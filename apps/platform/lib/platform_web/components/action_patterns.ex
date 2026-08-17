@@ -90,6 +90,13 @@ defmodule PlatformWeb.Components.ActionPatterns do
   """
   attr(:id, :string, required: true)
   attr(:event, :string, required: true, doc: "phx-change (live) / phx-submit (deep) event name")
+
+  attr(:target, :any,
+    default: nil,
+    doc:
+      "phx-target for `event`. Pass a LiveComponent's `@myself` (or a selector) when the handler lives in a component — the form, the keydown and the submit all need it, and without it they land on the parent LiveView. Task 01a008f6 stage 6."
+  )
+
   attr(:value, :string, default: nil)
   attr(:placeholder, :string, default: "Search…")
   attr(:name, :string, default: "q", doc: "param key the event handler receives")
@@ -103,6 +110,7 @@ defmodule PlatformWeb.Components.ActionPatterns do
       id={"#{@id}-form"}
       phx-change={!@deep && @event}
       phx-submit={@event}
+      phx-target={@target}
       class={["flex w-full items-center gap-2", @class]}
     >
       <label class="input input-sm flex w-full items-center gap-2">
@@ -117,6 +125,7 @@ defmodule PlatformWeb.Components.ActionPatterns do
           autocomplete="off"
           phx-debounce={if(!@deep, do: "200")}
           phx-keydown={@event}
+          phx-target={@target}
           phx-key="escape"
           class="grow"
         />
@@ -176,6 +185,13 @@ defmodule PlatformWeb.Components.ActionPatterns do
   attr(:id, :string, default: nil, doc: "wrapper id — stable hook for tests/e2e")
   attr(:open, :boolean, required: true)
   attr(:toggle_event, :string, required: true)
+
+  attr(:toggle_target, :any,
+    default: nil,
+    doc:
+      "phx-target for `toggle_event`. Pass a LiveComponent's `@myself` when the FAB is rendered INSIDE a LiveComponent — without it the toggle, the scrim tap-out and the window Escape binding all escape to the parent LiveView, which no longer has the handler. Task 01a008f6 stage 6."
+  )
+
   attr(:label, :string, default: "Create", doc: "accessible name for the FAB + menu")
   attr(:class, :any, default: nil, doc: "wrapper classes — visibility guards go here")
   attr(:rest, :global, doc: "extra attributes for the FAB button (e.g. data-role)")
@@ -189,6 +205,7 @@ defmodule PlatformWeb.Components.ActionPatterns do
         :if={@open}
         class="fixed inset-0 z-30 bg-black/30"
         phx-click={@toggle_event}
+        phx-target={@toggle_target}
         phx-window-keydown={@toggle_event}
         phx-key="escape"
         aria-hidden="true"
@@ -207,6 +224,7 @@ defmodule PlatformWeb.Components.ActionPatterns do
       <button
         type="button"
         phx-click={@toggle_event}
+        phx-target={@toggle_target}
         aria-label={@label}
         aria-haspopup="menu"
         aria-expanded={to_string(@open)}

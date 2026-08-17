@@ -548,7 +548,7 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   #     merged base       = 5,883
   #     019fb581 stage 3  = 5,889   (+6)
   #
-  # The +6 is entirely inside `handle_event("detach_canvas", …)`.
+  # The +6 is entirely inside `handle_event("detail_detach_canvas", …)`.
   # `Platform.Tasks.CanvasAttachments.detach_canvas/2` became `/3` with the
   # actor as an explicit first argument and NO defaulting arity, so every
   # caller has to name its principal or fail to compile: one line binding
@@ -632,7 +632,7 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # on_mount that was already assigning it, and the destination's access
   # control is `live_session :admin`, not this flag.
   #
-  # RE-PINNED (+7) by the freeze-changeset hotfix. `handle_event("approve_plan")`
+  # RE-PINNED (+7) by the freeze-changeset hotfix. `handle_event("plan_approve")`
   # matched `{:error, _}` and flashed a constant string, DISCARDING the reason.
   # A production outage that blocked every plan approval therefore produced a
   # generic toast, no server log line and a clean browser console — the cause
@@ -740,6 +740,67 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # No new assign, no new branch, no new event — the shell lost a private
   # helper and gained one field on a map it already built.
   #
+  # MERGE RESOLUTION: both re-pins above are live in this tree, so the pin was
+  # the sum of both deltas against the shared 6_008 base: 6_008 - 1 + 20 =
+  # 6_027.
+  #
+  # RE-PIN 2026-08-16 (task 01a008f6 stage 2): 6_027 -> 5_847. The Sidebar /
+  # Projects / Epics concern (15 events + its mount assigns + three form
+  # helpers) moved to PlatformWeb.TasksLive.SidebarComponent. This guard only
+  # ever ratchets DOWN; a later stage lowering it further is the point, and
+  # scripts/surface-budgets.txt carries the same number for CI.
+  #
+  # RE-PIN 2026-08-16 (task 01a008f6 stage 3): 5_847 -> 4_557. The Stacks
+  # concern (18 events + its mount assigns + the panel/overlay/modal helpers)
+  # moved to PlatformWeb.Tasks.StacksComponent, and the pure graph math
+  # (~450 lines) went further out to Platform.Tasks.StackGraph.
+  #
+  # RE-PIN 2026-08-16 (task 01a008f6 stage 4): 4_560 -> 3_158. Task detail,
+  # inline edit and plan approval (21 + 7 events, their mount assigns, the
+  # plan_body function component and the deploy-target / dependency /
+  # transition helpers) moved to PlatformWeb.Tasks.TaskDetailComponent, and
+  # the display helpers shared with the board went to
+  # PlatformWeb.Tasks.TaskDisplay.
+  #
+  # RE-PIN 2026-08-16 (task 01a008f6 stage 5): 3_158 -> 2_705. Execution &
+  # steering (with its own allow_upload plumbing and the newly-implemented
+  # @-mention pair), the per-phase assignee modal and the merge-control
+  # cluster moved to PlatformWeb.Tasks.{Steering,Assignees,MergeControl}Component.
+  #
+  # RE-PIN 2026-08-16 (task 01a008f6 stage 6): 2_705 -> 2_112. The four
+  # remaining self-contained panels moved out together, which is the point of
+  # the sweep — a half-emptied shell is the next attractor:
+  #   * Reviews & Validation (7 events, 4 assigns, the pending-review panel
+  #     and the review-canvas modal) -> PlatformWeb.Tasks.GatePanelComponent.
+  #   * Return-to-planning (4 events, 2 assigns) ->
+  #     PlatformWeb.Tasks.SupersedeComponent. Its twin, the reopen modal, was
+  #     already in TaskDetailComponent from stage 4, so this is the supersede
+  #     mode alone rather than the plan's two-mode component.
+  #   * New-Task creation (9 events, 12 assigns, the FAB, the bottom-sheet
+  #     form AND its allow_upload) -> PlatformWeb.Tasks.TaskCreateComponent.
+  #   * Board filtering (5 events, 3 assigns) ->
+  #     PlatformWeb.Tasks.FiltersComponent. `:sponsor_filter` stays here
+  #     because handle_params/3 is its writer and that callback cannot live
+  #     in a component.
+  #
+  # RE-PIN 2026-08-17 (task 01a008f6 stage 7, the final extraction): 2_112 ->
+  # 641. The board itself left last:
+  #   * Epics strip + mobile section list + desktop kanban + the per-row
+  #     action sheet (4 events) -> PlatformWeb.Tasks.BoardComponent. Filed as
+  #     a component, not the hook the inventory named, because "it is the page
+  #     body" is a rendering-POSITION fact and ADR 0035's criterion is
+  #     contiguity.
+  #   * The ten board PubSub clauses and refresh_board/1 ->
+  #     PlatformWeb.Tasks.BoardHooks (PubSub delivers to the process, so this
+  #     half genuinely cannot be a component).
+  #   * Container lifecycle (10 events, 3 assigns) ->
+  #     PlatformWeb.Tasks.LifecycleHooks.
+  #   * Pin-to-Chat (4 handle_info, 2 assigns) -> PlatformWeb.Tasks.PinHooks.
+  #   * Pure bucketing/search -> PlatformWeb.Tasks.BoardData; selected-task
+  #     assign plumbing -> PlatformWeb.Tasks.Selection.
+  #
+  # ── The blocked-explanation feature (task 01a004ad), for the record ────
+  #
   # 2026-08-15, task 01a004ad stage 2 — the blocked-explanation READ side.
   # ARITHMETIC: 6_007 + 59 = 6_066. All 59 lines are one new
   # `# ── Blocked-explanation helpers ──` region appended after
@@ -747,33 +808,42 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # and the `blocked_explanation/1` dispatcher, each with its fallback
   # clause and the comment recording why (precedence: a stamped escalation
   # sentence outranks unmet dependencies, and any non-`blocked` status
-  # explains nothing). Nothing was removed and nothing existing was edited
-  # — no new assign, no new event, no template change.
+  # explains nothing).
   #
-  # STAGE 3 DID NOT MOVE THIS PIN. Stage 2's comment predicted it would;
-  # that prediction was wrong and is corrected here rather than left to
-  # read as fact. The stage-3 blocked-explanation block lives entirely in
-  # `tasks_live.html.heex` and calls `blocked_explanation/1` plus the
-  # already-present `dependency_status_icon/1`, `status_label/1` and
-  # `relative_time/1`, so it needed no new shell function. Measured after
-  # stage 3: 6,066.
+  # STAGE 3 DID NOT MOVE THAT PIN: its block lived entirely in
+  # `tasks_live.html.heex`. `main` then re-measured to 6_086 in its own
+  # merge resolution.
   #
-  # MERGE RESOLUTION, 2026-08-15 (merging `main` into task 01a004ad's branch).
-  # The two sides pinned 6_066 (this branch, measured after stage 3) and 6_027
-  # (`main`, itself a merge resolution of the -1 and +20 re-pins above). The
-  # conflict is itself the proof that the two sides did NOT share a base, so
-  # neither side's arithmetic can be carried forward and the deltas must not be
-  # summed — the branch's `6_007 + 59` premise and `main`'s `6_008 - 1 + 20`
-  # premise start from different trees. Both are kept above as the record of
-  # what each side did, not as the derivation of the number below.
+  # MERGE RESOLUTION, 2026-08-17 (merging `main` into task 01a008f6's branch).
+  # The two sides pinned 640 (this branch, after the stage-7 extraction) and
+  # 6_086 (`main`, itself a re-measured merge resolution). As in that earlier
+  # resolution, the conflict IS the proof the two sides did not share a base,
+  # so the deltas must not be summed: `main`'s 6_086 counts a shell that still
+  # contains every concern this branch extracted.
   #
-  # The pin is therefore RE-MEASURED against the merged tree, which is the only
-  # tree this assertion ever runs on: `wc -l` on the merged
-  # `tasks_live.ex` reports 6,086. (Read back another way: `main`'s 6_027 plus
-  # this branch's own +59 blocked-explanation region, which merged cleanly into
-  # `tasks_live.ex` with no overlap — 6_027 + 59 = 6_086. That agreement is a
-  # cross-check on the measurement, not its source.)
-  @shell_line_count 6_086
+  # The pin is therefore RE-MEASURED against the merged tree: `wc -l` on
+  # `tasks_live.ex` reports 653.
+  #
+  # WHY IT ROSE 640 -> 653 (+13). This is NOT extraction regrowth. Task
+  # 01a004ad landed on `main` after this branch was cut, so its feature had to
+  # be PORTED into the extracted structure rather than merged in place. Its 59
+  # shell lines and its 85 template lines both went to
+  # `Tasks.TaskDetailComponent`, which is where `dependency_summary/1` and the
+  # detail panel now live — the feature reads a task's metadata and paints the
+  # detail panel, so under ADR 0035's contiguity criterion it belongs beside
+  # them, not in the shell.
+  #
+  # The +13 that DID land here is the public `defdelegate` surface alone:
+  # `blocked_reason/1`, `blocked_reason_at/1`, `blocked_explanation/1` plus the
+  # comment recording why the implementation moved. They exist so the
+  # pre-extraction call site keeps working —
+  # `tasks_live_blocked_explanation_test.exs` calls all three as public
+  # functions on `TasksLive` and passes unmodified.
+  #
+  # So the ratchet's promise still holds: no concern re-entered the shell, and
+  # every line of the +13 is a forwarding stub for a feature that did not exist
+  # on this branch when the 640 pin was set.
+  @shell_line_count 653
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 
@@ -794,9 +864,16 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
       # file that DOES carry the call sites. Without this, `refute source =~
       # "planning_step"` passes against a misspelt needle just as happily as
       # against a clean file.
+      #
+      # The call sites left the shell TEMPLATE too in stage 7, when the board
+      # markup moved into BoardComponent — so the control follows them there,
+      # and the shell template gets its own refutation.
       template = File.read!(@template_path)
-      assert template =~ "planning_step_extension"
-      assert template =~ "PlanningStepExtension.visible?"
+      refute template =~ "planning_step"
+
+      board = File.read!("lib/platform_web/live/tasks/board_component.ex")
+      assert board =~ "planning_step_extension"
+      assert board =~ "PlanningStepExtension.visible?"
     end
   end
 end

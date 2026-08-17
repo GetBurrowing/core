@@ -118,7 +118,7 @@ const ComposeInput = {
           // Don't send empty/whitespace-only messages
           if (this.el.value.trim().length === 0) return;
 
-          this.pushEvent("mention_clear", {});
+          this._pushMention("clear", {});
           this._lastMentionQuery = null;
 
           const form = this.el.closest("form");
@@ -128,7 +128,7 @@ const ComposeInput = {
       }
 
       if (e.key === "Escape") {
-        this.pushEvent("mention_clear", {});
+        this._pushMention("clear", {});
         this._lastMentionQuery = null;
       }
 
@@ -196,7 +196,7 @@ const ComposeInput = {
         writeDraft(this._draftKey, this.el.value);
       }
 
-      this.pushEvent("mention_clear", {});
+      this._pushMention("clear", {});
       this._lastMentionQuery = null;
       this.el.focus();
     });
@@ -209,6 +209,32 @@ const ComposeInput = {
     }
 
     this._syncDraftState();
+  },
+
+  // A hook's `pushEvent` ignores `phx-target` — `View.pushHookEvent/4`
+  // passes a nil target context — so an untargeted push from markup that
+  // lives inside a LiveComponent silently lands on the PARENT LiveView.
+  // TasksLive's steering composer moved into `SteeringComponent` (task
+  // 01a008f6 stage 5), so it declares `data-mention-target` and gets
+  // `pushEventTo`. ChatLive declares none of these attributes and keeps
+  // today's untargeted `mention_query` / `mention_clear`.
+  _mentionEvent(kind) {
+    const custom =
+      kind === "query"
+        ? this.el.dataset.mentionQueryEvent
+        : this.el.dataset.mentionClearEvent;
+    return custom || (kind === "query" ? "mention_query" : "mention_clear");
+  },
+
+  _pushMention(kind, payload) {
+    const event = this._mentionEvent(kind);
+    const target = this.el.dataset.mentionTarget;
+
+    if (target) {
+      this.pushEventTo(target, event, payload);
+    } else {
+      this.pushEvent(event, payload);
+    }
   },
 
   _detectMention() {
@@ -231,12 +257,12 @@ const ComposeInput = {
       const query = match[1];
       if (query !== this._lastMentionQuery) {
         this._lastMentionQuery = query;
-        this.pushEvent("mention_query", { query, source });
+        this._pushMention("query", { query, source });
       }
     } else {
       if (this._lastMentionQuery !== null) {
         this._lastMentionQuery = null;
-        this.pushEvent("mention_clear", {});
+        this._pushMention("clear", {});
       }
     }
   },

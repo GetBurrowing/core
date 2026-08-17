@@ -558,10 +558,13 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`agent.id` off the `%Agent{}` already in socket assigns"},
     {"platform_web/live/org_memory_live/view.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "normalize_page_key/1 uses Platform.UUID.cast/1 and its CAST OUTPUT becomes a page key, so a 16-character LiveView param is now rejected rather than accepted as a namespace uuid. Fabricated-value family: nothing ever raised here"},
-    {"platform_web/live/tasks_live.ex", :platform_uuid_guard, "-", 6, :safe_internal,
-     "all six task_id/plan_id guards use Platform.UUID.cast/1 and pass the CAST OUTPUT to Repo.get(Plan, uuid), so these never raised — a 16-character param was hex-encoded into an invented plan id that silently missed. The strict predicate makes it take the :error branch"},
-    {"platform_web/live/tasks_live.ex", :get, "Plan", 3, :safe_internal,
-     "each receives the `{:ok, uuid}` output of the cast above, which is always a well-formed 36-character UUID by construction; the guard itself is now Platform.UUID.cast/1, recorded on the `:platform_uuid_guard` key for this file"},
+    {"platform_web/live/tasks_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "the surviving task_id guard uses Platform.UUID.cast/1 and passes the CAST OUTPUT downstream, so it never raised — a 16-character param was hex-encoded into an invented id that silently missed. The strict predicate makes it take the :error branch. The five plan_id guards moved to task_detail_component.ex with the plan events (task 01a008f6 stage 4) and are inventoried below"},
+    {"platform_web/live/tasks/task_detail_component.ex", :platform_uuid_guard, "-", 3,
+     :safe_internal,
+     "the plan_id guards moved here from tasks_live.ex with the plan-approval events (task 01a008f6 stage 4). Each uses Platform.UUID.cast/1 and passes the CAST OUTPUT to Repo.get(Plan, uuid); the classification is unchanged by the move — the ids still arrive as phx-value-plan-id LiveView params and are still cast before the lookup. Three sites rather than six because approve/reject/reject-with-feedback now share one fetch_plan/1"},
+    {"platform_web/live/tasks/task_detail_component.ex", :get, "Plan", 1, :safe_internal,
+     "fetch_plan/1 receives the `{:ok, uuid}` output of the cast above, which is always a well-formed 36-character UUID by construction; the guard itself is Platform.UUID.cast/1, recorded on the `:platform_uuid_guard` key for this file"},
 
     # ── Platform.UUID guards recorded by stage 4 (the ratchet) ─────────
     # Tracking the FIX, not just the defect: re-simplifying any guard below

@@ -32,7 +32,18 @@ defmodule PlatformWeb.Components.SupersededReviewSubmissions do
   use Phoenix.Component
 
   attr(:reviews, :list, required: true, doc: "superseded `ReviewRequest` rows, items preloaded")
-  attr(:expanded, :boolean, required: true, doc: "disclosure state held by the shell")
+  attr(:expanded, :boolean, required: true, doc: "disclosure state held by the caller")
+
+  attr(:target, :any,
+    required: true,
+    doc: """
+    `@myself` of the LiveComponent that owns the disclosure. Required, not
+    optional-with-nil-default: the owner moved from the shell LiveView to
+    `PlatformWeb.Tasks.GatePanelComponent` in task 01a008f6 stage 6, and a
+    defaulted `phx-target` would have let the toggle keep compiling while
+    firing into a LiveView that no longer has the clause.
+    """
+  )
 
   def superseded_review_submissions(assigns) do
     ~H"""
@@ -41,7 +52,8 @@ defmodule PlatformWeb.Components.SupersededReviewSubmissions do
       <button
         type="button"
         class="flex items-center gap-1 text-xs text-base-content/60"
-        phx-click="toggle_superseded_reviews"
+        phx-click="gate_toggle_superseded"
+        phx-target={@target}
         aria-expanded={to_string(@expanded)}
       >
         <span class={"size-3 #{if @expanded, do: "hero-chevron-down", else: "hero-chevron-right"}"}>

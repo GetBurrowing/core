@@ -10,7 +10,7 @@
 //   - On click within the pill nav: write the clicked status to ClientState
 //     so the next mount picks it up.
 //
-// The LV-side `filter_by_status` handler validates the incoming status against
+// The component-side `filter_by_status` handler validates the incoming status against
 // `@mobile_columns`, so a corrupted/stale ClientState value gets silently
 // ignored on the server. No client-side validation needed.
 //
@@ -29,7 +29,12 @@ export default {
   mounted() {
     const stored = this.readStored()
     if (stored && stored !== "in_progress") {
-      this.pushEvent("filter_by_status", { status: stored })
+      // A hook's pushEvent ALWAYS lands on the parent LiveView and ignores
+      // phx-target, so this must name the component explicitly — the filter
+      // concern moved to FiltersComponent in task 01a008f6 stage 6. Without
+      // the retarget the stored pill silently stops being replayed while the
+      // click path (which does honour phx-target) keeps working.
+      this.pushEventTo("#tasks-filters", "filter_by_status", { status: stored })
     }
 
     this.handleClick = (event) => {

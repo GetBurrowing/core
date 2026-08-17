@@ -20,7 +20,18 @@ const InlineEdit = {
           e.preventDefault()
           const event = this.el.dataset.submitEvent || "update_task_title"
           const taskId = this.el.dataset.taskId || this.el.getAttribute("phx-value-task-id")
-          this.pushEvent(event, { value: this.el.value, "task-id": taskId })
+          const payload = { value: this.el.value, "task-id": taskId }
+          // The input may live inside a LiveComponent (task detail panel,
+          // task 01a008f6 stage 4). A hook's `pushEvent` always targets the
+          // parent LiveView regardless of the element's `phx-target`, so
+          // route explicitly through the rendered cid when one is present —
+          // otherwise the renamed `detail_*` handler is never reached.
+          const target = this.el.getAttribute("phx-target")
+          if (target) {
+            this.pushEventTo(/^\d+$/.test(target) ? parseInt(target, 10) : target, event, payload)
+          } else {
+            this.pushEvent(event, payload)
+          }
         } else if (e.key === "Escape") {
           this.el.blur()
         }

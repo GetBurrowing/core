@@ -503,7 +503,7 @@ defmodule PlatformWeb.PlanningCardStatesSurviveMigrationTest do
       set_planning(cursor, %{planning_step: "designing"})
 
       view = mount_board(conn)
-      render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # PRECONDITION: the rows exist. Members are stripped from the solo-card
       # board, so an unexpanded stack renders none of them and every
@@ -521,5 +521,13 @@ defmodule PlatformWeb.PlanningCardStatesSurviveMigrationTest do
       assert count(view, "[data-role='#{@member_role}'][data-planning-outcome='complete']") == 0
       assert count(view, "[data-role='#{@member_role}'] [data-planning-cursor]") == 0
     end
+  end
+
+  # Stacks events live on `PlatformWeb.Tasks.StacksComponent` (task
+  # 01a008f6 stage 3). Dispatch to the component, then re-render the whole
+  # view so board markup and post-notify shell state are both visible.
+  defp stacks_click(view, event, params \\ %{}) do
+    _ = render_click(with_target(view, "#tasks-stacks"), event, params)
+    render(view)
   end
 end

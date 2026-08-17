@@ -12,10 +12,11 @@
 // selection sites.
 //
 // Persistence flow:
-//   - On `mounted()`, read ClientState and push `select_project` /
-//     `clear_filters` to the server to restore the previous selection.
+//   - On `mounted()`, read ClientState and push `sidebar_select_project` /
+//     `filter_clear` to the server to restore the previous selection.
 //   - The server emits a `selected_project_changed` event from the
-//     `select_project` and `clear_filters` handlers (including the
+//     `sidebar_select_project` (on SidebarComponent) and `filter_clear`
+//     (on FiltersComponent) handlers (including the
 //     stale-UUID fallback path that maps a missing UUID → nil). The hook
 //     subscribes via `handleEvent` and writes the authoritative `id` to
 //     ClientState. This is event-driven (not DOM-diff-driven) so a
@@ -75,9 +76,12 @@ const LastProject = {
     }
 
     if (stored === ALL_PROJECTS_SENTINEL) {
-      this.pushEvent("clear_filters", {});
+      // pushEventTo, not pushEvent: `clear_filters` became `filter_clear`
+      // on FiltersComponent in task 01a008f6 stage 6, and a hook's pushEvent
+      // ignores phx-target.
+      this.pushEventTo("#tasks-filters", "filter_clear", {});
     } else {
-      this.pushEvent("select_project", { id: stored });
+      this.pushEventTo("#tasks-sidebar", "sidebar_select_project", { id: stored });
     }
   },
 

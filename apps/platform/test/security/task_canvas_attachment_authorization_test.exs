@@ -1033,7 +1033,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
         |> init_test_session(current_user_id: human.id)
         |> live(~p"/tasks?task_id=#{task.id}")
 
-      render_hook(view, "detach_canvas", %{"canvas-id" => canvas.id})
+      render_hook(detail(view), "detail_detach_canvas", %{"canvas-id" => canvas.id})
 
       assert attachment_rows(task.id) == []
     end
@@ -1061,7 +1061,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
         |> init_test_session(current_user_id: outsider.id)
         |> live(~p"/tasks?task_id=#{task.id}")
 
-      render_hook(view, "detach_canvas", %{"canvas-id" => canvas.id})
+      render_hook(detail(view), "detail_detach_canvas", %{"canvas-id" => canvas.id})
 
       # POSITIVE CONTROL is the test above: the identical hook, driven the
       # identical way, DOES delete the row for a member. So this is a refusal
@@ -1420,4 +1420,9 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     Declared-but-unexercised: #{inspect(MapSet.difference(declared, observed))}
     """
   end
+
+  # Task 01a008f6 stage 4: the task detail panel, inline editor and plan
+  # approval UI are a LiveComponent. Their events carry `phx-target`, so
+  # tests must address the component rather than the parent LiveView.
+  defp detail(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-detail")
 end

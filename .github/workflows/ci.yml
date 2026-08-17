@@ -53,6 +53,16 @@ jobs:
             exit 1
           fi
 
+      - name: Check surface line budgets
+        working-directory: ${{ github.workspace }}
+        run: |
+          chmod +x scripts/check-surface-budget.sh
+          if ! sh scripts/check-surface-budget.sh; then
+            echo "::error::Surface line budget check failed. See annotations above. Budgets live in scripts/surface-budgets.txt; raising one requires a justification in the commit message."
+            exit 1
+          fi
+          sh scripts/test/surface_budget_check_test.sh
+
       - name: Install system packages
         run: |
           apt-get update

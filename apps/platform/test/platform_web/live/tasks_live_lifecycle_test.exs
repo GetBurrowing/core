@@ -334,14 +334,14 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Active: the replayed id selects normally.
-      render_hook(view, "select_project", %{"id" => project.id})
+      sidebar_hook(view, "sidebar_select_project", %{"id" => project.id})
       assert_push_event(view, "selected_project_changed", %{id: pushed_id})
       assert pushed_id == project.id
 
       {:ok, _} = Tasks.archive_project(admin, project)
 
       # Archived: the same replayed id must fall back, and push the correction.
-      render_hook(view, "select_project", %{"id" => project.id})
+      sidebar_hook(view, "sidebar_select_project", %{"id" => project.id})
       assert_push_event(view, "selected_project_changed", %{id: "__all__"})
     end
 
@@ -351,7 +351,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_hook(view, "select_project", %{"id" => project.id})
+      sidebar_hook(view, "sidebar_select_project", %{"id" => project.id})
       assert_push_event(view, "selected_project_changed", %{id: pushed_id})
       assert pushed_id == project.id
     end
@@ -626,5 +626,20 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       assert rendered_scope_chips(view) == expected
       assert length(expected) > 2
     end
+  end
+
+  # ── Sidebar event helpers (task 01a008f6 stage 2) ──────────────────────
+  #
+  # Sidebar / Projects / Epics events live on
+  # `PlatformWeb.TasksLive.SidebarComponent`. Dispatching to a LiveComponent
+  # returns only THAT component's HTML, and any state the component asks the
+  # shell to change arrives as a message the shell processes afterwards — so
+  # a raw `render_click(with_target(...))` snapshot shows neither the board
+  # nor the post-notify state. These helpers dispatch to the component and
+  # then re-render the whole view, which is what every assertion here wants.
+
+  defp sidebar_hook(view, event, params) do
+    _ = render_hook(with_target(view, "#tasks-sidebar"), event, params)
+    render(view)
   end
 end

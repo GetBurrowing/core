@@ -8,7 +8,16 @@ const Sheet = {
 
     this.handleEscape = (e) => {
       if (e.key === "Escape" && this.el.dataset.open === "true") {
-        this.pushEvent(this.el.dataset.onClose)
+        // A sheet rendered inside a LiveComponent must close INTO that
+        // component — `pushEvent` would land on the parent LiveView, which no
+        // longer carries the handler. `data-on-close-target` is set by
+        // `sheet/1` whenever `on_close_target` is given (task 01a008f6 st. 2).
+        const target = this.el.dataset.onCloseTarget
+        if (target) {
+          this.pushEventTo(target, this.el.dataset.onClose)
+        } else {
+          this.pushEvent(this.el.dataset.onClose)
+        }
       }
     }
 

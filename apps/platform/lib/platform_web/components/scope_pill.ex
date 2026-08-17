@@ -132,6 +132,18 @@ defmodule PlatformWeb.Components.ScopePill do
       "Renders as a `<button>` with `phx-click=\"scope_filter\"` when true, or a non-interactive `<span>` when false. Defaults to true at `:default` size and false at `:compact` size (touch-target safety); pass explicitly to override."
   )
 
+  attr(:event, :string,
+    default: "scope_filter",
+    doc:
+      "phx-click event name for the clickable variant. Defaults to the historical `\"scope_filter\"` (ChatLive's handler). Tasks passes `\"filter_scope\"` since task 01a008f6 stage 6 moved that concern into a LiveComponent with a renamed event."
+  )
+
+  attr(:target, :any,
+    default: nil,
+    doc:
+      "phx-target for `event`. Required when the handler lives in a LiveComponent — this pill hardcoded an un-targeted `scope_filter` until stage 6, which would have silently dropped every sub-org chip click on the Tasks board while the surrounding rail kept rendering."
+  )
+
   attr(:size, :atom,
     default: :default,
     values: [:default, :compact],
@@ -187,6 +199,8 @@ defmodule PlatformWeb.Components.ScopePill do
             propagated_to: @propagated_to,
             role: :source,
             size: @size,
+            event: @event,
+            target: @target,
             label: @label
           })}
           <.icon name="hero-arrow-right" class="size-3 text-base-content/60" />
@@ -197,6 +211,8 @@ defmodule PlatformWeb.Components.ScopePill do
             propagated_to: @propagated_to,
             role: :target,
             size: @size,
+            event: @event,
+            target: @target,
             label: nil
           })}
         </span>
@@ -209,6 +225,8 @@ defmodule PlatformWeb.Components.ScopePill do
         propagated_to: nil,
         role: :single,
         size: @size,
+        event: @event,
+        target: @target,
         label: @label
       })}
     <% end %>
@@ -233,13 +251,19 @@ defmodule PlatformWeb.Components.ScopePill do
       assigns
       |> Map.put_new(:title, nil)
       |> Map.put_new(:aria_label, nil)
+      # Defaults, not decoration: `render_chip/1` is fed plain maps from four
+      # call sites, so a missing :event/:target/:label here is a runtime
+      # KeyError rather than a compile error.
+      |> Map.put_new(:event, "scope_filter")
+      |> Map.put_new(:target, nil)
       |> Map.put_new(:label, nil)
 
     ~H"""
     <%= if @clickable do %>
       <button
         type="button"
-        phx-click="scope_filter"
+        phx-click={@event}
+        phx-target={@target}
         phx-value-scope={@scope}
         phx-value-propagated-to={@propagated_to}
         title={@title}

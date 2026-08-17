@@ -29,6 +29,11 @@ defmodule PlatformWeb.Components.Sheet do
     default: "close_sheet",
     doc: "phx-click event fired when backdrop tapped, ESC pressed, or close-button clicked."
 
+  attr :on_close_target, :any,
+    default: nil,
+    doc:
+      "phx-target for `on_close`. Pass a LiveComponent's `@myself` (or a selector) when the sheet is rendered INSIDE a LiveComponent — without it the close event escapes to the parent LiveView, which no longer has a handler for it. Task 01a008f6 stage 2."
+
   attr :class, :string,
     default: nil,
     doc:
@@ -54,8 +59,9 @@ defmodule PlatformWeb.Components.Sheet do
       phx-hook="Sheet"
       data-open={to_string(@open)}
       data-on-close={@on_close}
+      data-on-close-target={close_target_selector(@on_close_target, @id)}
     >
-      <div class="sheet-backdrop" phx-click={@on_close}></div>
+      <div class="sheet-backdrop" phx-click={@on_close} phx-target={@on_close_target}></div>
       <div class="sheet-panel">
         <div :if={@placement == :bottom} class="sheet-handle" aria-hidden="true"></div>
 
@@ -67,6 +73,7 @@ defmodule PlatformWeb.Components.Sheet do
             type="button"
             aria-label="Close"
             phx-click={@on_close}
+            phx-target={@on_close_target}
             class="sheet-close-button rounded-full p-1 text-base-content/60 hover:text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
           >
             <.icon name="hero-x-mark" class="size-5" />
@@ -84,4 +91,16 @@ defmodule PlatformWeb.Components.Sheet do
     </div>
     """
   end
+
+  # The Sheet JS hook pushes `on_close` on Escape. `pushEvent` always lands on
+  # the LiveView, so the hook needs a SELECTOR it can hand to `pushEventTo`.
+  # `@myself` renders as the component's cid, which is not a selector — but a
+  # LiveComponent always carries its `id` on a DOM element, so `[data-phx-component]`
+  # is not needed: the sheet is rendered inside the component's own tree, and
+  # `phx-target` on the markup covers click/tap. For Escape we resolve the
+  # nearest enclosing component via the sheet's own id, which the caller can
+  # override by passing a selector string instead of `@myself`.
+  defp close_target_selector(nil, _id), do: nil
+  defp close_target_selector(target, _id) when is_binary(target), do: target
+  defp close_target_selector(_target, id), do: "##{id}"
 end

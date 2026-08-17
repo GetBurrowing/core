@@ -133,7 +133,7 @@ defmodule PlatformWeb.TasksLiveProjectCreateTest do
       # Menu closed by default — the item only renders once the FAB is tapped.
       refute html =~ ~s(data-role="project-create-fab")
 
-      html = render_click(view, "toggle_fab_menu")
+      html = render_click(create(view), "taskcreate_toggle_fab")
       assert html =~ ~s(data-role="project-create-fab")
 
       # The wrapper hides the whole FAB cluster on md+.
@@ -155,4 +155,7 @@ defmodule PlatformWeb.TasksLiveProjectCreateTest do
       refute html =~ ~s(data-role="fab-new-epic")
     end
   end
+
+  # Task 01a008f6 stage 6: New-Task creation is a LiveComponent.
+  defp create(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-create")
 end

@@ -43,6 +43,14 @@ defmodule PlatformWeb.Components.TaskMergeControls do
 
   attr(:control, :map, required: true, doc: "a `Platform.Tasks.MergeControl.t()`")
 
+  attr(:target, :any,
+    default: nil,
+    doc:
+      "`phx-target` for the Merge click. Task 01a008f6 stage 5 promoted the cluster's " <>
+        "state and event onto `PlatformWeb.Tasks.MergeControlComponent`, so the click " <>
+        "must be addressed to that LiveComponent rather than to the shell."
+  )
+
   def task_merge_controls(assigns) do
     ~H"""
     <%!-- Pinned bottom action bar, same shape as the stack detail panel's
@@ -104,6 +112,7 @@ defmodule PlatformWeb.Components.TaskMergeControls do
           type="button"
           class="btn btn-primary btn-sm flex-1"
           phx-click="merge_task_branch"
+          phx-target={@target}
           data-role="task-merge-button"
         >
           Merge

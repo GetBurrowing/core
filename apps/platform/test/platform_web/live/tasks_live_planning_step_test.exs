@@ -176,12 +176,12 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
     {Repo.get!(Stack, stack.id), members}
   end
 
-  # The DESKTOP expansion only. `toggle_stack_expand` is one MapSet for both
+  # The DESKTOP expansion only. `stack_toggle_expand` is one MapSet for both
   # branches, so this also expands the mobile list — but the mobile list only
   # renders the ACTIVE filter pill's section, so the mobile assertions below
   # additionally drive `filter_by_status`.
   defp expand(view, stack) do
-    render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+    stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
     view
   end
 
@@ -381,7 +381,7 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
     # Not a real HTML5 drag — there is no browser here. What it does is resolve
     # the two values `kanban_drag_drop.js` computes (`card.dataset.taskId` and
     # `card.closest("[data-column]").dataset.column`) OFF THE RENDERED DOM
-    # rather than from a literal, then push the same `kanban_drop` event the
+    # rather than from a literal, then push the same `board_drop` event the
     # hook pushes with exactly those values. A wrapper that captured the drag
     # source would change what those queries return, and the drop would carry
     # the wrong id.
@@ -413,7 +413,11 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
       # `in_progress -> backlog` is a legal drop (`@valid_drop_transitions`) and
       # `backlog` is not an execution-phase status, so it needs no approved
       # plan — the move is about the drag path, not the plan gate.
-      render_hook(view, "kanban_drop", %{"task_id" => task.id, "column" => "backlog"})
+      render_hook(
+        Phoenix.LiveViewTest.with_target(view, "#tasks-board"),
+        "board_drop",
+        %{"task_id" => task.id, "column" => "backlog"}
+      )
 
       assert Repo.get!(Platform.Tasks.Task, task.id).status == "backlog"
 
@@ -624,7 +628,7 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
 
       # The mobile list renders only the active filter pill's section, so the
       # mobile half needs the pill moved to the stack's rollup status first.
-      render_click(view, "filter_by_status", %{"status" => stack.status})
+      render_click(filters(view), "filter_by_status", %{"status" => stack.status})
       view = expand(view, stack)
 
       assert count_elements(view, "[data-role='#{@desktop_member_role}']") == 1
@@ -672,7 +676,7 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
         )
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      render_click(view, "filter_by_status", %{"status" => stack.status})
+      render_click(filters(view), "filter_by_status", %{"status" => stack.status})
       view = expand(view, stack)
 
       # Two chips in one root — the widest the marker ever gets — and the root
@@ -734,4 +738,15 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
         eventually(view, selector, attempts - 1)
     end
   end
+
+  # Stacks events live on `PlatformWeb.Tasks.StacksComponent` (task
+  # 01a008f6 stage 3). Dispatch to the component, then re-render the whole
+  # view so board markup and post-notify shell state are both visible.
+  defp stacks_click(view, event, params \\ %{}) do
+    _ = render_click(with_target(view, "#tasks-stacks"), event, params)
+    render(view)
+  end
+
+  # Task 01a008f6 stage 6: board filtering is a LiveComponent.
+  defp filters(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-filters")
 end

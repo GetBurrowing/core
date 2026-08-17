@@ -1,0 +1,22 @@
+# Surface line budgets. One "path max" line per entry.
+# A line whose path is SUM:<name> is the sum of every preceding non-SUM entry.
+# Ratcheting DOWN is expected as surfaces are modularized.
+# RAISING a number requires an explicit justification in the commit message.
+#
+# The SUM: line is the BINDING one. A per-file cap alone is satisfiable by
+# moving markup from the module into its template, which is exactly how the
+# ChatLive surface reached 8,225 lines while the number under review only ever
+# went down. See docs/decisions/0050-tasks-surface-budget-ratchet.md.
+# RAISED 2026-08-17, 640 -> 653 (SUM 1038 -> 1051). JUSTIFICATION: task
+# 01a004ad's blocked-explanation feature landed on main AFTER this branch was
+# cut, so it was PORTED into the extracted structure rather than merged in
+# place. Its 59 shell lines and 85 template lines both went to
+# Tasks.TaskDetailComponent, beside dependency_summary/1 and the detail panel
+# they serve. The +13 here is the public defdelegate surface alone
+# (blocked_reason/1, blocked_reason_at/1, blocked_explanation/1 plus the
+# comment recording the move), which keeps the pre-extraction call site working
+# for tasks_live_blocked_explanation_test.exs. No concern re-entered the shell;
+# this is a new feature's forwarding stubs, not extraction regrowth.
+apps/platform/lib/platform_web/live/tasks_live.ex 653
+apps/platform/lib/platform_web/live/tasks_live.html.heex 398
+SUM:tasks_live 1051

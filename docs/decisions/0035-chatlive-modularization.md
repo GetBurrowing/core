@@ -1,6 +1,6 @@
 # ADR 0035: ChatLive Modularization
 
-**Status:** Proposed
+**Status:** Accepted (2026-08-17 — see "Status resolution and corrections")
 **Date:** 2026-04-15
 **Deciders:** Rowan
 **Related:** ADR 0016 (Control Center LiveView Modularization), ADR 0020 (Chat Rich Content Rendering), ADR 0022 (DM Unread Badge), ADR 0030 (Meetings — LiveKit Voice/Video)
@@ -29,6 +29,14 @@ An audit of the module identifies **13 distinct feature concerns** coexisting in
 | Presence | 8 | 0 | 4 | scattered |
 | Drafts | 3 | 2 | 0 | inline |
 | ActiveAgent | 2 | 2 | 1 | L1145–1160 |
+
+> **Corrections, 2026-08-17 (task 01a008f6 stage 7).** Every line number in
+> the table above refers to a file shape that no longer exists — `chat_live.ex`
+> is 4,335 lines today and its template is a separate 3,890-line file, so the
+> cited `L…` ranges cannot be resolved against anything. Read the table as a
+> concern inventory, not as coordinates. Corrections to specific claims are
+> collected under "Status resolution and corrections" at the end of this
+> document.
 
 Several concrete symptoms already follow from the scale:
 
@@ -163,3 +171,57 @@ ADR 0016 succeeded because it expanded coverage before refactoring (14 baseline 
 4. **Handler modules (ADR 0016 pattern) for events, no LiveComponents** — keeps all state on the parent socket, which is exactly the problem we are trying to solve. Rejected.
 5. **Split ChatLive into multiple LiveViews** (e.g., `ChatLive` + `ThreadLive`) — too invasive; loses the shared socket state that makes the chat UX feel coherent (a thread opens next to its parent message). Rejected.
 6. **Component library in an umbrella app** — premature; start by splitting within one app, then promote if reuse emerges.
+
+---
+
+## Status resolution and corrections (2026-08-17)
+
+Recorded by task 01a008f6 stage 7, which applied this ADR's conventions to
+`TasksLive` and had to read this document as a specification. Six things in it
+were no longer true.
+
+**1. Status.** This ADR's own migration sequence says "move to `Accepted`
+after Pins ships and the convention has survived code review." Pins shipped
+2026-04-15 (`PlatformWeb.ChatLive.PinHooks`), and the LifecycleHook /
+LiveComponent convention it established has since been applied across
+`chat/` (14 modules) and the whole of `tasks/` (16 modules). The status is
+**Accepted**, and was in fact accepted by practice for four months while the
+document still said Proposed.
+
+**2. "Not addressed: template splitting" is contradicted by the tree.**
+Commit `af5cb8f6` externalized the shell template — `chat_live.html.heex`,
+3,890 lines. The position stated here ("we keep HEEx inline in each
+LiveComponent, and we reaffirm ADR 0016") still holds for COMPONENTS, whose
+templates are inline. It does not hold for the SHELL, whose template is a
+separate file on both this surface and Tasks. The ADR should be read as: the
+shell's template is external; a component's is inline.
+
+**3. The shadowed `join_meeting` / `leave_meeting` clauses are FIXED.** This
+ADR lists them as a live symptom, and step 6 of the migration predicted the
+Meeting extraction would resolve "the `@in_meeting`/`@meeting_active` duality
+as a forced side effect." It did: `chat_live.ex` contains zero
+`join_meeting` or `leave_meeting` clauses today — they live in
+`chat/meeting_hooks.ex`, singly. The prediction held; the symptom list
+outlived it.
+
+**4. Three concerns in the table were never extracted.** `SpaceNavigation`
+(10 assigns, 9 events — the LARGEST assign count in the inventory), `Drafts`
+and `AgentPicker` have no module under `chat/`. They are still in the shell.
+That is most of the reason `chat_live.ex` is 4,335 lines after eleven
+extractions.
+
+**5. The "3× the next-largest LiveView" claim is now INVERTED, and then
+inverted back.** At the time of writing, ChatLive was 5,090 and TasksLive
+1,578. By 2026-08-16 TasksLive had reached 6,027 `.ex` + 4,906 `.heex` —
+larger than ChatLive on both halves. As of this stage TasksLive is 641 + 398
+and ChatLive is 4,335 + 3,890, so ChatLive is the largest surface again by a
+factor of eight. The point is not the ranking but that the ranking moved
+twice in sixteen months with nothing tracking it.
+
+**6. Measuring the module and not its template understates the surface.**
+This ADR's per-feature checklist says "verify `chat_live.ex` line count has
+dropped by a plausible amount." That check is satisfiable by moving markup
+from the module into the shell TEMPLATE, which is exactly what a shell of
+4,335 + 3,890 = 8,225 lines looks like. ADR 0050 replaces it with a
+sum-of-both budget under machine check. Applying that rule here would put the
+ChatLive surface at 8,225 lines — a number this document has never stated.

@@ -134,7 +134,7 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Open the FAB sheet.
-      render_click(view, "toggle_project_create_sheet")
+      sidebar_click(view, "sidebar_toggle_project_create_sheet")
       html = render(view)
 
       # Slice the HTML from the FAB's <select> open tag to its </select>.
@@ -168,7 +168,7 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
       # selector matches twice — scope to the desktop `<aside>` to make
       # the selector unique.
       view
-      |> element(~s(aside button[phx-click="select_project"][phx-value-id="#{proj.id}"]))
+      |> element(~s(aside button[phx-click="sidebar_select_project"][phx-value-id="#{proj.id}"]))
       |> render_click()
 
       html = render(view)
@@ -193,5 +193,20 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
       # breadcrumb only.
       assert html =~ ~r/text-soylent[^>]*>\s*Soylent\s*<\/span>\s*<span[^>]*>\s*\/\s*<\/span>/
     end
+  end
+
+  # ── Sidebar event helpers (task 01a008f6 stage 2) ──────────────────────
+  #
+  # Sidebar / Projects / Epics events live on
+  # `PlatformWeb.TasksLive.SidebarComponent`. Dispatching to a LiveComponent
+  # returns only THAT component's HTML, and any state the component asks the
+  # shell to change arrives as a message the shell processes afterwards — so
+  # a raw `render_click(with_target(...))` snapshot shows neither the board
+  # nor the post-notify state. These helpers dispatch to the component and
+  # then re-render the whole view, which is what every assertion here wants.
+
+  defp sidebar_click(view, event, params \\ %{}) do
+    _ = render_click(with_target(view, "#tasks-sidebar"), event, params)
+    render(view)
   end
 end

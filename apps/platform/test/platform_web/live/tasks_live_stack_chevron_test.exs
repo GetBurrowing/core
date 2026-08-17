@@ -5,7 +5,7 @@ defmodule PlatformWeb.TasksLiveStackChevronTest do
   ## Why this file exists at all
 
   `[data-role="stack-chevron"]` shipped carrying BOTH
-  `phx-click="toggle_stack_expand"` and an inline
+  `phx-click="stack_toggle_expand"` and an inline
   `onclick="event.stopPropagation()"`. Those two are mutually exclusive
   on one element: `phoenix_live_view` binds its click handler with
   `window.addEventListener(eventName, handler, false)` — the BUBBLE
@@ -14,14 +14,14 @@ defmodule PlatformWeb.TasksLiveStackChevronTest do
   `bindClick/2`). An inline `onclick` runs at TARGET phase and stops the
   event before it ever reaches `window`, so the `phx-click` can never
   dispatch. The desktop chevron was dead: real clicks produced zero
-  `toggle_stack_expand` on the server.
+  `stack_toggle_expand` on the server.
 
   ## Why the obvious test would have caught nothing
 
   `Phoenix.LiveViewTest.render_click/3` pushes the event straight to the
   server over the test channel. It never runs browser DOM propagation
   and never reads an inline `onclick`. `tasks_live_test.exs` already
-  contains ~15 `render_click(view, "toggle_stack_expand", ...)` calls
+  contains ~15 `stacks_click(view, "stack_toggle_expand", ...)` calls
   plus a wiring assertion — all green for months, and not one of them
   could see this bug. Adding a sixteenth would have proved nothing.
 
@@ -148,7 +148,7 @@ defmodule PlatformWeb.TasksLiveStackChevronTest do
       end
     end
 
-    test "every chevron still carries the toggle_stack_expand wiring", %{conn: conn} do
+    test "every chevron still carries the stack_toggle_expand wiring", %{conn: conn} do
       {conn, stack} = seed(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
@@ -156,7 +156,7 @@ defmodule PlatformWeb.TasksLiveStackChevronTest do
       assert length(nodes) == 2
 
       for node <- nodes do
-        assert Map.get(node, "phx-click") == "toggle_stack_expand"
+        assert Map.get(node, "phx-click") == "stack_toggle_expand"
         assert Map.get(node, "phx-value-id") == stack.id
       end
     end
@@ -165,17 +165,25 @@ defmodule PlatformWeb.TasksLiveStackChevronTest do
          %{conn: conn} do
       # Deliberately labelled. render_click/3 bypasses DOM propagation
       # entirely, so this passes with the inline onclick fully present.
-      # It covers tasks_live.ex's toggle_stack_expand handler and
+      # It covers tasks_live.ex's stack_toggle_expand handler and
       # NOTHING about whether a real click can reach it. The markup
       # assertions above are the actual regression guard.
       {conn, stack} = seed(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
       assert MapSet.member?(:sys.get_state(view.pid).socket.assigns.expanded_stacks, stack.id)
 
-      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
       refute MapSet.member?(:sys.get_state(view.pid).socket.assigns.expanded_stacks, stack.id)
     end
+  end
+
+  # Stacks events live on `PlatformWeb.Tasks.StacksComponent` (task
+  # 01a008f6 stage 3). Dispatch to the component, then re-render the whole
+  # view so board markup and post-notify shell state are both visible.
+  defp stacks_click(view, event, params \\ %{}) do
+    _ = render_click(with_target(view, "#tasks-stacks"), event, params)
+    render(view)
   end
 end

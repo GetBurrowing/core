@@ -57,7 +57,7 @@ defmodule PlatformWeb.TasksLiveSearchTest do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       assert html =~ ~s(id="task-search-form")
-      assert html =~ ~s(phx-change="search_tasks")
+      assert html =~ ~s(phx-change="filter_search")
       assert html =~ ~s(aria-label="Search tasks")
     end
 
@@ -72,11 +72,12 @@ defmodule PlatformWeb.TasksLiveSearchTest do
       assert html =~ "Alpha Rocket"
       assert html =~ "Beta Boat"
 
-      html =
+      _ =
         view
         |> element("#task-search-form")
         |> render_change(%{"q" => "rocket"})
 
+      html = after_filter(view)
       assert html =~ "Alpha Rocket"
       refute html =~ "Beta Boat"
     end
@@ -97,11 +98,14 @@ defmodule PlatformWeb.TasksLiveSearchTest do
       # UUIDv7 ids share a timestamp prefix across same-test inserts —
       # the random tail is the only discriminating substring.
       id_fragment = String.slice(task.id, -12, 12)
-      html = view |> element("#task-search-form") |> render_change(%{"q" => id_fragment})
+      _ = view |> element("#task-search-form") |> render_change(%{"q" => id_fragment})
+      html = after_filter(view)
       assert html =~ "Id Target"
       refute html =~ "Unrelated"
 
-      html = view |> element("#task-search-form") |> render_change(%{"q" => "skyhook"})
+      _ = view |> element("#task-search-form") |> render_change(%{"q" => "skyhook"})
+
+      html = after_filter(view)
       assert html =~ "Epic Member"
       refute html =~ "Unrelated"
     end
@@ -113,17 +117,19 @@ defmodule PlatformWeb.TasksLiveSearchTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html =
+      _ =
         view
         |> element("#task-search-form")
         |> render_change(%{"q" => "zzz-no-such-task"})
 
+      html = after_filter(view)
       refute html =~ "Only Task"
       assert html =~ ~s(data-role="search-empty-state")
       assert html =~ "No matching tasks"
 
       # Escape keydown on the input clears the query and restores the board.
-      html = render_keydown(view, "search_tasks", %{"key" => "Escape", "value" => "zzz"})
+      _ = render_keydown(filters(view), "filter_search", %{"key" => "Escape", "value" => "zzz"})
+      html = after_filter(view)
       assert html =~ "Only Task"
       refute html =~ ~s(data-role="search-empty-state")
     end
@@ -136,7 +142,9 @@ defmodule PlatformWeb.TasksLiveSearchTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html = view |> element("#task-search-form") |> render_change(%{"q" => "kept"})
+      _ = view |> element("#task-search-form") |> render_change(%{"q" => "kept"})
+
+      html = after_filter(view)
       assert html =~ "Kept Match"
       refute html =~ "Filtered Away"
 
@@ -161,15 +169,29 @@ defmodule PlatformWeb.TasksLiveSearchTest do
     {:ok, view, _html} = conn |> authenticated_conn() |> live("/tasks")
 
     # Marlowe 2026-07-12: every on-screen count describes the filtered board.
-    html = render_change(view, "search_tasks", %{"q" => "composer"})
+    _ = render_change(filters(view), "filter_search", %{"q" => "composer"})
+    html = after_filter(view)
     assert html =~ "Composer dock retrofit"
     refute html =~ "Unrelated widget"
     # header badge + fabrikam scope chip both show exactly one visible task
     assert view |> element("#tasks-page-header") |> render() =~ ">1<"
 
     # clearing restores the unfiltered totals everywhere
-    html = render_change(view, "search_tasks", %{"q" => ""})
+    _ = render_change(filters(view), "filter_search", %{"q" => ""})
+    html = after_filter(view)
     assert html =~ "Unrelated widget"
     refute view |> element("#tasks-page-header") |> render() =~ ">1<"
+  end
+
+  # Task 01a008f6 stage 6: board filtering is a LiveComponent.
+  defp filters(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-filters")
+
+  # Task 01a008f6 stage 6: FiltersComponent writes the filter value and hands
+  # it to the shell as `{:tasks_filters_changed, _}`. The shell's board work
+  # therefore lands in the render AFTER the event reply, so a test that reads
+  # the reply html directly is reading the pre-mediation board.
+  defp after_filter(view) do
+    _ = :sys.get_state(view.pid)
+    Phoenix.LiveViewTest.render(view)
   end
 end

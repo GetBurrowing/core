@@ -214,7 +214,7 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
       new_name = "Created Fabrikam Project #{System.unique_integer([:positive])}"
 
       html =
-        render_submit(view, "create_project", %{
+        sidebar_submit(view, "sidebar_create_project", %{
           "project" => %{"name" => new_name, "slug" => "", "org_id" => fabrikam_org_id}
         })
 
@@ -239,7 +239,7 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
       new_name = "Created Fabrikam Project #{System.unique_integer([:positive])}"
 
       html =
-        render_submit(view, "create_project", %{
+        sidebar_submit(view, "sidebar_create_project", %{
           "project" => %{"name" => new_name, "slug" => "", "org_id" => fabrikam_org_id}
         })
 
@@ -281,5 +281,20 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
       assert sidebar =~ own.name
       assert sidebar =~ foreign.name
     end
+  end
+
+  # ── Sidebar event helpers (task 01a008f6 stage 2) ──────────────────────
+  #
+  # Sidebar / Projects / Epics events live on
+  # `PlatformWeb.TasksLive.SidebarComponent`. Dispatching to a LiveComponent
+  # returns only THAT component's HTML, and any state the component asks the
+  # shell to change arrives as a message the shell processes afterwards — so
+  # a raw `render_click(with_target(...))` snapshot shows neither the board
+  # nor the post-notify state. These helpers dispatch to the component and
+  # then re-render the whole view, which is what every assertion here wants.
+
+  defp sidebar_submit(view, event, params) do
+    _ = render_submit(with_target(view, "#tasks-sidebar"), event, params)
+    render(view)
   end
 end

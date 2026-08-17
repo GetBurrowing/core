@@ -69,7 +69,14 @@ const KanbanDragDrop = {
       // No-op if dropped on same column
       if (targetColumn === this._sourceColumn) return;
 
-      this.pushEvent("kanban_drop", {
+      // pushEventTo, not pushEvent: `kanban_drop` became `board_drop` on
+      // BoardComponent in task 01a008f6 stage 7, and a hook's pushEvent
+      // ALWAYS lands on the parent LiveView regardless of any phx-target
+      // on the element — so a plain pushEvent here would silently drop
+      // every drag with the whole suite still green. The target selector
+      // comes off the element (`data-board-target`) so the component id
+      // lives in exactly one place, the template.
+      this.pushEventTo(this.el.dataset.boardTarget || "#tasks-board", "board_drop", {
         task_id: this._draggedTaskId,
         column: targetColumn,
       });

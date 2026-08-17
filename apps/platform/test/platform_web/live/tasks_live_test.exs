@@ -740,10 +740,8 @@ defmodule PlatformWeb.TasksLiveTest do
       # Drive the fabrikam chip via the inbound scope_filter event the same way
       # ScopePill emits it (phx-value-scope is the atom serialized as
       # string).
-      html =
-        view
-        |> render_click("scope_filter", %{"scope" => "fabrikam"})
-
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "fabrikam"})
+      html = after_filter(view)
       assert :sys.get_state(view.pid).socket.assigns.scope_filter == :fabrikam
       # The fabrikam chip is now marked active.
       assert html =~ ~s(data-scope-chip="fabrikam" data-active="true")
@@ -759,8 +757,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html = render_click(view, "scope_filter", %{"scope" => "fabrikam"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "fabrikam"})
 
+      html = after_filter(view)
       # Today-state: every task folds under :fabrikam, so filtering to :fabrikam
       # is functionally a no-op for the desktop kanban (matches
       # count_by_scope's contract). Both cards remain on the desktop
@@ -778,8 +777,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html = render_click(view, "scope_filter", %{"scope" => "soylent"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "soylent"})
 
+      html = after_filter(view)
       # Pre-MT/RBAC contract: filtering to a non-fabrikam scope produces an
       # empty board because no task carries an org_id yet. The mobile
       # path is unscoped so the card title still appears in the mobile
@@ -802,11 +802,13 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Pin to a non-fabrikam scope → desktop card marker disappears (mobile
       # list keeps the title, so assert on the desktop-only id).
-      hidden = render_click(view, "scope_filter", %{"scope" => "sxi"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "sxi"})
+      hidden = after_filter(view)
       refute hidden =~ task_marker
 
       # All chip dispatches scope_filter with "all" → back to :all.
-      reset = render_click(view, "scope_filter", %{"scope" => "all"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "all"})
+      reset = after_filter(view)
       assert :sys.get_state(view.pid).socket.assigns.scope_filter == :all
       assert reset =~ task_marker
     end
@@ -815,7 +817,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _ = render_click(view, "scope_filter", %{"scope" => "totally-not-a-scope"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "totally-not-a-scope"})
 
       assert :sys.get_state(view.pid).socket.assigns.scope_filter == :all
     end
@@ -900,8 +902,9 @@ defmodule PlatformWeb.TasksLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html = render_click(view, "toggle_sponsor_filter", %{})
+      _ = render_click(filters(view), "filter_toggle_sponsor", %{})
 
+      html = after_filter(view)
       # Filter is now :mine.
       assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :mine
 
@@ -921,7 +924,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_click(view, "toggle_sponsor_filter", %{})
+      render_click(filters(view), "filter_toggle_sponsor", %{})
 
       # LiveView records the last patched path on the view.
       assert_patched(view, ~p"/tasks?sponsor=mine")
@@ -934,7 +937,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # Confirm we started in :mine from the URL param.
       assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :mine
 
-      render_click(view, "toggle_sponsor_filter", %{})
+      render_click(filters(view), "filter_toggle_sponsor", %{})
 
       # Canonical URL: no ?sponsor param when back to :all.
       assert_patched(view, ~p"/tasks")
@@ -999,8 +1002,9 @@ defmodule PlatformWeb.TasksLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html = render_click(view, "toggle_sponsor_filter", %{})
+      _ = render_click(filters(view), "filter_toggle_sponsor", %{})
 
+      html = after_filter(view)
       # Board-level custom empty state IS present. HEEX HTML-escapes the
       # `'` in "You're" as `&#39;`, so match the two static halves of the
       # copy separately rather than the raw phrase. Stage 4 of task 019f487e
@@ -1049,8 +1053,9 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ ~s(id="stack-card-#{other.id}")
       assert html =~ ~s(id="stack-card-#{unsponsored.id}")
 
-      html = render_click(view, "toggle_sponsor_filter", %{})
+      _ = render_click(filters(view), "filter_toggle_sponsor", %{})
 
+      html = after_filter(view)
       # Filter is now :mine.
       assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :mine
 
@@ -1062,7 +1067,8 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ ~s(id="stack-card-#{unsponsored.id}")
 
       # Toggle back off — all three visible again.
-      html = render_click(view, "toggle_sponsor_filter", %{})
+      _ = render_click(filters(view), "filter_toggle_sponsor", %{})
+      html = after_filter(view)
       assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :all
       assert html =~ ~s(id="stack-card-#{mine.id}")
       assert html =~ ~s(id="stack-card-#{other.id}")
@@ -1114,7 +1120,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # behavior end-to-end.
       {:ok, view, _html} = live(conn, ~p"/tasks?sponsor=mine")
 
-      html = render_click(view, "select_project", %{"id" => project_a.id})
+      html = sidebar_click(view, "sidebar_select_project", %{"id" => project_a.id})
 
       # Only the intersection is rendered.
       assert html =~ ~s(id="stack-card-#{mine_a.id}")
@@ -1257,8 +1263,13 @@ defmodule PlatformWeb.TasksLiveTest do
     # Transition from backlog → planning (valid per ADR 0018 §7)
     html =
       view
-      |> element("button[phx-click=\"transition_task\"][phx-value-status=\"planning\"]")
+      |> element("button[phx-click=\"detail_transition\"][phx-value-status=\"planning\"]")
       |> render_click()
+
+    # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so
+    # flashes and shell-state refreshes arrive on the NEXT render pass
+    # (the component notifies the shell via send/2). Re-render to observe.
+    html = render(view)
 
     assert html =~ "moved to planning"
 
@@ -1283,7 +1294,12 @@ defmodule PlatformWeb.TasksLiveTest do
 
     html =
       view
-      |> render_hook("transition_task", %{"id" => task.id, "status" => "deploying"})
+      |> detail()
+      |> render_hook("detail_transition", %{"id" => task.id, "status" => "deploying"})
+
+    # Task 01a008f6 stage 4: the detail panel is a LiveComponent; its
+    # flash lands on the NEXT render pass.
+    html = render(view)
 
     assert html =~ "no deploy target set"
 
@@ -1306,9 +1322,7 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Project Two Task"
 
     # Filter to p1 via sidebar
-    html =
-      view
-      |> render_click("select_project", %{"id" => p1.id})
+    html = sidebar_click(view, "sidebar_select_project", %{"id" => p1.id})
 
     assert html =~ "Project One Task"
     refute html =~ "Project Two Task"
@@ -1535,7 +1549,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Manually pre-load expansion state. (T7 stage 2 will wire the
-      # `toggle_stack_expand` event; for stage 1 we drive the assign
+      # `stack_toggle_expand` event; for stage 1 we drive the assign
       # directly to test the reset, since the public-event handler
       # doesn't exist yet.)
       _new_state =
@@ -1588,7 +1602,7 @@ defmodule PlatformWeb.TasksLiveTest do
                stack.id
              )
 
-      _html = render_click(view, "select_project", %{"id" => project.id})
+      _html = sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
 
       assert MapSet.size(:sys.get_state(view.pid).socket.assigns.expanded_stacks) == 0
     end
@@ -1728,11 +1742,11 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "#{board_data.ready_count}/#{board_data.member_count} ready"
     end
 
-    test "stack card declares the toggle_stack_expand phx-click with stack id",
+    test "stack card declares the stack_toggle_expand phx-click with stack id",
          %{conn: conn, stack: stack} do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      assert html =~ ~s(phx-click="toggle_stack_expand")
+      assert html =~ ~s(phx-click="stack_toggle_expand")
       assert html =~ ~s(phx-value-id="#{stack.id}")
     end
 
@@ -1754,21 +1768,21 @@ defmodule PlatformWeb.TasksLiveTest do
       end)
     end
 
-    test "toggle_stack_expand event flips :expanded_stacks MapSet membership",
+    test "stack_toggle_expand event flips :expanded_stacks MapSet membership",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       pre = :sys.get_state(view.pid).socket.assigns.expanded_stacks
       refute MapSet.member?(pre, stack.id)
 
-      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       mid = :sys.get_state(view.pid).socket.assigns.expanded_stacks
 
       assert MapSet.member?(mid, stack.id),
              "first click should add the stack id to :expanded_stacks"
 
-      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       post = :sys.get_state(view.pid).socket.assigns.expanded_stacks
 
@@ -1776,13 +1790,13 @@ defmodule PlatformWeb.TasksLiveTest do
              "second click should remove the stack id from :expanded_stacks"
     end
 
-    test "toggle_stack_expand is a no-op for unknown stack ids",
+    test "stack_toggle_expand is a no-op for unknown stack ids",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       unknown_id = Ecto.UUID.generate()
 
-      _html = render_click(view, "toggle_stack_expand", %{"id" => unknown_id})
+      _html = stacks_click(view, "stack_toggle_expand", %{"id" => unknown_id})
 
       post = :sys.get_state(view.pid).socket.assigns.expanded_stacks
 
@@ -1798,7 +1812,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # stack-card shell.
       refute html =~ ~r/stack-card-#{stack.id}[^>]*>.*rotate-180/s
 
-      html_expanded = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      html_expanded = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # After expansion, the chevron carries `rotate-180` somewhere in
       # the stack card subtree.
@@ -1842,7 +1856,7 @@ defmodule PlatformWeb.TasksLiveTest do
          %{conn: conn, stack: stack, m1: m1, m2: m2, m3: m3, m4: m4} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       for m <- [m1, m2, m3, m4] do
         assert html =~ ~s(id="stack-member-#{m.id}"),
@@ -1862,7 +1876,7 @@ defmodule PlatformWeb.TasksLiveTest do
          %{conn: conn, stack: stack, m2: m2, m3: m3, m4: m4} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # m2 depends on m1 only → "needs ①" with no parallel sibling
       # mention because m1 has no deps (no other member parallels m2's
@@ -1891,7 +1905,7 @@ defmodule PlatformWeb.TasksLiveTest do
          %{conn: conn, stack: stack, m3: m3} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # Each member row reuses the existing select_task handler.
       assert html =~ ~r/stack-member-#{m3.id}[^>]*phx-click="select_task"/s
@@ -1902,7 +1916,7 @@ defmodule PlatformWeb.TasksLiveTest do
          %{conn: conn, stack: stack, m3: m3} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # `select_task` push_patches to `/tasks/:id`, which routes through
       # handle_params and assigns `:selected_task` + `:show_detail`.
@@ -1927,12 +1941,12 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ ~s(id="stack-member-#{m1.id}")
 
       # First toggle: expanded — member row appears.
-      html_expanded = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      html_expanded = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
       assert html_expanded =~ ~s(id="stack-member-#{m1.id}")
       assert html_expanded =~ m1.title
 
       # Second toggle: collapsed again — member row disappears.
-      html_collapsed = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      html_collapsed = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
       refute html_collapsed =~ ~s(id="stack-member-#{m1.id}")
     end
 
@@ -1942,7 +1956,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, _m1} = Tasks.update_task(m1, %{status: "done"})
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # The done-status node carries the success-tint class.
       assert html =~ ~r/stack-member-#{m1.id}[^>]*>.*?bg-success\/20/s,
@@ -1956,7 +1970,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Expand the stack via the header click.
-      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       assert MapSet.member?(
                :sys.get_state(view.pid).socket.assigns.expanded_stacks,
@@ -2016,8 +2030,8 @@ defmodule PlatformWeb.TasksLiveTest do
       # `in_review`); the mobile list only renders the active filter
       # pill's section (T6 PR #328), so switch to the matching pill
       # before exercising the stack-card.
-      _ = render_click(view, "filter_by_status", %{"status" => stack.status})
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # Mobile member rows use the `stack-member-mobile-` id prefix so
       # they don't collide with the desktop `stack-member-` ids — both
@@ -2046,9 +2060,9 @@ defmodule PlatformWeb.TasksLiveTest do
       # the mobile stack header (the `min-h-[44px]` carrier) renders;
       # the desktop kanban variant is always rendered (`hidden
       # md:flex`) and emits `data-role="stack-header"` regardless.
-      html = render_click(view, "filter_by_status", %{"status" => stack.status})
-
-      # The mobile stack header button sits on the toggle_stack_expand
+      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
+      html = after_filter(view)
+      # The mobile stack header button sits on the stack_toggle_expand
       # phx-click — assert the iOS minimum 44px tap target is enforced.
       # Tailwind arbitrary value `min-h-[44px]` renders verbatim in the
       # class string. We assert presence of both markers in the
@@ -2064,8 +2078,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Switch the mobile filter pill to the rollup status so the
       # mobile stack-card is visible before expanding (T6 PR #328).
-      _ = render_click(view, "filter_by_status", %{"status" => stack.status})
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # Mobile member rows must be ≥ 44px tall (iOS guideline) and the
       # title span must `truncate min-w-0` so long member titles don't
@@ -2124,11 +2138,12 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ ~s|data-selected-project-id="__all__"|
 
       # After selecting a project, the wrapper should reflect the UUID.
-      html = render_click(view, "select_project", %{"id" => project.id})
+      html = sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
       assert html =~ ~s|data-selected-project-id="#{project.id}"|
 
       # Clearing the filter snaps the wrapper back to the sentinel.
-      html = render_click(view, "clear_filters")
+      _ = render_click(filters(view), "filter_clear")
+      html = after_filter(view)
       assert html =~ ~s|data-selected-project-id="__all__"|
     end
 
@@ -2144,7 +2159,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # The hook may push a UUID that no longer points at a project. The
       # handler should treat that as a clear-filters and not crash.
-      html = render_click(view, "select_project", %{"id" => stale_id})
+      html = sidebar_click(view, "sidebar_select_project", %{"id" => stale_id})
 
       assert html =~ ~s|data-selected-project-id="__all__"|
       # Board still renders (not blank/erroring) and the original task is
@@ -2162,12 +2177,13 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Narrow to p1
-      html = render_click(view, "select_project", %{"id" => p1.id})
+      html = sidebar_click(view, "sidebar_select_project", %{"id" => p1.id})
       assert html =~ "P1 Task"
       refute html =~ "P2 Task"
 
       # Clear — both visible again, sentinel restored on the wrapper
-      html = render_click(view, "clear_filters")
+      _ = render_click(filters(view), "filter_clear")
+      html = after_filter(view)
       assert html =~ ~s|data-selected-project-id="__all__"|
       assert html =~ "P1 Task"
       assert html =~ "P2 Task"
@@ -2182,7 +2198,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       project_id = project.id
-      render_click(view, "select_project", %{"id" => project.id})
+      sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
       assert_push_event(view, "selected_project_changed", %{id: ^project_id})
     end
 
@@ -2199,7 +2215,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       stale_id = Ecto.UUID.generate()
-      render_click(view, "select_project", %{"id" => stale_id})
+      sidebar_click(view, "sidebar_select_project", %{"id" => stale_id})
       assert_push_event(view, "selected_project_changed", %{id: "__all__"})
     end
 
@@ -2211,10 +2227,10 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       project_id = project.id
-      render_click(view, "select_project", %{"id" => project.id})
+      sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
       assert_push_event(view, "selected_project_changed", %{id: ^project_id})
 
-      render_click(view, "clear_filters")
+      render_click(filters(view), "filter_clear")
       assert_push_event(view, "selected_project_changed", %{id: "__all__"})
     end
   end
@@ -2336,11 +2352,11 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks")
 
     # Open the mobile project sheet
-    html = render_click(view, "toggle_project_sheet")
+    html = sidebar_click(view, "sidebar_toggle_project_sheet")
     assert html =~ "Projects"
 
     # Select project — sheet should close (no backdrop)
-    html = render_click(view, "select_project", %{"id" => project.id})
+    html = sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
     refute html =~ "bg-black/40"
   end
 
@@ -2364,7 +2380,7 @@ defmodule PlatformWeb.TasksLiveTest do
     refute html =~ "Above Board Epic"
 
     # Select project — epics section appears
-    html = render_click(view, "select_project", %{"id" => project.id})
+    html = sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
     assert html =~ "Above Board Epic"
     assert html =~ "in_progress"
     assert html =~ "Epic description here"
@@ -2388,15 +2404,15 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks")
 
     # Select project first
-    render_click(view, "select_project", %{"id" => project.id})
+    sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
 
     # Select epic — only epic tasks shown
-    html = render_click(view, "select_epic", %{"id" => epic.id})
+    html = sidebar_click(view, "sidebar_select_epic", %{"id" => epic.id})
     assert html =~ "Epic Task"
     refute html =~ "No Epic Task"
 
     # Deselect epic — both tasks shown again
-    html = render_click(view, "select_epic", %{"id" => epic.id})
+    html = sidebar_click(view, "sidebar_select_epic", %{"id" => epic.id})
     assert html =~ "Epic Task"
     assert html =~ "No Epic Task"
   end
@@ -2414,18 +2430,18 @@ defmodule PlatformWeb.TasksLiveTest do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks")
 
-    render_click(view, "select_project", %{"id" => project.id})
+    sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
 
     # Epic is visible initially
     html = render(view)
     assert html =~ "Collapsible Epic"
 
     # Toggle collapse — epic card should no longer be visible
-    html = render_click(view, "toggle_epics_panel")
+    html = sidebar_click(view, "sidebar_toggle_epics_panel")
     refute html =~ "Collapsible Epic"
 
     # Toggle again — epic card reappears
-    html = render_click(view, "toggle_epics_panel")
+    html = sidebar_click(view, "sidebar_toggle_epics_panel")
     assert html =~ "Collapsible Epic"
   end
 
@@ -2439,7 +2455,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks")
 
     html =
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Request a plan",
           "project_id" => project.id,
@@ -2452,6 +2468,10 @@ defmodule PlatformWeb.TasksLiveTest do
           "epic_id" => ""
         }
       })
+
+    # Stage 6: the component reports the outcome up; the flash and the
+    # board refresh land in the NEXT render, not the submit reply.
+    html = render(view)
 
     assert html =~ "Task created and planning requested."
 
@@ -2472,7 +2492,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks")
 
     html =
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Unassigned plan request",
           "project_id" => project.id,
@@ -2485,6 +2505,10 @@ defmodule PlatformWeb.TasksLiveTest do
           "epic_id" => ""
         }
       })
+
+    # Stage 6: the component reports the outcome up; the flash and the
+    # board refresh land in the NEXT render, not the submit reply.
+    html = render(view)
 
     assert html =~ "Select an agent before requesting a plan."
 
@@ -2504,7 +2528,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {conn, user} = authenticated_conn_with_user(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Task with sponsor",
           "project_id" => project.id,
@@ -2534,7 +2558,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Task without sponsor",
           "project_id" => project.id,
@@ -2565,7 +2589,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Task with empty sponsor",
           "project_id" => project.id,
@@ -2618,7 +2642,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Open the New-Task bottom sheet so `@users` renders inside the
       # Sponsor <select>.
-      render_click(view, "toggle_task_sheet", %{})
+      render_click(create(view), "taskcreate_toggle_sheet", %{})
       rendered = render(view)
 
       assert rendered =~ "Active Sponsor Candidate"
@@ -2637,10 +2661,10 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Open the sheet and flip the toggle via the phx-click handler.
-      render_click(view, "toggle_task_sheet")
-      render_click(view, "toggle_auto_approve_plan")
+      render_click(create(view), "taskcreate_toggle_sheet")
+      render_click(create(view), "taskcreate_toggle_auto_approve_plan")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Task with auto-approve on",
           "project_id" => project.id,
@@ -2669,7 +2693,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Task with auto-approve off",
           "project_id" => project.id,
@@ -2698,18 +2722,18 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_click(view, "toggle_task_sheet")
+      render_click(create(view), "taskcreate_toggle_sheet")
 
       # Off by default — the checked attribute is absent when off.
       html = render(view)
-      assert html =~ ~s(phx-click="toggle_auto_approve_plan")
+      assert html =~ ~s(phx-click="taskcreate_toggle_auto_approve_plan")
 
       # Toggle on — checkbox should render `checked`.
-      html = render_click(view, "toggle_auto_approve_plan")
+      html = render_click(create(view), "taskcreate_toggle_auto_approve_plan")
       assert html =~ ~r/name="task\[auto_approve_plan\]"[^>]*checked/s
 
       # Toggle back off — `checked` attribute should be gone from the toggle.
-      html = render_click(view, "toggle_auto_approve_plan")
+      html = render_click(create(view), "taskcreate_toggle_auto_approve_plan")
       refute html =~ ~r/name="task\[auto_approve_plan\]"[^>]*checked/s
     end
   end
@@ -2730,7 +2754,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Sheet deploy target task",
           "project_id" => project.id,
@@ -2759,7 +2783,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Sheet no deploy target",
           "project_id" => project.id,
@@ -2789,7 +2813,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Open the sheet — no project has been picked in the sheet yet.
-      html = render_click(view, "toggle_task_sheet")
+      html = render_click(create(view), "taskcreate_toggle_sheet")
 
       # The sheet's deploy_target select should be present, disabled, and
       # placeholder-labelled "(no targets configured)".
@@ -2828,10 +2852,10 @@ defmodule PlatformWeb.TasksLiveTest do
       # Open the sheet, then simulate validate_task firing after the user
       # picks a project — that's what wires @task_form[:project_id].value
       # and lets the sheet's dropdown light up.
-      render_click(view, "toggle_task_sheet")
+      render_click(create(view), "taskcreate_toggle_sheet")
 
       html =
-        render_change(view, "validate_task", %{
+        render_change(create(view), "taskcreate_validate", %{
           "task" => %{
             "title" => "Enable dt sheet",
             "project_id" => project.id,
@@ -2866,7 +2890,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # No deploy_target key at all — regression against the create path.
       html =
-        render_submit(view, "create_task", %{
+        render_submit(create(view), "taskcreate_submit", %{
           "task" => %{
             "title" => "Legacy create submit",
             "project_id" => project.id,
@@ -2878,6 +2902,10 @@ defmodule PlatformWeb.TasksLiveTest do
             "epic_id" => ""
           }
         })
+
+      # Stage 6: the component reports the outcome up; the flash and the
+      # board refresh land in the NEXT render, not the submit reply.
+      html = render(view)
 
       assert html =~ "Task created."
 
@@ -2903,7 +2931,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       html =
-        render_submit(view, "create_task", %{
+        render_submit(create(view), "taskcreate_submit", %{
           "task" => %{
             "title" => "Plan with deploy_target",
             "project_id" => project.id,
@@ -2916,6 +2944,10 @@ defmodule PlatformWeb.TasksLiveTest do
             "epic_id" => ""
           }
         })
+
+      # Stage 6: the component reports the outcome up; the flash and the
+      # board refresh land in the NEXT render, not the submit reply.
+      html = render(view)
 
       assert html =~ "Task created and planning requested."
 
@@ -2953,7 +2985,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Route through TaskAttrs",
           "project_id" => project.id,
@@ -2995,7 +3027,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      render_submit(view, "create_task", %{
+      render_submit(create(view), "taskcreate_submit", %{
         "task" => %{
           "title" => "Survives phase transition",
           "project_id" => project.id,
@@ -3064,8 +3096,13 @@ defmodule PlatformWeb.TasksLiveTest do
     # Click approve
     html =
       view
-      |> element("button[phx-click=\"approve_plan\"]")
+      |> element("button[phx-click=\"plan_approve\"]")
       |> render_click()
+
+    # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so
+    # flashes and shell-state refreshes arrive on the NEXT render pass
+    # (the component notifies the shell via send/2). Re-render to observe.
+    html = render(view)
 
     assert html =~ "Plan approved."
 
@@ -3092,7 +3129,12 @@ defmodule PlatformWeb.TasksLiveTest do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    html = render_click(view, "reject_plan", %{"plan-id" => plan.id})
+    html = render_click(detail(view), "plan_reject", %{"plan-id" => plan.id})
+
+    # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so
+    # flashes and shell-state refreshes arrive on the NEXT render pass
+    # (the component notifies the shell via send/2). Re-render to observe.
+    html = render(view)
 
     assert html =~ "Plan rejected."
 
@@ -3214,6 +3256,10 @@ defmodule PlatformWeb.TasksLiveTest do
         |> element(~s(button[data-role="plan-reject-feedback-submit"][data-plan-id="#{plan.id}"]))
         |> render_click()
 
+      # Task 01a008f6 stage 4: the detail panel is a LiveComponent; its
+      # flash lands on the NEXT render pass.
+      html = render(view)
+
       assert html =~ "Plan rejected with feedback."
 
       reloaded = Tasks.get_plan(plan.id)
@@ -3241,7 +3287,12 @@ defmodule PlatformWeb.TasksLiveTest do
       # leave the plan untouched. We dispatch the event by name so the
       # LiveViewTest disabled-button guard doesn't preempt the server.
       html =
-        render_click(view, "submit_reject_with_feedback", %{"plan-id" => plan.id})
+        render_click(detail(view), "plan_submit_reject_with_feedback", %{"plan-id" => plan.id})
+
+      # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so
+      # flashes and shell-state refreshes arrive on the NEXT render pass
+      # (the component notifies the shell via send/2). Re-render to observe.
+      html = render(view)
 
       assert html =~ "Please describe what needs to change before rejecting."
       # Drawer stays visible so the reviewer can fill it in.
@@ -3399,7 +3450,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Bypass the DOM-disabled guard and fire the event directly so we
       # exercise the server's empty-feedback branch.
-      render_click(view, "submit_reject_with_feedback", %{"plan-id" => plan.id})
+      render_click(detail(view), "plan_submit_reject_with_feedback", %{"plan-id" => plan.id})
 
       # Plan stayed in pending_review (v1's empty-feedback guard).
       reloaded = Tasks.get_plan(plan.id)
@@ -3643,13 +3694,13 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "Live stage"
       assert html =~ "test_pass"
       assert html =~ "Approve Plan"
-      assert html =~ "phx-click=\"approve_plan\""
+      assert html =~ "phx-click=\"plan_approve\""
       # Stage 1 of task 019e30be: Reject button now opens an inline
       # feedback drawer instead of rejecting directly, so it fires
       # `toggle_reject_feedback`. The `submit_reject_with_feedback`
       # button inside the (initially-collapsed) drawer is what
       # ultimately calls `Tasks.reject_plan/3`.
-      assert html =~ "phx-click=\"toggle_reject_feedback\""
+      assert html =~ "phx-click=\"plan_toggle_reject_feedback\""
       assert html =~ ~s(data-role="plan-reject-toggle")
       # The single rejected revision still folds — one summary, one body
       # (the active plan).
@@ -3663,13 +3714,15 @@ defmodule PlatformWeb.TasksLiveTest do
       ts = ~U[2026-05-04 12:34:56.000000Z]
       plan = %Plan{version: 1, status: "rejected", updated_at: ts}
 
-      assert PlatformWeb.TasksLive.plan_summary_label(plan) ==
+      assert PlatformWeb.Tasks.TaskDetailComponent.plan_summary_label(plan) ==
                "Plan v1 — rejected on 2026-05-04"
     end
 
     test "plan_summary_label/1 falls back when updated_at is nil" do
       plan = %Plan{version: 7, status: "rejected", updated_at: nil}
-      assert PlatformWeb.TasksLive.plan_summary_label(plan) == "Plan v7 — rejected"
+
+      assert PlatformWeb.Tasks.TaskDetailComponent.plan_summary_label(plan) ==
+               "Plan v7 — rejected"
     end
 
     test "plan_summary_label/1 appends a quoted excerpt when rejection_reason is set and short" do
@@ -3682,7 +3735,7 @@ defmodule PlatformWeb.TasksLiveTest do
         rejection_reason: "needs more tests"
       }
 
-      assert PlatformWeb.TasksLive.plan_summary_label(plan) ==
+      assert PlatformWeb.Tasks.TaskDetailComponent.plan_summary_label(plan) ==
                ~s(Plan v1 — rejected on 2026-05-04 — "needs more tests")
     end
 
@@ -3699,7 +3752,7 @@ defmodule PlatformWeb.TasksLiveTest do
         rejection_reason: long_reason
       }
 
-      label = PlatformWeb.TasksLive.plan_summary_label(plan)
+      label = PlatformWeb.Tasks.TaskDetailComponent.plan_summary_label(plan)
       expected_excerpt = String.slice(long_reason, 0, 60) <> "…"
 
       assert label == ~s(Plan v1 — rejected on 2026-05-04 — "#{expected_excerpt}")
@@ -3709,7 +3762,7 @@ defmodule PlatformWeb.TasksLiveTest do
       ts = ~U[2026-05-04 12:34:56.000000Z]
       plan = %Plan{version: 4, status: "rejected", updated_at: ts, rejection_reason: nil}
 
-      assert PlatformWeb.TasksLive.plan_summary_label(plan) ==
+      assert PlatformWeb.Tasks.TaskDetailComponent.plan_summary_label(plan) ==
                "Plan v4 — rejected on 2026-05-04"
     end
 
@@ -3726,7 +3779,7 @@ defmodule PlatformWeb.TasksLiveTest do
         superseded_by: %Plan{version: 2}
       }
 
-      label = PlatformWeb.TasksLive.plan_summary_label(plan)
+      label = PlatformWeb.Tasks.TaskDetailComponent.plan_summary_label(plan)
 
       assert label == "Plan v1 — superseded by v2 on 2026-05-07"
       refute label =~ "rejected on"
@@ -3752,7 +3805,7 @@ defmodule PlatformWeb.TasksLiveTest do
         }
       }
 
-      assert PlatformWeb.TasksLive.plan_summary_label(plan) ==
+      assert PlatformWeb.Tasks.TaskDetailComponent.plan_summary_label(plan) ==
                ~s(Plan v1 — rejected on 2026-05-04 — "design flaw")
     end
 
@@ -4081,23 +4134,23 @@ defmodule PlatformWeb.TasksLiveTest do
     %{task: task, conn: conn} = seed_superseded_review_pair(conn)
 
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
-    html = render_click(view, "toggle_superseded_reviews", %{})
+    html = render_click(element(view, ~s([phx-click="gate_toggle_superseded"])))
 
     # POSITIVE CONTROL FIRST. If this is zero the refute below is vacuous:
     # a renamed event or button class would empty both queries at once.
-    assert count_nodes(html, ~s([phx-click="approve_review_item"])) == 1
+    assert count_nodes(html, ~s([phx-click="gate_approve_item"])) == 1
 
     # The refute, scoped to the superseded container so a matching control
     # elsewhere on the page cannot satisfy it.
     assert count_nodes(
              html,
-             ~s([data-role="superseded-reviews"] [phx-click="approve_review_item"])
+             ~s([data-role="superseded-reviews"] [phx-click="gate_approve_item"])
            ) ==
              0
 
     assert count_nodes(
              html,
-             ~s([data-role="superseded-reviews"] [phx-click="toggle_review_feedback"])
+             ~s([data-role="superseded-reviews"] [phx-click="gate_toggle_feedback"])
            ) ==
              0
 
@@ -4128,7 +4181,7 @@ defmodule PlatformWeb.TasksLiveTest do
     refute superseded_block =~ "error"
     refute superseded_block =~ "Superseded"
 
-    expanded = render_click(view, "toggle_superseded_reviews", %{})
+    expanded = render_click(element(view, ~s([phx-click="gate_toggle_superseded"])))
     assert count_nodes(expanded, ~s([data-role="superseded-review"])) == 1
     assert expanded =~ "superseded"
   end
@@ -4161,7 +4214,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
 
     # One live request, one approve control, no disclosure line yet.
-    assert count_nodes(html, ~s([phx-click="approve_review_item"])) == 1
+    assert count_nodes(html, ~s([phx-click="gate_approve_item"])) == 1
     refute html =~ "earlier submission"
 
     {:ok, _second} =
@@ -4175,7 +4228,7 @@ defmodule PlatformWeb.TasksLiveTest do
     refreshed = render(view)
 
     assert refreshed =~ "1 earlier submission"
-    assert count_nodes(refreshed, ~s([phx-click="approve_review_item"])) == 1
+    assert count_nodes(refreshed, ~s([phx-click="gate_approve_item"])) == 1
   end
 
   # ── Soft delete tests ─────────────────────────────────────────────────
@@ -4228,7 +4281,7 @@ defmodule PlatformWeb.TasksLiveTest do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    html = render_click(view, "request_delete_task")
+    html = render_click(detail(view), "detail_request_delete")
 
     assert html =~ "Are you sure you want to delete this task?"
     assert html =~ "Yes, Delete"
@@ -4242,8 +4295,8 @@ defmodule PlatformWeb.TasksLiveTest do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    render_click(view, "request_delete_task")
-    html = render_click(view, "cancel_delete_task")
+    render_click(detail(view), "detail_request_delete")
+    html = render_click(detail(view), "detail_cancel_delete")
 
     refute html =~ "Are you sure you want to delete this task?"
   end
@@ -4259,8 +4312,8 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Doomed Task"
 
     # Request then confirm delete
-    render_click(view, "request_delete_task")
-    render_click(view, "confirm_delete_task")
+    render_click(detail(view), "detail_request_delete")
+    render_click(detail(view), "detail_confirm_delete")
 
     # Task should be gone from the board
     html = render(view)
@@ -4332,6 +4385,89 @@ defmodule PlatformWeb.TasksLiveTest do
 
   # ── Steering input tests ──────────────────────────────────────────────
 
+  # ── Steering @-mention autocomplete (task 01a008f6 stage 5) ───────────
+  #
+  # Before this stage `mention_query` / `mention_clear` were no-op stubs on
+  # the shell carrying a comment claiming "TasksLive has no mention UI" —
+  # false: the composer is `phx-hook="ComposeInput"` and the hook pushes
+  # both events. These two tests are what make the wiring provable rather
+  # than assumed, so they assert the SERVER side of the round trip:
+  # candidates come back for a query, and clear empties them.
+
+  test "steering_mention_query returns execution-space candidates", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Mentionable Task", status: "in_progress"})
+
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    {:ok, _p} =
+      Platform.Chat.add_participant(space.id, %{
+        participant_type: "agent",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Higgins",
+        joined_at: DateTime.utc_now()
+      })
+
+    {conn, _user} = authenticated_conn_with_user(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    html =
+      render_hook(steering(view), "steering_mention_query", %{
+        "query" => "Hig",
+        "source" => "steering-compose-form"
+      })
+
+    assert html =~ "data-mention-suggestion"
+    assert html =~ "Higgins"
+  end
+
+  test "steering_mention_clear empties the suggestion list", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Mention Clear Task", status: "in_progress"})
+
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    {:ok, _p} =
+      Platform.Chat.add_participant(space.id, %{
+        participant_type: "agent",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Higgins",
+        joined_at: DateTime.utc_now()
+      })
+
+    {conn, _user} = authenticated_conn_with_user(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    opened =
+      render_hook(steering(view), "steering_mention_query", %{
+        "query" => "Hig",
+        "source" => "steering-compose-form"
+      })
+
+    assert opened =~ "data-mention-suggestion"
+
+    cleared = render_hook(steering(view), "steering_mention_clear", %{})
+    refute cleared =~ "data-mention-suggestion"
+  end
+
+  test "the steering composer addresses its mention pushes at the component", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Mention Wiring Task", status: "in_progress"})
+
+    {:ok, _space} = ExecutionSpace.find_or_create(task.id)
+
+    {conn, _user} = authenticated_conn_with_user(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    # A hook's `pushEvent` ignores `phx-target`, so the composer must carry
+    # the data attributes `compose_input.js` reads to choose `pushEventTo`.
+    # Without them the mention events land on the shell and are dropped —
+    # exactly the silent shape this stage removed.
+    assert html =~ ~s|data-mention-target="#tasks-steering"|
+    assert html =~ ~s|data-mention-query-event="steering_mention_query"|
+    assert html =~ ~s|data-mention-clear-event="steering_mention_clear"|
+  end
+
   test "send_steering_message posts engagement metadata and shows success feedback", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Steerable Task", status: "in_progress"})
@@ -4342,7 +4478,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
     html =
-      render_submit(view, "send_steering_message", %{
+      render_submit(steering(view), "send_steering_message", %{
         "steering" => %{"text" => "Focus on the error handling first"}
       })
 
@@ -4370,7 +4506,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
     html =
-      render_submit(view, "send_steering_message", %{
+      render_submit(steering(view), "send_steering_message", %{
         "steering" => %{"text" => "   "}
       })
 
@@ -4387,7 +4523,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
     html =
-      render_submit(view, "send_steering_message", %{
+      render_submit(steering(view), "send_steering_message", %{
         "steering" => %{"text" => "This should do nothing"}
       })
 
@@ -4403,7 +4539,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
     # Trigger the change event — should not crash
-    render_change(view, "steering_changed", %{
+    render_change(steering(view), "steering_changed", %{
       "steering" => %{"text" => "typing something"}
     })
   end
@@ -4471,7 +4607,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
     # Send a steering message
-    render_submit(view, "send_steering_message", %{
+    render_submit(steering(view), "send_steering_message", %{
       "steering" => %{"text" => "Check the error logs"}
     })
 
@@ -4493,7 +4629,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {conn, user} = authenticated_conn_with_user(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    render_submit(view, "send_steering_message", %{
+    render_submit(steering(view), "send_steering_message", %{
       "steering" => %{"text" => "Hello agent"}
     })
 
@@ -4536,7 +4672,7 @@ defmodule PlatformWeb.TasksLiveTest do
     refute new_id == participant.id
 
     html =
-      render_submit(view, "send_steering_message", %{
+      render_submit(steering(view), "send_steering_message", %{
         "steering" => %{"text" => "Back in the loop"}
       })
 
@@ -4983,14 +5119,14 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
       # v2: detail-panel edits are gated on edit_mode. Engage it first.
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
       # Click-to-edit puts the detail panel into editing state.
-      render_click(view, "start_edit_title", %{"task-id" => task.id})
+      render_click(detail(view), "detail_start_edit_title", %{"task-id" => task.id})
       assert render(view) =~ "data-role=\"detail-title-input\""
 
       # Submit a new title via the same event the input fires on Enter/blur.
-      render_hook(view, "update_task_title", %{
+      render_hook(detail(view), "detail_update_task_title", %{
         "value" => "Renamed Title",
         "task-id" => task.id
       })
@@ -5024,8 +5160,12 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
       # v2: enter edit mode so the update handler isn't gated out.
-      render_click(view, "toggle_edit_mode")
-      render_hook(view, "update_task_title", %{"value" => "   ", "task-id" => task.id})
+      render_click(detail(view), "detail_toggle_edit_mode")
+
+      render_hook(detail(view), "detail_update_task_title", %{
+        "value" => "   ",
+        "task-id" => task.id
+      })
 
       assert render(view) =~ "Title cannot be empty"
       assert Tasks.get_task_record(task.id).title == "Keep Me"
@@ -5040,7 +5180,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, html} = live(conn, ~p"/tasks")
 
       # The kanban-card title is rendered as a plain <h3> with no
-      # `phx-click="start_edit_title"` and no InlineEdit hook. Edits must
+      # `phx-click="detail_start_edit_title"` and no InlineEdit hook. Edits must
       # go through the detail panel + explicit edit-mode toggle.
       assert html =~ ~s|data-role="card-title"|
 
@@ -5048,7 +5188,7 @@ defmodule PlatformWeb.TasksLiveTest do
         Regex.run(~r|<h3[^>]*data-role="card-title"[^>]*>|, html)
         |> List.first()
 
-      refute card_title_h3 =~ "phx-click=\"start_edit_title\""
+      refute card_title_h3 =~ "phx-click=\"detail_start_edit_title\""
       refute card_title_h3 =~ "phx-hook=\"InlineEdit\""
 
       # The legacy inline-edit input variant is also gone.
@@ -5072,16 +5212,16 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
-      render_click(view, "start_edit_title", %{"task-id" => task.id})
+      render_click(detail(view), "detail_toggle_edit_mode")
+      render_click(detail(view), "detail_start_edit_title", %{"task-id" => task.id})
 
-      render_hook(view, "update_task_title", %{
+      render_hook(detail(view), "detail_update_task_title", %{
         "value" => "Navigable Task v2",
         "task-id" => task.id
       })
 
       # Closing the detail panel still works after an edit.
-      render_click(view, "close_detail")
+      render_click(detail(view), "detail_close")
       assert render(view) =~ "Navigable Task v2"
     end
   end
@@ -5095,9 +5235,9 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
       # v2: edit-mode required.
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "priority",
         "value" => "high",
         "task-id" => task.id
@@ -5113,9 +5253,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "priority",
         "value" => "ULTRA",
         "task-id" => task.id
@@ -5139,14 +5279,14 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
       # v2: select only renders in edit mode.
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
       assert html =~ ~s|data-role="deploy-target-select"|
       assert html =~ ~s|value="production"|
       assert html =~ ~s|value="exp"|
       # Targets from other projects are not present.
       refute html =~ ~s|value="some_other_target"|
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "deploy_target",
         "value" => "exp",
         "task-id" => task.id
@@ -5178,7 +5318,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       # Names are extracted from the maps and rendered as <option> values.
       assert html =~ ~s|data-role="deploy-target-select"|
@@ -5191,7 +5331,7 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ "(no targets configured)"
 
       # Setting the value still persists.
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "deploy_target",
         "value" => "production",
         "task-id" => task.id
@@ -5229,7 +5369,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-role="deploy-target-select"|
       assert html =~ ~s|data-selected-value="production"|
@@ -5256,7 +5396,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-selected-value="production"|
 
@@ -5285,7 +5425,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-selected-value=""|
       assert html =~ "(none — no targets configured)"
@@ -5299,9 +5439,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "status",
         "value" => "done",
         "task-id" => task.id
@@ -5350,7 +5490,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       refute html =~ ~s|data-role="assignee-readonly"|
       refute html =~ "Current assignee"
@@ -5383,7 +5523,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|phx-click="open_assignee_modal"|
       assert html =~ "Configure"
@@ -5398,7 +5538,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "open_assignee_modal")
+      html = render_click(assignees(view), "open_assignee_modal")
 
       # Modal exposes the Simple/Advanced mode toggle when open.
       assert html =~ "set_assignee_modal_mode"
@@ -5423,9 +5563,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "assignee_id",
         "value" => a2.id,
         "task-id" => task.id
@@ -5446,9 +5586,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "open_assignee_modal")
+      render_click(assignees(view), "open_assignee_modal")
 
-      render_hook(view, "save_assignees", %{
+      render_hook(assignees(view), "save_assignees", %{
         "assignees" => %{"all" => a1.id}
       })
 
@@ -5468,9 +5608,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "sponsor_user_id",
         "value" => sponsor.id,
         "task-id" => task.id
@@ -5493,9 +5633,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "deploy_target",
         "value" => "exp",
         "task-id" => task.id
@@ -5554,7 +5694,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-role="sponsor-select"|
       assert html =~ "No Sponsor"
@@ -5570,7 +5710,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-role="sponsor-select"|
       assert html =~ "Chosen One"
@@ -5587,9 +5727,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "sponsor_user_id",
         "value" => replacement.id,
         "task-id" => task.id
@@ -5608,9 +5748,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "sponsor_user_id",
         "value" => "",
         "task-id" => task.id
@@ -5635,14 +5775,17 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
 
-      html =
-        render_hook(view, "update_task_field", %{
-          "field" => "sponsor_user_id",
-          "value" => sponsor.id,
-          "task-id" => task.id
-        })
+      render_hook(detail(view), "detail_update_task_field", %{
+        "field" => "sponsor_user_id",
+        "value" => sponsor.id,
+        "task-id" => task.id
+      })
+
+      # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so the
+      # shell-side reload it requests lands on the NEXT render pass.
+      html = render(view)
 
       assert html =~ ~s|data-role="sponsor-readonly"|
       assert html =~ "Late Arrival"
@@ -5686,9 +5829,9 @@ defmodule PlatformWeb.TasksLiveTest do
       # Session A: engage edit mode and set the sponsor via the inline
       # picker — same event Session B would fire if Rowan clicked the
       # dropdown himself.
-      render_click(view_a, "toggle_edit_mode")
+      render_click(detail(view_a), "detail_toggle_edit_mode")
 
-      render_hook(view_a, "update_task_field", %{
+      render_hook(detail(view_a), "detail_update_task_field", %{
         "field" => "sponsor_user_id",
         "value" => sponsor.id,
         "task-id" => task.id
@@ -5736,9 +5879,9 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html_b0 =~ ~s|data-role="sponsor-readonly"|
       assert html_b0 =~ "Departing Cross-Session Sponsor"
 
-      render_click(view_a, "toggle_edit_mode")
+      render_click(detail(view_a), "detail_toggle_edit_mode")
 
-      render_hook(view_a, "update_task_field", %{
+      render_hook(detail(view_a), "detail_update_task_field", %{
         "field" => "sponsor_user_id",
         "value" => "",
         "task-id" => task.id
@@ -5880,6 +6023,63 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  # ADR-0016 test-before-refactor net for task 01a008f6 stage 4: one test
+  # that opens a task and performs BOTH inline edits end to end, so the
+  # detail region's extraction into `PlatformWeb.Tasks.TaskDetailComponent`
+  # has a single failing signal if either path breaks.
+  describe "detail panel inline edit (extraction safety net)" do
+    test "opening a task and editing its title and description persists both",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Before Title", description: "Before body"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # The panel is rendered by the LiveComponent, and its events are
+      # targeted at it rather than at the shell.
+      assert html =~ ~s|data-phx-component=|
+      assert html =~ ~s|data-role="detail-title"|
+
+      render_click(detail(view), "detail_toggle_edit_mode")
+      render_click(detail(view), "detail_start_edit_title", %{"task-id" => task.id})
+
+      render_hook(detail(view), "detail_update_task_title", %{
+        "value" => "After Title",
+        "task-id" => task.id
+      })
+
+      render_click(detail(view), "detail_toggle_edit_mode")
+      render_click(detail(view), "detail_start_edit_description")
+
+      view
+      |> form(~s|form[data-role="description-form"]|, %{"description" => "After body"})
+      |> render_submit()
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.title == "After Title"
+      assert reloaded.description == "After body"
+
+      html = render(view)
+      assert html =~ "After Title"
+      assert html =~ "After body"
+    end
+
+    test "the detail panel renders at both breakpoints", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Two Breakpoints"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # One panel container, sized for phone (w-full) and desktop
+      # (max-w-lg) in the same element — the panel is not duplicated per
+      # breakpoint, so a single container carrying both is the invariant.
+      assert html =~ "max-w-lg"
+      assert html =~ ~s|data-role="detail-title"|
+    end
+  end
+
   describe "description editor (stage 4)" do
     test "Edit button swaps the rendered markdown for a textarea", %{conn: conn} do
       project = create_project()
@@ -5893,8 +6093,8 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "<strong>world</strong>"
 
       # v2: edit button only renders in edit mode.
-      render_click(view, "toggle_edit_mode")
-      html = render_click(view, "start_edit_description")
+      render_click(detail(view), "detail_toggle_edit_mode")
+      html = render_click(detail(view), "detail_start_edit_description")
       assert html =~ ~s|data-role="description-textarea"|
       assert html =~ ~s|data-role="description-save"|
       refute html =~ ~s|data-role="description-rendered"|
@@ -5907,8 +6107,8 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
-      render_click(view, "start_edit_description")
+      render_click(detail(view), "detail_toggle_edit_mode")
+      render_click(detail(view), "detail_start_edit_description")
 
       html =
         view
@@ -5924,6 +6124,11 @@ defmodule PlatformWeb.TasksLiveTest do
       # once sanitized. We match the rendered tag close (Earmark inserts a
       # newline between the opening tag and the text, so checking for the
       # close is the most stable way to assert the heading rendered).
+      # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so
+      # flashes and shell-state refreshes arrive on the NEXT render pass
+      # (the component notifies the shell via send/2). Re-render to observe.
+      html = render(view)
+
       assert html =~ "New heading</h3>"
       assert html =~ "Fresh body."
       assert html =~ ~s|data-role="description-rendered"|
@@ -5940,9 +6145,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
-      render_click(view, "start_edit_description")
-      html = render_click(view, "cancel_edit_description")
+      render_click(detail(view), "detail_toggle_edit_mode")
+      render_click(detail(view), "detail_start_edit_description")
+      html = render_click(detail(view), "detail_cancel_edit_description")
 
       assert html =~ ~s|data-role="description-rendered"|
       refute html =~ ~s|data-role="description-textarea"|
@@ -5962,8 +6167,8 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view_b, _html_b} = live(conn_b, ~p"/tasks/#{task.id}")
 
       # A engages edit mode and saves a new description.
-      render_click(view_a, "toggle_edit_mode")
-      render_click(view_a, "start_edit_description")
+      render_click(detail(view_a), "detail_toggle_edit_mode")
+      render_click(detail(view_a), "detail_start_edit_description")
 
       view_a
       |> form(~s|form[data-role="description-form"]|, %{"description" => "v1 from A"})
@@ -5986,7 +6191,7 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ "click Edit to add one"
 
       # On: placeholder mentions the Edit affordance now visible.
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
       assert html =~ "click Edit to add one"
     end
   end
@@ -6006,11 +6211,11 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, html} = live(conn, ~p"/tasks")
 
       # Both menus closed: no epic trigger anywhere in the initial render.
-      refute html =~ ~s|phx-click="toggle_epic_sheet"|
+      refute html =~ ~s|phx-click="sidebar_toggle_epic_sheet"|
 
-      html = render_click(view, "toggle_fab_menu")
+      html = render_click(create(view), "taskcreate_toggle_fab")
       [item_attrs] = Regex.run(~r/<button[^>]*data-role="fab-new-epic"[^>]*>/, html)
-      assert item_attrs =~ ~s|phx-click="toggle_epic_sheet"|
+      assert item_attrs =~ ~s|phx-click="sidebar_toggle_epic_sheet"|
       assert item_attrs =~ ~s|role="menuitem"|
     end
 
@@ -6022,7 +6227,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # Sheet is closed initially — its content is gated by :if=show_epic_sheet.
       refute html =~ "create-epic-form"
 
-      html = render_click(view, "toggle_epic_sheet")
+      html = sidebar_click(view, "sidebar_toggle_epic_sheet")
 
       assert html =~ "create-epic-form"
       assert html =~ "New Epic"
@@ -6035,7 +6240,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _ = render_click(view, "toggle_epic_sheet")
+      _ = sidebar_click(view, "sidebar_toggle_epic_sheet")
 
       html =
         view
@@ -6051,6 +6256,10 @@ defmodule PlatformWeb.TasksLiveTest do
         )
         |> render_submit()
 
+      # The form lives in SidebarComponent, so render_submit returns only the
+      # component's HTML — re-render the view for the shell-owned flash.
+      html = html <> render(view)
+
       # Flash + sheet closed.
       assert html =~ "Epic created."
       refute html =~ "create-epic-form"
@@ -6065,7 +6274,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _ = render_click(view, "toggle_epic_sheet")
+      _ = sidebar_click(view, "sidebar_toggle_epic_sheet")
 
       html =
         view
@@ -6076,6 +6285,9 @@ defmodule PlatformWeb.TasksLiveTest do
           }
         )
         |> render_submit()
+
+      # As above: the flash is the shell's, the form is the component's.
+      html = html <> render(view)
 
       # Sheet still open, error messaging present.
       assert html =~ "create-epic-form"
@@ -6095,7 +6307,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_fab_menu"[^>]*>/, html)
+      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="taskcreate_toggle_fab"[^>]*>/, html)
       assert fab_attrs =~ "btn-primary"
       assert fab_attrs =~ "btn-circle"
 
@@ -6110,7 +6322,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
 
-      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_fab_menu"[^>]*>/, html)
+      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="taskcreate_toggle_fab"[^>]*>/, html)
       assert fab_attrs =~ "btn-primary"
       assert fab_attrs =~ "btn-circle"
 
@@ -6217,6 +6429,11 @@ defmodule PlatformWeb.TasksLiveTest do
         |> form(~s|#reopen-modal form|, %{"reason" => "Spec missed the auth flow"})
         |> render_submit()
 
+      # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so
+      # flashes and shell-state refreshes arrive on the NEXT render pass
+      # (the component notifies the shell via send/2). Re-render to observe.
+      html = render(view)
+
       assert html =~ "Task reopened."
       # Modal closed.
       refute html =~ ~s|id="reopen-modal"|
@@ -6247,6 +6464,11 @@ defmodule PlatformWeb.TasksLiveTest do
         |> form(~s|#reopen-modal form|, %{"reason" => "   \n\t  "})
         |> render_submit()
 
+      # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so
+      # flashes and shell-state refreshes arrive on the NEXT render pass
+      # (the component notifies the shell via send/2). Re-render to observe.
+      html = render(view)
+
       assert html =~ "A reason is required to reopen the task."
       # Modal stays open.
       assert html =~ ~s|id="reopen-modal"|
@@ -6266,7 +6488,7 @@ defmodule PlatformWeb.TasksLiveTest do
       |> element(~s|button[data-role="reopen-task-button"]|)
       |> render_click()
 
-      html = render_click(view, "close_reopen_modal")
+      html = render_click(detail(view), "detail_close_reopen_modal")
 
       refute html =~ ~s|id="reopen-modal"|
       assert Tasks.get_task_record(task.id).status == "done"
@@ -6395,6 +6617,11 @@ defmodule PlatformWeb.TasksLiveTest do
         })
         |> render_submit()
 
+      # The component reports the outcome up as a message; the flash and the
+      # board reload land in the NEXT render, not in the submit reply.
+      _ = html
+      html = render(view)
+
       assert html =~ "Task returned to planning."
       # Modal closed.
       refute html =~ ~s|id="supersede-modal"|
@@ -6425,6 +6652,9 @@ defmodule PlatformWeb.TasksLiveTest do
         |> form(~s|#supersede-modal form|, %{"reason" => "   \n\t  "})
         |> render_submit()
 
+      _ = html
+      html = render(view)
+
       assert html =~ "A reason is required to return the task to planning."
       # Modal stays open.
       assert html =~ ~s|id="supersede-modal"|
@@ -6444,7 +6674,7 @@ defmodule PlatformWeb.TasksLiveTest do
       |> element(~s|button[data-role="supersede-plan-button"]|)
       |> render_click()
 
-      html = render_click(view, "close_supersede_modal")
+      html = render_click(element(view, ~s|#supersede-modal button.btn-ghost.btn-sm|, "Cancel"))
 
       refute html =~ ~s|id="supersede-modal"|
       assert Tasks.get_task_record(task.id).status == "in_progress"
@@ -6472,7 +6702,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-edit-mode="true"|
       assert html =~ ~s|data-role="edit-mode-indicator"|
@@ -6486,8 +6716,8 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "toggle_edit_mode")
-      html = render_click(view, "toggle_edit_mode")
+      render_click(detail(view), "detail_toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-edit-mode="false"|
       refute html =~ ~s|data-role="edit-mode-indicator"|
@@ -6503,7 +6733,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task_a.id}")
 
       # Engage edit mode on Task A.
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
       assert html =~ ~s|data-edit-mode="true"|
 
       # Navigate to Task B via the same select_task patch the kanban uses.
@@ -6523,8 +6753,8 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
       # Toggle on, then close.
-      render_click(view, "toggle_edit_mode")
-      render_click(view, "close_detail")
+      render_click(detail(view), "detail_toggle_edit_mode")
+      render_click(detail(view), "detail_close")
 
       # Re-open the same task — fresh navigation, edit_mode should be false.
       {:ok, view_reopen, _} = live(conn, ~p"/tasks/#{task.id}")
@@ -6542,13 +6772,13 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
       # Open edit mode, then start an inline title edit. The input should be visible.
-      render_click(view, "toggle_edit_mode")
-      render_click(view, "start_edit_title", %{"task-id" => task.id})
+      render_click(detail(view), "detail_toggle_edit_mode")
+      render_click(detail(view), "detail_start_edit_title", %{"task-id" => task.id})
       assert render(view) =~ ~s|data-role="detail-title-input"|
 
       # Toggle edit mode off — the in-progress inline edit should close so we
       # don't leave a stranded input visible in read-only state.
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
       refute html =~ ~s|data-role="detail-title-input"|
       assert html =~ ~s|data-role="detail-title"|
     end
@@ -6576,7 +6806,7 @@ defmodule PlatformWeb.TasksLiveTest do
         Regex.run(~r|<h2[^>]*data-role="detail-title"[^>]*>|, html)
         |> List.first()
 
-      refute detail_h2 =~ ~s|phx-click="start_edit_title"|
+      refute detail_h2 =~ ~s|phx-click="detail_start_edit_title"|
     end
 
     test "title becomes click-to-edit and shows the dashed affordance when edit_mode is on",
@@ -6587,7 +6817,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-role="detail-title"|
       assert html =~ ~s|data-editable="true"|
@@ -6596,7 +6826,7 @@ defmodule PlatformWeb.TasksLiveTest do
         Regex.run(~r|<h2[^>]*data-role="detail-title"[^>]*>|, html)
         |> List.first()
 
-      assert detail_h2 =~ ~s|phx-click="start_edit_title"|
+      assert detail_h2 =~ ~s|phx-click="detail_start_edit_title"|
       assert detail_h2 =~ "border-dashed"
     end
 
@@ -6607,7 +6837,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "start_edit_title", %{"task-id" => task.id})
+      render_click(detail(view), "detail_start_edit_title", %{"task-id" => task.id})
       html = render(view)
 
       refute html =~ ~s|data-role="detail-title-input"|
@@ -6621,7 +6851,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_hook(view, "update_task_title", %{
+      render_hook(detail(view), "detail_update_task_title", %{
         "value" => "Sneaky update",
         "task-id" => task.id
       })
@@ -6668,7 +6898,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
 
       assert html =~ ~s|data-role="priority-select"|
       assert html =~ ~s|data-role="deploy-target-select"|
@@ -6746,7 +6976,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Clicking the button flips the pane into edit_mode so the existing
       # deploy_target <select> becomes interactive.
-      html_after = render_click(view, "open_deploy_target_config")
+      html_after = render_click(detail(view), "detail_open_deploy_target_config")
       assert html_after =~ ~s|data-role="deploy-target-select"|
       assert html_after =~ ~s|data-role="edit-mode-indicator"|
     end
@@ -6945,7 +7175,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "priority",
         "value" => "high",
         "task-id" => task.id
@@ -6968,7 +7198,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "deploy_target",
         "value" => "production",
         "task-id" => task.id
@@ -7016,7 +7246,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_hook(view, "update_task_field", %{
+      render_hook(detail(view), "detail_update_task_field", %{
         "field" => "assignee_id",
         "value" => a2.id,
         "task-id" => task.id
@@ -7035,7 +7265,7 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ ~s|data-role="description-edit-button"|
       assert html =~ ~s|data-role="description-rendered"|
 
-      html = render_click(view, "toggle_edit_mode")
+      html = render_click(detail(view), "detail_toggle_edit_mode")
       assert html =~ ~s|data-role="description-edit-button"|
     end
 
@@ -7046,7 +7276,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-      render_click(view, "start_edit_description")
+      render_click(detail(view), "detail_start_edit_description")
       html = render(view)
 
       refute html =~ ~s|data-role="description-textarea"|
@@ -7062,7 +7292,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
       # Bypass the UI gate by sending the event directly while edit_mode is off.
-      render_hook(view, "save_description", %{"description" => "Sneaky"})
+      render_hook(detail(view), "detail_save_description", %{"description" => "Sneaky"})
 
       assert Tasks.get_task_record(task.id).description == "Original"
     end
@@ -7106,47 +7336,50 @@ defmodule PlatformWeb.TasksLiveTest do
       |> Enum.map(&{:ok, &1})
     end
 
-    test "open_stack_detail event sets :selected_stack and :show_stack_detail",
+    test "stack_open_detail event sets :selected_stack and :show_stack_detail",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       pre = :sys.get_state(view.pid).socket.assigns
-      assert pre.selected_stack == nil
-      assert pre.show_stack_detail == false
+      assert stacks_assigns(view).selected_stack == nil
+      assert stacks_assigns(view).show_stack_detail == false
 
-      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.show_stack_detail == true
-      assert post.selected_stack && post.selected_stack.id == stack.id
-      assert is_list(post.selected_stack_members)
-      assert length(post.selected_stack_members) == 4
+      assert stacks_assigns(view).show_stack_detail == true
+
+      assert stacks_assigns(view).selected_stack &&
+               stacks_assigns(view).selected_stack.id == stack.id
+
+      assert is_list(stacks_assigns(view).selected_stack_members)
+      assert length(stacks_assigns(view).selected_stack_members) == 4
     end
 
-    test "open_stack_detail closes the per-task detail panel if it was open",
+    test "stack_open_detail closes the per-task detail panel if it was open",
          %{conn: conn, stack: stack, members: [m1 | _]} do
       {:ok, view, _html} = live(conn, ~p"/tasks/#{m1.id}")
 
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.show_detail == true
 
-      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert assigns.show_stack_detail == true
+      assert stacks_assigns(view).show_stack_detail == true
       assert assigns.show_detail == false
       assert assigns.selected_task == nil
     end
 
-    test "open_stack_detail with an unknown id is a no-op",
+    test "stack_open_detail with an unknown id is a no-op",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _html = render_click(view, "open_stack_detail", %{"id" => Ecto.UUID.generate()})
+      _html = stacks_click(view, "stack_open_detail", %{"id" => Ecto.UUID.generate()})
 
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert assigns.show_stack_detail == false
-      assert assigns.selected_stack == nil
+      assert stacks_assigns(view).show_stack_detail == false
+      assert stacks_assigns(view).selected_stack == nil
     end
 
     test "panel renders the stack name, description, close button, and Stack tag",
@@ -7157,7 +7390,7 @@ defmodule PlatformWeb.TasksLiveTest do
         })
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert html =~ ~s(id="stack-detail-panel")
       assert html =~ ~s(data-role="stack-detail-panel")
@@ -7174,7 +7407,7 @@ defmodule PlatformWeb.TasksLiveTest do
     test "panel renders the action row with Abandon and View rollup PR buttons",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert html =~ ~s(data-role="stack-detail-actions")
       assert html =~ ~s(data-role="stack-detail-abandon")
@@ -7186,7 +7419,7 @@ defmodule PlatformWeb.TasksLiveTest do
     test "View rollup PR is disabled when metadata.rollup_pr.url is nil",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # When there's no rollup PR yet, the View button renders as a
       # disabled <button>, NOT an <a href> link. Match the rollup-PR
@@ -7208,7 +7441,7 @@ defmodule PlatformWeb.TasksLiveTest do
         })
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       [{:ok, rollup_tag}] = extract_open_tags(html, ~r/data-role="stack-detail-rollup-pr"/)
       assert rollup_tag =~ ~s(href="https://github.com/foo/bar/pull/42")
@@ -7216,59 +7449,59 @@ defmodule PlatformWeb.TasksLiveTest do
       assert String.starts_with?(rollup_tag, "<a ")
     end
 
-    test "abandon_stack event abandons the stack and closes the panel",
+    test "stack_abandon event abandons the stack and closes the panel",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert assigns.show_stack_detail == true
+      assert stacks_assigns(view).show_stack_detail == true
 
-      _html = render_click(view, "abandon_stack", %{})
+      _html = stacks_click(view, "stack_abandon", %{})
 
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert assigns.show_stack_detail == false
-      assert assigns.selected_stack == nil
+      assert stacks_assigns(view).show_stack_detail == false
+      assert stacks_assigns(view).selected_stack == nil
 
       assert Repo.get!(Stack, stack.id).status == "abandoned"
     end
 
-    test "close_stack_detail clears :selected_stack and :show_stack_detail",
+    test "stack_close_detail clears :selected_stack and :show_stack_detail",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_detail == true
+      assert stacks_assigns(view).show_stack_detail == true
 
-      _html = render_click(view, "close_stack_detail", %{})
+      _html = stacks_click(view, "stack_close_detail", %{})
 
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert assigns.show_stack_detail == false
-      assert assigns.selected_stack == nil
-      assert assigns.selected_stack_members == []
+      assert stacks_assigns(view).show_stack_detail == false
+      assert stacks_assigns(view).selected_stack == nil
+      assert stacks_assigns(view).selected_stack_members == []
     end
 
-    test "stack card header on the kanban board fires open_stack_detail (Option A)",
+    test "stack card header on the kanban board fires stack_open_detail (Option A)",
          %{conn: conn, stack: stack} do
       # Per the T8 stage 1 click-target decision: the stack card's
       # header is now the panel-opener (Option A — Discord "click thread
-      # to enter" pattern). The chevron icon retains toggle_stack_expand
+      # to enter" pattern). The chevron icon retains stack_toggle_expand
       # as a separate sibling button so inline expansion stays reachable.
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      # Header element carries open_stack_detail with the stack id.
+      # Header element carries stack_open_detail with the stack id.
       # Match the opening tag (no `>` until the attr cluster ends), in
       # either attr order.
       assert html =~
-               ~r/<[a-z]+[^>]*phx-click="open_stack_detail"[^>]*phx-value-id="#{stack.id}"[^>]*data-role="stack-header"/ or
+               ~r/<[a-z]+[^>]*phx-click="stack_open_detail"[^>]*phx-value-id="#{stack.id}"[^>]*data-role="stack-header"/ or
                html =~
-                 ~r/<[a-z]+[^>]*data-role="stack-header"[^>]*phx-click="open_stack_detail"[^>]*phx-value-id="#{stack.id}"/
+                 ~r/<[a-z]+[^>]*data-role="stack-header"[^>]*phx-click="stack_open_detail"[^>]*phx-value-id="#{stack.id}"/
 
-      # Chevron retains toggle_stack_expand on its own button.
+      # Chevron retains stack_toggle_expand on its own button.
       assert html =~
-               ~r/<[a-z]+[^>]*phx-click="toggle_stack_expand"[^>]*phx-value-id="#{stack.id}"[^>]*data-role="stack-chevron"/ or
+               ~r/<[a-z]+[^>]*phx-click="stack_toggle_expand"[^>]*phx-value-id="#{stack.id}"[^>]*data-role="stack-chevron"/ or
                html =~
-                 ~r/<[a-z]+[^>]*data-role="stack-chevron"[^>]*phx-click="toggle_stack_expand"[^>]*phx-value-id="#{stack.id}"/
+                 ~r/<[a-z]+[^>]*data-role="stack-chevron"[^>]*phx-click="stack_toggle_expand"[^>]*phx-value-id="#{stack.id}"/
     end
   end
 
@@ -7278,7 +7511,7 @@ defmodule PlatformWeb.TasksLiveTest do
     #   * render in the stack-detail-actions row only when ≥1 member is
     #     at `backlog` (no backlog members → nothing to plan, hide the
     #     button), and
-    #   * dispatch a `start_stack_planning` event that calls
+    #   * dispatch a `stack_start_planning` event that calls
     #     Stacks.start_planning/1, reloads :selected_stack +
     #     :selected_stack_members, and flashes a result summary.
 
@@ -7322,13 +7555,13 @@ defmodule PlatformWeb.TasksLiveTest do
       {stack, _members} = seed_stack_with_member_statuses(project, ["backlog", "backlog"])
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # Button is present in the action row with the documented event +
       # data-role markers.
       assert html =~ ~s(data-role="stack-detail-start-planning")
       assert html =~ "Start Planning"
-      assert html =~ ~s(phx-click="start_stack_planning")
+      assert html =~ ~s(phx-click="stack_start_planning")
     end
 
     test "Start Planning button is hidden when no member is at backlog",
@@ -7337,7 +7570,7 @@ defmodule PlatformWeb.TasksLiveTest do
         seed_stack_with_member_statuses(project, ["planning", "stack_pending"])
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # The detail panel is open (action row is rendered) but the
       # Start Planning control is suppressed.
@@ -7355,30 +7588,30 @@ defmodule PlatformWeb.TasksLiveTest do
         )
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert html =~ ~s(data-role="stack-detail-actions")
       refute html =~ ~s(data-role="stack-detail-start-planning")
     end
 
-    test "start_stack_planning event transitions every backlog member and reloads the panel",
+    test "stack_start_planning event transitions every backlog member and reloads the panel",
          %{conn: conn, project: project} do
       {stack, members} =
         seed_stack_with_member_statuses(project, ["backlog", "backlog", "backlog"])
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       pre = :sys.get_state(view.pid).socket.assigns
-      assert Enum.all?(pre.selected_stack_members, &(&1.status == "backlog"))
+      assert Enum.all?(stacks_assigns(view).selected_stack_members, &(&1.status == "backlog"))
 
-      _html = render_click(view, "start_stack_planning", %{})
+      _html = stacks_click(view, "stack_start_planning", %{})
 
       post = :sys.get_state(view.pid).socket.assigns
       # :selected_stack_members was reloaded → all three members now
       # report `planning` from the panel state.
-      assert length(post.selected_stack_members) == 3
-      assert Enum.all?(post.selected_stack_members, &(&1.status == "planning"))
+      assert length(stacks_assigns(view).selected_stack_members) == 3
+      assert Enum.all?(stacks_assigns(view).selected_stack_members, &(&1.status == "planning"))
 
       # DB state matches the panel state.
       member_ids = Enum.map(members, & &1.id)
@@ -7386,21 +7619,23 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Enum.all?(reloaded, &(&1 == "planning"))
 
       # :selected_stack is still the same stack id (panel stays open).
-      assert post.selected_stack && post.selected_stack.id == stack.id
-      assert post.show_stack_detail == true
+      assert stacks_assigns(view).selected_stack &&
+               stacks_assigns(view).selected_stack.id == stack.id
+
+      assert stacks_assigns(view).show_stack_detail == true
 
       # Result summary is flashed.
       assert Phoenix.Flash.get(post.flash, :info) =~ "Started planning for 3 members"
     end
 
-    test "start_stack_planning is a noop when the stack already has members past backlog (Stack v2)",
+    test "stack_start_planning is a noop when the stack already has members past backlog (Stack v2)",
          %{conn: conn, project: project} do
       {stack, [backlog_member, planning_member, parked_member]} =
         seed_stack_with_member_statuses(project, ["backlog", "planning", "stack_pending"])
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      _html = render_click(view, "start_stack_planning", %{})
+      _html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_start_planning", %{})
 
       # Stack v2 wave-gated dispatch (ADR 0045 / task 019f487e): any
       # member past backlog signals "planning already in flight" and the
@@ -7413,17 +7648,17 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Phoenix.Flash.get(assigns.flash, :info) =~ "already in flight"
     end
 
-    test "start_stack_planning is a no-op when no stack is selected",
+    test "stack_start_planning is a no-op when no stack is selected",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       pre = :sys.get_state(view.pid).socket.assigns
-      assert pre.selected_stack == nil
+      assert stacks_assigns(view).selected_stack == nil
 
-      _html = render_click(view, "start_stack_planning", %{})
+      _html = stacks_click(view, "stack_start_planning", %{})
 
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.selected_stack == nil
+      assert stacks_assigns(view).selected_stack == nil
       # No flash, no crash — handler short-circuits via the
       # `selected_stack: nil` guard.
       assert Phoenix.Flash.get(post.flash, :info) in [nil, ""]
@@ -7514,7 +7749,7 @@ defmodule PlatformWeb.TasksLiveTest do
     # Helper: open the stack panel and return its rendered HTML.
     defp open_panel(conn, stack) do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      render_click(view, "open_stack_detail", %{"id" => stack.id})
+      stacks_click(view, "stack_open_detail", %{"id" => stack.id})
     end
 
     test "renders the 4-cell meta-grid with Status / Members / Dep edges / Branch labels",
@@ -8136,7 +8371,7 @@ defmodule PlatformWeb.TasksLiveTest do
       stack = Repo.get!(Stack, stack.id)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       refute html =~ ~s(data-role="stack-detail-dag-resize-handle"),
              "expected no v1 drag-handle button in stack-detail render"
@@ -8206,10 +8441,10 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, conn: conn, project: project, stack: stack}
     end
 
-    test "dep-graph container carries expand button with open_stack_graph_expand handler",
+    test "dep-graph container carries expand button with stack_open_graph_expand handler",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # Exactly one expand button, positioned inside the dep-graph
       # container (data-role tripwire).
@@ -8224,8 +8459,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       [[button_tag]] = buttons
 
-      assert button_tag =~ ~s(phx-click="open_stack_graph_expand"),
-             "expected the expand button to fire open_stack_graph_expand: #{button_tag}"
+      assert button_tag =~ ~s(phx-click="stack_open_graph_expand"),
+             "expected the expand button to fire stack_open_graph_expand: #{button_tag}"
 
       # Semantic-token regression guard — no hard-coded color literals,
       # only the muted-foreground token + hover elevation.
@@ -8240,10 +8475,10 @@ defmodule PlatformWeb.TasksLiveTest do
              "expected aria-label on expand button: #{button_tag}"
     end
 
-    test "open_stack_graph_expand event renders modal SVG with same node count as inline",
+    test "stack_open_graph_expand event renders modal SVG with same node count as inline",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      inline_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      inline_html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       inline_nodes =
         Regex.scan(~r/data-role="stack-detail-dag-node"/, inline_html)
@@ -8252,11 +8487,11 @@ defmodule PlatformWeb.TasksLiveTest do
       # Sanity: fixture has 3 members → 3 inline nodes.
       assert inline_nodes == 3
 
-      modal_html = render_click(view, "open_stack_graph_expand", %{})
+      modal_html = stacks_click(view, "stack_open_graph_expand", %{})
 
       # Modal root present.
       assert modal_html =~ ~s(data-role="stack-detail-dag-modal"),
-             "expected the fullscreen modal to appear after open_stack_graph_expand"
+             "expected the fullscreen modal to appear after stack_open_graph_expand"
 
       # Modal node count matches inline count exactly (same underlying
       # `stack_dag_layout/1` output feeds both SVGs).
@@ -8271,29 +8506,29 @@ defmodule PlatformWeb.TasksLiveTest do
     test "close via X button clears :stack_graph_expanded",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      opened = render_click(view, "open_stack_graph_expand", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      opened = stacks_click(view, "stack_open_graph_expand", %{})
       assert opened =~ ~s(data-role="stack-detail-dag-modal")
 
-      closed = render_click(view, "close_stack_graph_expand", %{})
+      closed = stacks_click(view, "stack_close_graph_expand", %{})
 
       refute closed =~ ~s(data-role="stack-detail-dag-modal"),
              "expected the modal div to be gone after close event"
 
-      refute :sys.get_state(view.pid).socket.assigns.stack_graph_expanded,
+      refute stacks_assigns(view).stack_graph_expanded,
              "expected :stack_graph_expanded to be false after close"
     end
 
     test "close via backdrop click clears :stack_graph_expanded",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      opened = render_click(view, "open_stack_graph_expand", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      opened = stacks_click(view, "stack_open_graph_expand", %{})
       assert opened =~ ~s(data-role="stack-detail-dag-modal-backdrop")
 
-      # Backdrop is a bare div with phx-click="close_stack_graph_expand" —
+      # Backdrop is a bare div with phx-click="stack_close_graph_expand" —
       # firing that event is what the click handler triggers.
-      closed = render_click(view, "close_stack_graph_expand", %{})
+      closed = stacks_click(view, "stack_close_graph_expand", %{})
 
       refute closed =~ ~s(data-role="stack-detail-dag-modal"),
              "expected the modal div to be gone after backdrop click"
@@ -8302,13 +8537,16 @@ defmodule PlatformWeb.TasksLiveTest do
     test "Escape key close via phx-window-keydown clears :stack_graph_expanded",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      opened = render_click(view, "open_stack_graph_expand", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      opened = stacks_click(view, "stack_open_graph_expand", %{})
       assert opened =~ ~s(data-role="stack-detail-dag-modal")
 
-      # `phx-window-keydown="close_stack_graph_expand"` at the modal root
+      # `phx-window-keydown="stack_close_graph_expand"` at the modal root
       # — render_keydown dispatches the server-side event directly.
-      closed = render_keydown(view, "close_stack_graph_expand", %{"key" => "Escape"})
+      closed =
+        render_keydown(with_target(view, "#tasks-stacks"), "stack_close_graph_expand", %{
+          "key" => "Escape"
+        })
 
       refute closed =~ ~s(data-role="stack-detail-dag-modal"),
              "expected the modal to close on Escape keydown"
@@ -8317,23 +8555,23 @@ defmodule PlatformWeb.TasksLiveTest do
     test "closing stack detail resets :stack_graph_expanded",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      opened = render_click(view, "open_stack_graph_expand", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      opened = stacks_click(view, "stack_open_graph_expand", %{})
       assert opened =~ ~s(data-role="stack-detail-dag-modal")
 
-      assert :sys.get_state(view.pid).socket.assigns.stack_graph_expanded
+      assert stacks_assigns(view).stack_graph_expanded
 
-      _ = render_click(view, "close_stack_detail", %{})
+      _ = stacks_click(view, "stack_close_detail", %{})
 
-      refute :sys.get_state(view.pid).socket.assigns.stack_graph_expanded,
+      refute stacks_assigns(view).stack_graph_expanded,
              "expected :stack_graph_expanded false after closing the stack drawer — modal cannot outlive its underlying stack"
     end
 
     test "modal chrome mirrors active_review_canvas structural shape",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      html = render_click(view, "open_stack_graph_expand", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_graph_expand", %{})
 
       # Outer modal root: mirrors the review-canvas modal wrapper
       # (tasks_live.html.heex lines around the @active_review_canvas
@@ -8421,8 +8659,8 @@ defmodule PlatformWeb.TasksLiveTest do
     # this out keeps each test focused on its assertion.
     defp open_modal(conn, stack) do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      render_click(view, "open_stack_graph_expand", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      stacks_click(view, "stack_open_graph_expand", %{})
     end
 
     # Extract the opening tag of the outer modal root (the div carrying
@@ -8570,8 +8808,8 @@ defmodule PlatformWeb.TasksLiveTest do
       refute root == "",
              "expected to locate the modal root opening tag; got empty match"
 
-      assert root =~ ~s(phx-window-keydown="close_stack_graph_expand"),
-             "expected modal root to declare phx-window-keydown=close_stack_graph_expand; got: #{root}"
+      assert root =~ ~s(phx-window-keydown="stack_close_graph_expand"),
+             "expected modal root to declare phx-window-keydown=stack_close_graph_expand; got: #{root}"
 
       assert root =~ ~s(phx-key="Escape"),
              "expected modal root to declare phx-key=Escape; got: #{root}"
@@ -8583,8 +8821,8 @@ defmodule PlatformWeb.TasksLiveTest do
       # regression could ride in on either surface, so we assert against
       # the union of both HTMLs.
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      inline_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      modal_html = render_click(view, "open_stack_graph_expand", %{})
+      inline_html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      modal_html = stacks_click(view, "stack_open_graph_expand", %{})
       combined = inline_html <> modal_html
 
       for needle <- [
@@ -8623,7 +8861,7 @@ defmodule PlatformWeb.TasksLiveTest do
     test "expand button uses only semantic tokens, no hard-coded color",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       [button_tag] =
         Regex.run(~r/<button[^>]*data-role="stack-detail-dag-expand"[^>]*>/, html)
@@ -8664,7 +8902,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # (btn-sm stays ~32px at >=sm). This tripwire prevents a designer
       # trimming the overrides and silently regressing the mobile experience.
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       [button_tag] =
         Regex.run(~r/<button[^>]*data-role="stack-detail-dag-expand"[^>]*>/, html)
@@ -8902,19 +9140,19 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Open the stack panel first.
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       pre = :sys.get_state(view.pid).socket.assigns
-      assert pre.show_stack_detail == true
+      assert stacks_assigns(view).show_stack_detail == true
       assert pre.show_detail == false
 
       # Click member row ③ → push_patch to /tasks/:id AND close panel.
       _ = render_click(view, "select_task", %{"id" => m3.id})
 
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.show_stack_detail == false
-      assert post.selected_stack == nil
-      assert post.selected_stack_members == []
+      assert stacks_assigns(view).show_stack_detail == false
+      assert stacks_assigns(view).selected_stack == nil
+      assert stacks_assigns(view).selected_stack_members == []
       # The per-task detail panel is now open with m3 selected.
       assert post.show_detail == true
       assert post.selected_task && post.selected_task.id == m3.id
@@ -8978,7 +9216,7 @@ defmodule PlatformWeb.TasksLiveTest do
     # Helper: open the stack panel and return rendered HTML.
     defp open_stage5_panel(conn, stack) do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      render_click(view, "open_stack_detail", %{"id" => stack.id})
+      stacks_click(view, "stack_open_detail", %{"id" => stack.id})
     end
 
     # Helper: extract the opening tag for a single element by its
@@ -9104,7 +9342,7 @@ defmodule PlatformWeb.TasksLiveTest do
       refute is_nil(back_tag), "expected mobile back arrow to render"
       assert back_tag =~ "md:hidden"
       # The back arrow uses the same close handler as the desktop X.
-      assert back_tag =~ ~s(phx-click="close_stack_detail")
+      assert back_tag =~ ~s(phx-click="stack_close_detail")
       # Hero icon: arrow-left, per the mock's `←`.
       assert html =~ "hero-arrow-left"
 
@@ -9123,8 +9361,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       assert close_tag =~ "hidden"
       assert close_tag =~ "md:flex"
-      # Sanity: the close X still wires to close_stack_detail.
-      assert close_tag =~ ~s(phx-click="close_stack_detail")
+      # Sanity: the close X still wires to stack_close_detail.
+      assert close_tag =~ ~s(phx-click="stack_close_detail")
     end
 
     test "action bar is pinned to the panel bottom and never shrinks",
@@ -9279,30 +9517,32 @@ defmodule PlatformWeb.TasksLiveTest do
     test "Assign Agents button renders in the stack detail action row",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert html =~ ~s(data-role="stack-detail-assign-agents")
       assert html =~ "Assign Agents"
     end
 
-    test "open_stack_assignee_modal opens the stack assignee modal",
+    test "stack_open_assignee_modal opens the stack assignee modal",
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      render_click(view, "open_stack_detail", %{"id" => stack.id})
+      stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
-      html = render_click(view, "open_stack_assignee_modal", %{})
+      html = stacks_click(view, "stack_open_assignee_modal", %{})
 
       assert html =~ ~s(id="stack-assignee-modal")
       assert html =~ ~s(id="stack-assignees-form")
     end
 
-    test "save_stack_assignees (simple mode) percolates to un-overridden members",
+    test "stack_save_assignees (simple mode) percolates to un-overridden members",
          %{conn: conn, stack: stack, m1: m1, m2: m2, agent_a: agent_a} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      render_click(view, "open_stack_detail", %{"id" => stack.id})
-      render_click(view, "open_stack_assignee_modal", %{})
+      stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      stacks_click(view, "stack_open_assignee_modal", %{})
 
-      render_submit(view, "save_stack_assignees", %{"assignees" => %{"all" => agent_a.id}})
+      render_submit(with_target(view, "#tasks-stacks"), "stack_save_assignees", %{
+        "assignees" => %{"all" => agent_a.id}
+      })
 
       assert Repo.get!(Task, m1.id).assignee_id == agent_a.id
       assert Repo.get!(Task, m2.id).assignee_id == agent_a.id
@@ -9325,14 +9565,14 @@ defmodule PlatformWeb.TasksLiveTest do
         Tasks.update_task(m1, %{metadata: Map.put(m1.metadata || %{}, "assignee_override", true)})
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # Both badges present: m1 override, m2 inherited.
       assert html =~ ~s(data-assignment="override")
       assert html =~ ~s(data-assignment="inherited")
     end
 
-    test "clear_member_override returns a member to inheriting the stack default",
+    test "stack_clear_member_override returns a member to inheriting the stack default",
          %{conn: conn, stack: stack, m1: m1, agent_a: agent_a, agent_b: agent_b} do
       # m1 overridden to agent_b.
       {:ok, m1} = Tasks.set_phase_assignees(m1, all_phase_attrs(agent_b.id))
@@ -9345,9 +9585,9 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Repo.get!(Task, m1.id).assignee_id == agent_b.id
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      render_click(view, "open_stack_detail", %{"id" => stack.id})
+      stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
-      render_click(view, "clear_member_override", %{"id" => m1.id})
+      stacks_click(view, "stack_clear_member_override", %{"id" => m1.id})
 
       reloaded = Repo.get!(Task, m1.id)
       refute Stacks.member_overridden?(reloaded)
@@ -9357,9 +9597,9 @@ defmodule PlatformWeb.TasksLiveTest do
     test "the per-task assignee modal save stamps metadata.assignee_override",
          %{conn: conn, m1: m1, agent_b: agent_b} do
       {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{m1.id}")
-      render_click(view, "open_assignee_modal", %{})
+      render_click(assignees(view), "open_assignee_modal", %{})
 
-      render_submit(view, "save_assignees", %{"assignees" => %{"all" => agent_b.id}})
+      render_submit(assignees(view), "save_assignees", %{"assignees" => %{"all" => agent_b.id}})
 
       reloaded = Repo.get!(Task, m1.id)
       assert Stacks.member_overridden?(reloaded)
@@ -9421,7 +9661,7 @@ defmodule PlatformWeb.TasksLiveTest do
         Tasks.create_plan(%{task_id: member.id, version: 1, status: "pending_review"})
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert html =~ ~s(data-role="stack-detail-member-action")
       assert html =~ ~s(data-action-reason="plan_pending_review")
@@ -9461,7 +9701,7 @@ defmodule PlatformWeb.TasksLiveTest do
         })
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert html =~ ~s(data-role="stack-detail-member-action")
       assert html =~ ~s(data-action-reason="review_request_pending")
@@ -9473,7 +9713,7 @@ defmodule PlatformWeb.TasksLiveTest do
       _member = seed_member(stack, "in_progress")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # The row exists, but the action badge does not.
       assert html =~ ~s(data-role="stack-detail-member-row")
@@ -9489,7 +9729,7 @@ defmodule PlatformWeb.TasksLiveTest do
         Tasks.create_plan(%{task_id: member.id, version: 1, status: "approved"})
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      pre_html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       refute pre_html =~ ~s(data-role="stack-detail-member-action")
 
@@ -9543,7 +9783,7 @@ defmodule PlatformWeb.TasksLiveTest do
         })
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      pre_html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # No review_request yet → no badge.
       refute pre_html =~ ~s(data-role="stack-detail-member-action")
@@ -9620,8 +9860,8 @@ defmodule PlatformWeb.TasksLiveTest do
       # rendered (mobile only renders the active filter section).
       # `planning` status maps to the `backlog` column per
       # `@column_statuses` in tasks_live.ex.
-      html = render_click(view, "filter_by_status", %{"status" => "backlog"})
-
+      _ = render_click(filters(view), "filter_by_status", %{"status" => "backlog"})
+      html = after_filter(view)
       # Sanity: card is rendered.
       assert html =~ ~s(data-task-id="#{task.id}")
 
@@ -9673,8 +9913,8 @@ defmodule PlatformWeb.TasksLiveTest do
       task = Repo.get!(Task, task.id)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "filter_by_status", %{"status" => task.status})
-
+      _ = render_click(filters(view), "filter_by_status", %{"status" => task.status})
+      html = after_filter(view)
       assert html =~ ~s(data-role="mobile-task-action")
       assert html =~ ~s(data-action-reason="review_request_pending")
       assert html =~ "Needs review"
@@ -9685,8 +9925,8 @@ defmodule PlatformWeb.TasksLiveTest do
       task = seed_solo_task(project, "in_progress")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "filter_by_status", %{"status" => task.status})
-
+      _ = render_click(filters(view), "filter_by_status", %{"status" => task.status})
+      html = after_filter(view)
       # The card itself must be present (sanity check — otherwise a
       # rendering regression would silently let the negative assertion
       # below pass).
@@ -9780,8 +10020,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       # The mobile board renders ONLY the actively-filtered column.
-      html = render_click(view, "filter_by_status", %{"status" => "in_review"})
-
+      _ = render_click(filters(view), "filter_by_status", %{"status" => "in_review"})
+      html = after_filter(view)
       card = mobile_card_markup(html, task.id)
 
       assert card =~ ~s(data-role="mobile-task-action")
@@ -9797,8 +10037,8 @@ defmodule PlatformWeb.TasksLiveTest do
       task = seed_solo_task(project, "in_review")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "filter_by_status", %{"status" => "in_review"})
-
+      _ = render_click(filters(view), "filter_by_status", %{"status" => "in_review"})
+      html = after_filter(view)
       card = mobile_card_markup(html, task.id)
 
       # ANTI-VACUITY: the slice really is this card and really has content.
@@ -9829,7 +10069,7 @@ defmodule PlatformWeb.TasksLiveTest do
     #
     # The mobile board only renders the active filter pill's section
     # (T6 PR #328), so each test calls `filter_by_status` to switch the
-    # pill to the stack's rollup status before `toggle_stack_expand`
+    # pill to the stack's rollup status before `stack_toggle_expand`
     # to surface the member rows.
 
     setup %{conn: conn} do
@@ -9892,8 +10132,8 @@ defmodule PlatformWeb.TasksLiveTest do
       # `filter_by_status` handler only accepts `@mobile_columns` keys —
       # raw `forming` is rejected).
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "filter_by_status", %{"status" => "backlog"})
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _ = render_click(filters(view), "filter_by_status", %{"status" => "backlog"})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # Row exists.
       assert html =~ ~s(id="stack-member-mobile-#{member.id}")
@@ -9946,8 +10186,8 @@ defmodule PlatformWeb.TasksLiveTest do
       stack = refresh_stack_rollup(stack)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "filter_by_status", %{"status" => stack.status})
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       assert html =~ ~s(id="stack-member-mobile-#{member.id}")
       assert html =~ ~s(data-role="stack-member-mobile-action")
@@ -9961,8 +10201,8 @@ defmodule PlatformWeb.TasksLiveTest do
       stack = refresh_stack_rollup(stack)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "filter_by_status", %{"status" => stack.status})
-      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # The row exists (sanity), but the action badge does not.
       assert html =~ ~s(id="stack-member-mobile-#{member.id}")
@@ -9975,7 +10215,7 @@ defmodule PlatformWeb.TasksLiveTest do
     # surfaces a "Needs feedback (N)" badge whenever
     # `Stacks.count_pending_reviews/1` > 0. Hidden entirely when the count
     # is 0 so the chrome stays clean. Click target wires
-    # `phx-click="open_stack_feedback_overlay"` — a stage-2 stub that flips
+    # `phx-click="stack_open_feedback_overlay"` — a stage-2 stub that flips
     # `:show_stack_feedback_overlay`; stage 3 will render the actual rollup
     # overlay against that assign.
     #
@@ -10061,21 +10301,21 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_pending_review_request(m2)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert html =~ ~s(data-role="stack-detail-needs-feedback-pill")
       assert html =~ ~s(data-pending-count="2")
       assert html =~ "Needs feedback (2)"
       # Wired to the stage-2 handler stub — the overlay itself lands in
       # stage 3, but the click target must be observably present.
-      assert html =~ ~s(phx-click="open_stack_feedback_overlay")
+      assert html =~ ~s(phx-click="stack_open_feedback_overlay")
       # Hero-eye icon (matches the badge guideline).
       assert html =~ "hero-eye"
 
       # Server-side assign matches the rendered count (1 RR per member, 2
       # members → 2 pending across the stack).
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert assigns.selected_stack_pending_review_count == 2
+      assert stacks_assigns(view).selected_stack_pending_review_count == 2
     end
 
     test "(b) chrome pill is hidden entirely when the count is 0",
@@ -10084,14 +10324,14 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_rollup_member(stack, "in_progress", 2)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # No clutter on the chrome — the pill block does not render at all.
       refute html =~ ~s(data-role="stack-detail-needs-feedback-pill")
       refute html =~ "Needs feedback"
 
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert assigns.selected_stack_pending_review_count == 0
+      assert stacks_assigns(view).selected_stack_pending_review_count == 0
     end
 
     test "(c) chrome pill re-renders on `:review_request_pending` PubSub (count increments)",
@@ -10103,7 +10343,7 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_pending_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      pre_html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert pre_html =~ ~s(data-role="stack-detail-needs-feedback-pill")
       assert pre_html =~ "Needs feedback (1)"
@@ -10130,7 +10370,7 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_pending_review_request(m2)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      pre_html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert pre_html =~ ~s(data-pending-count="2")
       assert pre_html =~ "Needs feedback (2)"
@@ -10155,15 +10395,15 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_pending_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+      assert stacks_assigns(view).show_stack_feedback_overlay == false
 
-      _html = render_click(view, "open_stack_feedback_overlay", %{})
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == true
+      _html = stacks_click(view, "stack_open_feedback_overlay", %{})
+      assert stacks_assigns(view).show_stack_feedback_overlay == true
 
-      _html = render_click(view, "open_stack_feedback_overlay", %{})
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+      _html = stacks_click(view, "stack_open_feedback_overlay", %{})
+      assert stacks_assigns(view).show_stack_feedback_overlay == false
     end
 
     test "(f) regression: chrome pill does NOT clobber the stack-detail-member-action row badge",
@@ -10178,7 +10418,7 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_pending_review_request(member)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # Chrome pill is present (stage 2 of THIS task).
       assert html =~ ~s(data-role="stack-detail-needs-feedback-pill")
@@ -10332,7 +10572,7 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # Panel + chrome pill present; overlay panel absent.
       assert html =~ ~s(data-role="stack-detail-panel")
@@ -10340,7 +10580,7 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ ~s(id="stack-feedback-overlay")
       refute html =~ ~s(data-role="stack-feedback-overlay-panel")
 
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+      assert stacks_assigns(view).show_stack_feedback_overlay == false
     end
 
     test "(b) clicking the chrome pill renders the overlay with N items matching `list_open_review_requests/1`",
@@ -10355,8 +10595,8 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m2, c2)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      html = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       assert html =~ ~s(id="stack-feedback-overlay")
       assert html =~ ~s(data-role="stack-feedback-overlay-panel")
@@ -10389,8 +10629,8 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m1, c1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      html = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       # Inline canvas wrapper carries our data-role marker AND the
       # canvas id so a future test can drill in further.
@@ -10412,8 +10652,8 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      html = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       assert html =~ ~s(data-role="stack-feedback-overlay-approve")
       assert html =~ ~s(data-role="stack-feedback-overlay-reject")
@@ -10426,7 +10666,7 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ ~r/data-role="stack-feedback-overlay-reject"[^>]*btn-disabled/s
 
       assert html =~ ~s(phx-click="stack_feedback_approve_item")
-      assert html =~ ~s(phx-click="toggle_stack_feedback_reject")
+      assert html =~ ~s(phx-click="stack_toggle_feedback_reject")
     end
 
     test "(e) close button collapses the overlay",
@@ -10435,19 +10675,19 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      open_html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       assert open_html =~ ~s(data-role="stack-feedback-overlay-panel")
 
-      closed_html = render_click(view, "close_stack_feedback_overlay", %{})
+      closed_html = stacks_click(view, "stack_close_feedback_overlay", %{})
       refute closed_html =~ ~s(data-role="stack-feedback-overlay-panel")
 
       # Stack panel is still mounted — closing the overlay drops the
       # user back on the stack pane (NOT the board).
       assert closed_html =~ ~s(data-role="stack-detail-panel")
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_detail == true
+      assert stacks_assigns(view).show_stack_feedback_overlay == false
+      assert stacks_assigns(view).show_stack_detail == true
     end
 
     test "(f) backdrop click dismisses the overlay",
@@ -10456,17 +10696,17 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      _ = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_feedback_overlay", %{})
 
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == true
+      assert stacks_assigns(view).show_stack_feedback_overlay == true
 
       # Backdrop wires the same dismiss event — the test exercises the
-      # event the backdrop emits (`close_stack_feedback_overlay`).
-      closed_html = render_click(view, "close_stack_feedback_overlay", %{})
+      # event the backdrop emits (`stack_close_feedback_overlay`).
+      closed_html = stacks_click(view, "stack_close_feedback_overlay", %{})
 
       refute closed_html =~ ~s(data-role="stack-feedback-overlay-panel")
-      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+      assert stacks_assigns(view).show_stack_feedback_overlay == false
     end
 
     test "(g) opening overlay refreshes the snapshot — PubSub drops between mount and open are not stale",
@@ -10478,15 +10718,15 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # Add a second RR; live wiring also catches this via PubSub, but
-      # `open_stack_feedback_overlay` MUST also re-snapshot so a tab
+      # `stack_open_feedback_overlay` MUST also re-snapshot so a tab
       # that missed a broadcast still sees the freshest data when the
       # user actually opens the overlay.
       _ = seed_overlay_review_request(m2)
 
-      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+      open_html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       assert open_html =~ ~s(data-role="stack-feedback-overlay-panel")
 
@@ -10499,7 +10739,7 @@ defmodule PlatformWeb.TasksLiveTest do
       assert item_count == 2
 
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert length(assigns.selected_stack_open_review_requests) == 2
+      assert length(stacks_assigns(view).selected_stack_open_review_requests) == 2
     end
 
     test "(h) overlay row falls back to free-form content when item has no canvas_id",
@@ -10509,8 +10749,8 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m1, nil)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      html = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       refute html =~ ~s(data-role="stack-feedback-overlay-canvas")
       assert html =~ ~s(data-role="stack-feedback-overlay-content")
@@ -10527,12 +10767,12 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_overlay_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      pre_html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       assert pre_html =~ ~s(data-role="stack-detail-member-row")
       assert pre_html =~ ~s(data-role="stack-detail-member-action")
 
-      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+      open_html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       # Row chrome is still on the page even with the overlay open —
       # the panel is mounted underneath, just visually replaced.
@@ -10626,8 +10866,8 @@ defmodule PlatformWeb.TasksLiveTest do
       {_v, request, item} = seed_s4_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      open_html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       # Sanity: button is rendered ENABLED (no disabled attr / class).
       refute open_html =~ ~r/data-role="stack-feedback-overlay-approve"[^>]*\sdisabled/s
@@ -10635,12 +10875,12 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Pre-click: assigns + DB both show the pending item.
       pre = :sys.get_state(view.pid).socket.assigns
-      assert pre.selected_stack_pending_review_count == 1
-      assert length(pre.selected_stack_open_review_requests) == 1
+      assert stacks_assigns(view).selected_stack_pending_review_count == 1
+      assert length(stacks_assigns(view).selected_stack_open_review_requests) == 1
       assert Repo.get!(ReviewItem, item.id).status == "pending"
 
       after_html =
-        render_click(view, "stack_feedback_approve_item", %{"id" => item.id})
+        stacks_click(view, "stack_feedback_approve_item", %{"id" => item.id})
 
       # DB: item is now approved + the parent request resolved (last
       # pending item flipped → maybe_resolve_request/1).
@@ -10651,8 +10891,8 @@ defmodule PlatformWeb.TasksLiveTest do
       # Assigns: optimistic drop removed the RR (its last item went away)
       # and the chrome pill count came down with it.
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.selected_stack_open_review_requests == []
-      assert post.selected_stack_pending_review_count == 0
+      assert stacks_assigns(view).selected_stack_open_review_requests == []
+      assert stacks_assigns(view).selected_stack_pending_review_count == 0
 
       # The DOM no longer carries the approve button for that item (the
       # row is gone) — the overlay rendered the empty state instead.
@@ -10666,26 +10906,26 @@ defmodule PlatformWeb.TasksLiveTest do
       {_v, request, item} = seed_s4_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      _ = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       # Reject button is enabled.
       open_assigns = :sys.get_state(view.pid).socket.assigns
-      assert MapSet.size(open_assigns.stack_feedback_reject_open) == 0
+      assert MapSet.size(stacks_assigns(view).stack_feedback_reject_open) == 0
 
       # First click toggles the form open.
       toggled_html =
-        render_click(view, "toggle_stack_feedback_reject", %{"id" => item.id})
+        stacks_click(view, "stack_toggle_feedback_reject", %{"id" => item.id})
 
       assert toggled_html =~ ~s(data-role="stack-feedback-overlay-reject-form")
       assert toggled_html =~ ~s(data-role="stack-feedback-overlay-reject-text")
 
       toggled_assigns = :sys.get_state(view.pid).socket.assigns
-      assert MapSet.member?(toggled_assigns.stack_feedback_reject_open, item.id)
+      assert MapSet.member?(stacks_assigns(view).stack_feedback_reject_open, item.id)
 
       # Submitting reject lands in the DB with the feedback string.
       after_html =
-        render_click(view, "stack_feedback_reject_item", %{
+        stacks_click(view, "stack_feedback_reject_item", %{
           "id" => item.id,
           "feedback" => "Needs more detail in section two."
         })
@@ -10697,10 +10937,10 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Assigns: optimistic drop applied + reject draft cleared.
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.selected_stack_open_review_requests == []
-      assert post.selected_stack_pending_review_count == 0
-      refute MapSet.member?(post.stack_feedback_reject_open, item.id)
-      refute Map.has_key?(post.stack_feedback_reject_text, item.id)
+      assert stacks_assigns(view).selected_stack_open_review_requests == []
+      assert stacks_assigns(view).selected_stack_pending_review_count == 0
+      refute MapSet.member?(stacks_assigns(view).stack_feedback_reject_open, item.id)
+      refute Map.has_key?(stacks_assigns(view).stack_feedback_reject_text, item.id)
 
       refute after_html =~ ~s(data-review-item-id="#{item.id}")
     end
@@ -10711,12 +10951,12 @@ defmodule PlatformWeb.TasksLiveTest do
       {_v, _rr, item} = seed_s4_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      _ = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       pre = :sys.get_state(view.pid).socket.assigns
-      assert pre.selected_stack_pending_review_count == 1
-      assert length(pre.selected_stack_open_review_requests) == 1
+      assert stacks_assigns(view).selected_stack_pending_review_count == 1
+      assert length(stacks_assigns(view).selected_stack_open_review_requests) == 1
 
       # Externally approve via the API directly (mirrors another tab /
       # another agent landing the disposition) WITHOUT going through
@@ -10730,8 +10970,8 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = render(view)
 
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.selected_stack_open_review_requests == []
-      assert post.selected_stack_pending_review_count == 0
+      assert stacks_assigns(view).selected_stack_open_review_requests == []
+      assert stacks_assigns(view).selected_stack_pending_review_count == 0
     end
 
     test "(d) reject_item handler tolerates pre-collected text when no `feedback` param is supplied",
@@ -10740,56 +10980,56 @@ defmodule PlatformWeb.TasksLiveTest do
       {_v, _rr, item} = seed_s4_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      _ = render_click(view, "open_stack_feedback_overlay", %{})
-      _ = render_click(view, "toggle_stack_feedback_reject", %{"id" => item.id})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_toggle_feedback_reject", %{"id" => item.id})
 
       # Type into the textarea (the buffer assign is the source of truth).
       _ =
-        render_keyup(view, "update_stack_feedback_reject_text", %{
+        render_keyup(with_target(view, "#tasks-stacks"), "stack_update_feedback_reject_text", %{
           "id" => item.id,
           "value" => "Buffered feedback"
         })
 
-      buffered = :sys.get_state(view.pid).socket.assigns.stack_feedback_reject_text
+      buffered = stacks_assigns(view).stack_feedback_reject_text
       assert Map.get(buffered, item.id) == "Buffered feedback"
 
       # Submit WITHOUT the feedback key — handler must fall back to the
       # buffered draft so the in-flight assign is the source of truth
       # even if the template's `phx-value-feedback` is stripped.
-      _ = render_click(view, "stack_feedback_reject_item", %{"id" => item.id})
+      _ = stacks_click(view, "stack_feedback_reject_item", %{"id" => item.id})
 
       reloaded = Repo.get!(ReviewItem, item.id)
       assert reloaded.status == "needs_revision"
       assert reloaded.feedback == "Buffered feedback"
     end
 
-    test "(e) close_stack_feedback_overlay clears in-flight reject form state",
+    test "(e) stack_close_feedback_overlay clears in-flight reject form state",
          %{conn: conn, stack: stack} do
       m1 = seed_s4_member(stack, "in_progress", 1)
       {_v, _rr, item} = seed_s4_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      _ = render_click(view, "open_stack_feedback_overlay", %{})
-      _ = render_click(view, "toggle_stack_feedback_reject", %{"id" => item.id})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_toggle_feedback_reject", %{"id" => item.id})
 
       _ =
-        render_keyup(view, "update_stack_feedback_reject_text", %{
+        render_keyup(with_target(view, "#tasks-stacks"), "stack_update_feedback_reject_text", %{
           "id" => item.id,
           "value" => "half typed"
         })
 
       mid = :sys.get_state(view.pid).socket.assigns
-      assert MapSet.member?(mid.stack_feedback_reject_open, item.id)
-      assert Map.get(mid.stack_feedback_reject_text, item.id) == "half typed"
+      assert MapSet.member?(stacks_assigns(view).stack_feedback_reject_open, item.id)
+      assert Map.get(stacks_assigns(view).stack_feedback_reject_text, item.id) == "half typed"
 
-      _ = render_click(view, "close_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_close_feedback_overlay", %{})
 
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.show_stack_feedback_overlay == false
-      assert MapSet.size(post.stack_feedback_reject_open) == 0
-      assert post.stack_feedback_reject_text == %{}
+      assert stacks_assigns(view).show_stack_feedback_overlay == false
+      assert MapSet.size(stacks_assigns(view).stack_feedback_reject_open) == 0
+      assert stacks_assigns(view).stack_feedback_reject_text == %{}
 
       # Validation alias keeps the compiler from complaining about an
       # otherwise-unused alias at the top of this describe block.
@@ -10883,11 +11123,11 @@ defmodule PlatformWeb.TasksLiveTest do
       m2 = seed_s5_member(stack, "in_progress", 2)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      pre_html = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # Sanity: nothing pending pre-create — pill stays hidden.
       refute pre_html =~ ~s(data-role="stack-detail-needs-feedback-pill")
-      assert :sys.get_state(view.pid).socket.assigns.selected_stack_pending_review_count == 0
+      assert stacks_assigns(view).selected_stack_pending_review_count == 0
 
       # External actor creates a pending RR on m1 — broadcasts
       # `{:review_request_pending, ...}` on `review_requests:<m1.id>`.
@@ -10920,11 +11160,11 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_s5_review_request(m1)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      open_html = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       assert open_html =~ ~s(data-role="stack-feedback-overlay-panel")
-      assert :sys.get_state(view.pid).socket.assigns.selected_stack_pending_review_count == 1
+      assert stacks_assigns(view).selected_stack_pending_review_count == 1
 
       pre_rows =
         open_html
@@ -10943,8 +11183,8 @@ defmodule PlatformWeb.TasksLiveTest do
       post_html = render(view)
 
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.selected_stack_pending_review_count == 2
-      assert length(post.selected_stack_open_review_requests) == 2
+      assert stacks_assigns(view).selected_stack_pending_review_count == 2
+      assert length(stacks_assigns(view).selected_stack_open_review_requests) == 2
 
       assert post_html =~ ~s(data-pending-count="2")
 
@@ -10967,12 +11207,12 @@ defmodule PlatformWeb.TasksLiveTest do
       [item_on_m2] = r2.items
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
-      _ = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_feedback_overlay", %{})
 
       pre = :sys.get_state(view.pid).socket.assigns
-      assert pre.selected_stack_pending_review_count == 2
-      assert length(pre.selected_stack_open_review_requests) == 2
+      assert stacks_assigns(view).selected_stack_pending_review_count == 2
+      assert length(stacks_assigns(view).selected_stack_open_review_requests) == 2
 
       # External actor approves m2's only review item — this drives
       # `maybe_resolve_request/1` and broadcasts
@@ -10985,29 +11225,29 @@ defmodule PlatformWeb.TasksLiveTest do
       post_html = render(view)
 
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.selected_stack_pending_review_count == 1
-      assert length(post.selected_stack_open_review_requests) == 1
+      assert stacks_assigns(view).selected_stack_pending_review_count == 1
+      assert length(stacks_assigns(view).selected_stack_open_review_requests) == 1
       # The surviving RR is m1's — not m2's.
-      assert hd(post.selected_stack_open_review_requests).task_id == m1.id
+      assert hd(stacks_assigns(view).selected_stack_open_review_requests).task_id == m1.id
 
       assert post_html =~ ~s(data-pending-count="1")
       assert post_html =~ "Needs feedback (1)"
       refute post_html =~ ~s(data-review-item-id="#{item_on_m2.id}")
     end
 
-    test "(d) close_stack_detail unwinds the per-member subscriptions, leaving board subs intact",
+    test "(d) stack_close_detail unwinds the per-member subscriptions, leaving board subs intact",
          %{conn: conn, stack: stack} do
       m1 = seed_s5_member(stack, "in_progress", 1)
       m2 = seed_s5_member(stack, "in_progress", 2)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
 
       # While open: the stack-scoped subscription set must contain
       # every member id.
       mid = :sys.get_state(view.pid).socket.assigns
-      assert MapSet.member?(mid.stack_review_request_subscriptions, m1.id)
-      assert MapSet.member?(mid.stack_review_request_subscriptions, m2.id)
+      assert MapSet.member?(stacks_assigns(view).stack_review_request_subscriptions, m1.id)
+      assert MapSet.member?(stacks_assigns(view).stack_review_request_subscriptions, m2.id)
 
       # The board-level set (from the badges-task wiring) already holds
       # these too because the members were created BEFORE mount and so
@@ -11017,14 +11257,14 @@ defmodule PlatformWeb.TasksLiveTest do
       assert MapSet.member?(mid.review_request_subscriptions, m1.id)
       assert MapSet.member?(mid.review_request_subscriptions, m2.id)
 
-      _ = render_click(view, "close_stack_detail", %{})
+      _ = stacks_click(view, "stack_close_detail", %{})
 
       post = :sys.get_state(view.pid).socket.assigns
-      assert post.show_stack_detail == false
-      assert post.selected_stack == nil
+      assert stacks_assigns(view).show_stack_detail == false
+      assert stacks_assigns(view).selected_stack == nil
 
       # Stack-scoped set is empty — no member ids retained.
-      assert MapSet.size(post.stack_review_request_subscriptions) == 0
+      assert MapSet.size(stacks_assigns(view).stack_review_request_subscriptions) == 0
 
       # Board-level set still holds both members. The unwind respected
       # the overlap and only dropped subs the stack panel uniquely
@@ -11041,8 +11281,8 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = seed_s5_review_request(m1)
       _ = :sys.get_state(view.pid)
       post2 = :sys.get_state(view.pid).socket.assigns
-      assert post2.selected_stack_pending_review_count == 0
-      assert post2.selected_stack_open_review_requests == []
+      assert stacks_assigns(view).selected_stack_pending_review_count == 0
+      assert stacks_assigns(view).selected_stack_open_review_requests == []
     end
   end
 
@@ -11178,7 +11418,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # Click the × button on the chip for our canvas.
       view
       |> element(
-        ~s|[data-role="linked-canvas-chip"][data-canvas-id="#{canvas.id}"] button[phx-click="detach_canvas"]|
+        ~s|[data-role="linked-canvas-chip"][data-canvas-id="#{canvas.id}"] button[phx-click="detail_detach_canvas"]|
       )
       |> render_click()
 
@@ -11340,9 +11580,14 @@ defmodule PlatformWeb.TasksLiveTest do
       refute has_element?(view, "[data-role='task-chat-pin-toggle']")
 
       # Forge the event anyway (simulates a CDP/liveSocket.push bypass).
-      html = render_hook(view, "toggle_task_chat_pin", %{})
+      html = render_hook(detail(view), "detail_toggle_chat_pin", %{})
 
       # Server-side re-check fires an :error flash AND no pin/space landed.
+      # Task 01a008f6 stage 4: the detail panel is a LiveComponent, so
+      # flashes and shell-state refreshes arrive on the NEXT render pass
+      # (the component notifies the shell via send/2). Re-render to observe.
+      html = render(view)
+
       assert html =~ "Only the task sponsor can pin this task."
       assert count_chat_spaces_for_task(task.id) == 0
       assert Repo.aggregate(from(p in ChatPin, where: p.task_id == ^task.id), :count) == 0
@@ -11443,9 +11688,16 @@ defmodule PlatformWeb.TasksLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html =
-        view
-        |> render_hook("kanban_drop", %{"task_id" => task.id, "column" => "done"})
+      # Two steps, not one. `board_drop` is BoardComponent's since task
+      # 01a008f6 stage 7, and a LiveComponent cannot `put_flash/3` — it
+      # reports the outcome up with `send(self(), {:board_flash, ...})`,
+      # which the shell handles on the NEXT message. The diff `render_hook/3`
+      # returns therefore predates the flash; re-rendering drains the mailbox.
+      view
+      |> board()
+      |> render_hook("board_drop", %{"task_id" => task.id, "column" => "done"})
+
+      html = render(view)
 
       # Success path — info flash, no gate error.
       assert html =~ "Task moved to Done"
@@ -11470,7 +11722,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       html =
         view
-        |> render_hook("transition_task", %{"id" => task.id, "status" => "in_review"})
+        |> detail()
+        |> render_hook("detail_transition", %{"id" => task.id, "status" => "in_review"})
 
       # Success path — no `no approved plan` flash text.
       refute html =~ "no approved plan"
@@ -11540,9 +11793,16 @@ defmodule PlatformWeb.TasksLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html =
-        view
-        |> render_hook("kanban_drop", %{"task_id" => task.id, "column" => "done"})
+      # Two steps, not one. `board_drop` is BoardComponent's since task
+      # 01a008f6 stage 7, and a LiveComponent cannot `put_flash/3` — it
+      # reports the outcome up with `send(self(), {:board_flash, ...})`,
+      # which the shell handles on the NEXT message. The diff `render_hook/3`
+      # returns therefore predates the flash; re-rendering drains the mailbox.
+      view
+      |> board()
+      |> render_hook("board_drop", %{"task_id" => task.id, "column" => "done"})
+
+      html = render(view)
 
       # Success flash + no gate-error copy. `"no approved plan"` is the
       # substring shared by both error-flash variants (`transition_task`
@@ -11570,9 +11830,16 @@ defmodule PlatformWeb.TasksLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html =
-        view
-        |> render_hook("kanban_drop", %{"task_id" => task.id, "column" => "done"})
+      # Two steps, not one. `board_drop` is BoardComponent's since task
+      # 01a008f6 stage 7, and a LiveComponent cannot `put_flash/3` — it
+      # reports the outcome up with `send(self(), {:board_flash, ...})`,
+      # which the shell handles on the NEXT message. The diff `render_hook/3`
+      # returns therefore predates the flash; re-rendering drains the mailbox.
+      view
+      |> board()
+      |> render_hook("board_drop", %{"task_id" => task.id, "column" => "done"})
+
+      html = render(view)
 
       # Exact error-flash copy from `tasks_live.ex` at ~line 2579 — if
       # this string drifts, the test tells us before the sponsor sees
@@ -11624,9 +11891,16 @@ defmodule PlatformWeb.TasksLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      html =
-        view
-        |> render_hook("kanban_drop", %{"task_id" => task.id, "column" => "done"})
+      # Two steps, not one. `board_drop` is BoardComponent's since task
+      # 01a008f6 stage 7, and a LiveComponent cannot `put_flash/3` — it
+      # reports the outcome up with `send(self(), {:board_flash, ...})`,
+      # which the shell handles on the NEXT message. The diff `render_hook/3`
+      # returns therefore predates the flash; re-rendering drains the mailbox.
+      view
+      |> board()
+      |> render_hook("board_drop", %{"task_id" => task.id, "column" => "done"})
+
+      html = render(view)
 
       assert html =~
                "Cannot move task into Done: no approved plan exists. Create and approve a plan first."
@@ -11658,10 +11932,15 @@ defmodule PlatformWeb.TasksLiveTest do
 
       html =
         view
-        |> render_hook("transition_task", %{"id" => task.id, "status" => "in_review"})
+        |> detail()
+        |> render_hook("detail_transition", %{"id" => task.id, "status" => "in_review"})
 
       # Success flash from `tasks_live.ex` at ~line 1456 (`"Task moved
       # to <new_status>."`) plus absence of the gate-error text.
+      # Task 01a008f6 stage 4: the detail panel is a LiveComponent; its
+      # flash lands on the NEXT render pass.
+      html = render(view)
+
       assert html =~ "Task moved to in_review"
       refute html =~ "no approved plan"
 
@@ -11718,7 +11997,7 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
 
       [button_tag] =
-        Regex.run(~r/<button[^>]*phx-click="request_delete_task"[^>]*>/, html)
+        Regex.run(~r/<button[^>]*phx-click="detail_request_delete"[^>]*>/, html)
 
       for token <- @tap_target_tokens do
         assert button_tag =~ token,
@@ -11762,12 +12041,88 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
 
       [button_tag] =
-        Regex.run(~r/<button[^>]*phx-click="close_detail"[^>]*>/, html)
+        Regex.run(~r/<button[^>]*phx-click="detail_close"[^>]*>/, html)
 
       for token <- @tap_target_tokens do
         assert button_tag =~ token,
                "expected close button to carry #{token} for iOS HIG 44x44 tap-target; got: #{button_tag}"
       end
     end
+  end
+
+  # ── Sidebar event helpers (task 01a008f6 stage 2) ──────────────────────
+  #
+  # Sidebar / Projects / Epics events live on
+  # `PlatformWeb.TasksLive.SidebarComponent`. Dispatching to a LiveComponent
+  # returns only THAT component's HTML, and any state the component asks the
+  # shell to change arrives as a message the shell processes afterwards — so
+  # a raw `render_click(with_target(...))` snapshot shows neither the board
+  # nor the post-notify state. These helpers dispatch to the component and
+  # then re-render the whole view, which is what every assertion here wants.
+
+  defp sidebar_click(view, event, params \\ %{}) do
+    _ = render_click(with_target(view, "#tasks-sidebar"), event, params)
+    render(view)
+  end
+
+  # ── Stacks component helpers (task 01a008f6 stage 3) ───────────────────
+  #
+  # The Stacks concern moved to `PlatformWeb.Tasks.StacksComponent`, so its
+  # state no longer lives on the LiveView socket. `stacks_assigns/1` reads
+  # the LiveComponent's assigns out of the LiveView process state — the
+  # component equivalent of `:sys.get_state(view.pid).socket.assigns`.
+  #
+  # `stacks_click/3` dispatches to the component AND re-renders the whole
+  # view: dispatching to a LiveComponent returns only THAT component's HTML,
+  # and anything the component asks the shell to change (board refresh,
+  # expansion toggle, task-detail close) arrives as a message the shell
+  # processes afterwards.
+
+  defp stacks_assigns(view) do
+    {cid_map, _id_map, _counter} = :sys.get_state(view.pid).components
+
+    {_cid, {_mod, _id, assigns, _private, _prints}} =
+      Enum.find(cid_map, fn {_cid, entry} ->
+        elem(entry, 0) == PlatformWeb.Tasks.StacksComponent
+      end)
+
+    assigns
+  end
+
+  defp stacks_click(view, event, params \\ %{}) do
+    _ = render_click(with_target(view, "#tasks-stacks"), event, params)
+    render(view)
+  end
+
+  # Task 01a008f6 stage 4: the task detail panel, inline editor and plan
+  # approval UI are a LiveComponent. Their events carry `phx-target`, so
+  # tests must address the component rather than the parent LiveView.
+  defp detail(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-detail")
+
+  # Task 01a008f6 stage 6: New-Task creation is a LiveComponent.
+  defp create(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-create")
+
+  # Task 01a008f6 stage 5: execution & steering, the per-phase assignee
+  # modal and the merge-control cluster are LiveComponents too.
+  defp steering(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-steering")
+
+  defp assignees(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-assignees")
+
+  # Task 01a008f6 stage 6: board filtering is a LiveComponent.
+  defp filters(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-filters")
+
+  # BoardComponent (task 01a008f6 stage 7). `board_drop` is pushed by the
+  # KanbanDragDrop hook with pushEventTo("#tasks-board", ...) — a hook's
+  # pushEvent ignores phx-target, so the selector is in the JS, and the test
+  # has to name the same target to exercise the same handler.
+  defp board(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-board")
+
+  # Task 01a008f6 stage 6: FiltersComponent writes the filter value and hands
+  # it to the shell as `{:tasks_filters_changed, _}`. The shell's board work
+  # therefore lands in the render AFTER the event reply, so a test that reads
+  # the reply html directly is reading the pre-mediation board.
+  defp after_filter(view) do
+    _ = :sys.get_state(view.pid)
+    Phoenix.LiveViewTest.render(view)
   end
 end

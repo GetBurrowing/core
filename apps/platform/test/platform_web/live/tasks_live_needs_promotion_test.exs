@@ -67,7 +67,7 @@ defmodule PlatformWeb.TasksLiveNeedsPromotionTest do
       assert html =~ ~r{badge badge-warning[^"]*}
 
       # Wires the promote_task event with the task id.
-      assert html =~ ~s(phx-click="promote_task")
+      assert html =~ ~s(phx-click="board_promote_task")
       assert html =~ ~s(phx-value-id="#{task.id}")
 
       # M5b Stage 3: browser-native tooltip conveys the meeting-canvas
@@ -160,11 +160,17 @@ defmodule PlatformWeb.TasksLiveNeedsPromotionTest do
 
       # Send the event with a bogus id via render_hook — no matching DOM
       # element to click. We invoke handle_event directly.
-      html =
-        view
-        |> render_hook("promote_task", %{"id" => Ecto.UUID.generate()})
+      #
+      # Two renders, not one: `board_promote_task` is BoardComponent's, and a
+      # LiveComponent cannot `put_flash/3`. It reports the outcome up with
+      # `send(self(), {:board_flash, ...})`, which the shell handles on the
+      # NEXT message — so the diff `render_hook/3` returns predates the flash.
+      # Re-rendering drains the mailbox first.
+      view
+      |> Phoenix.LiveViewTest.with_target("#tasks-board")
+      |> render_hook("board_promote_task", %{"id" => Ecto.UUID.generate()})
 
-      assert html =~ "Task not found."
+      assert render(view) =~ "Task not found."
     end
 
     test "promoting a task that is already promoted no-ops without error", %{conn: conn} do
@@ -175,7 +181,9 @@ defmodule PlatformWeb.TasksLiveNeedsPromotionTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # No badge rendered — hit the event directly.
-      view |> render_hook("promote_task", %{"id" => task.id})
+      view
+      |> Phoenix.LiveViewTest.with_target("#tasks-board")
+      |> render_hook("board_promote_task", %{"id" => task.id})
 
       # Still cleared in DB (idempotent).
       assert %{needs_promotion: false} = Repo.get!(Tasks.Task, task.id)

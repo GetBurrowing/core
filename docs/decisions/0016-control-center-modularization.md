@@ -65,6 +65,23 @@ control_center/
 
 **Total: 3,750 lines across 12 files** (vs 3,219 in one file). The ~16% growth is structural overhead (module declarations, `attr` specs, imports) — a worthwhile trade for navigability.
 
+> **Correction, 2026-08-17 (task 01a008f6 stage 7).** The block above is the
+> shape at landing and has not been true for some time. As of `c1762b82` the
+> surface is **13 files / 4,851 lines** under `control_center/` — plus a
+> **1,023-line shell**, up from the 719 recorded here — for **5,874 lines
+> total**, a 57% growth on the 3,750 this ADR set down. Three modules were
+> added after the fact (`agent_avatar_upload.ex` 221, `roles_panel.ex` 267,
+> and `runtime_panel.ex` grew 177 → 212), and three of the originals roughly
+> doubled (`agent_detail.ex` 890 → 1,149, `agent_data.ex` 475 → 707,
+> `onboarding.ex` 491 → 969, `onboarding_events.ex` 348 → 646).
+>
+> The relevant lesson is not the drift itself but that **nothing measured
+> it**. A modularization that records its result in prose only records the
+> day it shipped. See ADR 0050 for the ratchet mechanism adopted on the
+> Tasks surface in response, and note that ADR 0050's measurement rule (sum
+> the module AND its template, not one file) applies here too: this ADR's
+> "719-line shell" never counted `control_center_live.html.heex`.
+
 ## AgentDetail Components
 
 The largest extraction. Eight function components, each rendering one section of the agent detail panel:
@@ -108,6 +125,17 @@ The refactor was driven by a test-first approach:
 - **Indirection:** Understanding the full event flow requires following delegation from the main module to handler modules. Mitigated by consistent naming (event name matches handler module).
 - **Total line count grew ~16%:** Module boilerplate (defmodule, use, import, attr declarations). This is structural investment, not complexity growth.
 - **Handler modules call back to main LiveView:** `RuntimeEvents` calls `PlatformWeb.ControlCenterLive.reload_selected_agent/2` — a circular reference. Acceptable for now; could be resolved with a behaviour or callback module if it becomes problematic.
+
+  > **Correction, 2026-08-17 (task 01a008f6 stage 7).** Still present, and it
+  > spread: `runtime_events.ex`, `memory_events.ex` and `workspace_events.ex`
+  > all call `PlatformWeb.ControlCenterLive.reload_selected_agent/2` today —
+  > six call sites across three modules, not the one this bullet names.
+  > "Acceptable for now" with no trigger condition attached is how a known
+  > compromise becomes the house pattern. The Tasks extraction declined to
+  > repeat it: `PlatformWeb.Tasks.BoardHooks` needed the same
+  > reload-the-selection behaviour and got it by extracting
+  > `PlatformWeb.Tasks.Selection`, a module both the hook and the shell
+  > depend on, so neither depends on the other.
 
 ### Not addressed
 
