@@ -459,6 +459,11 @@ defmodule Platform.Orchestration.LeaseManagerTest do
           send(parent, :writer_done)
         end)
 
+      # Monitor the writer BEFORE anything that could make it exit. A late
+      # monitor on an already-dead process delivers `:DOWN` immediately, which
+      # would make the assertion below pass instantly and always.
+      writer_ref = Process.monitor(writer)
+
       # Spawn 100 readers. Each pulls the lease 50 times and asserts
       # every read is a well-formed lease map (never a torn value).
       readers =
@@ -483,8 +488,12 @@ defmodule Platform.Orchestration.LeaseManagerTest do
         assert results == [:ok], "reader observed a malformed lease: #{inspect(results)}"
       end
 
+      # `:writer_done` is the progress signal: the writer finished its work and
+      # SENT. It says nothing about termination, so `Process.alive?/1` here
+      # races the scheduler. The monitor's `:DOWN` is precisely the observable
+      # that means "the writer terminated", so assert on that instead.
       assert_receive :writer_done, 10_000
-      refute Process.alive?(writer), "writer should have exited cleanly"
+      assert_receive {:DOWN, ^writer_ref, :process, ^writer, _reason}, 10_000
 
       # After the burst, the lease is still coherent and its
       # safety-net was extended past the initial dispatch value.

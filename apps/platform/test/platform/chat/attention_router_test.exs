@@ -749,30 +749,40 @@ defmodule Platform.Chat.AttentionRouterTest do
       drain()
     end
 
-    @tag timeout: 10_000
     test "the eye falls closed on TTL expiry but the space still remembers the agent", %{
       space: space,
       user: user,
       agent_participant: agent_participant
     } do
-      original = Application.get_env(:platform, :active_agent_timeout_ms)
-      Application.put_env(:platform, :active_agent_timeout_ms, 50)
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:platform, :active_agent_timeout_ms, original)
-        else
-          Application.delete_env(:platform, :active_agent_timeout_ms)
-        end
-      end)
-
       mention = create_message(space.id, user.id, %{content: "@zip quick one"})
       assert {:ok, [%{reason: :mention}]} = AttentionRouter.route(mention)
       assert_receive {:agent_chat_called, "@zip quick one", _opts}, 500
       assert ActiveAgentStore.get_active(space.id) == agent_participant.id
 
-      # Let the inactivity timer fire.
-      Process.sleep(150)
+      # The assertion above used to race a deliberately-shortened 50ms timeout:
+      # under load the timer fired before the test got here and the eye was
+      # already closed. The timeout is no longer overridden, so at the 900_000ms
+      # default it cannot fire during this test at all. Arming is asserted
+      # directly instead: `set_active/2` keeps the timer ref in the ETS row's
+      # 4th element (row shape is documented on the store), and the table handle
+      # comes from the store's own state rather than a hardcoded table name.
+      # `Process.read_timer/1` is the same instrument `task_router_test.exs`
+      # uses to prove an armed deadline.
+      table = :sys.get_state(ActiveAgentStore).table
+      [{_space_id, _active, _last, timer_ref}] = :ets.lookup(table, space.id)
+
+      assert is_reference(timer_ref), "set_active/2 armed no inactivity timer"
+      remaining = Process.read_timer(timer_ref)
+
+      assert is_integer(remaining) and remaining > 0 and remaining <= 900_000,
+             "inactivity timer is not pending within the default window: #{inspect(remaining)}"
+
+      # Drive expiry through the store's own timer message rather than a wall
+      # clock, then synchronise on its mailbox: `get_active/1` reads ETS
+      # directly, so without this call we would race the `handle_info` we just
+      # triggered — the same class of race this change removes.
+      send(ActiveAgentStore, {:timeout, space.id, agent_participant.id})
+      _ = :sys.get_state(ActiveAgentStore)
       assert ActiveAgentStore.get_active(space.id) == nil
 
       after_expiry = create_message(space.id, user.id, %{content: "much later"})
