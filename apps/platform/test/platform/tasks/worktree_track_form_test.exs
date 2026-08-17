@@ -106,11 +106,7 @@ defmodule Platform.Tasks.WorktreeTrackFormTest do
     output
   end
 
-  defp temp_dir(prefix) do
-    suffix = Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
-    path = Path.join(System.tmp_dir!(), "#{prefix}-#{System.system_time(:nanosecond)}-#{suffix}")
-    File.rm_rf!(path)
-    File.mkdir_p!(path)
-    path
-  end
+  # See proof_of_life_test.exs: the wall clock was never the component that made
+  # this unique across BEAMs, so it is gone rather than left looking load-bearing.
+  defp temp_dir(prefix), do: Platform.TestTemp.mkdir!(prefix)
 end

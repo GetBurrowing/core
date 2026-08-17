@@ -26,10 +26,7 @@ defmodule Platform.Files.StorageTest do
   describe "put/3 + get/1 round-trip" do
     setup do
       root =
-        Path.join(
-          System.tmp_dir!(),
-          "platform-files-storage-test-#{System.unique_integer([:positive])}"
-        )
+        Platform.TestTemp.path("platform-files-storage-test")
 
       File.mkdir_p!(root)
 

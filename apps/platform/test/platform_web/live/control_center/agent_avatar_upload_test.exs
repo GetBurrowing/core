@@ -48,12 +48,8 @@ defmodule PlatformWeb.ControlCenter.AgentAvatarUploadTest do
     prev = Application.get_env(:platform, :chat_attachments_root)
 
     scratch =
-      Path.join(
-        System.tmp_dir!(),
-        "agent_avatar_upload_test_#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.mkdir!("agent_avatar_upload_test")
 
-    File.mkdir_p!(scratch)
     Application.put_env(:platform, :chat_attachments_root, scratch)
 
     on_exit(fn ->

@@ -88,10 +88,7 @@ defmodule Platform.Files.HTMLBackfillTest do
     Application.put_env(:platform, :memory_service, provider: BackfillProvider)
 
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-html-backfill-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-html-backfill-test")
 
     File.mkdir_p!(root)
     previous_root = Application.get_env(:platform, :chat_attachments_root)

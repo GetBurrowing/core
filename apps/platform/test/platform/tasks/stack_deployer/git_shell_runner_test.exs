@@ -26,8 +26,7 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunnerTest do
   alias Platform.Tasks.StackDeployer.GitShellRunner
 
   setup do
-    root = Path.join(System.tmp_dir!(), "gsr-test-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+    root = Platform.TestTemp.mkdir!("gsr-test")
 
     prev = Application.get_env(:platform, :stack_deployer, [])
 

@@ -375,10 +375,7 @@ defmodule Platform.Federation.ToolSurfaceHumanOnlyContextTest do
   # binary branch has real bytes to withhold.
   defp with_tmp_storage_root(_context) do
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-human-only-ctx-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-human-only-ctx-test")
 
     File.mkdir_p!(root)
     previous = Application.get_env(:platform, :chat_attachments_root)

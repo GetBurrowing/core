@@ -42,13 +42,7 @@ defmodule Platform.Lifecycle.TerminalWorktreeCleanupTest do
   @webhook_step "completion_webhook"
 
   setup do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-terminal-cleanup-#{Base.encode32(:crypto.strong_rand_bytes(10), case: :lower, padding: false)}"
-      )
-
-    File.mkdir_p!(root)
+    root = Platform.TestTemp.mkdir!("platform-terminal-cleanup")
 
     previous = Application.get_env(:platform, :execution, [])
     Application.put_env(:platform, :execution, Keyword.put(previous, :local_run_root, root))

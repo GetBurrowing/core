@@ -35,8 +35,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
   # restore the prior value on exit so we don't poison other suites.
   setup do
     prev = Application.get_env(:platform, :chat_attachments_root)
-    scratch = Path.join(System.tmp_dir!(), "file_blob_test_#{System.unique_integer([:positive])}")
-    File.mkdir_p!(scratch)
+    scratch = Platform.TestTemp.mkdir!("file_blob_test")
     Application.put_env(:platform, :chat_attachments_root, scratch)
 
     on_exit(fn ->

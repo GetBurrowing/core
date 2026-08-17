@@ -40,7 +40,7 @@ defmodule Platform.Security.Scanners.CodeAudit.PatternLoaderTest do
     end
 
     test "returns error for a rubric without a top-level patterns key" do
-      tmp = Path.join(System.tmp_dir!(), "no_patterns_#{System.unique_integer([:positive])}.yaml")
+      tmp = Platform.TestTemp.path("no_patterns") <> ".yaml"
       File.write!(tmp, "other_key: []\n")
       on_exit(fn -> File.rm(tmp) end)
 
@@ -49,7 +49,7 @@ defmodule Platform.Security.Scanners.CodeAudit.PatternLoaderTest do
 
     test "returns error for an entry missing required keys" do
       tmp =
-        Path.join(System.tmp_dir!(), "missing_keys_#{System.unique_integer([:positive])}.yaml")
+        Platform.TestTemp.path("missing_keys") <> ".yaml"
 
       File.write!(tmp, """
       patterns:
@@ -65,7 +65,7 @@ defmodule Platform.Security.Scanners.CodeAudit.PatternLoaderTest do
     end
 
     test "returns error for an uncompilable regex" do
-      tmp = Path.join(System.tmp_dir!(), "bad_regex_#{System.unique_integer([:positive])}.yaml")
+      tmp = Platform.TestTemp.path("bad_regex") <> ".yaml"
 
       File.write!(tmp, """
       patterns:

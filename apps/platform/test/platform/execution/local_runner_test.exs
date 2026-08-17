@@ -597,14 +597,14 @@ defmodule Platform.Execution.LocalRunnerTest do
   #
   # Randomness rather than a counter is the point: the value has to be unique
   # across OS processes, and no per-VM counter can be.
+  #
+  # Task 01a0108d hoisted that conclusion out of this file: the token is now
+  # `Platform.TestTemp.unique_token/0` and the root comes from
+  # `Platform.TestTemp.mkdir!/1`, so the 51 sites that had the old construction
+  # share one implementation with this one. The account above is the measured
+  # record of why; only the location of the code changed.
   setup_all do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-local-runner-test-#{unique_token()}"
-      )
-
-    File.mkdir_p!(root)
+    root = Platform.TestTemp.mkdir!("platform-local-runner-test")
     :persistent_term.put({__MODULE__, :temp_root}, root)
 
     on_exit(fn ->
@@ -630,11 +630,11 @@ defmodule Platform.Execution.LocalRunnerTest do
     "run-#{unique_token()}"
   end
 
-  # Lowercase base32, no padding: safe as a path segment AND as a git branch
-  # name (the branch built in `setup_temp_git_repo/0` interpolates one).
-  defp unique_token do
-    Base.encode32(:crypto.strong_rand_bytes(10), case: :lower, padding: false)
-  end
+  # Delegated so this file and the swept call sites cannot drift apart. The
+  # shared token is lowercase base32 plus the OS pid plus a counter: safe as a
+  # path segment AND as a git branch name (the branch built in
+  # `setup_temp_git_repo/0` interpolates one).
+  defp unique_token, do: Platform.TestTemp.unique_token()
 
   defp assert_file_eventually(path, timeout \\ 1_000) do
     assert_eventually(fn -> File.exists?(path) end, timeout)

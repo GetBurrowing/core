@@ -59,14 +59,12 @@ defmodule Platform.Tasks.ProofOfLifeTest do
     |> Map.fetch!(:value)
   end
 
-  defp temp_dir(prefix) do
-    suffix = Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
-    path = Path.join(System.tmp_dir!(), "#{prefix}-#{System.system_time(:nanosecond)}-#{suffix}")
-
-    File.rm_rf!(path)
-    File.mkdir_p!(path)
-    path
-  end
+  # The previous construction was a wall clock plus random bytes. The random
+  # bytes already carried the cross-BEAM uniqueness; the clock never did, since
+  # two BEAMs can read the same coarse timestamp. Routed through the shared
+  # helper so the clock is not left looking load-bearing. The defensive
+  # `File.rm_rf!/1` went with it: the helper's path cannot pre-exist.
+  defp temp_dir(prefix), do: Platform.TestTemp.mkdir!(prefix)
 
   defp assert_eventually(fun, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout

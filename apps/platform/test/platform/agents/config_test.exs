@@ -151,7 +151,7 @@ defmodule Platform.Agents.ConfigTest do
   describe "parse_file/2" do
     test "reads and parses a config file from disk" do
       path =
-        Path.join(System.tmp_dir!(), "openclaw-config-#{System.unique_integer([:positive])}.json")
+        Platform.TestTemp.path("openclaw-config") <> ".json"
 
       File.write!(path, Jason.encode!(%{agents: %{list: [%{id: "file-agent"}]}}))
 

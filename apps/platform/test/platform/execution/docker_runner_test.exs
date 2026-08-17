@@ -618,8 +618,8 @@ defmodule Platform.Execution.DockerRunnerTest do
   end
 
   defp temp_dir(prefix) do
-    path = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(path)
+    path = Platform.TestTemp.mkdir!(prefix)
+    on_exit(fn -> File.rm_rf(path) end)
     path
   end
 end

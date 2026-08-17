@@ -12,10 +12,7 @@ defmodule PlatformWeb.ChatAttachmentControllerTest do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
 
     upload_root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform_test_chat_uploads_#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform_test_chat_uploads")
 
     Application.put_env(:platform, :chat_attachments_root, upload_root)
 
@@ -90,10 +87,7 @@ defmodule PlatformWeb.ChatAttachmentControllerTest do
       })
 
     source_path =
-      Path.join(
-        System.tmp_dir!(),
-        "chat-attachment-source-#{System.unique_integer([:positive])}.txt"
-      )
+      Platform.TestTemp.path("chat-attachment-source") <> ".txt"
 
     File.write!(source_path, "hello attachment")
 

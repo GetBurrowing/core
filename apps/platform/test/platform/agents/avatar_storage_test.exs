@@ -25,9 +25,8 @@ defmodule Platform.Agents.AvatarStorageTest do
     prev = Application.get_env(:platform, :chat_attachments_root)
 
     scratch =
-      Path.join(System.tmp_dir!(), "avatar_storage_test_#{System.unique_integer([:positive])}")
+      Platform.TestTemp.mkdir!("avatar_storage_test")
 
-    File.mkdir_p!(scratch)
     Application.put_env(:platform, :chat_attachments_root, scratch)
 
     on_exit(fn ->

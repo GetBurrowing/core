@@ -7,10 +7,7 @@ defmodule Platform.Agents.ConfigImportExportTest do
 
   defp tmp_dir!(label) do
     path =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-agents-config-#{label}-#{System.unique_integer([:positive, :monotonic])}"
-      )
+      Platform.TestTemp.path("platform-agents-config-#{label}")
 
     File.mkdir_p!(path)
 

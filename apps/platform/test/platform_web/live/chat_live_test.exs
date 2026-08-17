@@ -14,10 +14,7 @@ defmodule PlatformWeb.ChatLiveTest do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
 
     upload_root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform_live_test_chat_uploads_#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform_live_test_chat_uploads")
 
     Application.put_env(:platform, :chat_attachments_root, upload_root)
 
@@ -1087,10 +1084,7 @@ defmodule PlatformWeb.ChatLiveTest do
     conn = authenticated_conn(conn)
 
     workspace =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-chat-live-agent-#{System.unique_integer([:positive, :monotonic])}"
-      )
+      Platform.TestTemp.path("platform-chat-live-agent")
 
     File.mkdir_p!(workspace)
 
@@ -1136,10 +1130,7 @@ defmodule PlatformWeb.ChatLiveTest do
     conn = authenticated_conn(conn)
 
     workspace =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-chat-live-default-agent-#{System.unique_integer([:positive, :monotonic])}"
-      )
+      Platform.TestTemp.path("platform-chat-live-default-agent")
 
     File.mkdir_p!(workspace)
 

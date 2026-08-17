@@ -29,10 +29,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooksJunkBatchTest do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
 
     upload_root =
-      Path.join(
-        System.tmp_dir!(),
-        "junk_batch_hook_uploads_#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("junk_batch_hook_uploads")
 
     Application.put_env(:platform, :chat_attachments_root, upload_root)
 

@@ -7,10 +7,7 @@ defmodule Platform.Agents.WorkspaceBootstrapTest do
 
   defp tmp_workspace!(label) do
     path =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-agent-workspace-#{label}-#{System.unique_integer([:positive, :monotonic])}"
-      )
+      Platform.TestTemp.path("platform-agent-workspace-#{label}")
 
     File.mkdir_p!(path)
 

@@ -21,7 +21,7 @@ defmodule Mix.Tasks.Platform.Security.InstallHooksTest do
   alias Mix.Tasks.Platform.Security.InstallHooks
 
   setup do
-    tmp = Path.join(System.tmp_dir!(), "install_hooks_test_#{System.unique_integer([:positive])}")
+    tmp = Platform.TestTemp.path("install_hooks_test")
     File.mkdir_p!(Path.join([tmp, ".git", "hooks"]))
 
     on_exit(fn -> File.rm_rf!(tmp) end)

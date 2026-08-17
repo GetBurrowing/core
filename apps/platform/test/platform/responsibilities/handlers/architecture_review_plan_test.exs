@@ -123,10 +123,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
   # entry assertions pass against unparsed placeholders.
   defp write_adr_fixture!(files) do
     dir =
-      Path.join(
-        System.tmp_dir!(),
-        "adr-index-fixture-#{:os.getpid()}-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("adr-index-fixture-#{:os.getpid()}")
 
     File.mkdir_p!(dir)
 

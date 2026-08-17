@@ -309,10 +309,7 @@ defmodule Platform.FilesTest do
   describe "default ingest intent at create time (task 019fd033 stage 2)" do
     setup do
       root =
-        Path.join(
-          System.tmp_dir!(),
-          "platform-files-default-intent-#{System.unique_integer([:positive])}"
-        )
+        Platform.TestTemp.path("platform-files-default-intent")
 
       File.mkdir_p!(root)
       previous_root = Application.get_env(:platform, :chat_attachments_root)

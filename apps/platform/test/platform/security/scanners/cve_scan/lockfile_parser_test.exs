@@ -144,9 +144,7 @@ defmodule Platform.Security.Scanners.CveScan.LockfileParserTest do
   describe "discover_lockfiles/1" do
     setup do
       root =
-        System.tmp_dir!() |> Path.join("cve_scan_fixture_#{System.unique_integer([:positive])}")
-
-      File.mkdir_p!(root)
+        Platform.TestTemp.mkdir!("cve_scan_fixture")
 
       on_exit(fn -> File.rm_rf!(root) end)
       {:ok, root: root}

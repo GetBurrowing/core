@@ -90,10 +90,7 @@ defmodule Platform.Chat.PresenceTest do
   describe "native_agent_presence/2" do
     test "reports runtime reachability for the configured agent" do
       workspace =
-        Path.join(
-          System.tmp_dir!(),
-          "platform-chat-presence-#{System.unique_integer([:positive, :monotonic])}"
-        )
+        Platform.TestTemp.path("platform-chat-presence")
 
       File.mkdir_p!(workspace)
       on_exit(fn -> File.rm_rf(workspace) end)

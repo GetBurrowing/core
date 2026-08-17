@@ -288,7 +288,7 @@ defmodule Platform.Security.ExternalAttachmentScopeTest do
 
   defp servable_attachment!(space_id, message_id, content) do
     source =
-      Path.join(System.tmp_dir!(), "m15-src-#{System.unique_integer([:positive])}.txt")
+      Platform.TestTemp.path("m15-src") <> ".txt"
 
     File.write!(source, content)
     {:ok, stored} = AttachmentStorage.persist_upload(source, "f.txt", "text/plain")
@@ -306,7 +306,7 @@ defmodule Platform.Security.ExternalAttachmentScopeTest do
 
   defp servable_legacy_attachment!(content) do
     source =
-      Path.join(System.tmp_dir!(), "m15-legacy-#{System.unique_integer([:positive])}.txt")
+      Platform.TestTemp.path("m15-legacy") <> ".txt"
 
     File.write!(source, content)
     {:ok, stored} = AttachmentStorage.persist_upload(source, "legacy.txt", "text/plain")

@@ -65,10 +65,7 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
 
   defp with_tmp_storage_root(_) do
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-files-e2e-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-files-e2e")
 
     File.mkdir_p!(root)
     previous = Application.get_env(:platform, :chat_attachments_root)

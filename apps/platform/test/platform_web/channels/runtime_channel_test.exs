@@ -21,12 +21,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
 
     upload_root =
-      Path.join(
-        System.tmp_dir!(),
-        "runtime_channel_test_uploads_#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.mkdir!("runtime_channel_test_uploads")
 
-    File.mkdir_p!(upload_root)
     Application.put_env(:platform, :chat_attachments_root, upload_root)
 
     on_exit(fn ->

@@ -68,18 +68,17 @@ defmodule Platform.Agents.QuickAgentTest do
   end
 
   defp write_workspace! do
-    path =
-      Path.join(System.tmp_dir!(), "quick-agent-workspace-#{System.unique_integer([:positive])}")
+    path = Platform.TestTemp.mkdir!("quick-agent-workspace")
+    on_exit(fn -> File.rm_rf(path) end)
 
-    File.mkdir_p!(path)
     File.write!(Path.join(path, "SOUL.md"), "steady and calm")
     File.write!(Path.join(path, "IDENTITY.md"), "Zip")
     path
   end
 
   defp write_auth_file! do
-    dir = Path.join(System.tmp_dir!(), "codex-auth-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
+    dir = Platform.TestTemp.mkdir!("codex-auth")
+    on_exit(fn -> File.rm_rf(dir) end)
     path = Path.join(dir, "auth.json")
 
     File.write!(

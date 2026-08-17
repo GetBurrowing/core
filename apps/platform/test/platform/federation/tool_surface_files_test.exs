@@ -1291,10 +1291,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   # `/data/platform/chat_uploads` mount.
   defp with_tmp_storage_root(_context) do
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-file-add-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-file-add-test")
 
     File.mkdir_p!(root)
     previous = Application.get_env(:platform, :chat_attachments_root)

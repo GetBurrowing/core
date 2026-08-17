@@ -82,10 +82,7 @@ defmodule Platform.Files.IngesterTest do
     # Each test gets its own tmp dir for the local-disk attachment
     # adapter so the extractor's `local_path/1` resolves cleanly.
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-files-ingester-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-files-ingester-test")
 
     File.mkdir_p!(root)
 

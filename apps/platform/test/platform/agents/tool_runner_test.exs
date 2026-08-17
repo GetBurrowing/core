@@ -135,8 +135,8 @@ defmodule Platform.Agents.ToolRunnerTest do
   end
 
   defp write_auth_file! do
-    dir = Path.join(System.tmp_dir!(), "tool-runner-auth-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
+    dir = Platform.TestTemp.mkdir!("tool-runner-auth")
+    on_exit(fn -> File.rm_rf(dir) end)
     path = Path.join(dir, "auth.json")
 
     File.write!(

@@ -19,10 +19,7 @@ defmodule Platform.Files.ExtractorTest do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
 
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-files-extractor-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-files-extractor-test")
 
     File.mkdir_p!(root)
     Application.put_env(:platform, :chat_attachments_root, root)

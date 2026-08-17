@@ -63,10 +63,7 @@ defmodule Platform.Files.WithdrawFromAgentContextTest do
     :persistent_term.put({CaptureProvider, :pid}, self())
 
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-files-withdraw-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-files-withdraw-test")
 
     File.mkdir_p!(root)
     previous_root = Application.get_env(:platform, :chat_attachments_root)

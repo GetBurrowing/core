@@ -1225,8 +1225,7 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
       # "Nobody shipped docs/" and "somebody deleted the ADRs" are
       # different events. Both are non-refusing; collapsing them loses
       # the only signal that the second one happened.
-      dir = Path.join(System.tmp_dir!(), "adr-empty-#{System.unique_integer([:positive])}")
-      File.mkdir_p!(dir)
+      dir = Platform.TestTemp.mkdir!("adr-empty")
       Application.put_env(:platform, :adr_dir, dir)
 
       on_exit(fn ->

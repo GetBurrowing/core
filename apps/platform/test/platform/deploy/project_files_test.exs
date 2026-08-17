@@ -27,10 +27,7 @@ defmodule Platform.Deploy.ProjectFilesTest do
   # to a per-run tmp dir so the LocalDisk adapter can actually persist.
   setup do
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-deploy-project-files-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-deploy-project-files-test")
 
     File.mkdir_p!(root)
 

@@ -17,14 +17,13 @@ defmodule Platform.Execution.ProofRunTest do
 
   defp unique_task_id, do: "task-proof-#{System.unique_integer([:positive, :monotonic])}"
 
+  # Cleanup was missing here, which is why `proof-*` directories accumulated
+  # under `System.tmp_dir!()` — 87 of them were censused on this box while this
+  # task ran (2026-08-17). `Platform.TestTemp.mkdir!/1` deliberately registers
+  # no `on_exit` of its own, so the caller does it.
   defp temp_dir(prefix) do
-    path =
-      Path.join(
-        System.tmp_dir!(),
-        "#{prefix}-#{System.unique_integer([:positive, :monotonic])}"
-      )
-
-    File.mkdir_p!(path)
+    path = Platform.TestTemp.mkdir!(prefix)
+    on_exit(fn -> File.rm_rf(path) end)
     path
   end
 

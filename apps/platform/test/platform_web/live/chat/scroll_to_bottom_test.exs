@@ -68,10 +68,7 @@ defmodule PlatformWeb.ChatLive.ScrollToBottomTest do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
 
     upload_root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform_scroll_test_uploads_#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform_scroll_test_uploads")
 
     Application.put_env(:platform, :chat_attachments_root, upload_root)
 

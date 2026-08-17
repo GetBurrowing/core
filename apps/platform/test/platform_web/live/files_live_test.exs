@@ -522,10 +522,7 @@ defmodule PlatformWeb.FilesLiveTest do
       # value is `/data/platform/chat_uploads` (prod path) which is
       # not writable in CI.
       root =
-        Path.join(
-          System.tmp_dir!(),
-          "files-live-upload-test-#{System.unique_integer([:positive])}"
-        )
+        Platform.TestTemp.path("files-live-upload-test")
 
       File.mkdir_p!(root)
       previous = Application.get_env(:platform, :chat_attachments_root)
@@ -1334,10 +1331,7 @@ defmodule PlatformWeb.FilesLiveTest do
   describe "upload audience checkbox (stage 4)" do
     setup do
       root =
-        Path.join(
-          System.tmp_dir!(),
-          "files-live-audience-test-#{System.unique_integer([:positive])}"
-        )
+        Platform.TestTemp.path("files-live-audience-test")
 
       File.mkdir_p!(root)
       previous = Application.get_env(:platform, :chat_attachments_root)
@@ -1721,10 +1715,7 @@ defmodule PlatformWeb.FilesLiveTest do
   # extractor's path resolution works. Mirrors the ingester test's setup.
   defp attachments_root do
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-files-live-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-files-live-test")
 
     File.mkdir_p!(root)
     previous = Application.get_env(:platform, :chat_attachments_root)

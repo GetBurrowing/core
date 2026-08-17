@@ -84,10 +84,7 @@ defmodule Platform.Security.Scanners.CveScanTest do
 
   defp install_repo_root!(files) do
     root =
-      System.tmp_dir!()
-      |> Path.join("cve_scan_test_#{System.unique_integer([:positive])}")
-
-    File.mkdir_p!(root)
+      Platform.TestTemp.mkdir!("cve_scan_test")
 
     for {rel, contents} <- files do
       abs = Path.join(root, rel)

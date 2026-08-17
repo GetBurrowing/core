@@ -58,10 +58,8 @@ defmodule Platform.Security.Scanners.DeployAuditTest do
 
   defp mkdir!(name) do
     path =
-      System.tmp_dir!()
-      |> Path.join("deploy_audit_#{name}_#{System.unique_integer([:positive])}")
+      Platform.TestTemp.mkdir!("deploy_audit_#{name}")
 
-    File.mkdir_p!(path)
     path
   end
 

@@ -17,12 +17,8 @@ defmodule PlatformWeb.TasksLiveTest do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
 
     upload_root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform_tasks_live_test_uploads_#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.mkdir!("platform_tasks_live_test_uploads")
 
-    File.mkdir_p!(upload_root)
     Application.put_env(:platform, :chat_attachments_root, upload_root)
 
     on_exit(fn ->
@@ -4685,10 +4681,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, space} = ExecutionSpace.find_or_create(task.id)
 
     broken_root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform_tasks_live_test_broken_root_#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform_tasks_live_test_broken_root")
 
     File.write!(broken_root, "not a directory")
     Application.put_env(:platform, :chat_attachments_root, broken_root)

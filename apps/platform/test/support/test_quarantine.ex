@@ -102,6 +102,73 @@ defmodule Platform.TestQuarantine do
   that every entry names a test the suite cannot currently trust. Its history
   belongs in the commit log and the journal, which is where it is.
 
+  ## Retired entries
+
+  Deleting an entry is the intended end state, and it has to be earned by a
+  measurement rather than by reading the code and concluding the cause is gone.
+
+    * `test/platform/execution/local_runner_test.exs: "setup_git_worktree is
+      idempotent when called twice"` — `:environment`, added 2026-07-26,
+      **deleted 2026-08-17** (task `01a0108d` stage 5).
+
+      The recorded mechanism was that `temp_dir("wt-idempotent")` keyed its path
+      on `System.unique_integer([:positive, :monotonic])`, a per-VM counter that
+      restarts near 1 in every fresh BEAM, so run N+1 inherited run N's
+      directory and `setup_git_worktree` met a worktree it had not created. That
+      mechanism was real — a banked baseline on the old code was **8 failing
+      reps in 20**.
+
+      It is also no longer the code. The file now draws its token from
+      `Platform.TestTemp.unique_token/0` (random base32 plus the OS pid) under a
+      per-run `setup_all` root, so two runs cannot converge on one path. The
+      deletion rests on re-measurement, not on that reading:
+      `mix test test/platform/execution/local_runner_test.exs` run from
+      `apps/platform` against an isolated `PLATFORM_TEST_DATABASE`, **20
+      sequential fresh-BEAM reps, 20/20 green (26 tests, 0 failures each)**,
+      2026-08-17. Twenty reps is the same rep count that produced 8 failures
+      before; a handful of green reps would not have been enough to delete on.
+
+      Had it failed even once the entry would have stayed, with the stale
+      mechanism prose replaced by what was observed. That is the rule, not a
+      courtesy: an entry whose mechanism is unverified should be marked
+      UNCONFIRMED and kept, never asserted and never quietly dropped.
+
+  ## Temp-directory residue
+
+  Several entries above were written when temp paths were built from a per-VM
+  counter, so two runs could share one directory. Two things about that class of
+  advice go stale in opposite directions, and both have bitten:
+
+    * **Never hardcode a temp root.** Resolve it at runtime —
+      `System.tmp_dir!()` in Elixir, `"${TMPDIR:-/tmp}"` in shell. On macOS
+      `$TMPDIR` is a per-user directory under `/var/folders/…`; on Linux it is
+      typically `/tmp`. Both are correct answers, which is why neither may be
+      written down. A cleanup aimed at a literal `/tmp/<prefix>-*` on a box
+      where the root is `$TMPDIR` matches nothing **and exits 0** — it reads
+      exactly like a cleanup that worked, which is how wrong paths survive in
+      prose for weeks.
+
+    * **List before you remove, and never widen the glob.** Print what a glob
+      matched, read it, then delete. A prefix is a scope: `<prefix>-*` under the
+      resolved root, never the root itself and never a shortened prefix.
+
+  Path collision is not the only symptom to look for. Where two runs do converge
+  on one root, the visible failure is usually **shared-state interference rather
+  than a raised error**: `File.mkdir_p!/1` returns `:ok` on a directory that
+  already exists, so nothing raises at creation time. The first run to finish
+  executes its `on_exit(fn -> File.rm_rf!(root) end)` and deletes the *other*
+  run's fixtures out from under it, which surfaces as a missing or empty file
+  far from the cause.
+
+  Counts of leftover directories are worth measuring but not worth quoting
+  second-hand: figures for this residue class have failed to reproduce on
+  recount. If you cite a number, measure it yourself and date it.
+
+  `Platform.TestTemp` (task `01a0108d`) is the fix that makes this class
+  obsolete: one implementation, entropy that is unique across OS processes, and
+  a per-run root that is cleaned up by whoever created it. New tests should
+  reach for it rather than for `System.tmp_dir!()` directly.
+
   ## Known follow-up (deliberately not built here)
 
   A `mix platform.test_quarantine` task that re-runs every entry N times and
@@ -169,32 +236,10 @@ defmodule Platform.TestQuarantine do
       """,
       added_on: ~D[2026-07-26]
     },
-    %{
-      tag: nil,
-      test:
-        "test/platform/execution/local_runner_test.exs: " <>
-          "setup_git_worktree is idempotent when called twice",
-      class: :environment,
-      ticket: nil,
-      reason: """
-      PROVENANCE: failure inherited; mechanism re-derived here by reading
-      `local_runner_test.exs:440` (`temp_dir/1`) directly.
-
-      `temp_dir("wt-idempotent")` builds its path from
-      `System.unique_integer([:positive, :monotonic])`, which restarts near 1
-      in every fresh BEAM. So run N+1 reuses `/tmp/wt-idempotent-1` left behind
-      by run N, and `setup_git_worktree` meets a worktree it did not create.
-
-      Clear `/tmp/wt-idempotent-*`, `/tmp/git-repo-*` and `/tmp/wt-root-*`
-      before a run and it passes. Box state, not code.
-
-      Do NOT extend this diagnosis to the other `LocalRunnerTest` entry below —
-      that one was reproduced *with* those directories cleared, and assigning it
-      to this neighbouring cause is precisely the habit this registry exists to
-      break.
-      """,
-      added_on: ~D[2026-07-26]
-    },
+    # `local_runner_test.exs: "setup_git_worktree is idempotent when called
+    # twice"` was an :environment entry here from 2026-07-26 until 2026-08-17.
+    # It is DELETED, not corrected: see "Retired entries" in the moduledoc for
+    # the re-measurement that justified the deletion.
 
     # ── :intermittent ───────────────────────────────────────────────────
     %{
@@ -394,15 +439,20 @@ defmodule Platform.TestQuarantine do
 
       Cause unknown. Recorded honestly rather than assigned to a neighbour.
 
-      Observed: RED at control seeds 1 and 2, GREEN at seed 0, **with**
-      `/tmp/git-repo-*` and `/tmp/wt-root-*` cleared before every run. Shape is
+      Observed: RED at control seeds 1 and 2, GREEN at seed 0, **with** the
+      `git-repo-*` and `wt-root-*` residue cleared out of the temp root before
+      every run (resolve that root at runtime — see "Temp-directory residue" in
+      the moduledoc — do not assume `/tmp`). Shape is
       `assert String.trim(File.read!(output_file)) == "test-token-…"` failing
       with `left: ""` — the child wrote nothing, or nothing yet.
 
-      It has repeatedly been filed under the stale-temp-dir diagnosis that
-      genuinely explains the sibling `setup_git_worktree is idempotent` case
-      above. **That diagnosis is wrong for this test** — the directories were
-      clear. A spawn/read race is the current guess, and a guess is not a class.
+      It has repeatedly been filed under the stale-temp-dir diagnosis that used
+      to carry its own entry for the sibling `setup_git_worktree is idempotent`
+      test. **That diagnosis is wrong for this test** — the directories were
+      clear. It is also no longer available as an explanation for anything in
+      this file: that sibling entry was deleted on 2026-08-17 after 20/20 green
+      reps (moduledoc, "Retired entries"). A spawn/read race is the current
+      guess, and a guess is not a class.
 
       This entry is why `:unexplained` exists. Calling it `:intermittent` would
       assert that the cause is a race, which nobody has shown; and

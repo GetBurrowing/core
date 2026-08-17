@@ -70,10 +70,7 @@ defmodule Platform.Files.IngestStateCouplingTest do
     Application.put_env(:platform, :memory_service, provider: CaptureProvider)
 
     root =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-ingest-coupling-test-#{System.unique_integer([:positive])}"
-      )
+      Platform.TestTemp.path("platform-ingest-coupling-test")
 
     File.mkdir_p!(root)
     previous_root = Application.get_env(:platform, :chat_attachments_root)

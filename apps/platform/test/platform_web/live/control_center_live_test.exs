@@ -44,10 +44,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
   defp configure_workspace!(context, agents) do
     workspace =
-      Path.join(
-        System.tmp_dir!(),
-        "control-center-workspace-#{System.unique_integer([:positive, :monotonic])}"
-      )
+      Platform.TestTemp.path("control-center-workspace")
 
     File.mkdir_p!(workspace)
 
