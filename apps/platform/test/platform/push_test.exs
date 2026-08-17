@@ -122,6 +122,136 @@ defmodule Platform.PushTest do
     :ok
   end
 
+  # ── VAPID fixtures (task 01a0108a) ──────────────────────────────────────────
+
+  # ALL KEY-SHAPED LITERALS BELOW ARE INVENTED. This repository is public. None
+  # of these is a key, none has ever been a key, and none resembles the base64url
+  # shape of a real VAPID key. A DIFFERENT constant per resolution source is
+  # deliberate: it makes a value arriving from the wrong path visible as the
+  # wrong string instead of indistinguishable from the right one.
+
+  # Invented, not a key: the env-var path.
+  @env_public_key "fake-vapid-public-key-from-env-not-a-real-key"
+  # Invented, not a key: the env-var path.
+  @env_private_key "fake-vapid-private-key-from-env-not-a-real-key"
+  # Invented, not a key: the Vault fallback path.
+  @vault_public_key "fake-vapid-public-key-from-vault-not-a-real-key"
+  # Invented, not a key: the Vault fallback path.
+  @vault_private_key "fake-vapid-private-key-from-vault-not-a-real-key"
+
+  # Back to the NEITHER state: all three inputs absent. Deletes rather than nils
+  # (nil persists as a value), and clears any Vault rows a prior fixture seeded.
+  defp reset_vapid_inputs do
+    System.delete_env("VAPID_PUBLIC_KEY")
+    System.delete_env("VAPID_PRIVATE_KEY")
+    Application.delete_env(:web_push_encryption, :vapid_details)
+    delete_vault_vapid()
+    :ok
+  end
+
+  defp seed_env_only do
+    System.put_env("VAPID_PUBLIC_KEY", @env_public_key)
+    System.put_env("VAPID_PRIVATE_KEY", @env_private_key)
+    :ok
+  end
+
+  # Both halves in Vault, nothing in env or app env. `Platform.Vault.get/2`
+  # documents platform-scoped credentials as readable by any accessor, which is
+  # what lets `Platform.Push`'s `{:system, nil}` accessor — a supervised process
+  # carrying no user or agent identity — reach these rows.
+  defp seed_vault_only do
+    seed_vault_key("vapid-public-key", @vault_public_key)
+    seed_vault_key("vapid-private-key", @vault_private_key)
+    :ok
+  end
+
+  # Public half resolvable, private half unresolvable in ALL THREE sources.
+  defp seed_public_half_only do
+    System.put_env("VAPID_PUBLIC_KEY", @env_public_key)
+    :ok
+  end
+
+  # The mirror: private half only.
+  defp seed_private_half_only do
+    System.put_env("VAPID_PRIVATE_KEY", @env_private_key)
+    :ok
+  end
+
+  defp seed_vault_key(slug, value) do
+    {:ok, _credential} =
+      Platform.Vault.put(slug, :keypair, value,
+        scope: {:platform, nil},
+        name: "Test #{slug} (invented value, not a key)"
+      )
+
+    :ok
+  end
+
+  defp delete_vault_vapid do
+    Repo.delete_all(
+      from(c in Platform.Vault.Credential,
+        where: c.slug in ["vapid-public-key", "vapid-private-key"]
+      )
+    )
+
+    :ok
+  end
+
+  # An env var cannot hold nil, so "was absent" restores by DELETING. Setting ""
+  # would not restore absence either: `Platform.Push`'s presence/1 treats "" as
+  # unconfigured so it lands in the same half, but unset is still a different
+  # observable state.
+  defp restore_env(name, nil), do: System.delete_env(name)
+  defp restore_env(name, value), do: System.put_env(name, value)
+
+  defp count_occurrences(log, needle) do
+    log |> String.split(needle) |> length() |> Kernel.-(1)
+  end
+
+  # Attached per test and detached in on_exit: a leaked :telemetry handler makes a
+  # later test observe events it did not cause.
+  defp attach_half_configured_handler do
+    handler_id = "push-test-vapid-half-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:platform, :push, :vapid_half_configured],
+        fn _event, measurements, metadata, _cfg ->
+          send(parent, {:vapid_half_configured, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok
+  end
+
+  # Drive one real delivery attempt so the half-configured branch in
+  # `do_send_push/2` actually runs. Logs are captured because that branch is
+  # deliberately loud (Logger.error).
+  defp trigger_send_attempt(endpoint) do
+    space = create_space()
+    user = insert_user(name: "Half Configured")
+    participant = add_user_participant(space.id, user)
+    subscribe_endpoint(participant.id, endpoint)
+
+    log =
+      capture_log(fn ->
+        assert Push.send_to_user(user.id, %{title: "hi", body: "there", url: "/x"}) == :ok
+      end)
+
+    assert log =~ "VAPID half-configured",
+           "a half configuration is a misconfiguration and must log loudly"
+
+    refute log =~ @env_public_key, "the log must name the half, never the value"
+    refute log =~ @env_private_key, "the log must name the half, never the value"
+
+    log
+  end
+
   # ── Tests ───────────────────────────────────────────────────────────────────
 
   describe "send_notification/2 archived-user guard (Stage 4)" do
@@ -617,6 +747,218 @@ defmodule Platform.PushTest do
 
       assert_received {:suppressed_archived_user, %{count: 1}, %{user_id: uid}}
       assert uid == user.id
+    end
+  end
+
+  describe "VAPID key resolution vs the send path's configuration probe" do
+    # HISTORY, kept deliberately. Task 01a01041 stage 2 added this block as a
+    # CHARACTERISATION test of a real defect: `vapid_public_key/0` resolved env
+    # then Vault, while `do_send_push/2` and `vapid_configured?/0` read only
+    # `Application.get_env(:web_push_encryption, :vapid_details)` — which
+    # `config/runtime.exs` populates ONLY from the two env vars. So a
+    # Vault-configured host advertised a public key to the browser, accepted
+    # subscriptions, and then delivered nothing. Its test was named "a
+    # Vault-only deployment resolves keys while the send path reads
+    # unconfigured" and ASSERTED that disagreement, with a comment instructing
+    # the follow-up ticket to invert it rather than relax it.
+    #
+    # Task 01a0108a is that follow-up. Both surfaces now read one all-or-nothing
+    # `vapid_details/0`, so the tests below assert AGREEMENT. The disagreement is
+    # recorded here as the OLD, NOW-REJECTED behaviour: if a future reader finds
+    # a test asserting that the subscribe surface can report configured while the
+    # send surface does not, that is the bug returning, not a spec.
+    #
+    # The invented constants and fixture helpers live in the fixtures section at
+    # the top of this file. A DIFFERENT constant is used per resolution source on
+    # purpose: a value arriving from the wrong path is then visible as the wrong
+    # string rather than indistinguishable from the right one.
+
+    # Every test in this block starts from the NEITHER state and restores all
+    # three inputs afterwards. `System.delete_env/1` and `Application.delete_env/2`
+    # are used rather than setting nil, because nil persists as a VALUE: an env
+    # var cannot hold nil, and `Application.put_env(.., nil)` leaves a key whose
+    # value is the atom nil, which is a different state from absent.
+    setup do
+      previous_app_env = Application.get_env(:web_push_encryption, :vapid_details)
+      previous_public = System.get_env("VAPID_PUBLIC_KEY")
+      previous_private = System.get_env("VAPID_PRIVATE_KEY")
+
+      Application.delete_env(:web_push_encryption, :vapid_details)
+      System.delete_env("VAPID_PUBLIC_KEY")
+      System.delete_env("VAPID_PRIVATE_KEY")
+
+      on_exit(fn ->
+        if previous_app_env do
+          Application.put_env(:web_push_encryption, :vapid_details, previous_app_env)
+        else
+          Application.delete_env(:web_push_encryption, :vapid_details)
+        end
+
+        restore_env("VAPID_PUBLIC_KEY", previous_public)
+        restore_env("VAPID_PRIVATE_KEY", previous_private)
+      end)
+
+      :ok
+    end
+
+    # ── Fixture 1: ENV-ONLY ───────────────────────────────────────────────────
+
+    test "ENV-ONLY: both surfaces agree that env-supplied keys are configured" do
+      seed_env_only()
+
+      assert Push.vapid_public_key() == @env_public_key
+      assert Push.vapid_configured?()
+    end
+
+    # ── Fixture 2: FALLBACK-ONLY (Vault). THE REGRESSION CASE ─────────────────
+
+    # Converted from 01a01041's "a Vault-only deployment resolves keys while the
+    # send path reads unconfigured". Before task 01a0108a this exact fixture
+    # produced public-key-present + configured?-false. That state is now
+    # unreachable, and this test is what detonates if it becomes reachable again.
+    #
+    # It also closes a GAP in the original: that test never seeded a Vault
+    # secret, so its "Vault-only" case was really the NEITHER case and could not
+    # observe the bug it was named for. The assertions below prove the seeded
+    # value is what comes back, and that it is the VAULT constant rather than the
+    # env constant — which is what distinguishes this fixture from fixture 3.
+    test "FALLBACK-ONLY: a Vault-seeded pair resolves AND the send path reads configured" do
+      seed_vault_only()
+
+      # Anti-vacuity: prove this is genuinely the Vault path and not the
+      # neither-case wearing its name. Both env vars are absent and no app env
+      # is set, so the ONLY source that can supply these strings is Vault.
+      refute System.get_env("VAPID_PUBLIC_KEY")
+      refute System.get_env("VAPID_PRIVATE_KEY")
+      refute Application.get_env(:web_push_encryption, :vapid_details)
+
+      assert Push.vapid_public_key() == @vault_public_key,
+             "the public key must come back from Vault, and be the SEEDED value"
+
+      refute Push.vapid_public_key() == @env_public_key,
+             "a value arriving from the env path here would mean the fixture leaked"
+
+      assert Push.vapid_private_key() == @vault_private_key
+
+      # The send surface reads the same resolver, so it agrees. On origin/main
+      # this line was `refute` — that inversion IS the fix.
+      assert Push.vapid_configured?()
+
+      details = Push.vapid_details()
+      assert details[:public_key] == @vault_public_key
+      assert details[:private_key] == @vault_private_key
+      assert details[:subject] =~ "mailto:push@"
+    end
+
+    # ── Fixture 3: NEITHER ────────────────────────────────────────────────────
+
+    test "NEITHER: no key advertised, not configured, and a send attempt fails visibly" do
+      # setup/0 already deleted all three inputs and no Vault rows are seeded.
+      assert Push.vapid_public_key() == nil,
+             "an empty meta tag is what makes push_subscribe.js decline to subscribe"
+
+      refute Push.vapid_configured?()
+
+      space = create_space()
+      user = insert_user(name: "Neither Configured")
+      participant = add_user_participant(space.id, user)
+      subscribe_endpoint(participant.id, "https://push.example.com/device/neither")
+
+      log =
+        capture_log(fn ->
+          assert Push.send_to_user(user.id, %{title: "hi", body: "there", url: "/x"}) == :ok
+        end)
+
+      # The error reason is the primary signal, and it is a DIFFERENT string from
+      # the "VAPID keys not configured" warning that other tests in this file
+      # count as a delivery-attempt counter. Asserting on it here neither changes
+      # nor duplicates that counter.
+      assert log =~ ":vapid_keys_missing",
+             "the send attempt must surface {:error, :vapid_keys_missing}, not fail silently"
+
+      # And the neither-half branch still emits EXACTLY ONE warning for the one
+      # subscription, which is the invariant those counter assertions rest on.
+      assert count_occurrences(log, "VAPID keys not configured") == 1
+    end
+
+    # ── Fixtures 4 and 5: HALF configurations, one absence assertion per side ──
+
+    # Two cases, not one: a single half-configuration test cannot prove symmetry.
+    # A resolver that refused only a missing private key would pass a public-only
+    # test and still advertise on the mirror configuration.
+
+    test "HALF (public only): nothing is advertised and telemetry names the missing private half" do
+      attach_half_configured_handler()
+      seed_public_half_only()
+
+      assert Push.vapid_public_key() == nil,
+             "the public half resolved, but all-or-nothing means it is never advertised"
+
+      refute Push.vapid_configured?()
+
+      log = capture_log(fn -> assert Push.vapid_details() == nil end)
+      refute log =~ @env_public_key, "no log line may carry a key value"
+
+      trigger_send_attempt("https://push.example.com/device/half-public")
+
+      assert_received {:vapid_half_configured, %{count: 1}, %{missing: :private_key}}
+    end
+
+    test "HALF (private only): nothing is advertised and telemetry names the missing public half" do
+      attach_half_configured_handler()
+      seed_private_half_only()
+
+      # 01a01041's block asserted `Push.vapid_private_key() == "env-private-key-fixture"`
+      # here — that a private-half env var alone was readable. Task 01a0108a
+      # deliberately rejects that: a half configuration resolves to nothing on
+      # either surface, so this is now nil even though the env var IS set.
+      assert System.get_env("VAPID_PRIVATE_KEY") == @env_private_key
+      assert Push.vapid_private_key() == nil
+      assert Push.vapid_public_key() == nil
+      refute Push.vapid_configured?()
+
+      trigger_send_attempt("https://push.example.com/device/half-private")
+
+      assert_received {:vapid_half_configured, %{count: 1}, %{missing: :public_key}}
+    end
+
+    # ── The agreement property ────────────────────────────────────────────────
+
+    test "AGREEMENT: (vapid_public_key() != nil) == vapid_configured?() across all five fixtures" do
+      # WHAT THIS IS, stated honestly. This asserts a STRUCTURAL INVARIANT, not
+      # a behaviour: that both surfaces read one resolver. Against the current
+      # implementation it is TRUE BY CONSTRUCTION and cannot fail for any input —
+      # `vapid_configured?/0` is exactly `vapid_details() != nil`,
+      # `vapid_public_key/0` is exactly `vapid_details()[:public_key]`, and
+      # `vapid_details/0` is all-or-nothing, so the two sides of the equality are
+      # the same expression read twice.
+      #
+      # It is kept anyway, and it is not a behaviour check. Its job is to
+      # DETONATE if someone reintroduces a second, independent source of truth —
+      # e.g. `vapid_configured?/0` or `do_send_push/2` reading
+      # `Application.get_env(:web_push_encryption, :vapid_details)` directly
+      # again. That reintroduction is precisely the defect task 01a0108a fixed,
+      # and it was verified to redden this test by temporarily re-splitting the
+      # two readers with only the Vault fixture seeded.
+      #
+      # The BEHAVIOURAL coverage lives in the five fixtures above, because those
+      # seed states the resolver has to interpret. This is the regression pin on
+      # the shape, not a substitute for them.
+      for {name, seed} <- [
+            {"env-only", &seed_env_only/0},
+            {"vault-only", &seed_vault_only/0},
+            {"neither", fn -> :ok end},
+            {"public-half-only", &seed_public_half_only/0},
+            {"private-half-only", &seed_private_half_only/0}
+          ] do
+        reset_vapid_inputs()
+        seed.()
+
+        assert Push.vapid_public_key() != nil == Push.vapid_configured?(),
+               "the subscribe surface and the send surface disagreed on the #{name} fixture: " <>
+                 "public_key present? #{Push.vapid_public_key() != nil}, " <>
+                 "configured? #{Push.vapid_configured?()}"
+      end
     end
   end
 end

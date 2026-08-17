@@ -362,8 +362,16 @@ if config_env() == :prod do
 end
 
 # ── Web Push (VAPID) ──────────────────────────────────────────────────────────
-# Configure the web_push_encryption library with VAPID keys at runtime.
-# Keys are read from env vars, falling back to Vault lookup in Platform.Push.
+# This block is ONE INPUT to `Platform.Push.vapid_details/0` — an explicit
+# override for deployments that supply both halves as env vars — and NOT the send
+# path's source of truth. Every VAPID reader (the `vapid-public-key` meta tag and
+# `do_send_push/2` alike) goes through that resolver, which is all-or-nothing, so
+# the two surfaces cannot disagree about whether push is configured.
+#
+# Vault resolution deliberately happens at CALL TIME rather than here, because
+# `runtime.exs` evaluates before the Repo is started and before Vault decryption
+# is available — so a Vault-held key cannot be lifted into app env at boot. Do
+# not "fix" that by moving the Vault lookup up here; it will read as nil.
 vapid_public = System.get_env("VAPID_PUBLIC_KEY")
 vapid_private = System.get_env("VAPID_PRIVATE_KEY")
 

@@ -3,8 +3,45 @@ defmodule Platform.Push do
   Web Push notification context.
 
   Manages push subscriptions and sends notifications via the Web Push protocol.
-  VAPID keys are read from `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` env vars,
-  falling back to Vault lookup by slugs `"vapid-public-key"` / `"vapid-private-key"`.
+
+  ## The VAPID resolution invariant
+
+  `vapid_details/0` is the SINGLE source of truth for VAPID credentials, and it
+  is all-or-nothing: it returns a complete keyword list or `nil`, never a half.
+  Both surfaces that care about VAPID read it — the subscribe surface via
+  `vapid_public_key/0` (rendered into the `vapid-public-key` meta tag in
+  `root.html.heex`, which `assets/js/hooks/push_subscribe.js` refuses to
+  subscribe without) and the send surface via `do_send_push/2`. Therefore:
+
+  > **It is impossible for the subscribe surface to report configured while the
+  > send surface reports unconfigured.** They read the same all-or-nothing
+  > resolver, so they cannot disagree.
+
+  A future reader can check that invariant by confirming two things: that
+  `vapid_details/0` returns `nil` unless BOTH halves resolve, and that no other
+  function reads `Application.get_env(:web_push_encryption, :vapid_details)`
+  directly. Reintroducing that direct read in the send path is exactly how the
+  surfaces drifted apart before (task 01a0108a): `vapid_public_key/0` resolved
+  env-then-Vault, while the send path and the configuration probe read only the
+  app env that `config/runtime.exs` populates from env vars alone. A host whose
+  keys lived in Vault therefore advertised a public key, accepted browser
+  subscriptions, and silently delivered nothing.
+
+  Per key, resolution order is: the `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` env
+  var, then the matching entry of `Application.get_env(:web_push_encryption,
+  :vapid_details)` (an explicit override, and what `runtime.exs` sets), then a
+  Vault lookup by slug `"vapid-public-key"` / `"vapid-private-key"`.
+
+  ### Two alternatives that were rejected
+
+  * **Populate `:vapid_details` from Vault at boot.** Cannot work: the section
+    of `config/runtime.exs` that would do it evaluates before the Repo starts
+    and before Vault decryption is available, so a Vault-held key is simply not
+    readable at that point. Vault resolution has to happen at call time.
+  * **Make only the subscribe path refuse on a half configuration.** That stops
+    the false advertisement but leaves the send path unable to use a Vault-held
+    key it legitimately has — it fixes the symptom by making the working half
+    stop working, rather than making the two halves agree.
   """
 
   import Ecto.Query
@@ -419,23 +456,102 @@ defmodule Platform.Push do
   @spec list_subscriptions(binary()) :: [Subscription.t()]
   def list_subscriptions(participant_id), do: participant_row_subscriptions(participant_id)
 
-  @doc "Return the VAPID public key for use in client-side subscription."
-  @spec vapid_public_key() :: String.t() | nil
-  def vapid_public_key do
-    case System.get_env("VAPID_PUBLIC_KEY") do
-      nil -> vault_get("vapid-public-key")
-      key -> key
+  @doc """
+  Resolve the complete VAPID credential set, or `nil`.
+
+  The single source of truth for every VAPID reader — see the module doc for the
+  invariant this exists to enforce. Returns a keyword list carrying exactly
+  `:subject`, `:public_key` and `:private_key` (the three keys
+  `build_vapid_jwt/2` reads), or `nil` if EITHER half fails to resolve.
+
+  The all-or-nothing return is the point: it makes agreement between the
+  subscribe and send surfaces structural rather than a convention two callers
+  have to remember. A half configuration is a misconfiguration, and answering
+  `nil` to both surfaces is the loud behaviour — the meta tag renders empty and
+  the browser hook declines to subscribe, instead of a client being told
+  notifications are on while no send can succeed.
+
+  Vault resolution happens at call time, not at boot, because `runtime.exs`
+  evaluates before the Repo and Vault decryption exist. Callers on a per-send
+  hot path should therefore resolve ONCE per batch and pass the result down
+  rather than calling this per subscription.
+  """
+  @spec vapid_details() :: keyword() | nil
+  def vapid_details do
+    app_env = app_env_vapid()
+
+    public_key = resolve_vapid_key("VAPID_PUBLIC_KEY", app_env[:public_key], "vapid-public-key")
+
+    private_key =
+      resolve_vapid_key("VAPID_PRIVATE_KEY", app_env[:private_key], "vapid-private-key")
+
+    if public_key && private_key do
+      [
+        subject: vapid_subject(app_env),
+        public_key: public_key,
+        private_key: private_key
+      ]
     end
   end
+
+  @doc """
+  Return the VAPID public key for use in client-side subscription.
+
+  Reads `vapid_details/0`, so this is `nil` on a half configuration even when
+  the public half alone resolved. That is deliberate: advertising a public key
+  the send path cannot pair with is the defect this module now forbids.
+  """
+  @spec vapid_public_key() :: String.t() | nil
+  def vapid_public_key, do: vapid_details()[:public_key]
+
+  @doc """
+  Return the VAPID private key, or `nil`.
+
+  Reads `vapid_details/0` and is subject to the same all-or-nothing rule as
+  `vapid_public_key/0`. This is key material: never log it, never include it in
+  telemetry metadata, and never pass it as a command-line argument.
+  """
+  @spec vapid_private_key() :: String.t() | nil
+  def vapid_private_key, do: vapid_details()[:private_key]
+
+  @doc """
+  Whether VAPID is usable for sending.
+
+  Exactly `vapid_details() != nil`, which is what makes this probe agree with
+  the send surface by construction. On the pre-01a0108a code it read the app env
+  directly and so agreed with the send path while DISAGREEING with
+  `vapid_public_key/0` — a Vault-configured host answered `false` here and still
+  handed a public key to the browser.
+  """
+  @spec vapid_configured?() :: boolean()
+  def vapid_configured?, do: vapid_details() != nil
 
   # ── Private ─────────────────────────────────────────────────────────────────
 
-  defp vapid_private_key do
-    case System.get_env("VAPID_PRIVATE_KEY") do
-      nil -> vault_get("vapid-private-key")
-      key -> key
-    end
+  # The ONLY reader of `:web_push_encryption, :vapid_details` in this module. It
+  # is one input to the resolver — an explicit override that `config/runtime.exs`
+  # populates — not the send path's source of truth.
+  defp app_env_vapid, do: Application.get_env(:web_push_encryption, :vapid_details) || []
+
+  # Per-key precedence: env var, then the explicit app-env override that
+  # `config/runtime.exs` populates, then Vault. Vault is consulted last and
+  # lazily, so a configuration that never needs it never pays for it.
+  defp resolve_vapid_key(env_var, app_env_value, vault_slug) do
+    presence(System.get_env(env_var)) || presence(app_env_value) ||
+      presence(vault_get(vault_slug))
   end
+
+  # Mirrors the subject `config/runtime.exs` builds, so moving a deployment
+  # between the app-env and Vault paths does not change the JWT audience.
+  defp vapid_subject(app_env) do
+    presence(app_env[:subject]) || "mailto:push@" <> System.get_env("PHX_HOST", "suite.app")
+  end
+
+  # An empty string is an absent credential, not a credential. Env vars set to
+  # "" are common in container tooling and must not count as configured.
+  defp presence(nil), do: nil
+  defp presence(""), do: nil
+  defp presence(value), do: value
 
   # VAPID keys are platform-scoped and read from supervised processes that carry
   # no user or agent identity, so the access is attributed to the platform itself
@@ -449,11 +565,75 @@ defmodule Platform.Push do
     _ -> nil
   end
 
+  # `vapid_details/0` answers `nil` for two materially different states, and they
+  # deserve different volumes. NEITHER half resolving is an unconfigured dev box:
+  # a warning, and exactly the historical `"VAPID keys not configured"` line,
+  # once per attempt (existing tests count those lines as a delivery-attempt
+  # counter). ONE half resolving is a MISCONFIGURATION — somebody set half a
+  # credential pair — so it is an error, and it names WHICH half is missing.
+  #
+  # It names the half and never the value: `vapid_details/0` carries a private
+  # key, this repository is public, and the failure mode of making a credential
+  # path louder is credentials in logs. No value, not even truncated, goes into
+  # the message or the telemetry metadata.
+  defp log_vapid_unresolved do
+    public_key =
+      resolve_vapid_key("VAPID_PUBLIC_KEY", app_env_vapid()[:public_key], "vapid-public-key")
+
+    private_key =
+      resolve_vapid_key("VAPID_PRIVATE_KEY", app_env_vapid()[:private_key], "vapid-private-key")
+
+    case {public_key, private_key} do
+      {nil, nil} ->
+        Logger.warning("[Push] VAPID keys not configured, skipping push")
+
+      {_public, nil} ->
+        Logger.error(
+          "[Push] VAPID half-configured: public_key resolved, private_key did not; " <>
+            "refusing to advertise or send"
+        )
+
+        :telemetry.execute(
+          [:platform, :push, :vapid_half_configured],
+          %{count: 1},
+          %{missing: :private_key}
+        )
+
+      {nil, _private} ->
+        Logger.error(
+          "[Push] VAPID half-configured: private_key resolved, public_key did not; " <>
+            "refusing to advertise or send"
+        )
+
+        :telemetry.execute(
+          [:platform, :push, :vapid_half_configured],
+          %{count: 1},
+          %{missing: :public_key}
+        )
+
+      {_public, _private} ->
+        # Both halves resolve now but did not a moment ago in `vapid_details/0`:
+        # the configuration changed between the two reads. Say that rather than
+        # crash the send with a CaseClauseError or mislabel it as unconfigured.
+        Logger.error(
+          "[Push] VAPID configuration changed mid-send; keys resolve now but did not " <>
+            "when this attempt started, so the attempt was skipped"
+        )
+    end
+  end
+
+  # INVARIANT: the subscribe surface (`vapid_public_key/0`, rendered into the
+  # `vapid-public-key` meta tag) and the send surface (this function) read the
+  # SAME all-or-nothing `vapid_details/0`, so they cannot disagree about whether
+  # VAPID is configured. Failure looks like a future edit reintroducing
+  # `Application.get_env(:web_push_encryption, :vapid_details)` here — the app
+  # env is one INPUT to the resolver, never the send path's source of truth. The
+  # agreement test in `test/platform/push_test.exs` is what detonates on it.
   defp do_send_push(sub, json) do
-    vapid = Application.get_env(:web_push_encryption, :vapid_details)
+    vapid = vapid_details()
 
     unless vapid do
-      Logger.warning("[Push] VAPID keys not configured, skipping push")
+      log_vapid_unresolved()
       {:error, :vapid_keys_missing}
     else
       try do
@@ -539,11 +719,4 @@ defmodule Platform.Push do
 
   defp pad_to_32(bytes),
     do: :binary.copy(<<0>>, 32 - byte_size(bytes)) <> bytes
-
-  defp vapid_configured? do
-    case Application.get_env(:web_push_encryption, :vapid_details) do
-      nil -> false
-      details -> details[:public_key] != nil and details[:private_key] != nil
-    end
-  end
 end
