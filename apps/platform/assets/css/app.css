@@ -4064,6 +4064,23 @@ body, .font-fabrikam {
     @apply flex-1 min-w-0 truncate;
   }
 
+  /* The move confirmation's message slot (task 019ffcad stage 4). The hide
+     toast's slot minus `truncate`, and that one word is the whole difference.
+
+     The rail is ~224px wide. "Moved #gen-migration to Wayne-Tech." at text-sm
+     runs past that, and `truncate` ellipsises from the RIGHT, so the line would
+     render "Moved #gen-migration to P…", cutting the destination: the half of
+     the sentence the copy rule exists to keep, and it would still pass a test
+     that greps the markup. Two lines instead, which is how the design
+     canvas draws it.
+
+     No colour, no type, no surface of its own: it sits inside
+     `.channel-undo-toast`, which already carries text-sm / --color-base-content
+     on --color-base-300. Hide's toast is not touched by this rule. */
+  .channel-move-toast-message {
+    @apply flex-1 min-w-0;
+  }
+
   /* A filled pill, not a bare text link.
      ------------------------------------------------------------------
      This was `text-primary` on the toast's `bg-base-300`. Measured in Chrome

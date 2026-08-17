@@ -138,6 +138,25 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
   defp destination_selector(section_id),
     do: ~s([data-role="move-to-org-destination"][data-section-id="#{section_id}"])
 
+  # One rail row, addressed by BOTH the channel it draws and the section it is
+  # drawn under. `.channel-row-wrap` carries both attributes, so a single
+  # selector answers "is this row in this section?" without slicing html.
+  #
+  # Scoped to `#chat-sidebar`: the mobile drawer emits the same two attributes
+  # for the same rows, and this module is desktop-only by its own moduledoc, so
+  # an unscoped selector would report the drawer's copy as the rail's.
+  defp row_selector(channel_id, section_id),
+    do: ~s(#chat-sidebar [data-channel-id="#{channel_id}"][data-section-id="#{section_id}"])
+
+  # One section's collapse chevron, addressed by section and by the fold state
+  # it is currently reporting. `aria-expanded` is the rendered truth of
+  # `collapsed?` on that section, so this reads the resolver's stamp out of the
+  # markup instead of re-reading the preference the test just wrote.
+  defp collapse_toggle_selector(section_id, expanded?) do
+    ~s(#chat-sidebar button[phx-click="toggle_section_collapsed"]) <>
+      ~s([phx-value-section_id="#{section_id}"][aria-expanded="#{expanded?}"])
+  end
+
   # One rail row's overflow menu (task 019ff8ba stage 1). The row's three
   # trailing controls, "Move to organisation…" among them, moved behind it, and
   # the menu renders at the TEMPLATE ROOT — outside `<aside id="chat-sidebar">`
@@ -172,6 +191,39 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
     |> element(
       ~s(button[data-role="move-to-org-destination"][phx-value-channel_id="#{channel_id}"][data-section-id="#{section_id}"])
     )
+    |> render_click()
+  end
+
+  # The move confirmation at the foot of the rail (task 019ffcad stage 4). It
+  # shares the hide toast's `.channel-undo-toast` surface and nothing else, so
+  # each of the two lines is addressed by its own hook: this one by `data-role`,
+  # the hide one by the message class it has carried since it shipped.
+  #
+  # Returns "" rather than raising when the element is absent, so a case can
+  # assert the line is NOT there without reaching for a second helper.
+  defp move_toast_selector,
+    do: ~s(#chat-sidebar [data-role="channel-move-toast"])
+
+  defp move_toast_html(view), do: rendered_or_blank(view, move_toast_selector())
+
+  defp hide_toast_html(view),
+    do: rendered_or_blank(view, ~s(#chat-sidebar .channel-undo-toast-message))
+
+  defp rendered_or_blank(view, selector) do
+    if has_element?(view, selector) do
+      view |> element(selector) |> render()
+    else
+      ""
+    end
+  end
+
+  # Hide one rail row through the two real controls, same shape as
+  # `open_move_menu/2`: the row's overflow menu, then the item inside it.
+  defp hide_channel_row(view, channel_id) do
+    _ = open_row_menu(view, channel_id)
+
+    view
+    |> element(~s(button[data-role="rail-row-actions-hide"][data-space-id="#{channel_id}"]))
     |> render_click()
   end
 
@@ -409,6 +461,276 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
 
       assert Chat.get_space(channel.id).org_id == sxi_org_id
+    end
+
+    test "a confirmed move repaints the acting admin's rail: the row lands in the destination section and leaves the source",
+         %{conn: conn} do
+      # The user-reported defect (task 019ffcad): the move WRITES, and the
+      # acting admin's rail keeps drawing the row under the source section until
+      # they navigate or reload, so a move that worked reads as one that failed.
+      #
+      # The write is not what this measures. `Chat.get_space(id).org_id` flips
+      # today, which is why the case above passes against the defect. What is
+      # asserted here is the RE-RENDERED rail, driven through the same three
+      # real controls a person clicks.
+      admin = admin_user!("reassign_repaint")
+      conn = authenticated_conn(conn, admin)
+      channel = create_channel("repainter", "fabrikam")
+      fabrikam_section = section_id_for_org("fabrikam")
+      sxi_section = section_id_for_org("sxi")
+      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      # Positive control. Without this the two assertions at the end could both
+      # be satisfied by a rail that never drew the row at all. A fresh admin has
+      # no personal collapse prefs, so both sections render EXPANDED and a row's
+      # absence can only mean the resolver filed it elsewhere.
+      assert has_element?(view, row_selector(channel.id, fabrikam_section)),
+             "the row must start under its source section, or the assertions below are vacuous"
+
+      refute has_element?(view, row_selector(channel.id, sxi_section))
+
+      open_move_menu(view, channel.id)
+      pick_move_destination(view, channel.id, sxi_section)
+      view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
+
+      # Sanity, not the point: the write landed, so a failure below is a repaint
+      # failure and cannot be misread as a failed move.
+      assert Chat.get_space(channel.id).org_id == sxi_org_id
+
+      # Both halves. Absence from the source alone would also pass for a rail
+      # that dropped the row entirely, which is a worse bug than the one being
+      # fixed.
+      assert has_element?(view, row_selector(channel.id, sxi_section)),
+             "after the move the row must render under the destination section without a reload"
+
+      refute has_element?(view, row_selector(channel.id, fabrikam_section)),
+             "after the move the row must no longer render under the source section"
+    end
+
+    test "a confirmed move repaints the OTHER connected sessions' rails, not only the acting admin's",
+         %{conn: conn} do
+      # Task 019ffcad stage 2. `broadcast_sidebar_defaults_changed_from(self())`
+      # excludes only the acting process, so every OTHER connected session runs
+      # `handle_info(:sidebar_defaults_changed, ...)`. That handler re-resolved
+      # from `socket.assigns.channels`, the list its own session cached, which
+      # still carried the pre-move `org_id`. `Sidebar.resolve/3` buckets by the
+      # `org_id` on the struct it is handed, so those sessions filed the moved
+      # row straight back under the source section: the same defect stage 1
+      # fixed for the acting tab, reached by a different route.
+      admin = admin_user!("reassign_broadcast_admin")
+      channel = create_channel("broadcaster", "fabrikam")
+      fabrikam_section = section_id_for_org("fabrikam")
+      sxi_section = section_id_for_org("sxi")
+      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+
+      # Session one: the admin who will perform the move.
+      {:ok, actor_view, _html} = live_following_redirect(authenticated_conn(conn, admin))
+
+      # Session two: mounted BEFORE the move and never re-mounted after it. A
+      # session mounted afterwards re-fetches `@channels` on mount and would
+      # render correctly against the defect, which is why the order matters.
+      member = member_user!("reassign_broadcast_member")
+
+      {:ok, observer_view, _html} =
+        live_following_redirect(authenticated_conn(build_conn(), member))
+
+      # Positive control on SESSION TWO, the rail under test here. Without it
+      # both closing assertions could be satisfied by a rail that never drew
+      # the row at all.
+      assert has_element?(observer_view, row_selector(channel.id, fabrikam_section)),
+             "session two must start with the row under its source section, or the assertions below are vacuous"
+
+      refute has_element?(observer_view, row_selector(channel.id, sxi_section))
+
+      # Session one moves the channel through the same three real controls.
+      open_move_menu(actor_view, channel.id)
+      pick_move_destination(actor_view, channel.id, sxi_section)
+      actor_view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
+
+      # Sanity, not the point: the write landed, so a failure below is a repaint
+      # failure in session two and cannot be misread as a failed move.
+      assert Chat.get_space(channel.id).org_id == sxi_org_id
+
+      # Both halves, from session two's re-rendered markup, on the strength of
+      # the broadcast alone.
+      assert has_element?(observer_view, row_selector(channel.id, sxi_section)),
+             "session two must draw the row under the destination section after the broadcast, with no re-mount"
+
+      refute has_element?(observer_view, row_selector(channel.id, fabrikam_section)),
+             "session two must stop drawing the row under the source section after the broadcast"
+    end
+
+    test "a confirmed move expands a COLLAPSED destination section, so the row is actually visible",
+         %{conn: conn} do
+      # Task 019ffcad stage 3, and the case stages 1 and 2 cannot pass. Collapse
+      # is a flag, never a filter: `Sidebar.resolve/3` stamps `collapsed?` and
+      # the section keeps its resolved channels, so the rail can repaint
+      # perfectly and still draw nothing. `section_channel_rows/3` renders only
+      # the rows carrying unread when a section is collapsed, and a channel just
+      # filed into an org has none, so the moved row is absent from the DOM
+      # entirely. That is the reported bug reproduced by a fix that passes its
+      # own test.
+      admin = admin_user!("reassign_collapsed_dest")
+      conn = authenticated_conn(conn, admin)
+      channel = create_channel("collapsed_lander", "fabrikam")
+      fabrikam_section = section_id_for_org("fabrikam")
+      sxi_section = section_id_for_org("sxi")
+      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+
+      # The precondition, written before the mount so the resolver reads it.
+      # ONLY the destination is collapsed: the source stays expanded so the
+      # positive control below still means something.
+      {:ok, _} = Sidebar.set_section_collapsed(admin.id, sxi_section, true)
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      # Precondition asserted from the markup, not from the write. If the
+      # destination renders EXPANDED here the setup has failed and everything
+      # after it is a stage-1 repaint test wearing a stage-3 name.
+      assert has_element?(view, collapse_toggle_selector(sxi_section, false)),
+             "the destination section must start collapsed, or this case is a duplicate of the repaint test"
+
+      # The other half of the precondition: no unread on the moved channel. With
+      # unread the collapsed section would peek the row anyway (the "ajar group")
+      # and the case would pass without the fix.
+      assert Chat.list_messages(channel.id) == [],
+             "the moved channel must carry no unread, or a collapsed section peeks its row"
+
+      # Positive control, same shape as the two cases above.
+      assert has_element?(view, row_selector(channel.id, fabrikam_section)),
+             "the row must start under its source section, or the assertions below are vacuous"
+
+      refute has_element?(view, row_selector(channel.id, sxi_section))
+
+      open_move_menu(view, channel.id)
+      pick_move_destination(view, channel.id, sxi_section)
+      view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
+
+      # Sanity, not the point: the write landed, so a failure below is a
+      # visibility failure and cannot be misread as a failed move.
+      assert Chat.get_space(channel.id).org_id == sxi_org_id
+
+      # Both halves, from the re-rendered markup. The destination half is the
+      # one that fails without the expansion: the row is not merely folded out
+      # of sight, it is not in the document.
+      assert has_element?(view, row_selector(channel.id, sxi_section)),
+             "after the move the row must render under the destination section even though it was collapsed"
+
+      refute has_element?(view, row_selector(channel.id, fabrikam_section)),
+             "after the move the row must no longer render under the source section"
+
+      # Corroboration on the mechanism: the destination is expanded, which is
+      # why the row draws. The other way the assertion above could pass is a
+      # collapsed section that started drawing quiet rows, which would be a
+      # regression in `section_channel_rows/3` rather than this fix working.
+      assert has_element?(view, collapse_toggle_selector(sxi_section, true)),
+             "confirming the move must expand the destination section for the acting admin"
+    end
+
+    test "a confirmed move states the move at the foot of the rail, naming the channel AND the destination",
+         %{conn: conn} do
+      # Task 019ffcad stage 4, from the design canvas. Stages 1 to 3 put the row
+      # in its new home and make it visible there. None of them says anything to
+      # the admin, who is looking at the section they just filed a channel OUT
+      # of, where the only observable event is a row disappearing.
+      #
+      # Both names or nothing. "Moved #Confirmer." leaves the reader hunting for
+      # where it went, which is the work this line exists to save, and a test
+      # asserting only "Moved" or only the channel name would pass for that copy.
+      # So the assertion is the whole sentence, assembled from the two names read
+      # from their own sources (the space row and the section row) rather than
+      # from the markup under test.
+      admin = admin_user!("reassign_confirmation")
+      conn = authenticated_conn(conn, admin)
+      channel = create_channel("confirmer", "fabrikam")
+      sxi_section = section_id_for_org("sxi")
+      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+      to_label = Repo.get!(Section, sxi_section).name
+
+      expected = "Moved ##{channel.name} to #{to_label}."
+
+      {:ok, view, html} = live_following_redirect(conn)
+
+      # Positive control. The sentence sitting on the page before the move would
+      # make everything below it vacuous.
+      refute desktop_sidebar(html) =~ expected
+
+      refute has_element?(view, move_toast_selector()),
+             "the rail must carry no move confirmation before a move"
+
+      open_move_menu(view, channel.id)
+      pick_move_destination(view, channel.id, sxi_section)
+      view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
+
+      # Sanity, not the point: the write landed, so a failure below is a missing
+      # confirmation and cannot be misread as a failed move.
+      assert Chat.get_space(channel.id).org_id == sxi_org_id
+
+      assert move_toast_html(view) =~ expected,
+             "the rail must state the move in one sentence naming both the channel and the destination"
+
+      # WCAG: the line is announced, and politely. A move is a routine filing
+      # action, so it interrupts nothing.
+      assert has_element?(
+               view,
+               ~s(#{move_toast_selector()}[role="status"][aria-live="polite"])
+             ),
+             "the confirmation must announce itself as role=status / aria-live=polite"
+
+      # No action button. Undo is deliberately out of scope for this stage: the
+      # move already carries a two-step confirmation and the row's menu moves it
+      # back in one click. Marlowe's separate decision to offer an Undo here is
+      # task 01a01052-3155-7c15-8c48-9ff8955b9b70, and this line is what that
+      # task will change.
+      refute has_element?(view, ~s(#{move_toast_selector()} button)),
+             "the confirmation carries an action button, which this stage rules out"
+    end
+
+    test "a hide and a move each keep their own line: neither acknowledgement overwrites the other",
+         %{conn: conn} do
+      # The two lines sit on SEPARATE assigns on purpose. Sharing `@undo_toast`
+      # would have whichever action came second silently blank the first, and a
+      # case that only ever fires one of the two verbs cannot see that: each
+      # would pass alone. So this fires both, in both orders, and asserts each
+      # line survives the other.
+      admin = admin_user!("reassign_two_toasts")
+      conn = authenticated_conn(conn, admin)
+      hidden_first = create_channel("hidden-first", "fabrikam")
+      moved = create_channel("moved-second", "fabrikam")
+      hidden_last = create_channel("hidden-last", "fabrikam")
+      sxi_section = section_id_for_org("sxi")
+      to_label = Repo.get!(Section, sxi_section).name
+
+      expected_move = "Moved ##{moved.name} to #{to_label}."
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      # Order one: hide, then move.
+      hide_channel_row(view, hidden_first.id)
+
+      assert hide_toast_html(view) =~ "##{hidden_first.name}",
+             "the hide raised no line of its own, so the survival assertions below are vacuous"
+
+      open_move_menu(view, moved.id)
+      pick_move_destination(view, moved.id, sxi_section)
+      view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
+
+      assert move_toast_html(view) =~ expected_move,
+             "the move raised no line, so this case cannot measure the collision"
+
+      assert hide_toast_html(view) =~ "##{hidden_first.name}",
+             "the move overwrote the hide's line, so the two verbs share one assign"
+
+      # Order two: a hide AFTER the move must leave the move's line standing.
+      hide_channel_row(view, hidden_last.id)
+
+      assert hide_toast_html(view) =~ "##{hidden_last.name}",
+             "the second hide raised no line of its own"
+
+      assert move_toast_html(view) =~ expected_move,
+             "the hide overwrote the move's line, so the two verbs share one assign"
     end
 
     test "cancelling a requested move leaves the channel where it was", %{conn: conn} do

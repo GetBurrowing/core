@@ -60,6 +60,12 @@ defmodule PlatformWeb.ChatLive do
   # decoration. Overridable via `:anchor_highlight_ms` so tests can drive
   # the real timer instead of asserting on a hand-sent message.
   @anchor_highlight_ms 6_000
+
+  # How long the move confirmation stays at the foot of the rail (task 019ffcad
+  # stage 4). The same 4s the hide toast uses, because it is the same element in
+  # the same place and the stage asks for the same dismissal.
+  @move_toast_ms 4_000
+
   @impl true
   def mount(_params, session, socket) do
     do_mount(session, socket, embedded?: false)
@@ -328,6 +334,18 @@ defmodule PlatformWeb.ChatLive do
       # second hide arriving inside the 4s window replaces the toast
       # cleanly — the older timer's clear becomes a no-op.
       |> assign(:undo_toast, nil)
+      # Task 019ffcad stage 4: the move confirmation at the foot of the rail.
+      # `%{channel_id: <uuid>, channel_name: <name>, section_name: <name>}` while
+      # active, `nil` otherwise. Cleared by `{:clear_move_toast, channel_id}` on
+      # the same guarded-late-fire pattern as the hide toast above.
+      #
+      # A SEPARATE assign from `:undo_toast` rather than a second variant of it.
+      # The two lines are raised by different verbs that a person can perform
+      # seconds apart, and on one assign whichever came second would silently
+      # blank the first. Task 019ffc5f already tried sharing this element between
+      # two verbs and Marlowe rejected the result, so the shared surface stays and
+      # the state does not.
+      |> assign(:move_toast, nil)
       # Per-user sub-org section order (chat plan v2 Stage 3) is stored in
       # `users.preferences["chat_section_order"]` as a list of section IDS and
       # read fresh by `Sidebar.resolve_for_user/2` whenever the rail is
@@ -1565,7 +1583,13 @@ defmodule PlatformWeb.ChatLive do
   # purpose; see the block comment above.
   def handle_event("confirm_channel_reassign", _params, socket) do
     case socket.assigns.reassign_confirm do
-      %{channel_id: channel_id, to: %{org_id: org_id, name: to_name}} ->
+      # `destination` and `confirm` are bound alongside the fields rather than
+      # destructuring `section_id` / `channel_name` into the head: the head
+      # decides whether the MOVE happens, and those two are only needed for the
+      # rail-expansion and the confirmation line below it. Adding either to the
+      # pattern would mean an assign shape missing one presentation field
+      # silently cancels the write instead of merely skipping the cosmetic half.
+      %{channel_id: channel_id, to: %{org_id: org_id, name: to_name} = destination} = confirm ->
         socket = assign(socket, :reassign_confirm, nil)
 
         # The destination is re-checked for archival here, not just when the
@@ -1580,7 +1604,11 @@ defmodule PlatformWeb.ChatLive do
         else
           case Sidebar.reassign_channel(%{id: socket.assigns.user_id}, channel_id, org_id) do
             {:ok, _space} ->
-              {:noreply, recompute_sidebar_after_admin_write(socket)}
+              {:noreply,
+               socket
+               |> expand_destination_section(destination[:section_id])
+               |> recompute_sidebar_after_admin_write()
+               |> raise_move_toast(channel_id, confirm[:channel_name], to_name)}
 
             {:error, :unauthorized} ->
               {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
@@ -2465,14 +2493,110 @@ defmodule PlatformWeb.ChatLive do
 
   # Shared tail for every successful admin-default write: broadcast the
   # shared-defaults invalidation to all OTHER sessions (so non-admin users and
-  # the admin's other tabs converge live), then recompute the acting admin's
-  # own `@sidebar_sections` from the now-updated default layer. Channels +
-  # hidden ids + the admin's personal section_order are unchanged — only the
-  # default sections moved — so we re-resolve with the same inputs.
+  # the admin's other tabs converge live), then rebuild the acting admin's own
+  # rail from the now-updated default layer.
+  #
+  # RE-FETCHES `@channels` rather than re-resolving the ones already in the
+  # assign (task 019ffcad). One of the five writes routed through here
+  # (`confirm_channel_reassign`) changes a CHANNEL and not only a section: it
+  # writes `chat_spaces.org_id`. `Sidebar.resolve/3` buckets each channel by
+  # the `org_id` on the struct it is handed (`default_section_id/3`), so
+  # re-resolving the stale assign filed the moved row straight back under its
+  # old section and the move read as a failure to the admin who performed it.
+  # This comment used to assert that channels were unchanged here; that
+  # assumption WAS the defect.
+  #
+  # A re-fetch rather than patching the moved struct into `@channels` in place:
+  # the rail then renders what the database holds rather than what this process
+  # believed a moment ago, it goes through `rail_channels/1` so an external
+  # user's scope is re-applied on the way (the invariant that helper exists to
+  # carry), and it stays correct for any future admin write that touches a
+  # channel row. The cost is one `Chat.list_spaces` per admin default write.
+  # Four of the five call sites do not need it and pay for it anyway: all five
+  # are rare, human-driven admin actions over a tens-of-rows table, which is
+  # not a price worth a second code path to avoid.
   defp recompute_sidebar_after_admin_write(socket) do
     ChatPubSub.broadcast_sidebar_defaults_changed_from(self())
-    recompute_sidebar(socket)
+    refresh_chat_containers(socket)
   end
+
+  # Uncollapse the section a channel was just moved INTO, for the acting admin
+  # only (task 019ffcad stage 3, design canvas "signature element").
+  #
+  # Stages 1 and 2 make the rail repaint. They are not enough on their own, and
+  # the render path is why. Collapse is a flag rather than a filter: the
+  # resolver stamps `collapsed?` and hands the section its full channel list, so
+  # `section_channel_rows/3` is what decides, and on a collapsed section it
+  # draws only the rows carrying unread. A channel filed into an org a moment
+  # ago has none, so the moved row is absent from the DOM entirely. The rail
+  # repaints perfectly and the admin sees nothing, which is the reported bug
+  # surviving its own fix.
+  #
+  # Ordered BEFORE the recompute: `Sidebar.resolve_for_user/2` re-reads
+  # preferences from the database on every recompute, so the write has to land
+  # first for the resolver to stamp `collapsed?: false` on the destination.
+  #
+  # Scope. This writes the ACTING user's own preference and no one else's.
+  # `set_section_collapsed/3` is keyed on `socket.assigns.user_id`, and the
+  # `:sidebar_defaults_changed` broadcast that follows makes every other session
+  # re-resolve against ITS OWN prefs, so this admin's other tabs converge on the
+  # expansion for free and nobody else's fold state moves. Writing a preference
+  # on a user's behalf is acceptable here only because the section chevron puts
+  # it back in one click.
+  #
+  # Unconditional rather than read-then-write-if-collapsed: `set_section_collapsed/3`
+  # takes the desired next state and is idempotent, and this runs once per
+  # human-driven admin move.
+  #
+  # The second clause is the degrade path. `section_summary/2` always populates
+  # `section_id`, so it should be unreachable; it exists so that a destination
+  # assign lacking it costs the admin one chevron click rather than the move.
+  defp expand_destination_section(socket, section_id) when is_binary(section_id) do
+    _ = Sidebar.set_section_collapsed(socket.assigns.user_id, section_id, false)
+    socket
+  end
+
+  defp expand_destination_section(socket, _section_id), do: socket
+
+  # Say what just happened, at the foot of the rail (task 019ffcad stage 4,
+  # design canvas "Type" and "Layout").
+  #
+  # Stages 1 to 3 put the row in its new section and make it visible there. The
+  # admin is looking at the SOURCE section they filed the channel out of, where
+  # the only observable event is a row leaving, and a row leaving reads as a
+  # deletion before it reads as a relocation. So the rail says the sentence.
+  #
+  # BOTH names or nothing. "Moved #gen-migration." leaves the reader checking
+  # where it went, which is the work this line exists to save, and the
+  # destination half is the half a person actually needs.
+  #
+  # No action button. The move already carries a two-step confirmation and the
+  # row's own menu moves the channel back in one click, so this stage renders the
+  # reused toast shape with the message alone. Marlowe's separate decision to offer
+  # an Undo here is task 01a01052-3155-7c15-8c48-9ff8955b9b70.
+  #
+  # Auto-clears on the hide toast's pattern exactly: a `Process.send_after/3`
+  # paired with a `{:clear_move_toast, channel_id}` handler that only nils the
+  # assign while the toast still names THIS channel, so a second move inside the
+  # window replaces the line and the earlier timer's fire becomes a no-op. No
+  # timer refs to track or cancel.
+  #
+  # The guard is the degrade path, and it degrades to silence rather than to a
+  # half-sentence: `request_channel_reassign` populates both names, so a missing
+  # one means the confirm assign was not built by that handler, and "Moved  to
+  # ." is worse than no line at all.
+  defp raise_move_toast(socket, channel_id, channel_name, section_name)
+       when is_binary(channel_name) and is_binary(section_name) do
+    Process.send_after(self(), {:clear_move_toast, channel_id}, @move_toast_ms)
+
+    assign(socket, :move_toast, %{
+      channel_id: channel_id,
+      channel_name: channel_name,
+      section_name: section_name
+    })
+  end
+
+  defp raise_move_toast(socket, _channel_id, _channel_name, _section_name), do: socket
 
   # Per-message actions sheet (3-dot menu on chat messages — task 019e0f29
   # Stage 3). Replaces the inert DaisyUI dropdown placeholder added in
@@ -3236,6 +3360,20 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # Auto-clear the move confirmation 4s after a move (task 019ffcad stage 4).
+  # Guarded on the line still naming THIS channel, same reason as the hide
+  # toast's clear above: a second move inside the window replaces the line, and
+  # the first timer firing here would otherwise wipe the newer one early.
+  #
+  # Keyed on `channel_id` and reading `:move_toast`, so this and the hide toast's
+  # clear cannot reach each other's state even when both timers are in flight.
+  def handle_info({:clear_move_toast, channel_id}, socket) do
+    case socket.assigns.move_toast do
+      %{channel_id: ^channel_id} -> {:noreply, assign(socket, :move_toast, nil)}
+      _ -> {:noreply, socket}
+    end
+  end
+
   # Sidebar-shape invalidation (chat sidebar v3 Stage 4). Fired on the
   # per-user `chat:sidebar:<user_id>` topic when a personal arrangement change
   # (Stage 5) or an admin action in ANOTHER session — e.g. a Recovery-hub
@@ -3295,20 +3433,28 @@ defmodule PlatformWeb.ChatLive do
   # `chat:sidebar:defaults` topic when a Fabrikam admin curates the default layer
   # (rename / recolor / reorder / reassign). EVERY connected session receives
   # this (except the acting admin's own tab, which recomputed synchronously)
-  # and re-resolves its `@sidebar_sections` so the admin's default change is
-  # visible to all users without a refresh. Same recompute as `:sidebar_changed`
-  # — the resolver reads the now-updated default sections from the DB.
+  # and refreshes its rail so the admin's default change is visible to all
+  # users without a refresh.
+  #
+  # RE-FETCHES `@channels`, via the same `refresh_chat_containers/1` the acting
+  # tab uses in `recompute_sidebar_after_admin_write/1` (task 019ffcad stage 2).
+  # An earlier version of this comment claimed the resolver reads the updated
+  # default sections from the DB and that re-resolving the cached channel list
+  # was therefore enough. True for rename, recolor and reorder, which write the
+  # SECTION row. False for reassign, which writes `chat_spaces.org_id` and
+  # leaves the section rows alone: `Sidebar.resolve/3` buckets each channel by
+  # the `org_id` on the struct it is handed, so a session re-resolving its
+  # cached `@channels` filed the moved row back under the source section and
+  # kept it there until the reader re-mounted.
+  #
+  # The two paths are deliberately identical. Splitting them by event so the
+  # other three writes skip the fetch would need the broadcast to carry which
+  # kind of write fired it, and would leave the next channel-touching admin
+  # write silently stale in every session but one. The cost is one
+  # `Chat.list_spaces` per connected session per admin default write; those are
+  # rare, human-driven actions over a tens-of-rows table.
   def handle_info(:sidebar_defaults_changed, socket) do
-    {:noreply,
-     assign(
-       socket,
-       :sidebar_sections,
-       resolve_sidebar_sections(
-         socket.assigns.user_id,
-         socket.assigns.channels,
-         socket.assigns.hidden_channel_ids
-       )
-     )}
+    {:noreply, refresh_chat_containers(socket)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}

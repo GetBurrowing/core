@@ -1317,6 +1317,51 @@
       </button>
     </div>
 
+    <%!-- Move confirmation (task 019ffcad stage 4, from the design canvas).
+         Says what just happened after a Fabrikam admin files a channel into
+         another organisation. Stages 1 to 3 put the row in its new section
+         and make it visible there; the admin is looking at the section it
+         LEFT, where the only observable event is a row disappearing.
+
+         The hide toast's component, its position, and its 4s dismissal, with
+         the copy and the handler changed and no action button. Undo is out of
+         scope for this stage: the move already carries a two-step confirmation
+         and the row's own menu moves the channel back in one click. Marlowe's
+         separate decision to offer an Undo here is task
+         01a01052-3155-7c15-8c48-9ff8955b9b70.
+
+         A SEPARATE assign from `@undo_toast`. Hide and Move are two verbs a
+         person can perform seconds apart, and sharing one assign would have
+         whichever came second silently blank the first, which is invisible to
+         any test that fires only one of them.
+
+         Both names in one sentence. "Moved #gen-migration." leaves the reader
+         checking where it went, which is the work this line exists to save.
+         The destination is the SECTION's name, so the sentence echoes the word
+         the admin just clicked in the chooser (an admin can rename a section
+         away from its org's name).
+
+         `channel-move-toast-message` instead of `channel-undo-toast-message`:
+         the same flex slot WITHOUT `truncate`. The rail is ~224px wide, and a
+         two-name sentence under `truncate` ellipsises from the right, which
+         eats the destination: the exact half the copy rule exists to keep. It
+         wraps to two lines instead, as the canvas wireframe draws it. The
+         toast SURFACE is untouched, so Hide's toast is unchanged.
+
+         Desktop only, like the hide toast: there is no mobile-drawer copy of
+         either. --%>
+    <div
+      :if={@move_toast}
+      data-role="channel-move-toast"
+      role="status"
+      aria-live="polite"
+      class="channel-undo-toast"
+    >
+      <span class="channel-move-toast-message">
+        Moved #{@move_toast.channel_name} to {@move_toast.section_name}.
+      </span>
+    </div>
+
     <%!-- "+ New channel" — pinned rail chrome (Stage 3 v3 follow-up per
          Marlowe's review). Lives as an UNCONDITIONAL `flex-shrink-0` sibling
          of `<nav>` and the conditional bottom-region wrapper, so its
