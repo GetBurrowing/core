@@ -57,16 +57,51 @@ defmodule Platform.Meetings.IntentRoutingTest do
       # atom table is not garbage-collected, so a lookup that built atoms
       # from model output would be an unbounded leak reachable by anyone
       # who can speak in a meeting.
-      before = :erlang.system_info(:atom_count)
+      #
+      # This used to read `before = :erlang.system_info(:atom_count)` and
+      # then `assert :erlang.system_info(:atom_count) == before`. That was
+      # the wrong INSTRUMENT, not a flaky subject: `atom_count` is
+      # VM-GLOBAL, and this module is `async: true`, so any other test in
+      # the same BEAM that interns an atom inside the window fails the
+      # assertion no matter what `IntentRouting` does. Measured 2026-08-17
+      # under task 01a01037-d1c0-790d-8e0c-df63cfdffe13: one red in 31
+      # file-isolated reps, drifting 36075 -> 36077 with no code change.
+      # Retrying could not have fixed it, because the value read was never
+      # a property of the code under test.
+      #
+      # So assert the property on the SPECIFIC strings instead. This is
+      # exact and concurrency-immune: another test interning some
+      # unrelated atom cannot move these four answers. `atom_exists?/1`
+      # wraps `String.to_existing_atom/1`, which does NOT intern, so the
+      # probe itself is side-effect free (verified: 0 atom_count delta
+      # over 50 calls on absent names).
+      #
+      # "off_topic" IS expected to already exist as an atom — it appears
+      # in other tests and in the classifier. Keep it in the list: the
+      # snapshot-BEFORE design is exactly what makes a pre-existing atom
+      # harmless, and dropping it would weaken the case for no reason.
+      junk_strings = ["off_topic", "not_a_real_intent", "", "sudo_rm_rf"]
 
-      for junk <- ["off_topic", "not_a_real_intent", "", "sudo_rm_rf"] do
+      existed_before = Map.new(junk_strings, &{&1, atom_exists?(&1)})
+
+      for junk <- junk_strings do
         assert IntentRouting.entry(junk) == nil
         assert IntentRouting.responsibility_key(junk) == nil
         assert IntentRouting.topic(junk) == nil
         assert IntentRouting.event(junk) == nil
       end
 
-      assert :erlang.system_info(:atom_count) == before
+      exists_after = Map.new(junk_strings, &{&1, atom_exists?(&1)})
+
+      minted =
+        Enum.filter(junk_strings, fn junk ->
+          exists_after[junk] and not existed_before[junk]
+        end)
+
+      assert exists_after == existed_before,
+             "an IntentRouting lookup interned an atom from unrouted model output: " <>
+               "#{inspect(minted)} — the atom table is never garbage-collected, so this " <>
+               "is an unbounded leak reachable by anyone who can speak in a meeting"
     end
 
     test "off_topic is deliberately absent" do
@@ -175,5 +210,17 @@ defmodule Platform.Meetings.IntentRoutingTest do
       assert IntentRouting.event("action_items") == :action_item_intent
       assert IntentRouting.responsibility_key("action_items") == "meetings.action_items"
     end
+  end
+
+  # Does an atom of this name already exist? `String.to_existing_atom/1`
+  # raises rather than interning when it does not, so asking is free of
+  # side effects — which is what lets the same helper be used for both
+  # the before and after snapshots without the probe creating the very
+  # atom it is looking for.
+  defp atom_exists?(name) do
+    _ = String.to_existing_atom(name)
+    true
+  rescue
+    ArgumentError -> false
   end
 end

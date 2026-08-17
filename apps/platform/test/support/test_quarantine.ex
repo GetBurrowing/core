@@ -460,6 +460,72 @@ defmodule Platform.TestQuarantine do
       hideable. It needs a ticket and a bisect, not a label.
       """,
       added_on: ~D[2026-07-26]
+    },
+    %{
+      tag: nil,
+      test:
+        "test/platform/execution/proof_run_test.exs: " <>
+          "(whole module — the original report did not name a test)",
+      class: :unexplained,
+      ticket: "01a01037-d1c0-790d-8e0c-df63cfdffe13",
+      reason: """
+      PROVENANCE: reported failure inherited from the ticket; measured here in
+      task 01a01037 stage 1 and NOT reproduced. Recorded, deliberately untagged,
+      and `:unexplained` — which is never excludable — so the debt is written
+      down without hiding a test that currently passes.
+
+      Reported signature, verbatim:
+      `{:worktree_add_failed, 128, "fatal: not a git repository"}`.
+
+      Why it is a flake and not a regression: the identity ROTATED across two
+      runs of the SAME commit with no change in between — red on run 1, green on
+      run 2. A failure whose identity moves while the tree is fixed is not the
+      tree failing.
+
+      NON-REPRODUCTION — the most important fact here. **0 failures in 27 reps**
+      across four scopes:
+
+        * file-isolated, inside a git worktree, temp dirs CONTAMINATED with 3717
+          stale `proof-*` dirs — 5/5 green
+        * file-isolated, inside a worktree, temp dirs CLEARED — 3/3 green
+        * file-isolated, in a NON-worktree standalone clone (the cwd control) —
+          5/5 green
+        * inside the full suite, from a worktree — 3/3 green
+
+      All three circulating mechanism accounts were tested and REFUTED. Do not
+      re-derive them:
+
+        1. *cwd / nested worktree.* Fails its own control: green in both a
+           worktree and a standalone clone, so location makes no difference
+           because neither location is red.
+        2. *Concurrency.* Structurally unavailable — `proof_run_test.exs:9` is
+           `use ExUnit.Case, async: false`, so ExUnit runs the module serially.
+        3. *Shared `System.tmp_dir!()` / `git init` collision.* Refuted by direct
+           measurement. Directory REUSE is real: after clearing, run 1 created
+           exactly 9 `proof-*` dirs and runs 2 and 3 reused those same 9 (count
+           pinned at 9). But reuse is HARMLESS — `File.mkdir_p!` tolerates an
+           existing directory and `git init` reinitializes cleanly over one — and
+           all three runs were green. The premise is right and its conclusion
+           does not follow.
+
+      See "Temp-directory residue" in the moduledoc for why account (3)
+      survived several rounds of scrutiny. `System.tmp_dir!()` is not `/tmp` on
+      macOS, so the "I cleared the temp dirs and nothing changed" observation
+      was never a clear at all. Measured here on 2026-08-17 while investigating
+      this entry: the resolved temp root held 3717 stale `proof-*` dirs while
+      `/tmp` held 0. That figure is first-hand and dated on purpose — the
+      moduledoc warns that counts in this class have failed to reproduce on
+      recount, so do not carry it forward without re-measuring.
+
+      Not tagged, and `:unexplained` besides, so it still runs in the default
+      suite. Gating a test that just passed 27/27 would hide a signal nobody
+      understands, which is the failure mode this registry exists to prevent.
+      No temp-dir entropy change was made: there is no demonstrated defect for
+      one to fix. What is still owed is a bisect from whoever can reproduce the
+      signature — ideally with the run's box load recorded, since every other
+      flake in this file turned out to be load-sensitive.
+      """,
+      added_on: ~D[2026-08-17]
     }
   ]
 
