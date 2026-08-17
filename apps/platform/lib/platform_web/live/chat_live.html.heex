@@ -148,7 +148,7 @@
       <% else %>
         <.link
           :for={space <- external_spaces}
-          navigate={~p"/chat/#{space_nav_target(space)}"}
+          patch={~p"/chat/#{space_nav_target(space)}"}
           class={[
             "channel-row",
             @active_space && @active_space.id == space.id && "channel-row--active"
@@ -157,7 +157,7 @@
           <span :if={space.kind == "channel"} class="text-base-content/40">#</span>
           <span class="truncate flex-1">
             {if space.kind == "channel",
-              do: space.name,
+              do: masked_space_name(assigns, space.name),
               else: sidebar_display_name(space, @user_id)}
           </span>
           <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
@@ -261,6 +261,31 @@
           <p class="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-widest text-base-content/60">
             Channels
           </p>
+          <%!-- Screen-share name masking (task 01a00c66). PERMANENTLY VISIBLE
+               in the header row, a sibling of the kebab — never an item inside
+               the kebab popover or any other dropdown. Harper's request offered
+               "an eye symbol or some other dropdown"; the eye wins because a
+               dropdown costs two clicks and a decision at the exact moment
+               someone is fumbling with a share dialog.
+
+               Posts the DESIRED next state rather than a flip, so a duplicated
+               event from a render race is idempotent (same convention as
+               `toggle_section_collapsed`). The icon swap is deliberately NOT
+               the feature's signal — see the mode strip below. --%>
+          <button
+            type="button"
+            phx-click="toggle_mask_names"
+            phx-value-masked={to_string(!@mask_names?)}
+            class="channel-mask-toggle flex-shrink-0"
+            aria-pressed={to_string(@mask_names?)}
+            aria-label="Hide workspace names for sharing"
+          >
+            <span
+              class={[if(@mask_names?, do: "hero-eye-slash", else: "hero-eye"), "size-4"]}
+              aria-hidden="true"
+            >
+            </span>
+          </button>
           <div class="channel-sidebar-menu relative flex-shrink-0">
             <button
               type="button"
@@ -304,6 +329,35 @@
             </div>
           </div>
       <% end %>
+    </div>
+    <%!-- THE MODE STRIP IS THE SIGNAL, NOT THE ICON'S STATE (task 01a00c66).
+         An eye and a crossed-out eye differ by a few pixels of stroke, and the
+         only moment this feature exists for is a half-second glance under
+         social pressure while starting a screen share. Both misreadings cost:
+         believing it is on when it is off puts the client list on the call;
+         believing it is off when it is on has someone hunting for a client
+         that is sitting there as `Workspace C` while people watch. So the
+         active mode gets a full-width band, not a glyph state.
+
+         `--color-warning` because this is a deliberate TEMPORARY MODE, which
+         is how warning already reads on the notification-state row — not
+         `--color-error` (says something is wrong) and not `--color-primary`
+         (the action colour; it would read as a button).
+
+         Copy is about PRESENTING, never privacy: nothing here says privacy,
+         secure, protected or encrypted, and there is no padlock or shield
+         anywhere in this feature — an icon would make the same overclaim the
+         forbidden words would. The eye is the only permitted metaphor. --%>
+    <div :if={@mask_names?} class="channel-mask-strip">
+      <span class="hero-eye-slash size-3.5 flex-shrink-0" aria-hidden="true"></span>
+      <span class="min-w-0 flex-1">
+        {if MapSet.size(@revealed_section_ids) > 0,
+          do: "Names hidden · #{MapSet.size(@revealed_section_ids)} showing",
+          else: "Names hidden for sharing"}
+      </span>
+      <button type="button" phx-click="remask_all" class="channel-mask-strip-action">
+        Show all
+      </button>
     </div>
     <nav
       id="chat-section-list"
@@ -460,7 +514,7 @@
                 >
                 </span>
                 <.link
-                  navigate={~p"/chat/#{space_nav_target(space)}"}
+                  patch={~p"/chat/#{space_nav_target(space)}"}
                   data-role={kind == :task && "pinned-task-rail-row"}
                   data-space-id={kind == :task && space.id}
                   class={[
@@ -649,7 +703,7 @@
               data-space-id={space.id}
             >
               <.link
-                navigate={~p"/chat/#{space_nav_target(space)}"}
+                patch={~p"/chat/#{space_nav_target(space)}"}
                 class={[
                   "channel-row",
                   @active_space && @active_space.id == space.id && "channel-row--active"
@@ -692,6 +746,32 @@
             PlatformWeb.ChatLive.section_scope_atom(section.color) == @scope_filter
           end)
         end %>
+      <%!-- Screen-share masking (task 01a00c66). Placeholders are derived from
+           the FULL `@sidebar_sections`, not from `visible_sections`, so a scope
+           filter narrowing the rail cannot relabel the sections that remain —
+           the letter is a fixed position in the rail for the session.
+
+           The display name is merged into each entry ONCE here rather than
+           recomputed at each render site, because the name reaches the header
+           through several derived strings (`data-section-key`, the section's
+           own `aria-label`, the collapse toggle's accessible name, the Hide and
+           Reorder labels) and a single missed site leaves the real name in the
+           accessibility tree while the visible text reads `Workspace B`. That
+           is the failure this feature is most likely to ship with, and it
+           passes any test that only inspects rendered text. --%>
+      <% mask_ctx =
+        Platform.Chat.SidebarMask.context(
+          @sidebar_sections,
+          @mask_names?,
+          @revealed_section_ids
+        )
+
+      visible_sections =
+        Enum.map(visible_sections, fn %{section: section} = entry ->
+          entry
+          |> Map.put(:display_name, Platform.Chat.SidebarMask.label(mask_ctx, section))
+          |> Map.put(:revealed?, MapSet.member?(@revealed_section_ids, section.id))
+        end) %>
       <%!-- ChannelMembershipDrag wrapper (chat sidebar Stage 5). A SEPARATE
            hook element from the <nav>'s SectionReorder hook: an element can
            only carry one phx-hook, and the two drag behaviors target
@@ -712,20 +792,41 @@
              reorders its rows while staying locked at the top of the rail, so
              the two answers genuinely differ and one flag cannot carry
              both. --%>
+        <%!-- `data-section-slug` follows the LABEL, not the record, while the
+             mask is on: the colour token IS the org slug ("wayne-tech"), so an
+             unmasked attribute spells the real name in the page source beside a
+             header reading `Workspace B` — a leak that any assertion written
+             against visible text passes straight over. Nothing reads the
+             attribute at runtime (SectionReorder keys off `data-section-id`;
+             the dot colour comes from `section_dot_class/1`). --%>
         <section
           :for={
-            %{section: section, channels: section_channels, collapsed?: collapsed?} <-
+            %{
+              section: section,
+              channels: section_channels,
+              collapsed?: collapsed?,
+              display_name: display_name,
+              revealed?: revealed?
+            } <-
               visible_sections
           }
           id={"section-#{section.id}"}
-          class="channel-section group"
-          data-section-key={section.name}
-          data-section-slug={section.color}
+          class={[
+            "channel-section group",
+            (@mask_names? and revealed?) && "channel-section--revealed"
+          ]}
+          data-section-key={display_name}
+          data-section-slug={
+            if(@mask_names? and not revealed?,
+              do: Platform.Chat.SidebarMask.slug(display_name),
+              else: section.color
+            )
+          }
           data-section-id={section.id}
           data-section-reorderable="true"
           data-row-reorderable="true"
           draggable="true"
-          aria-label={"#{section.name} channels"}
+          aria-label={"#{display_name} channels"}
         >
           <div class="channel-section-header">
             <%!-- Admin-edit (Stage 6): inline rename form per section header.
@@ -758,8 +859,8 @@
               aria-expanded={to_string(!collapsed?)}
               aria-label={
                 if collapsed?,
-                  do: "Expand #{section.name}",
-                  else: "Collapse #{section.name}"
+                  do: "Expand #{display_name}",
+                  else: "Collapse #{display_name}"
               }
             >
               <span
@@ -775,7 +876,7 @@
                 :if={not @sidebar_admin_edit}
                 class="channel-section-label"
               >
-                {section.name}
+                {display_name}
               </span>
             </button>
             <%!-- Admin-edit (Stage 6): inline rename form per section header.
@@ -829,6 +930,22 @@
               aria-hidden="true"
             >
             </span>
+            <%!-- Per-item reveal (task 01a00c66). ONE click, no menu: the case
+                 this serves is walking one client through their own channel
+                 with the rest of the rail still masked. A real focusable
+                 button rather than a hover affordance, because
+                 `@media (hover: hover)` never matches on a touch device and
+                 the control would vanish there entirely. --%>
+            <button
+              :if={@mask_names? and not revealed?}
+              type="button"
+              class="channel-section-reveal-button"
+              phx-click="reveal_section"
+              phx-value-section_id={section.id}
+              aria-label="Show this workspace name"
+            >
+              <span class="hero-eye size-3.5" aria-hidden="true"></span>
+            </button>
             <%!-- Per-section Hide/Show control (Stage 5, edit mode only).
                  Posts the DESIRED next hidden state so the toggle is
                  idempotent. A hidden section drops out of @sidebar_sections
@@ -842,7 +959,7 @@
               phx-click="toggle_section_hidden"
               phx-value-section_id={section.id}
               phx-value-hidden="true"
-              aria-label={"Hide #{section.name} section"}
+              aria-label={"Hide #{display_name} section"}
               title="Hide section"
             >
               <span class="hero-eye-slash size-3.5"></span>
@@ -850,7 +967,7 @@
             <button
               type="button"
               class="channel-section-drag-handle"
-              aria-label={"Reorder #{section.name} section"}
+              aria-label={"Reorder #{display_name} section"}
               tabindex="-1"
               draggable="true"
             >
@@ -865,7 +982,7 @@
               open={@lifecycle_menu_key == "org:#{section.org_id}"}
               type="org"
               id={section.org_id}
-              name={section.name}
+              name={display_name}
               class="relative ml-auto opacity-0 focus-within:opacity-100 group-hover:opacity-100"
             />
           </div>
@@ -879,7 +996,7 @@
             :if={@sidebar_admin_edit}
             class="channel-section-palette"
             role="group"
-            aria-label={"Set color for #{section.name} section"}
+            aria-label={"Set color for #{display_name} section"}
           >
             <button
               :for={token <- ~w(fabrikam soylent wayne-tech sxi paragon cyberdyne)}
@@ -965,14 +1082,16 @@
                 ⠿
               </span>
               <.link
-                navigate={~p"/chat/#{space_nav_target(space)}"}
+                patch={~p"/chat/#{space_nav_target(space)}"}
                 class={[
                   "channel-row",
                   @active_space && @active_space.id == space.id && "channel-row--active"
                 ]}
               >
                 <span class="text-base-content/40">#</span>
-                <span class="truncate flex-1">{space.name}</span>
+                <span class="truncate flex-1">
+                  {Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
+                </span>
                 <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
                   <span class="channel-row-unread-pill">
                     {unread_label(Map.get(@unread_counts, space.id, 0))}
@@ -994,7 +1113,9 @@
                   phx-value-section_id={section.id}
                   phx-value-direction="up"
                   disabled={idx == 0}
-                  aria-label={"Move ##{space.name} up"}
+                  aria-label={
+                    "Move ##{Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)} up"
+                  }
                   title="Move up"
                 >
                   <span class="hero-chevron-up size-3"></span>
@@ -1007,7 +1128,9 @@
                   phx-value-section_id={section.id}
                   phx-value-direction="down"
                   disabled={idx == length(section_channels) - 1}
-                  aria-label={"Move ##{space.name} down"}
+                  aria-label={
+                    "Move ##{Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)} down"
+                  }
                   title="Move down"
                 >
                   <span class="hero-chevron-down size-3"></span>
@@ -1027,7 +1150,10 @@
                    Rows in this section are unpinned by definition — a pinned
                    channel is lifted into the Pinned block above — so the
                    menu's first item is always the Pin direction here. --%>
-              <.row_actions_trigger space_id={space.id} name={space.name} />
+              <.row_actions_trigger
+                space_id={space.id}
+                name={Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
+              />
             </div>
             <%!-- "Show all (N)": the line that stops a partial list reading as a
                  rendering bug. N is the section's TOTAL channel count, so it
@@ -1046,7 +1172,7 @@
               phx-click="toggle_section_collapsed"
               phx-value-section_id={section.id}
               phx-value-collapsed="false"
-              aria-label={"Show all #{length(section_channels)} channels in #{section.name}"}
+              aria-label={"Show all #{length(section_channels)} channels in #{display_name}"}
             >
               Show all ({length(section_channels)})
             </button>
@@ -1127,14 +1253,14 @@
         <div :if={@archived_open} id="archived-channel-list">
           <.link
             :for={space <- @archived_channels}
-            navigate={~p"/chat/#{space_nav_target(space)}"}
+            patch={~p"/chat/#{space_nav_target(space)}"}
             class={[
               "channel-row text-base-content/50",
               @active_space && @active_space.id == space.id && "channel-row--active"
             ]}
           >
             <span class="hero-archive-box size-3.5 text-base-content/30"></span>
-            <span class="truncate flex-1">{space.name}</span>
+            <span class="truncate flex-1">{masked_space_name(assigns, space.name)}</span>
           </.link>
         </div>
       </section>
@@ -1263,13 +1389,39 @@
                      we label the group with its plain name — `scope_pill`'s
                      colour/label clauses are a closed enum and would crash on
                      an unknown scope. --%>
-                <% scope = sub_org_scope_atom(bucket) %>
-                <.scope_pill :if={scope} scope={scope} clickable={false} />
+                <% scope = sub_org_scope_atom(bucket)
+
+                hidden_mask_ctx =
+                  Platform.Chat.SidebarMask.context(
+                    @sidebar_sections,
+                    @mask_names?,
+                    @revealed_section_ids
+                  )
+
+                bucket_label =
+                  Platform.Chat.SidebarMask.label_for_bucket(
+                    hidden_mask_ctx,
+                    @sidebar_sections,
+                    bucket
+                  ) %>
+                <%!-- Screen-share masking (task 01a00c66 stage 3). This heading
+                     is an ORG NAME, so it masks like every other one — a rail
+                     reading `Workspace B` above a hidden-channels group reading
+                     the real name has leaked exactly what the mode hides. The
+                     placeholder is passed IN; `scope_pill` holds no mask table
+                     of its own, because a second copy drifts and the copy that
+                     drifts is the one nobody is looking at. --%>
+                <.scope_pill
+                  :if={scope}
+                  scope={scope}
+                  clickable={false}
+                  label={@mask_names? && bucket_label}
+                />
                 <span
                   :if={is_nil(scope)}
                   class="text-xs font-semibold uppercase tracking-wide text-base-content/50"
                 >
-                  {bucket}
+                  {bucket_label}
                 </span>
               </div>
               <ul class="channel-hidden-drawer-group-list">
@@ -1278,13 +1430,13 @@
                   class="channel-hidden-drawer-item"
                 >
                   <span class="text-base-content/40">#</span>
-                  <span class="truncate flex-1">{space.name}</span>
+                  <span class="truncate flex-1">{masked_space_name(assigns, space.name)}</span>
                   <button
                     type="button"
                     class="channel-hidden-drawer-show"
                     phx-click="unhide_channel"
                     phx-value-id={space.id}
-                    aria-label={"Show ##{space.name}"}
+                    aria-label={"Show ##{masked_space_name(assigns, space.name)}"}
                   >
                     Show
                   </button>
@@ -1330,9 +1482,44 @@
       id="mobile-channel-browser"
       class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden safe-area-x"
     >
+      <%!-- Masking context for the drawer (task 01a00c66 stage 3). Derived
+           from the FULL `@sidebar_sections` exactly as the rail's is, so a
+           section carries the SAME letter on both breakpoints and an active
+           search cannot relabel what remains. Built once and threaded to
+           every derived string below — the header text, the section's own
+           aria-label, both move buttons, the touch drag handle and the
+           channel rows — because the way this ships broken is one missed
+           site leaving the real name in the accessibility tree under a
+           heading that reads `Workspace B`. --%>
+      <% drawer_mask_ctx =
+        Platform.Chat.SidebarMask.context(
+          @sidebar_sections,
+          @mask_names?,
+          @revealed_section_ids
+        ) %>
       <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
         <p class="text-sm font-semibold">Conversations</p>
         <div class="flex items-center gap-1">
+          <%!-- Screen-share name masking on the DRAWER (task 01a00c66 stage 3).
+               The SAME control and the SAME event as the desktop rail, not a
+               reduced variant: the rail renders at two breakpoints and they
+               have diverged before, and a phone that can only reveal — or only
+               mask — is the failure this stage exists to prevent. Sized to the
+               drawer's 44px touch floor rather than the rail's 16px glyph. --%>
+          <button
+            type="button"
+            phx-click="toggle_mask_names"
+            phx-value-masked={to_string(!@mask_names?)}
+            class="channel-mask-toggle flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/70 hover:bg-base-300 hover:text-base-content"
+            aria-pressed={to_string(@mask_names?)}
+            aria-label="Hide workspace names for sharing"
+          >
+            <span
+              class={[if(@mask_names?, do: "hero-eye-slash", else: "hero-eye"), "size-5"]}
+              aria-hidden="true"
+            >
+            </span>
+          </button>
           <%!-- Mobile entry into personal-edit mode (chat sidebar mobile
                Stage 3). Stage 2's report flagged that `@sidebar_edit` — which
                gates the lock affordances AND this stage's drag handles — was
@@ -1413,6 +1600,22 @@
             <span class="hero-x-mark size-4"></span>
           </button>
         </form>
+      </div>
+
+      <%!-- The mode strip, identical in copy and colour to the rail's (task
+           01a00c66 stage 3). It is the signal on this breakpoint too: the icon
+           swap is a few pixels of stroke either way, and the phone is the
+           likelier device to be mirrored into a call. --%>
+      <div :if={@mask_names?} class="channel-mask-strip">
+        <span class="hero-eye-slash size-3.5 flex-shrink-0" aria-hidden="true"></span>
+        <span class="min-w-0 flex-1">
+          {if MapSet.size(@revealed_section_ids) > 0,
+            do: "Names hidden · #{MapSet.size(@revealed_section_ids)} showing",
+            else: "Names hidden for sharing"}
+        </span>
+        <button type="button" phx-click="remask_all" class="channel-mask-strip-action">
+          Show all
+        </button>
       </div>
 
       <%!-- Sectioned mobile channel browser — parity with the desktop rail
@@ -1658,7 +1861,7 @@
               >
                 <% row_label = pinned_row_label(kind, space, @user_id) %>
                 <.link
-                  navigate={~p"/chat/#{space_nav_target(space)}"}
+                  patch={~p"/chat/#{space_nav_target(space)}"}
                   phx-click="close_mobile_browser"
                   data-role={kind == :task && "pinned-task-drawer-row"}
                   data-space-id={kind == :task && space.id}
@@ -1785,7 +1988,7 @@
               >
                 <% row_label = sidebar_row_label(space, @user_id) %>
                 <.link
-                  navigate={~p"/chat/#{space_nav_target(space)}"}
+                  patch={~p"/chat/#{space_nav_target(space)}"}
                   phx-click="close_mobile_browser"
                   class={[
                     "flex flex-1 min-w-0 items-center gap-3 px-4 py-3 text-sm transition-colors",
@@ -1822,16 +2025,36 @@
           <section
             :for={
               {%{section: section, channels: section_channels}, section_index} <-
-                Enum.with_index(drawer_filter_sections(@sidebar_sections, @drawer_query))
+                Enum.with_index(
+                  drawer_filter_sections(@sidebar_sections, @drawer_query, drawer_mask_ctx)
+                )
             }
             data-section-id={section.id}
             data-section-reorderable="true"
-            aria-label={"#{section.name} channels"}
+            aria-label={"#{Platform.Chat.SidebarMask.label(drawer_mask_ctx, section)} channels"}
           >
             <div class="flex items-center px-4 py-1 mt-2">
               <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                {section.name}
+                {Platform.Chat.SidebarMask.label(drawer_mask_ctx, section)}
               </p>
+              <%!-- Per-item reveal, the SAME affordance the rail has. A real
+                   focusable button, never a hover treatment: `@media (hover:
+                   hover)` never matches on a touch device, so a hover-only
+                   reveal would leave the drawer with no way to show one org at
+                   all. Sized to the 44px touch floor. --%>
+              <button
+                :if={
+                  @mask_names? and
+                    not Platform.Chat.SidebarMask.revealed?(drawer_mask_ctx, section)
+                }
+                type="button"
+                class="channel-section-reveal-button channel-section-reveal-button--touch"
+                phx-click="reveal_section"
+                phx-value-section_id={section.id}
+                aria-label="Show this workspace name"
+              >
+                <span class="hero-eye size-4" aria-hidden="true"></span>
+              </button>
               <%!-- Up/down move buttons (Stage 4 — WCAG 2.5.7 Dragging
                  Movements): the REQUIRED single-pointer alternative to the
                  long-press drag, not an optional nicety. They fire the SAME
@@ -1863,7 +2086,9 @@
                       Enum.at(@sidebar_sections, section_index - 1).section.id
                   }
                   disabled={section_index == 0}
-                  aria-label={"Move #{section.name} section up"}
+                  aria-label={
+                    "Move #{Platform.Chat.SidebarMask.label(drawer_mask_ctx, section)} section up"
+                  }
                   title="Move section up"
                 >
                   <span class="hero-chevron-up size-4"></span>
@@ -1878,7 +2103,9 @@
                   }
                   phx-value-to={section.id}
                   disabled={section_index == length(@sidebar_sections) - 1}
-                  aria-label={"Move #{section.name} section down"}
+                  aria-label={
+                    "Move #{Platform.Chat.SidebarMask.label(drawer_mask_ctx, section)} section down"
+                  }
                   title="Move section down"
                 >
                   <span class="hero-chevron-down size-4"></span>
@@ -1895,7 +2122,9 @@
                 :if={@sidebar_edit && @drawer_query == ""}
                 type="button"
                 class="channel-section-drag-handle channel-section-drag-handle--touch"
-                aria-label={"Reorder #{section.name} section — touch and hold, then drag"}
+                aria-label={
+                  "Reorder #{Platform.Chat.SidebarMask.label(drawer_mask_ctx, section)} section — touch and hold, then drag"
+                }
                 tabindex="-1"
               >
                 ☰
@@ -1928,7 +2157,9 @@
                   class="flex items-center gap-3 px-4 py-3 text-sm"
                 >
                   <span class="text-base-content/40 text-lg">#</span>
-                  <span class="truncate flex-1">{space.name}</span>
+                  <span class="truncate flex-1">
+                    {Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)}
+                  </span>
                   <span class="channel-row-move-controls--touch">
                     <button
                       type="button"
@@ -1938,7 +2169,9 @@
                       phx-value-section_id={section.id}
                       phx-value-direction="up"
                       disabled={row_index == 0}
-                      aria-label={"Move ##{space.name} up"}
+                      aria-label={
+                        "Move ##{Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)} up"
+                      }
                       title="Move up"
                     >
                       <span class="hero-chevron-up size-4"></span>
@@ -1951,7 +2184,9 @@
                       phx-value-section_id={section.id}
                       phx-value-direction="down"
                       disabled={row_index == length(section_channels) - 1}
-                      aria-label={"Move ##{space.name} down"}
+                      aria-label={
+                        "Move ##{Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)} down"
+                      }
                       title="Move down"
                     >
                       <span class="hero-chevron-down size-4"></span>
@@ -1968,7 +2203,9 @@
                     <button
                       type="button"
                       class="channel-row-drag-handle"
-                      aria-label={"Reorder ##{space.name} — touch and hold, then drag"}
+                      aria-label={
+                        "Reorder ##{Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)} — touch and hold, then drag"
+                      }
                       tabindex="-1"
                     >
                       ☰
@@ -1989,7 +2226,7 @@
                   data-space-id={space.id}
                 >
                   <.link
-                    navigate={~p"/chat/#{space_nav_target(space)}"}
+                    patch={~p"/chat/#{space_nav_target(space)}"}
                     phx-click="close_mobile_browser"
                     class={[
                       "flex flex-1 min-w-0 items-center gap-3 px-4 py-3 text-sm transition-colors",
@@ -1999,14 +2236,29 @@
                     ]}
                   >
                     <span class="text-base-content/40 text-lg">#</span>
-                    <span class="truncate flex-1">{space.name}</span>
+                    <span class="truncate flex-1">
+                      {Platform.Chat.SidebarMask.channel_label(
+                        drawer_mask_ctx,
+                        section,
+                        space.name
+                      )}
+                    </span>
                     <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
                       <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
                         {unread_label(Map.get(@unread_counts, space.id, 0))}
                       </span>
                     <% end %>
                   </.link>
-                  <.row_actions_control space_id={space.id} name={space.name} />
+                  <.row_actions_control
+                    space_id={space.id}
+                    name={
+                      Platform.Chat.SidebarMask.channel_label(
+                        drawer_mask_ctx,
+                        section,
+                        space.name
+                      )
+                    }
+                  />
                 </div>
             <% end %>
           </section>
@@ -2039,7 +2291,7 @@
             <div :if={@archived_open} id="archived-channel-list-mobile">
               <.link
                 :for={space <- @archived_channels}
-                navigate={~p"/chat/#{space_nav_target(space)}"}
+                patch={~p"/chat/#{space_nav_target(space)}"}
                 phx-click="close_mobile_browser"
                 class={[
                   "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
@@ -2049,7 +2301,7 @@
                 ]}
               >
                 <span class="hero-archive-box size-4 text-base-content/30"></span>
-                <span class="truncate flex-1">{space.name}</span>
+                <span class="truncate flex-1">{masked_space_name(assigns, space.name)}</span>
               </.link>
             </div>
           </section>
@@ -2068,7 +2320,8 @@
                   @channel_sections,
                   @sidebar_sections,
                   @drawer_query,
-                  @user_id
+                  @user_id,
+                  drawer_mask_ctx
                 )
             }
             class="flex flex-col items-center gap-3 px-6 py-10 text-center"
@@ -2268,7 +2521,7 @@
           <% else %>
             <.link
               :for={space <- external_switcher_filtered}
-              navigate={~p"/chat/#{space_nav_target(space)}"}
+              patch={~p"/chat/#{space_nav_target(space)}"}
               class={[
                 "channel-row",
                 @active_space && @active_space.id == space.id && "channel-row--active"
@@ -2277,7 +2530,7 @@
               <span :if={space.kind == "channel"} class="text-base-content/40">#</span>
               <span class="truncate flex-1">
                 {if space.kind == "channel",
-                  do: space.name,
+                  do: masked_space_name(assigns, space.name),
                   else: sidebar_display_name(space, @user_id)}
               </span>
               <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
@@ -2317,6 +2570,14 @@
         :if={@active_space && !@embedded}
         class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-content/10 px-5"
       >
+        <%!-- Screen-share masking (task 01a00c66 stage 5). The open channel's
+             own name sits in this header at the top of the screen; masking the
+             rail row for `#wayne-tech` and leaving the header spelling it out is
+             the same leak with an extra step. `space_label/3` looks the name up
+             across the whole rail because this header has no section in hand.
+             Applied to BOTH breakpoint branches below — the mobile and desktop
+             titles are separate nodes, and a mask applied to one of them is the
+             shape of bug this stage exists to find. --%>
         <div class="flex items-center gap-2 overflow-hidden">
           <%!-- Mobile: static channel name. Channel switching now happens via the
                pills strip below the header (Refined Option A — Marlowe approval
@@ -2331,7 +2592,12 @@
           <div class="flex items-center gap-2 overflow-hidden lg:hidden">
             <span :if={@active_space.kind == "channel"} class="text-base-content/50">#</span>
             <span class="truncate font-semibold">
-              {space_header_name(@active_space, @space_participants, @user_id)}
+              {space_header_name(
+                @active_space,
+                @space_participants,
+                @user_id,
+                space_mask(assigns)
+              )}
             </span>
             <%!-- Compact scope-pill on the mobile chat header (chat sidebar
                  mobile Stage 2, Decision #6). Mirrors the desktop header pill
@@ -2348,11 +2614,27 @@
               :if={mobile_header_scope}
               class="chat-header-scope-pill-mobile flex-shrink-0"
             >
+              <%!-- Masked like the rail (task 01a00c66 stage 3): this pill sits
+                   in the chat header at the top of the phone screen, which is
+                   the MOST visible surface in a mirrored window. The label
+                   override reaches the pill's `aria-label` too. --%>
               <.scope_pill
                 scope={mobile_header_scope}
                 size={:compact}
                 clickable={true}
                 active={@scope_filter == mobile_header_scope}
+                label={
+                  @mask_names? &&
+                    Platform.Chat.SidebarMask.label_for_bucket(
+                      Platform.Chat.SidebarMask.context(
+                        @sidebar_sections,
+                        @mask_names?,
+                        @revealed_section_ids
+                      ),
+                      @sidebar_sections,
+                      PlatformWeb.ChatLive.bucket_for_scope(mobile_header_scope)
+                    )
+                }
               />
             </span>
           </div>
@@ -2365,7 +2647,12 @@
               #
             </span>
             <span class="truncate font-bold text-base">
-              {space_header_name(@active_space, @space_participants, @user_id)}
+              {space_header_name(
+                @active_space,
+                @space_participants,
+                @user_id,
+                space_mask(assigns)
+              )}
             </span>
             <%!-- Prominent chat-header scope-pill (chat plan v2 Stage 4).
                  Only rendered for channels (DMs/groups have no scope). The
@@ -2380,6 +2667,18 @@
                 scope={header_scope}
                 clickable={true}
                 active={@scope_filter == header_scope}
+                label={
+                  @mask_names? &&
+                    Platform.Chat.SidebarMask.label_for_bucket(
+                      Platform.Chat.SidebarMask.context(
+                        @sidebar_sections,
+                        @mask_names?,
+                        @revealed_section_ids
+                      ),
+                      @sidebar_sections,
+                      PlatformWeb.ChatLive.bucket_for_scope(header_scope)
+                    )
+                }
               />
             </span>
             <span
@@ -2621,7 +2920,7 @@
       >
         <.link
           :for={space <- @pinned_task_spaces}
-          navigate={~p"/chat/#{space_nav_target(space)}"}
+          patch={~p"/chat/#{space_nav_target(space)}"}
           data-role="mobile-pinned-task-chip"
           data-space-id={space.id}
           class={[
@@ -2659,7 +2958,7 @@
         </.link>
         <.link
           :for={space <- @channel_sections.pinned}
-          navigate={~p"/chat/#{space_nav_target(space)}"}
+          patch={~p"/chat/#{space_nav_target(space)}"}
           data-role="mobile-pinned-channel-chip"
           data-space-id={space.id}
           class={[
@@ -2699,7 +2998,7 @@
             >
               #
             </span>
-            <span class="truncate max-w-[10rem]">{space.name}</span>
+            <span class="truncate max-w-[10rem]">{masked_space_name(assigns, space.name)}</span>
           <% end %>
           <span
             :if={unread_label(Map.get(@unread_counts, space.id, 0))}
@@ -2762,7 +3061,7 @@
           if @external?, do: @channels, else: Sidebar.flatten_sections(@sidebar_sections) %>
         <.link
           :for={space <- switcher_channel_pills}
-          navigate={~p"/chat/#{space_nav_target(space)}"}
+          patch={~p"/chat/#{space_nav_target(space)}"}
           class={[
             "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
             "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
@@ -2778,7 +3077,7 @@
               do: "text-primary-content/80",
               else: "text-base-content/40"
             )
-          ]}>#</span>{space.name}<span
+          ]}>#</span>{masked_space_name(assigns, space.name)}<span
             :if={unread_label(Map.get(@unread_counts, space.id, 0))}
             class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
           >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
@@ -2787,7 +3086,7 @@
         <%!-- DM pills (after channels, no divider for now to keep mobile compact) --%>
         <.link
           :for={space <- @dm_conversations}
-          navigate={~p"/chat/#{space_nav_target(space)}"}
+          patch={~p"/chat/#{space_nav_target(space)}"}
           class={[
             "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
             "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
@@ -3296,7 +3595,7 @@
               name="compose[text]"
               id={@compose_form[:text].id}
               data-draft-key={if @active_space, do: "chat-draft:" <> @active_space.id, else: nil}
-              placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
+              placeholder={"Message ##{masked_space_name(assigns, (@active_space && @active_space.name) || "")}"}
               autocomplete="off"
               rows="1"
               class="min-w-0 flex-1 text-sm resize-none"

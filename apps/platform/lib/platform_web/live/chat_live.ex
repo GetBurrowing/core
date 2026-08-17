@@ -219,6 +219,34 @@ defmodule PlatformWeb.ChatLive do
     socket =
       socket
       |> assign(:page_title, "Chat")
+      # Screen-share name masking (task 01a00c66). Session-only view state:
+      # OFF by default, never persisted to a preferences row / cookie /
+      # localStorage, never broadcast.
+      #
+      # THESE TWO LINES ARE THE WHOLE PERSISTENCE MODEL, and they only hold
+      # because channel switching is a `patch`, not a `navigate`. Stage 6
+      # found the opposite: every rail row in `chat_live.html.heex` used
+      # `<.link navigate=…>`, which remounts ChatLive over the same socket, so
+      # `mount/3` re-ran and BOTH the mask flag and the per-org reveal set were
+      # reset mid-screen-share — real names silently repainting, with the strip
+      # that would have signalled it gone from the DOM too. Those rows are now
+      # `<.link patch=…>`; `handle_params/3` already did 100% of the
+      # per-channel work, so no state had to move.
+      #
+      # The LiveView process lifetime IS the session scope, structurally:
+      #   * in-session nav → patch → same process → both assigns survive
+      #   * full page reload → new process → assigns start fresh → the rail
+      #     comes back with REAL names, which is deliberate. Someone who
+      #     masked for one call and returns next morning must not find a rail
+      #     where their orgs appear to be missing.
+      # Do NOT "improve" this with sessionStorage: it survives a reload and
+      # would break the second bullet.
+      #
+      # If you add a new way to reach `/chat/:space_slug` from inside this
+      # LiveView, it must be a patch. A `navigate` re-enters `mount/3` here
+      # and silently unmasks.
+      |> assign(:mask_names?, false)
+      |> assign(:revealed_section_ids, MapSet.new())
       |> assign(:user_id, user_id)
       # rbac-external-users M5: the render-branch flag + the read-scope it is
       # keyed on. `@external?` gates the discovery chrome off in the template
@@ -591,7 +619,14 @@ defmodule PlatformWeb.ChatLive do
 
         participant = find_user_participant(space.id, socket.assigns.user_id)
         participants = Chat.list_participants(space.id)
-        page_title = space_page_title(space, participants, socket.assigns.user_id)
+
+        page_title =
+          space_page_title(
+            space,
+            participants,
+            socket.assigns.user_id,
+            space_mask(socket.assigns)
+          )
 
         socket
         |> assign(:page_title, page_title)
@@ -682,7 +717,9 @@ defmodule PlatformWeb.ChatLive do
 
       participant = ensure_participant(space.id, socket.assigns.user_id)
       participants = Chat.list_participants(space.id)
-      page_title = space_page_title(space, participants, socket.assigns.user_id)
+
+      page_title =
+        space_page_title(space, participants, socket.assigns.user_id, space_mask(socket.assigns))
 
       # Refresh sidebar lists. rbac-external-users M5: re-thread the same
       # `@external_scope` the mount used so a channel-to-channel nav re-derives
@@ -1814,6 +1851,53 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, recompute_sidebar(socket)}
   end
 
+  # Screen-share name masking (task 01a00c66).
+  #
+  # `masked` arrives as the DESIRED next state ("true"/"false") rather than as a
+  # flip, matching `toggle_section_collapsed` above: a duplicated event from a
+  # client-side render race is then idempotent instead of landing in the
+  # opposite mode from the one the button showed.
+  #
+  # Turning the mode OFF also clears the per-section reveals, so re-enabling
+  # starts fully masked. Otherwise a reveal from earlier in the session is
+  # resurrected on the next share and one org is silently visible — the feature
+  # failing in the exact direction it exists to prevent.
+  #
+  # Pure view state: no write, no broadcast.
+  def handle_event("toggle_mask_names", params, socket) do
+    masked? = truthy?(params["masked"])
+
+    {:noreply,
+     socket
+     |> assign(:mask_names?, masked?)
+     |> assign(
+       :revealed_section_ids,
+       if(masked?, do: socket.assigns.revealed_section_ids, else: MapSet.new())
+     )
+     |> refresh_page_title()}
+  end
+
+  # Reveal exactly one section's real name while the mode stays on — the
+  # "walk this client through their own channel" case. One click, no menu.
+  def handle_event("reveal_section", %{"section_id" => section_id}, socket)
+      when is_binary(section_id) do
+    {:noreply,
+     socket
+     |> assign(
+       :revealed_section_ids,
+       MapSet.put(socket.assigns.revealed_section_ids, section_id)
+     )
+     |> refresh_page_title()}
+  end
+
+  # Re-mask everything in one action, leaving the mode on.
+  def handle_event("remask_all", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:revealed_section_ids, MapSet.new())
+     |> refresh_page_title()}
+  end
+
   # Pin or unpin one conversation for this user (task 019fd80f stage 3).
   #
   # `pinned` arrives as the DESIRED next state ("true"/"false") rather than as
@@ -2924,7 +3008,10 @@ defmodule PlatformWeb.ChatLive do
 
     case Chat.promote_to_channel(space, %{name: name, slug: slug}) do
       {:ok, updated} ->
-        {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(updated)}")}
+        # `patch`, not `navigate`: the promoted space is served by THIS
+        # LiveView, and a remount would drop the screen-share mask state
+        # (see the assign comment in `mount/3`).
+        {:noreply, push_patch(socket, to: ~p"/chat/#{space_nav_target(updated)}")}
 
       {:error, :not_promotable} ->
         {:noreply,
@@ -3350,18 +3437,81 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  defp space_page_title(%{kind: "channel", name: name}, _participants, _user_id) do
-    "# #{name}"
+  # Screen-share name masking (task 01a00c66 stage 5).
+  #
+  # The browser tab is the surface that most needs this and was the last to get
+  # it. A rail reading `Workspace B` next to a tab reading `# wayne-tech` has not
+  # masked anything — worse, it gives the presenter false confidence. The tab
+  # also survives WINDOW-share mode, where the rail may not be captured at all,
+  # so it is the one surface that can leak on a share that shows nothing else.
+  #
+  # `mask` is the `{context, sections}` pair from `space_mask/1`. Only the
+  # CHANNEL clause masks: a DM or group title is a person's name, which this
+  # feature does not claim to cover.
+  defp space_page_title(%{kind: "channel", name: name}, _participants, _user_id, mask) do
+    "# #{mask_space_name(mask, name)}"
   end
 
-  defp space_page_title(space, participants, user_id) do
+  defp space_page_title(space, participants, user_id, _mask) do
     Chat.display_name_for_space(space, participants, user_id)
   end
 
-  defp space_header_name(%{kind: "channel", name: name}, _participants, _user_id), do: name
+  defp space_header_name(%{kind: "channel", name: name}, _participants, _user_id, mask),
+    do: mask_space_name(mask, name)
 
-  defp space_header_name(space, participants, user_id) do
+  defp space_header_name(space, participants, user_id, _mask) do
     Chat.display_name_for_space(space, participants, user_id)
+  end
+
+  defp mask_space_name({ctx, sections}, name),
+    do: Platform.Chat.SidebarMask.space_label(ctx, sections, name)
+
+  @doc false
+  # The `{context, sections}` pair every out-of-rail surface masks a channel
+  # name through. Derived from `assigns` rather than threaded as a variable
+  # BECAUSE the surfaces are scattered: the tab title, both breakpoints of the
+  # chat header, the composer placeholder and the mobile pills strip are five
+  # sites in three scopes, and a threaded variable is how the fifth one gets
+  # missed. Taking `assigns` means a new site is one call, not one call plus a
+  # `<% %>` binding someone has to remember to add.
+  def space_mask(assigns) do
+    sections = assigns[:sidebar_sections] || []
+
+    {Platform.Chat.SidebarMask.context(
+       sections,
+       assigns[:mask_names?] == true,
+       assigns[:revealed_section_ids] || MapSet.new()
+     ), sections}
+  end
+
+  @doc false
+  # Mask one channel name for a surface that has no rail section in hand.
+  def masked_space_name(assigns, name) when is_binary(name),
+    do: mask_space_name(space_mask(assigns), name)
+
+  def masked_space_name(_assigns, name), do: name
+
+  # Re-derive the tab title after the mask mode or the reveal set changes.
+  # Without this the title keeps whatever spelling it had when the channel was
+  # opened, and turning masking ON leaves the real name in the tab — the exact
+  # failure the mode is switched on to prevent.
+  defp refresh_page_title(socket) do
+    case socket.assigns[:active_space] do
+      nil ->
+        socket
+
+      space ->
+        assign(
+          socket,
+          :page_title,
+          space_page_title(
+            space,
+            socket.assigns[:space_participants] || [],
+            socket.assigns.user_id,
+            space_mask(socket.assigns)
+          )
+        )
+    end
   end
 
   defp sidebar_display_name(space, current_user_id) do
@@ -3547,28 +3697,54 @@ defmodule PlatformWeb.ChatLive do
   # matches entirely (their headers would be noise), but keep headers on
   # sections that DO match — two orgs can hold same-named channels and the
   # section label is the only disambiguator.
-  defp drawer_filter_sections(sections, ""), do: sections
+  defp drawer_filter_sections(sections, "", _mask_ctx), do: sections
 
-  defp drawer_filter_sections(sections, query) do
+  # Screen-share masking (task 01a00c66 stage 3): the filter runs against the
+  # DISPLAYED channel label, never the stored name. Matching the stored name
+  # would turn the search box into an oracle — type a real client name while
+  # the drawer reads `Workspace B` and the matching row surfaces, confirming
+  # the client list to anyone watching the share. A masked row must not be
+  # reachable by the string it is hiding.
+  defp drawer_filter_sections(sections, query, mask_ctx) do
     sections
-    |> Enum.map(fn %{channels: channels} = entry ->
-      %{entry | channels: Enum.filter(channels, &drawer_match?(&1.name, query))}
+    |> Enum.map(fn %{section: section, channels: channels} = entry ->
+      %{
+        entry
+        | channels:
+            Enum.filter(channels, fn channel ->
+              mask_ctx
+              |> Platform.Chat.SidebarMask.channel_label(section, channel.name)
+              |> drawer_match?(query)
+            end)
+      }
     end)
     |> Enum.filter(fn %{channels: channels} -> channels != [] end)
   end
 
   # True when an active search matched nothing anywhere — drives the
   # dedicated "No matches" state (NOT the genuinely-empty-account copy).
-  defp drawer_no_matches?(_pinned, _channel_sections, _sidebar_sections, "", _user_id), do: false
+  # Takes the drawer's mask context so the empty-state and the list agree.
+  # Without it, a masked search for a real org name renders an EMPTY list with
+  # no "No matches" line, and the difference between "blank" and "No matches"
+  # is itself the oracle the masked filter just closed.
+  defp drawer_no_matches?(_pinned, _channel_sections, _sidebar_sections, "", _user_id, _mask_ctx),
+    do: false
 
-  defp drawer_no_matches?(pinned_entries, channel_sections, sidebar_sections, query, user_id) do
+  defp drawer_no_matches?(
+         pinned_entries,
+         channel_sections,
+         sidebar_sections,
+         query,
+         user_id,
+         mask_ctx
+       ) do
     # Takes the MERGED Pinned block rather than `channel_sections.pinned`:
     # the block now holds task conversations too, and a query that matches
     # only a pinned task would otherwise render a row and the "No matches"
     # copy at the same time.
     drawer_filter_pinned(pinned_entries, query, user_id) == [] and
       drawer_filter_dms(channel_sections.dms, query, user_id) == [] and
-      drawer_filter_sections(sidebar_sections, query) == []
+      drawer_filter_sections(sidebar_sections, query, mask_ctx) == []
   end
 
   defp clear_unread(socket, space_id) do

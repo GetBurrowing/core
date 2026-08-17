@@ -139,6 +139,20 @@ defmodule PlatformWeb.Components.ScopePill do
       "`:default` for the standard bordered pill; `:compact` for a denser, borderless pill (message rows, card chrome). Font stays text-xs at both sizes."
   )
 
+  attr(:label, :string,
+    default: nil,
+    doc: """
+    Overrides the pill's visible text AND its `aria-label`. Used by the chat
+    rail's screen-share name masking (task 01a00c66) to render `Workspace B`
+    in place of the real org name. The mask table lives in
+    `Platform.Chat.SidebarMask` and is passed in by the caller — this
+    component deliberately holds no second copy of it, because two mask
+    tables drift and the one that drifts is the one nobody is looking at.
+    A masked pill whose screen-reader name still says the real org name has
+    not been masked, so the override reaches both surfaces or neither.
+    """
+  )
+
   attr(:active, :boolean,
     default: false,
     doc:
@@ -160,8 +174,9 @@ defmodule PlatformWeb.Components.ScopePill do
           propagated_to: @propagated_to,
           role: :source,
           size: @size,
-          aria_label: propagated_aria(@scope, @propagated_to),
-          title: propagated_title(@scope, @propagated_to)
+          label: @label,
+          aria_label: propagated_aria(display_label(@label, @scope), @propagated_to),
+          title: propagated_title(display_label(@label, @scope), @propagated_to)
         })}
       <% else %>
         <span class="scope-pill-propagated inline-flex items-center gap-1">
@@ -171,7 +186,8 @@ defmodule PlatformWeb.Components.ScopePill do
             active: @active,
             propagated_to: @propagated_to,
             role: :source,
-            size: @size
+            size: @size,
+            label: @label
           })}
           <.icon name="hero-arrow-right" class="size-3 text-base-content/60" />
           {render_chip(%{
@@ -180,7 +196,8 @@ defmodule PlatformWeb.Components.ScopePill do
             active: @active,
             propagated_to: @propagated_to,
             role: :target,
-            size: @size
+            size: @size,
+            label: nil
           })}
         </span>
       <% end %>
@@ -191,7 +208,8 @@ defmodule PlatformWeb.Components.ScopePill do
         active: @active,
         propagated_to: nil,
         role: :single,
-        size: @size
+        size: @size,
+        label: @label
       })}
     <% end %>
     """
@@ -215,6 +233,7 @@ defmodule PlatformWeb.Components.ScopePill do
       assigns
       |> Map.put_new(:title, nil)
       |> Map.put_new(:aria_label, nil)
+      |> Map.put_new(:label, nil)
 
     ~H"""
     <%= if @clickable do %>
@@ -231,7 +250,7 @@ defmodule PlatformWeb.Components.ScopePill do
           not @active && chip_hover_classes(@scope),
           @size == :compact && "scope-pill-hit-expand"
         ]}
-        aria-label={@aria_label || aria_label(@scope, @active)}
+        aria-label={@aria_label || aria_label(display_label(@label, @scope), @active)}
         aria-pressed={if @active, do: "true", else: "false"}
       >
         {chip_inner(assigns)}
@@ -244,7 +263,7 @@ defmodule PlatformWeb.Components.ScopePill do
           chip_color_classes(@scope, @active, @size),
           if(@size == :compact, do: "opacity-70", else: "opacity-55")
         ]}
-        aria-label={@aria_label || aria_label_static(@scope)}
+        aria-label={@aria_label || aria_label_static(display_label(@label, @scope))}
       >
         {chip_inner(assigns)}
       </span>
@@ -262,7 +281,7 @@ defmodule PlatformWeb.Components.ScopePill do
         aria-hidden="true"
       />
     <% end %>
-    <span class={label_class(@size)}>{scope_label(@scope)}</span>
+    <span class={label_class(@size)}>{display_label(@label, @scope)}</span>
     """
   end
 
@@ -345,16 +364,26 @@ defmodule PlatformWeb.Components.ScopePill do
   defp scope_label(:paragon), do: "Paragon"
   defp scope_label(:cyberdyne), do: "Cyberdyne"
 
-  defp aria_label(scope, true), do: "Currently filtered by #{scope_label(scope)} scope"
-  defp aria_label(scope, false), do: "Filter by #{scope_label(scope)} scope"
+  # The caller's override wins over the scope enum's own name. Anything that
+  # is not a binary (`nil`, or the `false` an inline `@mask_names? && ...`
+  # produces when the mode is off) means "caller didn't say" and falls back to
+  # the scope's own name. An empty string IS a caller decision and is honoured
+  # — a blank label is never a leak.
+  defp display_label(label, _scope) when is_binary(label), do: label
+  defp display_label(_label, scope), do: scope_label(scope)
 
-  defp aria_label_static(scope), do: "#{scope_label(scope)} scope"
+  # These take the already-resolved LABEL, not the scope atom, so there is no
+  # path that renders a masked pill whose accessible name is the real one.
+  defp aria_label(label, true), do: "Currently filtered by #{label} scope"
+  defp aria_label(label, false), do: "Filter by #{label} scope"
+
+  defp aria_label_static(label), do: "#{label} scope"
 
   # Compact propagated collapses to the source chip; provenance is preserved
   # for assistive tech (aria-label) and hover (title).
-  defp propagated_aria(scope, to),
-    do: "#{scope_label(scope)} scope, propagated to #{scope_label(to)}"
+  defp propagated_aria(label, to),
+    do: "#{label} scope, propagated to #{scope_label(to)}"
 
-  defp propagated_title(scope, to),
-    do: "#{scope_label(scope)} → #{scope_label(to)}"
+  defp propagated_title(label, to),
+    do: "#{label} → #{scope_label(to)}"
 end

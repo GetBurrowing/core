@@ -3293,6 +3293,67 @@ body, .font-fabrikam {
     @apply flex items-center gap-2 px-2 pb-1.5;
   }
 
+  /* Screen-share name masking (task 01a00c66).
+
+     THE STRIP IS THE SIGNAL, NOT THE ICON'S STATE. An eye and a crossed-out
+     eye differ by a few pixels of stroke, and this is read in a half-second
+     glance under social pressure while a share dialog is going up. So the mode
+     announces itself as a full-width band across the rail, in `--color-warning`
+     — the token that already means "a deliberate temporary state" on the
+     notification-state row. NOT `--color-error`, which says something is
+     broken, and NOT `--color-primary`, which is the action colour and would
+     read as a button. No new token is introduced by this feature. */
+  /* The label WRAPS rather than truncates. At the ~260px rail width the
+     single-line form clipped to "Names hidden for s…", which is the one
+     failure this element cannot have — the strip exists to be read correctly
+     in a half-second, and a truncated mode label is worse than no label. Two
+     short lines cost a few pixels of rail height once per session. */
+  .channel-mask-strip {
+    @apply flex flex-shrink-0 items-center gap-2 border-b border-base-300 px-2 py-1.5;
+    @apply bg-warning text-xs font-semibold leading-tight text-warning-content;
+  }
+
+  /* Bare text button, no pill and no border — the strip is already the loud
+     element and a second bordered control inside it competes with it. */
+  .channel-mask-strip-action {
+    @apply flex-shrink-0 text-xs font-semibold underline underline-offset-2;
+  }
+
+  /* The eye toggle, sized and weighted like the kebab beside it so the header
+     row still reads as one pair of controls rather than a new emphasis. */
+  .channel-mask-toggle {
+    @apply inline-flex items-center justify-center rounded p-1 text-base-content/60;
+    @apply hover:bg-base-200 hover:text-base-content;
+  }
+
+  .channel-mask-toggle[aria-pressed="true"] {
+    @apply text-warning;
+  }
+
+  /* Per-item reveal control. Always in the DOM while its section is masked —
+     not hover-gated, so it survives touch. */
+  .channel-section-reveal-button {
+    @apply inline-flex flex-shrink-0 items-center justify-center rounded p-0.5;
+    @apply text-base-content/60 hover:bg-base-200 hover:text-base-content;
+  }
+
+  /* The drawer's reveal control (task 01a00c66 stage 3). Same control, same
+     event, same accessible name as the rail's — only the hit area grows, to
+     the 44px touch floor the rest of the drawer's controls already use.
+     `ml-auto` pushes it to the trailing edge of the header row, where the
+     drawer's other per-row controls sit. */
+  .channel-section-reveal-button--touch {
+    @apply ml-auto min-h-11 min-w-11 p-0;
+  }
+
+  /* One org deliberately shown while the mode is on. The border marks it as an
+     EXCEPTION to the mode rather than as a normal row, in the same warning
+     colour as the strip so the two read as one system. The label itself stays
+     untouched — see `.channel-section-label`. */
+  .channel-section--revealed {
+    border-left: 2px solid var(--color-warning);
+  }
+
   /* Collapse toggle in a client section header (019fd80f stage 2). It is the
      header's first child, not a wrapper around it — the Hide control and drag
      handle are siblings, so nesting would put a button inside a button. The

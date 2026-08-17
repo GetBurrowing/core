@@ -1,0 +1,280 @@
+defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
+  @moduledoc """
+  The ABSENCE half of screen-share name masking (task 01a00c66 stage 4).
+
+  ## Why a separate file from the stage-2 and stage-3 render tests
+
+  Asserting that `Workspace B` appears proves almost nothing. A `display:none`
+  real name renders `Workspace B` on screen while the real string sits in the
+  page source, in the accessibility tree, and one devtools panel away from a
+  shared screen. This file asserts the opposite direction: that the real name
+  is NOWHERE in the document, attributes included.
+
+  ## Every refute here is a matched pair
+
+  A refute that has never been seen to fail is indistinguishable from a typo in
+  the selector. So every absence test in this file has a twin — same fixture,
+  same string, same surface, `mask_names?` off instead of on — that asserts the
+  name IS present. If the mask is ever removed, the pair splits: the absence
+  test goes red and the presence test stays green, and the failure names the
+  surface that leaked.
+
+  This was verified by hand during stage 4 rather than assumed: `SidebarMask.label/4`
+  was temporarily neutered to return `section.name` unconditionally, and every
+  absence test in this file failed on the `refute_name_anywhere/2` message. The
+  neutering was then reverted and the file re-run green. A guard that has never
+  been observed to fire proves nothing.
+
+  ## Why the refutes run against the FULL rendered document
+
+  Not a scoped `element/2` selection. The point is that the string is nowhere —
+  a scoped assertion only proves the leak is not in the one node the author
+  thought to look at, and the leaks this feature actually shipped (stage 2's
+  `data-section-slug`) were in the nodes nobody scoped to.
+
+  ## Fixture names
+
+  The seeded root orgs (`priv/repo/migrations/20260519143620_seed_root_orgs.exs`)
+  are Fabrikam, Soylent, Wayne-Tech, SXI and Paragon. Those are the production-shaped
+  strings, so they are what the assertions bite on. `Cyberdyne` is not a seeded
+  org on this branch and is not invented here — a fixture the app never renders
+  would make every refute about it vacuously true.
+
+  `SXI` was checked before being trusted: three uppercase letters can collide
+  with unrelated markup, base64 or class fragments, and a refute failing for a
+  reason unrelated to masking is a false RED that trains people to loosen the
+  assertion. Rendered unmasked, `sxi` occurs exactly 7 times and every one is a
+  section-header surface (`data-section-key`, `data-section-slug`, the section
+  `aria-label`, the collapse toggle, the visible label, the reorder handle).
+  No collisions, so it stays.
+  """
+
+  use PlatformWeb.ConnCase, async: false
+  import Phoenix.LiveViewTest
+  import Platform.MaskAssertions
+
+  alias Platform.Accounts.User
+  alias Platform.Chat
+  alias Platform.Repo
+
+  # Three seeded orgs whose display form, hyphen slug and underscore slug are
+  # not all the same string — which is the property that makes a three-form
+  # assertion able to catch what `refute html =~ "Wayne-Tech"` sails past.
+  @orgs ["Wayne-Tech", "SXI", "Soylent"]
+
+  defp insert_user(suffix) do
+    Repo.insert!(%User{
+      email: "mask_absence_#{suffix}@example.com",
+      name: "Mask Absence #{suffix}",
+      oidc_sub: "oidc-mask-absence-#{suffix}",
+      avatar_url: nil
+    })
+  end
+
+  defp authenticated_conn(conn, suffix) do
+    init_test_session(conn, current_user_id: insert_user(suffix).id)
+  end
+
+  defp create_channel(slug, name \\ nil) do
+    org = Platform.Tenancy.get_org_by_slug(slug)
+
+    {:ok, ch} =
+      Chat.create_space(%{
+        name: name || String.capitalize(slug),
+        slug: slug,
+        kind: "channel",
+        org_id: org && org.id
+      })
+
+    ch
+  end
+
+  # `GET /chat` redirects to the first channel once one exists.
+  defp live_following_redirect(conn) do
+    case live(conn, ~p"/chat") do
+      {:error, {:live_redirect, %{to: path}}} -> live(conn, path)
+      ok -> ok
+    end
+  end
+
+  defp mounted_view(conn) do
+    create_channel("general")
+    {:ok, view, html} = live_following_redirect(conn)
+    {view, html}
+  end
+
+  # The rail's control. The drawer carries an identical one, so the rail
+  # selector is scoped to the sidebar to keep `element/2` unambiguous.
+  defp toggle_mask(view) do
+    view
+    |> element(~s(#chat-sidebar button[phx-click="toggle_mask_names"]))
+    |> render_click()
+  end
+
+  defp open_drawer(view) do
+    view
+    |> element(~s(button[phx-click="toggle_mobile_browser"]))
+    |> render_click()
+  end
+
+  defp extract(html, selector) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> LazyHTML.to_html()
+  end
+
+  defp first_section_id(html) do
+    [_, id] = Regex.run(~r/data-section-id="([^"]+)"/, html)
+    id
+  end
+
+  defp section_name(html, section_id) do
+    html
+    |> extract(~s(section[data-section-id="#{section_id}"]))
+    |> then(&Regex.run(~r/data-section-key="([^"]+)"/, &1))
+    |> then(fn [_, name] -> name end)
+  end
+
+  describe "absence — desktop rail" do
+    test "no spelling of any seeded org name survives anywhere in the document",
+         %{conn: conn} do
+      {view, _html} = conn |> authenticated_conn("desktop") |> mounted_view()
+
+      html = toggle_mask(view)
+
+      for name <- @orgs, do: refute_name_anywhere(html, name)
+    end
+
+    test "MATCHED PAIR: the same names ARE present in the same document unmasked",
+         %{conn: conn} do
+      {_view, html} = conn |> authenticated_conn("desktop-pair") |> mounted_view()
+
+      # No toggle: `mask_names?` is false on mount. Same fixture, same
+      # document, opposite expectation — this is what makes the refute above
+      # an assertion about masking rather than about an empty rail.
+      for name <- @orgs, do: assert_name_anywhere(html, name)
+    end
+  end
+
+  describe "absence — mobile drawer" do
+    test "no spelling survives with the drawer open, in the drawer or the document",
+         %{conn: conn} do
+      {view, _html} = conn |> authenticated_conn("mobile") |> mounted_view()
+
+      open_drawer(view)
+      html = toggle_mask(view)
+      drawer = extract(html, "#mobile-channel-browser")
+
+      assert drawer != "", "the drawer must be open, or the refutes below are vacuous"
+
+      for name <- @orgs do
+        refute_name_anywhere(drawer, name)
+        refute_name_anywhere(html, name)
+      end
+    end
+
+    test "MATCHED PAIR: the open drawer carries the real names unmasked", %{conn: conn} do
+      {view, _html} = conn |> authenticated_conn("mobile-pair") |> mounted_view()
+
+      drawer = view |> open_drawer() |> extract("#mobile-channel-browser")
+
+      for name <- @orgs, do: assert_name_anywhere(drawer, name)
+    end
+  end
+
+  describe "per-item reveal leaks exactly one name" do
+    test "revealing one org brings back that org and leaves the others absent",
+         %{conn: conn} do
+      {view, _html} = conn |> authenticated_conn("reveal") |> mounted_view()
+
+      masked = toggle_mask(view)
+      section_id = first_section_id(masked)
+
+      # The revealed section is identified by its position in the rail, and
+      # its REAL name is read from the unmasked render — never assumed.
+      {:ok, _peek, unmasked} =
+        Phoenix.ConnTest.build_conn()
+        |> authenticated_conn("reveal-peek")
+        |> live_following_redirect()
+
+      revealed_name = section_name(unmasked, section_id)
+
+      assert revealed_name in @orgs or revealed_name == "Fabrikam" or revealed_name == "Paragon",
+             "expected the first rail section to be a seeded org, got #{inspect(revealed_name)}"
+
+      html =
+        view
+        |> element(
+          ~s(#chat-sidebar button[phx-click="reveal_section"][phx-value-section_id="#{section_id}"])
+        )
+        |> render_click()
+
+      assert_name_anywhere(html, revealed_name)
+
+      # One reveal must not leak the rest.
+      for name <- @orgs, name != revealed_name do
+        refute_name_anywhere(html, name)
+      end
+    end
+  end
+
+  describe "masking is view state and never crosses sessions" do
+    test "a second user's live session still shows the real names", %{conn: conn} do
+      create_channel("general")
+
+      first = conn |> authenticated_conn("session-one") |> live_following_redirect()
+      {:ok, first_view, _} = first
+
+      second =
+        Phoenix.ConnTest.build_conn()
+        |> authenticated_conn("session-two")
+        |> live_following_redirect()
+
+      {:ok, second_view, second_html} = second
+
+      for name <- @orgs, do: assert_name_anywhere(second_html, name)
+
+      masked = toggle_mask(first_view)
+      for name <- @orgs, do: refute_name_anywhere(masked, name)
+
+      # The other session is untouched: no PubSub broadcast, no row written,
+      # so a re-render of the second view still carries the real names.
+      still = render(second_view)
+      for name <- @orgs, do: assert_name_anywhere(still, name)
+    end
+  end
+
+  describe "word discipline" do
+    test "no user-facing string in this feature contains \"client\"", %{conn: conn} do
+      {view, _html} = conn |> authenticated_conn("words") |> mounted_view()
+
+      open_drawer(view)
+      html = toggle_mask(view)
+
+      # Scoped to THIS feature's surfaces. A document-wide refute would trip
+      # on `id="meeting-client"` and LiveView's own upload `entry.client_name`,
+      # neither of which is this feature and neither of which this stage may
+      # rename.
+      surfaces =
+        [
+          ".channel-mask-strip",
+          ".channel-mask-toggle",
+          ~s([phx-click="reveal_section"]),
+          ~s([phx-click="remask_all"])
+        ]
+        |> Enum.map_join(" ", &extract(html, &1))
+
+      assert surfaces =~ "Hide workspace names for sharing",
+             "expected the eye control's accessible name in the scoped surfaces"
+
+      refute String.downcase(surfaces) =~ "client",
+             """
+             The word `client` is forbidden in this feature's user-facing
+             surface. `Client A` leaks the category and the count, and an
+             aria-label carrying it puts the word in the accessibility tree —
+             which is read aloud on the very share the mode exists for.
+             """
+    end
+  end
+end
