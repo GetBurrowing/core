@@ -163,9 +163,14 @@ defmodule Platform.Files.Extractor do
            Platform.Chat.AttachmentStorage.Adapter.LocalDisk
          ) do
       Platform.Chat.AttachmentStorage.Adapter.LocalDisk ->
+        # Unchanged app-env resolution, wrapped so a test process can own its
+        # own root instead of repointing a VM-global key that its concurrently
+        # running siblings also read. See `Platform.Chat.AttachmentStorage.Root`.
         root =
-          Application.get_env(:platform, :chat_attachments_root) ||
-            Path.join(System.tmp_dir!(), "platform-chat-attachments")
+          Platform.Chat.AttachmentStorage.Root.get(
+            Application.get_env(:platform, :chat_attachments_root) ||
+              Path.join(System.tmp_dir!(), "platform-chat-attachments")
+          )
 
         {:ok, Path.join(root, key)}
 

@@ -25,21 +25,15 @@ defmodule Platform.Files.StorageTest do
 
   describe "put/3 + get/1 round-trip" do
     setup do
-      root =
-        Platform.TestTemp.path("platform-files-storage-test")
+      # Claim the root for THIS test process instead of writing the VM-global
+      # `:chat_attachments_root`. This module is `async: true` alongside two
+      # others that need their own root; a global write let one module's
+      # cleanup repoint a sibling's root mid-test. See
+      # `Platform.Chat.AttachmentStorage.Root`.
+      root = Platform.TestTemp.mkdir!("platform-files-storage-test")
+      Platform.Chat.AttachmentStorage.Root.put_override(root)
 
-      File.mkdir_p!(root)
-
-      previous = Application.get_env(:platform, :chat_attachments_root)
-      Application.put_env(:platform, :chat_attachments_root, root)
-
-      on_exit(fn ->
-        File.rm_rf!(root)
-
-        if previous,
-          do: Application.put_env(:platform, :chat_attachments_root, previous),
-          else: Application.delete_env(:platform, :chat_attachments_root)
-      end)
+      on_exit(fn -> File.rm_rf(root) end)
 
       :ok
     end

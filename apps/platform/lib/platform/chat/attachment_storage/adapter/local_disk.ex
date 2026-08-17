@@ -3,6 +3,8 @@ defmodule Platform.Chat.AttachmentStorage.Adapter.LocalDisk do
 
   @behaviour Platform.Chat.AttachmentStorage.Adapter
 
+  alias Platform.Chat.AttachmentStorage.Root
+
   require Logger
 
   @read_chunk_bytes 64 * 1024
@@ -86,10 +88,16 @@ defmodule Platform.Chat.AttachmentStorage.Adapter.LocalDisk do
 
   @spec storage_root() :: binary()
   def storage_root do
-    Application.get_env(
-      :platform,
-      :chat_attachments_root,
-      Path.join(System.tmp_dir!(), "platform-chat-uploads")
+    # The app-env resolution below is unchanged; `Root.get/1` returns it
+    # verbatim unless the calling process (or an ancestor of it) claimed a
+    # root for itself, which only tests do. See
+    # `Platform.Chat.AttachmentStorage.Root` for why that indirection exists.
+    Root.get(
+      Application.get_env(
+        :platform,
+        :chat_attachments_root,
+        Path.join(System.tmp_dir!(), "platform-chat-uploads")
+      )
     )
   end
 

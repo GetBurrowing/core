@@ -17,27 +17,24 @@ defmodule Platform.Agents.AvatarStorageTest do
 
   alias Platform.Agents.AvatarStorage
   alias Platform.Chat.AttachmentStorage
+  alias Platform.Chat.AttachmentStorage.Root, as: AttachmentRoot
 
-  # Point the attachment store at a writable per-test scratch dir. The
-  # default in `test.exs` is `/data/platform/chat_uploads`, which exists in
-  # the dev container but not in CI / local sandboxes.
+  # Point the attachment store at a writable per-test scratch dir. The value
+  # in scope during a test run comes from `config/runtime.exs`, which is
+  # unguarded by env and loads last: `/data/platform/chat_uploads`, a
+  # deployment path that does not exist locally and whose parent is read-only.
+  #
+  # This claims the root for THIS test process rather than writing the
+  # VM-global `:chat_attachments_root`. This module is `async: true` alongside
+  # two other modules that need their own root, and a global write meant one
+  # test's cleanup repointed a sibling's root mid-test — at the unwritable
+  # deployment path above. The override dies with this process, so there is
+  # nothing to restore and nothing for a sibling to reach.
   setup do
-    prev = Application.get_env(:platform, :chat_attachments_root)
+    scratch = Platform.TestTemp.mkdir!("avatar_storage_test")
+    AttachmentRoot.put_override(scratch)
 
-    scratch =
-      Platform.TestTemp.mkdir!("avatar_storage_test")
-
-    Application.put_env(:platform, :chat_attachments_root, scratch)
-
-    on_exit(fn ->
-      if prev do
-        Application.put_env(:platform, :chat_attachments_root, prev)
-      else
-        Application.delete_env(:platform, :chat_attachments_root)
-      end
-
-      File.rm_rf!(scratch)
-    end)
+    on_exit(fn -> File.rm_rf(scratch) end)
 
     {:ok, agent_id: Ecto.UUID.generate()}
   end

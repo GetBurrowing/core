@@ -308,20 +308,15 @@ defmodule Platform.FilesTest do
 
   describe "default ingest intent at create time (task 019fd033 stage 2)" do
     setup do
-      root =
-        Platform.TestTemp.path("platform-files-default-intent")
+      # Claim the root for THIS test process instead of writing the VM-global
+      # `:chat_attachments_root`. This module is `async: true` alongside two
+      # others that need their own root; a global write let one module's
+      # cleanup repoint a sibling's root mid-test. See
+      # `Platform.Chat.AttachmentStorage.Root`.
+      root = Platform.TestTemp.mkdir!("platform-files-default-intent")
+      Platform.Chat.AttachmentStorage.Root.put_override(root)
 
-      File.mkdir_p!(root)
-      previous_root = Application.get_env(:platform, :chat_attachments_root)
-      Application.put_env(:platform, :chat_attachments_root, root)
-
-      on_exit(fn ->
-        File.rm_rf!(root)
-
-        if previous_root,
-          do: Application.put_env(:platform, :chat_attachments_root, previous_root),
-          else: Application.delete_env(:platform, :chat_attachments_root)
-      end)
+      on_exit(fn -> File.rm_rf(root) end)
 
       {:ok, project} = Tasks.create_project(%{name: "Default Intent #{System.unique_integer()}"})
       {:ok, project: project, root: root}
