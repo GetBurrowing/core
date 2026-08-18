@@ -1547,6 +1547,56 @@ defmodule PlatformWeb.FilesLiveTest do
       assert html =~ "1 of them has failed #{threshold} times"
     end
 
+    # The note about the withheld files is copy, and the copy is the
+    # behaviour here: a reader who is told a file was held back and is
+    # NOT told what they can still do concludes the door is shut. The
+    # manual retry is unbounded by design (see the retry-past-threshold
+    # tests below), so a note implying otherwise contradicts the control
+    # that ships beside it.
+    test "the withheld note names the AUTOMATIC path and points at the per-file retry",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Summary Withheld Copy Project")
+
+      threshold = Files.repeat_failure_threshold()
+      seed_failed_file(project, %{name: "fresh.txt"}, 1)
+      seed_failed_file(project, %{name: "corrupt.pdf"}, threshold)
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      note = summary_html(html)
+
+      # Both populations really are present, or the clause under test
+      # does not render at all and every assertion below is vacuous.
+      assert summary_attr(html, "data-failed-count") == "2"
+      assert summary_attr(html, "data-retryable-count") == "1"
+
+      # 1. The reason is the AUTOMATIC sweep declining, said in that word.
+      assert note =~ "automatically",
+             "withheld note must name the automatic path explicitly: #{note}"
+
+      # 2. It points at an action the reader can take. The retry lives in
+      #    the detail pane, reached by opening the file — there is no
+      #    per-row button to send them looking for.
+      assert note =~ "open",
+             "withheld note must point at the per-file retry: #{note}"
+
+      assert note =~ "try again",
+             "withheld note must name the retry action: #{note}"
+
+      # 3. Re-exporting is a suggestion, NOT a replacement for retrying.
+      #    "instead" frames it as the alternative to a retry and so reads
+      #    as "you cannot retry this one" — the inversion this task
+      #    exists to remove, and the defect the reviewer caught here.
+      refute note =~ "instead",
+             "withheld note must not frame re-exporting as replacing retry: #{note}"
+
+      # 4. The count tracks the shared threshold. A literal 3 here would
+      #    stay green while a threshold change silently made the copy
+      #    lie about how many attempts were spent.
+      assert note =~ "failed #{Files.repeat_failure_threshold()} times"
+    end
+
     # Deterministic by construction rather than by waiting: the retry
     # flips both rows out of "failed" INSIDE the click handler, so the
     # count is zero the moment the handler returns, whatever the spawned
@@ -1656,12 +1706,23 @@ defmodule PlatformWeb.FilesLiveTest do
       refute html =~ ~s(data-role="files-detail-retry")
     end
 
-    test "does not appear for a file at the repeat-failure threshold", %{conn: conn} do
+    # Task 01a0166d: the manual retry is UNBOUNDED. Asserting the button
+    # renders would prove nothing about the click, so this drives the
+    # control from far past the sweep's threshold and asserts the retry
+    # ACTUALLY HAPPENED — twice, so an off-by-one bound hiding at 4
+    # cannot pass.
+    test "is honoured far past the sweep threshold, twice over", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Detail Exhausted Project")
+      project = seed_project("fabrikam", "Detail Unbounded Project")
 
-      file =
-        seed_failed_file(project, %{name: "exhausted.pdf"}, Files.repeat_failure_threshold())
+      # No bytes on disk, so every attempt fails deterministically and we
+      # can sync on the failure rather than sleeping.
+      file = seed_failed_file(project, %{name: "unbounded.pdf"}, 1)
+      file = force_failure_count(file, 5)
+      assert Files.get_file(file.id).ingest_failure_count == 5
+      assert Files.get_file(file.id).ingest_failure_count > Files.repeat_failure_threshold()
+
+      attach_ingest_telemetry([[:platform, :files, :ingested, :exception]])
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
@@ -1670,12 +1731,326 @@ defmodule PlatformWeb.FilesLiveTest do
         |> element(~s([data-role="files-row"][data-file-id="#{file.id}"]))
         |> render_click()
 
-      assert html =~ ~s(data-role="files-detail-agent-toggle")
+      assert html =~ ~s(data-role="files-detail-retry")
+
+      # FIRST click, from count 5.
+      after_first =
+        view
+        |> element(~s([data-role="files-detail-retry"]))
+        |> render_click()
+
+      assert_in_row(after_first, file.id, "Ingesting…")
+
+      assert_receive {:ingest_telemetry, [:platform, :files, :ingested, :exception], _,
+                      %{file_id: first_id}},
+                     2_000
+
+      assert first_id == file.id
+      assert Files.get_file(file.id).ingest_status == "failed"
+      assert Files.get_file(file.id).ingest_failure_count == 6
+
+      # SECOND click, from the state the first one produced.
+      after_second =
+        view
+        |> element(~s([data-role="files-detail-retry"]))
+        |> render_click()
+
+      assert_in_row(after_second, file.id, "Ingesting…")
+
+      assert_receive {:ingest_telemetry, [:platform, :files, :ingested, :exception], _,
+                      %{file_id: second_id}},
+                     2_000
+
+      assert second_id == file.id
+      assert Files.get_file(file.id).ingest_failure_count == 7
+    end
+
+    # The server-side re-check is the real gate: a replayed click arrives
+    # with no button on the page at all.
+    test "a replayed retry_file event at count 5 is honoured", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Replayed Retry Project")
+
+      file = seed_failed_file(project, %{name: "replayed.pdf"}, 1)
+      file = force_failure_count(file, 5)
+
+      attach_ingest_telemetry([[:platform, :files, :ingested, :exception]])
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      # No selection, so no retry control has ever been rendered.
+      refute render(view) =~ ~s(data-role="files-detail-retry")
+
+      html = render_click(view, "retry_file", %{"id" => file.id})
+
+      assert_in_row(html, file.id, "Ingesting…")
+
+      # Sync on the spawned pipeline so it does not outlive the test's DB
+      # ownership, and pin that the attempt really reached the extractor.
+      assert_receive {:ingest_telemetry, [:platform, :files, :ingested, :exception], _,
+                      %{file_id: id}},
+                     2_000
+
+      assert id == file.id
+      assert Files.get_file(file.id).ingest_failure_count == 6
+    end
+
+    # ...but the status gate the re-check still enforces has NOT gone
+    # away: a human_only row was withheld by a person, not by a bound.
+    test "a replayed retry_file event on a human_only row is still refused", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Replayed Human Only Project")
+
+      file =
+        seed_file(project, %{
+          name: "people-only.txt",
+          ingest_intent: "human_only",
+          ingest_status: "not_attempted"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      html = render_click(view, "retry_file", %{"id" => file.id})
+
+      assert_in_row(html, file.id, "People only")
+      assert Files.get_file(file.id).ingest_status == "not_attempted"
+    end
+  end
+
+  describe "failure reason strip on the list row (task 01a0166d stage 4)" do
+    # Two forms of the same marker, and the distinction matters: the
+    # `_selector` is a CSS selector for `element/2`, the `_marker` is the
+    # literal attribute text for a substring assertion over the rendered
+    # HTML. They are not interchangeable.
+    @strip_selector ~s([data-role="files-row-failure-reason"])
+    @strip_marker ~s(data-role="files-row-failure-reason")
+    @skip_marker ~s(data-role="files-row-sweep-skipped")
+
+    # Invented detail strings throughout: `core` is a public repository,
+    # so no real hostname, URL, container or node id may appear in a
+    # fixture or a screenshot.
+    test "renders the stage prefix AND the verbatim detail in the list, without selecting the file",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Strip Embed Project")
+
+      seed_failed_file_with_reason(
+        project,
+        %{name: "brief.md"},
+        :embed,
+        "connect timed out after 5000ms",
+        1
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ @strip_marker
+
+      # The human half. Without it the column is worthless: eight rows
+      # reading "connect timed out" and one reading "unsupported
+      # encoding" is the whole value of the strip, and it is invisible
+      # unless the stage is named.
+      assert html =~ "Embedding:"
+
+      # The machine half, verbatim — this is the string a reader pastes
+      # to an engineer, so it must not be reworded or summarised.
+      assert html =~ "connect timed out after 5000ms"
+
+      # ...and all of that on MOUNT, with no click. The detail pane's
+      # marker is absent, which is what proves no file got selected.
       refute html =~ ~s(data-role="files-detail-retry")
+    end
+
+    test "a healthy or in-flight row renders no strip at all", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Strip Absent Project")
+
+      seed_file(project, %{name: "ready.txt", ingest_status: "ingested"})
+      seed_file(project, %{name: "working.txt", ingest_status: "pending"})
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ "ready.txt"
+      assert html =~ "working.txt"
+
+      # Asserted on the `data-role`, NOT on the absence of the reason
+      # prose. A substring refute over HTML is position-dependent and a
+      # longer value defeats it; the marker is the only thing that
+      # actually says "no strip was rendered".
+      refute html =~ @strip_marker
+    end
+
+    test "a legacy row with no recorded reason still says something", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Strip Legacy Project")
+
+      # No opts — exactly the shape of the rows that failed before the
+      # reason columns existed.
+      seed_failed_file(project, %{name: "legacy.txt"}, 1)
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ @strip_marker
+      assert html =~ "Reason not recorded"
+
+      # A blank strip on a failed row would re-create the exact defect
+      # this task exists to remove, so the generic prefix renders too.
+      assert html =~ "Ingest:"
+    end
+
+    test "below the threshold the row carries NO sweep-skipped clause", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Strip Under Threshold")
+
+      under = Files.repeat_failure_threshold() - 1
+
+      file =
+        seed_failed_file_with_reason(
+          project,
+          %{name: "twice.txt"},
+          :embed,
+          "connect timed out after 5000ms",
+          under
+        )
+
+      assert file.ingest_failure_count == under
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ @strip_marker
+      refute html =~ @skip_marker
+    end
+
+    test "at the threshold the row says it was not retried AUTOMATICALLY", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Strip At Threshold")
+
+      threshold = Files.repeat_failure_threshold()
+
+      file =
+        seed_failed_file_with_reason(
+          project,
+          %{name: "thrice.txt"},
+          :embed,
+          "connect timed out after 5000ms",
+          threshold
+        )
+
+      assert file.ingest_failure_count == threshold
+
+      {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ @skip_marker
+
+      strip = view |> element(@strip_selector) |> render()
+
+      # Appended to the reason, never replacing it: the reader needs both
+      # halves — what broke, and why nothing has happened since.
+      assert strip =~ "Embedding:"
+      assert strip =~ "connect timed out after 5000ms"
+
+      # The copy is the load-bearing part. The manual retry beside this
+      # text is unbounded, so a bare "not retried" would read as "you
+      # cannot retry" — the precise inversion of this task's instruction.
+      # The word that carries the distinction is "automatically".
+      assert strip =~ "automatically"
+
+      # Tracks the shared threshold rather than pinning a literal 3, so
+      # changing the bound cannot leave the copy quietly lying.
+      assert strip =~ "after #{Files.repeat_failure_threshold()} attempts"
+    end
+
+    test "a legacy row can also carry the sweep-skipped clause; they compose", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Strip Legacy Skipped")
+
+      seed_failed_file(project, %{name: "old-and-stuck.txt"}, Files.repeat_failure_threshold())
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      strip = view |> element(@strip_selector) |> render()
+
+      assert strip =~ "Reason not recorded"
+      assert strip =~ "automatically"
+    end
+
+    test "the strip emits no title attribute — it is text, never a tooltip", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Strip No Tooltip")
+
+      seed_failed_file_with_reason(
+        project,
+        %{name: "no-hover.txt"},
+        :extract,
+        "unsupported encoding in page 4",
+        Files.repeat_failure_threshold()
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      strip = view |> element(@strip_selector) |> render()
+
+      assert strip =~ "Extraction:"
+
+      # A hover affordance is invisible on touch and unreachable by
+      # keyboard, and this string is the entire point of the ticket. It
+      # renders as text or it does not exist.
+      refute strip =~ "title="
+    end
+
+    test "the strip disappears on a later success without a page reload", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Strip Clears Project")
+
+      file =
+        seed_failed_file_with_reason(
+          project,
+          %{name: "recovers.txt"},
+          :embed,
+          "connect timed out after 5000ms",
+          1
+        )
+
+      {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ @strip_marker
+      assert html =~ "connect timed out after 5000ms"
+
+      # The context clears BOTH reason columns on an "ingested" write, so
+      # this is the real end-to-end path, not a hand-cleared row.
+      {:ok, ingested} = Files.update_ingest_status(file, "ingested")
+      assert is_nil(ingested.ingest_failure_stage)
+      assert is_nil(ingested.ingest_failure_detail)
+
+      :ok = Files.broadcast_project(project.id, {:file_ingested, file.id})
+
+      # Same LiveView process, no re-mount, no `live/2` call: this only
+      # passes if the PubSub handler re-fetches the WHOLE row rather than
+      # patching the status field, which is what would leave a stale
+      # reason strip on a now-healthy file.
+      html_after = render(view)
+
+      assert html_after =~ "Ready"
+      refute html_after =~ @strip_marker
     end
   end
 
   # ── Local helpers ──────────────────────────────────────────────────────
+
+  # As `seed_failed_file/3`, but recording a reason on every attempt —
+  # the shape the ingester's `mark_failed/2` writes. `failures` drives
+  # the count through the real seam, so the sweep-skipped condition is
+  # reached the way production reaches it.
+  defp seed_failed_file_with_reason(project, attrs, stage, detail, failures) do
+    file = seed_file(project, attrs)
+
+    Enum.reduce(1..failures, file, fn _n, acc ->
+      {:ok, updated} =
+        Files.update_ingest_status(acc, "failed", failure_stage: stage, failure_detail: detail)
+
+      updated
+    end)
+  end
 
   # Drive the failure count through the real seam
   # (`update_ingest_status/2` increments it) rather than writing the
@@ -1688,6 +2063,16 @@ defmodule PlatformWeb.FilesLiveTest do
       {:ok, updated} = Files.update_ingest_status(acc, "failed")
       updated
     end)
+  end
+
+  # `:ingest_failure_count` is outside `@cast_fields` on purpose, so a
+  # count this far past the threshold can only be written directly.
+  defp force_failure_count(file, count) do
+    file
+    |> Ecto.Changeset.change(%{ingest_failure_count: count})
+    |> Platform.Repo.update!()
+
+    Files.get_file(file.id)
   end
 
   # A failed file whose bytes are genuinely on disk, so a retry can

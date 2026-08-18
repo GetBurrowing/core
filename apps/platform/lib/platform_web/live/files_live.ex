@@ -87,9 +87,10 @@ defmodule PlatformWeb.FilesLive do
 
   Repeated failure does NOT escalate. At
   `Platform.Files.repeat_failure_threshold/0` consecutive failures a file
-  is withheld from retry and the sentence re-diagnoses it as likely
-  needing a re-export; nothing pages, alerts, or changes colour. A fourth
-  attempt on unchanged bytes has no new information to act on.
+  is withheld from the BULK sweep and the sentence re-diagnoses it as
+  likely needing a re-export; nothing pages, alerts, or changes colour.
+  The per-file Retry stays available at any count — that bound rate-limits
+  one fan-out button, it does not lock anybody out of their own file.
 
   ## Out of scope
 
@@ -451,10 +452,12 @@ defmodule PlatformWeb.FilesLive do
   # enqueues); the default `mode: :async` is correct here because a
   # LiveView's BEAM outlives the spawned task.
   #
-  # The eligibility check is repeated server-side because the button is
-  # only *rendered* conditionally — a stale or replayed click must not be
-  # able to spend a fourth attempt on bytes that already broke three
-  # times.
+  # The eligibility check is repeated server-side because a click is an
+  # arbitrary client message, not proof a control was rendered. It no
+  # longer guards a failure count — the manual retry is unbounded — but
+  # it still guards STATUS: a replayed or forged click must not be able
+  # to re-enqueue a `"not_attempted"` (human_only) row and overturn a
+  # human's decision, nor kick a row that is already pending.
   def handle_event("retry_file", %{"id" => file_id}, socket) do
     case find_known_file(socket, file_id) do
       nil ->
@@ -1287,21 +1290,118 @@ defmodule PlatformWeb.FilesLive do
   Whether the detail panel offers a retry for this file (task 01a0008b
   stage 4).
 
-  Two conditions, both required: the file's extraction actually broke,
-  and it has not yet broken `Platform.Files.repeat_failure_threshold/0`
-  times. The threshold is READ, never re-spelled — a second literal `3`
-  in this module would be free to drift away from the one the bulk retry
-  enforces, and then the button and the sweep would disagree about which
-  files are still worth trying.
+  ONE condition: the file's extraction actually broke. There is NO
+  failure-count bound here, deliberately (task 01a0166d). A person
+  clicking Retry on a row has looked at that row, spends one request,
+  and is the only party who can know something changed outside the
+  system — the backend recovered, the file was re-exported. Refusing
+  them makes the product argue with someone about their own file.
 
-  A `"not_attempted"` file is not offered a retry here: it was withheld
-  on purpose, and the audience toggle beside this button is the control
-  that means "actually, do read this one".
+  `Platform.Files.repeat_failure_threshold/0` still bounds the bulk
+  sweep, and that bound is only defensible because THIS function never
+  withholds. Re-introducing a count comparison here turns the sweep's
+  rate limit into a lockout with no escape hatch; the comment on
+  `@repeat_failure_threshold` in `Platform.Files` says the same thing
+  from the other side. Read the threshold for copy, never to gate.
+
+  A `"not_attempted"` file is still not offered a retry: it was withheld
+  on purpose by a human, and the audience toggle beside this button is
+  the control that means "actually, do read this one". That withhold is
+  a decision, not a bound.
   """
-  def can_retry_file?(%Files.File{ingest_status: "failed"} = file),
-    do: failure_count(file) < Files.repeat_failure_threshold()
+  def can_retry_file?(%Files.File{ingest_status: "failed"}), do: true
 
   def can_retry_file?(_file), do: false
+
+  # What a failed row says when the reason column is NULL — the nine rows
+  # that failed before the column existed, and any future writer that
+  # records a stage without a detail. Rendered in the same mono as a real
+  # reason because it is a statement about the record, not a reason.
+  #
+  # A blank strip is not an option: a failed row that says nothing is the
+  # exact defect task 01a0166d exists to remove, so leaving the element
+  # empty would re-create it one layer down.
+  @missing_reason "Reason not recorded"
+
+  @doc """
+  The human half of the failure strip: which of the three ingest stages
+  broke, in words (task 01a0166d stage 4).
+
+  The prefix is the whole point of the column pair. When eight of nine
+  rows read `Embedding: connect timed out`, the ninth reading
+  `Extraction: unsupported encoding` is the entire value of the strip,
+  and it is invisible without this half. The machine tail is never
+  rendered alone.
+
+  TOTAL over any string, deliberately. `:ingest_failure_stage` is a plain
+  text column read back from the database, and a `case` without a
+  catch-all over one is a crash waiting for a value the writer did not
+  anticipate — a future stage, a hand-edited row, a migration. An
+  unrecognised stage degrades to the generic noun rather than taking the
+  Files page down.
+  """
+  def failure_stage_label("extract"), do: "Extraction"
+  def failure_stage_label("embed"), do: "Embedding"
+  def failure_stage_label("storage"), do: "Storage"
+  def failure_stage_label(_other), do: "Ingest"
+
+  @doc """
+  The machine half of the failure strip, verbatim.
+
+  Rendered in mono, which is doing real work: it tells the reader the
+  string came from the machine and was not written for them, which is
+  exactly the expectation you want before they paste it to an engineer.
+
+  A NULL or blank detail becomes `#{@missing_reason}` rather than an
+  empty element — see the note on `@missing_reason`.
+  """
+  def failure_detail_text(detail) when is_binary(detail) do
+    case String.trim(detail) do
+      "" -> @missing_reason
+      trimmed -> trimmed
+    end
+  end
+
+  def failure_detail_text(_detail), do: @missing_reason
+
+  @doc """
+  Whether the AUTOMATIC bulk sweep will decline to re-enqueue this row
+  (task 01a0166d stage 4).
+
+  Derived, not stored: `"failed"` plus a count that has reached
+  `Platform.Files.repeat_failure_threshold/0`. No new column, and no
+  second literal for the threshold.
+
+  This is a READ of the sweep's bound so the row can explain itself, NOT
+  a gate. Nothing in the manual retry path consults it — `can_retry_file?/1`
+  above stays status-only. A row this returns `true` for still offers the
+  detail pane's Retry, which is the only reason the sweep is allowed to
+  keep a bound at all.
+
+  Without this state a row the sweep skipped is pixel-identical to one
+  the sweep tried and failed on: it shows its old reason, and stale
+  silence reads as "tried and failed" when nothing was tried. That is
+  this task's own defect, reappearing one layer up.
+  """
+  def sweep_skipped?(%Files.File{ingest_status: "failed"} = file),
+    do: failure_count(file) >= Files.repeat_failure_threshold()
+
+  def sweep_skipped?(_file), do: false
+
+  @doc """
+  The clause appended to the reason when the sweep skipped the row.
+
+  The copy is the sharp part and it is not a preference: the sentence
+  must name the AUTOMATIC path. The manual retry is unbounded, so a bare
+  "not retried" reads as "you cannot retry" — the precise inversion of
+  the instruction this task exists to carry out. The strip must never
+  contradict the control it sits beside.
+
+  The number comes from `Platform.Files.repeat_failure_threshold/0`; a
+  second literal here is the drift that function exists to prevent.
+  """
+  def sweep_skipped_clause,
+    do: "not retried automatically after #{Files.repeat_failure_threshold()} attempts"
 
   @doc """
   The words following the count in the summary line.
@@ -1349,10 +1449,29 @@ defmodule PlatformWeb.FilesLive do
   # Only when BOTH populations exist. If every file is withheld the main
   # sentence already says so, and if none are there is nothing to
   # withhold — in both cases this clause would just repeat or mislead.
+  #
+  # The copy carries the same rule as `sweep_skipped_clause/0` one level
+  # up, and for the same reason: name the AUTOMATIC path, then point at
+  # the action that IS open. "needs re-exporting instead" framed the
+  # export as the alternative TO retrying, which reads as "you cannot
+  # retry these" — the exact inversion this task exists to remove, and
+  # false besides, since the detail pane's unbounded Retry is right
+  # there. Re-exporting is a suggestion; the retry is available; the
+  # sentence must not close the second to offer the first.
+  #
+  # It points at the file, not at the row: the per-row button was
+  # removed deliberately (see the row strip comment in the template), so
+  # copy telling the reader to look for one on the row would send them
+  # hunting for a control that does not exist. Opening the file is what
+  # actually reaches `files-detail-retry`.
+  #
+  # The number comes from the summary's `threshold`, which is
+  # `Files.repeat_failure_threshold/0` — never a second literal.
   defp withheld_clause(%{retryable: retryable, withheld: withheld, threshold: threshold})
        when retryable > 0 and withheld > 0 do
-    "#{withheld} of them #{has_have(withheld)} failed #{threshold} times and " <>
-      "#{needs_need(withheld)} re-exporting instead."
+    "#{withheld} of them #{has_have(withheld)} failed #{threshold} times, so the sweep " <>
+      "no longer retries #{it_them(withheld)} automatically — open #{that_file(withheld)} " <>
+      "to try again, or re-export."
   end
 
   defp withheld_clause(_summary), do: nil
@@ -1365,6 +1484,12 @@ defmodule PlatformWeb.FilesLive do
 
   defp needs_need(1), do: "needs"
   defp needs_need(_count), do: "need"
+
+  defp it_them(1), do: "it"
+  defp it_them(_count), do: "them"
+
+  defp that_file(1), do: "that file"
+  defp that_file(_count), do: "each of those files"
 
   @doc false
   def agent_toggle_label("attempt"), do: "Included for agents"

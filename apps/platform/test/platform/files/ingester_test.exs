@@ -67,6 +67,21 @@ defmodule Platform.Files.IngesterTest do
     def health(_c), do: :ok
   end
 
+  defmodule FailingProvider do
+    @moduledoc false
+    @behaviour Platform.Memory.Provider
+
+    @impl true
+    def ingest(_entries, _config), do: {:error, "connect timed out after 5000ms"}
+
+    @impl true
+    def search(_q, _o, _c), do: {:ok, []}
+    @impl true
+    def delete(_ids, _c), do: {:ok, 0}
+    @impl true
+    def health(_c), do: :ok
+  end
+
   # ── Setup ──────────────────────────────────────────────────────────────
 
   setup do
@@ -376,6 +391,96 @@ defmodule Platform.Files.IngesterTest do
       # log var is intentionally silent — capture_log just keeps the
       # crash log out of the test output.
       _ = log
+    end
+  end
+
+  describe "failure classification recorded on the row" do
+    # The three categories must be MUTUALLY DISTINGUISHABLE. A test that
+    # only asserts one of them passes just as happily against a classifier
+    # that returns the same constant for every input, which is precisely
+    # the collapse this block exists to catch — so each case refutes the
+    # other two stages as well as asserting its own.
+    test "an embed failure records stage=embed", %{project: project, root: root} do
+      Application.put_env(:platform, :memory_service, provider: FailingProvider)
+      file = create_text_file(project, root, "embeddable body")
+
+      capture_log(fn -> assert {:error, _} = Ingester.run(file) end)
+
+      row = Repo.get(Platform.Files.File, file.id)
+      assert row.ingest_status == "failed"
+      assert row.ingest_failure_stage == "embed"
+      refute row.ingest_failure_stage == "extract"
+      refute row.ingest_failure_stage == "storage"
+      assert row.ingest_failure_detail =~ "connect timed out after 5000ms"
+    end
+
+    test "an unreadable document records stage=extract", %{project: project, root: root} do
+      file =
+        create_text_file(project, root, "bogus body",
+          content_type: "application/x-not-real",
+          filename: "weird.bin"
+        )
+
+      capture_log(fn -> assert {:error, _} = Ingester.run(file) end)
+
+      row = Repo.get(Platform.Files.File, file.id)
+      assert row.ingest_failure_stage == "extract"
+      refute row.ingest_failure_stage == "embed"
+      refute row.ingest_failure_stage == "storage"
+    end
+
+    test "missing bytes record stage=storage, not extract", %{project: project, root: root} do
+      file = create_text_file(project, root, "body that will vanish")
+
+      # We never GET the bytes: the row is fine, the store is not. This is
+      # the re-homed case — it arrives through the extractor's error
+      # channel and would otherwise be indistinguishable from a document
+      # we could not read.
+      File.rm!(Path.join(root, file.storage_key))
+
+      capture_log(fn -> assert {:error, _} = Ingester.run(file) end)
+
+      row = Repo.get(Platform.Files.File, file.id)
+      assert row.ingest_failure_stage == "storage"
+      refute row.ingest_failure_stage == "extract"
+      refute row.ingest_failure_stage == "embed"
+    end
+
+    test "a later success clears both reason columns and the count",
+         %{project: project, root: root} do
+      Application.put_env(:platform, :memory_service, provider: FailingProvider)
+      file = create_text_file(project, root, "retryable body")
+
+      capture_log(fn -> assert {:error, _} = Ingester.run(file) end)
+
+      failed = Repo.get(Platform.Files.File, file.id)
+      assert failed.ingest_failure_stage == "embed"
+      assert failed.ingest_failure_count == 1
+
+      Application.put_env(:platform, :memory_service, provider: BroadcastProvider)
+      assert :ok = Ingester.run(Files.get_file(file.id))
+
+      cleared = Repo.get(Platform.Files.File, file.id)
+      assert cleared.ingest_status == "ingested"
+      assert is_nil(cleared.ingest_failure_stage)
+      assert is_nil(cleared.ingest_failure_detail)
+      assert cleared.ingest_failure_count == 0
+    end
+
+    test "a pending re-queue between the two does NOT clear the reason",
+         %{project: project, root: root} do
+      Application.put_env(:platform, :memory_service, provider: FailingProvider)
+      file = create_text_file(project, root, "requeued body")
+
+      capture_log(fn -> assert {:error, _} = Ingester.run(file) end)
+
+      failed = Repo.get(Platform.Files.File, file.id)
+      {:ok, _} = Files.update_ingest_status(failed, "pending")
+
+      requeued = Repo.get(Platform.Files.File, file.id)
+      assert requeued.ingest_status == "pending"
+      assert requeued.ingest_failure_stage == failed.ingest_failure_stage
+      assert requeued.ingest_failure_detail == failed.ingest_failure_detail
     end
   end
 

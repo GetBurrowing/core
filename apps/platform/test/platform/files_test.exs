@@ -758,6 +758,168 @@ defmodule Platform.FilesTest do
     end
   end
 
+  # ── Failure REASON (task 01a0166d stage 1) ───────────────────────────────
+  #
+  # `ingest_status` says a file broke and `ingest_failure_count` says how
+  # often; these two columns say WHAT broke, so a reader has a next action.
+  #
+  # Every assertion below RE-READS the row with `Platform.Repo.get/2` rather
+  # than trusting the writer's return value or `Files.get_file/1`: a
+  # reference value read back through the code under test is circular, and
+  # the thing being proved here is what is in the DATABASE.
+  describe "update_ingest_status/3 and the failure reason" do
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{name: "Failure Reason #{System.unique_integer([:positive])}"})
+
+      {:ok, file} =
+        Files.create_file(%{
+          project_id: project.id,
+          content_type: "text/plain",
+          byte_size: 3,
+          storage_key: "files/#{project.id}/fr/#{System.unique_integer([:positive])}.txt",
+          content_hash: String.duplicate("e", 64)
+        })
+
+      %{project: project, target: file}
+    end
+
+    test "a failed write records the stage and the detail, and a later success clears BOTH",
+         %{target: file} do
+      # Both halves live in ONE test on purpose. Asserting only the failed
+      # side passes while clear-on-success is broken, and vice versa — and a
+      # stale reason surviving a success makes the next reader diagnose a
+      # fixed file from a dead string, which is the defect this whole ticket
+      # exists to remove.
+      assert {:ok, _} =
+               Files.update_ingest_status(file, "failed",
+                 failure_stage: :embed,
+                 failure_detail: "connect timed out after 5000ms"
+               )
+
+      failed = Platform.Repo.get(PlatformFile, file.id)
+      assert failed.ingest_status == "failed"
+      assert failed.ingest_failure_stage == "embed"
+      assert failed.ingest_failure_detail == "connect timed out after 5000ms"
+
+      assert {:ok, _} = Files.update_ingest_status(failed, "ingested")
+
+      cleared = Platform.Repo.get(PlatformFile, file.id)
+      assert cleared.ingest_status == "ingested"
+      assert cleared.ingest_failure_stage == nil
+      assert cleared.ingest_failure_detail == nil
+      refute cleared.ingest_failure_detail == "connect timed out after 5000ms"
+    end
+
+    test "the three stages are stored distinguishably", %{target: file} do
+      for stage <- [:extract, :embed, :storage] do
+        assert {:ok, _} =
+                 Files.update_ingest_status(file, "failed",
+                   failure_stage: stage,
+                   failure_detail: "broke"
+                 )
+
+        assert Platform.Repo.get(PlatformFile, file.id).ingest_failure_stage ==
+                 Atom.to_string(stage)
+      end
+    end
+
+    test "an unknown stage raises rather than being silently stored", %{target: file} do
+      assert_raise ArgumentError, fn ->
+        Files.update_ingest_status(file, "failed", failure_stage: :teleport)
+      end
+
+      assert Platform.Repo.get(PlatformFile, file.id).ingest_failure_stage == nil
+    end
+
+    test "a pending write leaves both columns EXACTLY as they were", %{target: file} do
+      # The reason has to stay readable while a retry is in flight, so this
+      # asserts the exact prior values rather than merely non-nil.
+      {:ok, _} =
+        Files.update_ingest_status(file, "failed",
+          failure_stage: :storage,
+          failure_detail: "object not found"
+        )
+
+      failed = Platform.Repo.get(PlatformFile, file.id)
+      {:ok, _} = Files.update_ingest_status(failed, "pending")
+
+      requeued = Platform.Repo.get(PlatformFile, file.id)
+      assert requeued.ingest_status == "pending"
+      assert requeued.ingest_failure_stage == "storage"
+      assert requeued.ingest_failure_detail == "object not found"
+    end
+
+    test "a not_attempted write leaves both columns EXACTLY as they were", %{target: file} do
+      {:ok, _} =
+        Files.update_ingest_status(file, "failed",
+          failure_stage: :extract,
+          failure_detail: "unsupported encoding"
+        )
+
+      failed = Platform.Repo.get(PlatformFile, file.id)
+      {:ok, _} = Files.set_ingest_intent(failed, "human_only")
+      withheld = Platform.Repo.get(PlatformFile, file.id)
+      {:ok, _} = Files.update_ingest_status(withheld, "not_attempted")
+
+      settled = Platform.Repo.get(PlatformFile, file.id)
+      assert settled.ingest_failure_stage == "extract"
+      assert settled.ingest_failure_detail == "unsupported encoding"
+    end
+
+    test "a nil detail stores SQL NULL, never the literal string \"nil\"", %{target: file} do
+      # `nil` is an atom, so a naive `to_string/1` or JSON-safing pass turns
+      # "no reason recorded" into a reason that READS like a real one. The
+      # nil assertion and the string refute are both required: a substring
+      # refute alone cannot tell an empty string from NULL.
+      assert {:ok, _} = Files.update_ingest_status(file, "failed", failure_stage: :embed)
+
+      stored = Platform.Repo.get(PlatformFile, file.id)
+      assert stored.ingest_failure_detail == nil
+      refute stored.ingest_failure_detail == "nil"
+      refute stored.ingest_failure_stage == "nil"
+    end
+
+    test "an oversized detail is truncated on graphemes and stays valid UTF-8",
+         %{target: file} do
+      # Multi-byte on purpose: truncating on BYTES would cut a codepoint in
+      # half and hand Postgres invalid UTF-8.
+      long = String.duplicate("é", 900)
+
+      assert {:ok, _} =
+               Files.update_ingest_status(file, "failed",
+                 failure_stage: :embed,
+                 failure_detail: long
+               )
+
+      stored = Platform.Repo.get(PlatformFile, file.id).ingest_failure_detail
+      assert String.length(stored) == 500
+      assert String.valid?(stored)
+      assert stored == String.duplicate("é", 500)
+    end
+
+    test "a non-binary detail term is stored as an inspected string", %{target: file} do
+      assert {:ok, _} =
+               Files.update_ingest_status(file, "failed",
+                 failure_stage: :extract,
+                 failure_detail: {:file_read_failed, :enoent}
+               )
+
+      stored = Platform.Repo.get(PlatformFile, file.id).ingest_failure_detail
+      assert is_binary(stored)
+      assert stored == "{:file_read_failed, :enoent}"
+    end
+
+    test "update_ingest_status/2 still works and records no reason", %{target: file} do
+      assert {:ok, _} = Files.update_ingest_status(file, "failed")
+
+      stored = Platform.Repo.get(PlatformFile, file.id)
+      assert stored.ingest_status == "failed"
+      assert stored.ingest_failure_stage == nil
+      assert stored.ingest_failure_detail == nil
+    end
+  end
+
   describe "set_ingest_intent/2" do
     setup do
       {:ok, project} = Tasks.create_project(%{name: "Intent Writes"})
@@ -1054,7 +1216,7 @@ defmodule Platform.FilesTest do
 
       capture_log(fn ->
         assert {:ok, summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
-        assert summary == %{requested: 2, withheld: 0}
+        assert summary == %{requested: 2, withheld: 0, threshold: 3}
       end)
 
       started =
@@ -1078,7 +1240,7 @@ defmodule Platform.FilesTest do
       assert target.ingest_failure_count == 3
 
       assert {:ok, summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
-      assert summary == %{requested: 0, withheld: 1}
+      assert summary == %{requested: 0, withheld: 1, threshold: 3}
 
       # NOTE: `ingest_status == "failed"` is a WEAK assertion on its own — a
       # row that WAS retried and broke again lands back on "failed" too. The
@@ -1094,12 +1256,22 @@ defmodule Platform.FilesTest do
     end
 
     test "one below the threshold is still retried while the one at it is withheld", ctx do
+      # THE BOUND, ASSERTED AT ITS BOUNDARY: counts 2 and 3 with the
+      # threshold at 3, so flipping `<` to `<=` in `retryable_failure?/1`
+      # reds this test rather than passing on a wider fixture.
       retryable = failed_file!(ctx.project, Files.repeat_failure_threshold() - 1)
       exhausted = failed_file!(ctx.project, Files.repeat_failure_threshold())
+      assert retryable.ingest_failure_count == 2
+      assert exhausted.ingest_failure_count == 3
 
       capture_log(fn ->
         assert {:ok, summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
-        assert summary == %{requested: 1, withheld: 1}
+        assert summary == %{requested: 1, withheld: 1, threshold: 3}
+
+        # The summary carries the number that produced the withhold, so a
+        # caller can explain the skip without re-spelling it.
+        assert summary.threshold == Files.repeat_failure_threshold()
+        assert summary.requested + summary.withheld == 2
       end)
 
       assert_received {:at_ingest_start, %{id: started_id}}
@@ -1121,7 +1293,7 @@ defmodule Platform.FilesTest do
 
       capture_log(fn ->
         assert {:ok, summary} = Files.retry_failed_ingests(ctx.project.id, mode: :sync)
-        assert summary == %{requested: 1, withheld: 0}
+        assert summary == %{requested: 1, withheld: 0, threshold: 3}
       end)
 
       persisted = Files.get_file(withheld.id)
@@ -1161,7 +1333,9 @@ defmodule Platform.FilesTest do
     test "a project with nothing failed reports zeroes and enqueues nothing", ctx do
       sweep_file!(ctx.project, ingest_status: "ingested", ingest_intent: "attempt")
 
-      assert {:ok, %{requested: 0, withheld: 0}} = Files.retry_failed_ingests(ctx.project.id)
+      assert {:ok, %{requested: 0, withheld: 0, threshold: 3}} =
+               Files.retry_failed_ingests(ctx.project.id)
+
       refute_received {:at_ingest_start, _}
     end
   end

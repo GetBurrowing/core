@@ -505,14 +505,60 @@ defmodule Platform.Files do
   `mark_failed/1`, its two dedup/success branches, and every future writer
   each remembering to do it — the same drift the enqueue choke point
   documented on `set_ingest_intent/2` exists to prevent.
+
+  ## Contract: the failure REASON moves here too, and clears on success
+
+  `:ingest_failure_stage` / `:ingest_failure_detail` (task 01a0166d) say
+  WHAT broke, and follow the same rules as the count, at the same seam:
+
+    * `"failed"` — writes both from `opts` (`:failure_stage`,
+      `:failure_detail`). The stage must be one of `:extract` / `:embed` /
+      `:storage`; anything else is a programmer error and is not silently
+      stored.
+    * `"ingested"` — clears BOTH to nil. Mandatory, not tidiness: a stale
+      reason surviving a success makes the next reader diagnose a fixed
+      file from a dead string, which is the same defect class this ticket
+      exists to remove.
+    * `"pending"` / `"not_attempted"` — leaves both byte-identical, matching
+      the count contract. A re-queue is not an outcome, and the reason has
+      to stay readable while a retry is in flight.
+
+  `update_ingest_status/2` delegates here with no opts, so a caller with
+  nothing to record writes nil-nothing rather than being forced to invent a
+  reason.
+
+  ## Interaction with task 019ff49f (ingest status is last-writer-wins)
+
+  NOT fixed here. Both reason columns ride the SAME `Repo.update` as
+  `:ingest_status`, so they can never disagree with the status they
+  explain. A diverging concurrent ingest can still make that whole tuple
+  the loser — that is 019ff49f's problem, unchanged and not made worse by
+  these columns.
   """
   @spec update_ingest_status(File.t(), String.t()) ::
           {:ok, File.t()} | {:error, Ecto.Changeset.t()}
-  def update_ingest_status(%File{} = file, status)
-      when status in ~w(pending ingested failed not_attempted) do
+  def update_ingest_status(%File{} = file, status), do: update_ingest_status(file, status, [])
+
+  @doc """
+  As `update_ingest_status/2`, additionally recording WHY a `"failed"`
+  ingest failed. See that function's docs for the full contract.
+
+  ## Options
+
+    * `:failure_stage` — `:extract` / `:embed` / `:storage` (or the
+      equivalent string). Only read on a `"failed"` write.
+    * `:failure_detail` — any term. Binaries are stored verbatim, other
+      terms are inspected; `nil` stores SQL NULL rather than the string
+      `"nil"`. Truncated to 500 graphemes.
+  """
+  @spec update_ingest_status(File.t(), String.t(), keyword()) ::
+          {:ok, File.t()} | {:error, Ecto.Changeset.t()}
+  def update_ingest_status(%File{} = file, status, opts)
+      when status in ~w(pending ingested failed not_attempted) and is_list(opts) do
     file
     |> File.changeset(%{ingest_status: status})
     |> put_failure_count(file, status)
+    |> put_failure_reason(status, opts)
     |> Repo.update()
   end
 
@@ -545,6 +591,66 @@ defmodule Platform.Files do
   defp put_failure_count(changeset, _file, status)
        when status in ~w(pending not_attempted),
        do: changeset
+
+  @failure_stages ~w(extract embed storage)
+
+  # Same treatment and the same reason as `put_failure_count/3` above: both
+  # reason columns sit outside `@cast_fields`, so they move only through
+  # this explicit change and never through bulk attrs. A reason string any
+  # bulk update could set is not evidence anybody can trust, which would
+  # defeat the point of persisting it.
+  defp put_failure_reason(changeset, "failed", opts) do
+    stage = opts |> Keyword.get(:failure_stage) |> normalize_failure_stage()
+
+    changeset
+    |> Ecto.Changeset.put_change(:ingest_failure_stage, stage)
+    |> Ecto.Changeset.put_change(
+      :ingest_failure_detail,
+      sanitize_failure_detail(Keyword.get(opts, :failure_detail))
+    )
+  end
+
+  # Clearing on success is load-bearing, not housekeeping — see the
+  # contract on `update_ingest_status/2`.
+  defp put_failure_reason(changeset, "ingested", _opts) do
+    changeset
+    |> Ecto.Changeset.put_change(:ingest_failure_stage, nil)
+    |> Ecto.Changeset.put_change(:ingest_failure_detail, nil)
+  end
+
+  defp put_failure_reason(changeset, status, _opts)
+       when status in ~w(pending not_attempted),
+       do: changeset
+
+  defp normalize_failure_stage(nil), do: nil
+
+  defp normalize_failure_stage(stage) when is_atom(stage),
+    do: normalize_failure_stage(Atom.to_string(stage))
+
+  defp normalize_failure_stage(stage) when stage in @failure_stages, do: stage
+
+  defp normalize_failure_stage(other) do
+    raise ArgumentError,
+          "invalid :failure_stage #{inspect(other)}; expected one of #{inspect(@failure_stages)}"
+  end
+
+  # Total over arbitrary terms, and deliberately never produces a
+  # MISLEADING string.
+  #
+  # The `nil` clause is explicit and comes first because `nil` is an atom:
+  # a naive `to_string/1` or JSON-safing pass turns "no reason recorded"
+  # into the literal `"nil"`, which reads exactly like a real reason. That
+  # is the specific bug this function was written to avoid.
+  #
+  # Truncation is on GRAPHEMES (`String.slice/3`), not bytes, so we never
+  # cut a codepoint in half and hand Postgres invalid UTF-8.
+  defp sanitize_failure_detail(nil), do: nil
+
+  defp sanitize_failure_detail(detail) when is_binary(detail),
+    do: String.slice(detail, 0, 500)
+
+  defp sanitize_failure_detail(detail),
+    do: detail |> inspect(limit: 20, printable_limit: 200) |> String.slice(0, 500)
 
   @doc """
   Records that `file` now has a catalog card at `card_file_key`
@@ -676,21 +782,41 @@ defmodule Platform.Files do
     end
   end
 
-  # Consecutive failures after which a file stops being offered a retry.
-  # One number, read by everything that has to agree about it: the bulk
-  # sweep below and — through `repeat_failure_threshold/0` — the Files
-  # page's per-row control. A second literal `3` in the LiveView is the
-  # drift this attribute exists to prevent.
+  # Consecutive failures after which the BULK SWEEP stops re-enqueueing a
+  # file. It is a rate limit on one fan-out button, not a judgement about
+  # the file, and it has exactly ONE enforcement point: `retryable_failure?/1`
+  # below. The per-file manual retry is UNBOUNDED by design — see
+  # `retry_failed_ingests/2`'s "Eligibility" section for the argument.
+  #
+  # THIS BOUND IS ONLY HONEST BECAUSE THE MANUAL RETRY IS ALWAYS PRESENT
+  # FOR A FAILED FILE. That dependency lives in another file: the DETAIL
+  # PANE's `data-role="files-detail-retry"` button, gated by
+  # `PlatformWeb.FilesLive.can_retry_file?/1`, which is status-only. The
+  # list row deliberately carries no button of its own — it is already a
+  # whole-row click target — so the pane's button is the ONLY escape
+  # hatch and there is no second one to fall back on.
+  # If someone re-introduces a condition on that button — a count, a
+  # threshold, any withhold — this number silently stops being a rate
+  # limit and becomes a LOCKOUT, with no way for a human to retry their
+  # own file. Delete the bound in that same change, or do not re-condition
+  # the button.
+  #
+  # A second literal `3` anywhere is the drift `repeat_failure_threshold/0`
+  # exists to prevent; the LiveView READS it (for copy), never re-gates on it.
   @repeat_failure_threshold 3
 
   @doc """
-  The number of consecutive failed ingests after which a file is withheld
-  from retry (task 01a0008b stage 3).
+  The number of consecutive failed ingests after which the AUTOMATIC bulk
+  sweep stops re-enqueueing a file (task 01a0008b stage 3, rescoped by
+  task 01a0166d stage 3).
 
-  Public because the withhold rule has two enforcement points and they
-  must not disagree: `retry_failed_ingests/2` applies it to the bulk
-  action, and the Files page applies it to the per-file retry control.
-  The UI must read this rather than hardcode its own copy of the number.
+  ONE enforcement point: `retry_failed_ingests/2`. Public only so the
+  Files page can READ it for copy — naming the number in the sentence
+  that explains why a row was skipped, and in the per-row clause that
+  says the row was not retried *automatically*. That is a read, never a
+  second gate: the per-file manual retry is unbounded, so a UI that
+  compared a count against this value would be re-introducing a rule the
+  product deliberately removed.
   """
   @spec repeat_failure_threshold() :: pos_integer()
   def repeat_failure_threshold, do: @repeat_failure_threshold
@@ -701,7 +827,7 @@ defmodule Platform.Files do
 
   Reads the sweep from `list_failed_ingests/2` and calls
   `request_ingest/2` — the single retry entry point — on each eligible
-  row. Returns `{:ok, %{requested: n, withheld: m}}`.
+  row. Returns `{:ok, %{requested: n, withheld: m, threshold: t}}`.
 
   ## Routed, not reimplemented
 
@@ -718,22 +844,41 @@ defmodule Platform.Files do
   `opts` is passed straight through to `request_ingest/2`, so `:mode`
   behaves identically here (`:async` by default, correct for a LiveView).
 
-  ## Eligibility: three strikes and the machine stops pretending
+  ## Eligibility: a rate limit on the sweep, not a verdict on the file
 
   A row whose `:ingest_failure_count` has reached
-  `repeat_failure_threshold/0` is WITHHELD — counted, not retried. The
-  same bytes have already broken the extractor three times; a fourth
-  identical attempt has no new information to act on, so it would be the
-  system performing work rather than doing it, and it would keep the
-  file's real problem (it likely needs re-exporting) hidden behind a
-  button that looks like a fix.
+  `repeat_failure_threshold/0` is WITHHELD **by this function only** —
+  counted, not retried. The per-file manual retry has no such bound and
+  never refuses.
 
-  Repeated failure deliberately does NOT escalate. Nothing pages, no
+  The two callers differ in blast radius and in information. A human
+  clicking Retry on one row has looked at that row, spends one request,
+  and is the only party who can know something changed outside the
+  system — the backend came back, the file was re-exported. Bounding
+  them makes the product argue with a person about their own file. This
+  sweep is one click that fans out across EVERY failed row in a project,
+  at a backend that is very often the thing already failing; against a
+  downed embedder that is a burst proportional to the failure count.
+  Its bound is a rate limit, not paternalism, and not a claim that a
+  fourth attempt would be pointless.
+
+  KEEPING IT COSTS THE USER NOTHING ONLY BECAUSE THE UNBOUNDED PER-ROW
+  BUTTON IS ALWAYS PRESENT ON A FAILED ROW — see the comment on
+  `@repeat_failure_threshold`. If that escape hatch is ever conditioned
+  again, this bound becomes a lockout and must be deleted in the same
+  change.
+
+  Withholding deliberately does NOT escalate. Nothing pages, no
   notification is sent, no digest line is written, no severity or colour
-  changes, and no surface outside the Files page is created. The file
-  becomes self-diagnosing rather than louder: withheld here, re-worded
-  there. An alert firing on a condition nobody can act on from the alert
-  is the same noise this task exists to remove, relocated.
+  changes. The row says so where the row is: the Files page renders the
+  skip as its own state, naming the AUTOMATIC path, beside the Retry the
+  reader can still press.
+
+  ## The summary carries the threshold that produced the withholds
+
+  So a caller can explain the skip in words without re-spelling the
+  number: the map includes `:threshold`. `requested + withheld` still
+  equals the size of the sweep — `:threshold` is not a third arm.
 
   ## What is NOT swept
 
@@ -764,12 +909,18 @@ defmodule Platform.Files do
       to be trusted.
   """
   @spec retry_failed_ingests(binary(), keyword()) ::
-          {:ok, %{requested: non_neg_integer(), withheld: non_neg_integer()}}
+          {:ok,
+           %{
+             requested: non_neg_integer(),
+             withheld: non_neg_integer(),
+             threshold: pos_integer()
+           }}
   def retry_failed_ingests(project_id, opts \\ []) when is_binary(project_id) do
     summary =
       project_id
       |> list_failed_ingests()
-      |> Enum.reduce(%{requested: 0, withheld: 0}, fn file, acc ->
+      |> Enum.reduce(%{requested: 0, withheld: 0, threshold: @repeat_failure_threshold}, fn file,
+                                                                                            acc ->
         if retryable_failure?(file) do
           retry_one(file, opts, acc)
         else
@@ -780,6 +931,8 @@ defmodule Platform.Files do
     {:ok, summary}
   end
 
+  # The sweep's ONLY gate. Not called from the LiveView, and nothing in
+  # the manual retry path consults it.
   defp retryable_failure?(%File{} = file) do
     (file.ingest_failure_count || 0) < @repeat_failure_threshold
   end

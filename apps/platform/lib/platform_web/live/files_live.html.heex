@@ -311,43 +311,130 @@
           </tr>
         </thead>
         <tbody>
-          <tr
-            :for={file <- filtered_and_sorted(@files, @filter, @sort)}
-            phx-click="select_file"
-            phx-value-id={file.id}
-            class={"cursor-pointer hover:bg-base-200 #{if @selected_file && @selected_file.id == file.id, do: "bg-base-200"}"}
-            data-role="files-row"
-            data-file-id={file.id}
-            data-ingest-status={file.ingest_status}
-            data-ingest-intent={file.ingest_intent}
-          >
-            <td class="font-medium">
-              <div>{file.name || file.original_filename}</div>
-              <%!-- Ghost badge, on its own line under the name it
-                   qualifies. In the NAME cell, not the Status cell: a
-                   supersession claim is about the document's standing,
-                   not about its ingest, and the Status column stays
-                   single-axis. --%>
-              <div :if={Map.has_key?(@supersession_claims, file.id)} class="mt-0.5">
-                <PlatformWeb.Components.SupersessionRuling.supersession_badge claim={
-                  Map.get(@supersession_claims, file.id)
-                } />
-              </div>
-            </td>
-            <td class="text-xs text-base-content/60">{file.content_type}</td>
-            <td class="text-right tabular-nums">{humanize_bytes(file.byte_size)}</td>
-            <td>
-              <span
-                class={status_badge_class(file.ingest_status)}
-                data-role="files-status-badge"
-              >
-                {status_label(file.ingest_status)}
-              </span>
-            </td>
-            <td class="text-xs text-base-content/60">
-              {Calendar.strftime(file.inserted_at, "%Y-%m-%d %H:%M")}
-            </td>
-          </tr>
+          <%!-- A comprehension block rather than `:for` on the row,
+               because a failed file renders TWO sibling rows: the row
+               itself, unchanged, and the failure reason strip beneath
+               it. A non-failed file still renders exactly one, so every
+               healthy row is byte-identical to before. --%>
+          <%= for file <- filtered_and_sorted(@files, @filter, @sort) do %>
+            <tr
+              phx-click="select_file"
+              phx-value-id={file.id}
+              class={"cursor-pointer hover:bg-base-200 #{if @selected_file && @selected_file.id == file.id, do: "bg-base-200"}"}
+              data-role="files-row"
+              data-file-id={file.id}
+              data-ingest-status={file.ingest_status}
+              data-ingest-intent={file.ingest_intent}
+            >
+              <td class="font-medium">
+                <div>{file.name || file.original_filename}</div>
+                <%!-- Ghost badge, on its own line under the name it
+                     qualifies. In the NAME cell, not the Status cell: a
+                     supersession claim is about the document's standing,
+                     not about its ingest, and the Status column stays
+                     single-axis. --%>
+                <div :if={Map.has_key?(@supersession_claims, file.id)} class="mt-0.5">
+                  <PlatformWeb.Components.SupersessionRuling.supersession_badge claim={
+                    Map.get(@supersession_claims, file.id)
+                  } />
+                </div>
+              </td>
+              <td class="text-xs text-base-content/60">{file.content_type}</td>
+              <td class="text-right tabular-nums">{humanize_bytes(file.byte_size)}</td>
+              <td>
+                <span
+                  class={status_badge_class(file.ingest_status)}
+                  data-role="files-status-badge"
+                >
+                  {status_label(file.ingest_status)}
+                </span>
+              </td>
+              <td class="text-xs text-base-content/60">
+                {Calendar.strftime(file.inserted_at, "%Y-%m-%d %H:%M")}
+              </td>
+            </tr>
+            <%!-- The failure reason strip. Renders as TEXT on the row,
+                 never as a tooltip, `title=` or any other hover
+                 affordance: a hover is invisible on touch and
+                 unreachable by keyboard, and this string is the whole
+                 point of the ticket. It renders or it does not exist.
+
+                 No button here, deliberately, and this reverses an
+                 earlier direction. The row already carries a whole-row
+                 `select_file` click, so a control inside it nests one
+                 interactive element in another — the click would have to
+                 be stopped from also selecting the file, and a keyboard
+                 user would meet two tab stops in one visual object. The
+                 unbounded manual retry is the detail pane's
+                 `files-detail-retry`, which renders for any failed file.
+
+                 The strip is a sibling `<tr>` rather than a line inside
+                 the name cell so it spans the row, and so `files-row`
+                 keeps the exact shape other surfaces key off. --%>
+            <tr
+              :if={file.ingest_status == "failed"}
+              data-role="files-row-failure-reason"
+              data-file-id={file.id}
+            >
+              <td colspan="5" class="!py-0">
+                <%!-- `text-base-content`, NOT `text-neutral`, and this
+                     is a deliberate departure from the stage brief.
+                     `--color-neutral` is a SURFACE slot: its 4.7:1
+                     audit (1B-A11Y-5, in app.css) tuned it against
+                     `--color-neutral-content` as a fill, never as a
+                     foreground on `--color-base-200`. In the dark theme
+                     the pair is oklch(40%) text on an oklch(9%) band —
+                     roughly 2.4:1, which fails AA and made the reason
+                     genuinely hard to read in a captured render.
+                     `--color-base-content` is the foreground partner of
+                     the base surfaces and clears AA in BOTH themes,
+                     which is what the brief actually asked for. --%>
+                <div class="flex max-w-[calc(100vw-0.5rem)] flex-wrap items-baseline gap-x-2 gap-y-1 border-l-[3px] border-error bg-base-200 px-3 py-1.5 md:max-w-none md:flex-nowrap">
+                  <%!-- The width cap is what makes `truncate` below
+                       actually fire on a phone. This table scrolls
+                       horizontally on a narrow viewport, so an
+                       unconstrained cell is as wide as the OVERFLOWING
+                       table, not as wide as the screen — the tail would
+                       run off the side rather than truncate, and a
+                       reader would have to scroll sideways to learn
+                       what broke. Capping to the viewport puts the
+                       ellipsis where the reader can see it.
+
+                       It wraps below `md` rather than competing for one
+                       line. Single-line + a `shrink-0` skip clause
+                       starved the MIDDLE element, so a narrow viewport
+                       showed "Embedding: · not retried automatically
+                       after 3 att…" — the reason itself truncated to
+                       nothing while the least important fragment
+                       survived. That is the truncation-order rule
+                       inverted. Wrapping keeps every fragment readable;
+                       the desktop row is unchanged. --%>
+                  <%!-- Truncation order is the design decision here. The
+                       stage prefix is the meaningful fragment and never
+                       truncates; the machine tail is expendable.
+                       "Embedding: connect timed…" still tells the reader
+                       what to do, "…out after 5000ms" does not. --%>
+                  <span class="shrink-0 whitespace-nowrap text-xs font-medium text-base-content">
+                    {failure_stage_label(file.ingest_failure_stage)}:
+                  </span>
+                  <span class="min-w-0 truncate font-mono text-xs text-base-content">
+                    {failure_detail_text(file.ingest_failure_detail)}
+                  </span>
+                  <%!-- Fourth state: the sweep declined to touch this
+                       row. Appended to the reason, not replacing it —
+                       the reader needs both halves, what broke and why
+                       nothing has happened since. --%>
+                  <span
+                    :if={sweep_skipped?(file)}
+                    class="shrink-0 whitespace-nowrap font-mono text-xs text-base-content"
+                    data-role="files-row-sweep-skipped"
+                  >
+                    · {sweep_skipped_clause()}
+                  </span>
+                </div>
+              </td>
+            </tr>
+          <% end %>
         </tbody>
       </table>
 

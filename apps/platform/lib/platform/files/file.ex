@@ -70,6 +70,27 @@ defmodule Platform.Files.File do
     # history.
     field(:ingest_failure_count, :integer, default: 0)
 
+    # WHY the last ingest failed (task 01a0166d stage 1). `ingest_status`
+    # says a file broke and `ingest_failure_count` says how often; these two
+    # say what broke, so a reader has a next action.
+    #
+    # `ingest_failure_stage` is the machine-readable category — one of
+    # `"extract"` / `"embed"` / `"storage"` — kept SEPARATE from the detail
+    # because those three need opposite responses and a single free-text
+    # string forces every reader to parse prose back into a category.
+    # `ingest_failure_detail` is the verbatim machine tail.
+    #
+    # Both nullable with no default: nil is a real state, "no recorded
+    # reason", which is exactly what rows predating the columns are.
+    #
+    # Moved exclusively by `Platform.Files.update_ingest_status/3` —
+    # `"failed"` writes both, `"ingested"` clears both — and deliberately
+    # NOT in `@cast_fields`, for the same reason as `deleted_at` and
+    # `ingest_failure_count` above: bulk attrs from an upload form or an MCP
+    # tool must never be able to write a file's failure history.
+    field(:ingest_failure_stage, :string)
+    field(:ingest_failure_detail, :string)
+
     # Catalog card backlink (task 01a0008c). `card_file_key` is the wiki
     # file_key of this file's card page — `project/<uuid>/page/files/
     # <slug>.md`. Nil means "no card yet", which is what the backfill

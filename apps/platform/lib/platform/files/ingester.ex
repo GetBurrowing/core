@@ -132,7 +132,13 @@ defmodule Platform.Files.Ingester do
         duration = System.monotonic_time() - monotonic_start
         stacktrace = __STACKTRACE__
 
-        _ = mark_failed(file)
+        # Deliberate lossy default: a crash inside the pipeline is not
+        # attributable to a named stage — we do not know whether it blew up
+        # fetching bytes, reading them, or embedding them. We record
+        # `:extract` with the formatted exception rather than inventing a
+        # category or leaving the column nil, because a nil reason on a
+        # failed row is exactly the defect this column exists to remove.
+        _ = mark_failed(file, {:extract, Exception.format(kind, reason, stacktrace)})
 
         :telemetry.execute(
           @event_prefix ++ [:exception],
@@ -225,14 +231,14 @@ defmodule Platform.Files.Ingester do
             :ok
 
           {:error, reason} ->
-            _ = mark_failed(file)
+            _ = mark_failed(file, classify_failure({:memory_ingest_failed, reason}))
             emit_exception(monotonic_start, start_meta, :error, {:memory_ingest_failed, reason})
             broadcast_ingest_failed(file, reason)
             {:error, reason}
         end
 
       {:error, reason} ->
-        _ = mark_failed(file)
+        _ = mark_failed(file, classify_failure({:extract_failed, reason}))
         emit_exception(monotonic_start, start_meta, :error, {:extract_failed, reason})
         broadcast_ingest_failed(file, reason)
         {:error, reason}
@@ -358,7 +364,51 @@ defmodule Platform.Files.Ingester do
     :ok
   end
 
-  defp mark_failed(file) do
+  # Classifies a raw failure term into the `{stage, detail_term}` pair the
+  # `Files.update_ingest_status/3` seam persists.
+  #
+  # THE STAGE PREFIX IS THE FEATURE. Most production failures record the
+  # same transient embed error; the value of the column is that the odd one
+  # out is visibly a DIFFERENT KIND of problem. Raw machine tails do not
+  # sort themselves into kinds for a reader, so if anything has to give,
+  # detail fidelity gives and the category stays.
+  #
+  # The two categories demand OPPOSITE responses, which is the whole reason
+  # `:storage` is not folded into `:extract`:
+  #
+  #   * `:extract` — we HAVE the bytes and could not read them. The store is
+  #     fine; the document is the problem. Re-export it.
+  #   * `:storage` — we never GOT the bytes. The file is fine; the store is
+  #     the problem. Fixing the document changes nothing.
+  #
+  # `Extractor.extract/1` returns both kinds through one `{:error, reason}`
+  # channel, so the byte-fetch failures arrive wearing an extract error's
+  # clothes and have to be re-homed here by reason.
+  @spec classify_failure(term()) :: {:extract | :embed | :storage, term()}
+  defp classify_failure({:memory_ingest_failed, reason}), do: {:embed, reason}
+
+  # `Extractor.local_path/1` — no storage key on the row at all.
+  defp classify_failure({:extract_failed, :missing_storage_key}),
+    do: {:storage, :missing_storage_key}
+
+  # `Extractor.local_path/1` — the configured adapter cannot hand us a path.
+  defp classify_failure({:extract_failed, :unsupported_adapter}),
+    do: {:storage, :unsupported_adapter}
+
+  # `Extractor.fetch_bytes/2`'s `File.read/1` leg, both the tagged shape and
+  # the bare posix atom the stdlib actually returns.
+  defp classify_failure({:extract_failed, {:file_read_failed, detail}}),
+    do: {:storage, {:file_read_failed, detail}}
+
+  defp classify_failure({:extract_failed, reason})
+       when reason in [:enoent, :eacces, :eisdir, :enotdir, :enospc, :eperm, :eio],
+       do: {:storage, reason}
+
+  # Everything else out of the extractor — including
+  # `{:unsupported_content_type, _}` — is a genuine read-the-bytes failure.
+  defp classify_failure({:extract_failed, reason}), do: {:extract, reason}
+
+  defp mark_failed(file, {stage, detail}) do
     # Reload to avoid stomping a concurrent update. Best-effort.
     #
     # This runs inside the outer `try/catch` in `run/1` — but the
@@ -367,7 +417,7 @@ defmodule Platform.Files.Ingester do
     # `Task.Supervisor`-spawned child whose `$callers` chain is empty
     # (production: Cowboy handler / PubSub broadcast; test: the
     # cascade repro), the `Repo.get` raises `DBConnection.OwnershipError`
-    # and the raise escapes `mark_failed/1` entirely — reproducing the
+    # and the raise escapes `mark_failed/2` entirely — reproducing the
     # 2026-07-03 cascade shape from the *ingest* seam rather than the
     # summarizer seam. Guard it explicitly so the sandbox-unowned Task
     # exits `:normal` and the escape can no longer ride this path.
@@ -375,8 +425,24 @@ defmodule Platform.Files.Ingester do
     # See apps/platform/notes/2026-07-06-datacase-cascade-rootcause.md.
     try do
       case Files.get_file(file.id) do
-        nil -> :ok
-        %Platform.Files.File{} = current -> Files.update_ingest_status(current, "failed")
+        nil ->
+          :ok
+
+        %Platform.Files.File{} = current ->
+          # ONE call site for the log, so the three failure paths cannot
+          # drift apart. This does not replace the column — the column is
+          # the durable, user-visible record — it closes the hole where
+          # grepping a running container's logs for a returned-error
+          # failure produced zero lines.
+          Logger.warning(
+            "[Files.Ingester] ingest failed file=#{current.id} stage=#{stage} " <>
+              "detail=#{inspect(detail, limit: 20, printable_limit: 200)}"
+          )
+
+          Files.update_ingest_status(current, "failed",
+            failure_stage: stage,
+            failure_detail: detail
+          )
       end
     rescue
       DBConnection.OwnershipError ->
