@@ -141,6 +141,37 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # The set of spaces this session holds a rail-driven PubSub subscription for
+  # (task 01a011e9). `handle_params/3`'s teardown asks it one question: did the
+  # space being left have a subscription before it became active, and therefore
+  # does leaving owe it one back?
+  #
+  # Derived, never stored. The same `presence_subscribe_space_ids/2` over the
+  # same `channels ++ pinned_task_spaces ++ dm_conversations` that `mount/3`
+  # subscribes from, read off the assigns rather than re-queried, so the two can
+  # only ever agree. An assign captured at mount would have to be recomputed at
+  # every site that rebuilds the rail — `:space_created` and `:task_pin_added`
+  # both subscribe a new topic AND refresh those assigns — and the first one
+  # that forgot would silently stop restoring that row's subscription.
+  #
+  # Costs one `external_user?/1` existence query per navigation, on a path that
+  # already re-reads the channel list, the participant roster and the pinned
+  # spaces. Paid deliberately: reusing the mount function verbatim is what makes
+  # drift impossible, and a cached copy of the answer is the bug being fixed.
+  @spec rail_subscribe_space_ids(Phoenix.LiveView.Socket.t()) :: MapSet.t(binary())
+  defp rail_subscribe_space_ids(socket) do
+    %{
+      channels: channels,
+      pinned_task_spaces: pinned_task_spaces,
+      dm_conversations: dm_conversations,
+      user_id: user_id
+    } = socket.assigns
+
+    (channels ++ pinned_task_spaces ++ dm_conversations)
+    |> presence_subscribe_space_ids(user_id)
+    |> MapSet.new()
+  end
+
   defp do_mount(session, socket, opts) do
     embedded? = Keyword.fetch!(opts, :embedded?)
     user_id = session["current_user_id"] || Ecto.UUID.generate()
@@ -680,7 +711,30 @@ defmodule PlatformWeb.ChatLive do
     # send-eligible in space B's composer (BACKLOG #10).
     socket =
       if prev = socket.assigns.active_space do
+        # Task 01a011e9. `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2`
+        # on a `keys: :duplicate` registry: it removes EVERY entry this pid holds
+        # for the topic, not one of them. The enter path below has already
+        # normalised the outgoing space down to exactly one registration, so this
+        # call drops it outright — including the one `mount/3` established to feed
+        # the unread badge for a space nobody is looking at. Left as it was, the
+        # channel went silent for the rest of the session and its badge sat on the
+        # zero `clear_unread/2` wrote on the way in.
+        #
+        # Restore rather than skip the unsubscribe: deleting the call instead
+        # would leave a space reached only by URL — an execution space, say,
+        # which the rail never lists — holding a subscription it never had at
+        # mount. Gating the restore on the rail's own subscribe set ends leaving
+        # on mount-time state either way: exactly one registration for a rail
+        # space, zero for anything else.
         ChatPubSub.unsubscribe(prev.id)
+
+        if connected?(socket) and MapSet.member?(rail_subscribe_space_ids(socket), prev.id) do
+          ChatPubSub.subscribe(prev.id)
+        end
+
+        # Deliberately NOT given the same treatment: only the enter path below
+        # subscribes `active_agent:`, so removing every entry is the whole of the
+        # correct behaviour there.
         Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
 
         {main_cancelled, socket} = UploadHooks.cancel_all(socket, :attachments)
