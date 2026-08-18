@@ -39,30 +39,82 @@ defmodule PlatformWeb.ShellLiveTest do
   end
 
   # PWA app-shell scroll lock regression. The root shell container must
-  # constrain itself to the viewport (`h-[100vh]`) and refuse to scroll
+  # constrain itself to the viewport and refuse to scroll
   # (`overflow-hidden`) so the bottom-tab nav stays functionally rooted on
-  # mobile — without these classes, the body itself scrolls and drags the
-  # chrome out of view (Rowan's mobile review-request hotfix, supersedes
-  # the inner `pb-` clearance from PR #331). Asserting the literal class
-  # string keeps the fix from being quietly removed during refactors.
+  # mobile — without these, the body itself scrolls and drags the chrome
+  # out of view (Rowan's mobile review-request hotfix, supersedes the inner
+  # `pb-` clearance from PR #331).
+  #
+  # CHANGED 2026-08-17, task 019ffdce. This guard used to assert the
+  # literal `h-[100vh]` on the shell root, pinning a decision recorded in
+  # May 2026 (PRs #339/#350/#351 chased the bug through svh and
+  # env-padding before the on-device Web Inspector measurement on
+  # 2026-05-14 settled it). That measurement is NOT overturned and the
+  # value it established is still what iOS standalone resolves to — see
+  # the CSS assertion below, which is now where it is pinned. What
+  # changed is the location: the standalone height moved out of the
+  # template's Tailwind class and into a single `@media (display-mode:
+  # standalone)` rule in app.css keyed off `.app-shell-root`, so the
+  # stylesheet and the template can no longer carry different values.
+  # Asserting `h-[100vh]` on the markup after that move would assert a
+  # string that no longer decides anything.
   test "shell root container locks to viewport height (PWA scroll lock)", %{conn: conn} do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/tasks")
 
-    # h-[100vh] MUST match the `html, body { height: 100vh }` lock in
-    # app.css — and it must be 100vh, NOT 100dvh/100svh. In an installed
-    # iOS PWA, 100dvh/100svh resolve to the inset-short viewport (793px on
-    # iPhone 16) while 100vh resolves to the full screen (852px); the
-    # shorter value leaves a ~59px uncovered strip at the bottom. PRs
-    # #339/#350/#351 chased this through svh and env-padding before the
-    # on-device Web Inspector measurement (2026-05-14) confirmed the fix
-    # is simply 100vh. Top inset → `safe-area-top`; bottom inset →
-    # `padding-bottom: env(safe-area-inset-bottom)` on `.bottom-nav`.
-    assert html =~ "h-[100vh]"
+    # Browser-tab branch stays on the element: 100dvh tracks the visible
+    # viewport so the bottom-nav stays above iOS Safari/Chrome's dynamic
+    # URL toolbar (PR #392).
+    assert html =~ "h-[100dvh]"
+
+    # Standalone branch: the root must opt into the app.css rule. Without
+    # this class the installed PWA silently falls back to the browser-tab
+    # 100dvh, which is the ~59px-short iOS regression PR #352 fixed.
+    assert html =~ "app-shell-root"
+
     assert html =~ "overflow-hidden"
     # The main surface must contain its own iOS rubber-band so an inner
     # panel's overscroll cannot displace the chrome.
     assert html =~ "overscroll-contain"
+  end
+
+  # The other half of the guard above: the standalone height itself. The
+  # markup only opts in; app.css decides the value, so a class-only test
+  # would pass with any value at all — including a plain `100dvh` that
+  # reintroduces the iOS bug.
+  #
+  # Resolved from __DIR__, not the cwd, so the read does not depend on
+  # where mix was invoked from.
+  test "app.css pins the standalone shell height to the iOS-measured full screen" do
+    css = File.read!(Path.expand("../../../assets/css/app.css", __DIR__))
+
+    standalone_rule =
+      css
+      |> String.split("@media all and (display-mode: standalone)")
+      |> Enum.at(1)
+      |> String.slice(0, 400)
+
+    # All three selectors must share one declaration. If the shell root
+    # drops out of this list, the template and the stylesheet are free to
+    # drift to different heights again.
+    assert standalone_rule =~ "html"
+    assert standalone_rule =~ "body"
+    assert standalone_rule =~ ".app-shell-root"
+
+    # The value. On iOS standalone this resolves to exactly the 100vh the
+    # 2026-05-14 iPhone 16 measurement established: that device measured
+    # 100vh = 852 and 100dvh = 793, a shortfall of 59px which is precisely
+    # env(safe-area-inset-top) there, so calc(100dvh + safe-area-inset-top)
+    # reconstructs 852 and min() returns it. The min() exists for the
+    # Android case (task 019ffdce): where the shell lays out taller than
+    # the visible viewport and pushes the tab bar off-screen, 100dvh is
+    # the shorter value and min() takes it. min() can only ever shorten
+    # the shell to the visible viewport, never lengthen it past 100vh.
+    #
+    # Do not simplify this to plain `100dvh`: that drops the iOS branch
+    # 59px short. Do not simplify it to plain `100vh`: that is the state
+    # in which the Android tab bar was reported unreachable on 2026-08-17.
+    assert standalone_rule =~ "min(100vh, calc(100dvh + env(safe-area-inset-top, 0px)))"
   end
 
   # Task 01a00161 stage 1 extracted the shipped

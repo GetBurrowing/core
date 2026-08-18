@@ -1,6 +1,6 @@
 <%!-- PWA app-shell scroll lock: the shell occupies exactly the full
-     viewport. The class string MUST match the `html, body` height rule
-     in app.css for both display modes:
+     viewport, matching the `html, body` height rules in app.css for
+     both display modes:
 
      **Browser tab (default)** — `h-[100dvh]`. iOS Safari + Chrome show
      a dynamic bottom URL/toolbar; `100vh` reports the largest viewport
@@ -8,11 +8,19 @@
      shell hides BEHIND the toolbar when it's expanded. `100dvh` tracks
      the visible viewport and keeps the bottom-nav above the toolbar.
 
-     **Installed PWA (`display-mode: standalone`)** — overrides to
-     `h-[100vh]`. In standalone, `100dvh` resolves inset-short (~793px
-     on iPhone 16) vs `100vh` full screen (852px); using `100dvh` here
-     leaves a ~59px strip uncovered at the bottom. (See app.css comment
-     and on-device note 2026-05-14.)
+     **Installed PWA (`display-mode: standalone`)** — the override is
+     not a class here. `app-shell-root` puts this element into the
+     `@media (display-mode: standalone)` rule in app.css, which sets
+     `height: min(100vh, calc(100dvh + env(safe-area-inset-top, 0px)))`
+     on `html`, `body` and this root together. One definition for the
+     standalone height is the point. It used to live twice, once as a
+     Tailwind arbitrary variant on this element and once in app.css,
+     with a comment asking the reader to hand-check that they matched;
+     now they cannot disagree. The app.css comment carries the full
+     reasoning: the May 2026 iPhone 16 on-device measurement that rules
+     out plain `100dvh`, and why `min()` cannot lengthen the shell past
+     the `100vh` that measurement established. (Task 019ffdce, Android
+     on-device report 2026-08-17.)
 
      `overflow-hidden` prevents the document itself from scrolling;
      combined with the html/body lock in app.css, only the inner
@@ -27,7 +35,7 @@
      bound their bottom edge to `var(--bottom-nav-height)` so they don't
      sit behind the nav. --%>
 <div
-  class="flex h-[100dvh] [@media(display-mode:standalone)]:h-[100vh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
+  class="app-shell-root flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
   style={"--meeting-bar-height: " <> (if @meeting_active, do: "3rem", else: "0px")}
 >
   <%!-- Sidebar collapse persistence hook (localStorage) --%>

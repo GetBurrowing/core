@@ -432,16 +432,57 @@
    the toolbar. There's no home-indicator inset in a browser tab so
    the dvh-short-vs-screen-edge problem doesn't apply.
 
-   **Installed PWA (`display-mode: standalone`)** — `100vh`. In a
-   standalone PWA (viewport-fit=cover), `100dvh` resolves to the
-   inset-short viewport (e.g. 793px on iPhone 16) while `100vh`/`100lvh`
-   resolve to the full screen (852px). iOS extends content under the
-   top Dynamic Island but does NOT bump the dynamic viewport height to
-   the full screen, so `100dvh` leaves a ~59px strip uncovered at the
-   bottom. `100vh` covers the full screen; the top inset is handled by
-   `safe-area-top` padding on the shell and the bottom inset by
-   `padding-bottom: env(safe-area-inset-bottom)` on `.bottom-nav`.
-   (Confirmed via Web Inspector on-device 2026-05-14.)
+   **Installed PWA (`display-mode: standalone`)** —
+   `min(100vh, calc(100dvh + env(safe-area-inset-top, 0px)))`.
+
+   This branch was plain `100vh` from May 2026 (PR #352, then #392) and
+   that decision's reason still stands: on iOS standalone
+   (viewport-fit=cover) `100dvh` resolves inset-short. Measured on
+   device via Web Inspector 2026-05-14, iPhone 16 installed PWA:
+   `100vh`/`100lvh` = 852, `100dvh`/`100svh` = 793. iOS extends
+   standalone content under the top Dynamic Island but does NOT count
+   that band in the dynamic viewport, so a `100dvh` shell stops 59px
+   above the physical bottom edge and the bottom-nav floats there
+   instead of sitting flush. Plain `100dvh` here is a straight
+   regression of that fix. It is deliberately not what this rule says.
+
+   The same measurement pins the shape of the shortfall, which is what
+   lets this expression stay iOS-neutral: 852 - 793 = 59 is exactly
+   `env(safe-area-inset-top)` on that device, and the home-indicator
+   inset is NOT subtracted as well (that would give 852 - 59 - 34 =
+   759, not the measured 793). On iOS standalone the dynamic viewport
+   is short by the top inset and nothing else, so
+   `calc(100dvh + env(safe-area-inset-top))` reconstructs `100vh`
+   exactly and `min()` returns the same 852px the May fix produced.
+
+   The `min()` is what makes the Android side safe to ship without an
+   Android device to measure. On-device report 2026-08-17 from an
+   installed Android PWA, choosing between a missing tab bar and one
+   buried under Android's own system bar: MISSING, nothing at the
+   bottom edge to tap. That puts the nav below the visible viewport,
+   which means the shell is laying out TALLER than that viewport.
+   Wherever that is true `100dvh` is the shorter, correct value and
+   `min()` takes it; wherever `100vh` already equals the visible
+   height, `min()` returns `100vh` and this is a no-op. So the rule can
+   shorten the shell to the visible viewport but can never lengthen it
+   past the previous `100vh`, on any platform. (Task 019ffdce.)
+
+   NOT VERIFIED: that this actually reaches the Android tab bar; that
+   needs the installed PWA on the device. If it does not, the next
+   mechanism to check is whether Chrome is drawing the PWA
+   edge-to-edge. If it is, `100vh` already equals the visible height,
+   `min()` changes nothing, and the cause is the system nav bar
+   overlaying the nav with `env(safe-area-inset-bottom)` reporting 0.
+
+   `.app-shell-root` (the shell.html.heex root) is in this selector
+   list on purpose. The shell carries only `h-[100dvh]` for the
+   browser-tab branch; the standalone value exists once, here, so the
+   stylesheet and the template cannot drift to different heights the
+   way two hand-synced copies could. Unlayered, so it beats the
+   Tailwind utility in the cascade (same mechanism `.bottom-nav` relies
+   on below). The top inset is still handled by `safe-area-top` padding
+   on the shell and the bottom inset by `padding-bottom:
+   env(safe-area-inset-bottom)` on `.bottom-nav`.
 
    `overscroll-behavior: none` here is a backstop; per-scroller
    `overscroll-contain` (e.g., main in shell.html.heex) is what stops
@@ -455,8 +496,9 @@ body {
 
 @media all and (display-mode: standalone) {
   html,
-  body {
-    height: 100vh;
+  body,
+  .app-shell-root {
+    height: min(100vh, calc(100dvh + env(safe-area-inset-top, 0px)));
   }
 }
 
@@ -2568,7 +2610,7 @@ body, .font-fabrikam {
   background: oklch(8% 0 0 / 0.96);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(12px);
-  /* Both the shell's h-[100svh] AND env(safe-area-inset-bottom) padding
+  /* Both the shell's viewport height AND env(safe-area-inset-bottom) padding
      here are required for a flush iOS PWA bottom-nav. With
      viewport-fit=cover (set on the meta tag in root.html.heex), the
      layout viewport extends across the home-indicator gesture zone — so
