@@ -340,17 +340,6 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     """
   end
 
-  # `sm:absolute` is the ONLY difference, and it is the one that decides
-  # whether the list is clipped by an ancestor's cap. Everything else is
-  # shared so the two positions cannot drift in any other respect.
-  defp dropdown_class(:inline),
-    do: "mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100"
-
-  defp dropdown_class(:floating),
-    do:
-      "mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100 " <>
-        "sm:absolute sm:z-20 sm:w-full sm:shadow-lg"
-
   # Nothing matched and the query is not an address the account schema
   # would accept: no dropdown at all, rather than an empty panel.
   defp dropdown(%{candidates: [], email_option: nil} = assigns) do
@@ -441,6 +430,17 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     </div>
     """
   end
+
+  # `sm:absolute` is the ONLY difference, and it is the one that decides
+  # whether the list is clipped by an ancestor's cap. Everything else is
+  # shared so the two positions cannot drift in any other respect.
+  defp dropdown_class(:inline),
+    do: "mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100"
+
+  defp dropdown_class(:floating),
+    do:
+      "mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100 " <>
+        "sm:absolute sm:z-20 sm:w-full sm:shadow-lg"
 
   # ── invite_row/1 ───────────────────────────────────────────────────────
 

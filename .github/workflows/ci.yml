@@ -84,6 +84,45 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
+      # Task 01a01041 stage 6 — the ratchet that keeps the warning cleanup from
+      # rotting. It lands in the same PR as the cleanup on purpose: added before
+      # it, this step would red every PR including the ones fixing the warnings.
+      #
+      # SCOPE — what this step does and does not gate.
+      #
+      # COVERS:
+      #   * apps/platform/lib/**            (compiled in BOTH dev and test)
+      #   * apps/platform/test/support/**   (test env only — apps/platform/mix.exs
+      #     puts test/support on elixirc_paths(:test) and nowhere else, which is
+      #     the whole reason the MIX_ENV=test half below is not redundant. A
+      #     dev-only gate cannot see a warning in a test helper and looks
+      #     identical to a working one until somebody touches one.)
+      #   * .heex markup compiled through ~H or embed_templates, since those are
+      #     compiled as part of the modules above.
+      #
+      # DOES NOT COVER:
+      #   * apps/platform/test/**/*_test.exs — test files are not on
+      #     elixirc_paths; they are compiled by `mix test`, not `mix compile`, so
+      #     a warning in a *_test.exs file does not fail this step.
+      #   * dependency warnings — deps are built by `deps.compile`, not by this
+      #     invocation, so warnings emitted from deps/** (e.g. the Timex
+      #     struct-update warnings in a cold _build) never reach this gate.
+      # Both gaps are stated rather than left to be discovered.
+      #
+      # The flag lives here and NOT as `warnings_as_errors: true` in
+      # elixirc_options in mix.exs: that would make every local `mix compile` and
+      # `mix test` fail on a warning mid-edit. The CI flag is the narrower change.
+      - name: Compile with warnings as errors (dev + test)
+        run: |
+          if ! MIX_ENV=dev mix compile --force --warnings-as-errors; then
+            echo "::error::mix compile --warnings-as-errors failed in MIX_ENV=dev. Fix the warning; do not add --no-warnings-as-errors, @compile {:no_warn_undefined, ...} or a @dialyzer pragma. See apps/platform/notes/2026-08-17-compile-warnings-baseline.md."
+            exit 1
+          fi
+          if ! MIX_ENV=test mix compile --force --warnings-as-errors; then
+            echo "::error::mix compile --warnings-as-errors failed in MIX_ENV=test (this env additionally compiles test/support via elixirc_paths(:test)). Same rule: fix the warning, never suppress it."
+            exit 1
+          fi
+
       - name: Check formatting
         run: mix format --check-formatted
 

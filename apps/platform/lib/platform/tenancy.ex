@@ -1455,7 +1455,12 @@ defmodule Platform.Tenancy do
   # Core implementation for promote_to_admin / revoke_admin. Force-sets
   # both `role` and `roles_locked_at` on the user's Fabrikam membership row
   # and emits an audit event. Idempotent on already-target rows.
-  defp set_managed_role(%{id: user_id} = user, target_role, opts)
+  # Binds only `user_id` (task 01a01041 stage 2): the `= user` binding was
+  # unused — the body reaches the membership row through `user_id` alone
+  # (`Repo.get_by(OrgMembership, user_id: user_id, …)`, the audit event's
+  # `user_id:` field, and `write_managed_membership/5`), and never touches
+  # another field of the struct. Dropped rather than underscore-prefixed.
+  defp set_managed_role(%{id: user_id}, target_role, opts)
        when is_binary(user_id) and target_role in [:admin, :member] do
     slug_str = opts |> Keyword.get(:org_slug, "fabrikam") |> normalize_slug()
     role_str = Atom.to_string(target_role)

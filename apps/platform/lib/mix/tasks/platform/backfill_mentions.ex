@@ -34,7 +34,14 @@ defmodule Mix.Tasks.Platform.BackfillMentions do
       [apply: opts[:apply] || false]
       |> maybe_put(:limit, opts[:limit])
       |> maybe_put(:space_id, opts[:space_id])
-      |> Keyword.put(:log, &Mix.shell().info/1)
+      # `&Mix.shell().info/1` does not compile to what it reads like — the
+      # capture syntax requires the module position to be a variable or an
+      # atom, and `Mix.shell()` is a call, so the compiler warns and the
+      # capture is not the deferred shell lookup it appears to be. An explicit
+      # closure resolves `Mix.shell()` at log time, which is also what we want:
+      # the shell can be swapped (e.g. `Mix.Shell.Quiet`) after this task
+      # builds its options. Task 01a01041 stage 2.
+      |> Keyword.put(:log, fn msg -> Mix.shell().info(msg) end)
 
     MentionBackfill.run(module_opts)
     :ok

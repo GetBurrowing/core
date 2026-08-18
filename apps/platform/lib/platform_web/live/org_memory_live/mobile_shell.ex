@@ -692,7 +692,9 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               class="mt-3 rounded-lg border border-warning/40 bg-warning/5 p-2"
               data-role="mobile-reject-form"
             >
-              <input type="hidden" name="id" value={proposal.id} />
+              <%!-- `name="_id"` — see the desktop pane: name="id" on an input
+                   overrides the form element's DOM id. --%>
+              <input type="hidden" name="_id" value={proposal.id} />
               <label class="mb-1 block text-xs font-medium text-base-content/70">
                 Why reject? Feedback trains the next dreaming run.
               </label>

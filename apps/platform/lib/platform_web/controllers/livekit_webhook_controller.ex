@@ -21,21 +21,38 @@ defmodule PlatformWeb.LivekitWebhookController do
   # ── Handlers ─────────────────────────────────────────────────────────────
 
   @doc """
-  Handle `room_started` events — auto-create a transcript record.
+  Dispatch a LiveKit webhook on its `"event"` field.
 
-  Guards on `Meetings.legit_room?/1` against the room payload so phantom
-  LiveKit rooms (auto-generated `RM_<random>` names produced without a
-  prior `CreateRoom`, or well-formed `space-<uuid>` names pointing at
-  non-existent spaces) never spawn transcripts. Task 019f3312 tightened
-  the guard from regex-only to regex + `chat_spaces` existence check
-  because the attacker-observed phantom-flood was hitting the webhook
-  with well-formed `space-<uuid>` names that satisfied the old regex.
+  One clause per event type, in match order:
 
-  The persisted `room_id` prefers `name` over `sid` (flipped from the
-  previous `sid || name`) so legitimate rooms key transcript rows off
-  the stable app-controlled name; `sid` remains the fallback for
-  malformed / name-less payloads that somehow slip the guard.
+    * `room_started` — create the transcript record (phantom-room guarded).
+    * `room_finished` — finalize the transcript and trigger the summary,
+      sweeping phantom rows that have zero segments.
+    * `transcription` — append segments to the active transcript.
+    * `participant_joined` — upsert a resolvable `meeting_participants` row.
+    * `participant_left` — set `left_at` on the matching active row.
+    * any other `"event"` — logged and ignored.
+    * no `"event"` key — ignored.
+
+  Every clause answers `200` so LiveKit does not retry; "ignored" is carried
+  in the response body, not the status. The reasoning specific to each clause
+  is a comment on that clause, because `@doc` is per name/arity and a second
+  one would be discarded by the compiler rather than appended.
   """
+  # Handle `room_started` events — auto-create a transcript record.
+  #
+  # Guards on `Meetings.legit_room?/1` against the room payload so phantom
+  # LiveKit rooms (auto-generated `RM_<random>` names produced without a
+  # prior `CreateRoom`, or well-formed `space-<uuid>` names pointing at
+  # non-existent spaces) never spawn transcripts. Task 019f3312 tightened
+  # the guard from regex-only to regex + `chat_spaces` existence check
+  # because the attacker-observed phantom-flood was hitting the webhook
+  # with well-formed `space-<uuid>` names that satisfied the old regex.
+  #
+  # The persisted `room_id` prefers `name` over `sid` (flipped from the
+  # previous `sid || name`) so legitimate rooms key transcript rows off
+  # the stable app-controlled name; `sid` remains the fallback for
+  # malformed / name-less payloads that somehow slip the guard.
   def handle(conn, %{"event" => "room_started", "room" => room} = _params) do
     room_id = room["name"] || room["sid"]
     room_name = room["name"]
@@ -78,19 +95,17 @@ defmodule PlatformWeb.LivekitWebhookController do
     end
   end
 
-  @doc """
-  Handle `room_finished` events — finalize transcript and trigger summary.
-
-  Includes a defensive post-hoc sweep for phantom transcripts: if the room
-  is not app-registered AND the transcript has zero segments, delete the
-  row outright instead of finalizing. Stage 2's `room_started` +
-  `transcription` guards should prevent phantom transcripts from being
-  created in the first place, but this belt-and-suspenders sweep catches
-  historical rows (created before this task shipped) or any case where a
-  phantom room slipped past the source filter. A phantom room that
-  somehow accumulated segments still gets finalized — that's not the
-  common case, but it's the safer default than silently dropping data.
-  """
+  # Handle `room_finished` events — finalize transcript and trigger summary.
+  #
+  # Includes a defensive post-hoc sweep for phantom transcripts: if the room
+  # is not app-registered AND the transcript has zero segments, delete the
+  # row outright instead of finalizing. Stage 2's `room_started` +
+  # `transcription` guards should prevent phantom transcripts from being
+  # created in the first place, but this belt-and-suspenders sweep catches
+  # historical rows (created before this task shipped) or any case where a
+  # phantom room slipped past the source filter. A phantom room that
+  # somehow accumulated segments still gets finalized — that's not the
+  # common case, but it's the safer default than silently dropping data.
   def handle(conn, %{"event" => "room_finished", "room" => room} = params) do
     room_id = room["name"] || room["sid"]
     room_name = room["name"]
@@ -229,13 +244,11 @@ defmodule PlatformWeb.LivekitWebhookController do
     end
   end
 
-  @doc """
-  Handle `transcription` events — append segments to the active transcript.
-
-  LiveKit sends transcription segments with participant identity, text,
-  start/end times, and language. Each segment is appended to the transcript's
-  JSONB segments array.
-  """
+  # Handle `transcription` events — append segments to the active transcript.
+  #
+  # LiveKit sends transcription segments with participant identity, text,
+  # start/end times, and language. Each segment is appended to the transcript's
+  # JSONB segments array.
   def handle(conn, %{"event" => "transcription", "room" => room} = params) do
     room_id = room["name"] || room["sid"]
     room_name = room["name"]
@@ -280,12 +293,10 @@ defmodule PlatformWeb.LivekitWebhookController do
     end
   end
 
-  @doc """
-  Handle `participant_joined` events — upsert a resolvable
-  `meeting_participants` row so the rail/gallery render the joiner's real
-  name (not the literal "User"). The webhook is the only server-side
-  signal that a participant actually connected to the LiveKit room.
-  """
+  # Handle `participant_joined` events — upsert a resolvable
+  # `meeting_participants` row so the rail/gallery render the joiner's real
+  # name (not the literal "User"). The webhook is the only server-side
+  # signal that a participant actually connected to the LiveKit room.
   def handle(conn, %{"event" => "participant_joined"} = params) do
     participant = normalize_participant(params)
 
@@ -317,10 +328,8 @@ defmodule PlatformWeb.LivekitWebhookController do
     end
   end
 
-  @doc """
-  Handle `participant_left` events — set `left_at` on the matching active
-  row. Tolerates a leave for a participant we never recorded.
-  """
+  # Handle `participant_left` events — set `left_at` on the matching active
+  # row. Tolerates a leave for a participant we never recorded.
   def handle(conn, %{"event" => "participant_left"} = params) do
     participant = normalize_participant(params)
 
@@ -342,9 +351,7 @@ defmodule PlatformWeb.LivekitWebhookController do
     end
   end
 
-  @doc """
-  Catch-all for unhandled event types.
-  """
+  # Catch-all for unhandled event types.
   def handle(conn, %{"event" => event} = _params) do
     Logger.debug("[LiveKit] Ignoring event: #{event}")
     conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unhandled event: #{event}"})

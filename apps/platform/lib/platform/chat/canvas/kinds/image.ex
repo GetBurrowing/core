@@ -13,8 +13,10 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
 
   @attachment_path_re ~r|^/chat/attachments/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$|
 
+  @impl Platform.Chat.Canvas.Kind
   def children, do: :none
 
+  @impl Platform.Chat.Canvas.Kind
   def schema do
     %{
       "type" => "object",
@@ -55,6 +57,7 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
 
   attr :node, :map, required: true
 
+  @impl Platform.Chat.Canvas.Kind
   def render(assigns) do
     props = assigns.node["props"] || %{}
     assigns = assign(assigns, :props, props)

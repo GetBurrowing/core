@@ -396,63 +396,6 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
-  # Seed the index-mode defaults so the current heex (which falls through
-  # to the `:else` index branch when `@meeting == nil`) doesn't crash
-  # on a bare guest failure state. Stage 4 will add a `:state`-branch cond
-  # so `:expired` / `:invalid` render their own cards and this fallback
-  # becomes dead code — but keeping it lets stage 3 land as a compilable,
-  # renderable-without-crash unit even before stage 4 lands. Values are
-  # empty defaults; no data leaks into the guest surface's DOM.
-  defp seed_guest_index_fallback_assigns(socket) do
-    socket
-    |> assign(:meetings, [])
-    |> assign(:grouped_meetings, %{live: [], upcoming: [], ended: []})
-    # `false`, not `meetings == []`, even though the list above is empty:
-    # this is a guest FAILURE surface, and "No meetings yet." would be a
-    # claim about a scoped list that was never queried for this visitor.
-    |> assign(:index_empty?, false)
-    |> assign(:viewer_external?, true)
-    |> assign(:projects, [])
-    |> assign(:meeting_subscribed_project_ids, [])
-    |> assign(:show_start_meeting_sheet, false)
-    |> assign(:start_meeting_form, blank_start_meeting_form([]))
-    |> assign(:start_meeting_error, nil)
-    |> seed_create_invite_assigns()
-    |> seed_live_invite_assigns()
-  end
-
-  # Seed the meeting-shell-tree assigns the current (stage-3) heex reads
-  # unconditionally under `<%= if @meeting do %>`. Used by the `:name_entry`
-  # guest state so the shell renders without crashing before stage 4 adds
-  # the `:state`-branch cond. `:in_meeting` calls this indirectly via
-  # `enter_meeting_as_guest/3` which then overrides some values. All
-  # side-effect-free (no PubSub subscribes, no LiveKit calls).
-  defp seed_guest_shell_tree_assigns(socket, meeting) do
-    participants =
-      if is_binary(meeting.chat_space_id),
-        do: build_meeting_participants(meeting.chat_space_id),
-        else: []
-
-    socket
-    |> assign(:meeting, meeting)
-    # Per-meeting intent mute (task 019fbaac stage 4). `seed_intent_assigns/1`
-    # seeded `false` in the guest mount clause, but that is the
-    # PRE-RESOLUTION default, not the answer — and unlike the authenticated
-    # surface there is no `handle_params/3` pass to resolve it later. Read
-    # it here so a guest who joins a meeting that is ALREADY muted sees the
-    # badge on first paint rather than only after the next toggle.
-    |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
-    |> assign(:participants, participants)
-    |> assign(:agents_by_id, %{})
-    |> assign(:speaking_participant_ids, MapSet.new())
-    |> assign_meeting_canvases(meeting.chat_space_id)
-    |> assign(:canvas_tile_changed?, false)
-    |> assign(:current_stage_mode, :gallery)
-    |> assign(:active_space, meeting.chat_space)
-    |> assign(:current_participant, nil)
-    |> MeetingHooks.attach_guest()
-  end
-
   def mount(_params, session, socket) do
     # Pull the authenticated user_id off the session (same pattern as
     # ChatLive). Used to resolve a `current_participant` in the meeting's
@@ -526,6 +469,63 @@ defmodule PlatformWeb.MeetingLive do
      |> seed_intent_assigns()
      |> assign_calendar_time_zone()
      |> seed_calendar_now()}
+  end
+
+  # Seed the index-mode defaults so the current heex (which falls through
+  # to the `:else` index branch when `@meeting == nil`) doesn't crash
+  # on a bare guest failure state. Stage 4 will add a `:state`-branch cond
+  # so `:expired` / `:invalid` render their own cards and this fallback
+  # becomes dead code — but keeping it lets stage 3 land as a compilable,
+  # renderable-without-crash unit even before stage 4 lands. Values are
+  # empty defaults; no data leaks into the guest surface's DOM.
+  defp seed_guest_index_fallback_assigns(socket) do
+    socket
+    |> assign(:meetings, [])
+    |> assign(:grouped_meetings, %{live: [], upcoming: [], ended: []})
+    # `false`, not `meetings == []`, even though the list above is empty:
+    # this is a guest FAILURE surface, and "No meetings yet." would be a
+    # claim about a scoped list that was never queried for this visitor.
+    |> assign(:index_empty?, false)
+    |> assign(:viewer_external?, true)
+    |> assign(:projects, [])
+    |> assign(:meeting_subscribed_project_ids, [])
+    |> assign(:show_start_meeting_sheet, false)
+    |> assign(:start_meeting_form, blank_start_meeting_form([]))
+    |> assign(:start_meeting_error, nil)
+    |> seed_create_invite_assigns()
+    |> seed_live_invite_assigns()
+  end
+
+  # Seed the meeting-shell-tree assigns the current (stage-3) heex reads
+  # unconditionally under `<%= if @meeting do %>`. Used by the `:name_entry`
+  # guest state so the shell renders without crashing before stage 4 adds
+  # the `:state`-branch cond. `:in_meeting` calls this indirectly via
+  # `enter_meeting_as_guest/3` which then overrides some values. All
+  # side-effect-free (no PubSub subscribes, no LiveKit calls).
+  defp seed_guest_shell_tree_assigns(socket, meeting) do
+    participants =
+      if is_binary(meeting.chat_space_id),
+        do: build_meeting_participants(meeting.chat_space_id),
+        else: []
+
+    socket
+    |> assign(:meeting, meeting)
+    # Per-meeting intent mute (task 019fbaac stage 4). `seed_intent_assigns/1`
+    # seeded `false` in the guest mount clause, but that is the
+    # PRE-RESOLUTION default, not the answer — and unlike the authenticated
+    # surface there is no `handle_params/3` pass to resolve it later. Read
+    # it here so a guest who joins a meeting that is ALREADY muted sees the
+    # badge on first paint rather than only after the next toggle.
+    |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
+    |> assign(:participants, participants)
+    |> assign(:agents_by_id, %{})
+    |> assign(:speaking_participant_ids, MapSet.new())
+    |> assign_meeting_canvases(meeting.chat_space_id)
+    |> assign(:canvas_tile_changed?, false)
+    |> assign(:current_stage_mode, :gallery)
+    |> assign(:active_space, meeting.chat_space)
+    |> assign(:current_participant, nil)
+    |> MeetingHooks.attach_guest()
   end
 
   # The viewer's IANA zone, off the LiveSocket connect params (set in
@@ -2704,15 +2704,6 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, push_patch(socket, to: archive_path(socket.assigns, overrides))}
   end
 
-  # Paging keeps the selected day's OFFSET within the week (a Wednesday
-  # stays a Wednesday) rather than snapping back to Monday, so stepping
-  # through weeks does not silently move which day is highlighted.
-  defp shift_calendar_week(socket, days) do
-    anchor = Date.add(socket.assigns.calendar_anchor_date, days)
-    selected = Date.add(socket.assigns.calendar_selected_date, days)
-    assign_calendar_week(socket, anchor, selected)
-  end
-
   # ── New-meeting FAB + create sheet (`:index` action only) ────────────────
   #
   # The FAB lives only on the meetings index. Clicking it flips
@@ -3016,6 +3007,15 @@ defmodule PlatformWeb.MeetingLive do
     end)
   end
 
+  # Paging keeps the selected day's OFFSET within the week (a Wednesday
+  # stays a Wednesday) rather than snapping back to Monday, so stepping
+  # through weeks does not silently move which day is highlighted.
+  defp shift_calendar_week(socket, days) do
+    anchor = Date.add(socket.assigns.calendar_anchor_date, days)
+    selected = Date.add(socket.assigns.calendar_selected_date, days)
+    assign_calendar_week(socket, anchor, selected)
+  end
+
   # ── PubSub ───────────────────────────────────────────────────────────────
 
   # Auto-join trigger from handle_params/3. Delegates straight into
@@ -3057,21 +3057,6 @@ defmodule PlatformWeb.MeetingLive do
         {:noreply, socket}
     end
   end
-
-  # Flip a `scheduled` meeting to `live` (stamping `started_at` and
-  # broadcasting `{:meeting_started, _}` so the index re-buckets it under
-  # "Live now"). Guarded on `"scheduled"` because `status_changeset` rejects
-  # illegal transitions (a live→live attempt errors); any other status is a
-  # no-op. On success the updated meeting is re-assigned so the render path
-  # sees the live status.
-  defp maybe_start_meeting(%{assigns: %{meeting: %{status: "scheduled"} = m}} = socket) do
-    case Meetings.start_meeting(m) do
-      {:ok, started} -> assign(socket, :meeting, started)
-      {:error, _} -> socket
-    end
-  end
-
-  defp maybe_start_meeting(socket), do: socket
 
   def handle_info({:participant_joined, _participant}, socket) do
     {:noreply, refresh_participants(socket)}
@@ -3173,18 +3158,6 @@ defmodule PlatformWeb.MeetingLive do
           true ->
             {:noreply, socket}
         end
-    end
-  end
-
-  # Upsert by id, preserving `list_canvases/1`'s oldest-first ordering so
-  # `latest_canvas/1`'s `List.last/1` keeps meaning what it says.
-  defp append_canvas(socket, canvas) do
-    existing = socket.assigns[:meeting_canvases] || []
-
-    if Enum.any?(existing, &(&1.id == canvas.id)) do
-      Enum.map(existing, fn c -> if c.id == canvas.id, do: canvas, else: c end)
-    else
-      existing ++ [canvas]
     end
   end
 
@@ -3307,18 +3280,6 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, assign(socket, :calendar_now, now)}
   end
 
-  # Only the `:index` action holds calendar assigns; the `:show` and guest
-  # surfaces share this PubSub clause and must not be re-queried.
-  defp refresh_calendar_week(socket) do
-    case socket.assigns do
-      %{calendar_anchor_date: %Date{} = anchor, calendar_selected_date: selected} ->
-        assign_calendar_week(socket, anchor, selected)
-
-      _ ->
-        socket
-    end
-  end
-
   # ── Intents-collapse live updates (task 019f70b8 stage 7) ────────────────
   #
   # MUST stay ABOVE the catch-all below — the catch-all swallows anything
@@ -3435,6 +3396,45 @@ defmodule PlatformWeb.MeetingLive do
   # reactions, pins, …). The shell only cares about roster + canvas
   # events; ignore the rest so a broadcast can't crash the LV.
   def handle_info(_event, socket), do: {:noreply, socket}
+
+  # Flip a `scheduled` meeting to `live` (stamping `started_at` and
+  # broadcasting `{:meeting_started, _}` so the index re-buckets it under
+  # "Live now"). Guarded on `"scheduled"` because `status_changeset` rejects
+  # illegal transitions (a live→live attempt errors); any other status is a
+  # no-op. On success the updated meeting is re-assigned so the render path
+  # sees the live status.
+  defp maybe_start_meeting(%{assigns: %{meeting: %{status: "scheduled"} = m}} = socket) do
+    case Meetings.start_meeting(m) do
+      {:ok, started} -> assign(socket, :meeting, started)
+      {:error, _} -> socket
+    end
+  end
+
+  defp maybe_start_meeting(socket), do: socket
+
+  # Upsert by id, preserving `list_canvases/1`'s oldest-first ordering so
+  # `latest_canvas/1`'s `List.last/1` keeps meaning what it says.
+  defp append_canvas(socket, canvas) do
+    existing = socket.assigns[:meeting_canvases] || []
+
+    if Enum.any?(existing, &(&1.id == canvas.id)) do
+      Enum.map(existing, fn c -> if c.id == canvas.id, do: canvas, else: c end)
+    else
+      existing ++ [canvas]
+    end
+  end
+
+  # Only the `:index` action holds calendar assigns; the `:show` and guest
+  # surfaces share this PubSub clause and must not be re-queried.
+  defp refresh_calendar_week(socket) do
+    case socket.assigns do
+      %{calendar_anchor_date: %Date{} = anchor, calendar_selected_date: selected} ->
+        assign_calendar_week(socket, anchor, selected)
+
+      _ ->
+        socket
+    end
+  end
 
   # Mirror ChatLive's terminate hook so a tab-close mid-meeting
   # broadcasts the "left" event and the mini-bar doesn't ghost.

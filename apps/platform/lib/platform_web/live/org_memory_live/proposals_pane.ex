@@ -169,7 +169,12 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
                       id={"proposal-reject-form-#{proposal.id}"}
                       phx-submit="reject_proposal"
                     >
-                      <input type="hidden" name="id" value={proposal.id} />
+                      <%!-- `name="_id"`, not `name="id"`: on an input, name="id"
+                           overrides the DOM id of the enclosing form element, which
+                           LiveView warns about at compile time. The handler in
+                           `view.ex` matches `"_id"` for both proposal reject
+                           forms. --%>
+                      <input type="hidden" name="_id" value={proposal.id} />
                       <div class="mb-2 text-xs font-medium text-base-content/70">
                         Why is this proposal being rejected? Your feedback trains the next dreaming run.
                       </div>

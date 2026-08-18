@@ -708,21 +708,30 @@ defmodule Platform.Orchestration.PromptTemplates do
     task_ack_preamble = @task_ack_preamble
     planning_no_ack_notice = @planning_no_ack_notice
 
-    skills_reference =
-      "## Skill discovery — do this BEFORE you start executing\n\n" <>
-        "Skills encode org conventions you may not have; load the right one before improvising. " <>
-        "Discovery is an active step, not a passive read — the payload bundler does NOT always pre-attach the skill you need:\n\n" <>
-        "1. Derive this task's domain from its title and description (e.g. \"task stack\", \"canvas\", \"migration\", \"LiveView\").\n" <>
-        "2. Call the `skill_list` MCP tool yourself and scan the returned skills for one plausibly matching that domain " <>
-        "(a task mentioning \"task stack\" -> the `task-stack-creation` skill; \"canvas\" -> a `canvas-*` skill). " <>
-        "Do NOT assume the right skill was pre-attached to the payload.\n" <>
-        "3. If a skill matches, call the `skill_get` MCP tool to fetch its full content and follow it as authoritative.\n\n" <>
-        "Discovery happens by calling `skill_list` / `skill_get` yourself — do NOT treat \"the `skills` key\" or an attached " <>
-        "skills object as your discovery mechanism, because you receive rendered text, not an introspectable object.\n\n" <>
-        "If the dispatch context did attach skill content inline, still treat that bundled content as authoritative for this task " <>
-        "before trying to rediscover skills from disk. " <>
-        "Read and follow any relevant bundled skills — they describe conventions, repo layout, deploy targets, and how to delegate work. " <>
-        "Only fall back to filesystem skill lookup if the payload clearly references a path without including the needed content."
+    # NOTE (task 01a01041 stage 2): a `skills_reference = "## Skill discovery …"`
+    # local used to be built here and never interpolated, which the compiler
+    # reported as an unused variable. It was NOT a dropped interpolation — it
+    # was a third redundant copy of prose that already lives in two live
+    # places, and baking it into the descriptors would have been WRONG twice
+    # over:
+    #
+    #   1. `skills_reference` is a RENDER-TIME variable, not a
+    #      definition-time one. Template bodies below carry a literal
+    #      `{{skills_reference}}` placeholder and declare `"skills_reference"`
+    #      in `variables:`; `Orchestration.HeartbeatScheduler` supplies the
+    #      value from its own `@skills_reference` attribute at dispatch time
+    #      (heartbeat_scheduler.ex:76, :358, …). Interpolating the local into
+    #      the body would have emitted the block TWICE in every rendered
+    #      dispatch and broken the tests that assert the stored body still
+    #      contains the placeholder (prompt_templates_test.exs:687, :2329).
+    #   2. These strings are the seeded DESCRIPTOR a force-update migration
+    #      enforces from, so freezing prose into them makes it reappear in a
+    #      live prompt later.
+    #
+    # The same prose also sits verbatim inside `@federation_preamble`
+    # (line ~473), which reaches every dispatch through the sibling
+    # `{{federation_preamble}}` placeholder. So no template lost its skills
+    # section — the dead local was deleted, not renamed.
 
     [
       %{

@@ -20,7 +20,7 @@ defmodule Platform.Tasks.Stacks do
   alias Platform.Tasks
   alias Platform.Tenancy.Lifecycle
   alias Platform.Tasks.{Plan, PlanEngine, ReviewRequests, Stack, StackDeployer, Task}
-  alias Platform.Tasks.{Stage, Validation}
+  alias Platform.Tasks.Stage
   alias Platform.Tasks.Stacks.{CommencementGate, DepInference}
 
   @slug_regex ~r/^[a-z0-9][a-z0-9-]*$/
@@ -391,6 +391,13 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
+  def start_stack(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> start_stack(stack)
+      nil -> {:error, :stack_not_found}
+    end
+  end
+
   defp do_start_stack(%Stack{} = stack) do
     # ADR 0042 Decision 4: flip the stack to `in_progress` BEFORE cascading
     # members. The commencement gate (`CommencementGate.open?/1`) enforced
@@ -440,13 +447,6 @@ defmodule Platform.Tasks.Stacks do
 
       {:error, changeset} ->
         {:error, changeset}
-    end
-  end
-
-  def start_stack(stack_id) when is_binary(stack_id) do
-    case Repo.get(Stack, stack_id) do
-      %Stack{} = stack -> start_stack(stack)
-      nil -> {:error, :stack_not_found}
     end
   end
 

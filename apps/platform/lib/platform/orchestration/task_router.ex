@@ -3746,7 +3746,9 @@ defmodule Platform.Orchestration.TaskRouter do
     case Tasks.spend_review_round(task) do
       {:ok, updated, count} ->
         if count >= Tasks.max_review_rounds() do
-          replan_after_exhausted_rounds(state, updated, count, gate_stage)
+          # `gate_stage` is deliberately NOT forwarded — see
+          # `replan_after_exhausted_rounds/3`.
+          replan_after_exhausted_rounds(state, updated, count)
         else
           # ARM DECISION: the normal bounce DOES open a remediation stage.
           # This is the instance the task exists for — a genuine behavioural
@@ -3772,7 +3774,22 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
-  defp replan_after_exhausted_rounds(%State{} = state, task, count, gate_stage) do
+  # Arity 3, not 4 (task 01a01041 stage 2). This function used to take the
+  # failed `gate_stage` and ignore it, which the compiler flagged as an unused
+  # parameter. The ignoring is INTENTIONAL, not a guard failing open: BOTH arms
+  # below deliberately open no remediation stage, and the fallback arm's ARM
+  # DECISION comment says so explicitly and extends the same reasoning to the
+  # `:replanned` success path — on the success path the task goes to
+  # `planning` and a planner is dispatched, so the "must have an open stage"
+  # invariant does not apply; on the failure path the plan is already dying and
+  # stacking a synthesized stage onto it would hand the next planner an
+  # executable stage it never wrote. Neither arm has anywhere to put a
+  # `gate_stage`, so the parameter was vestigial and the arity shrank rather
+  # than the body growing a use for it. The review-round BOUND itself
+  # (`count >= Tasks.max_review_rounds()`, decided in
+  # `spend_round_and_route/3`) is untouched: nothing about the bound consults
+  # the gate stage.
+  defp replan_after_exhausted_rounds(%State{} = state, task, count) do
     reason =
       "Behavioural review failed #{count} times (bound: #{Tasks.max_review_rounds()}). " <>
         "Returning the task to planning rather than bouncing it to implementation again."

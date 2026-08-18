@@ -21,7 +21,6 @@ defmodule PlatformWeb.ChatLive do
 
   require Logger
 
-  import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.ChatLive.Partials
   import PlatformWeb.Components.ChatHelpers
   import PlatformWeb.Components.ChatMessage, only: [chat_message: 1, local_time: 1]
@@ -1060,15 +1059,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  defp confirm_junk_batch_actor_id(socket) do
-    case socket.assigns do
-      %{current_participant: %{user_id: id}} when is_binary(id) -> id
-      %{current_user_record: %{id: id}} when is_binary(id) -> id
-      %{current_user: %{id: id}} when is_binary(id) -> id
-      _ -> nil
-    end
-  end
-
   # ── Drawer search (mobile channel search Stage 1) ─────────────────────
   #
   # Filter-as-you-type over the drawer's already-loaded sections + DMs.
@@ -1204,147 +1194,6 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("undo_hide", %{"id" => space_id}, socket) when is_binary(space_id) do
     {:noreply, do_unhide(socket, space_id)}
   end
-
-  defp do_unhide(socket, space_id) do
-    user_id = socket.assigns.user_id
-    _ = Accounts.unhide_channel(user_id, space_id)
-    hidden = Accounts.get_hidden_channel_ids(user_id)
-
-    cleared_toast =
-      case socket.assigns.undo_toast do
-        %{space_id: ^space_id} -> nil
-        other -> other
-      end
-
-    # Stage 3 v3: collapse the global Hidden drawer when the user has
-    # just unhidden the last remaining channel — the drawer trigger goes
-    # silent (template-level :if guard), so leaving `:hidden_drawer_open`
-    # stuck at true would cause the panel to re-pop expanded the next
-    # time the user hides something. Reset to closed instead.
-    drawer_open =
-      if MapSet.size(hidden) == 0, do: false, else: socket.assigns.hidden_drawer_open
-
-    socket
-    |> assign(:hidden_channel_ids, hidden)
-    |> assign(
-      :channel_sections,
-      channel_sections(
-        socket.assigns.channels,
-        socket.assigns.dm_conversations,
-        socket.assigns.pinned_space_ids,
-        hidden,
-        socket.assigns.closed_dm_at
-      )
-    )
-    |> assign(
-      :sidebar_sections,
-      resolve_sidebar_sections(
-        user_id,
-        socket.assigns.channels,
-        hidden
-      )
-    )
-    |> assign(:undo_toast, cleared_toast)
-    |> assign(:hidden_drawer_open, drawer_open)
-  end
-
-  # Close raises NO acknowledgement. Stage 2 gave it an undo toast and stage 3
-  # gave that toast a line explaining the return; Marlowe rejected both at the
-  # stage-3 gate: "We don't need a acknowledgement / affirmation for a close
-  # action on a DM. A User can simply search for a person or agent to DM again
-  # if they want to bring back the window." The row leaves and that is the
-  # whole feedback. `@undo_toast` is therefore untouched here — a hide toast
-  # raised moments earlier is still true and still has its own timer running,
-  # so clearing it would be a second unasked-for behaviour change.
-  defp do_close_dm(socket, space) do
-    user_id = socket.assigns.user_id
-
-    # Closing a PINNED DM unpins it as well, so the row leaves the rail on the
-    # click that closed it (Marlowe, 2026-08-13: "Closing a pinned item doesn't
-    # do anything. As soon as I unpin the item (DM), it disappears because I
-    # closed it at some point. I expect if I closed a pinned item, it would
-    # undo the pin and close the DM.").
-    #
-    # `channel_sections/5` runs the close filter over the UNPINNED DM
-    # remainder only, because the Pinned block is a conversation's one place
-    # and nothing filters it. Without the unpin the close was still recorded,
-    # the row sat there, and the DM disappeared whenever the user unpinned it
-    # later: possibly days later, attached to an action they had no reason to
-    # connect to it. One rule everywhere instead. Close means this leaves my
-    # list now.
-    #
-    # THE OLD PIN IS DISCARDED, NOT STASHED. Designer's decision, tradeoff
-    # accepted by Marlowe: a DM that comes back (a new message in it, or the user
-    # opening it) comes back UNPINNED and is re-pinned in one click. Do not
-    # "improve" this by remembering the pin and restoring it on return. That
-    # would be a second piece of state the user cannot see, and invisible state
-    # is precisely what produced this bug.
-    #
-    # Written unconditionally rather than under a `pinned?` test, and BEFORE
-    # the close. `Sidebar.set_space_pinned/3` takes the DESIRED state, so
-    # stating the end state costs one idempotent write on a human-rate click,
-    # whereas a membership test against `@pinned_space_ids` can be stale and
-    # would fail by silently restoring the old behaviour. Unpin first because
-    # if the second write fails the user is left with an unpinned DM still on
-    # the rail, which is visible and recoverable; the other order fails back
-    # into the bug.
-    _ = Sidebar.set_space_pinned(user_id, space.id, false)
-    _ = Accounts.close_dm(user_id, space.id)
-
-    # Both halves are user preferences, so the user's OTHER tabs have to
-    # converge or they keep rendering a pinned row whose pin no longer exists.
-    # `toggle_pinned` already broadcasts for the pin half; a close broadcast
-    # nothing, so a second tab kept a closed DM on the rail until its next
-    # navigation. `handle_info(:sidebar_changed, ...)` re-reads the close store
-    # as well as the pin list, so the receiving tab applies BOTH halves. With
-    # only the pin half it would move the row out of Pinned into Direct
-    # Messages and leave it sitting there, which is this same bug one tab over.
-    ChatPubSub.broadcast_sidebar_changed_from(user_id, self())
-
-    socket
-    |> assign(:closed_dm_at, Accounts.get_closed_dm_at(user_id))
-    # The menu that issued this is still open on a row that has just left the
-    # rail. Same reason `hide_channel` does it: a menu naming a conversation
-    # the user can no longer see, still offering to act on it, is worse than
-    # the lost context of closing it.
-    |> assign(:row_actions_space_id, nil)
-    # Rebuilds `@channel_sections` off the pin list as PERSISTED. Rebuilding it
-    # here from `@pinned_space_ids` would use the pin this function has just
-    # dropped, and the row would stay in the Pinned block until the next
-    # navigation.
-    |> recompute_pinned()
-  end
-
-  # Entering a conversation clears its close, and returns the map the rail
-  # should be rebuilt from.
-  #
-  # Reads the STORE, not `@closed_dm_at`. The assign would be right today, but
-  # only because every space change remounts this LiveView and mount reads the
-  # store moments earlier. The store is the thing a second tab writes to, and
-  # the day a `<.link patch=` lands on a space route this would become a
-  # silent lost write: the user opens the DM, reads it, and the close another
-  # tab made survives to hide the row again. One preferences read on a DM
-  # navigation is not worth that trap.
-  #
-  # The write is still guarded on the key being present, so an ordinary DM
-  # navigation costs one read and no UPDATE.
-  #
-  # Groups are treated exactly like DMs, because `closeable` offers Close on
-  # both. A group whose close could only be undone by someone else posting in
-  # it would be the one closed conversation with no way back from the user's
-  # own side.
-  defp maybe_reopen_dm(socket, %{kind: kind, id: space_id}) when kind in ["dm", "group"] do
-    closed_dm_at = Accounts.get_closed_dm_at(socket.assigns.user_id)
-
-    if Map.has_key?(closed_dm_at, space_id) do
-      _ = Accounts.reopen_dm(socket.assigns.user_id, space_id)
-      Map.delete(closed_dm_at, space_id)
-    else
-      closed_dm_at
-    end
-  end
-
-  defp maybe_reopen_dm(socket, _space), do: socket.assigns.closed_dm_at
 
   # Scope filter (chat plan v2 Stage 4). Clicking a scope-pill in the
   # sectioned rail (or the chat-header pill) narrows the visible sub-org
@@ -1811,27 +1660,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Only orgs carry the include/keep modal state; a channel modal is a no-op here.
-  defp update_delete_modal(socket, fun) do
-    case socket.assigns.delete_modal do
-      %{type: "org"} = modal -> assign(socket, :delete_modal, fun.(modal))
-      _ -> socket
-    end
-  end
-
-  defp finish_schedule_deletion(socket, {:ok, _resource}) do
-    socket
-    |> assign(:delete_modal, nil)
-    |> refresh_chat_containers()
-    |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")
-  end
-
-  defp finish_schedule_deletion(socket, {:error, reason}) do
-    socket
-    |> assign(:delete_modal, nil)
-    |> put_flash(:error, LifecycleActions.error_message(reason))
-  end
-
   # Channel drag-drop OR keyboard move. The hook emits the TARGET section's
   # resulting channel-id order; `Sidebar.put_channel_order/3` records that
   # order for the section AND removes those channels from every other section
@@ -2035,6 +1863,738 @@ defmodule PlatformWeb.ChatLive do
          socket.assigns.hidden_channel_ids
        )
      )}
+  end
+
+  # Sectioned-rail drag-reorder (chat plan v2 Stage 3 + Stage 6). The JS hook
+  # (`section_reorder.js`) emits `{from: <section_id>, to: <section_id>}` after
+  # a drop onto another sub-org section. Reordering moves `from` into `to`'s
+  # slot in the list — the displaced section and everything after it shift one
+  # position toward `from`'s former slot (standard reorder semantics).
+  #
+  # Identity is the section `id`, NOT its `color` token. Stage 6 made `color`
+  # an admin-editable, non-unique cosmetic attribute (two sections can share a
+  # color after a recolor), so keying drag identity off `color` would make a
+  # drag onto a duplicate-color section ambiguous and resolve to the wrong (or
+  # no) section. Section `id` is stable and unique, so both the admin and the
+  # personal reorder paths resolve `from`/`to` by id against the currently
+  # rendered `@sidebar_sections`.
+  #
+  # Pinned + DMs are NOT reorderable — the JS hook drops their drag handle and
+  # the server-side guard rejects payloads whose ids aren't in the rendered
+  # sub-org sections, so both branches no-op on a bogus/stale id.
+  def handle_event("section_reordered", %{"from" => from_id, "to" => to_id}, socket)
+      when is_binary(from_id) and is_binary(to_id) do
+    # Stage 6: in admin-edit mode the same section-header drag persists to the
+    # GLOBAL org default (channel_sections.position) via Sidebar.reorder_sections
+    # instead of the per-user section_order. Branch here so the SectionReorder
+    # hook stays mode-agnostic — the server decides which layer to write.
+    if socket.assigns.sidebar_admin_edit do
+      reorder_sections_default(socket, from_id, to_id)
+    else
+      reorder_sections_personal(socket, from_id, to_id)
+    end
+  end
+
+  # Per-message actions sheet (3-dot menu on chat messages — task 019e0f29
+  # Stage 3). Replaces the inert DaisyUI dropdown placeholder added in
+  # Stage 2 with a real bottom sheet on mobile / centered card on desktop.
+  def handle_event("open_message_actions", %{"id" => msg_id}, socket) do
+    # Lift the message struct alongside the id so the sheet template can
+    # gate items (e.g. "Edit message") on per-message attributes (author,
+    # content_type) — see chat_live.html.heex around the Edit affordance.
+    msg = Platform.Chat.get_message(msg_id)
+
+    {:noreply,
+     socket
+     |> assign(:open_message_actions_id, msg_id)
+     |> assign(:open_message_actions_msg, msg)}
+  end
+
+  def handle_event("close_message_actions", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:open_message_actions_id, nil)
+     |> assign(:open_message_actions_msg, nil)}
+  end
+
+  # ── Mobile drawer row actions (task 019fe998) ─────────────────────────────
+  #
+  # Pin, unpin and hide were all revealed by `group-hover/row:` /
+  # `focus-within:`, and Tailwind compiles `hover:` inside
+  # `@media (hover: hover)`, so none of the three could fire on a phone. The
+  # drawer row's overflow control opens a bottom sheet carrying all three.
+  #
+  # These two handlers are the ONLY new events, and they carry no business
+  # logic: the sheet's actions reuse `toggle_pinned` and `hide_channel`
+  # unchanged. Same shape as `open_message_actions` above.
+  #
+  # Only the id is stored. Name and pinned-ness are re-derived at render, so
+  # the header and the Pin/Unpin verb cannot go stale against the row.
+  def handle_event("open_row_actions", %{"space_id" => space_id}, socket)
+      when is_binary(space_id) do
+    {:noreply, assign(socket, :row_actions_space_id, space_id)}
+  end
+
+  def handle_event("close_row_actions", _params, socket) do
+    {:noreply, assign(socket, :row_actions_space_id, nil)}
+  end
+
+  # ── Infinite scroll (task 019e18fc Stage 3) ────────────────────────────────
+  #
+  # Top sentinel fires `load_older_messages` when it scrolls into view AND
+  # `:has_more_older` is true. Bottom sentinel fires `load_newer_messages`
+  # when visible AND `:newest_evicted?` is true (the bounded-DOM tail was
+  # pruned by a prior prepend; the user is scrolling back toward the live
+  # tail and needs it re-hydrated). Both delegate the actual fetch +
+  # stream mutation to `PlatformWeb.ChatLive.MessagesHooks` — see Stages
+  # 1 and 2 for the helper implementations.
+  #
+  # Authorization: both handlers gate on a present `:active_space`. A
+  # missing active_space means the user is on the no-space landing
+  # state, in which case there's nothing to paginate.
+
+  def handle_event("load_older_messages", _params, socket) do
+    case socket.assigns[:active_space] do
+      %{id: space_id} when is_binary(space_id) ->
+        socket =
+          socket
+          |> assign(:loading_older, true)
+          |> PlatformWeb.ChatLive.MessagesHooks.load_older_messages(space_id)
+
+        {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("load_newer_messages", _params, socket) do
+    case socket.assigns[:active_space] do
+      %{id: space_id} when is_binary(space_id) ->
+        socket =
+          socket
+          |> assign(:loading_newer, true)
+          |> PlatformWeb.ChatLive.MessagesHooks.load_newer_messages(space_id)
+
+        {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # ── Version history popover (task 019e0f29 Stage 6, contract Section D.2)
+  # Clicking the `(edited)` affix opens this; the popover lists prior
+  # versions newest-first.
+
+  def handle_event("show_version_history", %{"message-id" => message_id}, socket) do
+    versions = Platform.Chat.MessageVersions.list_versions(message_id)
+
+    {:noreply, assign(socket, :version_history, %{message_id: message_id, versions: versions})}
+  end
+
+  def handle_event("close_version_history", _params, socket) do
+    {:noreply, assign(socket, :version_history, nil)}
+  end
+
+  # Click target on the "Correction to earlier message" header (Section D.4).
+  # Pushes a custom event to the client so a small JS handler can scroll the
+  # message stream to the target and apply a brief pulse animation.
+  def handle_event("scroll_to_message", %{"id" => target_id}, socket) do
+    {:noreply, push_event(socket, "chat:scroll-to-message", %{id: target_id})}
+  end
+
+  # ── Inline edit flow (task 019e0f29 Stage 5) ────────────────────────────
+  # Stage 4 left a placeholder; Stage 5 wires the full editor.
+  # `edit_message_clicked` opens the editor by setting editing_message_id;
+  # the chat_message component swaps the bubble for chat_message_editor
+  # when @editing_message_id matches the row's msg id. `cancel_edit`
+  # closes the editor. `save_edit` is the form-submit handler — it
+  # branches on the `removes_content` flag the JS hook set:
+  #   - "true"  → stash the pending edit, surface the removal-warning
+  #               modal (Section F.4 Policy 4 of the contract).
+  #   - "false" → fire the edit immediately.
+  # `confirm_save_edit` / `cancel_save_edit` handle the modal buttons.
+
+  def handle_event("edit_message_clicked", params, socket) do
+    msg_id = params["message-id"] || params["message_id"]
+
+    # Chat.get_message/1 rather than the fully-qualified Platform.Repo.get/2 —
+    # `msg_id` is a `phx-value-` param, and the fully-qualified spelling is
+    # invisible to `git grep "Repo.get("`, which is how it evaded the sweep.
+    with %Platform.Chat.Message{} = msg <- Platform.Chat.get_message(msg_id),
+         :ok <- authorize_edit(msg, socket.assigns.current_participant) do
+      {:noreply,
+       socket
+       |> assign(:editing_message_id, msg_id)
+       |> MessagesHooks.reinsert_stream_message(msg_id)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_edit", _params, socket) do
+    msg_id = socket.assigns.editing_message_id
+
+    socket =
+      socket
+      |> assign(:editing_message_id, nil)
+      |> assign(:pending_save_edit, nil)
+
+    case msg_id do
+      nil -> {:noreply, socket}
+      id -> {:noreply, MessagesHooks.reinsert_stream_message(socket, id)}
+    end
+  end
+
+  def handle_event(
+        "save_edit",
+        %{"message_id" => message_id, "body" => body, "removes_content" => flag},
+        socket
+      ) do
+    if flag == "true" do
+      # Stash the pending edit and let the removal-warning modal open
+      # via the @pending_save_edit assign. Keep the editor open in the
+      # background so a Cancel on the modal keeps the user's draft.
+      {:noreply, assign(socket, :pending_save_edit, %{message_id: message_id, body: body})}
+    else
+      apply_save_edit(socket, message_id, body)
+    end
+  end
+
+  def handle_event("confirm_save_edit", _params, socket) do
+    case socket.assigns.pending_save_edit do
+      %{message_id: message_id, body: body} ->
+        socket = assign(socket, :pending_save_edit, nil)
+        apply_save_edit(socket, message_id, body)
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_save_edit", _params, socket) do
+    # Modal dismissed; keep the editor open with the user's draft so
+    # they can revise.
+    {:noreply, assign(socket, :pending_save_edit, nil)}
+  end
+
+  # Coordinator: Search event that also writes MessagesHooks state
+  # (thread expansion, stream reinsert, highlight).
+  def handle_event("search_open_result", %{"message-id" => message_id}, socket) do
+    case Chat.get_message(message_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Search result not found.")}
+
+      %{thread_id: thread_id} = message when is_binary(thread_id) ->
+        parent_msg_id =
+          Enum.find_value(socket.assigns.thread_previews, fn {pmid, %{thread_id: tid}} ->
+            if tid == thread_id, do: pmid
+          end)
+
+        thread_msgs = MessagesHooks.load_thread_messages(message.space_id, thread_id)
+
+        socket =
+          if parent_msg_id do
+            socket
+            |> MessagesHooks.open_thread_context(parent_msg_id, thread_msgs)
+            |> SearchHooks.set_highlights(parent_msg_id)
+          else
+            SearchHooks.set_highlights(socket, message.id)
+          end
+
+        {:noreply, socket}
+
+      message ->
+        {:noreply,
+         socket
+         |> MessagesHooks.reset_thread_panel()
+         |> SearchHooks.set_highlights(message.id)}
+    end
+  end
+
+  # The five push events ("push_subscribed", "push_permission_state",
+  # "push_unsupported", "push_subscribe_failed", "enable_notifications")
+  # moved to the `:push_events` attach in `PlatformWeb.ShellLive` in task
+  # 019ffb7b stage 3, alongside the `#push-subscribe` anchor. Attached
+  # handlers run ahead of a LiveView's own `handle_event/3` and halt, so
+  # they now answer on every shell surface instead of only on `/chat`.
+
+  # The banner's dismiss control (task 019ffb7b stage 5) stays HERE rather
+  # than joining that attach, because the banner it dismisses is a chat-only
+  # component. `enable_notifications` moved because both the banner and the
+  # `/inbox` row emit it; nothing outside `/chat` emits this one.
+  #
+  # Persisted, not session-scoped: `Accounts.dismiss_notification_banner/1`
+  # writes `users.preferences["notification_banner_dismissed"]`, the same
+  # column and the same `_ =` no-op-on-anonymous shape as `hide_channel`
+  # below. The assign flip is what takes the banner down now; the write is
+  # what keeps it down on the next mount.
+  def handle_event("dismiss_notification_banner", _params, socket) do
+    _ = Accounts.dismiss_notification_banner(socket.assigns.user_id)
+
+    {:noreply, assign(socket, :notification_banner_dismissed, true)}
+  end
+
+  # Cross-feature: upload_send creates a message + attachments. Delegates
+  # post+stream writes to MessagesHooks, resets UploadHooks on success.
+  def handle_event("upload_send", _params, socket) do
+    with space when not is_nil(space) <- socket.assigns.active_space,
+         participant when not is_nil(participant) <- socket.assigns.current_participant do
+      caption = String.trim(socket.assigns.upload_caption || "")
+      tagged = socket.assigns.upload_tagged_agents
+
+      mentions =
+        tagged
+        |> MapSet.to_list()
+        |> Enum.reject(fn slug -> String.contains?(caption, "@#{String.capitalize(slug)}") end)
+        |> Enum.map(fn slug -> "@#{String.capitalize(slug)}" end)
+
+      content =
+        case {caption, mentions} do
+          {"", []} -> ""
+          {"", _} -> Enum.join(mentions, " ")
+          {c, []} -> c
+          {c, _} -> c <> " " <> Enum.join(mentions, " ")
+        end
+
+      attrs = %{
+        space_id: space.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: content
+      }
+
+      case MessagesHooks.post_message_with_upload(socket, :attachments, attrs) do
+        {:ok, socket, msg, attachments} ->
+          {:noreply,
+           socket
+           |> MessagesHooks.stream_insert_message(msg, attachments)
+           |> UploadHooks.reset()}
+
+        {:noop, _socket} ->
+          {:noreply, put_flash(socket, :info, "No files selected")}
+
+        {:error, socket, reason} ->
+          {:noreply, put_flash(socket, :error, reason)}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("noop", _params, socket), do: {:noreply, socket}
+
+  # ── End upload staging dialog events ──────────────────────────────────
+
+  # `handle_event("toggle_watch", ...)` used to live here. Deleted with the
+  # header control that called it (task 019f9790 stage 4): the eye is now the
+  # agent mutex, and a second, persisted flag that could disagree with it was
+  # the whole bug. This was the only writer of `chat_spaces.watch_enabled` in
+  # `lib/`; the column stays (no migration) and `AttentionRouter` stops reading
+  # it in stage 5.
+
+  # Coordinator: open a canvas and close the thread panel.
+  def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
+    case CanvasHooks.find(socket, canvas_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Canvas not found.")}
+
+      canvas ->
+        {:noreply,
+         socket
+         |> CanvasHooks.set_active(canvas)
+         |> MessagesHooks.reset_thread_panel()}
+    end
+  end
+
+  # Coordinator: create a canvas message, stream-insert it, open it.
+  def handle_event("canvas_create", %{"canvas" => canvas_params}, socket) do
+    with space when not is_nil(space) <- socket.assigns.active_space,
+         participant when not is_nil(participant) <- socket.assigns.current_participant do
+      attrs = Map.take(canvas_params, ["title"])
+
+      case Chat.create_canvas_with_message(space.id, participant.id, attrs) do
+        {:ok, canvas, message} ->
+          {:noreply,
+           socket
+           |> CanvasHooks.put(canvas)
+           |> MessagesHooks.stream_insert_message(message)
+           |> CanvasHooks.set_active(canvas)
+           |> MessagesHooks.reset_thread_panel()
+           |> CanvasHooks.show_panel()
+           |> CanvasHooks.reset_new_form()}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, CanvasHooks.changeset_error_summary(changeset))
+           |> CanvasHooks.reset_new_form(canvas_params)}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Failed to create canvas: #{inspect(reason)}")}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # ── Archived-channel events (task 019e95ea stage 2) ────────────────────────
+
+  def handle_event("toggle_archived_section", _params, socket) do
+    {:noreply, assign(socket, :archived_open, !socket.assigns.archived_open)}
+  end
+
+  # Unarchive from the read-only banner. Authorization lives in
+  # `Chat.unarchive_space/2` (Fabrikam admin or creator) — the banner button is
+  # UI affordance only. On success we re-ensure the user's participant row
+  # (implicit join is frozen on archived spaces, so `ensure_participant/2`
+  # returned nil when the user entered the archived view) and refresh the
+  # sidebar lists the space moves between.
+  def handle_event("unarchive_space", _params, socket) do
+    case socket.assigns.active_space do
+      nil ->
+        {:noreply, socket}
+
+      space ->
+        case Chat.unarchive_space(%{id: socket.assigns.user_id}, space) do
+          {:ok, updated} ->
+            participant =
+              socket.assigns.current_participant ||
+                ensure_participant(updated.id, socket.assigns.user_id)
+
+            channels = rail_channels(socket)
+            archived_channels = rail_archived_channels(socket)
+            dm_convos = socket.assigns.dm_conversations
+
+            {:noreply,
+             socket
+             |> assign_active_space(updated)
+             |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
+             |> assign(:current_participant, participant)
+             |> assign(:channels, channels)
+             |> assign(:archived_channels, archived_channels)
+             |> assign(:spaces, channels ++ dm_convos)
+             |> assign(
+               :channel_sections,
+               channel_sections(
+                 channels,
+                 dm_convos,
+                 socket.assigns.pinned_space_ids,
+                 socket.assigns.hidden_channel_ids,
+                 socket.assigns.closed_dm_at
+               )
+             )
+             |> assign(
+               :sidebar_sections,
+               resolve_sidebar_sections(
+                 socket.assigns.user_id,
+                 channels,
+                 socket.assigns.hidden_channel_ids
+               )
+             )
+             |> put_flash(:info, "##{updated.name} was unarchived.")}
+
+          {:error, :unauthorized} ->
+            {:noreply,
+             put_flash(socket, :error, "You don't have permission to unarchive this channel.")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not unarchive this channel.")}
+        end
+    end
+  end
+
+  # Cancel a scheduled deletion from the read-only banner (task 019e95ea
+  # stage 4). Fabrikam-admin only — `Chat.cancel_space_deletion/2` is the gate,
+  # the banner button is UI affordance. The space stays archived (the banner
+  # reverts to the archive copy with its Unarchive button) and reappears in
+  # the sidebar's Archived section, which excludes deletion-flagged channels.
+  def handle_event("cancel_space_deletion", _params, socket) do
+    case socket.assigns.active_space do
+      nil ->
+        {:noreply, socket}
+
+      space ->
+        case Chat.cancel_space_deletion(%{id: socket.assigns.user_id}, space) do
+          {:ok, updated} ->
+            {:noreply,
+             socket
+             |> assign_active_space(updated)
+             |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
+             |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
+             |> assign(:archived_channels, rail_archived_channels(socket))
+             |> put_flash(:info, "Deletion cancelled — the channel remains archived.")}
+
+          {:error, :unauthorized} ->
+            {:noreply,
+             put_flash(socket, :error, "You don't have permission to cancel this deletion.")}
+
+          {:error, :not_scheduled} ->
+            {:noreply, put_flash(socket, :error, "No deletion is scheduled for this channel.")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not cancel the deletion.")}
+        end
+    end
+  end
+
+  # ── Channel / Conversation creation events ─────────────────────────────────
+
+  def handle_event("new_channel_open", _params, socket) do
+    {:noreply, assign(socket, :show_new_channel_modal, true)}
+  end
+
+  def handle_event("new_conversation_open", _params, socket) do
+    {:noreply, assign(socket, :show_new_conversation_modal, true)}
+  end
+
+  def handle_event("promote_to_channel", %{"name" => name}, socket) do
+    space = socket.assigns.active_space
+
+    slug =
+      name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9\s-]/, "")
+      |> String.replace(~r/\s+/, "-")
+      |> String.trim("-")
+
+    case Chat.promote_to_channel(space, %{name: name, slug: slug}) do
+      {:ok, updated} ->
+        # `patch`, not `navigate`: the promoted space is served by THIS
+        # LiveView, and a remount would drop the screen-share mask state
+        # (see the assign comment in `mount/3`).
+        {:noreply, push_patch(socket, to: ~p"/chat/#{space_nav_target(updated)}")}
+
+      {:error, :not_promotable} ->
+        {:noreply,
+         put_flash(socket, :error, "This conversation cannot be promoted to a channel.")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not promote to channel.")}
+    end
+  end
+
+  # ── Pin-to-Chat rail unpin (task 019f62a1 stage 4 fixup #2) ───────────────
+  #
+  # Rowan asked for a "small pin icon next to the task" so users can unpin
+  # a task-exec space directly from the Pinned rail without navigating to
+  # the task detail panel. This handler is PARTICIPANT-SCOPED — every
+  # viewer that sees a rail row can unpin themselves regardless of whether
+  # they're the sponsor (the rail surfaces rows for BOTH the sponsor's own
+  # pin AND for participants pinned via sponsor @-mention in stage 3). A
+  # sponsor unpin removes only her row; other participants keep seeing the
+  # space until they unpin themselves or the task hits `done` (which
+  # cascades via `ChatPins.unpin_all_for_task/1`).
+  #
+  # No sponsor gate here on purpose — that gate lives on the pin ADD path
+  # in `TasksLive.handle_event("toggle_task_chat_pin", ...)` because the
+  # add path is the earliest point that materialises a chat_spaces row.
+  # Unpin cannot materialise anything, so a bypass has no side-effect
+  # beyond removing a pin the caller already owns.
+  def handle_event("unpin_task_from_chat", %{"task-id" => task_id}, socket)
+      when is_binary(task_id) and task_id != "" do
+    case socket.assigns[:current_user_email] do
+      nil ->
+        # Anonymous session or user record was deleted between mount and
+        # click. Refuse silently — the pin row is keyed by email so we
+        # can't even attribute a delete.
+        {:noreply, put_flash(socket, :error, "You need to be signed in to unpin tasks.")}
+
+      email ->
+        participant = %{kind: "user", id: email}
+        _ = Platform.Tasks.ChatPins.unpin(task_id, participant, email)
+
+        # Dismiss the rail's row-actions menu, which is where this click now
+        # comes from (task 019ff8ba, 2026-08-13). Same line `toggle_pinned`
+        # carries and for the same reason: the row is about to leave the rail,
+        # and a menu describing a row that is gone is a menu with no subject.
+        # Unconditional because the assign is already nil on every other path
+        # into this handler.
+        {:noreply,
+         socket
+         |> assign(:row_actions_space_id, nil)
+         |> put_flash(:info, "Unpinned from Chat.")}
+    end
+  end
+
+  def handle_event("unpin_task_from_chat", _params, socket), do: {:noreply, socket}
+
+  # ── Settings modal (see SettingsComponent) ────────────────────────────────
+
+  def handle_event("settings_open", _params, socket) do
+    {:noreply, assign(socket, :show_settings, true)}
+  end
+
+  defp confirm_junk_batch_actor_id(socket) do
+    case socket.assigns do
+      %{current_participant: %{user_id: id}} when is_binary(id) -> id
+      %{current_user_record: %{id: id}} when is_binary(id) -> id
+      %{current_user: %{id: id}} when is_binary(id) -> id
+      _ -> nil
+    end
+  end
+
+  defp do_unhide(socket, space_id) do
+    user_id = socket.assigns.user_id
+    _ = Accounts.unhide_channel(user_id, space_id)
+    hidden = Accounts.get_hidden_channel_ids(user_id)
+
+    cleared_toast =
+      case socket.assigns.undo_toast do
+        %{space_id: ^space_id} -> nil
+        other -> other
+      end
+
+    # Stage 3 v3: collapse the global Hidden drawer when the user has
+    # just unhidden the last remaining channel — the drawer trigger goes
+    # silent (template-level :if guard), so leaving `:hidden_drawer_open`
+    # stuck at true would cause the panel to re-pop expanded the next
+    # time the user hides something. Reset to closed instead.
+    drawer_open =
+      if MapSet.size(hidden) == 0, do: false, else: socket.assigns.hidden_drawer_open
+
+    socket
+    |> assign(:hidden_channel_ids, hidden)
+    |> assign(
+      :channel_sections,
+      channel_sections(
+        socket.assigns.channels,
+        socket.assigns.dm_conversations,
+        socket.assigns.pinned_space_ids,
+        hidden,
+        socket.assigns.closed_dm_at
+      )
+    )
+    |> assign(
+      :sidebar_sections,
+      resolve_sidebar_sections(
+        user_id,
+        socket.assigns.channels,
+        hidden
+      )
+    )
+    |> assign(:undo_toast, cleared_toast)
+    |> assign(:hidden_drawer_open, drawer_open)
+  end
+
+  # Close raises NO acknowledgement. Stage 2 gave it an undo toast and stage 3
+  # gave that toast a line explaining the return; Marlowe rejected both at the
+  # stage-3 gate: "We don't need a acknowledgement / affirmation for a close
+  # action on a DM. A User can simply search for a person or agent to DM again
+  # if they want to bring back the window." The row leaves and that is the
+  # whole feedback. `@undo_toast` is therefore untouched here — a hide toast
+  # raised moments earlier is still true and still has its own timer running,
+  # so clearing it would be a second unasked-for behaviour change.
+  defp do_close_dm(socket, space) do
+    user_id = socket.assigns.user_id
+
+    # Closing a PINNED DM unpins it as well, so the row leaves the rail on the
+    # click that closed it (Marlowe, 2026-08-13: "Closing a pinned item doesn't
+    # do anything. As soon as I unpin the item (DM), it disappears because I
+    # closed it at some point. I expect if I closed a pinned item, it would
+    # undo the pin and close the DM.").
+    #
+    # `channel_sections/5` runs the close filter over the UNPINNED DM
+    # remainder only, because the Pinned block is a conversation's one place
+    # and nothing filters it. Without the unpin the close was still recorded,
+    # the row sat there, and the DM disappeared whenever the user unpinned it
+    # later: possibly days later, attached to an action they had no reason to
+    # connect to it. One rule everywhere instead. Close means this leaves my
+    # list now.
+    #
+    # THE OLD PIN IS DISCARDED, NOT STASHED. Designer's decision, tradeoff
+    # accepted by Marlowe: a DM that comes back (a new message in it, or the user
+    # opening it) comes back UNPINNED and is re-pinned in one click. Do not
+    # "improve" this by remembering the pin and restoring it on return. That
+    # would be a second piece of state the user cannot see, and invisible state
+    # is precisely what produced this bug.
+    #
+    # Written unconditionally rather than under a `pinned?` test, and BEFORE
+    # the close. `Sidebar.set_space_pinned/3` takes the DESIRED state, so
+    # stating the end state costs one idempotent write on a human-rate click,
+    # whereas a membership test against `@pinned_space_ids` can be stale and
+    # would fail by silently restoring the old behaviour. Unpin first because
+    # if the second write fails the user is left with an unpinned DM still on
+    # the rail, which is visible and recoverable; the other order fails back
+    # into the bug.
+    _ = Sidebar.set_space_pinned(user_id, space.id, false)
+    _ = Accounts.close_dm(user_id, space.id)
+
+    # Both halves are user preferences, so the user's OTHER tabs have to
+    # converge or they keep rendering a pinned row whose pin no longer exists.
+    # `toggle_pinned` already broadcasts for the pin half; a close broadcast
+    # nothing, so a second tab kept a closed DM on the rail until its next
+    # navigation. `handle_info(:sidebar_changed, ...)` re-reads the close store
+    # as well as the pin list, so the receiving tab applies BOTH halves. With
+    # only the pin half it would move the row out of Pinned into Direct
+    # Messages and leave it sitting there, which is this same bug one tab over.
+    ChatPubSub.broadcast_sidebar_changed_from(user_id, self())
+
+    socket
+    |> assign(:closed_dm_at, Accounts.get_closed_dm_at(user_id))
+    # The menu that issued this is still open on a row that has just left the
+    # rail. Same reason `hide_channel` does it: a menu naming a conversation
+    # the user can no longer see, still offering to act on it, is worse than
+    # the lost context of closing it.
+    |> assign(:row_actions_space_id, nil)
+    # Rebuilds `@channel_sections` off the pin list as PERSISTED. Rebuilding it
+    # here from `@pinned_space_ids` would use the pin this function has just
+    # dropped, and the row would stay in the Pinned block until the next
+    # navigation.
+    |> recompute_pinned()
+  end
+
+  # Entering a conversation clears its close, and returns the map the rail
+  # should be rebuilt from.
+  #
+  # Reads the STORE, not `@closed_dm_at`. The assign would be right today, but
+  # only because every space change remounts this LiveView and mount reads the
+  # store moments earlier. The store is the thing a second tab writes to, and
+  # the day a `<.link patch=` lands on a space route this would become a
+  # silent lost write: the user opens the DM, reads it, and the close another
+  # tab made survives to hide the row again. One preferences read on a DM
+  # navigation is not worth that trap.
+  #
+  # The write is still guarded on the key being present, so an ordinary DM
+  # navigation costs one read and no UPDATE.
+  #
+  # Groups are treated exactly like DMs, because `closeable` offers Close on
+  # both. A group whose close could only be undone by someone else posting in
+  # it would be the one closed conversation with no way back from the user's
+  # own side.
+  defp maybe_reopen_dm(socket, %{kind: kind, id: space_id}) when kind in ["dm", "group"] do
+    closed_dm_at = Accounts.get_closed_dm_at(socket.assigns.user_id)
+
+    if Map.has_key?(closed_dm_at, space_id) do
+      _ = Accounts.reopen_dm(socket.assigns.user_id, space_id)
+      Map.delete(closed_dm_at, space_id)
+    else
+      closed_dm_at
+    end
+  end
+
+  defp maybe_reopen_dm(socket, _space), do: socket.assigns.closed_dm_at
+
+  # Only orgs carry the include/keep modal state; a channel modal is a no-op here.
+  defp update_delete_modal(socket, fun) do
+    case socket.assigns.delete_modal do
+      %{type: "org"} = modal -> assign(socket, :delete_modal, fun.(modal))
+      _ -> socket
+    end
+  end
+
+  defp finish_schedule_deletion(socket, {:ok, _resource}) do
+    socket
+    |> assign(:delete_modal, nil)
+    |> refresh_chat_containers()
+    |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")
+  end
+
+  defp finish_schedule_deletion(socket, {:error, reason}) do
+    socket
+    |> assign(:delete_modal, nil)
+    |> put_flash(:error, LifecycleActions.error_message(reason))
   end
 
   # Shared body for drag + keyboard channel moves: persist the target
@@ -2286,36 +2846,6 @@ defmodule PlatformWeb.ChatLive do
   defp truthy?(true), do: true
   defp truthy?("true"), do: true
   defp truthy?(_), do: false
-
-  # Sectioned-rail drag-reorder (chat plan v2 Stage 3 + Stage 6). The JS hook
-  # (`section_reorder.js`) emits `{from: <section_id>, to: <section_id>}` after
-  # a drop onto another sub-org section. Reordering moves `from` into `to`'s
-  # slot in the list — the displaced section and everything after it shift one
-  # position toward `from`'s former slot (standard reorder semantics).
-  #
-  # Identity is the section `id`, NOT its `color` token. Stage 6 made `color`
-  # an admin-editable, non-unique cosmetic attribute (two sections can share a
-  # color after a recolor), so keying drag identity off `color` would make a
-  # drag onto a duplicate-color section ambiguous and resolve to the wrong (or
-  # no) section. Section `id` is stable and unique, so both the admin and the
-  # personal reorder paths resolve `from`/`to` by id against the currently
-  # rendered `@sidebar_sections`.
-  #
-  # Pinned + DMs are NOT reorderable — the JS hook drops their drag handle and
-  # the server-side guard rejects payloads whose ids aren't in the rendered
-  # sub-org sections, so both branches no-op on a bogus/stale id.
-  def handle_event("section_reordered", %{"from" => from_id, "to" => to_id}, socket)
-      when is_binary(from_id) and is_binary(to_id) do
-    # Stage 6: in admin-edit mode the same section-header drag persists to the
-    # GLOBAL org default (channel_sections.position) via Sidebar.reorder_sections
-    # instead of the per-user section_order. Branch here so the SectionReorder
-    # hook stays mode-agnostic — the server decides which layer to write.
-    if socket.assigns.sidebar_admin_edit do
-      reorder_sections_default(socket, from_id, to_id)
-    else
-      reorder_sections_personal(socket, from_id, to_id)
-    end
-  end
 
   # Personal section-reorder (Stage 3). Persist the per-user `chat_section_order`
   # as a list of section IDS (not names). IDs are stable across admin
@@ -2618,190 +3148,6 @@ defmodule PlatformWeb.ChatLive do
 
   defp raise_move_toast(socket, _channel_id, _channel_name, _section_name), do: socket
 
-  # Per-message actions sheet (3-dot menu on chat messages — task 019e0f29
-  # Stage 3). Replaces the inert DaisyUI dropdown placeholder added in
-  # Stage 2 with a real bottom sheet on mobile / centered card on desktop.
-  def handle_event("open_message_actions", %{"id" => msg_id}, socket) do
-    # Lift the message struct alongside the id so the sheet template can
-    # gate items (e.g. "Edit message") on per-message attributes (author,
-    # content_type) — see chat_live.html.heex around the Edit affordance.
-    msg = Platform.Chat.get_message(msg_id)
-
-    {:noreply,
-     socket
-     |> assign(:open_message_actions_id, msg_id)
-     |> assign(:open_message_actions_msg, msg)}
-  end
-
-  def handle_event("close_message_actions", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:open_message_actions_id, nil)
-     |> assign(:open_message_actions_msg, nil)}
-  end
-
-  # ── Mobile drawer row actions (task 019fe998) ─────────────────────────────
-  #
-  # Pin, unpin and hide were all revealed by `group-hover/row:` /
-  # `focus-within:`, and Tailwind compiles `hover:` inside
-  # `@media (hover: hover)`, so none of the three could fire on a phone. The
-  # drawer row's overflow control opens a bottom sheet carrying all three.
-  #
-  # These two handlers are the ONLY new events, and they carry no business
-  # logic: the sheet's actions reuse `toggle_pinned` and `hide_channel`
-  # unchanged. Same shape as `open_message_actions` above.
-  #
-  # Only the id is stored. Name and pinned-ness are re-derived at render, so
-  # the header and the Pin/Unpin verb cannot go stale against the row.
-  def handle_event("open_row_actions", %{"space_id" => space_id}, socket)
-      when is_binary(space_id) do
-    {:noreply, assign(socket, :row_actions_space_id, space_id)}
-  end
-
-  def handle_event("close_row_actions", _params, socket) do
-    {:noreply, assign(socket, :row_actions_space_id, nil)}
-  end
-
-  # ── Infinite scroll (task 019e18fc Stage 3) ────────────────────────────────
-  #
-  # Top sentinel fires `load_older_messages` when it scrolls into view AND
-  # `:has_more_older` is true. Bottom sentinel fires `load_newer_messages`
-  # when visible AND `:newest_evicted?` is true (the bounded-DOM tail was
-  # pruned by a prior prepend; the user is scrolling back toward the live
-  # tail and needs it re-hydrated). Both delegate the actual fetch +
-  # stream mutation to `PlatformWeb.ChatLive.MessagesHooks` — see Stages
-  # 1 and 2 for the helper implementations.
-  #
-  # Authorization: both handlers gate on a present `:active_space`. A
-  # missing active_space means the user is on the no-space landing
-  # state, in which case there's nothing to paginate.
-
-  def handle_event("load_older_messages", _params, socket) do
-    case socket.assigns[:active_space] do
-      %{id: space_id} when is_binary(space_id) ->
-        socket =
-          socket
-          |> assign(:loading_older, true)
-          |> PlatformWeb.ChatLive.MessagesHooks.load_older_messages(space_id)
-
-        {:noreply, socket}
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("load_newer_messages", _params, socket) do
-    case socket.assigns[:active_space] do
-      %{id: space_id} when is_binary(space_id) ->
-        socket =
-          socket
-          |> assign(:loading_newer, true)
-          |> PlatformWeb.ChatLive.MessagesHooks.load_newer_messages(space_id)
-
-        {:noreply, socket}
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
-  # ── Version history popover (task 019e0f29 Stage 6, contract Section D.2)
-  # Clicking the `(edited)` affix opens this; the popover lists prior
-  # versions newest-first.
-
-  def handle_event("show_version_history", %{"message-id" => message_id}, socket) do
-    versions = Platform.Chat.MessageVersions.list_versions(message_id)
-
-    {:noreply, assign(socket, :version_history, %{message_id: message_id, versions: versions})}
-  end
-
-  def handle_event("close_version_history", _params, socket) do
-    {:noreply, assign(socket, :version_history, nil)}
-  end
-
-  # Click target on the "Correction to earlier message" header (Section D.4).
-  # Pushes a custom event to the client so a small JS handler can scroll the
-  # message stream to the target and apply a brief pulse animation.
-  def handle_event("scroll_to_message", %{"id" => target_id}, socket) do
-    {:noreply, push_event(socket, "chat:scroll-to-message", %{id: target_id})}
-  end
-
-  # ── Inline edit flow (task 019e0f29 Stage 5) ────────────────────────────
-  # Stage 4 left a placeholder; Stage 5 wires the full editor.
-  # `edit_message_clicked` opens the editor by setting editing_message_id;
-  # the chat_message component swaps the bubble for chat_message_editor
-  # when @editing_message_id matches the row's msg id. `cancel_edit`
-  # closes the editor. `save_edit` is the form-submit handler — it
-  # branches on the `removes_content` flag the JS hook set:
-  #   - "true"  → stash the pending edit, surface the removal-warning
-  #               modal (Section F.4 Policy 4 of the contract).
-  #   - "false" → fire the edit immediately.
-  # `confirm_save_edit` / `cancel_save_edit` handle the modal buttons.
-
-  def handle_event("edit_message_clicked", params, socket) do
-    msg_id = params["message-id"] || params["message_id"]
-
-    # Chat.get_message/1 rather than the fully-qualified Platform.Repo.get/2 —
-    # `msg_id` is a `phx-value-` param, and the fully-qualified spelling is
-    # invisible to `git grep "Repo.get("`, which is how it evaded the sweep.
-    with %Platform.Chat.Message{} = msg <- Platform.Chat.get_message(msg_id),
-         :ok <- authorize_edit(msg, socket.assigns.current_participant) do
-      {:noreply,
-       socket
-       |> assign(:editing_message_id, msg_id)
-       |> MessagesHooks.reinsert_stream_message(msg_id)}
-    else
-      _ -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("cancel_edit", _params, socket) do
-    msg_id = socket.assigns.editing_message_id
-
-    socket =
-      socket
-      |> assign(:editing_message_id, nil)
-      |> assign(:pending_save_edit, nil)
-
-    case msg_id do
-      nil -> {:noreply, socket}
-      id -> {:noreply, MessagesHooks.reinsert_stream_message(socket, id)}
-    end
-  end
-
-  def handle_event(
-        "save_edit",
-        %{"message_id" => message_id, "body" => body, "removes_content" => flag},
-        socket
-      ) do
-    if flag == "true" do
-      # Stash the pending edit and let the removal-warning modal open
-      # via the @pending_save_edit assign. Keep the editor open in the
-      # background so a Cancel on the modal keeps the user's draft.
-      {:noreply, assign(socket, :pending_save_edit, %{message_id: message_id, body: body})}
-    else
-      apply_save_edit(socket, message_id, body)
-    end
-  end
-
-  def handle_event("confirm_save_edit", _params, socket) do
-    case socket.assigns.pending_save_edit do
-      %{message_id: message_id, body: body} ->
-        socket = assign(socket, :pending_save_edit, nil)
-        apply_save_edit(socket, message_id, body)
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("cancel_save_edit", _params, socket) do
-    # Modal dismissed; keep the editor open with the user's draft so
-    # they can revise.
-    {:noreply, assign(socket, :pending_save_edit, nil)}
-  end
-
   defp apply_save_edit(socket, message_id, body) do
     participant = socket.assigns.current_participant
 
@@ -2864,357 +3210,10 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Coordinator: Search event that also writes MessagesHooks state
-  # (thread expansion, stream reinsert, highlight).
-  def handle_event("search_open_result", %{"message-id" => message_id}, socket) do
-    case Chat.get_message(message_id) do
-      nil ->
-        {:noreply, put_flash(socket, :error, "Search result not found.")}
-
-      %{thread_id: thread_id} = message when is_binary(thread_id) ->
-        parent_msg_id =
-          Enum.find_value(socket.assigns.thread_previews, fn {pmid, %{thread_id: tid}} ->
-            if tid == thread_id, do: pmid
-          end)
-
-        thread_msgs = MessagesHooks.load_thread_messages(message.space_id, thread_id)
-
-        socket =
-          if parent_msg_id do
-            socket
-            |> MessagesHooks.open_thread_context(parent_msg_id, thread_msgs)
-            |> SearchHooks.set_highlights(parent_msg_id)
-          else
-            SearchHooks.set_highlights(socket, message.id)
-          end
-
-        {:noreply, socket}
-
-      message ->
-        {:noreply,
-         socket
-         |> MessagesHooks.reset_thread_panel()
-         |> SearchHooks.set_highlights(message.id)}
-    end
-  end
-
-  # The five push events ("push_subscribed", "push_permission_state",
-  # "push_unsupported", "push_subscribe_failed", "enable_notifications")
-  # moved to the `:push_events` attach in `PlatformWeb.ShellLive` in task
-  # 019ffb7b stage 3, alongside the `#push-subscribe` anchor. Attached
-  # handlers run ahead of a LiveView's own `handle_event/3` and halt, so
-  # they now answer on every shell surface instead of only on `/chat`.
-
-  # The banner's dismiss control (task 019ffb7b stage 5) stays HERE rather
-  # than joining that attach, because the banner it dismisses is a chat-only
-  # component. `enable_notifications` moved because both the banner and the
-  # `/inbox` row emit it; nothing outside `/chat` emits this one.
-  #
-  # Persisted, not session-scoped: `Accounts.dismiss_notification_banner/1`
-  # writes `users.preferences["notification_banner_dismissed"]`, the same
-  # column and the same `_ =` no-op-on-anonymous shape as `hide_channel`
-  # below. The assign flip is what takes the banner down now; the write is
-  # what keeps it down on the next mount.
-  def handle_event("dismiss_notification_banner", _params, socket) do
-    _ = Accounts.dismiss_notification_banner(socket.assigns.user_id)
-
-    {:noreply, assign(socket, :notification_banner_dismissed, true)}
-  end
-
   # ── Upload staging dialog events ──────────────────────────────────────
 
   defp handle_upload_progress(_upload_name, _entry, socket) do
     {:noreply, socket}
-  end
-
-  # Cross-feature: upload_send creates a message + attachments. Delegates
-  # post+stream writes to MessagesHooks, resets UploadHooks on success.
-  def handle_event("upload_send", _params, socket) do
-    with space when not is_nil(space) <- socket.assigns.active_space,
-         participant when not is_nil(participant) <- socket.assigns.current_participant do
-      caption = String.trim(socket.assigns.upload_caption || "")
-      tagged = socket.assigns.upload_tagged_agents
-
-      mentions =
-        tagged
-        |> MapSet.to_list()
-        |> Enum.reject(fn slug -> String.contains?(caption, "@#{String.capitalize(slug)}") end)
-        |> Enum.map(fn slug -> "@#{String.capitalize(slug)}" end)
-
-      content =
-        case {caption, mentions} do
-          {"", []} -> ""
-          {"", _} -> Enum.join(mentions, " ")
-          {c, []} -> c
-          {c, _} -> c <> " " <> Enum.join(mentions, " ")
-        end
-
-      attrs = %{
-        space_id: space.id,
-        participant_id: participant.id,
-        content_type: "text",
-        content: content
-      }
-
-      case MessagesHooks.post_message_with_upload(socket, :attachments, attrs) do
-        {:ok, socket, msg, attachments} ->
-          {:noreply,
-           socket
-           |> MessagesHooks.stream_insert_message(msg, attachments)
-           |> UploadHooks.reset()}
-
-        {:noop, _socket} ->
-          {:noreply, put_flash(socket, :info, "No files selected")}
-
-        {:error, socket, reason} ->
-          {:noreply, put_flash(socket, :error, reason)}
-      end
-    else
-      _ -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("noop", _params, socket), do: {:noreply, socket}
-
-  # ── End upload staging dialog events ──────────────────────────────────
-
-  # `handle_event("toggle_watch", ...)` used to live here. Deleted with the
-  # header control that called it (task 019f9790 stage 4): the eye is now the
-  # agent mutex, and a second, persisted flag that could disagree with it was
-  # the whole bug. This was the only writer of `chat_spaces.watch_enabled` in
-  # `lib/`; the column stays (no migration) and `AttentionRouter` stops reading
-  # it in stage 5.
-
-  # Coordinator: open a canvas and close the thread panel.
-  def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
-    case CanvasHooks.find(socket, canvas_id) do
-      nil ->
-        {:noreply, put_flash(socket, :error, "Canvas not found.")}
-
-      canvas ->
-        {:noreply,
-         socket
-         |> CanvasHooks.set_active(canvas)
-         |> MessagesHooks.reset_thread_panel()}
-    end
-  end
-
-  # Coordinator: create a canvas message, stream-insert it, open it.
-  def handle_event("canvas_create", %{"canvas" => canvas_params}, socket) do
-    with space when not is_nil(space) <- socket.assigns.active_space,
-         participant when not is_nil(participant) <- socket.assigns.current_participant do
-      attrs = Map.take(canvas_params, ["title"])
-
-      case Chat.create_canvas_with_message(space.id, participant.id, attrs) do
-        {:ok, canvas, message} ->
-          {:noreply,
-           socket
-           |> CanvasHooks.put(canvas)
-           |> MessagesHooks.stream_insert_message(message)
-           |> CanvasHooks.set_active(canvas)
-           |> MessagesHooks.reset_thread_panel()
-           |> CanvasHooks.show_panel()
-           |> CanvasHooks.reset_new_form()}
-
-        {:error, %Ecto.Changeset{} = changeset} ->
-          {:noreply,
-           socket
-           |> put_flash(:error, CanvasHooks.changeset_error_summary(changeset))
-           |> CanvasHooks.reset_new_form(canvas_params)}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Failed to create canvas: #{inspect(reason)}")}
-      end
-    else
-      _ -> {:noreply, socket}
-    end
-  end
-
-  # ── Archived-channel events (task 019e95ea stage 2) ────────────────────────
-
-  def handle_event("toggle_archived_section", _params, socket) do
-    {:noreply, assign(socket, :archived_open, !socket.assigns.archived_open)}
-  end
-
-  # Unarchive from the read-only banner. Authorization lives in
-  # `Chat.unarchive_space/2` (Fabrikam admin or creator) — the banner button is
-  # UI affordance only. On success we re-ensure the user's participant row
-  # (implicit join is frozen on archived spaces, so `ensure_participant/2`
-  # returned nil when the user entered the archived view) and refresh the
-  # sidebar lists the space moves between.
-  def handle_event("unarchive_space", _params, socket) do
-    case socket.assigns.active_space do
-      nil ->
-        {:noreply, socket}
-
-      space ->
-        case Chat.unarchive_space(%{id: socket.assigns.user_id}, space) do
-          {:ok, updated} ->
-            participant =
-              socket.assigns.current_participant ||
-                ensure_participant(updated.id, socket.assigns.user_id)
-
-            channels = rail_channels(socket)
-            archived_channels = rail_archived_channels(socket)
-            dm_convos = socket.assigns.dm_conversations
-
-            {:noreply,
-             socket
-             |> assign_active_space(updated)
-             |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
-             |> assign(:current_participant, participant)
-             |> assign(:channels, channels)
-             |> assign(:archived_channels, archived_channels)
-             |> assign(:spaces, channels ++ dm_convos)
-             |> assign(
-               :channel_sections,
-               channel_sections(
-                 channels,
-                 dm_convos,
-                 socket.assigns.pinned_space_ids,
-                 socket.assigns.hidden_channel_ids,
-                 socket.assigns.closed_dm_at
-               )
-             )
-             |> assign(
-               :sidebar_sections,
-               resolve_sidebar_sections(
-                 socket.assigns.user_id,
-                 channels,
-                 socket.assigns.hidden_channel_ids
-               )
-             )
-             |> put_flash(:info, "##{updated.name} was unarchived.")}
-
-          {:error, :unauthorized} ->
-            {:noreply,
-             put_flash(socket, :error, "You don't have permission to unarchive this channel.")}
-
-          {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, "Could not unarchive this channel.")}
-        end
-    end
-  end
-
-  # Cancel a scheduled deletion from the read-only banner (task 019e95ea
-  # stage 4). Fabrikam-admin only — `Chat.cancel_space_deletion/2` is the gate,
-  # the banner button is UI affordance. The space stays archived (the banner
-  # reverts to the archive copy with its Unarchive button) and reappears in
-  # the sidebar's Archived section, which excludes deletion-flagged channels.
-  def handle_event("cancel_space_deletion", _params, socket) do
-    case socket.assigns.active_space do
-      nil ->
-        {:noreply, socket}
-
-      space ->
-        case Chat.cancel_space_deletion(%{id: socket.assigns.user_id}, space) do
-          {:ok, updated} ->
-            {:noreply,
-             socket
-             |> assign_active_space(updated)
-             |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
-             |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
-             |> assign(:archived_channels, rail_archived_channels(socket))
-             |> put_flash(:info, "Deletion cancelled — the channel remains archived.")}
-
-          {:error, :unauthorized} ->
-            {:noreply,
-             put_flash(socket, :error, "You don't have permission to cancel this deletion.")}
-
-          {:error, :not_scheduled} ->
-            {:noreply, put_flash(socket, :error, "No deletion is scheduled for this channel.")}
-
-          {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, "Could not cancel the deletion.")}
-        end
-    end
-  end
-
-  # ── Channel / Conversation creation events ─────────────────────────────────
-
-  def handle_event("new_channel_open", _params, socket) do
-    {:noreply, assign(socket, :show_new_channel_modal, true)}
-  end
-
-  def handle_event("new_conversation_open", _params, socket) do
-    {:noreply, assign(socket, :show_new_conversation_modal, true)}
-  end
-
-  def handle_event("promote_to_channel", %{"name" => name}, socket) do
-    space = socket.assigns.active_space
-
-    slug =
-      name
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9\s-]/, "")
-      |> String.replace(~r/\s+/, "-")
-      |> String.trim("-")
-
-    case Chat.promote_to_channel(space, %{name: name, slug: slug}) do
-      {:ok, updated} ->
-        # `patch`, not `navigate`: the promoted space is served by THIS
-        # LiveView, and a remount would drop the screen-share mask state
-        # (see the assign comment in `mount/3`).
-        {:noreply, push_patch(socket, to: ~p"/chat/#{space_nav_target(updated)}")}
-
-      {:error, :not_promotable} ->
-        {:noreply,
-         put_flash(socket, :error, "This conversation cannot be promoted to a channel.")}
-
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Could not promote to channel.")}
-    end
-  end
-
-  # ── Pin-to-Chat rail unpin (task 019f62a1 stage 4 fixup #2) ───────────────
-  #
-  # Rowan asked for a "small pin icon next to the task" so users can unpin
-  # a task-exec space directly from the Pinned rail without navigating to
-  # the task detail panel. This handler is PARTICIPANT-SCOPED — every
-  # viewer that sees a rail row can unpin themselves regardless of whether
-  # they're the sponsor (the rail surfaces rows for BOTH the sponsor's own
-  # pin AND for participants pinned via sponsor @-mention in stage 3). A
-  # sponsor unpin removes only her row; other participants keep seeing the
-  # space until they unpin themselves or the task hits `done` (which
-  # cascades via `ChatPins.unpin_all_for_task/1`).
-  #
-  # No sponsor gate here on purpose — that gate lives on the pin ADD path
-  # in `TasksLive.handle_event("toggle_task_chat_pin", ...)` because the
-  # add path is the earliest point that materialises a chat_spaces row.
-  # Unpin cannot materialise anything, so a bypass has no side-effect
-  # beyond removing a pin the caller already owns.
-  def handle_event("unpin_task_from_chat", %{"task-id" => task_id}, socket)
-      when is_binary(task_id) and task_id != "" do
-    case socket.assigns[:current_user_email] do
-      nil ->
-        # Anonymous session or user record was deleted between mount and
-        # click. Refuse silently — the pin row is keyed by email so we
-        # can't even attribute a delete.
-        {:noreply, put_flash(socket, :error, "You need to be signed in to unpin tasks.")}
-
-      email ->
-        participant = %{kind: "user", id: email}
-        _ = Platform.Tasks.ChatPins.unpin(task_id, participant, email)
-
-        # Dismiss the rail's row-actions menu, which is where this click now
-        # comes from (task 019ff8ba, 2026-08-13). Same line `toggle_pinned`
-        # carries and for the same reason: the row is about to leave the rail,
-        # and a menu describing a row that is gone is a menu with no subject.
-        # Unconditional because the assign is already nil on every other path
-        # into this handler.
-        {:noreply,
-         socket
-         |> assign(:row_actions_space_id, nil)
-         |> put_flash(:info, "Unpinned from Chat.")}
-    end
-  end
-
-  def handle_event("unpin_task_from_chat", _params, socket), do: {:noreply, socket}
-
-  # ── Settings modal (see SettingsComponent) ────────────────────────────────
-
-  def handle_event("settings_open", _params, socket) do
-    {:noreply, assign(socket, :show_settings, true)}
   end
 
   @impl true
@@ -4079,20 +4078,13 @@ defmodule PlatformWeb.ChatLive do
     |> Phoenix.HTML.raw()
   end
 
-  defp format_message_date(nil), do: ""
-
-  defp format_message_date(%DateTime{} = dt) do
-    today = Date.utc_today()
-    msg_date = DateTime.to_date(dt)
-
-    cond do
-      msg_date == today -> "Today"
-      msg_date == Date.add(today, -1) -> "Yesterday"
-      true -> Calendar.strftime(dt, "%a, %b %-d")
-    end
-  end
-
-  defp format_message_date(_), do: ""
+  # `format_message_date/1` was deleted here in task 01a01041 stage 2. Dead
+  # after the day-divider refactor, not a call that went missing: the
+  # "Today" / "Yesterday" / `%a, %b %-d` labelling of a message day-bucket now
+  # lives in the component that renders the divider,
+  # `PlatformWeb.Components.ChatMessage` (chat_message.ex:745), which is what
+  # the templates call. This copy had no caller in `lib/` or `test/` and was
+  # the stale duplicate of the two.
 
   # Composer empty-state check for the send button's disabled attribute.
   # The form value can be nil (initial render), a binary, or a Phoenix.HTML.Form.normalize_value-shaped

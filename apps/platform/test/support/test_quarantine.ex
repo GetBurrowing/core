@@ -272,7 +272,7 @@ defmodule Platform.TestQuarantine do
           (B) only ("transcript reaches a terminal state"). Assertion (A), the
           actual leak guard (`exit_reason == :normal`), passes.
 
-      Assertion (B) depends on `Summarizer.safe_fail_transcript/1`'s
+      Assertion (B) depends on `Summarizer.safe_fail_transcript/2`'s
       `try_borrow_sandbox/0` recovery — a TEST-ONLY hack that reaches for a
       DataCase-allowed singleton's sandbox connection so the terminal-status
       write can land from an unowned process. Under a full parallel run that

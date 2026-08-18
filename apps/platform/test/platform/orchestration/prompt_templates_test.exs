@@ -2822,6 +2822,44 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       end
     end
 
+    test "the skill-discovery block reaches bodies only as a placeholder, never baked in" do
+      # Task 01a01041 stage 2. `do_default_templates/0` used to build a
+      # `skills_reference = "## Skill discovery …"` local that nothing
+      # interpolated (an unused-variable warning). It was deleted, not
+      # interpolated: the block is a RENDER-time variable supplied by
+      # `Orchestration.HeartbeatScheduler`, so baking it into a descriptor
+      # would have double-emitted it in every rendered dispatch and frozen
+      # prose into the row a force-update migration enforces from.
+      #
+      # This test is what makes that deletion safe to keep: it fails if a
+      # future edit re-bakes the prose into a body.
+      sentinel = "Skills encode org conventions you may not have"
+
+      templates = PromptTemplates.default_templates()
+
+      # `federation.preamble` is exempt BY DESIGN: it is not a dispatch body,
+      # it IS the shared block those bodies substitute in via
+      # `{{federation_preamble}}`, and it legitimately carries the prose.
+      {[preamble_row], dispatch_rows} =
+        Enum.split_with(templates, &(&1.slug == "federation.preamble"))
+
+      assert preamble_row.content =~ sentinel,
+             "ANTI-VACUITY: the sentinel must actually appear somewhere, or the refutes " <>
+               "below pass because the string was reworded rather than because no body bakes it"
+
+      for row <- dispatch_rows do
+        refute row.content =~ sentinel,
+               "#{row.slug} bakes the skill-discovery prose into its descriptor — it must " <>
+                 "arrive via the {{skills_reference}} or {{federation_preamble}} placeholder " <>
+                 "instead, or agents receive the block twice"
+      end
+
+      # ANTI-VACUITY for the loop: at least one dispatch body must actually
+      # reference the block, otherwise the refutes hold trivially because
+      # nothing mentions skills at all.
+      assert Enum.any?(dispatch_rows, &(&1.content =~ "{{skills_reference}}"))
+    end
+
     test "dreaming template body specifies the six synthesis-proposal categories" do
       content = PromptTemplates.default_content_for_slug("historian.dreaming")
 

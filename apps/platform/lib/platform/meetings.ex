@@ -3360,7 +3360,13 @@ defmodule Platform.Meetings do
   - `exp` — expiry (default 6 hours)
   - `video` — grant with room name and permissions
 
-  Returns `{:ok, token_string}` or `{:error, reason}`.
+  Two clauses:
+
+    * `generate_token(%Room{}, %{identity: _, name: _})` — takes the room
+      struct and returns `{:ok, token_string}` or `{:error, reason}`.
+    * `generate_token(room_name, identity)` when both are binaries — the
+      room-name-string form, equivalent to `generate_token(room_name,
+      identity, [])`. See `generate_token/3` for the available options.
   """
   @spec generate_token(Room.t(), map()) :: {:ok, String.t()} | {:error, atom()}
   def generate_token(%Room{} = room, %{identity: identity, name: name}) do
@@ -3396,16 +3402,11 @@ defmodule Platform.Meetings do
     end
   end
 
-  # When the room is a meeting space (space-<uuid>), explicitly dispatch the
-  # meeting-transcriber agent. This keeps the voice-assistant agent (which
-  # handles phone-call rooms) out of meetings — LiveKit routes by agentName.
-  defp maybe_put_room_config(claims, "space-" <> _) do
-    Map.put(claims, "roomConfig", %{
-      "agents" => [%{"agentName" => "meeting-transcriber"}]
-    })
+  # Room-name-string form of `generate_token/2`; documented on the first clause
+  # above, since @doc is per name/arity and a second one would be discarded.
+  def generate_token(room_name, identity) when is_binary(room_name) and is_binary(identity) do
+    generate_token(room_name, identity, [])
   end
-
-  defp maybe_put_room_config(claims, _room_name), do: claims
 
   @doc """
   Generate a LiveKit access token from a room name string.
@@ -3448,12 +3449,16 @@ defmodule Platform.Meetings do
     sign_jwt(claims, config[:api_secret])
   end
 
-  @doc """
-  Generate a LiveKit access token from a room name string with default options.
-  """
-  def generate_token(room_name, identity) when is_binary(room_name) and is_binary(identity) do
-    generate_token(room_name, identity, [])
+  # When the room is a meeting space (space-<uuid>), explicitly dispatch the
+  # meeting-transcriber agent. This keeps the voice-assistant agent (which
+  # handles phone-call rooms) out of meetings — LiveKit routes by agentName.
+  defp maybe_put_room_config(claims, "space-" <> _) do
+    Map.put(claims, "roomConfig", %{
+      "agents" => [%{"agentName" => "meeting-transcriber"}]
+    })
   end
+
+  defp maybe_put_room_config(claims, _room_name), do: claims
 
   @doc """
   Generate a LiveKit access token for an agent worker.

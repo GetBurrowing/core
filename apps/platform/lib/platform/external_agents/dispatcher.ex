@@ -168,7 +168,7 @@ defmodule Platform.ExternalAgents.Dispatcher do
   Recognised options:
 
     * `messages: [%{role: "system"|"user", content: "..."}]` — pass the
-      raw OpenAI-shaped messages list directly to `request_body/2`.
+      raw OpenAI-shaped messages list directly to `request_body/3`.
       Skips the `default_prompt_template` render entirely.
 
     * `prompt: %{system: sys, user: user}` — sugar for the same. When
@@ -449,7 +449,7 @@ defmodule Platform.ExternalAgents.Dispatcher do
 
   # ── HTTP ──────────────────────────────────────────────────────────────────
 
-  defp post(agent, messages_or_legacy, responsibility \\ nil) do
+  defp post(agent, messages_or_legacy, responsibility) do
     url = request_url(agent)
     headers = request_headers(agent)
     body = request_body(agent, messages_or_legacy, responsibility)
@@ -525,7 +525,7 @@ defmodule Platform.ExternalAgents.Dispatcher do
   # responsibility hint takes precedence; otherwise falls back to
   # `@default_external_max_tokens`. Keeps the OpenAI-compat concierge
   # from applying its own ~800-token default and truncating outputs.
-  defp request_body(agent, messages, responsibility \\ nil) when is_list(messages) do
+  defp request_body(agent, messages, responsibility) when is_list(messages) do
     %{
       model: model(agent),
       messages: messages,

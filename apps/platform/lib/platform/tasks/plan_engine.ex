@@ -1798,7 +1798,7 @@ defmodule Platform.Tasks.PlanEngine do
 
   # ── Telemetry ───────────────────────────────────────────────────────────
 
-  defp emit_stage_telemetry(%Stage{} = stage, from_status, completed_by \\ nil) do
+  defp emit_stage_telemetry(%Stage{} = stage, from_status, completed_by) do
     base = %{
       stage_id: stage.id,
       plan_id: stage.plan_id,

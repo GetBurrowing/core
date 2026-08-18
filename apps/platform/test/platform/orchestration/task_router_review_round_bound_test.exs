@@ -88,7 +88,38 @@ defmodule Platform.Orchestration.TaskRouterReviewRoundBoundTest do
       assert Tasks.get_task_record(task.id).review_round_count == 2
       assert Tasks.get_task_record(task.id).status == "in_progress"
 
+      # Task 01a01041 stage 2: rounds 1–2 bounced, and the bounce arm DOES
+      # synthesize a remediation stage. The replan arm deliberately does not —
+      # the task goes to `planning` and a planner is dispatched, so stacking a
+      # synthesized stage onto the dying plan would hand the next planner an
+      # executable stage it never wrote. That is why
+      # `replan_after_exhausted_rounds/3` takes no `gate_stage` (it used to take
+      # one and ignore it, which read like a guard failing open).
+      #
+      # The observable has to be the DELTA across round 3, not the presence of
+      # the name: rounds 1–2 already put remediation stages on this same plan,
+      # so an absence assertion scoped to the plan would be false, and one
+      # scoped to a substring like "%remediat%" would be vacuous (the stage is
+      # named "Address the failed behavioural gate").
+      remediation_name = PlanEngine.remediation_stage_name()
+
+      remediation_count = fn ->
+        Platform.Repo.aggregate(
+          from(s in Stage, where: s.plan_id == ^plan.id and s.name == ^remediation_name),
+          :count
+        )
+      end
+
+      before_replan = remediation_count.()
+
+      assert before_replan > 0,
+             "positive control: the two bounce rounds must have synthesized remediation stages, " <>
+               "otherwise the equality below holds because this query finds nothing at all"
+
       fail_gate(task, g3, @genuine_evidence)
+
+      assert remediation_count.() == before_replan,
+             "the replan arm must add no remediation stage to the superseded plan"
 
       # The endpoint — and the counter reading that says the endpoint was
       # reached by counting rather than by some other trigger.

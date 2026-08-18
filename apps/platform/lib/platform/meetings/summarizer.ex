@@ -374,7 +374,7 @@ defmodule Platform.Meetings.Summarizer do
   # `Meetings.fail_transcript/3` so the row itself records WHY. Without
   # it a populated transcript ends at `failed` with a NULL summary and
   # the reason exists only in a log line nobody greps.
-  defp safe_fail_transcript(id, reason \\ nil) do
+  defp safe_fail_transcript(id, reason) do
     Meetings.fail_transcript(id, nil, reason)
   rescue
     DBConnection.OwnershipError ->

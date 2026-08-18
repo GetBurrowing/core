@@ -969,9 +969,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # environments this fallback exists to serve.
   defp hardcoded_dispatch_planning(
          task,
-         provider_guidance \\ "",
-         previous_rejection_reason \\ nil,
-         parent_plans \\ []
+         provider_guidance,
+         previous_rejection_reason,
+         parent_plans
        ) do
     previous_rejection_section = render_previous_rejection_section(previous_rejection_reason)
     upstream_plans_section = render_upstream_plans_section(parent_plans)
@@ -1120,7 +1120,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  defp hardcoded_dispatch_in_progress(task, plan, stage, provider_guidance \\ "") do
+  defp hardcoded_dispatch_in_progress(task, plan, stage, provider_guidance) do
     stage_info = format_stage_info(plan, stage)
     # Parity with the `{{stage_description}}` placeholder in the DB
     # `dispatch.in_progress` body — same value, same position. An environment
@@ -1161,7 +1161,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     |> enrich_in_progress_prompt(task, stage)
   end
 
-  defp hardcoded_dispatch_in_review(task, plan, stage, provider_guidance \\ "") do
+  defp hardcoded_dispatch_in_review(task, plan, stage, provider_guidance) do
     stage_info = format_stage_info(plan, stage)
     # Parity with the `{{stage_description}}` placeholder in the DB
     # `dispatch.in_review` body — same value, same position. An environment

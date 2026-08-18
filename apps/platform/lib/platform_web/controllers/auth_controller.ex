@@ -1,7 +1,6 @@
 defmodule PlatformWeb.AuthController do
   use PlatformWeb, :controller
 
-  alias Platform.Accounts
   alias Platform.Accounts.ExternalAdmission
   alias Platform.OIDC
   alias PlatformWeb.ExternalRedirect
@@ -102,6 +101,11 @@ defmodule PlatformWeb.AuthController do
     end
   end
 
+  def callback(conn, _params) do
+    emit_callback_failure(conn, :missing_params)
+    invalid_state(conn)
+  end
+
   # Wrap `ExternalAdmission.admit/2` so the archived-user rejection carries
   # the OIDC-claim email through the `with` chain into the telemetry emitter.
   # The email isn't on the (nonexistent) session yet, and the OIDC callback
@@ -185,11 +189,6 @@ defmodule PlatformWeb.AuthController do
       user_id: result.user.id
     })
     |> redirect(to: ExternalAdmission.post_login_path(result))
-  end
-
-  def callback(conn, _params) do
-    emit_callback_failure(conn, :missing_params)
-    invalid_state(conn)
   end
 
   def dev_login(conn, params) do

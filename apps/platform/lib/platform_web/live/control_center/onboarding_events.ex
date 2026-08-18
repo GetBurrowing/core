@@ -125,6 +125,18 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   """
   defdelegate default_external_agent_params, to: AgentData
 
+  @doc """
+  Handle one Control Center onboarding event, dispatched on the event name.
+
+  Clauses cover the onboarding chooser, the template flow, the federate flow,
+  and the External Agent form (change / vault-mode tab / submit). Each event
+  that takes params has a permissive trailing clause returning the socket
+  unchanged, so a malformed payload is a no-op rather than a crash.
+
+  The reasoning specific to a clause is a comment on that clause: `@doc` is
+  per name/arity, so a second one is discarded by the compiler rather than
+  appended, and the per-clause notes were previously being dropped silently.
+  """
   def handle("open_onboarding_chooser", _params, socket) do
     {:noreply,
      socket
@@ -321,13 +333,11 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
     end
   end
 
-  @doc """
-  `phx-change` cycle for the External Agent form. Auto-slugifies the slug
-  from the display name when slug is blank or matches the prior auto-slug,
-  and keeps every other entered value intact (full round-trip through
-  `to_form`). Stage-3 adds vault sub-form fields (`vault_mode`, `vault_key`,
-  `secret`, `save_to_vault`) which round-trip the same way.
-  """
+  # `phx-change` cycle for the External Agent form. Auto-slugifies the slug
+  # from the display name when slug is blank or matches the prior auto-slug,
+  # and keeps every other entered value intact (full round-trip through
+  # `to_form`). Stage-3 adds vault sub-form fields (`vault_mode`, `vault_key`,
+  # `secret`, `save_to_vault`) which round-trip the same way.
   def handle("external_agent_change", %{"external_agent" => params}, socket) do
     prior = current_external_agent_params(socket)
 
@@ -358,15 +368,13 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
 
   def handle("external_agent_change", _params, socket), do: {:noreply, socket}
 
-  @doc """
-  Tab toggle in the Vault sub-form. Updates `vault_mode` in the form params
-  without touching any other entered value (no DB hit). Round-trips through
-  `to_form` so subsequent renders pick up the new mode while preserving
-  vault_key / secret / save_to_vault and every other field.
-
-  This is the regression e2e case B exercises — tabbing back and forth
-  cannot blank inputs the user already filled in.
-  """
+  # Tab toggle in the Vault sub-form. Updates `vault_mode` in the form params
+  # without touching any other entered value (no DB hit). Round-trips through
+  # `to_form` so subsequent renders pick up the new mode while preserving
+  # vault_key / secret / save_to_vault and every other field.
+  #
+  # This is the regression e2e case B exercises — tabbing back and forth
+  # cannot blank inputs the user already filled in.
   def handle("set_vault_mode", %{"mode" => mode}, socket) when mode in ["from_vault", "paste"] do
     next_params =
       socket
@@ -379,22 +387,20 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
 
   def handle("set_vault_mode", _params, socket), do: {:noreply, socket}
 
-  @doc """
-  Submit the External Agent form (stage 4 — full wiring).
-
-  Pipeline:
-    1. Build agent attrs from form params (forces `kind: "external"` via
-       `Platform.ExternalAgents.create_external_agent/1`).
-    2. On changeset error → re-render form with errors via flash.
-    3. On insert success → write the credential branch:
-       * paste + save_to_vault=true → `Platform.Vault.put_inline/2`
-       * paste + save_to_vault=false → `EphemeralCredentials.put/2`
-       * from_vault → no write (credential already exists)
-    4. Run `Platform.ExternalAgents.probe/1`. Failure does NOT roll back —
-       we keep the agent, assign `:probe_result` with the error, and flash
-       a warning. The user can re-probe later from agent detail.
-    5. Close modal + push_patch to the new agent's control-center page.
-  """
+  # Submit the External Agent form (stage 4 — full wiring).
+  #
+  # Pipeline:
+  #   1. Build agent attrs from form params (forces `kind: "external"` via
+  #      `Platform.ExternalAgents.create_external_agent/1`).
+  #   2. On changeset error → re-render form with errors via flash.
+  #   3. On insert success → write the credential branch:
+  #      * paste + save_to_vault=true → `Platform.Vault.put_inline/2`
+  #      * paste + save_to_vault=false → `EphemeralCredentials.put/2`
+  #      * from_vault → no write (credential already exists)
+  #   4. Run `Platform.ExternalAgents.probe/1`. Failure does NOT roll back —
+  #      we keep the agent, assign `:probe_result` with the error, and flash
+  #      a warning. The user can re-probe later from agent detail.
+  #   5. Close modal + push_patch to the new agent's control-center page.
   def handle("submit_external", %{"external_agent" => params}, socket) do
     attrs = build_external_agent_attrs(params)
 
@@ -428,6 +434,50 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   end
 
   def handle("submit_external", _params, socket), do: {:noreply, socket}
+
+  def handle("toggle_import_agent", %{"agent_id" => agent_id}, socket) do
+    selected = socket.assigns.import_selected
+
+    selected =
+      if MapSet.member?(selected, agent_id),
+        do: MapSet.delete(selected, agent_id),
+        else: MapSet.put(selected, agent_id)
+
+    {:noreply, assign(socket, :import_selected, selected)}
+  end
+
+  def handle("submit_import", _params, socket) do
+    selected = socket.assigns.import_selected
+    agents = socket.assigns.import_agents
+
+    to_import = Enum.filter(agents, &MapSet.member?(selected, &1.id))
+
+    if to_import == [] do
+      {:noreply, put_flash(socket, :error, "Select at least one agent to import.")}
+    else
+      results =
+        Enum.map(to_import, fn configured_agent ->
+          case WorkspaceBootstrap.ensure_agent(slug: configured_agent.id) do
+            {:ok, agent} -> {:ok, agent}
+            {:error, reason} -> {:error, configured_agent.id, reason}
+          end
+        end)
+
+      imported = Enum.count(results, &match?({:ok, _}, &1))
+      last_agent = results |> Enum.filter(&match?({:ok, _}, &1)) |> List.last()
+
+      socket =
+        socket
+        |> put_flash(:info, "Imported #{imported} agent(s).")
+        |> assign(:show_onboarding_chooser, false)
+        |> assign(:onboarding_flow, nil)
+
+      case last_agent do
+        {:ok, agent} -> {:noreply, push_patch(socket, to: ~p"/control/#{agent.slug}")}
+        _ -> {:noreply, push_patch(socket, to: ~p"/control")}
+      end
+    end
+  end
 
   defp build_external_agent_attrs(params) do
     name = String.trim(Map.get(params, "name", ""))
@@ -599,48 +649,4 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   defp truthy_checkbox?("true"), do: true
   defp truthy_checkbox?("on"), do: true
   defp truthy_checkbox?(_), do: false
-
-  def handle("toggle_import_agent", %{"agent_id" => agent_id}, socket) do
-    selected = socket.assigns.import_selected
-
-    selected =
-      if MapSet.member?(selected, agent_id),
-        do: MapSet.delete(selected, agent_id),
-        else: MapSet.put(selected, agent_id)
-
-    {:noreply, assign(socket, :import_selected, selected)}
-  end
-
-  def handle("submit_import", _params, socket) do
-    selected = socket.assigns.import_selected
-    agents = socket.assigns.import_agents
-
-    to_import = Enum.filter(agents, &MapSet.member?(selected, &1.id))
-
-    if to_import == [] do
-      {:noreply, put_flash(socket, :error, "Select at least one agent to import.")}
-    else
-      results =
-        Enum.map(to_import, fn configured_agent ->
-          case WorkspaceBootstrap.ensure_agent(slug: configured_agent.id) do
-            {:ok, agent} -> {:ok, agent}
-            {:error, reason} -> {:error, configured_agent.id, reason}
-          end
-        end)
-
-      imported = Enum.count(results, &match?({:ok, _}, &1))
-      last_agent = results |> Enum.filter(&match?({:ok, _}, &1)) |> List.last()
-
-      socket =
-        socket
-        |> put_flash(:info, "Imported #{imported} agent(s).")
-        |> assign(:show_onboarding_chooser, false)
-        |> assign(:onboarding_flow, nil)
-
-      case last_agent do
-        {:ok, agent} -> {:noreply, push_patch(socket, to: ~p"/control/#{agent.slug}")}
-        _ -> {:noreply, push_patch(socket, to: ~p"/control")}
-      end
-    end
-  end
 end

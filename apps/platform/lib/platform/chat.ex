@@ -1412,6 +1412,13 @@ defmodule Platform.Chat do
     end
   end
 
+  def add_agent_participant(space_id, agent_id, opts) when is_binary(agent_id) do
+    case resolve_agent(agent_id) do
+      %Agent{} = agent -> add_agent_participant(space_id, agent, opts)
+      nil -> {:error, :not_found}
+    end
+  end
+
   defp do_add_agent_participant(space_id, %Agent{} = agent, opts) do
     case Repo.get_by(Participant,
            space_id: space_id,
@@ -1429,13 +1436,6 @@ defmodule Platform.Chat do
           attention_mode: Keyword.get(opts, :attention_mode, "mention"),
           joined_at: Keyword.get(opts, :joined_at, DateTime.utc_now())
         })
-    end
-  end
-
-  def add_agent_participant(space_id, agent_id, opts) when is_binary(agent_id) do
-    case resolve_agent(agent_id) do
-      %Agent{} = agent -> add_agent_participant(space_id, agent, opts)
-      nil -> {:error, :not_found}
     end
   end
 
@@ -2065,13 +2065,6 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Full-text search messages in a space using PostgreSQL text search.
-
-  Returns up to `limit` results ordered by search rank (highest first) with a
-  lightweight highlighted excerpt in the virtual `search_headline` field.
-  Blank queries return an empty list.
-  """
-  @doc """
   Returns true when `query` parses to at least one lexeme under the SAME
   `websearch_to_tsquery('english', ...)` parse that `search_messages/3` uses.
 
@@ -2100,6 +2093,13 @@ defmodule Platform.Chat do
     end
   end
 
+  @doc """
+  Full-text search messages in a space using PostgreSQL text search.
+
+  Returns up to `limit` results ordered by search rank (highest first) with a
+  lightweight highlighted excerpt in the virtual `search_headline` field.
+  Blank queries return an empty list.
+  """
   @spec search_messages(binary(), String.t(), keyword()) :: [Message.t()]
   def search_messages(space_id, query, opts \\ [])
   def search_messages(_space_id, query, _opts) when not is_binary(query) or query == "", do: []
@@ -2505,28 +2505,14 @@ defmodule Platform.Chat do
     |> Map.new()
   end
 
-  @doc """
-  For a list of message IDs, returns thread preview data for any that have threads with replies.
-
-  Returns `%{message_id => %{thread_id: id, reply_count: count, last_reply_at: datetime}}`.
-  """
-  @spec thread_previews_for_messages([binary()]) :: map()
-  def thread_previews_for_messages([]), do: %{}
-
-  def thread_previews_for_messages(message_ids) do
-    from(t in Thread,
-      where: t.parent_message_id in ^message_ids,
-      left_join: m in Message,
-      on: m.thread_id == t.id and is_nil(m.deleted_at),
-      group_by: [t.id, t.parent_message_id],
-      having: count(m.id) > 0,
-      select:
-        {t.parent_message_id,
-         %{thread_id: t.id, reply_count: count(m.id), last_reply_at: max(m.inserted_at)}}
-    )
-    |> Repo.all()
-    |> Map.new()
-  end
+  # NOTE (task 01a01041 stage 2): a SECOND, byte-identical definition of
+  # `thread_previews_for_messages/1` used to sit here, ~460 lines after the
+  # canonical one at the top of this module. Both clauses were unreachable
+  # (`cannot match because a previous clause at line 2052 always matches`), so
+  # every caller has always been served by the earlier copy. `diff` of the two
+  # blocks — docstring, `@spec`, and both bodies — was empty, so there is no
+  # behaviour question about which one callers get: the two were the same
+  # function. The dead pair is deleted; the live one is unchanged.
 
   # ── Reactions ───────────────────────────────────────────────────────────────
 
@@ -4313,24 +4299,6 @@ defmodule Platform.Chat do
   # ── AI Activity (Activity panel — list + undo agent-driven actions) ────────
 
   @doc """
-  List recent AI-agent-driven actions (messages, canvases) in spaces the given
-  user participates in. Used by the Activity LiveView. Returns currently-active
-  items (not soft-deleted), sorted chronologically newest first.
-
-  Each result is a map: `%{kind: :message | :canvas, item: t, agent_name: name,
-  agent_avatar_url: url | nil, space_id: id, inserted_at: dt}`.
-
-  `agent_avatar_url` is resolved from the `agents` table at read time, not from
-  the author snapshot: the snapshot columns freeze the acting agent's NAME so a
-  historical row keeps saying who acted, but an avatar is a mutable fact about
-  the agent and the feed should show the face the agent has now.
-
-  Options:
-    * `:since` (`DateTime`) — only items with `inserted_at >= since`. If omitted,
-      all-time history is returned.
-    * `:limit` (`integer`) — cap on combined results. Default `200`.
-  """
-  @doc """
   Count of agent-driven actions visible to `list_recent_agent_actions/1` under
   the same filter options. Used by the Activity panel for numbered-page
   pagination (total page count = ceil(count / page_size)).
@@ -4378,6 +4346,24 @@ defmodule Platform.Chat do
     Repo.aggregate(base, :count, :id)
   end
 
+  @doc """
+  List recent AI-agent-driven actions (messages, canvases) in spaces the given
+  user participates in. Used by the Activity LiveView. Returns currently-active
+  items (not soft-deleted), sorted chronologically newest first.
+
+  Each result is a map: `%{kind: :message | :canvas, item: t, agent_name: name,
+  agent_avatar_url: url | nil, space_id: id, inserted_at: dt}`.
+
+  `agent_avatar_url` is resolved from the `agents` table at read time, not from
+  the author snapshot: the snapshot columns freeze the acting agent's NAME so a
+  historical row keeps saying who acted, but an avatar is a mutable fact about
+  the agent and the feed should show the face the agent has now.
+
+  Options:
+    * `:since` (`DateTime`) — only items with `inserted_at >= since`. If omitted,
+      all-time history is returned.
+    * `:limit` (`integer`) — cap on combined results. Default `200`.
+  """
   @spec list_recent_agent_actions(keyword()) :: [map()]
   def list_recent_agent_actions(opts \\ []) do
     since = Keyword.get(opts, :since)
@@ -4662,10 +4648,6 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Soft-delete a canvas. Sets `deleted_at` to the current timestamp,
-  emits telemetry, and broadcasts `{:canvas_deleted, canvas}` to the space.
-  """
-  @doc """
   Restore a soft-deleted canvas by clearing `deleted_at`. Counterpart to
   `delete_canvas/1`. Emits `:canvas_restored` telemetry and broadcasts
   `{:canvas_restored, canvas}` to the space topic so chat clients can re-add
@@ -4695,6 +4677,10 @@ defmodule Platform.Chat do
     result
   end
 
+  @doc """
+  Soft-delete a canvas. Sets `deleted_at` to the current timestamp,
+  emits telemetry, and broadcasts `{:canvas_deleted, canvas}` to the space.
+  """
   @spec delete_canvas(Canvas.t()) :: {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
   def delete_canvas(%Canvas{} = canvas) do
     # Use the dedicated soft-delete changeset so `validate_document/1` doesn't

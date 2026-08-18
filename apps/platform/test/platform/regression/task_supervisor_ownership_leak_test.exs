@@ -260,7 +260,7 @@ defmodule Platform.Regression.TaskSupervisorOwnershipLeakTest do
       # ── Log capture (load-bearing for assertion E) ──
       # The specific `rescue DBConnection.OwnershipError ->` clause in
       # `Platform.Responsibilities.Router.safe_assignee_for/1` (and the
-      # peer clause in `Platform.Meetings.Summarizer.safe_fail_transcript/1`)
+      # peer clause in `Platform.Meetings.Summarizer.safe_fail_transcript/2`)
       # emit a distinctive `:debug` log substring: `"sandbox-owned DB
       # call from Task.Supervised"`. The GENERIC `error ->` fallback
       # clause immediately below the OwnershipError one logs at
@@ -352,7 +352,7 @@ defmodule Platform.Regression.TaskSupervisorOwnershipLeakTest do
       # The generic `error ->` fallback emits a different message
       # (`"Roles.assignee_for/1 raised ..."`) at `:warning` and does
       # NOT contain this substring. Same distinctive substring is
-      # emitted by `Summarizer.safe_fail_transcript/1` when its own
+      # emitted by `Summarizer.safe_fail_transcript/2` when its own
       # OwnershipError branch fires with `:no_sandbox`.
       #
       # Asserting the substring is present makes the test load-bearing
@@ -366,7 +366,7 @@ defmodule Platform.Regression.TaskSupervisorOwnershipLeakTest do
                (a) The `rescue DBConnection.OwnershipError ->` clause in
                    `Platform.Responsibilities.Router.safe_assignee_for/1`
                    (or its peer in
-                   `Platform.Meetings.Summarizer.safe_fail_transcript/1`)
+                   `Platform.Meetings.Summarizer.safe_fail_transcript/2`)
                    was deleted / commented out — the generic `error ->`
                    fallback silently absorbs the raise but does NOT
                    emit this specific substring. Restore the specific

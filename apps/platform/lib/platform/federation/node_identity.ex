@@ -41,9 +41,6 @@ defmodule Platform.Federation.NodeIdentity do
   end
 
   @doc """
-  Signs a binary nonce with the identity's private key using Ed25519.
-  """
-  @doc """
   Signs a binary payload with the identity's private key using Ed25519.
   """
   def sign(payload, identity) when is_binary(payload) do

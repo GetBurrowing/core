@@ -1627,7 +1627,22 @@
         >
         </div>
 
-        <%!-- Agent section: one `<.agent_tile>` per agent participant. --%>
+        <%!-- Agent section: one `<.agent_tile>` per agent participant.
+
+             `accent_color` is deliberately NOT passed. The component declares
+             `attr :accent_color, :string, default: nil`, which already means
+             "no accent -> bg-base-200"; a literal `accent_color={nil}` is a
+             type error against a `:string` attr no matter what its default is.
+
+             It is not wired to a real accent here because the only accent a
+             meeting can reach is `Platform.Agents.ColorPalette.accent_for/1`
+             (via `@agents_by_id`), which returns an `oklch()` string, while
+             `agent_tile/1`'s `accent_background_style/1` accepts hex only and
+             silently discards anything else. Wiring it would therefore render
+             no accent at all until that validator is widened, which is a
+             behaviour change to the component and out of scope for a warning
+             cleanup. Recorded in
+             notes/2026-08-17-compile-warnings-baseline.md. --%>
         <section
           class="flex h-full items-stretch gap-2"
           data-section="agents"
@@ -1644,7 +1659,6 @@
             }
             role={agent_role(participant)}
             activity_state={:idle}
-            accent_color={nil}
             avatar_url={participant.avatar_url}
           />
         </section>

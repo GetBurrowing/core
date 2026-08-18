@@ -360,6 +360,20 @@ defmodule Platform.Tasks.Task do
   end
 
   @doc """
+  Narrow changeset for the bounded-review-loop counter (task 019ff788
+  stage 3). Casts `:review_round_count` and nothing else — in particular
+  not `:status`, so a caller holding only this changeset cannot smuggle a
+  status transition through it, and `changeset/2` (the sole recorded
+  status writer) stays the only unguarded status surface.
+  """
+  def review_round_changeset(task, attrs) do
+    task
+    |> cast(attrs, [:review_round_count])
+    |> validate_required([:review_round_count])
+    |> validate_number(:review_round_count, greater_than_or_equal_to: 0)
+  end
+
+  @doc """
   Narrow changeset for the ADR-0046 planning sub-phase fields.
 
   Casts ONLY `:planning_step` and `:planning_step_outcomes`. Anything
@@ -378,20 +392,6 @@ defmodule Platform.Tasks.Task do
       introduce a fourth outcome value that downstream readers would
       then have to guess about.
   """
-  @doc """
-  Narrow changeset for the bounded-review-loop counter (task 019ff788
-  stage 3). Casts `:review_round_count` and nothing else — in particular
-  not `:status`, so a caller holding only this changeset cannot smuggle a
-  status transition through it, and `changeset/2` (the sole recorded
-  status writer) stays the only unguarded status surface.
-  """
-  def review_round_changeset(task, attrs) do
-    task
-    |> cast(attrs, [:review_round_count])
-    |> validate_required([:review_round_count])
-    |> validate_number(:review_round_count, greater_than_or_equal_to: 0)
-  end
-
   def planning_step_changeset(task, attrs) do
     task
     |> cast(attrs, [:planning_step, :planning_step_outcomes])

@@ -2946,49 +2946,6 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp normalize_send_media_attachments(args) do
-    file_paths =
-      case Map.get(args, "file_paths") do
-        paths when is_list(paths) -> Enum.filter(paths, &is_binary/1)
-        _ -> []
-      end
-
-    attachment_specs =
-      cond do
-        file_paths != [] ->
-          Enum.map(file_paths, fn path ->
-            %{path: path, filename: Path.basename(path)}
-          end)
-
-        is_binary(Map.get(args, "file_path")) and Map.get(args, "file_path") != "" ->
-          file_path = Map.get(args, "file_path")
-          filename = Map.get(args, "filename") || Path.basename(file_path)
-          [%{path: file_path, filename: filename}]
-
-        true ->
-          []
-      end
-
-    case attachment_specs do
-      [] -> {:error, "Failed to send media: no file path provided"}
-      specs -> {:ok, specs}
-    end
-  end
-
-  defp persist_send_media_attachments(attachment_specs) do
-    attachment_specs
-    |> Enum.reduce_while({:ok, []}, fn %{path: path, filename: filename}, {:ok, acc} ->
-      case Chat.AttachmentStorage.persist_upload(path, filename) do
-        {:ok, file_meta} -> {:cont, {:ok, [Map.put(file_meta, :message_id, nil) | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, attachment_attrs} -> {:ok, Enum.reverse(attachment_attrs)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   def execute("react", args, context) do
     react_after_validation(
       Map.get(args, "space_id"),
@@ -2996,84 +2953,6 @@ defmodule Platform.Federation.ToolSurface do
       Map.get(args, "emoji"),
       context
     )
-  end
-
-  defp react_after_validation(space_id, message_id, emoji, context) do
-    case Chat.get_message(message_id) do
-      nil ->
-        {:error,
-         %{
-           error: "Message #{message_id} not found",
-           recoverable: false,
-           suggestion: "Verify the message_id exists and is accessible to the agent"
-         }}
-
-      %{space_id: msg_space_id} when msg_space_id != space_id ->
-        {:error,
-         %{
-           error: "Message does not belong to space #{space_id}",
-           recoverable: false,
-           suggestion: "Pass the space_id that owns the target message"
-         }}
-
-      _message ->
-        participant_id =
-          Map.get(context, :agent_participant_id) ||
-            get_agent_participant_id_for_space(space_id, context)
-
-        if is_nil(participant_id) do
-          {:error,
-           %{
-             error: "Access denied: agent is not a participant in space #{space_id}",
-             recoverable: false,
-             suggestion: "Use space_list to find spaces the agent has access to"
-           }}
-        else
-          persist_reaction(space_id, message_id, participant_id, emoji)
-        end
-    end
-  end
-
-  defp persist_reaction(space_id, message_id, participant_id, emoji) do
-    case Chat.add_reaction(%{
-           message_id: message_id,
-           participant_id: participant_id,
-           emoji: emoji
-         }) do
-      {:ok, _reaction} ->
-        {:ok,
-         %{
-           message_id: message_id,
-           space_id: space_id,
-           emoji: emoji,
-           status: "added"
-         }}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        if already_reacted?(changeset) do
-          {:ok,
-           %{
-             message_id: message_id,
-             space_id: space_id,
-             emoji: emoji,
-             status: "already_reacted"
-           }}
-        else
-          {:error,
-           %{
-             error: "Failed to add reaction: #{inspect_errors_safe(changeset)}",
-             recoverable: true,
-             suggestion: "Verify message_id, participant_id, and emoji are valid"
-           }}
-        end
-    end
-  end
-
-  defp already_reacted?(%Ecto.Changeset{errors: errors}) do
-    case Keyword.get(errors, :emoji) do
-      {_msg, opts} -> Keyword.get(opts, :constraint) == :unique
-      _ -> false
-    end
   end
 
   # ── Review tools ────────────────────────────────────────────────────────
@@ -3172,70 +3051,6 @@ defmodule Platform.Federation.ToolSurface do
       {:error, reason} ->
         {:error, design_critique_error(reason)}
     end
-  end
-
-  # Error translation is deliberately per-term rather than a catch-all
-  # string: a caller that receives a wrong `recoverable` flag retries
-  # something that cannot work, or abandons something that would have.
-  defp design_critique_error(:responsibility_unfilled) do
-    %{
-      error:
-        "No agent holds the Designer role's `design.critique` duty, so no design review can be obtained.",
-      recoverable: false,
-      suggestion:
-        "Assign the Designer role (or a `design.critique` override) to an external agent. Until then, create the review request anyway and note that design review is missing."
-    }
-  end
-
-  defp design_critique_error(:responsibility_not_registered) do
-    %{
-      error: "`design.critique` is not registered on this instance.",
-      recoverable: false,
-      suggestion:
-        "Create the review request anyway and note that design review is unavailable here."
-    }
-  end
-
-  defp design_critique_error({:assignee_not_external, kind}) do
-    %{
-      error:
-        "The `design.critique` assignee is a #{kind} agent; a synchronous critique needs an external one.",
-      recoverable: false,
-      suggestion:
-        "Point the Designer role at an external agent, or proceed without design review and say so."
-    }
-  end
-
-  defp design_critique_error(:no_canvas_resolved) do
-    %{
-      error: "No canvas could be resolved for the critique, so nothing was sent for review.",
-      recoverable: true,
-      suggestion: "Pass an explicit `canvas_id` for the evidence canvas holding your screenshots."
-    }
-  end
-
-  defp design_critique_error({:dispatch_raised, message}) do
-    %{
-      error: "The design critique dispatch failed: #{message}",
-      recoverable: true,
-      suggestion: "Retry once; if it fails again, create the review request noting the failure."
-    }
-  end
-
-  defp design_critique_error({:dispatch_exited, reason}) do
-    %{
-      error: "The design critique dispatch exited: #{inspect(reason)}",
-      recoverable: true,
-      suggestion: "Retry once; if it fails again, create the review request noting the failure."
-    }
-  end
-
-  defp design_critique_error(reason) do
-    %{
-      error: "Could not obtain a design critique: #{inspect(reason)}",
-      recoverable: true,
-      suggestion: "Retry once; if it fails again, create the review request noting the failure."
-    }
   end
 
   # ── Space tools ─────────────────────────────────────────────────────────
@@ -3340,20 +3155,6 @@ defmodule Platform.Federation.ToolSurface do
             end
         end
     end
-  end
-
-  # Look up the agent's participant row in a space. Post-ADR-0038 there is
-  # no dismissed-but-present state — the row exists iff the agent is in the
-  # space. Scoped to participant_type="agent" so a user participant with a
-  # colliding UUID can't be matched here.
-  defp find_active_agent_participant(space_id, agent_id) do
-    from(p in Participant,
-      where:
-        p.space_id == ^space_id and
-          p.participant_id == ^agent_id and
-          p.participant_type == "agent"
-    )
-    |> Repo.one()
   end
 
   # ── Canvas tools (ADR 0036) ─────────────────────────────────────────────
@@ -3510,24 +3311,6 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp search_hits(space_id, query, limit) do
-    messages = Chat.search_messages(space_id, query, limit: limit)
-
-    {:ok,
-     Enum.map(messages, fn m ->
-       {trimmed_content, truncated?} = cap_content(m.content || "")
-
-       %{
-         id: m.id,
-         participant_id: m.participant_id,
-         content: trimmed_content,
-         content_truncated: truncated?,
-         search_headline: m.search_headline,
-         inserted_at: format_datetime(m.inserted_at)
-       }
-     end)}
-  end
-
   def execute("space_get_messages", args, context) do
     space_id = Map.get(args, "space_id")
     limit = args |> Map.get("limit", 20) |> min(20)
@@ -3556,25 +3339,6 @@ defmodule Platform.Federation.ToolSurface do
          }
        end)}
     end
-  end
-
-  defp cap_content(content) when is_binary(content) do
-    if String.length(content) > @message_content_cap do
-      {String.slice(content, 0, @message_content_cap), true}
-    else
-      {content, false}
-    end
-  end
-
-  defp serialize_attachments(attachments) do
-    Enum.map(attachments, fn a ->
-      %{
-        url: "/chat/attachments/#{a.id}",
-        content_type: a.content_type,
-        byte_size: a.byte_size,
-        filename: a.filename
-      }
-    end)
   end
 
   # `canvas_list` stays on `assert_agent_in_space/2` while `canvas_get` moved onto
@@ -3690,64 +3454,6 @@ defmodule Platform.Federation.ToolSurface do
 
         {:ok, %{results: users ++ agents}}
     end
-  end
-
-  defp normalize_limit(n) when is_integer(n) and n > 0, do: min(n, 100)
-  defp normalize_limit(_), do: 20
-
-  defp search_users(query_trimmed, query_norm, like_pattern, prefix_pattern, limit) do
-    from(u in Platform.Accounts.User,
-      where:
-        fragment("LOWER(?)", u.email) == ^query_norm or
-          ilike(u.name, ^like_pattern),
-      order_by: [
-        desc: fragment("LOWER(?) = ?", u.email, ^query_norm),
-        desc: fragment("LOWER(?) = LOWER(?)", u.name, ^query_trimmed),
-        desc: fragment("? ILIKE ?", u.name, ^prefix_pattern),
-        asc: u.name
-      ],
-      limit: ^limit
-    )
-    |> Repo.all()
-    |> Enum.map(&format_principal_user/1)
-  end
-
-  defp search_agents(query_trimmed, like_pattern, prefix_pattern, limit) do
-    from(a in Agent,
-      where:
-        ilike(a.name, ^like_pattern) or
-          ilike(a.slug, ^like_pattern),
-      order_by: [
-        desc: fragment("LOWER(?) = LOWER(?)", a.slug, ^query_trimmed),
-        desc: fragment("LOWER(?) = LOWER(?)", a.name, ^query_trimmed),
-        desc: fragment("? ILIKE ?", a.name, ^prefix_pattern),
-        asc: a.name
-      ],
-      limit: ^limit
-    )
-    |> Repo.all()
-    |> Enum.map(&format_principal_agent/1)
-  end
-
-  defp format_principal_user(%Platform.Accounts.User{} = u) do
-    %{
-      type: "user",
-      id: u.id,
-      display_name: u.name,
-      email: u.email,
-      avatar_url: u.avatar_url
-    }
-  end
-
-  defp format_principal_agent(%Agent{} = a) do
-    %{
-      type: "agent",
-      id: a.id,
-      display_name: a.name,
-      slug: a.slug,
-      kind: a.kind,
-      classification: Atom.to_string(Platform.Agents.Kind.classify(a))
-    }
   end
 
   # ── Task tools ───────────────────────────────────────────────────────────
@@ -4083,156 +3789,6 @@ defmodule Platform.Federation.ToolSurface do
            suggestion: "Check the request shape"
          }}
     end
-  end
-
-  # Applies a per-phase assignee map through the canonical writer
-  # (`Tasks.set_phase_assignees/2`), which re-derives the flat
-  # `assignee_id + assignee_type` pointer from the current phase. Called
-  # from both `task_create` and `task_update` after `build_task_attrs/3`
-  # emits a non-nil `phase_attrs`.
-  defp maybe_apply_phase_assignees(task, nil), do: {:ok, task}
-
-  defp maybe_apply_phase_assignees(task, phase_attrs) when is_map(phase_attrs),
-    do: Tasks.set_phase_assignees(task, phase_attrs)
-
-  # Stage 4 (019f3dbb) — advisory self-similarity search for
-  # `task_create`. Runs synchronously post-create because the caller
-  # needs the field in the same response envelope (a follow-up
-  # `memory_search` round-trip would double the create's latency).
-  #
-  # ## Threshold
-  #
-  # The plan (task 019f3dbb stage 4) expresses the "strong match" cutoff
-  # as `similarity_score >= 0.5`. `Platform.Org.Wiki.Search` produces
-  # RRF-fused scores bounded by roughly `2 * 1/(k + 1) ≈ 0.033` at k=60,
-  # so the fused `score` on the hit envelope never crosses 0.5 in
-  # practice. We derive `similarity_score` from the hit's channel ranks
-  # instead — `1.0 / min(semantic_rank, lexical_rank)` — which cleanly
-  # maps to the plan's mental model:
-  #
-  #   * rank 1 → 1.0 (near-identical content, both channels rank 1
-  #     usually means the title tokens overlap fully)
-  #   * rank 2 → 0.5 (still a plausible duplicate)
-  #   * rank 3 → 0.33 (weak — filtered out)
-  #
-  # So the effective filter is "top-2 in at least one channel," which
-  # is the "strong match" bar the plan describes.
-  #
-  # ## Advisory guarantees
-  #
-  # - Never blocks the create — a raise or `{:error, _}` from `Search`
-  #   surfaces as `similar_tasks: []` and a `:warning` log line.
-  # - Self-match is excluded (the just-created task will often lexical-
-  #   match its own title at rank 1).
-  # - Project scope is enforced through the `project_id` filter passed
-  #   to `Search.search`; cross-project leakage cannot occur because the
-  #   lexical `tasks` channel joins projects and the semantic channel
-  #   filters on the `project_id` provider option.
-  defp similar_tasks_for(task) do
-    try do
-      query_text =
-        [task.title, task.description]
-        |> Enum.reject(&(&1 in [nil, ""]))
-        |> Enum.join(" ")
-        |> normalize_similarity_query()
-
-      case Search.search(query_text,
-             source: "task",
-             project_id: task.project_id,
-             # Pull one extra so we still return up to 5 after dropping
-             # the self-match.
-             limit: 6,
-             # Task creation may run under a system context with no
-             # caller agent; tenancy is enforced via `project_id`.
-             agent: nil
-           ) do
-        {:ok, %{results: results}} ->
-          results
-          |> Enum.reject(fn hit -> hit.id == task.id end)
-          |> Enum.map(&similar_task_entry/1)
-          |> Enum.filter(fn entry -> entry.similarity_score >= 0.5 end)
-          |> Enum.take(5)
-
-        {:error, reason} ->
-          Logger.warning("task_create similarity search returned error: #{inspect(reason)}")
-
-          []
-      end
-    rescue
-      error ->
-        Logger.warning("task_create similarity search raised: #{Exception.message(error)}")
-
-        []
-    catch
-      # `Search.search` fans channels through `Task.async_stream` — a
-      # crash in a semantic-provider `search/3` implementation surfaces
-      # as an EXIT that leaks out of the stream. Treat it identically
-      # to the rescue path: advisory search, never blocks the create.
-      kind, reason when kind in [:exit, :throw] ->
-        Logger.warning("task_create similarity search exited: #{inspect({kind, reason})}")
-
-        []
-    end
-  end
-
-  # Project a `Platform.Org.Wiki.Search` task hit into the advisory
-  # `similar_tasks` entry the plan spec calls out. Fields flow through
-  # from stage 3's hydration — see `Search.task_to_hit/2`.
-  defp similar_task_entry(hit) do
-    %{
-      id: hit.id,
-      title: hit_title(hit),
-      status: hit.status,
-      priority: hit.priority,
-      similarity_score: hit_similarity_score(hit),
-      updated_at: hit.updated_at,
-      merged_pr_url: hit.merged_pr_url,
-      follow_up_task_ids: hit.follow_up_task_ids,
-      cancellation_note: hit.cancellation_note
-    }
-  end
-
-  # `Search` builds `content` as `title` or `title <> " — " <> description`.
-  # Recover the title cheaply without re-fetching the task row.
-  defp hit_title(%{content: content}) when is_binary(content) do
-    case String.split(content, " — ", parts: 2) do
-      [title | _] -> title
-      _ -> content
-    end
-  end
-
-  defp hit_title(_), do: ""
-
-  # See `similar_tasks_for/1` for the rationale — rank-based confidence
-  # in [0, 1]. `100` is the "not present in this channel" sentinel; both
-  # ranks missing would already have been filtered upstream (a hit with
-  # no channel rank cannot exist), so the max is a defensive floor.
-  defp hit_similarity_score(%{semantic_rank: semantic_rank, lexical_rank: lexical_rank}) do
-    ranks = Enum.reject([semantic_rank, lexical_rank], &is_nil/1)
-
-    min_rank =
-      case ranks do
-        [] -> 100
-        list -> Enum.min(list)
-      end
-
-    Float.round(1.0 / min_rank, 3)
-  end
-
-  defp hit_similarity_score(_), do: 0.0
-
-  # `Search.search` funnels the query into `websearch_to_tsquery('english', ?)`,
-  # which treats `-` as a NOT operator (`meeting -fix` → `meeting & !fix`),
-  # `"..."` as a phrase, and `OR` as alternation. A task's title +
-  # description is arbitrary prose — an em-dash inside "the summarizer
-  # leaks memory each meeting - fix it" would silently exclude every
-  # candidate that mentions "fix". Normalise punctuation to whitespace
-  # so the query is a plain token bag and the tsquery only carries the
-  # implicit-AND of stems.
-  defp normalize_similarity_query(text) do
-    text
-    |> String.replace(~r/[^\p{L}\p{N}]+/u, " ")
-    |> String.trim()
   end
 
   def execute("meeting_create", args, context) do
@@ -4595,129 +4151,6 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp maybe_update_task(task, attrs, _actor) when map_size(attrs) == 0, do: {:ok, task}
-  defp maybe_update_task(task, attrs, actor), do: Tasks.update_task(task, attrs, actor: actor)
-
-  defp maybe_transition_status(task, nil, _actor), do: {:ok, task}
-
-  # `transition_task_status/2` deliberately takes no actor (it is called by
-  # the router, Stacks, CommencementGate, ChatPins and more). The MCP
-  # caller's identity is supplied out-of-band so the recorded transition is
-  # attributed to the calling agent instead of `unknown`.
-  defp maybe_transition_status(task, new_status, actor),
-    do:
-      Tasks.TransitionActor.with_actor(actor, "mcp_task_update", fn ->
-        Tasks.transition_task_status(task, new_status)
-      end)
-
-  # Task 019f6380 stage 2: consult `Tasks.require_approved_plan_for/3`
-  # before an MCP-initiated status transition. When there's no status
-  # change in this call (`nil`), skip the check entirely — bare
-  # metadata updates should never hit the plan gate. Also skip when the
-  # transition would fail as `:invalid_transition` in
-  # `transition_task_status/2` — otherwise the gate would mask the more-
-  # specific transition-table error (e.g. `cancelled → in_progress`
-  # would surface as `:no_approved_plan` instead of the terminal-state
-  # refusal). When the gate returns `{:error, :no_approved_plan}`,
-  # propagate as-is so the outer `with` chain hits the friendly envelope
-  # branch above.
-  defp maybe_check_plan_gate(_task, nil, _actor), do: :ok
-
-  defp maybe_check_plan_gate(task, new_status, actor) do
-    if Tasks.transition_valid?(task, new_status) do
-      Tasks.require_approved_plan_for(task, new_status, actor)
-    else
-      :ok
-    end
-  end
-
-  # Derive an `actor` tuple for the plan-gate call from the MCP call
-  # context. MCP callers are agents by default — the `:agent_id` key
-  # is the standard shape (see e.g. `space_leave`, `space_list` above).
-  # An absent `:agent_id` falls back to the bare `:agent` atom, which
-  # `sponsor_bypasses_plan_gate?/2` treats as non-human and therefore
-  # never grants the sponsor-bypass exemption.
-  defp actor_from_mcp_context(context) when is_map(context) do
-    case Map.get(context, :agent_id) do
-      id when is_binary(id) -> {:agent, id}
-      _ -> :agent
-    end
-  end
-
-  defp actor_from_mcp_context(_context), do: :agent
-
-  # Shared envelope for `TaskAttrs.check_auto_approve_preconditions/4`
-  # rejections — both `task_create` and `task_update` surface the identical
-  # shape so callers can dispatch on `envelope.code` without checking which
-  # tool produced the error. `missing_phases` retains stable
-  # `[\"execution\", \"review\"]` ordering from TaskAttrs.
-  # Shared envelope for the Stack-v2 commencement gate's 3-tuple refusal
-  # `{:error, :stack_plans_pending, %{stack_id, waiting_on}}`. BOTH MCP
-  # entry points that can transition a member into `in_progress`
-  # (`task_start` and `task_update`) route here so the wording lives in
-  # exactly one place.
-  #
-  # Two branches, because the atom is overloaded:
-  #
-  #   * `waiting_on != []` — siblings are still missing approved plans.
-  #     Wording is copied from the `stack_start` handler below so an
-  #     agent that has seen one message recognises the other.
-  #
-  #   * `waiting_on == []` — every member IS planned, but
-  #     `CommencementGate.open?/1` still returns false because the stack
-  #     row itself is not `"in_progress"`. Rendering the blocker list
-  #     here would emit a dangling empty enumeration ("waiting on: "),
-  #     so this branch names the real cause instead: nobody has called
-  #     `stack_start` yet.
-  defp stack_plans_pending_envelope(stack_id, []) do
-    %{
-      error:
-        "Cannot start task: stack #{stack_id} has not started yet. Every member holds an approved plan, but the stack itself is not in_progress, so the commencement gate stays closed.",
-      recoverable: true,
-      suggestion: "Call stack_start with stack_id #{stack_id} to open the stack, then retry."
-    }
-  end
-
-  defp stack_plans_pending_envelope(stack_id, waiting_on) when is_list(waiting_on) do
-    %{
-      error:
-        "Stack cannot start yet — the following members are missing an approved plan: " <>
-          Enum.join(describe_waiting_on(stack_id, waiting_on), ", "),
-      recoverable: true,
-      suggestion: "Approve the missing plans (via plan_approve) before starting this task again."
-    }
-  end
-
-  # Resolve blocking member ids to `"<title> (<id>)"` using the existing
-  # `Stacks.members/1` accessor — one query over the stack, no new
-  # context function. An id that isn't in the member list (deleted
-  # mid-flight) degrades to the bare id rather than dropping out.
-  defp describe_waiting_on(stack_id, waiting_on) do
-    titles =
-      stack_id
-      |> Stacks.members()
-      |> Map.new(fn member -> {member.id, member.title} end)
-
-    Enum.map(waiting_on, fn id ->
-      case Map.get(titles, id) do
-        nil -> id
-        title -> "#{title} (#{id})"
-      end
-    end)
-  end
-
-  defp auto_approve_precondition_envelope(phases) do
-    %{
-      error:
-        "auto_approve_plan requires an agent assignee on both the execution and review phases.",
-      code: :auto_approve_precondition_missing,
-      missing_phases: phases,
-      suggestion:
-        "Pass phase_assignees with agent-typed assignee_id + assignee_type for each of: planning, execution, review. Flat assignee_id only sets planning per ADR 0044.",
-      recoverable: true
-    }
-  end
-
   def execute("task_attach_canvas", args, context) do
     task_id = Map.get(args, "task_id")
     canvas_id = Map.get(args, "canvas_id")
@@ -4979,267 +4412,6 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  # Resolve the `attached_by` identity from the federated tool context.
-  # Prefers explicit kind+id pairs (agent/user); falls back to nil so the
-  # changeset surface returns a friendly `attached_by` validation error
-  # rather than silently mis-attributing the row.
-  defp resolve_attached_by(context) when is_map(context) do
-    cond do
-      is_binary(Map.get(context, :agent_id)) ->
-        %{kind: "agent", id: Map.get(context, :agent_id)}
-
-      is_binary(Map.get(context, :user_id)) ->
-        %{kind: "user", id: Map.get(context, :user_id)}
-
-      true ->
-        %{}
-    end
-  end
-
-  defp resolve_attached_by(_), do: %{}
-
-  # The AUTHORIZATION subject for canvas-touching task tools (task 019e2c4b
-  # stage 2). Shaped like `resolve_attached_by/1` and read from the same
-  # context, but kept separate on purpose: that one produces the attribution
-  # recorded on the row, which is caller-supplied metadata, while this one
-  # answers "who is asking".
-  #
-  # Neither key present → `nil`, which `Platform.Chat.CanvasAccess` treats as
-  # no principal and denies. It deliberately does not fall back to `:system`.
-  defp canvas_authorization_actor(context) when is_map(context) do
-    cond do
-      is_binary(Map.get(context, :agent_id)) -> {:agent, Map.get(context, :agent_id)}
-      is_binary(Map.get(context, :user_id)) -> {:user, Map.get(context, :user_id)}
-      true -> nil
-    end
-  end
-
-  defp canvas_authorization_actor(_), do: nil
-
-  # ── The canvas-attachment refusal taxonomy (task 019fb581 stage 5) ───────
-
-  # The CLOSED set of refusal atoms each canvas-attachment clause must handle,
-  # keyed by tool. These are `Platform.Tasks.CanvasAttachments`' return atoms,
-  # which is the boundary the three clauses actually pattern-match on — so a
-  # fifth atom added there with no clause here is a `CaseClauseError` at
-  # runtime, i.e. a 500 rather than a refusal.
-  #
-  # Declared rather than inferred so a test can drive every atom for real and
-  # compare the driven set against this one, the same way
-  # `@design_decline_error_codes` above is compared against
-  # `task_design_decline`'s emissions. Restating the taxonomy in a test would
-  # only pin the test against itself.
-  #
-  # `attach_canvas/4` can also return `{:error, %Ecto.Changeset{}}`, which is
-  # a struct rather than an atom and is deliberately NOT in this set: it is a
-  # validation failure on `attached_by`, not an authorization outcome, and it
-  # has no place in a taxonomy an agent branches on.
-  @canvas_attachment_error_codes %{
-    "task_attach_canvas" => [
-      :task_forbidden,
-      :task_not_found,
-      :canvas_forbidden,
-      :canvas_not_found
-    ],
-    "task_detach_canvas" => [:task_forbidden, :task_not_found, :not_found],
-    "task_list_canvases" => [:task_forbidden, :task_not_found]
-  }
-
-  # THE ASYMMETRY, DECLARED RATHER THAN DISCOVERED. Only `:task_forbidden`
-  # reaches the caller as a machine-readable `code` key. The other four are
-  # prose-only: the caller has to string-match `error` to tell them apart.
-  #
-  # Stage 5 did NOT widen this. Adding `code:` to the other four envelopes is
-  # additive on the wire (`MCPController.error_content/1` drops nil keys, so
-  # nothing currently branches on their absence) and would make the taxonomy
-  # usable, but it is a wire-behaviour change and this is the stage that
-  # catches wrongness rather than the stage that introduces it. Recorded here
-  # and pinned by a test so the next person decides it deliberately instead of
-  # inheriting it. Raised to the review stage of task 019fb581.
-  @canvas_attachment_coded_errors [:task_forbidden]
-
-  @doc """
-  The closed set of refusal atoms each canvas-attachment tool must handle.
-
-  Public so the guard that keeps the three tools' `limitations` prose honest
-  can compare the documented taxonomy against the emitted one instead of
-  restating either. Keyed by tool name; see `@canvas_attachment_error_codes`
-  for why the set is the `Platform.Tasks.CanvasAttachments` boundary atoms
-  rather than the envelope `code` values.
-  """
-  @spec canvas_attachment_error_codes() :: %{String.t() => [atom()]}
-  def canvas_attachment_error_codes, do: @canvas_attachment_error_codes
-
-  @doc """
-  The subset of `canvas_attachment_error_codes/0` that reaches the caller as a
-  machine-readable `code` key rather than as prose in `error`.
-  """
-  @spec canvas_attachment_coded_errors() :: [atom()]
-  def canvas_attachment_coded_errors, do: @canvas_attachment_coded_errors
-
-  # ── ADR-0046 member 7 stage 2: task_design_decline internals ─────────────
-
-  # The closed set of refusal codes the `task_design_decline` clause can
-  # emit. The tool's `limitations` prose names exactly these, and a test
-  # compares the two sets rather than restating either — documentation that
-  # drifts from the code is worse than none, because remote runtimes branch
-  # on it.
-  @design_decline_error_codes [
-    :missing_task_id,
-    :missing_reason,
-    :task_not_found,
-    :step_not_open,
-    :decline_failed
-  ]
-
-  # A reason short enough to be a placeholder ("n/a", "none", "no") is worse
-  # than no decline at all: the step closes and the classifier observation
-  # that justified recording anything is lost. Eight graphemes is the
-  # cheapest bar that rejects every placeholder anyone actually types.
-  @design_decline_min_reason 8
-
-  @doc """
-  The closed set of `code` values `task_design_decline` refuses with.
-
-  Public so the guard that keeps the tool's `limitations` prose honest can
-  compare the documented taxonomy against the emitted one instead of
-  restating it.
-  """
-  @spec design_decline_error_codes() :: [atom()]
-  def design_decline_error_codes, do: @design_decline_error_codes
-
-  defp design_decline_task_id_arg(task_id) when is_binary(task_id) do
-    case String.trim(task_id) do
-      "" -> design_decline_error(:missing_task_id, task_id)
-      trimmed -> {:ok, trimmed}
-    end
-  end
-
-  defp design_decline_task_id_arg(task_id), do: design_decline_error(:missing_task_id, task_id)
-
-  defp design_decline_reason_arg(reason) when is_binary(reason) do
-    case String.trim(reason) do
-      trimmed when byte_size(trimmed) == 0 ->
-        design_decline_error(:missing_reason, reason)
-
-      trimmed ->
-        if String.length(trimmed) < @design_decline_min_reason do
-          design_decline_error(:missing_reason, reason)
-        else
-          {:ok, trimmed}
-        end
-    end
-  end
-
-  defp design_decline_reason_arg(reason), do: design_decline_error(:missing_reason, reason)
-
-  # `Platform.UUID.cast/1`, not a bare `Repo.get/2`: `task_id` arrives
-  # straight off an agent's tool payload, and `repo_lookup_boundary_test.exs`
-  # ratchets against bare casts on agent-facing paths. Resolving HERE rather
-  # than letting `decline/3` do it is what separates `task_not_found` from
-  # `step_not_open` — `decline/3` collapses both to `{:ok, :noop}`, and a
-  # designer who mistyped a task id must not be told her step already settled.
-  defp design_decline_task(task_id) do
-    with {:ok, uuid} <- Platform.UUID.cast(task_id),
-         %Task{} = task <- Repo.get(Task, uuid) do
-      {:ok, task}
-    else
-      _ -> design_decline_error(:task_not_found, task_id)
-    end
-  end
-
-  defp record_design_decline(%Task{} = task, note, context) do
-    case PreplanStep.decline(task, note, declined_by: resolve_attached_by(context)) do
-      {:ok, :noop} ->
-        design_decline_error(:step_not_open, task.id)
-
-      {:ok, outcome} ->
-        {:ok, design_decline_result(task, outcome)}
-
-      # UNREACHABLE from here — `design_decline_reason_arg/1` already refused
-      # every non-binary note. Mapped anyway, and mapped to `missing_reason`
-      # rather than `decline_failed`: `:invalid_note` is the caller's own bad
-      # argument, and reporting it as "the step already settled" or "the write
-      # failed" would misattribute a client error to task state.
-      {:error, :invalid_note} ->
-        design_decline_error(:missing_reason, note)
-
-      {:error, reason} ->
-        design_decline_error(:decline_failed, reason)
-    end
-  end
-
-  # `declined_after_timeout` is read back off the PERSISTED entry rather than
-  # inferred: `decline/3` returns only the outcome, and the upgrade marker is
-  # the anti-collapse property this tool's caller most needs reported.
-  defp design_decline_result(%Task{} = task, outcome) do
-    entry =
-      case Tasks.get_task_record(task.id) do
-        %Task{planning_step_outcomes: %{"design" => %{} = entry}} -> entry
-        _ -> %{}
-      end
-
-    %{
-      task_id: task.id,
-      outcome: to_string(outcome),
-      reason: PreplanStep.reasons().declined,
-      declined_after_timeout: Map.get(entry, "declined_after_timeout") == true
-    }
-  end
-
-  defp design_decline_error(:missing_task_id, task_id) do
-    design_decline_refusal(
-      :missing_task_id,
-      "task_design_decline requires task_id (non-blank string), got #{inspect(task_id)}.",
-      true,
-      "Pass the UUID printed as `task_id:` in the design dispatch prompt."
-    )
-  end
-
-  defp design_decline_error(:missing_reason, _reason) do
-    design_decline_refusal(
-      :missing_reason,
-      "reason is required and must be a non-blank string of at least #{@design_decline_min_reason} characters.",
-      true,
-      "One sentence: why this task needs no design direction. A decline with no stated reason closes the step but tells nobody whether the UI classifier misfired, which is the only thing this record is for."
-    )
-  end
-
-  defp design_decline_error(:task_not_found, task_id) do
-    design_decline_refusal(
-      :task_not_found,
-      "Task not found: #{inspect(task_id)}",
-      false,
-      "Use the `task_id` printed in the design dispatch prompt, or task_list to look it up."
-    )
-  end
-
-  # Named against the ACTUAL state, not "the step is not open": a designer who
-  # calls twice, or who declines a task the deadline already closed and reopened
-  # by some other path, has to read an explanation rather than a mystery.
-  defp design_decline_error(:step_not_open, task_id) do
-    design_decline_refusal(
-      :step_not_open,
-      "The design step for task #{task_id} is not open: it already settled, was skipped, or never fired.",
-      false,
-      "Nothing changed — a decline never overwrites a delivered canvas or a completed step. If you already attached a canvas for this task, that delivery stands. Use task_get to see the recorded planning-step outcome."
-    )
-  end
-
-  defp design_decline_error(:decline_failed, reason) do
-    design_decline_refusal(
-      :decline_failed,
-      "Failed to record the decline: #{inspect_errors_safe(reason)}",
-      true,
-      "The step was left as it was. Retry once; if it refuses again, report a blocker rather than attaching a canvas you do not believe in."
-    )
-  end
-
-  defp design_decline_refusal(code, error, recoverable, suggestion)
-       when code in @design_decline_error_codes do
-    {:error, %{code: code, error: error, recoverable: recoverable, suggestion: suggestion}}
-  end
-
   def execute("task_start", args, _context) do
     task_id = Map.get(args, "task_id")
 
@@ -5380,259 +4552,6 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp locate_intent_meeting(intent_id) do
-    case Meetings.IntentQueue.locate(intent_id) do
-      {:ok, meeting_id} ->
-        {:ok, meeting_id}
-
-      {:error, :not_found} ->
-        {:error,
-         %{
-           error: "Intent not found: #{intent_id}",
-           recoverable: false,
-           suggestion:
-             "The intent queue is meeting-lifetime — if the meeting has ended its queue is gone, and there is nothing left to ack. Verify the intent_id came from a live meeting's dispatch signal."
-         }}
-    end
-  end
-
-  # Explicit string -> atom table rather than `String.to_existing_atom/1`:
-  # this is a remote-supplied value, and an allowlist that can't depend on
-  # which modules happen to be loaded is the honest way to convert it.
-  @intent_ack_statuses %{
-    "working" => :working,
-    "completed" => :completed,
-    "rejected" => :rejected,
-    "cancel_honored" => :cancel_honored
-  }
-
-  defp validate_intent_ack_status(status) when is_binary(status) do
-    case Map.fetch(@intent_ack_statuses, status) do
-      {:ok, atom} -> {:ok, atom}
-      :error -> invalid_intent_ack_status(status)
-    end
-  end
-
-  defp validate_intent_ack_status(status) when is_atom(status) and not is_nil(status) do
-    validate_intent_ack_status(Atom.to_string(status))
-  end
-
-  defp validate_intent_ack_status(status), do: invalid_intent_ack_status(status)
-
-  defp invalid_intent_ack_status(status) do
-    allowed = @intent_ack_statuses |> Map.keys() |> Enum.sort() |> Enum.join(", ")
-
-    {:error,
-     %{
-       error: "status must be one of #{allowed} (got #{inspect(status)})",
-       recoverable: true,
-       suggestion:
-         "Use `working` right after spawning the subagent, `completed` when it finishes, `rejected` if the intent isn't yours, `cancel_honored` after stopping a cancelled subagent."
-     }}
-  end
-
-  # A rejected subagent_id is EVIDENCE, not just an error: it means the
-  # runtime tried to ack and could not name a subagent. The queue counts
-  # those attempts so an eventual timeout is reported as
-  # `:no_ack_spawn_failed` (broken target) rather than `:timed_out`
-  # (nothing came back). Recording the attempt does not touch the row.
-  defp validate_intent_subagent_id(meeting_id, intent_id, supplied) do
-    case validate_subagent_id(supplied) do
-      {:ok, subagent_id} ->
-        {:ok, subagent_id}
-
-      {:error, envelope} ->
-        _ = Meetings.IntentQueue.record_rejected_ack(meeting_id, intent_id)
-        {:error, envelope}
-    end
-  end
-
-  defp apply_intent_ack(meeting_id, intent_id, subagent_id, ack_status, note) do
-    case Meetings.IntentQueue.ack(meeting_id, intent_id, subagent_id, ack_status, note) do
-      {:ok, row} ->
-        {:ok,
-         %{
-           intent_id: intent_id,
-           meeting_id: meeting_id,
-           status: row.status,
-           subagent_id: row.subagent_id,
-           acked_at: row.acked_at
-         }}
-
-      {:error, {:invalid_ack_state, current}} ->
-        {:error,
-         %{
-           error: "Intent #{intent_id} is #{current} — cannot ack it with #{ack_status}.",
-           recoverable: false,
-           suggestion:
-             "Only a dispatched or acked intent can be acked. A `queued` intent hasn't been sent to you yet; a terminal one has already been resolved (completed, cancelled, or timed out)."
-         }}
-
-      {:error, :not_found} ->
-        {:error,
-         %{
-           error: "Intent not found: #{intent_id}",
-           recoverable: false,
-           suggestion:
-             "The row was removed from its meeting's queue — most likely the meeting's producer cancelled it, or the meeting ended."
-         }}
-
-      {:error, reason} ->
-        {:error,
-         %{
-           error: "Failed to ack intent: #{inspect(reason)}",
-           recoverable: true,
-           suggestion: "Retry once; if it persists the meeting's queue is no longer running."
-         }}
-    end
-  end
-
-  # Presence + shape guard for the `subagent_id` param on task_ack. Hard-rejects
-  # (task 019f6c73) rather than warn-and-drift: any in-flight dispatch that
-  # skips the param fails its next ack immediately rather than silently drifting
-  # into a 90-minute no-ack stall. No format policing beyond presence + byte cap
-  # so both openclaw runtime slugs (e.g. `higgins.moon`) and Claude Code
-  # Task-tool agentIds (e.g. `afd767f1e0cc81633`) fit through the same gate.
-  defp validate_subagent_id(nil) do
-    {:error,
-     %{
-       error: "subagent_id is required",
-       recoverable: true,
-       suggestion:
-         "Spawn the subagent (SuiteExecutor / SuiteReviewer via the Agent tool) FIRST, then pass its returned agent id here."
-     }}
-  end
-
-  defp validate_subagent_id(id) when is_binary(id) do
-    cond do
-      id == "" ->
-        {:error,
-         %{
-           error: "subagent_id is required",
-           recoverable: true,
-           suggestion:
-             "Spawn the subagent (SuiteExecutor / SuiteReviewer via the Agent tool) FIRST, then pass its returned agent id here."
-         }}
-
-      String.trim(id) == "" ->
-        {:error,
-         %{
-           error: "subagent_id must not be whitespace-only",
-           recoverable: true,
-           suggestion:
-             "subagent_id was whitespace-only — pass the spawn call's returned agent id verbatim."
-         }}
-
-      byte_size(id) > 128 ->
-        {:error,
-         %{
-           error: "subagent_id exceeds 128 bytes",
-           recoverable: true,
-           suggestion:
-             "Truncate to the spawn call's returned id — free-form annotations don't belong in this field."
-         }}
-
-      true ->
-        {:ok, id}
-    end
-  end
-
-  defp validate_subagent_id(_) do
-    {:error,
-     %{
-       error: "subagent_id must be a string",
-       recoverable: true,
-       suggestion:
-         "Pass the spawn call's returned agent id as a plain string (e.g. `higgins.moon` or `afd767f1e0cc81633`)."
-     }}
-  end
-
-  # Prefer the explicit stage_id from args; otherwise resolve from the
-  # task's current plan. Both branches return {:ok, stage_id} or the
-  # `:no_running_stage` error the caller reports back to the runtime.
-  defp resolve_ack_stage_id(_task_id, stage_id) when is_binary(stage_id) and stage_id != "",
-    do: {:ok, stage_id}
-
-  defp resolve_ack_stage_id(task_id, _) do
-    case Tasks.current_plan(task_id) do
-      nil ->
-        {:error, :no_running_stage}
-
-      plan ->
-        case Enum.find(plan.stages || [], &(&1.status == "running")) do
-          nil -> {:error, :no_running_stage}
-          stage -> {:ok, stage.id}
-        end
-    end
-  end
-
-  # Persist + broadcast the execution.acked runtime_event and refresh the
-  # LeaseManager row belt-and-braces. Returns the tool envelope with
-  # `next_safety_net_at` reflecting whatever the lease now holds (nil
-  # when no lease is armed — planning phase or manual_approval stages).
-  defp emit_task_ack(task_id, stage_id, subagent_id, context) do
-    acked_at = DateTime.utc_now()
-
-    attrs = %{
-      "task_id" => task_id,
-      "phase" => current_phase_for_blocker(task_id),
-      "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
-      "event_type" => "execution.acked",
-      "execution_space_id" => execution_space_id_for_task(task_id),
-      "occurred_at" => acked_at,
-      "payload" => %{
-        "stage_id" => stage_id,
-        "acked_at" => DateTime.to_iso8601(acked_at),
-        "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
-        "subagent_id" => subagent_id
-      }
-    }
-
-    # LeaseManager write is best-effort — a `:not_found` here is expected
-    # when the router hasn't recorded the dispatch yet (boot race, or the
-    # ack raced ahead of the arm-liveness path). The runtime_event still
-    # persists and the router's own `apply_runtime_event/2` clause will
-    # call `record_ack/1` again when the PubSub broadcast arrives.
-    # Task 01a007bf stage 4: match on the return so the `:not_found` is
-    # visible in the log instead of vanishing into `_`. Worded as
-    # "expected" — this site runs BEFORE `record_runtime_event/1`.
-    case Platform.Orchestration.LeaseManager.record_ack(task_id) do
-      :ok ->
-        :ok
-
-      {:error, :not_found} ->
-        Logger.warning(
-          "[ToolSurface.task_ack] task #{task_id} stage #{stage_id} — LeaseManager.record_ack/1 returned :not_found: no ETS lease armed yet (expected during the dispatch race); the durable execution.acked row is still being written. No operator action needed."
-        )
-    end
-
-    case Platform.Orchestration.record_runtime_event(attrs) do
-      {:ok, event} ->
-        next_safety_net_at =
-          case Platform.Orchestration.LeaseManager.get(task_id) do
-            %{safety_net_at: %DateTime{} = ts} -> ts
-            _ -> nil
-          end
-
-        {:ok,
-         %{
-           task_id: task_id,
-           stage_id: stage_id,
-           event_id: event.id,
-           acked_at: acked_at,
-           next_safety_net_at: next_safety_net_at
-         }}
-
-      {:error, reason} ->
-        {:error,
-         %{
-           error: "Failed to record ack: #{inspect(reason)}",
-           recoverable: true,
-           suggestion: "Retry task_ack or push validation_pass evidence to prove liveness."
-         }}
-    end
-  end
-
   # ── alarm_silence (task 019f6791-c01b stage 3) ────────────────────────
   # Operator escape hatch for the `execution.no_ack_timeout` alarm when
   # the MCP client cache lacks `task_ack`. Sets `silenced_until` on the
@@ -5667,176 +4586,6 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp validate_alarm_silence_task_id(nil), do: alarm_silence_missing_field_error("task_id")
-  defp validate_alarm_silence_task_id(""), do: alarm_silence_missing_field_error("task_id")
-  defp validate_alarm_silence_task_id(id) when is_binary(id), do: :ok
-  defp validate_alarm_silence_task_id(_), do: alarm_silence_missing_field_error("task_id")
-
-  defp validate_alarm_silence_until_seconds(nil),
-    do: alarm_silence_missing_field_error("until_seconds")
-
-  defp validate_alarm_silence_until_seconds(n) when is_integer(n) and n >= 60 and n <= 86_400,
-    do: :ok
-
-  defp validate_alarm_silence_until_seconds(_) do
-    {:error,
-     %{
-       error: "until_seconds must be an integer in the range 60..86_400 (1m..24h)",
-       recoverable: true,
-       suggestion:
-         "Pass a positive integer between 60 (1 minute floor) and 86_400 (24 hour cap). Re-silence if you need to extend."
-     }}
-  end
-
-  defp validate_alarm_silence_reason(reason)
-       when is_binary(reason) and byte_size(reason) >= 8,
-       do: :ok
-
-  defp validate_alarm_silence_reason(_) do
-    {:error,
-     %{
-       error: "reason must be a string of at least 8 characters",
-       recoverable: true,
-       suggestion:
-         "Describe why you're silencing the alarm — the reason is audit-logged so operators can later explain the override."
-     }}
-  end
-
-  defp alarm_silence_missing_field_error(field) do
-    {:error,
-     %{
-       error: "#{field} is required",
-       recoverable: true,
-       suggestion:
-         "alarm_silence needs task_id, until_seconds (60..86_400), and reason (>= 8 chars). Optional: stage_id (resolves from current running stage if omitted)."
-     }}
-  end
-
-  defp fetch_alarm_silence_task(task_id) do
-    case Tasks.get_task_record(task_id) do
-      nil ->
-        {:error,
-         %{
-           error: "Task not found: #{task_id}",
-           recoverable: false,
-           suggestion:
-             "Verify the task_id matches your dispatch payload; use task_list to enumerate live tasks."
-         }}
-
-      task ->
-        {:ok, task}
-    end
-  end
-
-  # Persist the runtime_event, emit telemetry, and call LeaseManager.silence/3.
-  # The LeaseManager call is the source of truth for the router — if it
-  # returns :not_found, we surface a recoverable error without emitting
-  # audit noise for a lease that doesn't exist.
-  defp emit_alarm_silence(task_id, stage_id, until, reason, context) do
-    case Platform.Orchestration.LeaseManager.silence(task_id, until, reason) do
-      :ok ->
-        record_alarm_silence_side_effects(task_id, stage_id, until, reason, context)
-
-      {:error, :not_found} ->
-        {:error,
-         %{
-           error: "No active lease for task #{task_id} — dispatch not yet recorded.",
-           recoverable: true,
-           suggestion:
-             "Wait for the router to arm liveness (typically <1s post-dispatch) then retry."
-         }}
-
-      {:error, :invalid_until} ->
-        {:error,
-         %{
-           error: "silenced_until must be strictly in the future",
-           recoverable: true,
-           suggestion:
-             "The lease manager rejected the computed silenced_until as non-future — this usually means clock skew; try a slightly larger until_seconds."
-         }}
-
-      {:error, :cap_exceeded} ->
-        {:error,
-         %{
-           error: "silenced_until exceeds the 24h cap",
-           recoverable: true,
-           suggestion:
-             "Silence is capped at 24 hours to prevent indefinite alarm suppression. Use a smaller until_seconds and re-silence if the condition persists."
-         }}
-    end
-  end
-
-  defp record_alarm_silence_side_effects(task_id, stage_id, until, reason, context) do
-    silenced_at = DateTime.utc_now()
-    runtime_id = Map.get(context, :runtime_id) || "tool-surface"
-
-    attrs = %{
-      "task_id" => task_id,
-      "phase" => current_phase_for_blocker(task_id),
-      "runtime_id" => runtime_id,
-      "event_type" => "execution.alarm_silenced",
-      "execution_space_id" => execution_space_id_for_task(task_id),
-      "occurred_at" => silenced_at,
-      "payload" => %{
-        "stage_id" => stage_id,
-        "silenced_until" => DateTime.to_iso8601(until),
-        "reason" => reason,
-        "runtime_id" => runtime_id
-      }
-    }
-
-    # Persist the runtime_event first — it's the durable audit trail and
-    # PubSub broadcast target. Telemetry is fire-and-forget on top; a
-    # runtime_event persist failure returns an error envelope without
-    # emitting telemetry (which would create an audit row for a silence
-    # that never actually landed in the event stream).
-    case Platform.Orchestration.record_runtime_event(attrs) do
-      {:ok, _event} ->
-        # silenced_until is passed as ISO-8601 because the audit
-        # TelemetryHandler's ensure_json_safe/1 recurses into maps and
-        # DateTime (which IS a map) doesn't implement Enumerable — an
-        # unwrapped %DateTime{} in the metadata crashes the handler.
-        # actor_type is "system" (not "runtime") because
-        # Platform.Audit.Event's actor_type enum only accepts
-        # system|user|agent|anonymous|federated_user, and actor_id is
-        # left nil because runtime IDs are opaque strings, not UUIDs
-        # (the schema casts actor_id as Ecto.UUID). runtime_id + the
-        # opaque caller identity ride in metadata for correlation.
-        :telemetry.execute(
-          [:platform, :orchestration, :alarm_silence],
-          %{count: 1},
-          %{
-            task_id: task_id,
-            stage_id: stage_id,
-            silenced_until: DateTime.to_iso8601(until),
-            reason: reason,
-            runtime_id: runtime_id,
-            actor_type: "system",
-            resource_type: "task",
-            resource_id: task_id,
-            action: "silence"
-          }
-        )
-
-        {:ok,
-         %{
-           task_id: task_id,
-           stage_id: stage_id,
-           silenced_until: until,
-           reason: reason
-         }}
-
-      {:error, reason} ->
-        {:error,
-         %{
-           error: "Failed to record alarm silence: #{inspect(reason)}",
-           recoverable: true,
-           suggestion:
-             "Retry alarm_silence. LeaseManager.silence has already applied; the runtime_event will re-emit on retry."
-         }}
-    end
-  end
-
   def execute("task_dependencies", args, _context) do
     task_id = Map.get(args, "task_id")
 
@@ -5857,69 +4606,6 @@ defmodule Platform.Federation.ToolSurface do
            dependents: build_dependent_entries(task)
          }}
     end
-  end
-
-  # Resolves a task's declared dependency entries into the canonical
-  # `[%{task_id, title, kind, status}]` shape, preserving the order the
-  # author wrote them in. Missing/deleted dep ids return entries with
-  # `title: nil` and `status: nil` but always carry the `task_id` and
-  # `kind` from the source map (so callers can still see the broken
-  # reference rather than silently dropping it).
-  defp build_dependency_entries(%Task{dependencies: deps}) when is_list(deps) do
-    ids =
-      deps
-      |> Enum.map(&Map.get(&1, "task_id"))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-
-    rows_by_id =
-      case ids do
-        [] ->
-          %{}
-
-        ids ->
-          Repo.all(
-            from(t in Task,
-              where: t.id in ^ids,
-              select: %{id: t.id, title: t.title, status: t.status}
-            )
-          )
-          |> Map.new(&{&1.id, &1})
-      end
-
-    Enum.map(deps, fn dep ->
-      task_id = Map.get(dep, "task_id")
-      kind = Map.get(dep, "kind")
-      row = Map.get(rows_by_id, task_id)
-
-      %{
-        task_id: task_id,
-        title: row && row.title,
-        kind: kind,
-        status: row && row.status
-      }
-    end)
-  end
-
-  defp build_dependency_entries(_), do: []
-
-  # Inverse: tasks that declare this task as one of their dependencies.
-  # Uses the same JSONB containment query the unblock sweep relies on
-  # (`fragment("? @> ?", t.dependencies, ^[%{"task_id" => id}])`). Sorted
-  # by `inserted_at` so the result is deterministic across runs.
-  defp build_dependent_entries(%Task{id: id}) do
-    match = [%{"task_id" => id}]
-
-    Repo.all(
-      from(t in Task,
-        where:
-          fragment("? @> ?", t.dependencies, ^match) and
-            is_nil(t.deleted_at),
-        order_by: [asc: t.inserted_at, asc: t.id],
-        select: %{id: t.id, title: t.title, status: t.status}
-      )
-    )
-    |> Enum.map(fn row -> %{task_id: row.id, title: row.title, status: row.status} end)
   end
 
   # ── Stack tools (ADR 0041) ───────────────────────────────────────────────
@@ -6041,33 +4727,6 @@ defmodule Platform.Federation.ToolSurface do
                }}
             end
         end
-    end
-  end
-
-  # Nilable-semantics writer: only `sponsor_user_id` propagates explicit
-  # nil (clears the slot); `name` and `description` are dropped when
-  # omitted OR when nil (unset ≠ clear for those). Mirrors the
-  # `TaskAttrs.build_task_attrs/3` contract for the stack surface.
-  defp build_stack_update_attrs(args) do
-    base = %{}
-
-    base =
-      case Map.fetch(args, "name") do
-        {:ok, nil} -> base
-        {:ok, value} -> Map.put(base, :name, value)
-        :error -> base
-      end
-
-    base =
-      case Map.fetch(args, "description") do
-        {:ok, nil} -> base
-        {:ok, value} -> Map.put(base, :description, value)
-        :error -> base
-      end
-
-    case Map.fetch(args, "sponsor_user_id") do
-      {:ok, value} -> Map.put(base, :sponsor_user_id, value)
-      :error -> base
     end
   end
 
@@ -6514,6 +5173,2242 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Plan / Stage / Validation tools ──────────────────────────────────────
+
+  def execute("plan_create", args, _context) do
+    task_id = Map.get(args, "task_id")
+    raw_stages_input = Map.get(args, "stages", [])
+
+    # Task 01a006d1 stage 3 — the gate runs BEFORE the rewrite pipe and before
+    # the transaction opens, so a refused plan writes nothing at all. Rejecting
+    # after a draft row exists would leave the author unable to retry
+    # (`plan_create` refuses while a draft/pending_review plan is live), which
+    # is the same lockout this guard exists to prevent.
+    #
+    # Task 01a00b91 stage 3 chains a SECOND guard into the same pre-transaction
+    # position for the same reason: a manual_approval that cannot name the UI
+    # surface it will show is refused before anything is written. Both guards
+    # run before `do_plan_create/2`; neither may move below the rewrite pipe.
+    #
+    # PROBE RECORD (01a00b91 stage 5). PROBE C moved the
+    # `detect_unnamed_manual_gate/1` call from here to AFTER `Tasks.create_plan/1`,
+    # returning the same envelope from inside the transaction so the draft row
+    # committed. Predicted: the persistence control detonates and NOTHING ELSE
+    # does. That is exactly what happened, on the full suite — one failure,
+    # `assert Tasks.latest_plan(task.id) == nil`, left a `%Plan{status: "draft"}`.
+    # Every envelope assertion in the same test passed under the mutant, which
+    # is the point: the envelope is byte-identical whether or not a draft was
+    # left behind, so the nil check is the ONLY instrument that sees this
+    # ordering. Delete that one assertion and this line is free to move.
+    # (Two `Platform.Execution.ProofRunTest` failures in the same run are the
+    # known IO-contention flake; re-run green in isolation.)
+    case Platform.Tasks.PlanEngine.detect_e2e_host_collision(raw_stages_input) do
+      {:error, info} ->
+        {:error, e2e_host_collision_envelope(info)}
+
+      :ok ->
+        case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(raw_stages_input) do
+          {:error, info} ->
+            {:error, unnamed_manual_gate_envelope(info)}
+
+          :ok ->
+            do_plan_create(task_id, raw_stages_input)
+        end
+    end
+  end
+
+  # Task 01a006c2 stage 3 — `plan_get` widened with an explicit,
+  # default-preserving `status`. Deliberately NOT a sibling tool: a sibling
+  # means a caller must know to try a second tool after the first says
+  # not-found, which is precisely the round trip that cost an agent a cycle
+  # when it could not read a rejected plan's `rejection_reason`.
+  #
+  # The `"id"` alias is kept because the registration declares it — removing
+  # it here would make the registration lie to callers. What is added is the
+  # guard: a call naming NO task used to fall into `current_plan(nil)` and
+  # come back "No approved plan for task", a confident answer about a task
+  # the caller never identified.
+  #
+  # Cross-tenant fix (01a006c2, post-e2e): this clause used to take `_context`
+  # and no authorization ran anywhere in the chain, so any agent that could
+  # name a task_id read its plan. Stage 3 widened the OUTPUT CLASS — rejected
+  # and pending_review plans carry `rejection_reason` and
+  # `architecture_verdict`, human-written prose — which re-opened the
+  # authorization question on a line the stage never edited. The check is the
+  # same `authorize_review_access/2` stages 1 and 2 use, and it runs BEFORE
+  # `plan_get_resolution/1` and any serialization so the denial envelope
+  # carries no plan id, no status, no rejection prose. It runs before the
+  # status parse too: a denied caller must not learn which statuses exist.
+  # Omitting `status` is authorized identically — that is the path every
+  # existing caller uses — and its not-found envelope is untouched.
+  def execute("plan_get", args, context) do
+    task_id = Map.get(args, "task_id") || Map.get(args, "id")
+
+    with {:ok, task_id} <- require_string(%{"task_id" => task_id}, "task_id", "plan_get"),
+         :ok <- authorize_review_access(context, task_id),
+         {:ok, resolution} <- plan_get_resolution(args),
+         {:ok, plan} <- resolve_plan_by_status(task_id, resolution) do
+      {:ok, serialize_plan(Repo.preload(plan, stages: :validations))}
+    end
+  end
+
+  def execute("plan_submit", args, _context) do
+    plan_id = Map.get(args, "plan_id")
+
+    case Tasks.get_plan(plan_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Plan not found: #{plan_id}",
+           recoverable: false,
+           suggestion: "Use plan_create to create a plan first"
+         }}
+
+      plan ->
+        case Tasks.submit_plan_for_review(plan) do
+          {:ok, updated} ->
+            {:ok, serialize_plan(Repo.preload(updated, :stages))}
+
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error:
+                 "Plan must be in draft status to submit for review (current: #{plan.status})",
+               recoverable: false,
+               suggestion: "Only draft plans can be submitted for review"
+             }}
+
+          {:error, reason} ->
+            {:error,
+             %{
+               error: "Failed to submit plan: #{inspect(reason)}",
+               recoverable: true,
+               suggestion: "Check the plan status"
+             }}
+        end
+    end
+  end
+
+  def execute("plan_approve", args, _context) do
+    plan_id = Map.get(args, "plan_id")
+    approved_by = Map.get(args, "approved_by", "system")
+
+    case get_by_uuid(Plan, plan_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Plan not found: #{plan_id}",
+           recoverable: false,
+           suggestion: "Use plan_get to find the plan ID for a task"
+         }}
+
+      plan ->
+        case Tasks.approve_plan(plan, approved_by) do
+          {:ok, approved} ->
+            {:ok,
+             %{
+               id: approved.id,
+               task_id: approved.task_id,
+               status: approved.status,
+               approved_by: approved.approved_by
+             }}
+
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error: "Cannot approve plan with status #{plan.status}. Must be pending_review.",
+               recoverable: true,
+               suggestion: "Use plan_submit first to move the plan to pending_review"
+             }}
+
+          # ADR-0046 member 5 stage 3. This tool is the agent-reachable
+          # approval writer: it lives in the `plan` capability bundle and
+          # defaults `approved_by` to `"system"`, so without an explicit
+          # arm here the refusal would arrive as an untyped
+          # "Failed to approve plan" with no suggestion. The guard itself
+          # is in `Tasks.approve_plan/3`, not here — this arm only names it.
+          {:error, :architecture_gate_open} ->
+            {:error,
+             %{
+               error:
+                 "Plan #{plan_id} is held by the architecture gate: the architect has not returned a verdict yet.",
+               recoverable: true,
+               suggestion:
+                 "Wait for the architect's verdict or the gate deadline. An agent cannot approve past an open gate; a human reviewer can, from the task UI."
+             }}
+
+          {:error, reason} ->
+            {:error, %{error: "Failed to approve plan: #{inspect(reason)}", recoverable: true}}
+        end
+    end
+  end
+
+  # ── ADR-0046 member 5 stage 4: the architect's verdict surface ────────
+  #
+  # ONE of the two ways a verdict gets in (the other is
+  # `Handlers.ArchitectureReviewPlan.handle_output/3`, for an external
+  # architect that can only reply with text). Neither re-implements the
+  # state machine: both end in `Tasks.resolve_architecture_gate/3`, the
+  # single exit stage 3 built, which is one-shot because it arbitrates on
+  # the persisted row. A duplicate call is therefore harmless — it lands
+  # on `gate_already_resolved` and changes nothing.
+  #
+  # THE CONTRACT IS ENFORCED HERE, NOT REQUESTED IN THE PROMPT.
+  # `0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`
+  # says the architect rejects for architecture and explicitly
+  # not for taste, naming or style. "Don't reject for style" is
+  # unenforceable as prose — it produces a differently-worded rejection,
+  # not a better one. A closed `constraint` vocabulary means a style
+  # objection has NO REPRESENTABLE VALUE. Stage 1 asserted that at the
+  # schema layer; this asserts it at the boundary an agent actually
+  # touches, because the schema is only reached by callers who already
+  # decided to write.
+  #
+  # Every refusal carries a `code` and every code is named in the tool's
+  # `limitations`, with a test that the two sets are equal.
+  def execute("plan_architecture_verdict", args, context) do
+    plan_id = Map.get(args, "plan_id")
+
+    with {:ok, plan} <- verdict_plan(plan_id),
+         {:ok, resolution} <- verdict_resolution_arg(Map.get(args, "verdict")),
+         {:ok, summary} <- verdict_summary_arg(Map.get(args, "summary")),
+         {:ok, findings} <- verdict_findings_arg(Map.get(args, "findings"), resolution, plan),
+         :ok <- verdict_gate_open(plan) do
+      resolve_architecture_verdict(plan, resolution, summary, findings, context)
+    end
+  end
+
+  # Task 019fa61c stage 3. The counterpart to `plan_architecture_verdict`
+  # above, for the OTHER architect surface — and the reason this task
+  # exists. `review_plan` was observable because it had a tool that wrote
+  # a row; `audit_diff` asked for a side effect in prose and named no tool
+  # at all, so 28 fires in a 3.3-hour window left no evidence anywhere.
+  #
+  # This clause validates and refuses; it does not implement the state
+  # machine. Everything past the argument checks goes through
+  # `StageAudit.record_note/3`, the single writer that persists the row
+  # and posts the annotation together. The tool RESOLVES the stage itself
+  # rather than letting `record_note/3` do it, for the same reason
+  # `task_design_decline` resolves its own task: it is what separates
+  # `stage_not_found` from `audit_not_open`, and an architect who mistyped
+  # a stage id must not be told the audit already closed.
+  #
+  # Every refusal carries a `code` and every code is named in the tool's
+  # `limitations`, with a test that the two sets are equal.
+  def execute("stage_architecture_audit", args, context) do
+    with {:ok, stage} <- stage_audit_stage(Map.get(args, "stage_id")),
+         {:ok, summary} <- stage_audit_summary_arg(Map.get(args, "summary")),
+         {:ok, findings} <- stage_audit_findings_arg(Map.get(args, "findings")) do
+      record_stage_audit_note(stage, summary, findings, context)
+    end
+  end
+
+  def execute("stage_start", args, _context) do
+    stage_id = Map.get(args, "stage_id")
+
+    case PlanEngine.start_stage(stage_id) do
+      {:ok, stage} ->
+        {:ok, serialize_stage(stage)}
+
+      {:error, :invalid_transition} ->
+        {:error,
+         %{
+           error: "Stage must be in pending status to start",
+           recoverable: false,
+           suggestion: "Check the stage's current status with stage_list"
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to start stage: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Verify the stage_id is valid"
+         }}
+    end
+  end
+
+  def execute("stage_list", args, _context) do
+    with {:ok, plan_id} <- resolve_stage_list_plan(args) do
+      stages =
+        Tasks.list_stages(plan_id)
+        |> Repo.preload(:validations)
+
+      {:ok, Enum.map(stages, &serialize_stage_with_validations/1)}
+    end
+  end
+
+  def execute("validation_evaluate", args, _context) do
+    validation_id = Map.get(args, "validation_id")
+    status = Map.get(args, "status")
+    evidence = Map.get(args, "evidence", %{})
+    evaluated_by = Map.get(args, "evaluated_by", "system")
+
+    unless status in ~w(passed failed) do
+      {:error,
+       %{
+         error: "Invalid status: #{inspect(status)}. Must be \"passed\" or \"failed\"",
+         recoverable: true,
+         suggestion: "Use status \"passed\" or \"failed\""
+       }}
+    else
+      case PlanEngine.evaluate_validation(validation_id, %{
+             status: status,
+             evidence: evidence,
+             evaluated_by: evaluated_by
+           }) do
+        {:ok, validation} ->
+          {:ok, serialize_validation(validation)}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "Failed to evaluate validation: #{inspect(reason)}",
+             recoverable: true,
+             suggestion: "Verify the validation_id is valid"
+           }}
+      end
+    end
+  end
+
+  def execute("validation_pass", args, context) do
+    execute(
+      "validation_evaluate",
+      %{
+        "validation_id" => Map.get(args, "validation_id"),
+        "status" => "passed",
+        "evidence" => Map.get(args, "evidence", %{}),
+        "evaluated_by" => Map.get(args, "evaluated_by", "system")
+      },
+      context
+    )
+  end
+
+  def execute("stage_complete", args, context) do
+    stage_id = Map.get(args, "stage_id") || Map.get(args, "id")
+    completed_by = Map.get(context, :agent_id) || Map.get(context, :user_id) || "agent"
+
+    # NOTE: superseded-plan guard runs BEFORE :not_running / :pending_validations
+    # so an executor whose task was returned-to-planning mid-flight gets a
+    # decisive stop signal (recoverable: false) rather than a retry-friendly
+    # "pending validations" hint. `&&` (not `||`) is the correct operator for
+    # the negative-guard pattern here: a `false` helper result short-circuits
+    # to `false`, which matches `false <-` and continues the chain; a `true`
+    # result yields `{:error, :plan_superseded}` for the else branch.
+    with %Stage{} = stage <- get_by_uuid(Stage, stage_id),
+         %Plan{} = current_plan <- Repo.get(Plan, stage.plan_id),
+         false <- plan_superseded?(current_plan) && {:error, :plan_superseded},
+         true <- stage.status in ["running", "passed"] || {:error, :not_running},
+         validations <- Tasks.list_validations(stage.id),
+         true <-
+           Enum.all?(validations, &(&1.status == "passed")) || validations == [] ||
+             {:error, :pending_validations},
+         # Scoped to the asserted stage (task 019fec3a): the admission guard
+         # above deliberately accepts an already-`passed` stage so idempotent
+         # re-calls succeed, but such a call must not advance a stage it does
+         # not name. `advance/2` no-ops unless `stage` IS the current stage.
+         {:ok, advanced_plan} <-
+           PlanEngine.advance(stage.plan_id,
+             stage_id: stage.id,
+             completed_by: completed_by
+           ) do
+      fresh_stage = Enum.find(advanced_plan.stages || [], &(&1.id == stage.id))
+
+      {:ok,
+       %{
+         stage_id: stage.id,
+         stage_status: fresh_stage && fresh_stage.status,
+         plan_id: advanced_plan.id,
+         plan_status: advanced_plan.status
+       }}
+    else
+      nil ->
+        {:error,
+         %{
+           error: "Stage not found: #{inspect(stage_id)}",
+           recoverable: true,
+           suggestion: "Verify the stage_id is valid"
+         }}
+
+      {:error, :plan_superseded} ->
+        {:error,
+         %{
+           error: "plan_superseded",
+           recoverable: false,
+           suggestion:
+             "This task has been returned to planning; the current plan is superseded. Stop this executor — a new plan will dispatch a fresh execution when approved."
+         }}
+
+      {:error, :not_running} ->
+        {:error,
+         %{
+           error: "Stage must be running before it can be completed",
+           recoverable: false,
+           suggestion: "Use stage_list to inspect the current stage status"
+         }}
+
+      {:error, :pending_validations} ->
+        {:error,
+         %{
+           error: "Stage still has pending or failed validations",
+           recoverable: true,
+           suggestion: "Use validation_pass or validation_evaluate before stage_complete"
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to complete stage: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Verify the stage state and validations"
+         }}
+    end
+  end
+
+  def execute("report_blocker", args, context) do
+    task_id = Map.get(args, "task_id")
+    stage_id = Map.get(args, "stage_id")
+    description = Map.get(args, "description")
+    needs_human = Map.get(args, "needs_human", false)
+
+    attrs = %{
+      "task_id" => task_id,
+      "phase" => current_phase_for_blocker(task_id),
+      "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
+      "event_type" => "execution.blocked",
+      "execution_space_id" => execution_space_id_for_task(task_id),
+      "payload" => %{
+        "stage_id" => stage_id,
+        "description" => description,
+        "needs_human" => needs_human,
+        "reported_by" => Map.get(context, :agent_id) || "agent"
+      }
+    }
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, event} ->
+        if needs_human do
+          if space_id = execution_space_id_for_task(task_id) do
+            Platform.Orchestration.ExecutionSpace.post_engagement(
+              space_id,
+              "Blocker reported: #{description}",
+              metadata: %{"reason" => "runtime_blocker", "stage_id" => stage_id}
+            )
+          end
+        end
+
+        {:ok, %{event_id: event.id, task_id: task_id, stage_id: stage_id, blocked: true}}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to record blocker: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Retry the blocker report or post the blocker in the execution space"
+         }}
+    end
+  end
+
+  def execute("validation_list", args, _context) do
+    stage_id = Map.get(args, "stage_id")
+    validations = Tasks.list_validations(stage_id)
+    {:ok, Enum.map(validations, &serialize_validation/1)}
+  end
+
+  def execute("prompt_template_list", _args, _context) do
+    templates = Platform.Orchestration.PromptTemplates.list_templates()
+
+    result =
+      Enum.map(templates, fn t ->
+        %{
+          slug: t.slug,
+          name: t.name,
+          description: t.description,
+          variables: t.variables,
+          updated_by: t.updated_by,
+          updated_at: format_datetime(t.updated_at)
+        }
+      end)
+
+    {:ok, result}
+  end
+
+  def execute("prompt_template_update", args, _context) do
+    slug = Map.get(args, "slug")
+    content = Map.get(args, "content")
+
+    case Platform.Orchestration.PromptTemplates.get_template_by_slug(slug) do
+      nil ->
+        {:error,
+         %{
+           error: "Template not found: #{slug}",
+           recoverable: true,
+           suggestion: "Use prompt_template_list to see available slugs, or check spelling"
+         }}
+
+      template ->
+        case Platform.Orchestration.PromptTemplates.update_template(template, %{
+               "content" => content,
+               "updated_by" => "agent"
+             }) do
+          {:ok, updated} ->
+            {:ok,
+             %{
+               slug: updated.slug,
+               name: updated.name,
+               description: updated.description,
+               variables: updated.variables,
+               updated_by: updated.updated_by,
+               updated_at: format_datetime(updated.updated_at)
+             }}
+
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to update template: #{inspect_errors_safe(changeset)}",
+               recoverable: true,
+               suggestion: "Check that content is not empty"
+             }}
+        end
+    end
+  end
+
+  # ── Federation tools ─────────────────────────────────────────────────
+
+  def execute("federation_status", _args, _context) do
+    status = Platform.Federation.federation_status()
+
+    runtimes =
+      Enum.map(status, fn r ->
+        %{
+          runtime_id: r.runtime_id,
+          agent_name: r.agent_name,
+          agent_slug: r.agent_slug,
+          online: r.online,
+          connected_at: format_datetime(r.connected_at),
+          last_seen_at: format_datetime(r.last_seen_at),
+          last_connected_at: format_datetime(r.last_connected_at)
+        }
+      end)
+
+    {:ok, %{runtimes: runtimes}}
+  end
+
+  # ── Memory tool dispatch (ADR-0041 T5) ──────────────────────────────────
+  # Thin adapter: every clause gates through `Wiki.Routing` then routes to
+  # `Wiki` (pages/private) or `Wiki.Journal` (journal). No direct `Repo`
+  # calls here — the routing+domain modules own DB access.
+
+  def execute("memory_view", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_view"),
+         agent = load_agent(context),
+         :ok <- gate_to_envelope(Routing.gate_read(agent, path)) do
+      class = Routing.classify(path)
+      workspace_id = Map.get(args, "workspace_id")
+      view_range = Map.get(args, "view_range")
+
+      case class.kind do
+        :page -> view_page(path, view_range, workspace_id, class)
+        :private -> view_page(path, view_range, workspace_id, class)
+        :journal -> view_journal(path, class, view_range, workspace_id)
+      end
+    end
+  end
+
+  def execute("memory_create", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_create"),
+         {:ok, text} <- require_string(args, "file_text", "memory_create"),
+         agent = load_agent(context) do
+      class = Routing.classify(path)
+      workspace_id = Map.get(args, "workspace_id")
+
+      existing =
+        if class.kind in [:page, :private],
+          do: Wiki.get_page(path, workspace_id: workspace_id),
+          else: nil
+
+      gate_opts = if existing, do: [existing_page: existing], else: []
+
+      case gate_to_envelope(Routing.gate_write(agent, path, gate_opts)) do
+        :ok ->
+          do_memory_create(class, path, text, agent, workspace_id)
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  def execute("memory_str_replace", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_str_replace"),
+         {:ok, old_str} <- require_string(args, "old_str", "memory_str_replace"),
+         {:ok, new_str} <- require_string(args, "new_str", "memory_str_replace"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_str_replace"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      apply_str_replace(existing, path, old_str, new_str, agent, Map.get(args, "workspace_id"))
+    end
+  end
+
+  def execute("memory_insert", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_insert"),
+         {:ok, insert_text} <- require_string(args, "insert_text", "memory_insert"),
+         {:ok, insert_line} <- require_integer(args, "insert_line", "memory_insert"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_insert"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      apply_insert(existing, path, insert_line, insert_text, agent, Map.get(args, "workspace_id"))
+    end
+  end
+
+  def execute("memory_delete", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_delete"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_delete"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      do_memory_delete(path, Map.get(args, "workspace_id"))
+    end
+  end
+
+  def execute("memory_rename", args, context) do
+    with {:ok, old_path} <- require_string(args, "old_path", "memory_rename"),
+         {:ok, new_path} <- require_string(args, "new_path", "memory_rename"),
+         agent = load_agent(context),
+         workspace_id = Map.get(args, "workspace_id"),
+         :ok <- ensure_page_kind(old_path, "memory_rename"),
+         :ok <- ensure_page_kind(new_path, "memory_rename"),
+         :ok <- ensure_same_kind(old_path, new_path),
+         existing_old = Wiki.get_page(old_path, workspace_id: workspace_id),
+         existing_new = Wiki.get_page(new_path, workspace_id: workspace_id),
+         :ok <-
+           gate_to_envelope(Routing.gate_write(agent, old_path, existing_page: existing_old)),
+         :ok <-
+           gate_to_envelope(Routing.gate_write(agent, new_path, existing_page: existing_new)) do
+      do_memory_rename(old_path, new_path, agent, workspace_id)
+    end
+  end
+
+  # ── memory_search payload bound ──────────────────────────────────────
+  #
+  # `Search.search/2` hydrates each hit with the FULL body (`page.content`
+  # / `entry.content`). Twenty full org pages serialize to a six-figure
+  # JSON string, which is unusable as a single MCP tool result.
+  #
+  # The bound lives HERE, on the MCP dispatch head, and deliberately NOT
+  # inside `Search.search/2`: that function has a second consumer with no
+  # token budget — the org-memory LiveView search pane, which renders full
+  # content and clamps to its own 240-char preview. Narrowing the shared
+  # function would silently degrade that surface. A token cap is a
+  # property of the MCP transport, so it belongs on the transport's head.
+  @memory_search_snippet_chars 500
+  @memory_search_max_payload_bytes 20_000
+
+  def execute("memory_search", args, context) do
+    with {:ok, query} <- require_string(args, "query", "memory_search") do
+      agent = load_agent(context)
+
+      with :ok <- authorize_org_filter(agent, Map.get(args, "org_id")),
+           {:ok, opts} <- search_opts_from(args, agent) do
+        query |> Search.search(opts) |> bound_memory_search_payload()
+      end
+    end
+  end
+
+  # ── Memory-feedback read tools (task 019f6381 stage 4) ───────────────────
+  #
+  # These three tools thinly wrap `Platform.MemoryFeedback.list_recent/1`.
+  # They are READ-ONLY by construction — no `record_*` write path is
+  # exposed here. Humans (and the in-tree capture hooks at
+  # `Platform.Org.Context.upsert_context_file/3` + `delete_file/2`) own
+  # the write side of the corpus; agents may only inspect it.
+  #
+  # The default namespace lives on `Platform.MemoryFeedback` itself
+  # (`@default_namespace`), so we deliberately do NOT pass it here —
+  # keeps the tool_surface source clean of any bundle-name-adjacent
+  # string literals that the T5 scope-creep guard forbids.
+
+  def execute("org_memory_recently_edited", args, _context) do
+    opts = feedback_read_opts(args, "edit")
+    {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
+  end
+
+  def execute("org_memory_recently_deleted", args, _context) do
+    opts = feedback_read_opts(args, "delete")
+    {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
+  end
+
+  def execute("org_memory_feedback_at_path", args, _context) do
+    with {:ok, path} <- require_string(args, "path", "org_memory_feedback_at_path") do
+      workspace_id = Map.get(args, "workspace_id")
+
+      # Two `list_recent/1` calls (one per feedback_kind) rather than a
+      # single unfiltered call + Elixir-side partition — keeps the query
+      # narrow enough that the ceiling of 100 per side is enforced by
+      # the DB, not by an in-BEAM filter that would need a much larger
+      # buffer to guarantee the same result for pathological corpora.
+      edits =
+        [feedback_kind: "edit", path_prefix: path, workspace_id: workspace_id, limit: 100]
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Platform.MemoryFeedback.list_recent()
+        |> Enum.filter(&(&1.path == path))
+        |> Enum.map(&serialize_feedback_entry/1)
+
+      deletes =
+        [feedback_kind: "delete", path_prefix: path, workspace_id: workspace_id, limit: 100]
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Platform.MemoryFeedback.list_recent()
+        |> Enum.filter(&(&1.path == path))
+        |> Enum.map(&serialize_feedback_entry/1)
+
+      {:ok, %{path: path, edits: edits, deletes: deletes}}
+    end
+  end
+
+  # ── Files MCP dispatch (ADR-0042 Stage 4) ──────────────────────────────
+
+  def execute("file_list", args, context) do
+    with {:ok, project_id} <- require_string(args, "project_id", "file_list"),
+         {:ok, project} <- fetch_project_for_files(project_id, "file_list"),
+         :ok <- authorize_org_filter_for_explicit(args, context),
+         :ok <- authorize_file_access(context, project) do
+      limit = Map.get(args, "limit") |> normalize_limit(50, 200)
+      content_type = Map.get(args, "content_type")
+
+      files =
+        Platform.Files.list_files_for_project(project.id,
+          limit: limit,
+          content_type: content_type
+        )
+
+      {:ok,
+       %{
+         project_id: project.id,
+         count: length(files),
+         files: Enum.map(files, &file_summary/1)
+       }}
+    end
+  end
+
+  def execute("file_get_text", args, context) do
+    if truthy?(Map.get(args, "binary")) do
+      file_get_text_binary(args, context)
+    else
+      file_get_text_text(args, context)
+    end
+  end
+
+  def execute("file_get_metadata", args, context) do
+    with {:ok, file_id} <- require_string(args, "file_id", "file_get_metadata"),
+         %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
+         {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_metadata"),
+         :ok <- authorize_file_access(context, project) do
+      {:ok, file_metadata(file)}
+    else
+      nil ->
+        file_metadata_not_found_error(Map.get(args, "file_id"))
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def execute("file_search", args, context) do
+    with {:ok, project_id} <- require_string(args, "project_id", "file_search"),
+         {:ok, query} <- require_string(args, "query", "file_search"),
+         {:ok, project} <- fetch_project_for_files(project_id, "file_search"),
+         :ok <- authorize_org_filter_for_explicit(args, context),
+         :ok <- authorize_file_access(context, project) do
+      limit = Map.get(args, "limit") |> normalize_limit(20, 100)
+
+      memory_opts =
+        [
+          project_id: project.id,
+          org_id: project.org_id,
+          memory_type: "document",
+          limit: limit
+        ]
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+      case Platform.Memory.search(query, memory_opts) do
+        {:ok, results} ->
+          hits =
+            results
+            |> Enum.map(&format_file_hit(&1, project.id))
+            |> Enum.reject(&is_nil/1)
+
+          {:ok,
+           %{
+             project_id: project.id,
+             count: length(hits),
+             hits: hits
+           }}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "file_search: memory service error (#{inspect(reason)})",
+             code: :memory_service_error,
+             recoverable: true,
+             suggestion:
+               "The embedding service is unavailable or returned an error. Retry shortly; fall back to file_list if it persists."
+           }}
+      end
+    end
+  end
+
+  def execute("file_add", args, context) do
+    with {:ok, project_id} <- require_string(args, "project_id", "file_add"),
+         {:ok, filename} <- require_string(args, "filename", "file_add"),
+         {:ok, content_type} <- require_string(args, "content_type", "file_add"),
+         {:ok, project} <- fetch_project_for_files(project_id, "file_add"),
+         :ok <- authorize_org_filter_for_explicit(args, context),
+         :ok <- authorize_file_access(context, project) do
+      cond do
+        is_binary(Map.get(args, "data_base64")) ->
+          file_add_inline(args, project, filename, content_type)
+
+        is_integer(Map.get(args, "byte_size")) and Map.get(args, "byte_size") > 0 ->
+          file_add_presigned(args, project, filename, content_type)
+
+        true ->
+          {:error,
+           %{
+             error:
+               "file_add: pass either `data_base64` (inline branch) or `byte_size` (presigned branch)",
+             recoverable: true,
+             suggestion:
+               "For small files pass base64-encoded bytes as `data_base64`; for files over 25 MB pass `byte_size` (positive integer) to reserve a presigned upload slot."
+           }}
+      end
+    end
+  end
+
+  def execute("file_delete", args, context) do
+    with {:ok, file_id} <- require_string(args, "file_id", "file_delete"),
+         %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
+         {:ok, project} <- fetch_project_for_files(file.project_id, "file_delete"),
+         :ok <- authorize_org_filter_for_explicit(args, context),
+         :ok <- authorize_file_access(context, project) do
+      # Task 019f7cb0 stage 4: agent deletes ride the same soft-delete
+      # path as humans. `Platform.Files.delete_file/2` marks the row
+      # deleted (30-day restore window — the Purger owns permanent
+      # removal of row AND stored bytes after retention), scrubs the AI
+      # search index, writes the audit row with the acting agent
+      # attributed, and broadcasts {:file_deleted, id} on the project
+      # topic — so no Storage.delete and no handler-side broadcast here.
+      case Platform.Files.delete_file(file_delete_actor(context), file) do
+        {:ok, _deleted} ->
+          {:ok, %{file_id: file.id, deleted: true}}
+
+        {:error, :already_deleted} ->
+          # Race: another caller soft-deleted the row between our
+          # `get_file` and the write. Same envelope as the get-miss —
+          # a re-delete must look identical to a never-existed id.
+          file_delete_not_found_error(file.id)
+
+        {:error, :unauthorized} ->
+          {:error,
+           %{
+             error: "file_delete: caller identity could not be resolved for audit attribution",
+             code: :unauthorized,
+             recoverable: false,
+             suggestion:
+               "Deletes are audit-logged and require an acting agent. Call through the MCP endpoint (which always supplies agent_id) rather than bare-invoking the tool surface."
+           }}
+
+        {:error, :project_archived} ->
+          {:error,
+           %{
+             error: "file_delete: project is archived (read-only)",
+             code: :project_archived,
+             recoverable: false,
+             suggestion:
+               "Archived projects refuse writes. Unarchive the project before deleting its files."
+           }}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error,
+           %{
+             error: "file_delete: row update failed (#{inspect(changeset.errors)})",
+             code: :delete_failed,
+             recoverable: true,
+             suggestion: "Transient write failure — re-issue the call."
+           }}
+      end
+    else
+      nil ->
+        file_delete_not_found_error(Map.get(args, "file_id"))
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def execute(unknown_tool, _args, _context) do
+    tool_names =
+      tool_definitions()
+      |> Enum.map(& &1.name)
+      |> Enum.join(", ")
+
+    {:error,
+     %{
+       error: "Unknown tool: #{unknown_tool}",
+       recoverable: false,
+       suggestion: "Available tools: #{tool_names}"
+     }}
+  end
+
+  defp normalize_send_media_attachments(args) do
+    file_paths =
+      case Map.get(args, "file_paths") do
+        paths when is_list(paths) -> Enum.filter(paths, &is_binary/1)
+        _ -> []
+      end
+
+    attachment_specs =
+      cond do
+        file_paths != [] ->
+          Enum.map(file_paths, fn path ->
+            %{path: path, filename: Path.basename(path)}
+          end)
+
+        is_binary(Map.get(args, "file_path")) and Map.get(args, "file_path") != "" ->
+          file_path = Map.get(args, "file_path")
+          filename = Map.get(args, "filename") || Path.basename(file_path)
+          [%{path: file_path, filename: filename}]
+
+        true ->
+          []
+      end
+
+    case attachment_specs do
+      [] -> {:error, "Failed to send media: no file path provided"}
+      specs -> {:ok, specs}
+    end
+  end
+
+  defp persist_send_media_attachments(attachment_specs) do
+    attachment_specs
+    |> Enum.reduce_while({:ok, []}, fn %{path: path, filename: filename}, {:ok, acc} ->
+      case Chat.AttachmentStorage.persist_upload(path, filename) do
+        {:ok, file_meta} -> {:cont, {:ok, [Map.put(file_meta, :message_id, nil) | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, attachment_attrs} -> {:ok, Enum.reverse(attachment_attrs)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp react_after_validation(space_id, message_id, emoji, context) do
+    case Chat.get_message(message_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Message #{message_id} not found",
+           recoverable: false,
+           suggestion: "Verify the message_id exists and is accessible to the agent"
+         }}
+
+      %{space_id: msg_space_id} when msg_space_id != space_id ->
+        {:error,
+         %{
+           error: "Message does not belong to space #{space_id}",
+           recoverable: false,
+           suggestion: "Pass the space_id that owns the target message"
+         }}
+
+      _message ->
+        participant_id =
+          Map.get(context, :agent_participant_id) ||
+            get_agent_participant_id_for_space(space_id, context)
+
+        if is_nil(participant_id) do
+          {:error,
+           %{
+             error: "Access denied: agent is not a participant in space #{space_id}",
+             recoverable: false,
+             suggestion: "Use space_list to find spaces the agent has access to"
+           }}
+        else
+          persist_reaction(space_id, message_id, participant_id, emoji)
+        end
+    end
+  end
+
+  defp persist_reaction(space_id, message_id, participant_id, emoji) do
+    case Chat.add_reaction(%{
+           message_id: message_id,
+           participant_id: participant_id,
+           emoji: emoji
+         }) do
+      {:ok, _reaction} ->
+        {:ok,
+         %{
+           message_id: message_id,
+           space_id: space_id,
+           emoji: emoji,
+           status: "added"
+         }}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        if already_reacted?(changeset) do
+          {:ok,
+           %{
+             message_id: message_id,
+             space_id: space_id,
+             emoji: emoji,
+             status: "already_reacted"
+           }}
+        else
+          {:error,
+           %{
+             error: "Failed to add reaction: #{inspect_errors_safe(changeset)}",
+             recoverable: true,
+             suggestion: "Verify message_id, participant_id, and emoji are valid"
+           }}
+        end
+    end
+  end
+
+  defp already_reacted?(%Ecto.Changeset{errors: errors}) do
+    case Keyword.get(errors, :emoji) do
+      {_msg, opts} -> Keyword.get(opts, :constraint) == :unique
+      _ -> false
+    end
+  end
+
+  # Error translation is deliberately per-term rather than a catch-all
+  # string: a caller that receives a wrong `recoverable` flag retries
+  # something that cannot work, or abandons something that would have.
+  defp design_critique_error(:responsibility_unfilled) do
+    %{
+      error:
+        "No agent holds the Designer role's `design.critique` duty, so no design review can be obtained.",
+      recoverable: false,
+      suggestion:
+        "Assign the Designer role (or a `design.critique` override) to an external agent. Until then, create the review request anyway and note that design review is missing."
+    }
+  end
+
+  defp design_critique_error(:responsibility_not_registered) do
+    %{
+      error: "`design.critique` is not registered on this instance.",
+      recoverable: false,
+      suggestion:
+        "Create the review request anyway and note that design review is unavailable here."
+    }
+  end
+
+  defp design_critique_error({:assignee_not_external, kind}) do
+    %{
+      error:
+        "The `design.critique` assignee is a #{kind} agent; a synchronous critique needs an external one.",
+      recoverable: false,
+      suggestion:
+        "Point the Designer role at an external agent, or proceed without design review and say so."
+    }
+  end
+
+  defp design_critique_error(:no_canvas_resolved) do
+    %{
+      error: "No canvas could be resolved for the critique, so nothing was sent for review.",
+      recoverable: true,
+      suggestion: "Pass an explicit `canvas_id` for the evidence canvas holding your screenshots."
+    }
+  end
+
+  defp design_critique_error({:dispatch_raised, message}) do
+    %{
+      error: "The design critique dispatch failed: #{message}",
+      recoverable: true,
+      suggestion: "Retry once; if it fails again, create the review request noting the failure."
+    }
+  end
+
+  defp design_critique_error({:dispatch_exited, reason}) do
+    %{
+      error: "The design critique dispatch exited: #{inspect(reason)}",
+      recoverable: true,
+      suggestion: "Retry once; if it fails again, create the review request noting the failure."
+    }
+  end
+
+  defp design_critique_error(reason) do
+    %{
+      error: "Could not obtain a design critique: #{inspect(reason)}",
+      recoverable: true,
+      suggestion: "Retry once; if it fails again, create the review request noting the failure."
+    }
+  end
+
+  # Look up the agent's participant row in a space. Post-ADR-0038 there is
+  # no dismissed-but-present state — the row exists iff the agent is in the
+  # space. Scoped to participant_type="agent" so a user participant with a
+  # colliding UUID can't be matched here.
+  defp find_active_agent_participant(space_id, agent_id) do
+    from(p in Participant,
+      where:
+        p.space_id == ^space_id and
+          p.participant_id == ^agent_id and
+          p.participant_type == "agent"
+    )
+    |> Repo.one()
+  end
+
+  defp search_hits(space_id, query, limit) do
+    messages = Chat.search_messages(space_id, query, limit: limit)
+
+    {:ok,
+     Enum.map(messages, fn m ->
+       {trimmed_content, truncated?} = cap_content(m.content || "")
+
+       %{
+         id: m.id,
+         participant_id: m.participant_id,
+         content: trimmed_content,
+         content_truncated: truncated?,
+         search_headline: m.search_headline,
+         inserted_at: format_datetime(m.inserted_at)
+       }
+     end)}
+  end
+
+  defp cap_content(content) when is_binary(content) do
+    if String.length(content) > @message_content_cap do
+      {String.slice(content, 0, @message_content_cap), true}
+    else
+      {content, false}
+    end
+  end
+
+  defp serialize_attachments(attachments) do
+    Enum.map(attachments, fn a ->
+      %{
+        url: "/chat/attachments/#{a.id}",
+        content_type: a.content_type,
+        byte_size: a.byte_size,
+        filename: a.filename
+      }
+    end)
+  end
+
+  defp normalize_limit(n) when is_integer(n) and n > 0, do: min(n, 100)
+  defp normalize_limit(_), do: 20
+
+  defp search_users(query_trimmed, query_norm, like_pattern, prefix_pattern, limit) do
+    from(u in Platform.Accounts.User,
+      where:
+        fragment("LOWER(?)", u.email) == ^query_norm or
+          ilike(u.name, ^like_pattern),
+      order_by: [
+        desc: fragment("LOWER(?) = ?", u.email, ^query_norm),
+        desc: fragment("LOWER(?) = LOWER(?)", u.name, ^query_trimmed),
+        desc: fragment("? ILIKE ?", u.name, ^prefix_pattern),
+        asc: u.name
+      ],
+      limit: ^limit
+    )
+    |> Repo.all()
+    |> Enum.map(&format_principal_user/1)
+  end
+
+  defp search_agents(query_trimmed, like_pattern, prefix_pattern, limit) do
+    from(a in Agent,
+      where:
+        ilike(a.name, ^like_pattern) or
+          ilike(a.slug, ^like_pattern),
+      order_by: [
+        desc: fragment("LOWER(?) = LOWER(?)", a.slug, ^query_trimmed),
+        desc: fragment("LOWER(?) = LOWER(?)", a.name, ^query_trimmed),
+        desc: fragment("? ILIKE ?", a.name, ^prefix_pattern),
+        asc: a.name
+      ],
+      limit: ^limit
+    )
+    |> Repo.all()
+    |> Enum.map(&format_principal_agent/1)
+  end
+
+  defp format_principal_user(%Platform.Accounts.User{} = u) do
+    %{
+      type: "user",
+      id: u.id,
+      display_name: u.name,
+      email: u.email,
+      avatar_url: u.avatar_url
+    }
+  end
+
+  defp format_principal_agent(%Agent{} = a) do
+    %{
+      type: "agent",
+      id: a.id,
+      display_name: a.name,
+      slug: a.slug,
+      kind: a.kind,
+      classification: Atom.to_string(Platform.Agents.Kind.classify(a))
+    }
+  end
+
+  # Applies a per-phase assignee map through the canonical writer
+  # (`Tasks.set_phase_assignees/2`), which re-derives the flat
+  # `assignee_id + assignee_type` pointer from the current phase. Called
+  # from both `task_create` and `task_update` after `build_task_attrs/3`
+  # emits a non-nil `phase_attrs`.
+  defp maybe_apply_phase_assignees(task, nil), do: {:ok, task}
+
+  defp maybe_apply_phase_assignees(task, phase_attrs) when is_map(phase_attrs),
+    do: Tasks.set_phase_assignees(task, phase_attrs)
+
+  # Stage 4 (019f3dbb) — advisory self-similarity search for
+  # `task_create`. Runs synchronously post-create because the caller
+  # needs the field in the same response envelope (a follow-up
+  # `memory_search` round-trip would double the create's latency).
+  #
+  # ## Threshold
+  #
+  # The plan (task 019f3dbb stage 4) expresses the "strong match" cutoff
+  # as `similarity_score >= 0.5`. `Platform.Org.Wiki.Search` produces
+  # RRF-fused scores bounded by roughly `2 * 1/(k + 1) ≈ 0.033` at k=60,
+  # so the fused `score` on the hit envelope never crosses 0.5 in
+  # practice. We derive `similarity_score` from the hit's channel ranks
+  # instead — `1.0 / min(semantic_rank, lexical_rank)` — which cleanly
+  # maps to the plan's mental model:
+  #
+  #   * rank 1 → 1.0 (near-identical content, both channels rank 1
+  #     usually means the title tokens overlap fully)
+  #   * rank 2 → 0.5 (still a plausible duplicate)
+  #   * rank 3 → 0.33 (weak — filtered out)
+  #
+  # So the effective filter is "top-2 in at least one channel," which
+  # is the "strong match" bar the plan describes.
+  #
+  # ## Advisory guarantees
+  #
+  # - Never blocks the create — a raise or `{:error, _}` from `Search`
+  #   surfaces as `similar_tasks: []` and a `:warning` log line.
+  # - Self-match is excluded (the just-created task will often lexical-
+  #   match its own title at rank 1).
+  # - Project scope is enforced through the `project_id` filter passed
+  #   to `Search.search`; cross-project leakage cannot occur because the
+  #   lexical `tasks` channel joins projects and the semantic channel
+  #   filters on the `project_id` provider option.
+  #
+  # Task 01a01041 stage 2: an `{:error, reason}` arm on the `case` below was
+  # unreachable and has been removed. `Org.Wiki.Search.search/2` is total —
+  # `@spec` (search.ex:147) declares only `{:ok, %{results: …}}`, the
+  # blank-query short-circuit returns `{:ok, …}`, and `do_search/2` absorbs
+  # every channel failure (`Task.async_stream` with `:kill_task`, plus the
+  # `{:error, _} -> []` provider arms) precisely so a degraded channel
+  # contributes no hits instead of failing the search. That is deliberate for
+  # an advisory search, so the callee's return type is not the bug and the
+  # branch was dead rather than the spec being too narrow. The failure paths
+  # that DO fire here are the `rescue`/`catch` below, which stay: a provider
+  # crash surfaces as a raise or an EXIT, never as an error tuple.
+  defp similar_tasks_for(task) do
+    try do
+      query_text =
+        [task.title, task.description]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join(" ")
+        |> normalize_similarity_query()
+
+      case Search.search(query_text,
+             source: "task",
+             project_id: task.project_id,
+             # Pull one extra so we still return up to 5 after dropping
+             # the self-match.
+             limit: 6,
+             # Task creation may run under a system context with no
+             # caller agent; tenancy is enforced via `project_id`.
+             agent: nil
+           ) do
+        {:ok, %{results: results}} ->
+          results
+          |> Enum.reject(fn hit -> hit.id == task.id end)
+          |> Enum.map(&similar_task_entry/1)
+          |> Enum.filter(fn entry -> entry.similarity_score >= 0.5 end)
+          |> Enum.take(5)
+      end
+    rescue
+      error ->
+        Logger.warning("task_create similarity search raised: #{Exception.message(error)}")
+
+        []
+    catch
+      # `Search.search` fans channels through `Task.async_stream` — a
+      # crash in a semantic-provider `search/3` implementation surfaces
+      # as an EXIT that leaks out of the stream. Treat it identically
+      # to the rescue path: advisory search, never blocks the create.
+      kind, reason when kind in [:exit, :throw] ->
+        Logger.warning("task_create similarity search exited: #{inspect({kind, reason})}")
+
+        []
+    end
+  end
+
+  # Project a `Platform.Org.Wiki.Search` task hit into the advisory
+  # `similar_tasks` entry the plan spec calls out. Fields flow through
+  # from stage 3's hydration — see `Search.task_to_hit/2`.
+  defp similar_task_entry(hit) do
+    %{
+      id: hit.id,
+      title: hit_title(hit),
+      status: hit.status,
+      priority: hit.priority,
+      similarity_score: hit_similarity_score(hit),
+      updated_at: hit.updated_at,
+      merged_pr_url: hit.merged_pr_url,
+      follow_up_task_ids: hit.follow_up_task_ids,
+      cancellation_note: hit.cancellation_note
+    }
+  end
+
+  # `Search` builds `content` as `title` or `title <> " — " <> description`.
+  # Recover the title cheaply without re-fetching the task row.
+  defp hit_title(%{content: content}) when is_binary(content) do
+    case String.split(content, " — ", parts: 2) do
+      [title | _] -> title
+      _ -> content
+    end
+  end
+
+  defp hit_title(_), do: ""
+
+  # See `similar_tasks_for/1` for the rationale — rank-based confidence
+  # in [0, 1]. `100` is the "not present in this channel" sentinel; both
+  # ranks missing would already have been filtered upstream (a hit with
+  # no channel rank cannot exist), so the max is a defensive floor.
+  defp hit_similarity_score(%{semantic_rank: semantic_rank, lexical_rank: lexical_rank}) do
+    ranks = Enum.reject([semantic_rank, lexical_rank], &is_nil/1)
+
+    min_rank =
+      case ranks do
+        [] -> 100
+        list -> Enum.min(list)
+      end
+
+    Float.round(1.0 / min_rank, 3)
+  end
+
+  defp hit_similarity_score(_), do: 0.0
+
+  # `Search.search` funnels the query into `websearch_to_tsquery('english', ?)`,
+  # which treats `-` as a NOT operator (`meeting -fix` → `meeting & !fix`),
+  # `"..."` as a phrase, and `OR` as alternation. A task's title +
+  # description is arbitrary prose — an em-dash inside "the summarizer
+  # leaks memory each meeting - fix it" would silently exclude every
+  # candidate that mentions "fix". Normalise punctuation to whitespace
+  # so the query is a plain token bag and the tsquery only carries the
+  # implicit-AND of stems.
+  defp normalize_similarity_query(text) do
+    text
+    |> String.replace(~r/[^\p{L}\p{N}]+/u, " ")
+    |> String.trim()
+  end
+
+  defp maybe_update_task(task, attrs, _actor) when map_size(attrs) == 0, do: {:ok, task}
+  defp maybe_update_task(task, attrs, actor), do: Tasks.update_task(task, attrs, actor: actor)
+
+  defp maybe_transition_status(task, nil, _actor), do: {:ok, task}
+
+  # `transition_task_status/2` deliberately takes no actor (it is called by
+  # the router, Stacks, CommencementGate, ChatPins and more). The MCP
+  # caller's identity is supplied out-of-band so the recorded transition is
+  # attributed to the calling agent instead of `unknown`.
+  defp maybe_transition_status(task, new_status, actor),
+    do:
+      Tasks.TransitionActor.with_actor(actor, "mcp_task_update", fn ->
+        Tasks.transition_task_status(task, new_status)
+      end)
+
+  # Task 019f6380 stage 2: consult `Tasks.require_approved_plan_for/3`
+  # before an MCP-initiated status transition. When there's no status
+  # change in this call (`nil`), skip the check entirely — bare
+  # metadata updates should never hit the plan gate. Also skip when the
+  # transition would fail as `:invalid_transition` in
+  # `transition_task_status/2` — otherwise the gate would mask the more-
+  # specific transition-table error (e.g. `cancelled → in_progress`
+  # would surface as `:no_approved_plan` instead of the terminal-state
+  # refusal). When the gate returns `{:error, :no_approved_plan}`,
+  # propagate as-is so the outer `with` chain hits the friendly envelope
+  # branch above.
+  defp maybe_check_plan_gate(_task, nil, _actor), do: :ok
+
+  defp maybe_check_plan_gate(task, new_status, actor) do
+    if Tasks.transition_valid?(task, new_status) do
+      Tasks.require_approved_plan_for(task, new_status, actor)
+    else
+      :ok
+    end
+  end
+
+  # Derive an `actor` tuple for the plan-gate call from the MCP call
+  # context. MCP callers are agents by default — the `:agent_id` key
+  # is the standard shape (see e.g. `space_leave`, `space_list` above).
+  # An absent `:agent_id` falls back to the bare `:agent` atom, which
+  # `sponsor_bypasses_plan_gate?/2` treats as non-human and therefore
+  # never grants the sponsor-bypass exemption.
+  defp actor_from_mcp_context(context) when is_map(context) do
+    case Map.get(context, :agent_id) do
+      id when is_binary(id) -> {:agent, id}
+      _ -> :agent
+    end
+  end
+
+  defp actor_from_mcp_context(_context), do: :agent
+
+  # Shared envelope for `TaskAttrs.check_auto_approve_preconditions/4`
+  # rejections — both `task_create` and `task_update` surface the identical
+  # shape so callers can dispatch on `envelope.code` without checking which
+  # tool produced the error. `missing_phases` retains stable
+  # `[\"execution\", \"review\"]` ordering from TaskAttrs.
+  # Shared envelope for the Stack-v2 commencement gate's 3-tuple refusal
+  # `{:error, :stack_plans_pending, %{stack_id, waiting_on}}`. BOTH MCP
+  # entry points that can transition a member into `in_progress`
+  # (`task_start` and `task_update`) route here so the wording lives in
+  # exactly one place.
+  #
+  # Two branches, because the atom is overloaded:
+  #
+  #   * `waiting_on != []` — siblings are still missing approved plans.
+  #     Wording is copied from the `stack_start` handler below so an
+  #     agent that has seen one message recognises the other.
+  #
+  #   * `waiting_on == []` — every member IS planned, but
+  #     `CommencementGate.open?/1` still returns false because the stack
+  #     row itself is not `"in_progress"`. Rendering the blocker list
+  #     here would emit a dangling empty enumeration ("waiting on: "),
+  #     so this branch names the real cause instead: nobody has called
+  #     `stack_start` yet.
+  defp stack_plans_pending_envelope(stack_id, []) do
+    %{
+      error:
+        "Cannot start task: stack #{stack_id} has not started yet. Every member holds an approved plan, but the stack itself is not in_progress, so the commencement gate stays closed.",
+      recoverable: true,
+      suggestion: "Call stack_start with stack_id #{stack_id} to open the stack, then retry."
+    }
+  end
+
+  defp stack_plans_pending_envelope(stack_id, waiting_on) when is_list(waiting_on) do
+    %{
+      error:
+        "Stack cannot start yet — the following members are missing an approved plan: " <>
+          Enum.join(describe_waiting_on(stack_id, waiting_on), ", "),
+      recoverable: true,
+      suggestion: "Approve the missing plans (via plan_approve) before starting this task again."
+    }
+  end
+
+  # Resolve blocking member ids to `"<title> (<id>)"` using the existing
+  # `Stacks.members/1` accessor — one query over the stack, no new
+  # context function. An id that isn't in the member list (deleted
+  # mid-flight) degrades to the bare id rather than dropping out.
+  defp describe_waiting_on(stack_id, waiting_on) do
+    titles =
+      stack_id
+      |> Stacks.members()
+      |> Map.new(fn member -> {member.id, member.title} end)
+
+    Enum.map(waiting_on, fn id ->
+      case Map.get(titles, id) do
+        nil -> id
+        title -> "#{title} (#{id})"
+      end
+    end)
+  end
+
+  defp auto_approve_precondition_envelope(phases) do
+    %{
+      error:
+        "auto_approve_plan requires an agent assignee on both the execution and review phases.",
+      code: :auto_approve_precondition_missing,
+      missing_phases: phases,
+      suggestion:
+        "Pass phase_assignees with agent-typed assignee_id + assignee_type for each of: planning, execution, review. Flat assignee_id only sets planning per ADR 0044.",
+      recoverable: true
+    }
+  end
+
+  # Resolve the `attached_by` identity from the federated tool context.
+  # Prefers explicit kind+id pairs (agent/user); falls back to nil so the
+  # changeset surface returns a friendly `attached_by` validation error
+  # rather than silently mis-attributing the row.
+  defp resolve_attached_by(context) when is_map(context) do
+    cond do
+      is_binary(Map.get(context, :agent_id)) ->
+        %{kind: "agent", id: Map.get(context, :agent_id)}
+
+      is_binary(Map.get(context, :user_id)) ->
+        %{kind: "user", id: Map.get(context, :user_id)}
+
+      true ->
+        %{}
+    end
+  end
+
+  defp resolve_attached_by(_), do: %{}
+
+  # The AUTHORIZATION subject for canvas-touching task tools (task 019e2c4b
+  # stage 2). Shaped like `resolve_attached_by/1` and read from the same
+  # context, but kept separate on purpose: that one produces the attribution
+  # recorded on the row, which is caller-supplied metadata, while this one
+  # answers "who is asking".
+  #
+  # Neither key present → `nil`, which `Platform.Chat.CanvasAccess` treats as
+  # no principal and denies. It deliberately does not fall back to `:system`.
+  defp canvas_authorization_actor(context) when is_map(context) do
+    cond do
+      is_binary(Map.get(context, :agent_id)) -> {:agent, Map.get(context, :agent_id)}
+      is_binary(Map.get(context, :user_id)) -> {:user, Map.get(context, :user_id)}
+      true -> nil
+    end
+  end
+
+  defp canvas_authorization_actor(_), do: nil
+
+  # ── The canvas-attachment refusal taxonomy (task 019fb581 stage 5) ───────
+
+  # The CLOSED set of refusal atoms each canvas-attachment clause must handle,
+  # keyed by tool. These are `Platform.Tasks.CanvasAttachments`' return atoms,
+  # which is the boundary the three clauses actually pattern-match on — so a
+  # fifth atom added there with no clause here is a `CaseClauseError` at
+  # runtime, i.e. a 500 rather than a refusal.
+  #
+  # Declared rather than inferred so a test can drive every atom for real and
+  # compare the driven set against this one, the same way
+  # `@design_decline_error_codes` above is compared against
+  # `task_design_decline`'s emissions. Restating the taxonomy in a test would
+  # only pin the test against itself.
+  #
+  # `attach_canvas/4` can also return `{:error, %Ecto.Changeset{}}`, which is
+  # a struct rather than an atom and is deliberately NOT in this set: it is a
+  # validation failure on `attached_by`, not an authorization outcome, and it
+  # has no place in a taxonomy an agent branches on.
+  @canvas_attachment_error_codes %{
+    "task_attach_canvas" => [
+      :task_forbidden,
+      :task_not_found,
+      :canvas_forbidden,
+      :canvas_not_found
+    ],
+    "task_detach_canvas" => [:task_forbidden, :task_not_found, :not_found],
+    "task_list_canvases" => [:task_forbidden, :task_not_found]
+  }
+
+  # THE ASYMMETRY, DECLARED RATHER THAN DISCOVERED. Only `:task_forbidden`
+  # reaches the caller as a machine-readable `code` key. The other four are
+  # prose-only: the caller has to string-match `error` to tell them apart.
+  #
+  # Stage 5 did NOT widen this. Adding `code:` to the other four envelopes is
+  # additive on the wire (`MCPController.error_content/1` drops nil keys, so
+  # nothing currently branches on their absence) and would make the taxonomy
+  # usable, but it is a wire-behaviour change and this is the stage that
+  # catches wrongness rather than the stage that introduces it. Recorded here
+  # and pinned by a test so the next person decides it deliberately instead of
+  # inheriting it. Raised to the review stage of task 019fb581.
+  @canvas_attachment_coded_errors [:task_forbidden]
+
+  @doc """
+  The closed set of refusal atoms each canvas-attachment tool must handle.
+
+  Public so the guard that keeps the three tools' `limitations` prose honest
+  can compare the documented taxonomy against the emitted one instead of
+  restating either. Keyed by tool name; see `@canvas_attachment_error_codes`
+  for why the set is the `Platform.Tasks.CanvasAttachments` boundary atoms
+  rather than the envelope `code` values.
+  """
+  @spec canvas_attachment_error_codes() :: %{String.t() => [atom()]}
+  def canvas_attachment_error_codes, do: @canvas_attachment_error_codes
+
+  @doc """
+  The subset of `canvas_attachment_error_codes/0` that reaches the caller as a
+  machine-readable `code` key rather than as prose in `error`.
+  """
+  @spec canvas_attachment_coded_errors() :: [atom()]
+  def canvas_attachment_coded_errors, do: @canvas_attachment_coded_errors
+
+  # ── ADR-0046 member 7 stage 2: task_design_decline internals ─────────────
+
+  # The closed set of refusal codes the `task_design_decline` clause can
+  # emit. The tool's `limitations` prose names exactly these, and a test
+  # compares the two sets rather than restating either — documentation that
+  # drifts from the code is worse than none, because remote runtimes branch
+  # on it.
+  @design_decline_error_codes [
+    :missing_task_id,
+    :missing_reason,
+    :task_not_found,
+    :step_not_open,
+    :decline_failed
+  ]
+
+  # A reason short enough to be a placeholder ("n/a", "none", "no") is worse
+  # than no decline at all: the step closes and the classifier observation
+  # that justified recording anything is lost. Eight graphemes is the
+  # cheapest bar that rejects every placeholder anyone actually types.
+  @design_decline_min_reason 8
+
+  @doc """
+  The closed set of `code` values `task_design_decline` refuses with.
+
+  Public so the guard that keeps the tool's `limitations` prose honest can
+  compare the documented taxonomy against the emitted one instead of
+  restating it.
+  """
+  @spec design_decline_error_codes() :: [atom()]
+  def design_decline_error_codes, do: @design_decline_error_codes
+
+  defp design_decline_task_id_arg(task_id) when is_binary(task_id) do
+    case String.trim(task_id) do
+      "" -> design_decline_error(:missing_task_id, task_id)
+      trimmed -> {:ok, trimmed}
+    end
+  end
+
+  defp design_decline_task_id_arg(task_id), do: design_decline_error(:missing_task_id, task_id)
+
+  defp design_decline_reason_arg(reason) when is_binary(reason) do
+    case String.trim(reason) do
+      trimmed when byte_size(trimmed) == 0 ->
+        design_decline_error(:missing_reason, reason)
+
+      trimmed ->
+        if String.length(trimmed) < @design_decline_min_reason do
+          design_decline_error(:missing_reason, reason)
+        else
+          {:ok, trimmed}
+        end
+    end
+  end
+
+  defp design_decline_reason_arg(reason), do: design_decline_error(:missing_reason, reason)
+
+  # `Platform.UUID.cast/1`, not a bare `Repo.get/2`: `task_id` arrives
+  # straight off an agent's tool payload, and `repo_lookup_boundary_test.exs`
+  # ratchets against bare casts on agent-facing paths. Resolving HERE rather
+  # than letting `decline/3` do it is what separates `task_not_found` from
+  # `step_not_open` — `decline/3` collapses both to `{:ok, :noop}`, and a
+  # designer who mistyped a task id must not be told her step already settled.
+  defp design_decline_task(task_id) do
+    with {:ok, uuid} <- Platform.UUID.cast(task_id),
+         %Task{} = task <- Repo.get(Task, uuid) do
+      {:ok, task}
+    else
+      _ -> design_decline_error(:task_not_found, task_id)
+    end
+  end
+
+  defp record_design_decline(%Task{} = task, note, context) do
+    case PreplanStep.decline(task, note, declined_by: resolve_attached_by(context)) do
+      {:ok, :noop} ->
+        design_decline_error(:step_not_open, task.id)
+
+      {:ok, outcome} ->
+        {:ok, design_decline_result(task, outcome)}
+
+      # UNREACHABLE from here — `design_decline_reason_arg/1` already refused
+      # every non-binary note. Mapped anyway, and mapped to `missing_reason`
+      # rather than `decline_failed`: `:invalid_note` is the caller's own bad
+      # argument, and reporting it as "the step already settled" or "the write
+      # failed" would misattribute a client error to task state.
+      {:error, :invalid_note} ->
+        design_decline_error(:missing_reason, note)
+
+      {:error, reason} ->
+        design_decline_error(:decline_failed, reason)
+    end
+  end
+
+  # `declined_after_timeout` is read back off the PERSISTED entry rather than
+  # inferred: `decline/3` returns only the outcome, and the upgrade marker is
+  # the anti-collapse property this tool's caller most needs reported.
+  defp design_decline_result(%Task{} = task, outcome) do
+    entry =
+      case Tasks.get_task_record(task.id) do
+        %Task{planning_step_outcomes: %{"design" => %{} = entry}} -> entry
+        _ -> %{}
+      end
+
+    %{
+      task_id: task.id,
+      outcome: to_string(outcome),
+      reason: PreplanStep.reasons().declined,
+      declined_after_timeout: Map.get(entry, "declined_after_timeout") == true
+    }
+  end
+
+  defp design_decline_error(:missing_task_id, task_id) do
+    design_decline_refusal(
+      :missing_task_id,
+      "task_design_decline requires task_id (non-blank string), got #{inspect(task_id)}.",
+      true,
+      "Pass the UUID printed as `task_id:` in the design dispatch prompt."
+    )
+  end
+
+  defp design_decline_error(:missing_reason, _reason) do
+    design_decline_refusal(
+      :missing_reason,
+      "reason is required and must be a non-blank string of at least #{@design_decline_min_reason} characters.",
+      true,
+      "One sentence: why this task needs no design direction. A decline with no stated reason closes the step but tells nobody whether the UI classifier misfired, which is the only thing this record is for."
+    )
+  end
+
+  defp design_decline_error(:task_not_found, task_id) do
+    design_decline_refusal(
+      :task_not_found,
+      "Task not found: #{inspect(task_id)}",
+      false,
+      "Use the `task_id` printed in the design dispatch prompt, or task_list to look it up."
+    )
+  end
+
+  # Named against the ACTUAL state, not "the step is not open": a designer who
+  # calls twice, or who declines a task the deadline already closed and reopened
+  # by some other path, has to read an explanation rather than a mystery.
+  defp design_decline_error(:step_not_open, task_id) do
+    design_decline_refusal(
+      :step_not_open,
+      "The design step for task #{task_id} is not open: it already settled, was skipped, or never fired.",
+      false,
+      "Nothing changed — a decline never overwrites a delivered canvas or a completed step. If you already attached a canvas for this task, that delivery stands. Use task_get to see the recorded planning-step outcome."
+    )
+  end
+
+  defp design_decline_error(:decline_failed, reason) do
+    design_decline_refusal(
+      :decline_failed,
+      "Failed to record the decline: #{inspect_errors_safe(reason)}",
+      true,
+      "The step was left as it was. Retry once; if it refuses again, report a blocker rather than attaching a canvas you do not believe in."
+    )
+  end
+
+  defp design_decline_refusal(code, error, recoverable, suggestion)
+       when code in @design_decline_error_codes do
+    {:error, %{code: code, error: error, recoverable: recoverable, suggestion: suggestion}}
+  end
+
+  defp locate_intent_meeting(intent_id) do
+    case Meetings.IntentQueue.locate(intent_id) do
+      {:ok, meeting_id} ->
+        {:ok, meeting_id}
+
+      {:error, :not_found} ->
+        {:error,
+         %{
+           error: "Intent not found: #{intent_id}",
+           recoverable: false,
+           suggestion:
+             "The intent queue is meeting-lifetime — if the meeting has ended its queue is gone, and there is nothing left to ack. Verify the intent_id came from a live meeting's dispatch signal."
+         }}
+    end
+  end
+
+  # Explicit string -> atom table rather than `String.to_existing_atom/1`:
+  # this is a remote-supplied value, and an allowlist that can't depend on
+  # which modules happen to be loaded is the honest way to convert it.
+  @intent_ack_statuses %{
+    "working" => :working,
+    "completed" => :completed,
+    "rejected" => :rejected,
+    "cancel_honored" => :cancel_honored
+  }
+
+  defp validate_intent_ack_status(status) when is_binary(status) do
+    case Map.fetch(@intent_ack_statuses, status) do
+      {:ok, atom} -> {:ok, atom}
+      :error -> invalid_intent_ack_status(status)
+    end
+  end
+
+  defp validate_intent_ack_status(status) when is_atom(status) and not is_nil(status) do
+    validate_intent_ack_status(Atom.to_string(status))
+  end
+
+  defp validate_intent_ack_status(status), do: invalid_intent_ack_status(status)
+
+  defp invalid_intent_ack_status(status) do
+    allowed = @intent_ack_statuses |> Map.keys() |> Enum.sort() |> Enum.join(", ")
+
+    {:error,
+     %{
+       error: "status must be one of #{allowed} (got #{inspect(status)})",
+       recoverable: true,
+       suggestion:
+         "Use `working` right after spawning the subagent, `completed` when it finishes, `rejected` if the intent isn't yours, `cancel_honored` after stopping a cancelled subagent."
+     }}
+  end
+
+  # A rejected subagent_id is EVIDENCE, not just an error: it means the
+  # runtime tried to ack and could not name a subagent. The queue counts
+  # those attempts so an eventual timeout is reported as
+  # `:no_ack_spawn_failed` (broken target) rather than `:timed_out`
+  # (nothing came back). Recording the attempt does not touch the row.
+  defp validate_intent_subagent_id(meeting_id, intent_id, supplied) do
+    case validate_subagent_id(supplied) do
+      {:ok, subagent_id} ->
+        {:ok, subagent_id}
+
+      {:error, envelope} ->
+        _ = Meetings.IntentQueue.record_rejected_ack(meeting_id, intent_id)
+        {:error, envelope}
+    end
+  end
+
+  defp apply_intent_ack(meeting_id, intent_id, subagent_id, ack_status, note) do
+    case Meetings.IntentQueue.ack(meeting_id, intent_id, subagent_id, ack_status, note) do
+      {:ok, row} ->
+        {:ok,
+         %{
+           intent_id: intent_id,
+           meeting_id: meeting_id,
+           status: row.status,
+           subagent_id: row.subagent_id,
+           acked_at: row.acked_at
+         }}
+
+      {:error, {:invalid_ack_state, current}} ->
+        {:error,
+         %{
+           error: "Intent #{intent_id} is #{current} — cannot ack it with #{ack_status}.",
+           recoverable: false,
+           suggestion:
+             "Only a dispatched or acked intent can be acked. A `queued` intent hasn't been sent to you yet; a terminal one has already been resolved (completed, cancelled, or timed out)."
+         }}
+
+      {:error, :not_found} ->
+        {:error,
+         %{
+           error: "Intent not found: #{intent_id}",
+           recoverable: false,
+           suggestion:
+             "The row was removed from its meeting's queue — most likely the meeting's producer cancelled it, or the meeting ended."
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to ack intent: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Retry once; if it persists the meeting's queue is no longer running."
+         }}
+    end
+  end
+
+  # Presence + shape guard for the `subagent_id` param on task_ack. Hard-rejects
+  # (task 019f6c73) rather than warn-and-drift: any in-flight dispatch that
+  # skips the param fails its next ack immediately rather than silently drifting
+  # into a 90-minute no-ack stall. No format policing beyond presence + byte cap
+  # so both openclaw runtime slugs (e.g. `higgins.moon`) and Claude Code
+  # Task-tool agentIds (e.g. `afd767f1e0cc81633`) fit through the same gate.
+  defp validate_subagent_id(nil) do
+    {:error,
+     %{
+       error: "subagent_id is required",
+       recoverable: true,
+       suggestion:
+         "Spawn the subagent (SuiteExecutor / SuiteReviewer via the Agent tool) FIRST, then pass its returned agent id here."
+     }}
+  end
+
+  defp validate_subagent_id(id) when is_binary(id) do
+    cond do
+      id == "" ->
+        {:error,
+         %{
+           error: "subagent_id is required",
+           recoverable: true,
+           suggestion:
+             "Spawn the subagent (SuiteExecutor / SuiteReviewer via the Agent tool) FIRST, then pass its returned agent id here."
+         }}
+
+      String.trim(id) == "" ->
+        {:error,
+         %{
+           error: "subagent_id must not be whitespace-only",
+           recoverable: true,
+           suggestion:
+             "subagent_id was whitespace-only — pass the spawn call's returned agent id verbatim."
+         }}
+
+      byte_size(id) > 128 ->
+        {:error,
+         %{
+           error: "subagent_id exceeds 128 bytes",
+           recoverable: true,
+           suggestion:
+             "Truncate to the spawn call's returned id — free-form annotations don't belong in this field."
+         }}
+
+      true ->
+        {:ok, id}
+    end
+  end
+
+  defp validate_subagent_id(_) do
+    {:error,
+     %{
+       error: "subagent_id must be a string",
+       recoverable: true,
+       suggestion:
+         "Pass the spawn call's returned agent id as a plain string (e.g. `higgins.moon` or `afd767f1e0cc81633`)."
+     }}
+  end
+
+  # Prefer the explicit stage_id from args; otherwise resolve from the
+  # task's current plan. Both branches return {:ok, stage_id} or the
+  # `:no_running_stage` error the caller reports back to the runtime.
+  defp resolve_ack_stage_id(_task_id, stage_id) when is_binary(stage_id) and stage_id != "",
+    do: {:ok, stage_id}
+
+  defp resolve_ack_stage_id(task_id, _) do
+    case Tasks.current_plan(task_id) do
+      nil ->
+        {:error, :no_running_stage}
+
+      plan ->
+        case Enum.find(plan.stages || [], &(&1.status == "running")) do
+          nil -> {:error, :no_running_stage}
+          stage -> {:ok, stage.id}
+        end
+    end
+  end
+
+  # Persist + broadcast the execution.acked runtime_event and refresh the
+  # LeaseManager row belt-and-braces. Returns the tool envelope with
+  # `next_safety_net_at` reflecting whatever the lease now holds (nil
+  # when no lease is armed — planning phase or manual_approval stages).
+  defp emit_task_ack(task_id, stage_id, subagent_id, context) do
+    acked_at = DateTime.utc_now()
+
+    attrs = %{
+      "task_id" => task_id,
+      "phase" => current_phase_for_blocker(task_id),
+      "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
+      "event_type" => "execution.acked",
+      "execution_space_id" => execution_space_id_for_task(task_id),
+      "occurred_at" => acked_at,
+      "payload" => %{
+        "stage_id" => stage_id,
+        "acked_at" => DateTime.to_iso8601(acked_at),
+        "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
+        "subagent_id" => subagent_id
+      }
+    }
+
+    # LeaseManager write is best-effort — a `:not_found` here is expected
+    # when the router hasn't recorded the dispatch yet (boot race, or the
+    # ack raced ahead of the arm-liveness path). The runtime_event still
+    # persists and the router's own `apply_runtime_event/2` clause will
+    # call `record_ack/1` again when the PubSub broadcast arrives.
+    # Task 01a007bf stage 4: match on the return so the `:not_found` is
+    # visible in the log instead of vanishing into `_`. Worded as
+    # "expected" — this site runs BEFORE `record_runtime_event/1`.
+    case Platform.Orchestration.LeaseManager.record_ack(task_id) do
+      :ok ->
+        :ok
+
+      {:error, :not_found} ->
+        Logger.warning(
+          "[ToolSurface.task_ack] task #{task_id} stage #{stage_id} — LeaseManager.record_ack/1 returned :not_found: no ETS lease armed yet (expected during the dispatch race); the durable execution.acked row is still being written. No operator action needed."
+        )
+    end
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, event} ->
+        next_safety_net_at =
+          case Platform.Orchestration.LeaseManager.get(task_id) do
+            %{safety_net_at: %DateTime{} = ts} -> ts
+            _ -> nil
+          end
+
+        {:ok,
+         %{
+           task_id: task_id,
+           stage_id: stage_id,
+           event_id: event.id,
+           acked_at: acked_at,
+           next_safety_net_at: next_safety_net_at
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to record ack: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Retry task_ack or push validation_pass evidence to prove liveness."
+         }}
+    end
+  end
+
+  defp validate_alarm_silence_task_id(nil), do: alarm_silence_missing_field_error("task_id")
+  defp validate_alarm_silence_task_id(""), do: alarm_silence_missing_field_error("task_id")
+  defp validate_alarm_silence_task_id(id) when is_binary(id), do: :ok
+  defp validate_alarm_silence_task_id(_), do: alarm_silence_missing_field_error("task_id")
+
+  defp validate_alarm_silence_until_seconds(nil),
+    do: alarm_silence_missing_field_error("until_seconds")
+
+  defp validate_alarm_silence_until_seconds(n) when is_integer(n) and n >= 60 and n <= 86_400,
+    do: :ok
+
+  defp validate_alarm_silence_until_seconds(_) do
+    {:error,
+     %{
+       error: "until_seconds must be an integer in the range 60..86_400 (1m..24h)",
+       recoverable: true,
+       suggestion:
+         "Pass a positive integer between 60 (1 minute floor) and 86_400 (24 hour cap). Re-silence if you need to extend."
+     }}
+  end
+
+  defp validate_alarm_silence_reason(reason)
+       when is_binary(reason) and byte_size(reason) >= 8,
+       do: :ok
+
+  defp validate_alarm_silence_reason(_) do
+    {:error,
+     %{
+       error: "reason must be a string of at least 8 characters",
+       recoverable: true,
+       suggestion:
+         "Describe why you're silencing the alarm — the reason is audit-logged so operators can later explain the override."
+     }}
+  end
+
+  defp alarm_silence_missing_field_error(field) do
+    {:error,
+     %{
+       error: "#{field} is required",
+       recoverable: true,
+       suggestion:
+         "alarm_silence needs task_id, until_seconds (60..86_400), and reason (>= 8 chars). Optional: stage_id (resolves from current running stage if omitted)."
+     }}
+  end
+
+  defp fetch_alarm_silence_task(task_id) do
+    case Tasks.get_task_record(task_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Task not found: #{task_id}",
+           recoverable: false,
+           suggestion:
+             "Verify the task_id matches your dispatch payload; use task_list to enumerate live tasks."
+         }}
+
+      task ->
+        {:ok, task}
+    end
+  end
+
+  # Persist the runtime_event, emit telemetry, and call LeaseManager.silence/3.
+  # The LeaseManager call is the source of truth for the router — if it
+  # returns :not_found, we surface a recoverable error without emitting
+  # audit noise for a lease that doesn't exist.
+  defp emit_alarm_silence(task_id, stage_id, until, reason, context) do
+    case Platform.Orchestration.LeaseManager.silence(task_id, until, reason) do
+      :ok ->
+        record_alarm_silence_side_effects(task_id, stage_id, until, reason, context)
+
+      {:error, :not_found} ->
+        {:error,
+         %{
+           error: "No active lease for task #{task_id} — dispatch not yet recorded.",
+           recoverable: true,
+           suggestion:
+             "Wait for the router to arm liveness (typically <1s post-dispatch) then retry."
+         }}
+
+      {:error, :invalid_until} ->
+        {:error,
+         %{
+           error: "silenced_until must be strictly in the future",
+           recoverable: true,
+           suggestion:
+             "The lease manager rejected the computed silenced_until as non-future — this usually means clock skew; try a slightly larger until_seconds."
+         }}
+
+      {:error, :cap_exceeded} ->
+        {:error,
+         %{
+           error: "silenced_until exceeds the 24h cap",
+           recoverable: true,
+           suggestion:
+             "Silence is capped at 24 hours to prevent indefinite alarm suppression. Use a smaller until_seconds and re-silence if the condition persists."
+         }}
+    end
+  end
+
+  defp record_alarm_silence_side_effects(task_id, stage_id, until, reason, context) do
+    silenced_at = DateTime.utc_now()
+    runtime_id = Map.get(context, :runtime_id) || "tool-surface"
+
+    attrs = %{
+      "task_id" => task_id,
+      "phase" => current_phase_for_blocker(task_id),
+      "runtime_id" => runtime_id,
+      "event_type" => "execution.alarm_silenced",
+      "execution_space_id" => execution_space_id_for_task(task_id),
+      "occurred_at" => silenced_at,
+      "payload" => %{
+        "stage_id" => stage_id,
+        "silenced_until" => DateTime.to_iso8601(until),
+        "reason" => reason,
+        "runtime_id" => runtime_id
+      }
+    }
+
+    # Persist the runtime_event first — it's the durable audit trail and
+    # PubSub broadcast target. Telemetry is fire-and-forget on top; a
+    # runtime_event persist failure returns an error envelope without
+    # emitting telemetry (which would create an audit row for a silence
+    # that never actually landed in the event stream).
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, _event} ->
+        # silenced_until is passed as ISO-8601 because the audit
+        # TelemetryHandler's ensure_json_safe/1 recurses into maps and
+        # DateTime (which IS a map) doesn't implement Enumerable — an
+        # unwrapped %DateTime{} in the metadata crashes the handler.
+        # actor_type is "system" (not "runtime") because
+        # Platform.Audit.Event's actor_type enum only accepts
+        # system|user|agent|anonymous|federated_user, and actor_id is
+        # left nil because runtime IDs are opaque strings, not UUIDs
+        # (the schema casts actor_id as Ecto.UUID). runtime_id + the
+        # opaque caller identity ride in metadata for correlation.
+        :telemetry.execute(
+          [:platform, :orchestration, :alarm_silence],
+          %{count: 1},
+          %{
+            task_id: task_id,
+            stage_id: stage_id,
+            silenced_until: DateTime.to_iso8601(until),
+            reason: reason,
+            runtime_id: runtime_id,
+            actor_type: "system",
+            resource_type: "task",
+            resource_id: task_id,
+            action: "silence"
+          }
+        )
+
+        {:ok,
+         %{
+           task_id: task_id,
+           stage_id: stage_id,
+           silenced_until: until,
+           reason: reason
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to record alarm silence: #{inspect(reason)}",
+           recoverable: true,
+           suggestion:
+             "Retry alarm_silence. LeaseManager.silence has already applied; the runtime_event will re-emit on retry."
+         }}
+    end
+  end
+
+  # Resolves a task's declared dependency entries into the canonical
+  # `[%{task_id, title, kind, status}]` shape, preserving the order the
+  # author wrote them in. Missing/deleted dep ids return entries with
+  # `title: nil` and `status: nil` but always carry the `task_id` and
+  # `kind` from the source map (so callers can still see the broken
+  # reference rather than silently dropping it).
+  defp build_dependency_entries(%Task{dependencies: deps}) when is_list(deps) do
+    ids =
+      deps
+      |> Enum.map(&Map.get(&1, "task_id"))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    rows_by_id =
+      case ids do
+        [] ->
+          %{}
+
+        ids ->
+          Repo.all(
+            from(t in Task,
+              where: t.id in ^ids,
+              select: %{id: t.id, title: t.title, status: t.status}
+            )
+          )
+          |> Map.new(&{&1.id, &1})
+      end
+
+    Enum.map(deps, fn dep ->
+      task_id = Map.get(dep, "task_id")
+      kind = Map.get(dep, "kind")
+      row = Map.get(rows_by_id, task_id)
+
+      %{
+        task_id: task_id,
+        title: row && row.title,
+        kind: kind,
+        status: row && row.status
+      }
+    end)
+  end
+
+  defp build_dependency_entries(_), do: []
+
+  # Inverse: tasks that declare this task as one of their dependencies.
+  # Uses the same JSONB containment query the unblock sweep relies on
+  # (`fragment("? @> ?", t.dependencies, ^[%{"task_id" => id}])`). Sorted
+  # by `inserted_at` so the result is deterministic across runs.
+  defp build_dependent_entries(%Task{id: id}) do
+    match = [%{"task_id" => id}]
+
+    Repo.all(
+      from(t in Task,
+        where:
+          fragment("? @> ?", t.dependencies, ^match) and
+            is_nil(t.deleted_at),
+        order_by: [asc: t.inserted_at, asc: t.id],
+        select: %{id: t.id, title: t.title, status: t.status}
+      )
+    )
+    |> Enum.map(fn row -> %{task_id: row.id, title: row.title, status: row.status} end)
+  end
+
+  # Nilable-semantics writer: only `sponsor_user_id` propagates explicit
+  # nil (clears the slot); `name` and `description` are dropped when
+  # omitted OR when nil (unset ≠ clear for those). Mirrors the
+  # `TaskAttrs.build_task_attrs/3` contract for the stack surface.
+  defp build_stack_update_attrs(args) do
+    base = %{}
+
+    base =
+      case Map.fetch(args, "name") do
+        {:ok, nil} -> base
+        {:ok, value} -> Map.put(base, :name, value)
+        :error -> base
+      end
+
+    base =
+      case Map.fetch(args, "description") do
+        {:ok, nil} -> base
+        {:ok, value} -> Map.put(base, :description, value)
+        :error -> base
+      end
+
+    case Map.fetch(args, "sponsor_user_id") do
+      {:ok, value} -> Map.put(base, :sponsor_user_id, value)
+      :error -> base
+    end
+  end
+
   # Build the `attrs_by_phase` map from the tool args. If any per-phase id
   # (`planning`/`execution`/`review`) is present, advanced mode is used and
   # the simple `assignee_id` is ignored; otherwise simple mode applies the
@@ -6566,7 +7461,7 @@ defmodule Platform.Federation.ToolSurface do
          errors,
          edges_authored,
          edges_skipped_reason,
-         opts \\ []
+         opts
        ) do
     payload =
       stack
@@ -6950,50 +7845,6 @@ defmodule Platform.Federation.ToolSurface do
   defp maybe_put_boolean(attrs, key, value) when is_boolean(value), do: Map.put(attrs, key, value)
   defp maybe_put_boolean(attrs, _key, _value), do: attrs
 
-  # ── Plan / Stage / Validation tools ──────────────────────────────────────
-
-  def execute("plan_create", args, _context) do
-    task_id = Map.get(args, "task_id")
-    raw_stages_input = Map.get(args, "stages", [])
-
-    # Task 01a006d1 stage 3 — the gate runs BEFORE the rewrite pipe and before
-    # the transaction opens, so a refused plan writes nothing at all. Rejecting
-    # after a draft row exists would leave the author unable to retry
-    # (`plan_create` refuses while a draft/pending_review plan is live), which
-    # is the same lockout this guard exists to prevent.
-    #
-    # Task 01a00b91 stage 3 chains a SECOND guard into the same pre-transaction
-    # position for the same reason: a manual_approval that cannot name the UI
-    # surface it will show is refused before anything is written. Both guards
-    # run before `do_plan_create/2`; neither may move below the rewrite pipe.
-    #
-    # PROBE RECORD (01a00b91 stage 5). PROBE C moved the
-    # `detect_unnamed_manual_gate/1` call from here to AFTER `Tasks.create_plan/1`,
-    # returning the same envelope from inside the transaction so the draft row
-    # committed. Predicted: the persistence control detonates and NOTHING ELSE
-    # does. That is exactly what happened, on the full suite — one failure,
-    # `assert Tasks.latest_plan(task.id) == nil`, left a `%Plan{status: "draft"}`.
-    # Every envelope assertion in the same test passed under the mutant, which
-    # is the point: the envelope is byte-identical whether or not a draft was
-    # left behind, so the nil check is the ONLY instrument that sees this
-    # ordering. Delete that one assertion and this line is free to move.
-    # (Two `Platform.Execution.ProofRunTest` failures in the same run are the
-    # known IO-contention flake; re-run green in isolation.)
-    case Platform.Tasks.PlanEngine.detect_e2e_host_collision(raw_stages_input) do
-      {:error, info} ->
-        {:error, e2e_host_collision_envelope(info)}
-
-      :ok ->
-        case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(raw_stages_input) do
-          {:error, info} ->
-            {:error, unnamed_manual_gate_envelope(info)}
-
-          :ok ->
-            do_plan_create(task_id, raw_stages_input)
-        end
-    end
-  end
-
   defp do_plan_create(task_id, raw_stages_input) do
     # Pre-persistence rewrites:
     # 1. Lift any e2e_behavior validations into a single task-level review stage.
@@ -7137,227 +7988,6 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
-  # Task 01a006c2 stage 3 — `plan_get` widened with an explicit,
-  # default-preserving `status`. Deliberately NOT a sibling tool: a sibling
-  # means a caller must know to try a second tool after the first says
-  # not-found, which is precisely the round trip that cost an agent a cycle
-  # when it could not read a rejected plan's `rejection_reason`.
-  #
-  # The `"id"` alias is kept because the registration declares it — removing
-  # it here would make the registration lie to callers. What is added is the
-  # guard: a call naming NO task used to fall into `current_plan(nil)` and
-  # come back "No approved plan for task", a confident answer about a task
-  # the caller never identified.
-  #
-  # Cross-tenant fix (01a006c2, post-e2e): this clause used to take `_context`
-  # and no authorization ran anywhere in the chain, so any agent that could
-  # name a task_id read its plan. Stage 3 widened the OUTPUT CLASS — rejected
-  # and pending_review plans carry `rejection_reason` and
-  # `architecture_verdict`, human-written prose — which re-opened the
-  # authorization question on a line the stage never edited. The check is the
-  # same `authorize_review_access/2` stages 1 and 2 use, and it runs BEFORE
-  # `plan_get_resolution/1` and any serialization so the denial envelope
-  # carries no plan id, no status, no rejection prose. It runs before the
-  # status parse too: a denied caller must not learn which statuses exist.
-  # Omitting `status` is authorized identically — that is the path every
-  # existing caller uses — and its not-found envelope is untouched.
-  def execute("plan_get", args, context) do
-    task_id = Map.get(args, "task_id") || Map.get(args, "id")
-
-    with {:ok, task_id} <- require_string(%{"task_id" => task_id}, "task_id", "plan_get"),
-         :ok <- authorize_review_access(context, task_id),
-         {:ok, resolution} <- plan_get_resolution(args),
-         {:ok, plan} <- resolve_plan_by_status(task_id, resolution) do
-      {:ok, serialize_plan(Repo.preload(plan, stages: :validations))}
-    end
-  end
-
-  def execute("plan_submit", args, _context) do
-    plan_id = Map.get(args, "plan_id")
-
-    case Tasks.get_plan(plan_id) do
-      nil ->
-        {:error,
-         %{
-           error: "Plan not found: #{plan_id}",
-           recoverable: false,
-           suggestion: "Use plan_create to create a plan first"
-         }}
-
-      plan ->
-        case Tasks.submit_plan_for_review(plan) do
-          {:ok, updated} ->
-            {:ok, serialize_plan(Repo.preload(updated, :stages))}
-
-          {:error, :invalid_transition} ->
-            {:error,
-             %{
-               error:
-                 "Plan must be in draft status to submit for review (current: #{plan.status})",
-               recoverable: false,
-               suggestion: "Only draft plans can be submitted for review"
-             }}
-
-          {:error, reason} ->
-            {:error,
-             %{
-               error: "Failed to submit plan: #{inspect(reason)}",
-               recoverable: true,
-               suggestion: "Check the plan status"
-             }}
-        end
-    end
-  end
-
-  def execute("plan_approve", args, _context) do
-    plan_id = Map.get(args, "plan_id")
-    approved_by = Map.get(args, "approved_by", "system")
-
-    case get_by_uuid(Plan, plan_id) do
-      nil ->
-        {:error,
-         %{
-           error: "Plan not found: #{plan_id}",
-           recoverable: false,
-           suggestion: "Use plan_get to find the plan ID for a task"
-         }}
-
-      plan ->
-        case Tasks.approve_plan(plan, approved_by) do
-          {:ok, approved} ->
-            {:ok,
-             %{
-               id: approved.id,
-               task_id: approved.task_id,
-               status: approved.status,
-               approved_by: approved.approved_by
-             }}
-
-          {:error, :invalid_transition} ->
-            {:error,
-             %{
-               error: "Cannot approve plan with status #{plan.status}. Must be pending_review.",
-               recoverable: true,
-               suggestion: "Use plan_submit first to move the plan to pending_review"
-             }}
-
-          # ADR-0046 member 5 stage 3. This tool is the agent-reachable
-          # approval writer: it lives in the `plan` capability bundle and
-          # defaults `approved_by` to `"system"`, so without an explicit
-          # arm here the refusal would arrive as an untyped
-          # "Failed to approve plan" with no suggestion. The guard itself
-          # is in `Tasks.approve_plan/3`, not here — this arm only names it.
-          {:error, :architecture_gate_open} ->
-            {:error,
-             %{
-               error:
-                 "Plan #{plan_id} is held by the architecture gate: the architect has not returned a verdict yet.",
-               recoverable: true,
-               suggestion:
-                 "Wait for the architect's verdict or the gate deadline. An agent cannot approve past an open gate; a human reviewer can, from the task UI."
-             }}
-
-          {:error, reason} ->
-            {:error, %{error: "Failed to approve plan: #{inspect(reason)}", recoverable: true}}
-        end
-    end
-  end
-
-  # ── ADR-0046 member 5 stage 4: the architect's verdict surface ────────
-  #
-  # ONE of the two ways a verdict gets in (the other is
-  # `Handlers.ArchitectureReviewPlan.handle_output/3`, for an external
-  # architect that can only reply with text). Neither re-implements the
-  # state machine: both end in `Tasks.resolve_architecture_gate/3`, the
-  # single exit stage 3 built, which is one-shot because it arbitrates on
-  # the persisted row. A duplicate call is therefore harmless — it lands
-  # on `gate_already_resolved` and changes nothing.
-  #
-  # THE CONTRACT IS ENFORCED HERE, NOT REQUESTED IN THE PROMPT.
-  # `0046-design-and-architecture-phases-in-planning.md § Architect prompt contract`
-  # says the architect rejects for architecture and explicitly
-  # not for taste, naming or style. "Don't reject for style" is
-  # unenforceable as prose — it produces a differently-worded rejection,
-  # not a better one. A closed `constraint` vocabulary means a style
-  # objection has NO REPRESENTABLE VALUE. Stage 1 asserted that at the
-  # schema layer; this asserts it at the boundary an agent actually
-  # touches, because the schema is only reached by callers who already
-  # decided to write.
-  #
-  # Every refusal carries a `code` and every code is named in the tool's
-  # `limitations`, with a test that the two sets are equal.
-  def execute("plan_architecture_verdict", args, context) do
-    plan_id = Map.get(args, "plan_id")
-
-    with {:ok, plan} <- verdict_plan(plan_id),
-         {:ok, resolution} <- verdict_resolution_arg(Map.get(args, "verdict")),
-         {:ok, summary} <- verdict_summary_arg(Map.get(args, "summary")),
-         {:ok, findings} <- verdict_findings_arg(Map.get(args, "findings"), resolution, plan),
-         :ok <- verdict_gate_open(plan) do
-      resolve_architecture_verdict(plan, resolution, summary, findings, context)
-    end
-  end
-
-  # Task 019fa61c stage 3. The counterpart to `plan_architecture_verdict`
-  # above, for the OTHER architect surface — and the reason this task
-  # exists. `review_plan` was observable because it had a tool that wrote
-  # a row; `audit_diff` asked for a side effect in prose and named no tool
-  # at all, so 28 fires in a 3.3-hour window left no evidence anywhere.
-  #
-  # This clause validates and refuses; it does not implement the state
-  # machine. Everything past the argument checks goes through
-  # `StageAudit.record_note/3`, the single writer that persists the row
-  # and posts the annotation together. The tool RESOLVES the stage itself
-  # rather than letting `record_note/3` do it, for the same reason
-  # `task_design_decline` resolves its own task: it is what separates
-  # `stage_not_found` from `audit_not_open`, and an architect who mistyped
-  # a stage id must not be told the audit already closed.
-  #
-  # Every refusal carries a `code` and every code is named in the tool's
-  # `limitations`, with a test that the two sets are equal.
-  def execute("stage_architecture_audit", args, context) do
-    with {:ok, stage} <- stage_audit_stage(Map.get(args, "stage_id")),
-         {:ok, summary} <- stage_audit_summary_arg(Map.get(args, "summary")),
-         {:ok, findings} <- stage_audit_findings_arg(Map.get(args, "findings")) do
-      record_stage_audit_note(stage, summary, findings, context)
-    end
-  end
-
-  def execute("stage_start", args, _context) do
-    stage_id = Map.get(args, "stage_id")
-
-    case PlanEngine.start_stage(stage_id) do
-      {:ok, stage} ->
-        {:ok, serialize_stage(stage)}
-
-      {:error, :invalid_transition} ->
-        {:error,
-         %{
-           error: "Stage must be in pending status to start",
-           recoverable: false,
-           suggestion: "Check the stage's current status with stage_list"
-         }}
-
-      {:error, reason} ->
-        {:error,
-         %{
-           error: "Failed to start stage: #{inspect(reason)}",
-           recoverable: true,
-           suggestion: "Verify the stage_id is valid"
-         }}
-    end
-  end
-
-  def execute("stage_list", args, _context) do
-    with {:ok, plan_id} <- resolve_stage_list_plan(args) do
-      stages =
-        Tasks.list_stages(plan_id)
-        |> Repo.preload(:validations)
-
-      {:ok, Enum.map(stages, &serialize_stage_with_validations/1)}
-    end
-  end
-
   # ── stage_list plan resolution (task 019fa609 stage 5) ──────────────────
   #
   # `stage_list` accepts `plan_id` OR `task_id`. That is a CONDITIONAL
@@ -7497,387 +8127,8 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
-  def execute("validation_evaluate", args, _context) do
-    validation_id = Map.get(args, "validation_id")
-    status = Map.get(args, "status")
-    evidence = Map.get(args, "evidence", %{})
-    evaluated_by = Map.get(args, "evaluated_by", "system")
-
-    unless status in ~w(passed failed) do
-      {:error,
-       %{
-         error: "Invalid status: #{inspect(status)}. Must be \"passed\" or \"failed\"",
-         recoverable: true,
-         suggestion: "Use status \"passed\" or \"failed\""
-       }}
-    else
-      case PlanEngine.evaluate_validation(validation_id, %{
-             status: status,
-             evidence: evidence,
-             evaluated_by: evaluated_by
-           }) do
-        {:ok, validation} ->
-          {:ok, serialize_validation(validation)}
-
-        {:error, reason} ->
-          {:error,
-           %{
-             error: "Failed to evaluate validation: #{inspect(reason)}",
-             recoverable: true,
-             suggestion: "Verify the validation_id is valid"
-           }}
-      end
-    end
-  end
-
-  def execute("validation_pass", args, context) do
-    execute(
-      "validation_evaluate",
-      %{
-        "validation_id" => Map.get(args, "validation_id"),
-        "status" => "passed",
-        "evidence" => Map.get(args, "evidence", %{}),
-        "evaluated_by" => Map.get(args, "evaluated_by", "system")
-      },
-      context
-    )
-  end
-
-  def execute("stage_complete", args, context) do
-    stage_id = Map.get(args, "stage_id") || Map.get(args, "id")
-    completed_by = Map.get(context, :agent_id) || Map.get(context, :user_id) || "agent"
-
-    # NOTE: superseded-plan guard runs BEFORE :not_running / :pending_validations
-    # so an executor whose task was returned-to-planning mid-flight gets a
-    # decisive stop signal (recoverable: false) rather than a retry-friendly
-    # "pending validations" hint. `&&` (not `||`) is the correct operator for
-    # the negative-guard pattern here: a `false` helper result short-circuits
-    # to `false`, which matches `false <-` and continues the chain; a `true`
-    # result yields `{:error, :plan_superseded}` for the else branch.
-    with %Stage{} = stage <- get_by_uuid(Stage, stage_id),
-         %Plan{} = current_plan <- Repo.get(Plan, stage.plan_id),
-         false <- plan_superseded?(current_plan) && {:error, :plan_superseded},
-         true <- stage.status in ["running", "passed"] || {:error, :not_running},
-         validations <- Tasks.list_validations(stage.id),
-         true <-
-           Enum.all?(validations, &(&1.status == "passed")) || validations == [] ||
-             {:error, :pending_validations},
-         # Scoped to the asserted stage (task 019fec3a): the admission guard
-         # above deliberately accepts an already-`passed` stage so idempotent
-         # re-calls succeed, but such a call must not advance a stage it does
-         # not name. `advance/2` no-ops unless `stage` IS the current stage.
-         {:ok, advanced_plan} <-
-           PlanEngine.advance(stage.plan_id,
-             stage_id: stage.id,
-             completed_by: completed_by
-           ) do
-      fresh_stage = Enum.find(advanced_plan.stages || [], &(&1.id == stage.id))
-
-      {:ok,
-       %{
-         stage_id: stage.id,
-         stage_status: fresh_stage && fresh_stage.status,
-         plan_id: advanced_plan.id,
-         plan_status: advanced_plan.status
-       }}
-    else
-      nil ->
-        {:error,
-         %{
-           error: "Stage not found: #{inspect(stage_id)}",
-           recoverable: true,
-           suggestion: "Verify the stage_id is valid"
-         }}
-
-      {:error, :plan_superseded} ->
-        {:error,
-         %{
-           error: "plan_superseded",
-           recoverable: false,
-           suggestion:
-             "This task has been returned to planning; the current plan is superseded. Stop this executor — a new plan will dispatch a fresh execution when approved."
-         }}
-
-      {:error, :not_running} ->
-        {:error,
-         %{
-           error: "Stage must be running before it can be completed",
-           recoverable: false,
-           suggestion: "Use stage_list to inspect the current stage status"
-         }}
-
-      {:error, :pending_validations} ->
-        {:error,
-         %{
-           error: "Stage still has pending or failed validations",
-           recoverable: true,
-           suggestion: "Use validation_pass or validation_evaluate before stage_complete"
-         }}
-
-      {:error, reason} ->
-        {:error,
-         %{
-           error: "Failed to complete stage: #{inspect(reason)}",
-           recoverable: true,
-           suggestion: "Verify the stage state and validations"
-         }}
-    end
-  end
-
   defp plan_superseded?(%Plan{status: "superseded"}), do: true
   defp plan_superseded?(_), do: false
-
-  def execute("report_blocker", args, context) do
-    task_id = Map.get(args, "task_id")
-    stage_id = Map.get(args, "stage_id")
-    description = Map.get(args, "description")
-    needs_human = Map.get(args, "needs_human", false)
-
-    attrs = %{
-      "task_id" => task_id,
-      "phase" => current_phase_for_blocker(task_id),
-      "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
-      "event_type" => "execution.blocked",
-      "execution_space_id" => execution_space_id_for_task(task_id),
-      "payload" => %{
-        "stage_id" => stage_id,
-        "description" => description,
-        "needs_human" => needs_human,
-        "reported_by" => Map.get(context, :agent_id) || "agent"
-      }
-    }
-
-    case Platform.Orchestration.record_runtime_event(attrs) do
-      {:ok, event} ->
-        if needs_human do
-          if space_id = execution_space_id_for_task(task_id) do
-            Platform.Orchestration.ExecutionSpace.post_engagement(
-              space_id,
-              "Blocker reported: #{description}",
-              metadata: %{"reason" => "runtime_blocker", "stage_id" => stage_id}
-            )
-          end
-        end
-
-        {:ok, %{event_id: event.id, task_id: task_id, stage_id: stage_id, blocked: true}}
-
-      {:error, reason} ->
-        {:error,
-         %{
-           error: "Failed to record blocker: #{inspect(reason)}",
-           recoverable: true,
-           suggestion: "Retry the blocker report or post the blocker in the execution space"
-         }}
-    end
-  end
-
-  def execute("validation_list", args, _context) do
-    stage_id = Map.get(args, "stage_id")
-    validations = Tasks.list_validations(stage_id)
-    {:ok, Enum.map(validations, &serialize_validation/1)}
-  end
-
-  def execute("prompt_template_list", _args, _context) do
-    templates = Platform.Orchestration.PromptTemplates.list_templates()
-
-    result =
-      Enum.map(templates, fn t ->
-        %{
-          slug: t.slug,
-          name: t.name,
-          description: t.description,
-          variables: t.variables,
-          updated_by: t.updated_by,
-          updated_at: format_datetime(t.updated_at)
-        }
-      end)
-
-    {:ok, result}
-  end
-
-  def execute("prompt_template_update", args, _context) do
-    slug = Map.get(args, "slug")
-    content = Map.get(args, "content")
-
-    case Platform.Orchestration.PromptTemplates.get_template_by_slug(slug) do
-      nil ->
-        {:error,
-         %{
-           error: "Template not found: #{slug}",
-           recoverable: true,
-           suggestion: "Use prompt_template_list to see available slugs, or check spelling"
-         }}
-
-      template ->
-        case Platform.Orchestration.PromptTemplates.update_template(template, %{
-               "content" => content,
-               "updated_by" => "agent"
-             }) do
-          {:ok, updated} ->
-            {:ok,
-             %{
-               slug: updated.slug,
-               name: updated.name,
-               description: updated.description,
-               variables: updated.variables,
-               updated_by: updated.updated_by,
-               updated_at: format_datetime(updated.updated_at)
-             }}
-
-          {:error, changeset} ->
-            {:error,
-             %{
-               error: "Failed to update template: #{inspect_errors_safe(changeset)}",
-               recoverable: true,
-               suggestion: "Check that content is not empty"
-             }}
-        end
-    end
-  end
-
-  # ── Federation tools ─────────────────────────────────────────────────
-
-  def execute("federation_status", _args, _context) do
-    status = Platform.Federation.federation_status()
-
-    runtimes =
-      Enum.map(status, fn r ->
-        %{
-          runtime_id: r.runtime_id,
-          agent_name: r.agent_name,
-          agent_slug: r.agent_slug,
-          online: r.online,
-          connected_at: format_datetime(r.connected_at),
-          last_seen_at: format_datetime(r.last_seen_at),
-          last_connected_at: format_datetime(r.last_connected_at)
-        }
-      end)
-
-    {:ok, %{runtimes: runtimes}}
-  end
-
-  # ── Memory tool dispatch (ADR-0041 T5) ──────────────────────────────────
-  # Thin adapter: every clause gates through `Wiki.Routing` then routes to
-  # `Wiki` (pages/private) or `Wiki.Journal` (journal). No direct `Repo`
-  # calls here — the routing+domain modules own DB access.
-
-  def execute("memory_view", args, context) do
-    with {:ok, path} <- require_string(args, "path", "memory_view"),
-         agent = load_agent(context),
-         :ok <- gate_to_envelope(Routing.gate_read(agent, path)) do
-      class = Routing.classify(path)
-      workspace_id = Map.get(args, "workspace_id")
-      view_range = Map.get(args, "view_range")
-
-      case class.kind do
-        :page -> view_page(path, view_range, workspace_id, class)
-        :private -> view_page(path, view_range, workspace_id, class)
-        :journal -> view_journal(path, class, view_range, workspace_id)
-      end
-    end
-  end
-
-  def execute("memory_create", args, context) do
-    with {:ok, path} <- require_string(args, "path", "memory_create"),
-         {:ok, text} <- require_string(args, "file_text", "memory_create"),
-         agent = load_agent(context) do
-      class = Routing.classify(path)
-      workspace_id = Map.get(args, "workspace_id")
-
-      existing =
-        if class.kind in [:page, :private],
-          do: Wiki.get_page(path, workspace_id: workspace_id),
-          else: nil
-
-      gate_opts = if existing, do: [existing_page: existing], else: []
-
-      case gate_to_envelope(Routing.gate_write(agent, path, gate_opts)) do
-        :ok ->
-          do_memory_create(class, path, text, agent, workspace_id)
-
-        {:error, _} = err ->
-          err
-      end
-    end
-  end
-
-  def execute("memory_str_replace", args, context) do
-    with {:ok, path} <- require_string(args, "path", "memory_str_replace"),
-         {:ok, old_str} <- require_string(args, "old_str", "memory_str_replace"),
-         {:ok, new_str} <- require_string(args, "new_str", "memory_str_replace"),
-         agent = load_agent(context),
-         :ok <- ensure_page_kind(path, "memory_str_replace"),
-         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
-         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
-      apply_str_replace(existing, path, old_str, new_str, agent, Map.get(args, "workspace_id"))
-    end
-  end
-
-  def execute("memory_insert", args, context) do
-    with {:ok, path} <- require_string(args, "path", "memory_insert"),
-         {:ok, insert_text} <- require_string(args, "insert_text", "memory_insert"),
-         {:ok, insert_line} <- require_integer(args, "insert_line", "memory_insert"),
-         agent = load_agent(context),
-         :ok <- ensure_page_kind(path, "memory_insert"),
-         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
-         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
-      apply_insert(existing, path, insert_line, insert_text, agent, Map.get(args, "workspace_id"))
-    end
-  end
-
-  def execute("memory_delete", args, context) do
-    with {:ok, path} <- require_string(args, "path", "memory_delete"),
-         agent = load_agent(context),
-         :ok <- ensure_page_kind(path, "memory_delete"),
-         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
-         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
-      do_memory_delete(path, Map.get(args, "workspace_id"))
-    end
-  end
-
-  def execute("memory_rename", args, context) do
-    with {:ok, old_path} <- require_string(args, "old_path", "memory_rename"),
-         {:ok, new_path} <- require_string(args, "new_path", "memory_rename"),
-         agent = load_agent(context),
-         workspace_id = Map.get(args, "workspace_id"),
-         :ok <- ensure_page_kind(old_path, "memory_rename"),
-         :ok <- ensure_page_kind(new_path, "memory_rename"),
-         :ok <- ensure_same_kind(old_path, new_path),
-         existing_old = Wiki.get_page(old_path, workspace_id: workspace_id),
-         existing_new = Wiki.get_page(new_path, workspace_id: workspace_id),
-         :ok <-
-           gate_to_envelope(Routing.gate_write(agent, old_path, existing_page: existing_old)),
-         :ok <-
-           gate_to_envelope(Routing.gate_write(agent, new_path, existing_page: existing_new)) do
-      do_memory_rename(old_path, new_path, agent, workspace_id)
-    end
-  end
-
-  # ── memory_search payload bound ──────────────────────────────────────
-  #
-  # `Search.search/2` hydrates each hit with the FULL body (`page.content`
-  # / `entry.content`). Twenty full org pages serialize to a six-figure
-  # JSON string, which is unusable as a single MCP tool result.
-  #
-  # The bound lives HERE, on the MCP dispatch head, and deliberately NOT
-  # inside `Search.search/2`: that function has a second consumer with no
-  # token budget — the org-memory LiveView search pane, which renders full
-  # content and clamps to its own 240-char preview. Narrowing the shared
-  # function would silently degrade that surface. A token cap is a
-  # property of the MCP transport, so it belongs on the transport's head.
-  @memory_search_snippet_chars 500
-  @memory_search_max_payload_bytes 20_000
-
-  def execute("memory_search", args, context) do
-    with {:ok, query} <- require_string(args, "query", "memory_search") do
-      agent = load_agent(context)
-
-      with :ok <- authorize_org_filter(agent, Map.get(args, "org_id")),
-           {:ok, opts} <- search_opts_from(args, agent) do
-        query |> Search.search(opts) |> bound_memory_search_payload()
-      end
-    end
-  end
 
   # Snippet each hit's `:content`, then drop hits from the TAIL (the list
   # is score-sorted, so the highest-ranked survive) until the encoded
@@ -7931,56 +8182,6 @@ defmodule Platform.Federation.ToolSurface do
     byte_size(Jason.encode!(envelope))
   end
 
-  # ── Memory-feedback read tools (task 019f6381 stage 4) ───────────────────
-  #
-  # These three tools thinly wrap `Platform.MemoryFeedback.list_recent/1`.
-  # They are READ-ONLY by construction — no `record_*` write path is
-  # exposed here. Humans (and the in-tree capture hooks at
-  # `Platform.Org.Context.upsert_context_file/3` + `delete_file/2`) own
-  # the write side of the corpus; agents may only inspect it.
-  #
-  # The default namespace lives on `Platform.MemoryFeedback` itself
-  # (`@default_namespace`), so we deliberately do NOT pass it here —
-  # keeps the tool_surface source clean of any bundle-name-adjacent
-  # string literals that the T5 scope-creep guard forbids.
-
-  def execute("org_memory_recently_edited", args, _context) do
-    opts = feedback_read_opts(args, "edit")
-    {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
-  end
-
-  def execute("org_memory_recently_deleted", args, _context) do
-    opts = feedback_read_opts(args, "delete")
-    {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
-  end
-
-  def execute("org_memory_feedback_at_path", args, _context) do
-    with {:ok, path} <- require_string(args, "path", "org_memory_feedback_at_path") do
-      workspace_id = Map.get(args, "workspace_id")
-
-      # Two `list_recent/1` calls (one per feedback_kind) rather than a
-      # single unfiltered call + Elixir-side partition — keeps the query
-      # narrow enough that the ceiling of 100 per side is enforced by
-      # the DB, not by an in-BEAM filter that would need a much larger
-      # buffer to guarantee the same result for pathological corpora.
-      edits =
-        [feedback_kind: "edit", path_prefix: path, workspace_id: workspace_id, limit: 100]
-        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-        |> Platform.MemoryFeedback.list_recent()
-        |> Enum.filter(&(&1.path == path))
-        |> Enum.map(&serialize_feedback_entry/1)
-
-      deletes =
-        [feedback_kind: "delete", path_prefix: path, workspace_id: workspace_id, limit: 100]
-        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-        |> Platform.MemoryFeedback.list_recent()
-        |> Enum.filter(&(&1.path == path))
-        |> Enum.map(&serialize_feedback_entry/1)
-
-      {:ok, %{path: path, edits: edits, deletes: deletes}}
-    end
-  end
-
   # Shared opt-builder for the two `recently_*` heads. `feedback_kind`
   # is caller-controlled ("edit" | "delete"); everything else comes off
   # the MCP args map.
@@ -8000,39 +8201,6 @@ defmodule Platform.Federation.ToolSurface do
       limit: limit
     ]
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-  end
-
-  # ── Files MCP dispatch (ADR-0042 Stage 4) ──────────────────────────────
-
-  def execute("file_list", args, context) do
-    with {:ok, project_id} <- require_string(args, "project_id", "file_list"),
-         {:ok, project} <- fetch_project_for_files(project_id, "file_list"),
-         :ok <- authorize_org_filter_for_explicit(args, context),
-         :ok <- authorize_file_access(context, project) do
-      limit = Map.get(args, "limit") |> normalize_limit(50, 200)
-      content_type = Map.get(args, "content_type")
-
-      files =
-        Platform.Files.list_files_for_project(project.id,
-          limit: limit,
-          content_type: content_type
-        )
-
-      {:ok,
-       %{
-         project_id: project.id,
-         count: length(files),
-         files: Enum.map(files, &file_summary/1)
-       }}
-    end
-  end
-
-  def execute("file_get_text", args, context) do
-    if truthy?(Map.get(args, "binary")) do
-      file_get_text_binary(args, context)
-    else
-      file_get_text_text(args, context)
-    end
   end
 
   defp file_get_text_text(args, context) do
@@ -8140,167 +8308,6 @@ defmodule Platform.Federation.ToolSurface do
       {:error, _} = err ->
         err
     end
-  end
-
-  def execute("file_get_metadata", args, context) do
-    with {:ok, file_id} <- require_string(args, "file_id", "file_get_metadata"),
-         %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
-         {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_metadata"),
-         :ok <- authorize_file_access(context, project) do
-      {:ok, file_metadata(file)}
-    else
-      nil ->
-        file_metadata_not_found_error(Map.get(args, "file_id"))
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  def execute("file_search", args, context) do
-    with {:ok, project_id} <- require_string(args, "project_id", "file_search"),
-         {:ok, query} <- require_string(args, "query", "file_search"),
-         {:ok, project} <- fetch_project_for_files(project_id, "file_search"),
-         :ok <- authorize_org_filter_for_explicit(args, context),
-         :ok <- authorize_file_access(context, project) do
-      limit = Map.get(args, "limit") |> normalize_limit(20, 100)
-
-      memory_opts =
-        [
-          project_id: project.id,
-          org_id: project.org_id,
-          memory_type: "document",
-          limit: limit
-        ]
-        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-
-      case Platform.Memory.search(query, memory_opts) do
-        {:ok, results} ->
-          hits =
-            results
-            |> Enum.map(&format_file_hit(&1, project.id))
-            |> Enum.reject(&is_nil/1)
-
-          {:ok,
-           %{
-             project_id: project.id,
-             count: length(hits),
-             hits: hits
-           }}
-
-        {:error, reason} ->
-          {:error,
-           %{
-             error: "file_search: memory service error (#{inspect(reason)})",
-             code: :memory_service_error,
-             recoverable: true,
-             suggestion:
-               "The embedding service is unavailable or returned an error. Retry shortly; fall back to file_list if it persists."
-           }}
-      end
-    end
-  end
-
-  def execute("file_add", args, context) do
-    with {:ok, project_id} <- require_string(args, "project_id", "file_add"),
-         {:ok, filename} <- require_string(args, "filename", "file_add"),
-         {:ok, content_type} <- require_string(args, "content_type", "file_add"),
-         {:ok, project} <- fetch_project_for_files(project_id, "file_add"),
-         :ok <- authorize_org_filter_for_explicit(args, context),
-         :ok <- authorize_file_access(context, project) do
-      cond do
-        is_binary(Map.get(args, "data_base64")) ->
-          file_add_inline(args, project, filename, content_type)
-
-        is_integer(Map.get(args, "byte_size")) and Map.get(args, "byte_size") > 0 ->
-          file_add_presigned(args, project, filename, content_type)
-
-        true ->
-          {:error,
-           %{
-             error:
-               "file_add: pass either `data_base64` (inline branch) or `byte_size` (presigned branch)",
-             recoverable: true,
-             suggestion:
-               "For small files pass base64-encoded bytes as `data_base64`; for files over 25 MB pass `byte_size` (positive integer) to reserve a presigned upload slot."
-           }}
-      end
-    end
-  end
-
-  def execute("file_delete", args, context) do
-    with {:ok, file_id} <- require_string(args, "file_id", "file_delete"),
-         %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
-         {:ok, project} <- fetch_project_for_files(file.project_id, "file_delete"),
-         :ok <- authorize_org_filter_for_explicit(args, context),
-         :ok <- authorize_file_access(context, project) do
-      # Task 019f7cb0 stage 4: agent deletes ride the same soft-delete
-      # path as humans. `Platform.Files.delete_file/2` marks the row
-      # deleted (30-day restore window — the Purger owns permanent
-      # removal of row AND stored bytes after retention), scrubs the AI
-      # search index, writes the audit row with the acting agent
-      # attributed, and broadcasts {:file_deleted, id} on the project
-      # topic — so no Storage.delete and no handler-side broadcast here.
-      case Platform.Files.delete_file(file_delete_actor(context), file) do
-        {:ok, _deleted} ->
-          {:ok, %{file_id: file.id, deleted: true}}
-
-        {:error, :already_deleted} ->
-          # Race: another caller soft-deleted the row between our
-          # `get_file` and the write. Same envelope as the get-miss —
-          # a re-delete must look identical to a never-existed id.
-          file_delete_not_found_error(file.id)
-
-        {:error, :unauthorized} ->
-          {:error,
-           %{
-             error: "file_delete: caller identity could not be resolved for audit attribution",
-             code: :unauthorized,
-             recoverable: false,
-             suggestion:
-               "Deletes are audit-logged and require an acting agent. Call through the MCP endpoint (which always supplies agent_id) rather than bare-invoking the tool surface."
-           }}
-
-        {:error, :project_archived} ->
-          {:error,
-           %{
-             error: "file_delete: project is archived (read-only)",
-             code: :project_archived,
-             recoverable: false,
-             suggestion:
-               "Archived projects refuse writes. Unarchive the project before deleting its files."
-           }}
-
-        {:error, %Ecto.Changeset{} = changeset} ->
-          {:error,
-           %{
-             error: "file_delete: row update failed (#{inspect(changeset.errors)})",
-             code: :delete_failed,
-             recoverable: true,
-             suggestion: "Transient write failure — re-issue the call."
-           }}
-      end
-    else
-      nil ->
-        file_delete_not_found_error(Map.get(args, "file_id"))
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  def execute(unknown_tool, _args, _context) do
-    tool_names =
-      tool_definitions()
-      |> Enum.map(& &1.name)
-      |> Enum.join(", ")
-
-    {:error,
-     %{
-       error: "Unknown tool: #{unknown_tool}",
-       recoverable: false,
-       suggestion: "Available tools: #{tool_names}"
-     }}
   end
 
   # ── Memory tool helpers (ADR-0041 T5) ───────────────────────────────────

@@ -862,8 +862,12 @@ defmodule Platform.Chat.AgentResponder do
 
   defp history_content(content, _message, _role), do: content
 
-  defp build_external_signal(signal, space_id), do: build_external_signal(signal, space_id, nil)
-
+  # The agent-less `build_external_signal/2` shim was deleted in task 01a01041
+  # stage 2: it only delegated here with `agent: nil`, and the single call site
+  # (line ~267) passes `context.agent`, so no caller could reach it. Dead after
+  # the refactor that made the agent always available on the dispatch context —
+  # not a call that went missing. `/3` still tolerates a nil agent via
+  # `Map.get(agent || %{}, …)`, so the nil case remains expressible.
   defp build_external_signal(signal, space_id, agent) do
     {task_id, task_status} = execution_task_context(space_id)
 

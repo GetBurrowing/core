@@ -259,6 +259,45 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
                ~s([data-role="mobile-diff-toggle"][phx-click="toggle_proposal_diff"])
              )
     end
+
+    test "the mobile reject form resolves the proposal by its hidden `_id` input", %{conn: conn} do
+      seed_pages!()
+      proposal = insert_proposal!()
+
+      {:ok, view, _html} = live(authed(conn), "/memory/proposals")
+
+      # Open the inline reject form inside the card.
+      render_click(view, "show_reject_form", %{"id" => proposal.id})
+      assert has_element?(view, ~s([data-role="mobile-reject-form"]))
+
+      # `_id`, not `id`: an input named `id` overrides the DOM id of its own
+      # form element. The value under test is the one the TEMPLATE rendered —
+      # the submission below supplies only the feedback.
+      assert has_element?(
+               view,
+               ~s(#m-proposal-reject-form-#{proposal.id} input[type="hidden"][name="_id"][value="#{proposal.id}"])
+             )
+
+      refute has_element?(
+               view,
+               ~s(#m-proposal-reject-form-#{proposal.id} input[name="id"])
+             )
+
+      view
+      |> form("#m-proposal-reject-form-#{proposal.id}", %{
+        "feedback" => "Superseded by the pricing page."
+      })
+      |> render_submit()
+
+      row = Repo.get(MemoryProposal, proposal.id)
+      assert row.status == "rejected"
+      assert row.feedback == "Superseded by the pricing page."
+
+      # Card dropped and the form collapsed.
+      html = render(view)
+      refute html =~ ~s(data-mobile-proposal-id="#{proposal.id}")
+      refute html =~ ~s(id="m-proposal-reject-form-#{proposal.id}")
+    end
   end
 
   describe "search input + facet chips" do

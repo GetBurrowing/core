@@ -435,7 +435,7 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
           apps/platform/lib/platform/responsibilities/router.ex
           (`safe_assignee_for/1`, `fire_trigger/3`) or
           apps/platform/lib/platform/meetings/summarizer.ex
-          (`safe_fail_transcript/1`).
+          (`safe_fail_transcript/2`).
 
       (b) If the spawn path is unreachable in test env (config-gated
           off / sync-fallback), add the module to `@known_safe` in

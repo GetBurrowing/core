@@ -211,6 +211,19 @@ defmodule Platform.Chat.Canvas.Server do
         _from,
         %State{} = state
       ) do
+    # Task 01a01041 stage 2: an `{:error, reason}` arm used to close this
+    # `case`, and the compiler reported it as unreachable. It is:
+    # `apply_with_rebase/3` is total over `{:ok, doc, rev} | {:conflict,
+    # payload}` on all three of its `cond` branches, and the one place a
+    # genuine failure arises — `apply_at_head/3`'s `CanvasPatch.apply_many/2`
+    # returning `{:error, reason}` — deliberately CONVERTS it into a
+    # `{:conflict, …}` with a classified rejection. That is ADR 0036's
+    # rebase-or-reject contract: `:conflict` IS this call's failure channel,
+    # and the public `canvas.patch` tool documents a structured rejection
+    # reason rather than an error tuple. So the callee is not missing an error
+    # return — it has no error return by design, and the dead arm was removed
+    # rather than the callee widened. An unexpected shape now raises
+    # `CaseClauseError` here instead of being reshaped into `{:error, _}`.
     case apply_with_rebase(state, operations, base_revision) do
       {:ok, new_document, new_revision} ->
         persist_async(
@@ -242,9 +255,6 @@ defmodule Platform.Chat.Canvas.Server do
 
       {:conflict, payload} ->
         {:reply, {:conflict, payload}, state}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
     end
   end
 

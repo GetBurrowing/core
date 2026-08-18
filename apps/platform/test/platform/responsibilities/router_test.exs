@@ -4041,4 +4041,81 @@ defmodule Platform.Responsibilities.RouterTest do
       assert Repo.get!(Agent, agent.id).last_successful_fire_at == nil
     end
   end
+
+  describe "safe_stamp_last_fire/2 resolves to the writer that actually exists" do
+    # Task 01a01041 stage 2. `safe_stamp_last_fire/2` probes for a canonical
+    # writer by name. For as long as it opened with a probe for
+    # `Platform.ExternalAgents.stamp_last_successful_fire/2` — a name that was
+    # never implemented — `mix compile` reported an undefined-or-private call.
+    #
+    # These tests pin WHY that branch could be deleted rather than the function
+    # restored, and they assert the stamp LANDS (a reload from the DB), not
+    # merely that the call does not raise: `safe_stamp_last_fire/2` has a
+    # `rescue` that swallows and returns `:ok`, so a does-not-raise assertion
+    # would have passed against the broken name too and proved nothing.
+
+    test "the ExternalAgents name the deleted branch probed for does not exist, and the Registry name does" do
+      assert Code.ensure_loaded?(Platform.ExternalAgents)
+      assert Code.ensure_loaded?(Platform.Responsibilities.Registry)
+
+      refute function_exported?(Platform.ExternalAgents, :stamp_last_successful_fire, 2),
+             "Platform.ExternalAgents does not define stamp_last_successful_fire/2 — it only " <>
+               "READS last_successful_fire_at (external_agents.ex fired_within?/3). If this " <>
+               "ever becomes true, the Router's probe order needs revisiting deliberately."
+
+      # ANTI-VACUITY for the refute above: the capability exists, just under
+      # the other name the M6 planner contracted for. Without this, the refute
+      # would also pass if nobody anywhere could stamp.
+      assert function_exported?(
+               Platform.Responsibilities.Registry,
+               :stamp_last_successful_fire,
+               2
+             )
+    end
+
+    test "the surviving Registry writer lands the stamp in the DB and returns the patched struct" do
+      key = "routertest.stamp_writer_#{System.unique_integer([:positive])}"
+      agent = wire_native_assignee(key)
+
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == nil
+
+      fired_at = ~U[2026-08-17 11:22:33.000000Z]
+
+      returned = Platform.Responsibilities.Registry.stamp_last_successful_fire(agent, fired_at)
+
+      # The DB row, re-read — the observable the swallowing wrapper cannot fake.
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == fired_at
+      # And the in-memory patch the docstring promises, so callers can pipe.
+      assert returned.last_successful_fire_at == fired_at
+    end
+
+    test "a native fire through the Router stamps via that writer" do
+      put_native_dispatcher(NoopNativeDispatcher)
+
+      key = "routertest.stamp_via_router_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+      fired_at = ~U[2026-08-17 12:00:00.000000Z]
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:ok, :dispatched} =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+        end)
+
+      assert Repo.get!(Agent, agent.id).last_successful_fire_at == fired_at
+
+      # The wrapper's rescue arm must NOT have fired. Without this, a future
+      # regression that reintroduces an unresolvable writer would still pass
+      # the stamp assertion above if some other path happened to write it.
+      refute log =~ "stamp_last_successful_fire raised"
+    end
+  end
 end

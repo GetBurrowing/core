@@ -1125,10 +1125,24 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       render_click(view, "show_reject_form", %{"id" => proposal.id})
       assert has_element?(view, ~s([data-role="reject-form-row"]))
 
-      # Submit the form with feedback text.
+      # The id travels in a hidden input named `_id`, NOT `id` — an input named
+      # `id` overrides the DOM id of its own form element (LiveView warns about
+      # it at compile time). Assert the wire key rather than supplying it here,
+      # so the proposal can only be resolved by the value the FORM rendered.
+      assert has_element?(
+               view,
+               ~s(#proposal-reject-form-#{proposal.id} input[type="hidden"][name="_id"][value="#{proposal.id}"])
+             )
+
+      refute has_element?(
+               view,
+               ~s(#proposal-reject-form-#{proposal.id} input[name="id"])
+             )
+
+      # Submit the form with feedback text only; the id comes off the hidden
+      # input the template rendered.
       view
       |> form("#proposal-reject-form-#{proposal.id}", %{
-        "id" => proposal.id,
         "feedback" => "Already captured in org/page/pricing.md — not novel."
       })
       |> render_submit()

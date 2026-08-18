@@ -37,8 +37,10 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
   @min_width 320
   @max_width 2400
 
+  @impl Platform.Chat.Canvas.Kind
   def children, do: :none
 
+  @impl Platform.Chat.Canvas.Kind
   def schema do
     %{
       "type" => "object",
@@ -143,6 +145,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
   attr(:node, :map, required: true)
   attr(:dom_id_scope, :string, default: nil)
 
+  @impl Platform.Chat.Canvas.Kind
   def render(assigns) do
     props = assigns.node["props"] || %{}
 

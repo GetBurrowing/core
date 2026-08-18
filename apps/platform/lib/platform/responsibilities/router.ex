@@ -2449,18 +2449,24 @@ defmodule Platform.Responsibilities.Router do
   end
 
   # Tolerant stamp so we don't crash if the canonical writer hasn't
-  # landed yet. The expected writer surface in later stages is either
-  # `Platform.ExternalAgents.stamp_last_successful_fire/2` (extended
-  # to cover native agents too) or a dedicated
-  # `Platform.Responsibilities.Registry.stamp_last_successful_fire/2`.
-  # We probe both names and short-circuit to `:ok` if neither exists,
-  # exactly as the M6 planner contracted for.
+  # landed yet. The canonical writer DID land, as
+  # `Platform.Responsibilities.Registry.stamp_last_successful_fire/2`
+  # (registry.ex:143) — so the probe below resolves to that branch on
+  # every real call.
+  #
+  # Task 01a01041 stage 2: this `cond` used to open with a probe for
+  # `Platform.ExternalAgents.stamp_last_successful_fire/2`, the OTHER
+  # name the M6 planner contracted for. That function was never written
+  # on `Platform.ExternalAgents` (which only READS
+  # `last_successful_fire_at`, via `fired_within?/3`), so the compiler
+  # flagged the call as undefined-or-private for as long as the branch
+  # existed. It was never a live `UndefinedFunctionError`: the
+  # `function_exported?/3` guard in the same clause is false, so the body
+  # was unreachable, and the branch has been removed rather than the
+  # function restored. Removing it is behaviour-preserving by
+  # construction — nothing could reach it.
   defp safe_stamp_last_fire(agent, fired_at) do
     cond do
-      Code.ensure_loaded?(Platform.ExternalAgents) and
-          function_exported?(Platform.ExternalAgents, :stamp_last_successful_fire, 2) ->
-        Platform.ExternalAgents.stamp_last_successful_fire(agent, fired_at)
-
       Code.ensure_loaded?(Platform.Responsibilities.Registry) and
           function_exported?(
             Platform.Responsibilities.Registry,

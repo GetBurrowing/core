@@ -40,14 +40,6 @@ defmodule PlatformWeb.MCPController do
     end
   end
 
-  defp respond(conn, id, {:ok, result}) do
-    json(conn, %{jsonrpc: "2.0", id: id, result: result})
-  end
-
-  defp respond(conn, id, {:error, code, message}) do
-    json(conn, %{jsonrpc: "2.0", id: id, error: %{code: code, message: message}})
-  end
-
   def handle(conn, _body) do
     conn
     |> put_status(:bad_request)
@@ -55,6 +47,14 @@ defmodule PlatformWeb.MCPController do
       jsonrpc: "2.0",
       error: %{code: -32600, message: "invalid JSON-RPC envelope"}
     })
+  end
+
+  defp respond(conn, id, {:ok, result}) do
+    json(conn, %{jsonrpc: "2.0", id: id, result: result})
+  end
+
+  defp respond(conn, id, {:error, code, message}) do
+    json(conn, %{jsonrpc: "2.0", id: id, error: %{code: code, message: message}})
   end
 
   def stream(conn, _params), do: send_resp(conn, 405, "")

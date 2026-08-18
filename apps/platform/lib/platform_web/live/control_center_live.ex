@@ -242,9 +242,6 @@ defmodule PlatformWeb.ControlCenterLive do
      |> put_flash(:info, "Cleared override for #{key}.")}
   end
 
-  defp normalize_tab("roles"), do: :roles
-  defp normalize_tab(_), do: :roles
-
   # ── Runtime events (kept here — tightly coupled to socket) ────────
 
   @impl true
@@ -540,6 +537,9 @@ defmodule PlatformWeb.ControlCenterLive do
     {:noreply,
      put_flash(socket, :error, "Could not add agent to space: agent not selected or invalid.")}
   end
+
+  defp normalize_tab("roles"), do: :roles
+  defp normalize_tab(_), do: :roles
 
   # ── Render ────────────────────────────────────────────────────────
 

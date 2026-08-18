@@ -1088,11 +1088,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
-  defp stream_insert_frozen(socket, %Platform.Chat.Message{} = msg) do
-    enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
-    stream_insert(socket, :messages, enriched)
-  end
-
   defp handle_info({:message_deleted, msg}, socket) do
     if same_active_space?(socket, msg) do
       rendered_ids = MapSet.delete(socket.assigns[:rendered_message_ids] || MapSet.new(), msg.id)
@@ -1234,6 +1229,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp handle_info(_msg, socket), do: {:cont, socket}
+
+  defp stream_insert_frozen(socket, %Platform.Chat.Message{} = msg) do
+    enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
+    stream_insert(socket, :messages, enriched)
+  end
 
   # ── Internals ────────────────────────────────────────────────────────
 

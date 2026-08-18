@@ -385,8 +385,14 @@ defmodule PlatformWeb.OrgMemoryLive do
     end
   end
 
+  # The id arrives as `"_id"`, not `"id"`. Both reject forms (the desktop
+  # `proposals_pane` table row and the `mobile_shell` card) carry it in a hidden
+  # input, and an input named `id` overrides the DOM id of its own form element —
+  # so the wire key is prefixed. Only this clause reads it; the sibling
+  # `phx-value-id` events (`show_reject_form`, `cancel_reject`,
+  # `approve_proposal`) are unaffected and still match `"id"`.
   @impl true
-  def handle_event("reject_proposal", %{"id" => id} = params, socket) do
+  def handle_event("reject_proposal", %{"_id" => id} = params, socket) do
     feedback = params |> Map.get("feedback", "") |> String.trim()
     feedback = if feedback == "", do: nil, else: feedback
 
