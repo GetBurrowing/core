@@ -1,6 +1,7 @@
 # ADR 0025: Task Router and Execution Orchestration
 
 **Status:** Accepted (2026-03-22) — amended 2026-07-15 (task 019f640d; see amendment section at bottom)  
+**Superseded in part by:** ADR 0051 (TaskRouter Dispatch as a Debounced Reconcile, and Ack Durability Outside the Lease) — dispatch-trigger and ack-liveness sections  
 **Date:** 2026-03-22  
 **Related:** ADR 0002 (Domain Boundaries), ADR 0011 (Execution Runners), ADR 0013 (Attention Routing), ADR 0014 (Runtime Channel), ADR 0018 (Tasks Persistent Model and Plan Engine)  
 **Deciders:** Rowan Ellis
