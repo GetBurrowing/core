@@ -625,6 +625,16 @@ defmodule PlatformWeb.ChatLive do
         (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
         system_prefix_fallback(slug_or_id)
 
+    # EXTERNAL ADMISSION GATE (task 01a011ed), the embedded half. Collapsed into
+    # `nil` rather than given its own branch, because here a denial IS the
+    # unresolvable case: the pane loads no space and renders nothing, exactly as
+    # it already does for a slug that names nothing.
+    #
+    # Deliberately NOT the standalone deny. This LiveView is `live_render`ed
+    # inside MeetingLive, so `push_navigate/2` would move the PARENT surface out
+    # of the meeting. Denial here is silent and local to the pane.
+    space = if space && external_space_denied?(socket, space), do: nil, else: space
+
     case space do
       nil ->
         socket
@@ -710,7 +720,17 @@ defmodule PlatformWeb.ChatLive do
         system_prefix_fallback(slug_or_id) ||
         maybe_bootstrap_space(params, slug_or_id, active_org_id)
 
-    if is_nil(space) do
+    # EXTERNAL ADMISSION GATE (task 01a011ed). Folded into the SAME condition as
+    # "did not resolve" on purpose: one branch and one outcome, so an off-limits
+    # slug stays indistinguishable from a missing one and the denial is not an
+    # existence oracle (the plug documents the same property).
+    #
+    # Sitting in this condition also puts it ahead of EVERY load in the success
+    # branch below — the subscribe, `ensure_participant/2` (which inserts a
+    # `chat_participants` row with no authorization check of its own, and is
+    # what converts a read bypass into permanent membership), the roster read
+    # and the whole assign pipeline. Do not move it below any of them.
+    if is_nil(space) or external_space_denied?(socket, space) do
       # The URL saved by the RouteResume hook (`route_resume:chat` in
       # localStorage) points at a space this user can no longer resolve
       # (deleted, unauthorized). Signal the client to clear the entry so the
@@ -3555,6 +3575,51 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp system_prefix_fallback(_), do: nil
+
+  # ── The socket-path half of the external admission gate (task 01a011ed) ─────
+  #
+  # `PlatformWeb.Plugs.ExternalUserScope` decides which space an external user
+  # may open, and a plug runs on HTTP requests only. A client-sent `live_patch`
+  # frame reaches `handle_params/3` without passing any plug, so until this
+  # shipped the socket re-resolved and loaded any space an external user could
+  # name. Both LiveView resolution points now clear the SAME predicate the plug
+  # clears. Do not grow a third copy of the rule here — stage 1 lifted it out of
+  # the plug precisely because two gates answering one question drift apart.
+  #
+  # The `nil` space is the CALLER's branch, not this one. Both call sites treat
+  # "does not resolve" and "not yours" identically, and `authorized_space?/2`
+  # answers false for nil anyway.
+  #
+  # `user_id` is a bare binary in this LiveView; `authorized_space?/2` reads
+  # `user.id`, so it is wrapped here rather than taught about binaries.
+  defp external_space_denied?(socket, space) do
+    external_session?(socket) and
+      not Platform.Chat.ExternalScope.authorized_space?(%{id: socket.assigns.user_id}, space)
+  end
+
+  # Is this an EXTERNAL session? Two sources, because the two surfaces derive
+  # externality differently and the difference is load-bearing.
+  #
+  #   * Standalone: `do_mount/3` already derived `@external?` from IDENTITY via
+  #     `ExternalScope.for_user/1`. Reuse it, so an internal nav short-circuits
+  #     on an assign with no query and the internal `handle_params/3` path keeps
+  #     its exact query profile.
+  #   * Embedded: `do_mount/3` hard-codes `external_scope = nil`, and therefore
+  #     `@external? = false`, for EVERY embedded session — internal or not. That
+  #     assign is a RENDER decision (the meeting pane paints no rail and must
+  #     never show external chrome). Reusing it as the gate would leave the
+  #     embedded gate unable to fire for the only user it exists to stop, so ask
+  #     identity instead: one `Repo.exists?`, once per pane mount.
+  #
+  # An INVITED external user reaching the pane is unaffected:
+  # `Meetings.invite_external_user/3` seats the invitee in
+  # `meeting.chat_space_id`, so `authorized_space?/2` finds their participant
+  # row. Token guests never reach here at all — the chat panel is `@shell?`
+  # gated and the guest surface has none.
+  defp external_session?(%{assigns: %{embedded: true}} = socket),
+    do: Platform.Tenancy.external_user?(%{id: socket.assigns.user_id})
+
+  defp external_session?(socket), do: socket.assigns.external?
 
   defp maybe_put_org_id(attrs, nil), do: attrs
   defp maybe_put_org_id(attrs, org_id), do: Map.put(attrs, :org_id, org_id)

@@ -25,6 +25,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
   alias Platform.Repo
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
+  alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.ChatLive
 
   defp with_chat_host(conn, host \\ "chat.localhost") do
@@ -934,62 +935,325 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
 
   # ── REPRODUCTION for task 01a011ed-9ce1-7c8b-90d3-3d1b7527656d ─────────────
   #
-  # SKIPPED BECAUSE IT FAILS ON TODAY'S CODE, not because it is flaky and not
-  # because the defect is in doubt. Task 019ffca8 stage 4 found this and its
-  # brief forbids fixing scoping code, so the reproduction lands here and the
-  # fix lands with the ticket. Remove the tag when the gate ships.
-  #
-  # THE DEFECT. `PlatformWeb.Plugs.ExternalUserScope` is the only gate deciding
+  # THE DEFECT. `PlatformWeb.Plugs.ExternalUserScope` was the only gate deciding
   # which space an external user may open, and plugs run on HTTP requests only.
-  # `ChatLive.handle_params/3` re-resolves and loads a space with no external
+  # `ChatLive.handle_params/3` re-resolved and loaded a space with no external
   # scope check, and the socket accepts a client-sent `live_patch` frame that
   # reaches it without passing any plug. `Phoenix.LiveViewTest.render_patch/2`
   # pushes that exact frame, so this is the browser's own capability rather than
   # a test-only affordance.
   #
-  # Three resolver branches reach an off-limits space, and this case walks the
-  # one that matters most for the acceptance bar: a `task-exec-` slug, which
-  # `system_prefix_fallback/1` resolves with no org scoping at all.
-  #
-  # The read is not the worst of it. `ensure_participant/2` inserts a
+  # The read was not the worst of it. `ensure_participant/2` inserts a
   # `chat_participants` row on entry with no authorization check, so the bypass
-  # converts itself into permanent membership: the space joins the rail, a cold
-  # HTTP mount at the same URL returns 200 instead of 403, and the external user
-  # can post into it.
-  @tag :skip
-  test "an external user cannot open an off-limits space over the live socket", %{conn: conn} do
-    org = tenant_org!()
-    ext = external_user!(org)
-    allowed = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+  # converted itself into permanent membership: the space joined the rail, a
+  # cold HTTP mount at the same URL returned 200 instead of 403, and the
+  # external user could post into it. `refute Chat.participant?/2` is what pins
+  # that, and it is in every case below for that reason.
+  #
+  # WHY THE COMMITTED ASSERTIONS COULD NOT STAY VERBATIM, and why the
+  # replacement is not a weakening. As committed, this case read `assigns(view)`
+  # after the patch. The shipped gate denies by `push_navigate(to: ~p"/chat")`,
+  # which STOPS the LiveView process — so a post-patch `assigns(view)` exits
+  # with `no process` rather than returning state to refute, on a build where
+  # the gate works perfectly. Those refutes are replaced by `assert_redirect/2`,
+  # which is strictly stronger: a redirected process holds no assigns at all, so
+  # there is nothing left for internal content to leak into. The two assertions
+  # that read the DATABASE rather than the view — the HTTP 403 control and
+  # `refute Chat.participant?/2` — are unchanged, because the dead process does
+  # not touch them.
+  #
+  # THREE RESOLVER BRANCHES reach an off-limits space from `handle_params/3`,
+  # and each gets its own case, because they are three different lookups: a gate
+  # placed inside any one of them would leave the other two open.
+  #
+  #   1. `system_prefix_fallback/1` — a reserved `task-exec-` slug, resolved
+  #      with no org scoping at all. This is the branch the committed
+  #      reproduction walked.
+  #   2. `bootstrap_space/2`'s ADOPT branch — an ORG-LESS channel slug, which
+  #      the org-scoped lookup structurally cannot see.
+  #   3. `Chat.get_space/1` — a bare space UUID.
+  #
+  # ANTI-VACUITY, applied without exception. A gate that denied EVERYTHING would
+  # pass every refute here, so each case pairs its refutes IN THE SAME TEST with
+  # a positive control. The control always runs FIRST, and has to: after the
+  # deny there is no process left to assert anything against.
+  describe "path 3: a client-sent live_patch cannot open an off-limits space" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
 
-    internal =
-      internal_space_with_content!(
-        name: "Internal Execution Space",
-        slug: "task-exec-#{System.unique_integer([:positive])}"
-      )
+      allowed = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+      landing = channel!("Client Intake", org_id: org.id) |> join!(ext)
+      landing_message = message_in!(landing, ext, "landing-message-body")
 
-    # CONTROL: the plug refuses the same space over HTTP. Without this the case
-    # could not tell a missing gate from a space that does not resolve at all.
-    assert conn
-           |> with_chat_host()
-           |> authed(ext)
-           |> get(~p"/chat/#{internal.space.slug}")
-           |> Map.get(:status) == 403
+      %{
+        conn: conn,
+        org: org,
+        ext: ext,
+        allowed: allowed,
+        landing: landing,
+        landing_message: landing_message
+      }
+    end
 
-    {:ok, view, _} = conn |> with_chat_host() |> authed(ext) |> live("/chat/#{allowed.slug}")
+    # BRANCH 1 — `system_prefix_fallback/1`. The committed reproduction.
+    test "an external user cannot open an off-limits space over the live socket", ctx do
+      internal =
+        internal_space_with_content!(
+          name: "Internal Execution Space",
+          slug: "task-exec-#{System.unique_integer([:positive])}"
+        )
 
-    render_patch(view, ~p"/chat/#{internal.space.slug}")
+      # The branch is the one this case claims to walk: a reserved prefix, so
+      # the unscoped fallback answers where the org-scoped lookup cannot.
+      assert Chat.reserved_slug_prefix?(internal.space.slug)
+      refute Chat.get_space_by_slug(internal.space.slug, org_id: ctx.org.id)
 
-    refute assigns(view).active_space.id == internal.space.id,
-           "a client-sent live_patch put an off-limits space in an external user's session"
+      # CONTROL: the plug refuses the same space over HTTP. Without this the
+      # case could not tell a missing gate from a space that does not resolve.
+      assert ctx.conn
+             |> with_chat_host()
+             |> authed(ctx.ext)
+             |> get(~p"/chat/#{internal.space.slug}")
+             |> Map.get(:status) == 403
 
-    refute MapSet.member?(held_message_ids(view), internal.message.id)
-    refute MapSet.member?(held_canvas_ids(view), internal.canvas.id)
-    refute MapSet.member?(held_roster_ids(view), internal.insider.id)
-    refute render(view) =~ "internal-only-message-body"
+      {:ok, view, _} = live(external_conn(ctx.conn, ctx.ext), ~p"/chat/#{ctx.allowed.slug}")
 
-    refute Chat.participant?(internal.space.id, ext.id),
-           "entering the space minted a chat_participants row, making the bypass permanent"
+      # POSITIVE CONTROL: patching to a space this user IS a member of lands
+      # and LOADS — the message is in the assigns, not merely the URL changed.
+      render_patch(view, ~p"/chat/#{ctx.landing.slug}")
+      assert assigns(view).active_space.id == ctx.landing.id
+      assert MapSet.member?(held_message_ids(view), ctx.landing_message.id)
+
+      render_patch(view, ~p"/chat/#{internal.space.slug}")
+
+      assert_redirect(view, "/chat")
+
+      refute Chat.participant?(internal.space.id, ctx.ext.id),
+             "entering the space minted a chat_participants row, making the bypass permanent"
+    end
+
+    # BRANCH 2 — `bootstrap_space/2`'s adopt branch. An org-less channel row is
+    # invisible to the org-scoped slug lookup, so resolution falls all the way
+    # through to the branch that ADOPTS it (task 01a00910 stage 5 added that
+    # branch to stop a duplicate channel being minted; it also opened a second
+    # way into an off-limits space).
+    test "an external user cannot open an off-limits ORG-LESS channel slug over the live socket",
+         ctx do
+      internal = internal_space_with_content!(name: "Internal Ops Room")
+
+      # Pin the branch identity. If a later change gives this row an org, the
+      # case silently becomes a duplicate of branch 3 and stops covering the
+      # adopt path — these two lines fail instead.
+      refute Chat.reserved_slug_prefix?(internal.space.slug)
+      refute Chat.get_space_by_slug(internal.space.slug, org_id: ctx.org.id)
+      assert Chat.get_orgless_space_by_slug(internal.space.slug).id == internal.space.id
+
+      assert ctx.conn
+             |> with_chat_host()
+             |> authed(ctx.ext)
+             |> get(~p"/chat/#{internal.space.slug}")
+             |> Map.get(:status) == 403
+
+      {:ok, view, _} = live(external_conn(ctx.conn, ctx.ext), ~p"/chat/#{ctx.allowed.slug}")
+
+      render_patch(view, ~p"/chat/#{ctx.landing.slug}")
+      assert assigns(view).active_space.id == ctx.landing.id
+      assert MapSet.member?(held_message_ids(view), ctx.landing_message.id)
+
+      render_patch(view, ~p"/chat/#{internal.space.slug}")
+
+      assert_redirect(view, "/chat")
+
+      refute Chat.participant?(internal.space.id, ctx.ext.id),
+             "the adopt branch minted a chat_participants row for an off-limits channel"
+    end
+
+    # BRANCH 3 — a bare space UUID. `Chat.get_space/1` is unscoped by design,
+    # so this branch reaches EVERY space in the deployment, org-less or not.
+    test "an external user cannot open an off-limits space by bare UUID over the live socket",
+         ctx do
+      internal = internal_space_with_content!(name: "Internal Strategy Room")
+
+      assert ctx.conn
+             |> with_chat_host()
+             |> authed(ctx.ext)
+             |> get(~p"/chat/#{internal.space.id}")
+             |> Map.get(:status) == 403
+
+      {:ok, view, _} = live(external_conn(ctx.conn, ctx.ext), ~p"/chat/#{ctx.allowed.slug}")
+
+      render_patch(view, ~p"/chat/#{ctx.landing.slug}")
+      assert assigns(view).active_space.id == ctx.landing.id
+      assert MapSet.member?(held_message_ids(view), ctx.landing_message.id)
+
+      render_patch(view, ~p"/chat/#{internal.space.id}")
+
+      assert_redirect(view, "/chat")
+
+      refute Chat.participant?(internal.space.id, ctx.ext.id),
+             "a bare-UUID patch minted a chat_participants row for an off-limits space"
+    end
+
+    # THE CONTROL A MEMBERSHIP-ONLY GATE FAILS. Admission is wider than the read
+    # scope: an external user may open a DM with a counterpart on their per-org
+    # allowlist even with no participant row of their own. Swap
+    # `authorized_space?/2` for `visible_space_id?/2` and this case goes red
+    # while every refute above stays green.
+    test "an allowlisted DM still opens over the socket, and one off the allowlist does not",
+         ctx do
+      allowlisted = dm_with_counterpart!(ctx.org)
+      off_allowlist = dm_with_counterpart!(tenant_org!())
+
+      # Membership cannot be what admits either DM — there is none.
+      refute Chat.participant?(allowlisted.id, ctx.ext.id)
+      refute Chat.participant?(off_allowlist.id, ctx.ext.id)
+
+      {:ok, view, _} = live(external_conn(ctx.conn, ctx.ext), ~p"/chat/#{ctx.allowed.slug}")
+
+      # POSITIVE CONTROL: the allowlist alone opens it, and the entry is real —
+      # `ensure_participant/2` ran, which is what a landed load does.
+      render_patch(view, ~p"/chat/#{allowlisted.slug}")
+      assert assigns(view).active_space.id == allowlisted.id
+      assert Chat.participant?(allowlisted.id, ctx.ext.id)
+
+      render_patch(view, ~p"/chat/#{off_allowlist.slug}")
+
+      assert_redirect(view, "/chat")
+      refute Chat.participant?(off_allowlist.id, ctx.ext.id)
+    end
+
+    # The other half of "the gate does not deny everything": internal users are
+    # a complete no-op. `external_session?/1` keys on IDENTITY, so an internal
+    # user's reach is exactly what it was before the gate shipped — including
+    # into spaces they have not joined, which is today's behaviour and not this
+    # ticket's to change.
+    test "an internal user patching between two spaces is unaffected", %{conn: conn} do
+      insider = create_user!("Ivor Insider")
+      plain_membership!(insider, tenant_org!())
+
+      first = channel!("Ops Intake")
+      second = channel!("Ops Handover")
+
+      refute Chat.participant?(first.id, insider.id)
+      refute Chat.participant?(second.id, insider.id)
+
+      {:ok, view, _} = live(authed(conn, insider), ~p"/chat/#{first.slug}")
+      assert assigns(view).active_space.id == first.id
+
+      render_patch(view, ~p"/chat/#{second.slug}")
+      assert assigns(view).active_space.id == second.id
+      assert Chat.participant?(second.id, insider.id)
+    end
+  end
+
+  # ── The embedded half of the same gate ─────────────────────────────────────
+  #
+  # `bootstrap_embedded_space/2` is the meeting chat pane's resolver. It has no
+  # `handle_params/3` (Phoenix forbids one on a nested LiveView), so there is
+  # nothing to patch: the whole resolution happens once, at mount, from the
+  # session slug MeetingLive hands down. It therefore needed its own gate and
+  # gets its own case.
+  describe "path 4: the embedded meeting pane never bootstraps an off-limits space" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+      allowed = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+
+      internal =
+        internal_space_with_content!(
+          name: "Internal Execution Space",
+          slug: "task-exec-#{System.unique_integer([:positive])}"
+        )
+
+      %{conn: conn, org: org, ext: ext, allowed: allowed, internal: internal}
+    end
+
+    test "refuses an off-limits space for an external session and still renders an entitled one",
+         ctx do
+      # POSITIVE CONTROL: the pane paints the space this user IS entitled to.
+      {:ok, allowed_view, _} = embedded_pane(ctx.conn, ctx.ext, ctx.allowed.slug)
+      assert assigns(allowed_view).active_space.id == ctx.allowed.id
+
+      # `@external?` is FALSE on this session even though the user IS external:
+      # `do_mount/3` hard-codes a nil external scope for every embedded mount,
+      # because that assign is a RENDER decision (the pane must paint no
+      # external chrome). The gate cannot key off it here, which is why
+      # `external_session?/1` carries a second clause asking
+      # `Tenancy.external_user?/1` directly. Pinned so a "simplification" back
+      # to the assign fails loudly instead of silently disarming this gate.
+      refute assigns(allowed_view).external?
+      assert Tenancy.external_user?(%{id: ctx.ext.id})
+
+      {:ok, denied_view, denied_html} = embedded_pane(ctx.conn, ctx.ext, ctx.internal.space.slug)
+
+      # Denial here is SILENT AND LOCAL — the pane collapses to no active space
+      # rather than redirecting, because a push_navigate would move the PARENT
+      # meeting surface out of the meeting.
+      refute assigns(denied_view).active_space
+      refute denied_html =~ "internal-only-message-body"
+      refute render(denied_view) =~ "internal-only-message-body"
+      refute MapSet.member?(held_message_ids(denied_view), ctx.internal.message.id)
+      refute MapSet.member?(held_canvas_ids(denied_view), ctx.internal.canvas.id)
+      refute MapSet.member?(held_roster_ids(denied_view), ctx.internal.insider.id)
+
+      refute Chat.participant?(ctx.internal.space.id, ctx.ext.id)
+
+      # POSITIVE CONTROL for the nil above: it came from the GATE, not from a
+      # slug that fails to resolve on this path. The same slug, mounted by an
+      # internal user, paints the space.
+      {:ok, insider_view, _} =
+        embedded_pane(ctx.conn, ctx.internal.insider, ctx.internal.space.slug)
+
+      assert assigns(insider_view).active_space.id == ctx.internal.space.id
+    end
+  end
+
+  defp external_conn(conn, ext), do: conn |> with_chat_host() |> authed(ext)
+
+  defp plain_membership!(user, org) do
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})
+    |> Repo.insert!()
+  end
+
+  defp message_in!(space, user, body) do
+    {:ok, message} =
+      Chat.post_message(%{
+        space_id: space.id,
+        participant_id: participant_for(space, user).id,
+        content_type: "text",
+        content: body
+      })
+
+    message
+  end
+
+  # A DM the external user holds NO participant row in, whose only other
+  # participant belongs to `org`. Whether it opens is then a pure function of
+  # whether `org` is on the caller's DM allowlist.
+  defp dm_with_counterpart!(org) do
+    counterpart = create_user!("Cyrus Counterpart")
+    plain_membership!(counterpart, org)
+
+    {:ok, dm} =
+      Chat.create_space(%{
+        name: "Direct message",
+        slug: "dm-#{System.unique_integer([:positive])}",
+        kind: "dm"
+      })
+
+    join!(dm, counterpart)
+    dm
+  end
+
+  # Mount the meeting chat pane in isolation. `ChatLive.Embedded` is the module
+  # MeetingLive `live_render`s, and it seeds its space from the session because
+  # URL params do not flow to child LiveViews.
+  defp embedded_pane(conn, user, slug) do
+    live_isolated(conn, PlatformWeb.ChatLive.Embedded,
+      session: %{"current_user_id" => user.id, "chat_space_slug" => slug}
+    )
   end
 
   defp space_ids(spaces), do: Enum.map(spaces, & &1.id)

@@ -43,6 +43,7 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   import Plug.Conn
 
   alias Platform.Chat
+  alias Platform.Chat.ExternalScope
   alias Platform.Meetings
   alias Platform.Tenancy
   alias PlatformWeb.ExternalRedirect
@@ -182,8 +183,19 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
     end
   end
 
+  # A uniform 403 for BOTH a nonexistent space (`nil`) and an out-of-scope
+  # existing space is deliberate: it gives the external user no existence
+  # oracle — an off-limits slug is indistinguishable from a missing one
+  # (canvas §9, cl-9-10). Never redirect and never 500 on the nil path;
+  # `ExternalScope.authorized_space?/2` answers `false` for nil so both land
+  # on this one deny call with this one reason string.
+  #
+  # The PREDICATE lives in `Platform.Chat.ExternalScope`, not here (task
+  # 01a011ed). It was private to this plug, ChatLive had no equivalent, and
+  # the two gates drifted — which is the whole defect. Do not re-inline it:
+  # the LiveView mount calls the same function.
   defp gate_space(conn, user, slug) do
-    if authorized_space?(user, resolve_space(conn, slug)) do
+    if ExternalScope.authorized_space?(user, resolve_space(conn, slug)) do
       conn
     else
       deny(conn, user, "external_out_of_scope")
@@ -191,10 +203,11 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   end
 
   # RESOLUTION, NOT AUTHORIZATION. This function's only job is to turn a URL
-  # segment into the row the request names; `authorized_space?/2` below decides
-  # whether this user may have it. Keeping the two apart is load-bearing —
-  # org-scoping inside resolution silently fails CLOSED on rows the authorizer
-  # would have admitted, and gives a denial that no grant can lift.
+  # segment into the row the request names; `ExternalScope.authorized_space?/2`
+  # decides whether this user may have it. Keeping the two apart is
+  # load-bearing — org-scoping inside resolution silently fails CLOSED on rows
+  # the authorizer would have admitted, and gives a denial that no grant can
+  # lift.
   #
   # Same resolution ChatLive `handle_params/3` uses, all three steps of it:
   #
@@ -243,43 +256,10 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   #
   # Mirrors `ChatLive.system_prefix_fallback/1` and shares its prefix list.
   # This RESOLVES; it does not admit. Everything it returns still has to clear
-  # `authorized_space?/2`, which requires a real `chat_participants` row or the
-  # DM allowlist.
+  # `ExternalScope.authorized_space?/2`, which requires a real
+  # `chat_participants` row or the DM allowlist.
   defp system_prefix_fallback(slug) do
     if Chat.reserved_slug_prefix?(slug), do: Chat.get_space_by_slug(slug, [])
-  end
-
-  # A uniform 403 for BOTH a nonexistent space (`nil`) and an out-of-scope
-  # existing space is deliberate: it gives the external user no existence
-  # oracle — an off-limits slug is indistinguishable from a missing one
-  # (canvas §9, cl-9-10). Never redirect and never 500 on the nil path.
-  defp authorized_space?(_user, nil), do: false
-
-  defp authorized_space?(user, %{id: space_id} = space) do
-    # Primary gate: an actual `chat_participants` row (channels, groups, and
-    # DMs the user already belongs to — apply_grant/DM-creation materializes
-    # the row). Thinner DM branch below only for the may-DM access case.
-    Chat.participant?(space_id, user.id) or dm_allowlisted?(user, space)
-  end
-
-  # DM ACCESS branch: let an external user open a DM surface with a counterpart
-  # whose org is on their per-org DM allowlist. This gates ACCESS to an
-  # existing `/chat/:slug` only — M8 (task 019f8837-4663) owns server-side
-  # enforcement of DM *initiation* (rejecting a create to a non-allowlisted
-  # org). Keep this branch to access, not creation.
-  defp dm_allowlisted?(user, %{kind: "dm", id: space_id}) do
-    space_id
-    |> Chat.list_participants(participant_type: "user")
-    |> Enum.reject(fn p -> p.participant_id == user.id end)
-    |> Enum.any?(fn p -> counterpart_org_allowed?(user, p.participant_id) end)
-  end
-
-  defp dm_allowlisted?(_user, _space), do: false
-
-  defp counterpart_org_allowed?(user, counterpart_user_id) do
-    %{id: counterpart_user_id}
-    |> Tenancy.list_user_memberships()
-    |> Enum.any?(fn m -> Tenancy.may_dm_org?(user, m.org_id) end)
   end
 
   # On any deny: emit the access-blocked telemetry (mirrors

@@ -4,6 +4,12 @@ defmodule Platform.Chat.ExternalScopeTest do
   read-scope primitive. Exercises the query building blocks in isolation:
   `Tenancy.external_user?/1`, and `ExternalScope.{for_user,member_space_ids,
   scope_spaces,scope_by_space_id,visible_space_id?}/*`.
+
+  Task 01a011ed added `authorized_space?/2` to this module — the ADMISSION
+  gate both the HTTP plug and the LiveView mount call. Its own describe block
+  is at the bottom, and it is tested here directly rather than only through
+  the plug, because a predicate only ever exercised through one of its two
+  callers is how the two callers drifted in the first place.
   """
   use Platform.DataCase, async: false
 
@@ -274,5 +280,95 @@ defmodule Platform.Chat.ExternalScopeTest do
       assert ExternalScope.visible_space_id?(ctx.b.id, int)
       assert ExternalScope.visible_space_id?(ctx.b.id, nil)
     end
+  end
+
+  # ── authorized_space?/2 ────────────────────────────────────────────────
+  #
+  # The ADMISSION gate, as against the membership-only read scope above. It
+  # was private to `PlatformWeb.Plugs.ExternalUserScope` until task 01a011ed
+  # and is exercised directly here, so neither caller owns the proof.
+
+  describe "authorized_space?/2" do
+    setup do
+      user = create_user!()
+      org = tenant_org!()
+      {:ok, _} = Tenancy.mark_membership_external(%{user_id: user.id, org_id: org.id})
+
+      {:ok, user: user, org: org}
+    end
+
+    test "true for a space the user holds a participant row in", ctx do
+      space = create_space()
+      add_user(space.id, ctx.user.id)
+
+      assert ExternalScope.authorized_space?(ctx.user, space)
+    end
+
+    test "false for a space with no participant row", ctx do
+      refute ExternalScope.authorized_space?(ctx.user, create_space())
+    end
+
+    test "true for a DM whose counterpart org is on the user's allowlist", ctx do
+      dm = dm_with_counterpart!()
+      {:ok, _} = Tenancy.allow_dm(ctx.user, dm.counterpart_org)
+
+      # No participant row for the external user, so the allowlist branch is
+      # the only thing that can admit this space.
+      refute Chat.participant?(dm.space.id, ctx.user.id)
+      assert ExternalScope.authorized_space?(ctx.user, dm.space)
+    end
+
+    test "false for a DM whose counterpart org is not on the allowlist", ctx do
+      dm = dm_with_counterpart!()
+
+      refute ExternalScope.authorized_space?(ctx.user, dm.space)
+    end
+
+    # The `kind: "dm"` guard is the whole difference between "a DM with someone
+    # from an allowlisted org" and "any space containing someone from an
+    # allowlisted org". Drop it and the allowlist alone admits an external user
+    # to a CHANNEL, which is the widest escalation available in this predicate.
+    test "false for a non-DM space holding a member of an allowlisted org", ctx do
+      counterpart = create_user!()
+      counterpart_org = tenant_org!()
+      plain_membership!(counterpart, counterpart_org)
+
+      channel = create_space(%{kind: "channel"})
+      add_user(channel.id, counterpart.id)
+      {:ok, _} = Tenancy.allow_dm(ctx.user, counterpart_org)
+
+      refute ExternalScope.authorized_space?(ctx.user, channel)
+    end
+
+    test "false for a nil space", ctx do
+      refute ExternalScope.authorized_space?(ctx.user, nil)
+    end
+
+    # The trap the move exists to prevent: `visible_space_id?/2` looks like a
+    # drop-in gate and is not one. Swapping it in silently locks an external
+    # user out of an allowlisted DM.
+    test "an allowlisted DM is admitted here and refused by visible_space_id?/2", ctx do
+      dm = dm_with_counterpart!()
+      {:ok, _} = Tenancy.allow_dm(ctx.user, dm.counterpart_org)
+
+      assert ExternalScope.authorized_space?(ctx.user, dm.space)
+
+      refute ExternalScope.visible_space_id?(dm.space.id, ExternalScope.for_user(ctx.user.id)),
+             "membership-only read scope must not be substituted for the admission gate"
+    end
+  end
+
+  # A DM space carrying exactly one participant, who belongs to an org of
+  # their own. Whether the caller may open it is then a pure function of
+  # whether that org is on the caller's DM allowlist.
+  defp dm_with_counterpart! do
+    counterpart = create_user!()
+    counterpart_org = tenant_org!()
+    plain_membership!(counterpart, counterpart_org)
+
+    space = create_space(%{kind: "dm"})
+    add_user(space.id, counterpart.id)
+
+    %{space: space, counterpart: counterpart, counterpart_org: counterpart_org}
   end
 end

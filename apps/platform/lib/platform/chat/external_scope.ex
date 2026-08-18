@@ -19,7 +19,8 @@ defmodule Platform.Chat.ExternalScope do
     * M8 (per-org DM allowlist) owns `may_dm_org?/2` and the DM-creation gate.
       M7's read scope is `chat_participants` membership — the tightest set: a
       DM the external user already participates in is in-scope by definition —
-      so M7 does not re-implement the allowlist.
+      so M7 does not re-implement the allowlist. `authorized_space?/2` below
+      CONSUMES `may_dm_org?/2` for its DM branch; it does not redefine it.
     * M9 (attachments) owns the signed-URL / presigner scope. M7 stops at the
       context read-query filter.
 
@@ -38,10 +39,25 @@ defmodule Platform.Chat.ExternalScope do
 
   Internal and system (nil) scopes are pass-through everywhere — this is
   external-user-only, so no internal read path regresses.
+
+  ## Read scope vs admission gate
+
+  Two different questions live in this module and collapsing them is a bug in
+  both directions:
+
+    * `visible_space_id?/2`, and the query scopers above it, answer
+      MEMBERSHIP — the filter a read query wants.
+    * `authorized_space?/2` answers ADMISSION — may this external user open
+      this space at all. That is membership OR the per-org DM allowlist.
+
+  Admission is the wider set. Using the read scope as the gate refuses a DM
+  the allowlist admits; using the gate as the read filter returns rows the
+  user is not a member of. Pick by the question asked.
   """
 
   import Ecto.Query
 
+  alias Platform.Chat
   alias Platform.Chat.Participant
   alias Platform.Repo
   alias Platform.Tenancy
@@ -120,4 +136,52 @@ defmodule Platform.Chat.ExternalScope do
   end
 
   def visible_space_id?(_space_id, _scope), do: true
+
+  @doc """
+  May this external user open `space`? The single ADMISSION predicate behind
+  every external entry point to a chat space.
+
+  `true` when the user holds a real `chat_participants` row for the space
+  (channels, groups, and DMs they already belong to — `apply_grant` and DM
+  creation materialize the row), or when the space is a DM whose counterpart
+  belongs to an org on the user's per-org DM allowlist.
+
+  Both gates call THIS function: the HTTP plug
+  (`PlatformWeb.Plugs.ExternalUserScope`) and the LiveView mount. It was
+  private to the plug until task 01a011ed; the LiveView had no equivalent,
+  and that gap is the defect this move closes. Do not grow a second copy.
+  Two gates answering the same question is how they drift apart.
+
+  `nil` is `false`. Callers must render the SAME denial for a `nil` space as
+  for an out-of-scope one: an off-limits slug has to be indistinguishable
+  from a missing one, or the denial becomes an existence oracle.
+
+  See the moduledoc on why this is not `visible_space_id?/2`.
+  """
+  @spec authorized_space?(map(), map() | nil) :: boolean()
+  def authorized_space?(_user, nil), do: false
+
+  def authorized_space?(user, %{id: space_id} = space) do
+    Chat.participant?(space_id, user.id) or dm_allowlisted?(user, space)
+  end
+
+  # DM ACCESS branch: let an external user open a DM surface with a counterpart
+  # whose org is on their per-org DM allowlist. This gates ACCESS to an
+  # existing space only — M8 (task 019f8837-4663) owns server-side enforcement
+  # of DM *initiation* (rejecting a create to a non-allowlisted org). Keep this
+  # branch to access, not creation.
+  defp dm_allowlisted?(user, %{kind: "dm", id: space_id}) do
+    space_id
+    |> Chat.list_participants(participant_type: "user")
+    |> Enum.reject(fn p -> p.participant_id == user.id end)
+    |> Enum.any?(fn p -> counterpart_org_allowed?(user, p.participant_id) end)
+  end
+
+  defp dm_allowlisted?(_user, _space), do: false
+
+  defp counterpart_org_allowed?(user, counterpart_user_id) do
+    %{id: counterpart_user_id}
+    |> Tenancy.list_user_memberships()
+    |> Enum.any?(fn m -> Tenancy.may_dm_org?(user, m.org_id) end)
+  end
 end
