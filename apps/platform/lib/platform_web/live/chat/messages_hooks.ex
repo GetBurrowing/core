@@ -722,6 +722,54 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     update(socket, :drafts, &Map.put(&1, space_id, text))
   end
 
+  @doc """
+  Drop the outgoing space's rendered-message bookkeeping — call from the
+  space-switch teardown, next to `save_draft/2`.
+
+  `:rendered_message_ids` and `:msg_day_labels` are keyed by message id with
+  no space in them, so between leaving space A and the new space's loader
+  running they describe rows that are no longer on screen. Anything that
+  re-hydrates from them in that gap (task 01a0119e: the presence-hook
+  re-insert, which runs one line ahead of the loader) writes space A's
+  messages into space B's stream. The loader repopulates both assigns a
+  moment later; clearing them here removes the stale window entirely rather
+  than relying on every reader to filter.
+
+  `:last_msg_day` / `:first_msg_day` go with them because they are the same
+  bookkeeping seen from the other end: `stream_reinsert_with_day_label/2` falls
+  through to `stream_insert_with_day_label/2` for any id missing from
+  `:msg_day_labels`, and that computes its separator against `:last_msg_day`.
+  Clearing the map while keeping the day would date a row in the incoming space
+  against the outgoing one — worse than clearing neither. The window CURSORS
+  (`:earliest_message_id`, `:latest_message_id`, `:newest_evicted?`,
+  `:evicted_tail_message_ids`) are deliberately left to the loader: nothing
+  reads them between the teardown and the load, and they are not what a stale
+  re-insert consults.
+  """
+  @spec clear_rendered_messages(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def clear_rendered_messages(socket) do
+    socket
+    |> assign(:rendered_message_ids, MapSet.new())
+    |> assign(:msg_day_labels, %{})
+    |> assign(:last_msg_day, nil)
+    |> assign(:first_msg_day, nil)
+  end
+
+  @doc """
+  The id of the space currently on screen, or `nil` when no space is open.
+
+  Every hook that re-inserts stream rows needs it for `:space_id`, and the
+  `:messages` stream belongs to this module, so the accessor lives here rather
+  than being copied into each hook.
+  """
+  @spec active_space_id(Phoenix.LiveView.Socket.t()) :: binary() | nil
+  def active_space_id(socket) do
+    case socket.assigns[:active_space] do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
+
   # ── Hook callbacks ────────────────────────────────────────────────────
 
   defp handle_event("send_message", %{"compose" => %{"text" => content}}, socket) do
@@ -1288,7 +1336,10 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   Returns the socket unchanged when the message no longer exists.
   """
   def reinsert_stream_message(socket, msg_id) do
-    case Chat.get_message(msg_id) do
+    # Scoped for the same reason as the batched sibling below: the id arrives
+    # from an in-memory assign (a pin set, a reaction payload, a thread
+    # preview), so this re-fetch is the membership check or there isn't one.
+    case Chat.get_message(msg_id, scope: socket.assigns[:external_scope]) do
       nil ->
         socket
 
@@ -1300,7 +1351,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   @doc """
   Batched variant of `reinsert_stream_message/2`. Fetches the messages
-  in a single DB query (via `Chat.get_messages_by_ids/1`) and reinserts
+  in a single DB query (via `Chat.get_messages_by_ids/2`) and reinserts
   each into the `:messages` stream with the same enrichment as the
   singular path. Missing or deleted ids are silently dropped.
 
@@ -1314,16 +1365,43 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   Most stream effects are exercised via the chat LiveView integration
   tests (Stage 4 of task 019e273f). The standalone unit test in
   `messages_hooks_test.exs` covers the empty-input short-circuit.
-  """
-  def reinsert_stream_messages(socket, []), do: socket
 
-  def reinsert_stream_messages(socket, message_ids) when is_list(message_ids) do
-    message_ids
-    |> Chat.get_messages_by_ids()
-    |> Enum.reduce(socket, fn msg, acc ->
-      enriched = enrich_with_reactions(msg, acc)
-      stream_reinsert_with_day_label(acc, enriched)
-    end)
+  ## Options
+
+    * `:space_id` — REQUIRED for a non-empty id list. Only messages belonging
+      to this space are re-inserted. The `:messages` stream only ever holds one
+      space's rows, so a row from anywhere else is a bug in every case, and
+      omitting the option raises rather than silently writing whatever the ids
+      resolve to. `nil` means "no space is on screen" and re-inserts nothing.
+
+  The space is the one the CALLER is writing, not one read back off the socket:
+  `PresenceHooks.enter_space/4` passes the space it was handed, because on a
+  space switch it runs before `:active_space`-derived state has caught up
+  (task 01a0119e).
+
+  The external read scope (`@external_scope`) is threaded into
+  `Chat.get_messages_by_ids/2` here. The ids come out of an in-memory MapSet,
+  so without it the re-fetch would be the one Chat read on this path that is
+  not scope-checked.
+  """
+  def reinsert_stream_messages(socket, message_ids, opts \\ [])
+
+  def reinsert_stream_messages(socket, [], _opts), do: socket
+
+  def reinsert_stream_messages(socket, message_ids, opts) when is_list(message_ids) do
+    case Keyword.fetch!(opts, :space_id) do
+      nil ->
+        socket
+
+      space_id ->
+        message_ids
+        |> Chat.get_messages_by_ids(scope: socket.assigns[:external_scope])
+        |> Enum.filter(&(&1.space_id == space_id))
+        |> Enum.reduce(socket, fn msg, acc ->
+          enriched = enrich_with_reactions(msg, acc)
+          stream_reinsert_with_day_label(acc, enriched)
+        end)
+    end
   end
 
   defp maybe_update_inline_thread(socket, %{thread_id: thread_id} = msg)

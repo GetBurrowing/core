@@ -100,7 +100,9 @@ defmodule PlatformWeb.ChatLive.PinHooks do
      socket
      |> assign(:pins, pins)
      |> assign(:pinned_message_ids, pinned_message_ids)
-     |> MessagesHooks.reinsert_stream_messages(filtered_for_rendered(socket, [pin.message_id]))}
+     |> MessagesHooks.reinsert_stream_messages(filtered_for_rendered(socket, [pin.message_id]),
+       space_id: MessagesHooks.active_space_id(socket)
+     )}
   end
 
   defp handle_info({:pin_removed, %{message_id: msg_id}}, socket) do
@@ -111,7 +113,9 @@ defmodule PlatformWeb.ChatLive.PinHooks do
      socket
      |> assign(:pins, pins)
      |> assign(:pinned_message_ids, pinned_message_ids)
-     |> MessagesHooks.reinsert_stream_messages(filtered_for_rendered(socket, [msg_id]))}
+     |> MessagesHooks.reinsert_stream_messages(filtered_for_rendered(socket, [msg_id]),
+       space_id: MessagesHooks.active_space_id(socket)
+     )}
   end
 
   defp handle_info(_msg, socket), do: {:cont, socket}

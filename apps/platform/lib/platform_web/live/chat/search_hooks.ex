@@ -168,6 +168,8 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
       |> Enum.uniq()
       |> Enum.filter(&MapSet.member?(rendered, &1))
 
-    MessagesHooks.reinsert_stream_messages(socket, ids)
+    MessagesHooks.reinsert_stream_messages(socket, ids,
+      space_id: MessagesHooks.active_space_id(socket)
+    )
   end
 end

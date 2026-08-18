@@ -692,6 +692,12 @@ defmodule PlatformWeb.ChatLive do
         |> assign(:can_unarchive?, can_unarchive?(space, socket.assigns.user_id))
         |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
         |> assign(:current_participant, participant)
+        # Same teardown as the standalone surface's `handle_params/3`. The
+        # embed bootstraps once per mount, so today this clears an already-
+        # empty MapSet; it is here so both entry points into
+        # `PresenceHooks.enter_space/4` reach it with no carried-over message
+        # ids, whatever a later change does to the embed's lifecycle.
+        |> MessagesHooks.clear_rendered_messages()
         |> PresenceHooks.enter_space(space, participant, participants)
         |> MessagesHooks.enter_space(space, participant)
         |> SearchHooks.reset_for_space()
@@ -740,10 +746,18 @@ defmodule PlatformWeb.ChatLive do
         {main_cancelled, socket} = UploadHooks.cancel_all(socket, :attachments)
         {thread_cancelled, socket} = UploadHooks.cancel_all(socket, :thread_attachments)
 
+        # Message bookkeeping keyed by id, with no space in it
+        # (`:rendered_message_ids`, `:msg_day_labels`), describes rows that
+        # stop being on screen the moment we leave `prev`. Drop it here, in
+        # the same teardown as the draft and the presence untrack, so nothing
+        # between this point and the new space's loader can re-hydrate the
+        # outgoing space's messages into the incoming space's stream
+        # (task 01a0119e).
         socket =
           socket
           |> PresenceHooks.leave_space(prev.id)
           |> MessagesHooks.save_draft(prev.id)
+          |> MessagesHooks.clear_rendered_messages()
 
         flash_cancelled_uploads(socket, main_cancelled + thread_cancelled)
       else

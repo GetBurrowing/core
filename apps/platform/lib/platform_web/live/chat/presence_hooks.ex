@@ -226,7 +226,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:agent_presence, agent_presence)
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:agent_typing_pids, MapSet.new())
-    |> reinsert_rendered_messages()
+    |> reinsert_rendered_messages(space.id)
     |> schedule_refresh()
   end
 
@@ -256,7 +256,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
      |> update(:participants_map, fn map ->
        Map.put(map, participant.id, participant_identity(participant, user, agent_avatars))
      end)
-     |> reinsert_rendered_messages()}
+     |> reinsert_rendered_messages(MessagesHooks.active_space_id(socket))}
   end
 
   defp handle_info({:participant_left, _participant}, socket), do: {:halt, socket}
@@ -328,9 +328,18 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   # The `:rendered_message_ids` MapSet is maintained by MessagesHooks
   # (Stage 3 of 019e273f); empty MapSet → no DB call, safe no-op for
   # call sites that fire before the chat is mounted.
-  defp reinsert_rendered_messages(socket) do
+  #
+  # `space_id` is REQUIRED and is the space whose stream is being written.
+  # The MapSet carries no space of its own, so on a space switch it still
+  # holds the previous space's ids when `enter_space/4` runs — this hook
+  # fires one line before the loader resets the stream, so those rows would
+  # land in the new space's DOM and survive the reset (task 01a0119e).
+  # `enter_space/4` passes the space it was handed rather than reading
+  # `:active_space` back off the socket, so re-ordering the switch pipeline
+  # cannot resurrect the defect.
+  defp reinsert_rendered_messages(socket, space_id) do
     ids = socket.assigns[:rendered_message_ids] || MapSet.new()
-    MessagesHooks.reinsert_stream_messages(socket, MapSet.to_list(ids))
+    MessagesHooks.reinsert_stream_messages(socket, MapSet.to_list(ids), space_id: space_id)
   end
 
   # ── handle_info helpers ──────────────────────────────────────────────

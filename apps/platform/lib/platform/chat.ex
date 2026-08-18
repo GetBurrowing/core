@@ -1781,7 +1781,7 @@ defmodule Platform.Chat do
   Returns matching `%Message{}` records; missing or deleted ids are
   silently dropped. Order is not preserved — callers must sort if needed.
 
-  Used by `PlatformWeb.Live.Chat.MessagesHooks.reinsert_stream_messages/2`
+  Used by `PlatformWeb.Live.Chat.MessagesHooks.reinsert_stream_messages/3`
   to refresh many currently-rendered stream rows after a parent assign
   changes, avoiding the N+1 that would result from per-message
   `get_message/1` calls.
