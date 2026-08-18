@@ -17,6 +17,9 @@
     orgs={@orgs}
     fabrikam_admin={@fabrikam_admin?}
     lifecycle_menu_key={@lifecycle_menu_key}
+    mask_names?={@mask_names?}
+    revealed_rail_ids={@revealed_rail_ids}
+    mask_labels={@mask_labels}
     selected_project_id={@selected_project_id}
     current_user_id={@current_user_id}
   />
@@ -130,62 +133,7 @@
             </div>
           </div>
 
-          <%!-- Task 019fed1e — admin-only settings menu, LAST in the header
-               control order so it never competes with what a member came to
-               use. One row today (Pipeline); the row carries a description
-               line, which is the reason this is a menu and not a bare link.
-               Deliberately NO lock icon, NO "Admin" badge, NO tinted row: a
-               member never renders the trigger, so a marker would warn
-               nobody, and for an admin every row here is admin-only, so a
-               badge would mark the rule rather than the exception. The cog's
-               presence IS the signal. Same styled-div/scrim mechanism as the
-               create menu above — `border-base-content/10` matches that
-               sibling rather than the base-300 the design canvas names, for
-               visual consistency between two menus in one header. --%>
-          <div :if={@fabrikam_admin?} class="relative">
-            <button
-              type="button"
-              phx-click="toggle_settings_menu"
-              class="btn btn-ghost btn-sm px-2 text-base-content/60 hover:text-base-content focus-visible-ring"
-              aria-label="Tasks settings"
-              aria-haspopup="menu"
-              aria-controls="tasks-settings-menu"
-              aria-expanded={to_string(@settings_menu_open)}
-              data-role="tasks-settings-menu-trigger"
-            >
-              <span class="hero-cog-6-tooth size-5"></span>
-            </button>
-
-            <div
-              :if={@settings_menu_open}
-              class="fixed inset-0 z-30 hidden md:block"
-              phx-click="toggle_settings_menu"
-              phx-window-keydown="toggle_settings_menu"
-              phx-key="escape"
-              aria-hidden="true"
-            >
-            </div>
-            <div
-              :if={@settings_menu_open}
-              id="tasks-settings-menu"
-              role="menu"
-              aria-label="Tasks settings"
-              class="absolute right-0 top-full z-40 mt-2 hidden min-w-64 flex-col rounded-box border border-base-content/10 bg-base-100 p-2 md:flex"
-              style="box-shadow: var(--shadow-dropdown);"
-            >
-              <.link
-                navigate={~p"/admin/pipeline"}
-                role="menuitem"
-                class="flex flex-col gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-base-200 focus-visible-ring"
-                data-role="tasks-settings-pipeline-link"
-              >
-                <span class="text-sm font-medium text-base-content">Pipeline</span>
-                <span class="text-xs text-base-content/60">
-                  Stage and validation flow across all tasks
-                </span>
-              </.link>
-            </div>
-          </div>
+          <.settings_menu admin?={@fabrikam_admin?} open?={@settings_menu_open} />
         </div>
       </:primary_action>
       <:filters>
@@ -206,6 +154,8 @@
           active_scope_keys={@active_scope_keys}
           projects={@projects}
           epics={@epics}
+          mask_names?={@mask_names?}
+          mask_labels={@mask_labels}
           selected_project_id={@selected_project_id}
           selected_epic_id={@selected_epic_id}
         />
@@ -226,6 +176,8 @@
       selected_project_id={@selected_project_id}
       selected_epic_id={@selected_epic_id}
       epics={@epics}
+      mask_names?={@mask_names?}
+      mask_labels={@mask_labels}
       epics_collapsed={@epics_collapsed}
       show_detail={@show_detail}
       selected_task={@selected_task}
@@ -340,6 +292,8 @@
     id="tasks-create"
     selected_task={@selected_task}
     projects_by_org={@projects_by_org}
+    mask_names?={@mask_names?}
+    mask_labels={@mask_labels}
     epics={@epics}
     agents={@agents}
     users={@users}
@@ -354,35 +308,7 @@
     agents={@agents}
   />
 
-  <%!-- Task 019fed1e — the phone form of the Tasks settings menu. The house
-       sheet primitive rather than a dropdown at phone width, per the design
-       canvas; its known >768px centred-card reflow and inert grab handle are
-       task 019fed0f-ed70 and out of scope here. Its row carries a DISTINCT
-       data-role from the desktop one on purpose: the two are never both
-       visible, but both are in the DOM, and a shared role would make every
-       selector ambiguous. --%>
-  <.sheet
-    :if={@fabrikam_admin? and @settings_menu_open}
-    id="tasks-settings-sheet"
-    open={true}
-    placement={:bottom}
-    on_close="toggle_settings_menu"
-    class="md:hidden"
-  >
-    <:title>Tasks settings</:title>
-    <div class="flex flex-col gap-1">
-      <.link
-        navigate={~p"/admin/pipeline"}
-        class="flex flex-col gap-0.5 rounded-lg px-4 py-3 text-left hover:bg-base-200 transition-colors focus-visible-ring"
-        data-role="tasks-settings-pipeline-link-mobile"
-      >
-        <span class="text-sm font-medium text-base-content">Pipeline</span>
-        <span class="text-xs text-base-content/60">
-          Stage and validation flow across all tasks
-        </span>
-      </.link>
-    </div>
-  </.sheet>
+  <.settings_sheet admin?={@fabrikam_admin?} open?={@settings_menu_open} />
 
   <%!-- Schedule-deletion confirm dialog (task 019f4eaa stage 6). Archive is
        instant + reversible with no modal; only this destructive step confirms. --%>

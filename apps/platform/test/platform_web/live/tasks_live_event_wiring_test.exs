@@ -356,7 +356,34 @@ defmodule PlatformWeb.TasksLiveEventWiringTest do
         |> Enum.map(fn [_, ev] -> ev end)
         |> MapSet.new()
 
-      Map.update(acc, mod, events, &MapSet.union(&1, events))
+      # ATTACHED HOOKS COUNT AS THE SHELL (task 01a00cf1 stage 2).
+      #
+      # A module that calls `attach_hook(socket, _, :handle_event, &handle_event/3)`
+      # writes its clauses as `defp` and is attached to the SHELL's socket, so
+      # an untargeted push from the markup lands there — `owner_for/2` already
+      # resolves such a push to `@shell_module`, correctly. Without this branch
+      # the handler index never sees the clause and every hook-handled event
+      # reads as an orphan.
+      #
+      # This was latent, not new: `LifecycleHooks` has always worked this way.
+      # It went unnoticed because the lifecycle kebab's push sites live in
+      # `components/lifecycle_controls.ex`, which `template_files/0` does not
+      # scan, so its events were never looked up. The rail's masking controls
+      # are the first hook-handled events pushed from markup this guard DOES
+      # read, and they surfaced the gap immediately.
+      hook_events =
+        if Regex.match?(~r/attach_hook\([^)]*:handle_event/s, source) do
+          ~r/defp handle_event\(\s*"([a-z0-9_\-]+)"/
+          |> Regex.scan(source)
+          |> Enum.map(fn [_, ev] -> ev end)
+          |> MapSet.new()
+        else
+          MapSet.new()
+        end
+
+      acc
+      |> Map.update(mod, events, &MapSet.union(&1, events))
+      |> Map.update(@shell_module, hook_events, &MapSet.union(&1, hook_events))
     end)
   end
 

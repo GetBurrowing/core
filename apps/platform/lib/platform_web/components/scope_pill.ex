@@ -165,6 +165,18 @@ defmodule PlatformWeb.Components.ScopePill do
     """
   )
 
+  attr(:value, :string,
+    default: nil,
+    doc: """
+    Overrides the `phx-value-scope` PAYLOAD only, leaving `scope` itself — and
+    therefore the colour classes and the `scope_label/1` fallback — untouched.
+    The Tasks rail's screen-share masking (task 01a00cf1) emits a per-session
+    placeholder slug here so the real org slug is absent from the DOM, and
+    resolves it back to the real slug in its own `filter_scope` handler. A
+    caller that overrides this MUST own that resolution: the pill does not.
+    """
+  )
+
   attr(:active, :boolean,
     default: false,
     doc:
@@ -227,7 +239,8 @@ defmodule PlatformWeb.Components.ScopePill do
         size: @size,
         event: @event,
         target: @target,
-        label: @label
+        label: @label,
+        value: @value
       })}
     <% end %>
     """
@@ -257,6 +270,12 @@ defmodule PlatformWeb.Components.ScopePill do
       |> Map.put_new(:event, "scope_filter")
       |> Map.put_new(:target, nil)
       |> Map.put_new(:label, nil)
+      # The `phx-value-scope` PAYLOAD, separable from `@scope` since task
+      # 01a00cf1: the Tasks rail emits a per-session placeholder slug there
+      # while masking is on and resolves it back in its own handler. `@scope`
+      # itself must stay the real atom — the chip's colour classes and its
+      # `scope_label/1` fallback are both keyed on it.
+      |> Map.put_new(:value, nil)
 
     ~H"""
     <%= if @clickable do %>
@@ -264,7 +283,7 @@ defmodule PlatformWeb.Components.ScopePill do
         type="button"
         phx-click={@event}
         phx-target={@target}
-        phx-value-scope={@scope}
+        phx-value-scope={@value || @scope}
         phx-value-propagated-to={@propagated_to}
         title={@title}
         class={[

@@ -56,10 +56,32 @@ defmodule Platform.MaskAssertions do
   @doc """
   Fail if `name` appears in `html` in ANY of its three spellings, outside the
   three excluded attributes.
+
+  `extra_excluded` adds surface-specific machine identifiers to the exclusion
+  list FOR ONE CALL ONLY, and is how the Tasks rail (task 01a00cf1) is
+  asserted. It is a per-call argument rather than a fourth entry in
+  `@dom_only_attrs` on purpose: widening the module-level list would silently
+  weaken every chat assertion that already passes, whereas a Tasks caller who
+  forgets the argument gets a FAILURE. Over-strict is the safe direction for a
+  default.
+
+  The Tasks rail passes `~w(phx-value-id phx-value-key data-menu-key)`. Each is
+  the same class as `phx-value-scope` above — the ARGUMENT of the action the
+  control performs, not a label:
+
+    * `phx-value-id` — the org slug the lifecycle menu archives / schedules for
+      deletion, and the id the per-item reveal reveals. Mask it and the control
+      acts on nothing, or on the wrong org.
+    * `phx-value-key` / `data-menu-key` — `"org:<slug>"`, the open-state key
+      matched against `@lifecycle_menu_key`. The two must be the same string or
+      the menu never opens.
+
+  Named limitation, same as the other three: they are invisible on a screen
+  share, which is this feature's entire threat model.
   """
-  @spec refute_name_anywhere(binary(), binary()) :: :ok
-  def refute_name_anywhere(html, name) do
-    haystack = normalise(html)
+  @spec refute_name_anywhere(binary(), binary(), [binary()]) :: :ok
+  def refute_name_anywhere(html, name, extra_excluded \\ []) do
+    haystack = normalise(html, extra_excluded)
 
     for form <- forms(name) do
       refute String.contains?(haystack, form),
@@ -91,8 +113,8 @@ defmodule Platform.MaskAssertions do
     :ok
   end
 
-  defp normalise(html) do
-    @dom_only_attrs
+  defp normalise(html, extra_excluded \\ []) do
+    (@dom_only_attrs ++ extra_excluded)
     |> Enum.reduce(html, fn attr, acc ->
       Regex.replace(~r/\s#{Regex.escape(attr)}="[^"]*"/, acc, " ")
     end)

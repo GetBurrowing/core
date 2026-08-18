@@ -43,6 +43,16 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   are scattered across the shell too. State and events are wholly here;
   only two fragments of markup are not.
 
+  ## Read-only masking attrs (task 01a00cf1 stage 3)
+
+  `mask_names?` and `mask_labels` arrive as ATTRS from the shell (written by
+  `PlatformWeb.Tasks.MaskHooks`) and are never written here. Two of this
+  component's three regions render real org and project names — the breadcrumb
+  and the scope rail's sub-org chips — and both sit in the page header, above
+  the rail stage 2 masked. No render site may call `SidebarMask` or resolve its
+  own placeholder: one map, one resolved string per entity, or the text surface
+  and the `aria-label` surface disagree.
+
   ## Hook retargeting
 
   Two JS hooks push filter events, and `pushEvent` from a hook ignores
@@ -57,6 +67,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
 
   alias Platform.Tasks
   alias Platform.Tenancy
+  alias PlatformWeb.Tasks.TaskDisplay
 
   @impl true
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
@@ -68,9 +79,29 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
       <%!-- Active filter breadcrumb. Stage 5 of ADR-0042 prefixes the project
            with `<org_label> / ` (org name carries the scope color token, e.g.
            `text-soylent`) so users always know which tenant context they're
-           inside. --%>
+           inside.
+
+           THE MOST VISIBLE SINGLE LEAK this task had left (01a00cf1 stage 3):
+           it is on screen at both breakpoints for as long as a project is
+           selected, directly above the masked rail, so an unmasked breadcrumb
+           does not merely leak — it makes the masked rail beside it read as
+           broken. Both halves follow @mask_labels.
+
+           `Tenancy.scope_color/1` keeps the real slug on purpose: it emits a
+           CSS utility class and no name, class names cannot be regenerated per
+           session, and `Platform.MaskAssertions` excludes `class` for exactly
+           that reason. Named limitation, as on the rail.
+
+           THE EPIC NAME FOLLOWS THE MASK TOO. An epic is an entity with an id
+           and a name — structurally a project, reachable by the same lookup —
+           not free text like a task title, so `@mask_labels` carries an
+           `{:epic, id}` key and this span reads it through the same
+           `label_for/4` its two siblings use. Leaving it real put a live epic
+           name directly above a fully masked rail, which does not merely leak:
+           it makes the rail beside it read as broken. --%>
       <div
         :if={@selected_project_id}
+        data-role="tasks-breadcrumb"
         class="flex items-center gap-1 px-4 pb-2 text-xs text-base-content/60"
       >
         <span
@@ -82,13 +113,20 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             :if={match?(%Tenancy.Org{}, p.org)}
             class={"font-medium #{Tenancy.scope_color(p.org.slug)}"}
           >
-            {Tenancy.scope_label(p.org.slug)}
+            {TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, p.org.slug},
+              real: Tenancy.scope_label(p.org.slug)
+            )}
           </span>
           <span :if={match?(%Tenancy.Org{}, p.org)} class="text-base-content/40">/</span>
-          <span>{p.name}</span>
+          <span>
+            {TaskDisplay.label_for(@mask_labels, @mask_names?, {:project, p.id}, real: p.name)}
+          </span>
         </span>
         <span :if={@selected_epic_id}>
-          / <span :for={e <- @epics} :if={e.id == @selected_epic_id}>{e.name}</span>
+          /
+          <span :for={e <- @epics} :if={e.id == @selected_epic_id}>
+            {TaskDisplay.label_for(@mask_labels, @mask_names?, {:epic, e.id}, real: e.name)}
+          </span>
         </span>
         <button
           phx-click="filter_clear"
@@ -149,19 +187,31 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         </button>
         <span
           :for={scope <- @active_scope_keys}
-          data-scope-chip={Atom.to_string(scope)}
+          data-scope-chip={TaskDisplay.scope_pill_slug(@mask_labels, @mask_names?, scope)}
           data-active={to_string(@scope_filter == scope)}
           class="inline-flex items-center gap-1"
         >
           <%!-- event/target are NOT optional decoration: `scope_pill/1`
                hardcoded an un-targeted `phx-click="scope_filter"` until
                stage 6, so without these the sub-org chips would render
-               perfectly and click into a shell that no longer handles them. --%>
+               perfectly and click into a shell that no longer handles them.
+
+               `label` is the seam PR #769 already cut for the chat rail (task
+               01a00c66) — it overrides the visible text AND the aria-label
+               together, which is the whole point: a chip that masks its text
+               and keeps the real org name in the accessibility tree has not
+               been masked. THIS IS THE SIXTH SURFACE, found by stage 2's live
+               DOM sweep and absent from stage 3's written site list. It sits in
+               the page header, inches above the masked rail, at desktop width.
+               Passing `nil` while unmasked leaves the pill computing its own
+               label exactly as before — see `TaskDisplay.scope_pill_label/3`. --%>
           <.scope_pill
             scope={scope}
             active={@scope_filter == scope}
             event="filter_scope"
             target={@myself}
+            label={TaskDisplay.scope_pill_label(@mask_labels, @mask_names?, scope)}
+            value={TaskDisplay.scope_pill_slug(@mask_labels, @mask_names?, scope)}
           />
           <span class={[
             "inline-flex items-center justify-center min-w-[18px] h-[18px] -ml-0.5 rounded-full text-[10px] font-bold tabular-nums",
@@ -256,8 +306,15 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   # name), so parse it against the canonical allowlist — anything outside
   # the known set is ignored rather than blowing up
   # `String.to_existing_atom/1`.
+  #
+  # While masking is on the chip emits the per-session PLACEHOLDER slug
+  # (task 01a00cf1), so the value is resolved back to the real slug before it
+  # meets the allowlist. Unmasked, `real_org_slug/2` returns its argument
+  # unchanged and this reads exactly as it did.
   def handle_event("filter_scope", %{"scope" => scope}, socket) do
-    case parse_scope(socket, scope) do
+    resolved = TaskDisplay.real_org_slug(socket.assigns[:mask_labels] || %{}, scope)
+
+    case parse_scope(socket, resolved) do
       {:ok, parsed} -> {:noreply, announce(socket, %{scope_filter: parsed})}
       :error -> {:noreply, socket}
     end

@@ -58,6 +58,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
   alias Platform.Tasks
   alias Platform.Tasks.Task
   alias Platform.Tenancy
+  alias PlatformWeb.Tasks.TaskDisplay
 
   import PlatformWeb.Tasks.TaskDisplay,
     only: [deploy_target_label: 1, project_deploy_targets: 1]
@@ -211,21 +212,33 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
           />
 
           <%!-- Project. Stage 5 of ADR-0042 groups options by their owning org
-               via <optgroup>, mirroring the sidebar's grouped layout. --%>
+               via <optgroup>, mirroring the sidebar's grouped layout.
+
+               Masked via @mask_labels (task 01a00cf1 stage 3). An <optgroup>
+               label is visible the moment the select is opened and is in the
+               DOM the whole time regardless — masking the options alone would
+               leave every org name one tap from the shared screen. The `title`
+               field above is the user's own keystrokes and is left alone. --%>
           <div>
             <label class="label label-text text-xs font-medium">Project *</label>
             <select name="task[project_id]" class="select select-bordered w-full" required>
               <option value="">Select project</option>
               <optgroup
                 :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
-                label={Tenancy.scope_label(org_slug)}
+                label={
+                  TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, org_slug},
+                    real: Tenancy.scope_label(org_slug)
+                  )
+                }
               >
                 <option
                   :for={project <- org_projects}
                   value={project.id}
                   selected={@task_form[:project_id].value == project.id}
                 >
-                  {project.name}
+                  {TaskDisplay.label_for(@mask_labels, @mask_names?, {:project, project.id},
+                    real: project.name
+                  )}
                 </option>
               </optgroup>
             </select>

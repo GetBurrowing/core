@@ -52,12 +52,15 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Tenancy
   alias PlatformWeb.Tasks.BoardData
   alias PlatformWeb.Tasks.BoardHooks
+  alias PlatformWeb.Tasks.EpicLoaders
   alias PlatformWeb.Tasks.LifecycleHooks
   alias PlatformWeb.Tasks.PinHooks
   alias PlatformWeb.Tasks.SteeringComponent
   alias PlatformWeb.Tasks.TaskDetailComponent
 
+  import PlatformWeb.Tasks.EpicLoaders, only: [reload_epics: 1]
   import PlatformWeb.Tasks.ReviewLoaders, only: [load_review_canvases: 1]
+  import PlatformWeb.Tasks.SettingsMenu, only: [settings_menu: 1, settings_sheet: 1]
 
   # `phase_entry/1` only — `all_phases_same_agent?/1` went to
   # `AssigneesComponent` with the modal. What is left here is the
@@ -85,7 +88,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:current_user_id, session["current_user_id"])
      |> assign(:selected_project_id, nil)
      |> assign(:selected_epic_id, nil)
-     |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
+     |> assign(:epics, EpicLoaders.load_epics(nil))
      # Read-only MIRROR of SidebarComponent's `:epics_collapsed`. The epics
      # strip renders in the board column, so the shell threads the boolean
      # through as a BoardComponent attr; the sidebar remains the single
@@ -129,6 +132,10 @@ defmodule PlatformWeb.TasksLive do
      |> bump_detail_epoch()
      |> PinHooks.attach(session["current_user_id"])
      |> LifecycleHooks.attach()
+     # Screen-share name masking (task 01a00cf1 stage 2). BEFORE
+     # `refresh_containers/1`, whose `assign_mask_labels/1` pass must read the
+     # real defaults rather than its own fallbacks.
+     |> PlatformWeb.Tasks.MaskHooks.attach()
      |> LifecycleHooks.refresh_containers()
      |> BoardHooks.attach()
      |> BoardHooks.refresh_board()}
@@ -560,14 +567,6 @@ defmodule PlatformWeb.TasksLive do
     |> push_selected_project_changed()
   end
 
-  defp reload_epics(socket) do
-    assign(
-      socket,
-      :epics,
-      enrich_epics(Tasks.list_epics_for_project(socket.assigns.selected_project_id))
-    )
-  end
-
   # Push the canonical post-handler selection back to the client so the
   # LastProject JS hook can keep localStorage in sync. This MUST fire after
   # both project selection (including the stale-UUID fallback path) and
@@ -620,23 +619,6 @@ defmodule PlatformWeb.TasksLive do
   # hang the mount.
   defp decode_sponsor_param(%{"sponsor" => "mine"}), do: :mine
   defp decode_sponsor_param(_), do: :all
-
-  defp enrich_epics(epics) do
-    counts = Tasks.epic_task_counts(Enum.map(epics, & &1.id))
-
-    Enum.map(epics, fn epic ->
-      c = Map.get(counts, epic.id, %{total: 0, done: 0})
-
-      %{
-        id: epic.id,
-        name: epic.name,
-        description: epic.description,
-        status: epic.status,
-        task_count: c.total,
-        done_count: c.done
-      }
-    end)
-  end
 
   # ── Blocked-explanation surface (task 01a004ad) ────────────────────────
   #

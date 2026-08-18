@@ -843,7 +843,62 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # So the ratchet's promise still holds: no concern re-entered the shell, and
   # every line of the +13 is a forwarding stub for a feature that did not exist
   # on this branch when the 640 pin was set.
-  @shell_line_count 653
+  #
+  # MOVED 653 -> 657 (+4), 2026-08-17, task 01a00cf1 stage 2 (rail masking).
+  # ARITHMETIC: 653 + 4 = 657. The four lines are ONE hook attachment and its
+  # three-line comment:
+  #
+  #     |> PlatformWeb.Tasks.MaskHooks.attach()
+  #
+  # NO CONCERN RE-ENTERED THE SHELL — that is what this pin protects and it
+  # still holds. The stage text asked for the two mount assigns and the three
+  # `toggle_mask_names` / `reveal_rail_item` / `remask_all` handlers to be
+  # written HERE, and they were, at which point this guard failed at 718. They
+  # were then moved to `PlatformWeb.Tasks.MaskHooks` rather than the pin being
+  # moved to 718, because masking is a CONCERN by ADR-0035's criterion (two
+  # assigns, three events, one derived map, reachable from each other and from
+  # nothing else) and accommodating the first feature that wants shell space is
+  # precisely how `chat_live.ex` went 684 -> 4,335.
+  #
+  # State OWNERSHIP is unchanged by that move: an attached `:handle_event` hook
+  # writes the shell's own socket, so `:mask_names?`, `:revealed_rail_ids` and
+  # `:mask_labels` are still shell assigns passed to `SidebarComponent` as
+  # read-only attrs. Only the source file differs.
+  #
+  # The +4 is irreducible: `LifecycleHooks.attach/1` and `BoardHooks.attach/1`
+  # cost the shell the same one line each. A hook has to be attached from the
+  # LiveView that owns the socket.
+  # MOVED 657 -> 664 (+7), 2026-08-18, task 01a00cf1 review remediation.
+  # ARITHMETIC: 657 + 7 = 664. ONE line of code and its six-line comment:
+  #
+  #     |> PlatformWeb.Tasks.MaskHooks.assign_mask_labels()
+  #
+  # appended to `reload_epics/1`. `:epics` became a MASKED ENTITY SET when the
+  # breadcrumb's epic name started reading `@mask_labels`, and `reload_epics/1`
+  # is the only writer of `:epics` — the same reason
+  # `LifecycleHooks.refresh_containers/1` already calls it for
+  # `:project_sections`. Recomputing where the source assign is written is what
+  # keeps the two from disagreeing; the alternative is a second writer.
+  #
+  # NO CONCERN RE-ENTERED THE SHELL. The masking concern is still wholly in
+  # `MaskHooks`; this is one call into it from the writer of an assign it reads,
+  # which is the same shape as the existing `refresh_containers/1` call site.
+  #
+  # RATCHETED DOWN 664 -> 635 (-29), 2026-08-18, task 01a00cf1 CI remediation.
+  # ARITHMETIC: 664 - 29 = 635. The `Check surface line budgets` CI step
+  # failed this branch (shell 664 > 653, template 407 > 398, combined 1071 >
+  # 1051). The budget was NOT raised; two concerns left the shell instead:
+  #
+  #   * `reload_epics/1` + `enrich_epics/1` -> `PlatformWeb.Tasks.EpicLoaders`
+  #     (-29 here; `reload_epics/1` is now imported, `enrich_epics/1` became
+  #     `EpicLoaders.load_epics/1` and the mount call site follows it).
+  #   * the admin settings dropdown + its phone sheet ->
+  #     `PlatformWeb.Tasks.SettingsMenu` (-83 in the TEMPLATE, not here).
+  #
+  # `SettingsMenu` is a pair of FUNCTION components, not a LiveComponent, so
+  # `toggle_settings_menu` and `:settings_menu_open` stay on the shell and no
+  # `phx-target` was introduced — a JS-hook `pushEvent` would have ignored one.
+  @shell_line_count 635
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

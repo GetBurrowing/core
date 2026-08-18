@@ -71,6 +71,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
   import Platform.Tasks.StackGraph, only: [dep_annotation_text: 2, stack_position_glyph: 1]
 
+  alias PlatformWeb.Tasks.TaskDisplay
+
   import PlatformWeb.Tasks.TaskDisplay,
     only: [
       assignee_name: 2,
@@ -235,7 +237,18 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           >
             <div class="card-body gap-1 p-3">
               <div class="flex items-center justify-between gap-2">
-                <h3 class="text-sm font-bold truncate">{epic.name}</h3>
+                <%!-- The epic strip letters out of the SAME `@mask_labels` map
+                     the breadcrumb reads (task 01a00cf1). An epic is an entity
+                     with an id and a name — structurally a project — and this
+                     card sits on the same screen as the breadcrumb one row
+                     above it; masking one and not the other would show two
+                     different names for one epic. Task TITLES on the cards
+                     below are free text with no lookup table and stay real. --%>
+                <h3 class="text-sm font-bold truncate">
+                  {TaskDisplay.label_for(@mask_labels, @mask_names?, {:epic, epic.id},
+                    real: epic.name
+                  )}
+                </h3>
                 <span class={epic_status_badge_class(epic.status)}>{epic.status}</span>
               </div>
               <p :if={epic.description} class="text-xs text-base-content/60 line-clamp-2">

@@ -88,6 +88,32 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
     * `{:sidebar_close_create_menus}` — parent closes the header/FAB create
       menus so picking a menu item dismisses the menu server-side
     * `{:sidebar_flash, kind, msg}` — parent attaches a flash
+
+  ## Read-only masking attrs (task 01a00cf1 stage 2)
+
+  `mask_names?`, `revealed_rail_ids` and `mask_labels` arrive as ATTRS and are
+  never written here. The shell owns them, and the three controls this
+  component renders for them (`toggle_mask_names`, `reveal_rail_item`,
+  `remask_all`) carry NO `phx-target` so their events reach the shell — the
+  same arrangement the org lifecycle controls already use.
+
+  `mask_labels` is precomputed by `LifecycleHooks.assign_mask_labels/1` on the
+  same pass that assigns `project_sections`. No render site in this module may
+  call `Platform.Chat.SidebarMask` or `Tenancy.scope_label/1` for a rail row:
+  one resolved string per entity is what keeps the attribute surface and the
+  text surface from disagreeing.
+
+  Stage 3 carried the same treatment into the mobile `#project-sheet` (rows,
+  `data-org-slug`, both `lifecycle_menu` names, per-item reveals AND the mode
+  strip — the state, not only its effect), and into the two `<optgroup>`-bearing
+  project pickers plus the project-create sheet's org `<select>`. The
+  `project[name]` input in that sheet is NOT masked and never should be: it is
+  the user's own keystrokes, not a name the app is putting on screen.
+
+  Surfaces this component does NOT mask: none remain. The breadcrumb and the
+  scope-rail chips live in `PlatformWeb.Tasks.FiltersComponent`; task titles and
+  epic names on the board are free text and are out of the feature's scope
+  entirely.
   """
 
   use PlatformWeb, :live_component
@@ -96,6 +122,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
   alias Platform.Tasks
   alias Platform.Tasks.{Epic, Project}
   alias Platform.Tenancy
+  alias PlatformWeb.Tasks.TaskDisplay
 
   @impl true
   def mount(socket) do
@@ -333,6 +360,14 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
     end
   end
 
+  # Right padding for an org <summary>: one class covering however many
+  # absolutely-positioned controls overlay the row's right edge (the lifecycle
+  # kebab, the per-item reveal, both, or neither).
+  defp summary_pad(true, true), do: "pr-16"
+  defp summary_pad(true, false), do: "pr-9"
+  defp summary_pad(false, true), do: "pr-9"
+  defp summary_pad(false, false), do: nil
+
   # ── Render ──────────────────────────────────────────────────────────────
 
   @impl true
@@ -349,6 +384,32 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
             Projects
           </span>
           <div class="flex items-center gap-1">
+            <%!-- Screen-share name masking (task 01a00cf1 stage 2). NO
+                 phx-target: the shell owns the state, matching the org
+                 lifecycle controls below. Posts the DESIRED next state rather
+                 than a flip, so a duplicated event from a render race is
+                 idempotent.
+
+                 EYE ONLY. No padlock and no shield anywhere in this feature —
+                 an icon would make the same overclaim the forbidden words
+                 would (this is a presentation aid, not a security control).
+                 The icon swap is deliberately NOT the feature's signal; the
+                 mode strip below is. --%>
+            <button
+              type="button"
+              phx-click="toggle_mask_names"
+              phx-value-masked={to_string(!@mask_names?)}
+              class="channel-mask-toggle"
+              aria-pressed={to_string(@mask_names?)}
+              aria-label="Hide workspace names for sharing"
+              data-role="rail-mask-toggle"
+            >
+              <span
+                class={[if(@mask_names?, do: "hero-eye-slash", else: "hero-eye"), "size-4"]}
+                aria-hidden="true"
+              >
+              </span>
+            </button>
             <.section_add_button
               phx-click="sidebar_toggle_project_create_sheet"
               phx-target={@myself}
@@ -379,24 +440,106 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
              <details> sections. Fabrikam first (root), then tenant orgs alphabetically.
              Header carries the scope color dot (Tenancy.scope_color/1, pure +
              DB-free) so users see at a glance which org a section belongs to. --%>
+        <%!-- Mode strip (task 01a00cf1 stage 2). THE STRIP IS THE SIGNAL, NOT
+             THE ICON STATE: an eye and a crossed-out eye differ by a few
+             pixels of stroke, read in a half-second glance while a share
+             dialog is going up. `.channel-mask-strip` wraps rather than
+             truncates — chat found the single-line form clipped to "Names
+             hidden for s…" at rail width, and a truncated mode label is worse
+             than none. Copy is about PRESENTING, never privacy. --%>
+        <div :if={@mask_names?} class="channel-mask-strip" data-role="rail-mask-strip">
+          <span class="hero-eye-slash size-3.5 flex-shrink-0" aria-hidden="true"></span>
+          <span class="min-w-0 flex-1">
+            {if MapSet.size(@revealed_rail_ids) > 0,
+              do: "Names hidden · #{MapSet.size(@revealed_rail_ids)} showing",
+              else: "Names hidden for sharing"}
+          </span>
+          <button
+            type="button"
+            phx-click="remask_all"
+            class="channel-mask-strip-action"
+            data-role="rail-mask-remask-all"
+          >
+            Show all
+          </button>
+        </div>
+
         <div :if={!@projects_collapsed} class="flex-1 overflow-y-auto">
+          <%!-- Every name-bearing surface on these rows reads @mask_labels via
+               TaskDisplay.rail_label/2 — never Tenancy.scope_label/1 or
+               project.name directly, and never SidebarMask itself. One
+               resolved string per entity, so the attribute surface and the
+               text surface cannot disagree. That divergence is the defect that
+               cost the sibling task 01a00c66 a full review cycle.
+
+               THE ORG ROW'S FOUR ROUTING ATTRIBUTES FOLLOW THE LABEL TOO —
+               `phx-value-id` on the reveal button, `phx-value-key` /
+               `data-menu-key` on the kebab. Each carried `soylent` verbatim
+               under a row reading `Workspace B`, which is the one surface left
+               in this feature routing by a human-readable name: project rows
+               have keyed by UUID all along. They now carry the per-session
+               placeholder slug out of the same map, and the handlers resolve
+               it with `TaskDisplay.real_org_slug/2` before acting.
+
+               `Tenancy.scope_color/1` DELIBERATELY keeps the real slug: it
+               produces a CSS utility class and no name. Class names cannot be
+               regenerated per session, they are invisible on a screen share,
+               and `Platform.MaskAssertions` excludes `class` for exactly that
+               reason. This is a named limitation, not a miss. --%>
           <details
             :for={{org_slug, _org_name, org_projects} <- @project_sections}
             open
             class="group relative"
             data-role="project-group"
-            data-org-slug={org_slug}
+            data-org-slug={TaskDisplay.rail_org_slug(@mask_labels, org_slug)}
           >
-            <summary class={[
-              "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none",
-              (@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"]) && "pr-9"
-            ]}>
+            <summary class={
+              [
+                "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none",
+                # ONE padding class, never two: `["pr-9", "pr-16"]` both land in
+                # the attribute and which wins is Tailwind's stylesheet order,
+                # not the list's — the row's padding would be decided somewhere
+                # other than here. Kebab and reveal each claim a slot; the row
+                # reserves exactly as many as it renders.
+                summary_pad(
+                  @fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"],
+                  @mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)
+                )
+              ]
+            }>
               <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
-              <span>{Tenancy.scope_label(org_slug)}</span>
+              <span>{TaskDisplay.rail_label(@mask_labels, {:org, org_slug})}</span>
               <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
                 {length(org_projects)}
               </span>
             </summary>
+            <%!-- Per-item reveal for the org row. A SIBLING of <summary>, not a
+                 descendant, for the same reason the kebab beside it is one: a
+                 button inside <summary> toggles the native <details> on click,
+                 so revealing a name would also collapse the section.
+
+                 ALWAYS IN THE DOM while this row is masked, never hover-gated.
+                 `@media (hover: hover)` never matches on a touch device and a
+                 hover affordance would vanish there entirely. Offset left of
+                 the kebab's slot when the kebab is also rendered. --%>
+            <button
+              :if={@mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)}
+              type="button"
+              class={[
+                "channel-section-reveal-button absolute top-1.5",
+                if(@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"],
+                  do: "right-8",
+                  else: "right-1"
+                )
+              ]}
+              phx-click="reveal_rail_item"
+              phx-value-kind="org"
+              phx-value-id={TaskDisplay.rail_org_slug(@mask_labels, org_slug)}
+              aria-label="Show this workspace name"
+              data-role="rail-reveal-org"
+            >
+              <span class="hero-eye size-3.5" aria-hidden="true"></span>
+            </button>
             <%!-- Org kebab: a sibling of <summary> (NOT a descendant) positioned
                  over the row's right edge, so clicking it opens the lifecycle
                  menu without toggling the native <details>. Root org (Fabrikam) is
@@ -407,11 +550,11 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                  still owns them and the directory maps they refresh. --%>
             <.lifecycle_menu
               :if={@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"]}
-              key={"org:#{org_slug}"}
-              open={@lifecycle_menu_key == "org:#{org_slug}"}
+              key={"org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
+              open={@lifecycle_menu_key == "org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
               type="org"
-              id={org_slug}
-              name={Tenancy.scope_label(org_slug)}
+              id={TaskDisplay.rail_org_slug(@mask_labels, org_slug)}
+              name={TaskDisplay.rail_label(@mask_labels, {:org, org_slug})}
               class="absolute right-1 top-1.5"
             />
             <div
@@ -424,15 +567,34 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                 phx-value-id={project.id}
                 class={"min-w-0 flex-1 text-left px-5 py-2 text-sm truncate #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
               >
-                {project.name}
+                {TaskDisplay.rail_label(@mask_labels, {:project, project.id})}
               </button>
+              <%!-- Per-item reveal for a project row. In normal flow here (not
+                   absolutely positioned): this row is a <div>, so a nested
+                   button has no <details> to toggle. --%>
+              <button
+                :if={@mask_names? and not MapSet.member?(@revealed_rail_ids, project.id)}
+                type="button"
+                class="channel-section-reveal-button mr-1"
+                phx-click="reveal_rail_item"
+                phx-value-kind="project"
+                phx-value-id={project.id}
+                aria-label="Show this project name"
+                data-role="rail-reveal-project"
+              >
+                <span class="hero-eye size-3.5" aria-hidden="true"></span>
+              </button>
+              <%!-- A DERIVED-STRING LEAK if it took `project.name`: the menu
+                   renders `name` into `aria-label`, the menu's own
+                   `aria-label`, `phx-value-name` and from there the confirm
+                   modal and the flash. It takes the RESOLVED label. --%>
               <.lifecycle_menu
                 :if={@fabrikam_admin}
                 key={"project:#{project.id}"}
                 open={@lifecycle_menu_key == "project:#{project.id}"}
                 type="project"
                 id={project.id}
-                name={project.name}
+                name={TaskDisplay.rail_label(@mask_labels, {:project, project.id})}
                 class="relative pr-2 opacity-0 focus-within:opacity-100 group-hover/proj:opacity-100"
               />
             </div>
@@ -473,26 +635,82 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
         class="md:hidden"
       >
         <:title>Projects</:title>
+        <%!-- THE MODE STRIP RENDERS HERE TOO (task 01a00cf1 stage 3), not only
+             on the desktop aside. Someone who turned masking on at a laptop and
+             then opened this sheet on a phone must be able to see the STATE, not
+             only its effect — a rail of `Workspace A` rows with no explanation
+             reads as a data-loading bug, and the person deciding whether it is
+             safe to keep sharing has nothing on screen to decide from. Distinct
+             data-roles from the desktop strip: the two are never both visible,
+             but both are in the DOM at once and a shared role makes every
+             selector ambiguous (the same reasoning as the settings sheet's). --%>
+        <div :if={@mask_names?} class="channel-mask-strip" data-role="rail-mask-strip-mobile">
+          <span class="hero-eye-slash size-3.5 flex-shrink-0" aria-hidden="true"></span>
+          <span class="min-w-0 flex-1">
+            {if MapSet.size(@revealed_rail_ids) > 0,
+              do: "Names hidden · #{MapSet.size(@revealed_rail_ids)} showing",
+              else: "Names hidden for sharing"}
+          </span>
+          <button
+            type="button"
+            phx-click="remask_all"
+            class="channel-mask-strip-action"
+            data-role="rail-mask-remask-all-mobile"
+          >
+            Show all
+          </button>
+        </div>
         <%!-- Stage 5 of ADR-0042: grouped by org with the same <details> shape
-             as the desktop sidebar so the mobile sheet stays visually consistent. --%>
+             as the desktop sidebar so the mobile sheet stays visually consistent.
+
+             Every name-bearing surface reads @mask_labels through
+             TaskDisplay.rail_label/2, exactly as the desktop rows do — the SAME
+             map, so the phone and the laptop cannot letter an org differently.
+             `data-org-slug` follows the label here too; it is the leak that
+             `refute html =~ "Wayne-Tech"` cannot see. --%>
         <div class="flex flex-col">
           <details
             :for={{org_slug, _org_name, org_projects} <- @project_sections}
             open
             class="relative"
             data-role="project-group"
-            data-org-slug={org_slug}
+            data-org-slug={TaskDisplay.rail_org_slug(@mask_labels, org_slug)}
           >
             <summary class={[
               "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 cursor-pointer select-none",
-              (@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"]) && "pr-9"
+              summary_pad(
+                @fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"],
+                @mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)
+              )
             ]}>
               <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
-              <span>{Tenancy.scope_label(org_slug)}</span>
+              <span>{TaskDisplay.rail_label(@mask_labels, {:org, org_slug})}</span>
               <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
                 {length(org_projects)}
               </span>
             </summary>
+            <%!-- Per-item reveal, a POSITIONED SIBLING of <summary> and not a
+                 descendant: a <button> inside <summary> toggles the native
+                 <details>, so revealing a name would collapse the section under
+                 the finger that tapped it. The desktop rail hit this first. --%>
+            <button
+              :if={@mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)}
+              type="button"
+              class={[
+                "channel-section-reveal-button absolute top-1.5",
+                if(@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"],
+                  do: "right-8",
+                  else: "right-1"
+                )
+              ]}
+              phx-click="reveal_rail_item"
+              phx-value-kind="org"
+              phx-value-id={TaskDisplay.rail_org_slug(@mask_labels, org_slug)}
+              aria-label="Show this workspace name"
+              data-role="rail-reveal-org-mobile"
+            >
+              <span class="hero-eye size-3.5" aria-hidden="true"></span>
+            </button>
             <%!-- Mobile org kebab: same lifecycle_menu + events as the desktop
                  sidebar, keyed with a `mobile-` prefix so its open-state never
                  collides with the desktop menu's data-menu-key in the DOM.
@@ -500,11 +718,14 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                  toggling the native <details>. Root org (Fabrikam) is never offered. --%>
             <.lifecycle_menu
               :if={@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"]}
-              key={"mobile-org:#{org_slug}"}
-              open={@lifecycle_menu_key == "mobile-org:#{org_slug}"}
+              key={"mobile-org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
+              open={
+                @lifecycle_menu_key ==
+                  "mobile-org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"
+              }
               type="org"
-              id={org_slug}
-              name={Tenancy.scope_label(org_slug)}
+              id={TaskDisplay.rail_org_slug(@mask_labels, org_slug)}
+              name={TaskDisplay.rail_label(@mask_labels, {:org, org_slug})}
               class="absolute right-1 top-1.5"
             />
             <div
@@ -517,16 +738,32 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                 phx-value-id={project.id}
                 class={"min-w-0 flex-1 text-left px-5 py-2 text-sm truncate #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
               >
-                {project.name}
+                {TaskDisplay.rail_label(@mask_labels, {:project, project.id})}
               </button>
-              <%!-- Kebab stays visible on touch (no hover reveal like desktop). --%>
+              <%!-- In normal flow: this row is a <div>, so a nested button has
+                   no <details> to toggle. --%>
+              <button
+                :if={@mask_names? and not MapSet.member?(@revealed_rail_ids, project.id)}
+                type="button"
+                class="channel-section-reveal-button mr-1"
+                phx-click="reveal_rail_item"
+                phx-value-kind="project"
+                phx-value-id={project.id}
+                aria-label="Show this project name"
+                data-role="rail-reveal-project-mobile"
+              >
+                <span class="hero-eye size-3.5" aria-hidden="true"></span>
+              </button>
+              <%!-- Kebab stays visible on touch (no hover reveal like desktop).
+                   Takes the RESOLVED label: `name` reaches aria-label,
+                   phx-value-name, the confirm modal and the archive flash. --%>
               <.lifecycle_menu
                 :if={@fabrikam_admin}
                 key={"mobile-project:#{project.id}"}
                 open={@lifecycle_menu_key == "mobile-project:#{project.id}"}
                 type="project"
                 id={project.id}
-                name={project.name}
+                name={TaskDisplay.rail_label(@mask_labels, {:project, project.id})}
                 class="relative pr-2"
               />
             </div>
@@ -587,17 +824,29 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                 required
               >
                 <option value="">Select project</option>
-                <%!-- Stage 5 of ADR-0042: group by owning org via <optgroup>. --%>
+                <%!-- Stage 5 of ADR-0042: group by owning org via <optgroup>.
+
+                     AN OPTGROUP LABEL IS ON SCREEN whenever the select is open,
+                     and it is in the DOM always — masking the options and
+                     leaving the group headings would put the org names back on
+                     the shared screen the moment someone opened the picker.
+                     Both follow @mask_labels (task 01a00cf1 stage 3). --%>
                 <optgroup
                   :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
-                  label={Tenancy.scope_label(org_slug)}
+                  label={
+                    TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, org_slug},
+                      real: Tenancy.scope_label(org_slug)
+                    )
+                  }
                 >
                   <option
                     :for={project <- org_projects}
                     value={project.id}
                     selected={@epic_form[:project_id].value == project.id}
                   >
-                    {project.name}
+                    {TaskDisplay.label_for(@mask_labels, @mask_names?, {:project, project.id},
+                      real: project.name
+                    )}
                   </option>
                 </optgroup>
               </select>
@@ -704,7 +953,21 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
             </p>
           </div>
 
-          <%!-- Org (required per ADR-0042). --%>
+          <%!-- Org (required per ADR-0042).
+
+               The `project[name]` input above is NOT masked and must not be:
+               it is a form field the user is typing into, its value is their
+               own keystrokes, and blanking or rewriting it would destroy the
+               thing being created. Masking is about names the app puts on
+               screen, not names the user is putting there.
+
+               `@orgs` is a WIDER set than `@project_sections` — it includes
+               orgs with no projects, which have no entry in @mask_labels. Those
+               fall through `rail_label/2`'s fail-closed branch to a bare
+               `Workspace`, so several options can read identically while masked.
+               That is the correct direction to be wrong in and it is
+               recoverable in one click (turn the mode off to pick), whereas the
+               other direction puts a real org name on a shared screen. --%>
           <div>
             <label class="label label-text text-xs font-medium">Org *</label>
             <select
@@ -719,7 +982,9 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                 value={org.id}
                 selected={@project_form[:org_id].value == org.id}
               >
-                {Tenancy.scope_label(org.slug)}
+                {TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, org.slug},
+                  real: Tenancy.scope_label(org.slug)
+                )}
               </option>
             </select>
             <p

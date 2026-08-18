@@ -54,6 +54,7 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
   alias Platform.Tasks
   alias Platform.Tenancy
   alias PlatformWeb.LifecycleActions
+  alias PlatformWeb.Tasks.TaskDisplay
 
   @doc "Attach the container-lifecycle handlers. Call from `TasksLive.mount/3`."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -70,7 +71,14 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
     {:halt, assign(socket, :lifecycle_menu_key, next)}
   end
 
+  # `id` for an org arrives as whatever the rail EMITTED, which while masking
+  # is on is the per-session placeholder slug rather than the real one (task
+  # 01a00cf1). Resolve it here, at the boundary, so everything downstream —
+  # `LifecycleActions`, `:undo_archive`, `:delete_modal` — keeps seeing a real
+  # slug and none of them needs to know masking exists.
   defp handle_event("archive_container", %{"type" => type, "id" => id} = params, socket) do
+    id = resolve_container_id(socket, type, id)
+
     case LifecycleActions.archive(socket.assigns.current_user_record, type, id) do
       {:ok, resource} ->
         # An undo toast rather than a flash (Marlowe, 2026-07-16). Archive stays
@@ -133,6 +141,7 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
          %{"type" => "org" = type, "id" => id, "name" => name},
          socket
        ) do
+    id = resolve_container_id(socket, type, id)
     modal = build_org_delete_modal(id, name, LifecycleActions.purge_preview(type, id))
 
     {:halt, socket |> assign(:lifecycle_menu_key, nil) |> assign(:delete_modal, modal)}
@@ -191,6 +200,13 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
+  # Orgs route by slug on this surface and the rail masks that slug; projects
+  # route by UUID, which is not a name and is never aliased.
+  defp resolve_container_id(socket, "org", id) when is_binary(id),
+    do: TaskDisplay.real_org_slug(socket.assigns[:mask_labels] || %{}, id)
+
+  defp resolve_container_id(_socket, _type, id), do: id
+
   # Only orgs carry the include/keep modal state; a project modal is a no-op.
   defp update_delete_modal(socket, fun) do
     case socket.assigns.delete_modal do
@@ -228,6 +244,7 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
     |> assign(:projects_by_org, Platform.Projects.group_by_org(projects))
     |> assign(:project_sections, project_sections(projects, socket.assigns[:current_user_record]))
     |> assign(:active_scope_keys, active_scope_keys(socket.assigns[:current_user_record]))
+    |> PlatformWeb.Tasks.MaskHooks.assign_mask_labels()
   end
 
   @doc """

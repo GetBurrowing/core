@@ -85,14 +85,33 @@ defmodule Platform.Chat.SidebarMask do
       correct for derived channel names as of stage 6 — `#cyberdyne-builds`
       now titles as `# workspace-f`, matching the header beside it.
 
-  ## Boundary note
+  ## Boundary note — TWO consumers now, and why this still lives in Chat
 
   This is a presentational concept living in the Chat domain context, following
   the precedent of `Platform.Chat.Sidebar.flatten_sections/1` — also
-  presentation-shaped, also pure, also in this module family. The alternative
-  reading (placeholder naming is a `PlatformWeb` concern) is defensible; the
-  choice recorded here is to keep it beside the resolver whose output it
-  consumes. A pure module with a single caller is cheap to move later.
+  presentation-shaped, also pure, also in this module family.
+
+  It is NO LONGER single-caller. The Tasks rail (task 01a00cf1) is a second
+  consumer, reaching it through `PlatformWeb.Tasks.TaskDisplay.mask_labels/3`.
+  Two things about the Tasks rail differ genuinely from chat, which is why the
+  generic arities below exist rather than a forked copy:
+
+    * Tasks orgs are NOT structs. The identity key is a SLUG STRING and the
+      display name comes from a FUNCTION CALL (`Tenancy.scope_label/1`), not
+      from a `.name` field. `placeholders/1` and `label/4` both reach into
+      `section.id` / `section.name`, so neither fits.
+    * Tasks has TWO entity kinds in one rail — orgs and their projects, each
+      lettered independently with its own prefix. Chat had one.
+
+  The generalisation is `placeholders/2` and `label/5`, keyed on a plain id and
+  a caller-supplied prefix. `placeholders/1` and `label/4` are now thin
+  delegates onto them; chat's behaviour is unchanged by construction, and the
+  chat test file passes unmodified.
+
+  The module keeps its `Platform.Chat` namespace DELIBERATELY. Moving it to a
+  neutral home would touch `chat_live` and every chat render site inside a
+  Tasks-scoped task, which is a worse trade than the misleading namespace. That
+  is recorded debt, not an oversight.
   """
 
   @placeholder_prefix "Workspace"
@@ -110,11 +129,32 @@ defmodule Platform.Chat.SidebarMask do
   @spec placeholders([resolved()]) :: %{optional(binary()) => binary()}
   def placeholders(sections) when is_list(sections) do
     sections
-    |> Enum.with_index()
-    |> Map.new(fn {%{section: section}, index} ->
-      {section.id, @placeholder_prefix <> " " <> letters(index)}
-    end)
+    |> Enum.map(fn %{section: section} -> {section.id, section.name} end)
+    |> placeholders(@placeholder_prefix)
   end
+
+  @doc """
+  The id/prefix form of `placeholders/1`, for a rail whose rows are not chat
+  section structs.
+
+  `entries` is a list of `{id, _name}` two-tuples or `%{id: _, name: _}` maps;
+  only the id is read, the name is accepted so a caller can pass one list to
+  both this and `label/5`. `prefix` is the placeholder word — `"Workspace"` for
+  orgs, `"Project"` for projects.
+
+  Letters follow the GIVEN DISPLAY ORDER, exactly as in `placeholders/1`, and
+  roll over past 26 to `AA`. Two entity kinds sharing one rail call this once
+  each, so each kind letters from `A` independently.
+  """
+  @spec placeholders([{binary(), any()} | map()], binary()) :: %{optional(binary()) => binary()}
+  def placeholders(entries, prefix) when is_list(entries) and is_binary(prefix) do
+    entries
+    |> Enum.with_index()
+    |> Map.new(fn {entry, index} -> {entry_id(entry), prefix <> " " <> letters(index)} end)
+  end
+
+  defp entry_id({id, _name}), do: id
+  defp entry_id(%{id: id}), do: id
 
   @doc """
   The string to render for one section header.
@@ -128,13 +168,58 @@ defmodule Platform.Chat.SidebarMask do
           binary()
   def label(placeholders, section, masked?, revealed_ids)
 
-  def label(_placeholders, section, false, _revealed_ids), do: section.name
+  def label(placeholders, section, masked?, revealed_ids) when is_map(section),
+    do: label(placeholders, section.id, section.name, masked?, revealed_ids)
 
-  def label(placeholders, section, true, revealed_ids) do
-    if id_revealed?(revealed_ids, section.id) do
-      section.name
+  @doc """
+  The id/name form of `label/4`, for a caller with no section struct in hand —
+  the Tasks rail, whose org identity is a slug string and whose display name
+  comes from `Tenancy.scope_label/1` rather than a field.
+
+  FAIL-CLOSED, and this branch is the whole point of the function: an id with
+  no entry in `placeholders` returns the BARE PREFIX, never `real_name`. The
+  prefix is recovered from the map's own values (they all share it), falling
+  back to `"Workspace"` for an empty map. Echoing `real_name` back on a miss
+  would leak exactly the name the mode was turned on to hide, and a miss is
+  precisely the case where the caller was wrong about what is in the rail.
+  """
+  @spec label(
+          %{optional(binary()) => binary()},
+          binary(),
+          binary(),
+          boolean(),
+          MapSet.t()
+          | [
+              binary()
+            ]
+        ) :: binary()
+  def label(placeholders, id, real_name, masked?, revealed_ids)
+
+  def label(_placeholders, _id, real_name, false, _revealed_ids), do: real_name
+
+  def label(placeholders, id, real_name, true, revealed_ids) do
+    if id_revealed?(revealed_ids, id) do
+      real_name
     else
-      Map.get(placeholders, section.id, @placeholder_prefix)
+      Map.get_lazy(placeholders, id, fn -> fallback_prefix(placeholders) end)
+    end
+  end
+
+  # All values in one `placeholders/2` map share the prefix they were built
+  # with, so any value recovers it. An empty map has nothing to recover from
+  # and falls back to the chat default — still not the real name, which is the
+  # only property that matters here.
+  defp fallback_prefix(placeholders) when map_size(placeholders) == 0, do: @placeholder_prefix
+
+  defp fallback_prefix(placeholders) do
+    placeholders
+    |> Map.values()
+    |> List.first()
+    |> String.split(" ")
+    |> Enum.drop(-1)
+    |> case do
+      [] -> @placeholder_prefix
+      parts -> Enum.join(parts, " ")
     end
   end
 

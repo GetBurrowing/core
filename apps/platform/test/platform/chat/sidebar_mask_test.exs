@@ -147,4 +147,111 @@ defmodule Platform.Chat.SidebarMaskTest do
       assert SidebarMask.space_label(ctx, sections, "orion") == "orion"
     end
   end
+
+  # ── Task 01a00cf1: the id/prefix arities the Tasks rail needs ────────────
+  #
+  # The Tasks rail has no section struct: its org identity is a SLUG STRING
+  # and its display name comes from a function call. It also carries TWO
+  # entity kinds (orgs and projects) in one rail. Hence `placeholders/2` and
+  # `label/5` rather than a forked module.
+  describe "placeholders/2 — id + prefix" do
+    test "letters follow given display order under a caller-supplied prefix" do
+      entries = [{"zzz", "Cyberdyne"}, {"aaa", "Wayne-Tech"}, {"mmm", "SXI"}]
+
+      assert SidebarMask.placeholders(entries, "Workspace") == %{
+               "zzz" => "Workspace A",
+               "aaa" => "Workspace B",
+               "mmm" => "Workspace C"
+             }
+
+      assert SidebarMask.placeholders(entries, "Project") == %{
+               "zzz" => "Project A",
+               "aaa" => "Project B",
+               "mmm" => "Project C"
+             }
+    end
+
+    test "accepts %{id: _, name: _} maps as well as two-tuples" do
+      tuples = [{"a", "One"}, {"b", "Two"}]
+      maps = [%{id: "a", name: "One"}, %{id: "b", name: "Two"}]
+
+      assert SidebarMask.placeholders(maps, "Project") ==
+               SidebarMask.placeholders(tuples, "Project")
+    end
+
+    test "rolls over past 26 entries" do
+      entries = for i <- 1..30, do: {"e#{i}", "Name #{i}"}
+      placeholders = SidebarMask.placeholders(entries, "Project")
+
+      assert placeholders["e26"] == "Project Z"
+      assert placeholders["e27"] == "Project AA"
+      assert placeholders["e30"] == "Project AD"
+    end
+
+    test "empty list yields an empty map" do
+      assert SidebarMask.placeholders([], "Workspace") == %{}
+    end
+
+    test "agrees with placeholders/1 for the chat shape" do
+      sections = [resolved("a", "Wayne-Tech"), resolved("b", "SXI")]
+      entries = [{"a", "Wayne-Tech"}, {"b", "SXI"}]
+
+      assert SidebarMask.placeholders(sections) ==
+               SidebarMask.placeholders(entries, "Workspace")
+    end
+  end
+
+  describe "label/5 — id + name" do
+    setup do
+      %{
+        workspace: SidebarMask.placeholders([{"a", "Wayne-Tech"}, {"b", "SXI"}], "Workspace"),
+        project: SidebarMask.placeholders([{"p1", "Orbit"}, {"p2", "Ascent"}], "Project")
+      }
+    end
+
+    test "returns the real name when masking is off", %{workspace: p} do
+      assert SidebarMask.label(p, "a", "Wayne-Tech", false, MapSet.new()) == "Wayne-Tech"
+    end
+
+    test "returns the prefixed placeholder when masking is on", %{workspace: w, project: pr} do
+      assert SidebarMask.label(w, "a", "Wayne-Tech", true, MapSet.new()) == "Workspace A"
+      assert SidebarMask.label(w, "b", "SXI", true, MapSet.new()) == "Workspace B"
+      assert SidebarMask.label(pr, "p1", "Orbit", true, MapSet.new()) == "Project A"
+      assert SidebarMask.label(pr, "p2", "Ascent", true, MapSet.new()) == "Project B"
+    end
+
+    test "a revealed id shows its real name; the rest stay masked", %{workspace: p} do
+      revealed = MapSet.new(["a"])
+
+      assert SidebarMask.label(p, "a", "Wayne-Tech", true, revealed) == "Wayne-Tech"
+      assert SidebarMask.label(p, "b", "SXI", true, revealed) == "Workspace B"
+    end
+
+    test "a plain LIST of revealed ids behaves like the MapSet", %{workspace: p} do
+      assert SidebarMask.label(p, "a", "Wayne-Tech", true, ["a"]) == "Wayne-Tech"
+      assert SidebarMask.label(p, "b", "SXI", true, ["a"]) == "Workspace B"
+    end
+
+    test "FAIL CLOSED: an unknown id returns the bare prefix, never the real name",
+         %{workspace: w, project: pr} do
+      assert SidebarMask.label(w, "ghost", "Cyberdyne", true, MapSet.new()) == "Workspace"
+      assert SidebarMask.label(pr, "ghost", "Cyberdyne", true, MapSet.new()) == "Project"
+    end
+
+    test "FAIL CLOSED against an empty placeholder map too" do
+      assert SidebarMask.label(%{}, "ghost", "Cyberdyne", true, MapSet.new()) == "Workspace"
+    end
+
+    test "agrees with label/4 for the chat shape" do
+      sections = [resolved("a", "Wayne-Tech"), resolved("b", "SXI")]
+      p = SidebarMask.placeholders(sections)
+
+      for masked? <- [true, false], id_name <- [{"a", "Wayne-Tech"}, {"b", "SXI"}] do
+        {id, name} = id_name
+
+        assert SidebarMask.label(p, section(id, name), masked?, MapSet.new()) ==
+                 SidebarMask.label(p, id, name, masked?, MapSet.new())
+      end
+    end
+  end
 end
