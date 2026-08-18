@@ -2843,7 +2843,28 @@ defmodule Platform.Orchestration.TaskRouter do
 
     case Map.get(deploy_config, "deploy_targets") || Map.get(deploy_config, :deploy_targets) do
       targets when is_list(targets) ->
-        Enum.map(targets, fn target -> target["name"] || inspect(target) end)
+        # MATCH ON THE SHAPE FIRST. This was `target["name"] || inspect(target)`,
+        # whose `||` branch was clearly written for a target that is not a map —
+        # and could never run, because `target["name"]` is `Access.get/3` and
+        # binaries do not implement Access. A project whose deploy_targets are
+        # plain strings (`["staging"]` rather than `[%{"name" => "staging"}]`)
+        # therefore raised FunctionClauseError instead of falling back.
+        #
+        # That mattered far out of proportion to the line. This runs inside
+        # do_log_heartbeat_suppressed/3 — a DIAGNOSTIC path, reached only for a
+        # task whose dispatch is suppressed — so the crash killed that task's
+        # TaskRouter, and with it every other task's router in the same
+        # supervision tree. One project with string-shaped deploy_targets plus
+        # one task awaiting plan review cycled the whole orchestration layer:
+        # restart, re-dispatch everything, crash, repeat. Observed 2026-08-17.
+        #
+        # A function that only builds a log line must never be able to take the
+        # process down; the fallback is now reachable for exactly the input it
+        # was written for.
+        Enum.map(targets, fn
+          target when is_map(target) -> target["name"] || inspect(target)
+          target -> inspect(target)
+        end)
 
       _ ->
         []
