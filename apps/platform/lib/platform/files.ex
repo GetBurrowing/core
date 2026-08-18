@@ -903,8 +903,29 @@ defmodule Platform.Files do
     do: "files:project:" <> project_id
 
   @doc """
-  Subscribes the calling process to a project's file events. Safe to call
-  more than once per process (Phoenix.PubSub.subscribe is idempotent).
+  Subscribes the calling process to a project's file events.
+
+  CAUTION: this is NOT idempotent per pid. `Phoenix.PubSub` does NOT dedup
+  within a single pid — its registry is started with `keys: :duplicate`
+  (deps/phoenix_pubsub/lib/phoenix/pubsub/supervisor.ex) and `subscribe/3` is
+  a bare `Registry.register/3` (deps/phoenix_pubsub/lib/phoenix/pubsub.ex), so
+  a second call from the same process for the same project adds a SECOND
+  registration and every later broadcast on the topic is delivered twice.
+
+  The caller's obligation is therefore to track what it has subscribed and
+  guard the subscribe. `PlatformWeb.FilesLive` is the shape to copy: it holds
+  the current topic in the `:subscribed_project_id` assign and releases it via
+  `maybe_unsubscribe/1` before subscribing to the next project
+  (apps/platform/lib/platform_web/live/files_live.ex:805).
+
+  ASYMMETRY — do NOT reflexively pair every subscribe with an unsubscribe.
+  One `Registry.unregister/2` takes that pid's count for the key to 0, not to
+  n-1: it drops ALL of that pid's entries for the topic. So an unsubscribe on
+  a teardown path silently kills a registration another feature still holds —
+  that is how the unread badge died, when a teardown unsubscribed the space it
+  was leaving and took the mount-time badge registration with it. Guard the
+  subscribe; unsubscribe only with the full overlap of that pid's
+  registrations understood.
   """
   @spec subscribe_project(String.t()) :: :ok | {:error, term()}
   def subscribe_project(project_id) when is_binary(project_id) do

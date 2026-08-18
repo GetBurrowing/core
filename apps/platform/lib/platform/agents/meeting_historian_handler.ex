@@ -96,9 +96,29 @@ defmodule Platform.Agents.MeetingHistorianHandler do
   @impl GenServer
   def init(_opts) do
     # Subscribe to the meta-topic FIRST so projects created during the
-    # `list_projects_unscoped/1` call (or just after) don't slip past — the worst
-    # case is a duplicate subscribe on a topic, which is idempotent for
-    # Phoenix.PubSub.
+    # `list_projects_unscoped/1` call (or just after) don't slip past. The
+    # ordering is deliberate and asymmetric: a missed project is unrecoverable
+    # (no later event re-announces it), while the overlap costs at worst a
+    # duplicate subscribe on a topic.
+    #
+    # That duplicate is a REAL duplicate delivery, not a no-op. `Phoenix.PubSub`
+    # does NOT dedup within a single pid — its registry is started with
+    # `keys: :duplicate` (deps/phoenix_pubsub/lib/phoenix/pubsub/supervisor.ex)
+    # and `subscribe/3` is a bare `Registry.register/3`
+    # (deps/phoenix_pubsub/lib/phoenix/pubsub.ex), so a second call from this
+    # process for the same topic adds a SECOND registration and every later
+    # broadcast on it arrives twice.
+    #
+    # What makes the ordering safe is the MapSet guard, not PubSub: the dynamic
+    # `{:project_meetings_topic_added, _}` clause below opens with
+    # `MapSet.member?(state.subscribed, project_id)` and returns state unchanged
+    # on a hit, so a project caught by both the boot enumeration and the
+    # meta-topic is subscribed once. Do not delete that check believing
+    # `Phoenix.PubSub` covers it — it does not.
+    #
+    # Do NOT "fix" this by pairing an unsubscribe with the subscribe. One
+    # `Registry.unregister/2` takes this pid's count for the key to 0, not n-1,
+    # dropping ALL of its entries for that topic. Guard the subscribe instead.
     :ok = Meetings.subscribe_to_project_meetings_meta()
 
     subscribed =

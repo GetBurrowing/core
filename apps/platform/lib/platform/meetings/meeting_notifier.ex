@@ -45,8 +45,25 @@ defmodule Platform.Meetings.MeetingNotifier do
 
   Both `{:project_created, project}` and `{:project_meetings_topic_added,
   project_id}` prompt a dynamic subscribe so the next `{:meeting_started,
-  _}` for that project routes here. Duplicate subscribes on the same topic
-  are idempotent in `Phoenix.PubSub`.
+  _}` for that project routes here.
+
+  The meta-topic subscribes happen BEFORE the boot enumeration on purpose: a
+  project missed between the two is unrecoverable, while the overlap costs at
+  worst a duplicate subscribe. That duplicate is a REAL duplicate delivery, not
+  a no-op — `Phoenix.PubSub` does NOT dedup within a single pid. Its registry is
+  started with `keys: :duplicate`
+  (deps/phoenix_pubsub/lib/phoenix/pubsub/supervisor.ex) and `subscribe/3` is a
+  bare `Registry.register/3` (deps/phoenix_pubsub/lib/phoenix/pubsub.ex), so a
+  second subscribe from the same process adds a SECOND registration and every
+  later broadcast on the topic arrives twice.
+
+  What actually closes the window is the MapSet guard in
+  `maybe_subscribe_project/2`, not `Phoenix.PubSub`: it opens with
+  `MapSet.member?(state.subscribed, project_id)` and returns state unchanged on
+  a hit, and both dynamic clauses converge on it. Do not delete that check
+  believing `Phoenix.PubSub` covers it. Do not pair an unsubscribe with the
+  subscribe either — one `Registry.unregister/2` takes this pid's count for the
+  key to 0, not n-1, dropping ALL of its entries for that topic.
 
   ## Test injection
 
@@ -93,7 +110,23 @@ defmodule Platform.Meetings.MeetingNotifier do
   @impl GenServer
   def init(_opts) do
     # Subscribe to meta-topics FIRST so projects created mid-`list_projects_unscoped/1`
-    # don't slip past. Idempotent re-subscribes are fine.
+    # don't slip past. The ordering is deliberate and asymmetric: a missed
+    # project is unrecoverable, while the overlap costs at worst a duplicate
+    # subscribe — and that duplicate is a REAL duplicate delivery, not a no-op.
+    # `Phoenix.PubSub` does NOT dedup within a single pid: its registry is
+    # started with `keys: :duplicate`
+    # (deps/phoenix_pubsub/lib/phoenix/pubsub/supervisor.ex) and `subscribe/3`
+    # is a bare `Registry.register/3` (deps/phoenix_pubsub/lib/phoenix/pubsub.ex),
+    # so a second subscribe from this process adds a SECOND registration and
+    # every later broadcast on the topic arrives twice.
+    #
+    # What makes the ordering safe is the MapSet guard in
+    # `maybe_subscribe_project/2` below, not `Phoenix.PubSub`: it returns state
+    # unchanged when `state.subscribed` already holds the project, and both
+    # `{:project_created, _}` and `{:project_meetings_topic_added, _}` converge
+    # on it. Do not delete that check believing PubSub covers it, and do not
+    # pair an unsubscribe with the subscribe — one `Registry.unregister/2`
+    # takes this pid's count for the key to 0, not n-1.
     :ok = Tasks.subscribe_to_projects_lifecycle()
     :ok = Meetings.subscribe_to_project_meetings_meta()
 
