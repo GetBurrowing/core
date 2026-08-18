@@ -804,6 +804,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                       >
                         <textarea
                           class="textarea textarea-bordered textarea-xs w-full"
+                          aria-label="Rejection feedback"
                           placeholder="Describe what needs to change..."
                           phx-keyup="stack_update_feedback_reject_text"
                           phx-target={@myself}

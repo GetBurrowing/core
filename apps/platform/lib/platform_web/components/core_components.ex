@@ -216,6 +216,16 @@ defmodule PlatformWeb.CoreComponents do
                search select tel text textarea time url week hidden)
   )
 
+  attr(:kind, :atom,
+    default: :default,
+    values: [:default, :auto_resize],
+    doc: """
+    textarea only: `:auto_resize` grows with content via `field-sizing: content`
+    (the one blessed inline style — no Tailwind utility exists for it), clamped
+    to the design-system scale (`min-h-10` / `max-h-50`).
+    """
+  )
+
   attr(:field, Phoenix.HTML.FormField,
     doc: "a form field struct retrieved from the form, for example: @form[:email]"
   )
@@ -257,7 +267,7 @@ defmodule PlatformWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset py-0">
       <label for={@id}>
         <input
           type="hidden"
@@ -285,9 +295,14 @@ defmodule PlatformWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset py-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="label mb-1 font-medium whitespace-normal">
+          {@label}<span
+            :if={@rest[:required]}
+            aria-hidden="true"
+          >*</span>
+        </span>
         <select
           id={@id}
           name={@name}
@@ -304,11 +319,43 @@ defmodule PlatformWeb.CoreComponents do
     """
   end
 
+  def input(%{type: "textarea", kind: :auto_resize} = assigns) do
+    ~H"""
+    <div class="fieldset py-0">
+      <label for={@id}>
+        <span :if={@label} class="label mb-1 font-medium whitespace-normal">
+          {@label}<span
+            :if={@rest[:required]}
+            aria-hidden="true"
+          >*</span>
+        </span>
+        <textarea
+          id={@id}
+          name={@name}
+          class={[
+            @class || "w-full textarea",
+            "min-h-10 max-h-50 leading-normal overflow-y-auto",
+            @errors != [] && (@error_class || "textarea-error")
+          ]}
+          style="field-sizing: content"
+          {@rest}
+        >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
+      </label>
+      <.error :for={msg <- @errors}>{msg}</.error>
+    </div>
+    """
+  end
+
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset py-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="label mb-1 font-medium whitespace-normal">
+          {@label}<span
+            :if={@rest[:required]}
+            aria-hidden="true"
+          >*</span>
+        </span>
         <textarea
           id={@id}
           name={@name}
@@ -327,9 +374,14 @@ defmodule PlatformWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset py-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="label mb-1 font-medium whitespace-normal">
+          {@label}<span
+            :if={@rest[:required]}
+            aria-hidden="true"
+          >*</span>
+        </span>
         <input
           type={@type}
           name={@name}
@@ -350,7 +402,7 @@ defmodule PlatformWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
+    <p role="alert" class="mt-1.5 flex gap-2 items-center text-sm text-error">
       <.icon name="hero-exclamation-circle" class="size-5" />
       {render_slot(@inner_block)}
     </p>

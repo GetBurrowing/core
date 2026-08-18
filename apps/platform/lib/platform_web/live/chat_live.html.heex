@@ -2751,6 +2751,7 @@
             <input
               name="name"
               type="text"
+              aria-label="Channel name"
               placeholder="Channel name…"
               class="input input-bordered input-xs w-32"
               required
@@ -2793,10 +2794,11 @@
               <.input
                 field={@search_form[:query]}
                 type="text"
+                aria-label="Search messages in this space"
                 placeholder="Search messages…"
                 autocomplete="off"
                 phx-debounce="250"
-                class="input input-bordered input-sm w-64 text-sm"
+                class="input input-sm w-64 text-sm"
               />
 
               <button
@@ -3314,18 +3316,11 @@
               </p>
             </div>
 
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                Title
-              </label>
-              <input
-                type="text"
-                name="canvas[title]"
-                value={@new_canvas_form[:title].value || ""}
-                placeholder="Sprint planning board"
-                class="input input-bordered w-full"
-              />
-            </div>
+            <.input
+              field={@new_canvas_form[:title]}
+              label="Title"
+              placeholder="Sprint planning board"
+            />
 
             <button
               type="submit"

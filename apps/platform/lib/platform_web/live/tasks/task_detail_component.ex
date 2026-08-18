@@ -1630,12 +1630,16 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 data-role="description-form"
                 class="space-y-2"
               >
-                <textarea
+                <.input
+                  type="textarea"
+                  id="task-description-edit"
                   name="description"
+                  value={@selected_task.description}
                   rows="8"
+                  aria-label="Task description"
                   data-role="description-textarea"
-                  class="textarea textarea-bordered w-full text-sm font-mono"
-                >{@selected_task.description}</textarea>
+                  class="textarea w-full text-sm font-mono"
+                />
                 <div class="flex gap-2">
                   <button type="submit" class="btn btn-primary btn-sm" data-role="description-save">
                     Save

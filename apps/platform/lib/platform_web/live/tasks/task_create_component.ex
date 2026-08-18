@@ -203,17 +203,12 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
           class="form-fields space-y-4"
         >
           <%!-- Title --%>
-          <div>
-            <label class="label label-text text-xs font-medium">Title *</label>
-            <input
-              type="text"
-              name="task[title]"
-              value={@task_form[:title].value}
-              required
-              placeholder="Add unread badges"
-              class="input input-bordered w-full"
-            />
-          </div>
+          <.input
+            field={@task_form[:title]}
+            label="Title"
+            required
+            placeholder="Add unread badges"
+          />
 
           <%!-- Project. Stage 5 of ADR-0042 groups options by their owning org
                via <optgroup>, mirroring the sidebar's grouped layout. --%>
@@ -237,28 +232,28 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
           </div>
 
           <%!-- What --%>
-          <div>
-            <label class="label label-text text-xs font-medium">What *</label>
-            <textarea
-              name="task[what]"
-              required
-              placeholder="What is being changed or added?"
-              style="field-sizing:content"
-              class="textarea textarea-bordered w-full min-h-10 max-h-50 leading-normal"
-            >{@sheet_what}</textarea>
-          </div>
+          <.input
+            type="textarea"
+            kind={:auto_resize}
+            id="task-sheet-what"
+            name="task[what]"
+            value={@sheet_what}
+            label="What"
+            required
+            placeholder="What is being changed or added?"
+          />
 
           <%!-- Why --%>
-          <div>
-            <label class="label label-text text-xs font-medium">Why *</label>
-            <textarea
-              name="task[why]"
-              required
-              placeholder="Why is this change needed?"
-              style="field-sizing:content"
-              class="textarea textarea-bordered w-full min-h-10 max-h-50 leading-normal"
-            >{@sheet_why}</textarea>
-          </div>
+          <.input
+            type="textarea"
+            kind={:auto_resize}
+            id="task-sheet-why"
+            name="task[why]"
+            value={@sheet_why}
+            label="Why"
+            required
+            placeholder="Why is this change needed?"
+          />
 
           <%!-- Epic --%>
           <div>
@@ -454,13 +449,17 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
                 Manual
               </button>
             </div>
-            <textarea
+            <.input
               :if={MapSet.member?(@validation_modes, "manual")}
+              type="textarea"
+              kind={:auto_resize}
+              id="task-sheet-manual-validation"
               name="task[manual_validation_text]"
+              value={@manual_validation_text}
+              aria-label="Manual validation criteria"
               placeholder="Describe the validation criteria..."
-              style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
-              class="textarea textarea-bordered mt-2 w-full text-sm"
-            >{@manual_validation_text}</textarea>
+              class="textarea mt-2 w-full text-sm"
+            />
           </div>
 
           <%!-- Attachments --%>

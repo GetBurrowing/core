@@ -566,23 +566,12 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
           class="form-fields space-y-4"
         >
           <%!-- Name --%>
-          <div>
-            <label class="label label-text text-xs font-medium">Name *</label>
-            <input
-              type="text"
-              name="epic[name]"
-              value={@epic_form[:name].value}
-              required
-              placeholder="Mobile redesign"
-              class="input input-bordered w-full"
-            />
-            <p
-              :for={msg <- Enum.map(@epic_form[:name].errors, &translate_error/1)}
-              class="mt-1 text-xs text-error"
-            >
-              {msg}
-            </p>
-          </div>
+          <.input
+            field={@epic_form[:name]}
+            label="Name"
+            required
+            placeholder="Mobile redesign"
+          />
 
           <%!-- Project. When the board is filtered to a single project we hide
                the picker entirely and pin via a hidden input — matches Rowan's
@@ -622,50 +611,36 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
           <% end %>
 
           <%!-- Description (optional) --%>
-          <div>
-            <label class="label label-text text-xs font-medium">Description</label>
-            <textarea
-              name="epic[description]"
-              placeholder="What is this epic about?"
-              style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
-              class="textarea textarea-bordered w-full text-sm"
-            >{@epic_form[:description].value}</textarea>
-          </div>
+          <.input
+            field={@epic_form[:description]}
+            type="textarea"
+            kind={:auto_resize}
+            label="Description"
+            placeholder="What is this epic about?"
+          />
 
           <%!-- Acceptance criteria (optional) --%>
-          <div>
-            <label class="label label-text text-xs font-medium">Acceptance criteria</label>
-            <textarea
-              name="epic[acceptance_criteria]"
-              placeholder="How will we know this epic is done?"
-              style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
-              class="textarea textarea-bordered w-full text-sm"
-            >{@epic_form[:acceptance_criteria].value}</textarea>
-          </div>
+          <.input
+            field={@epic_form[:acceptance_criteria]}
+            type="textarea"
+            kind={:auto_resize}
+            label="Acceptance criteria"
+            placeholder="How will we know this epic is done?"
+          />
 
           <%!-- Target branch (optional) --%>
-          <div>
-            <label class="label label-text text-xs font-medium">Target branch</label>
-            <input
-              type="text"
-              name="epic[target_branch]"
-              value={@epic_form[:target_branch].value}
-              placeholder="main"
-              class="input input-bordered w-full"
-            />
-          </div>
+          <.input
+            field={@epic_form[:target_branch]}
+            label="Target branch"
+            placeholder="main"
+          />
 
           <%!-- Deploy target (optional) --%>
-          <div>
-            <label class="label label-text text-xs font-medium">Deploy target</label>
-            <input
-              type="text"
-              name="epic[deploy_target]"
-              value={@epic_form[:deploy_target].value}
-              placeholder="staging"
-              class="input input-bordered w-full"
-            />
-          </div>
+          <.input
+            field={@epic_form[:deploy_target]}
+            label="Deploy target"
+            placeholder="staging"
+          />
 
           <%!-- Submit + Cancel --%>
           <div class="flex gap-2 pt-2">
@@ -710,40 +685,20 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
           data-role="project-create-form"
         >
           <%!-- Name --%>
-          <div>
-            <label class="label label-text text-xs font-medium">Name *</label>
-            <input
-              type="text"
-              name="project[name]"
-              value={@project_form[:name].value}
-              required
-              placeholder="Storefront"
-              class="input input-bordered w-full"
-            />
-            <p
-              :for={msg <- Enum.map(@project_form[:name].errors, &translate_error/1)}
-              class="mt-1 text-xs text-error"
-            >
-              {msg}
-            </p>
-          </div>
+          <.input
+            field={@project_form[:name]}
+            label="Name"
+            required
+            placeholder="Storefront"
+          />
 
           <%!-- Slug (optional — auto-derived from name when blank) --%>
           <div>
-            <label class="label label-text text-xs font-medium">Slug</label>
-            <input
-              type="text"
-              name="project[slug]"
-              value={@project_form[:slug].value}
+            <.input
+              field={@project_form[:slug]}
+              label="Slug"
               placeholder="storefront"
-              class="input input-bordered w-full"
             />
-            <p
-              :for={msg <- Enum.map(@project_form[:slug].errors, &translate_error/1)}
-              class="mt-1 text-xs text-error"
-            >
-              {msg}
-            </p>
             <p class="mt-1 text-xs text-base-content/40">
               Leave blank to auto-derive from name.
             </p>

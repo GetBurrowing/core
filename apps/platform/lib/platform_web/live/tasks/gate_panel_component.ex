@@ -199,6 +199,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
             >
               <textarea
                 class="textarea textarea-bordered textarea-xs w-full"
+                aria-label="Review feedback"
                 placeholder="Describe what needs to change..."
                 phx-keyup="gate_feedback_changed"
                 phx-target={@myself}
