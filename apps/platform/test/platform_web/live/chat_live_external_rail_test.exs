@@ -19,9 +19,13 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
 
   alias Platform.Accounts.User
   alias Platform.Chat
+  alias Platform.Chat.ExternalScope
+  alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Chat.Sidebar
   alias Platform.Repo
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
+  alias PlatformWeb.ChatLive
 
   defp with_chat_host(conn, host \\ "chat.localhost") do
     %{conn | host: host}
@@ -548,6 +552,466 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       assert archived.id in Enum.map(archived_channels(int_b), & &1.id),
              "the internal user lost the archived channel, so the helper is emptying too widely"
     end
+  end
+
+  # ── task 019ffca8 stage 4: nothing from an internal space can ENTER an
+  #    external user's assigns ────────────────────────────────────────────────
+  #
+  # The assertion is about what can enter the assigns, NOT about what renders.
+  # A LiveView can only render what its own socket holds, so a case that asserts
+  # only "the external session does not render internal content" leaves the LOAD
+  # path unexamined and stays green while internal content sits in the assigns
+  # one render bug away from view. Every case below reads the hook's own state.
+  #
+  # ANTI-VACUITY, applied without exception. "No internal content reached the
+  # external session" passes trivially against a build that delivered nothing at
+  # all, so every refute is paired IN THE SAME TEST with a positive control
+  # proving the legitimate load or delivery happened. The model is core#676
+  # (`b4fa8d82`): assert the foreign event was really on the wire, then refute
+  # the scoped receive.
+
+  # An off-limits internal space, seeded with the three things an external
+  # session must never hold: a message, a canvas, and an insider roster row.
+  defp internal_space_with_content!(opts \\ []) do
+    insider = create_user!("Ingrid Insider")
+    space = channel!(Keyword.get(opts, :name, "Internal Ops Room"), opts)
+    insider_participant = join!(space, insider) |> participant_for(insider)
+
+    {:ok, message} =
+      Chat.post_message(%{
+        space_id: space.id,
+        participant_id: insider_participant.id,
+        content_type: "text",
+        content: "internal-only-message-body"
+      })
+
+    {:ok, canvas} = canvas!(space, insider_participant, "Internal Roadmap")
+
+    %{space: space, insider: insider, message: message, canvas: canvas}
+  end
+
+  defp participant_for(space, user) do
+    space.id
+    |> Chat.list_participants(participant_type: "user")
+    |> Enum.find(&(&1.participant_id == user.id))
+  end
+
+  defp canvas!(space, participant, title) do
+    Chat.create_canvas(%{
+      "space_id" => space.id,
+      "created_by" => participant.id,
+      "title" => title,
+      "created_by_display_name" => "Ingrid Insider",
+      "created_by_participant_type" => "user",
+      "document" => %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{"id" => "root", "type" => "stack", "children" => []}
+      }
+    })
+  end
+
+  defp assigns(view), do: :sys.get_state(view.pid).socket.assigns
+
+  defp held_message_ids(view), do: assigns(view).rendered_message_ids
+
+  defp held_canvas_ids(view), do: assigns(view).canvases_by_id |> Map.keys() |> MapSet.new()
+
+  defp held_roster_ids(view) do
+    assigns(view).space_participants |> MapSet.new(& &1.participant_id)
+  end
+
+  describe "path 1: the mount load path never loads an off-limits space" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+      allowed = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+      ext_participant = participant_for(allowed, ext)
+
+      {:ok, own_message} =
+        Chat.post_message(%{
+          space_id: allowed.id,
+          participant_id: ext_participant.id,
+          content_type: "text",
+          content: "allowlisted-message-body"
+        })
+
+      {:ok, own_canvas} = canvas!(allowed, ext_participant, "Client Brief")
+
+      %{conn: conn, ext: ext, allowed: allowed, own_message: own_message, own_canvas: own_canvas}
+    end
+
+    test "the mounted session holds its own space's content and none of the internal space's",
+         ctx do
+      internal = internal_space_with_content!()
+
+      {:ok, view, _html} =
+        ctx.conn |> with_chat_host() |> authed(ctx.ext) |> live("/chat/#{ctx.allowed.slug}")
+
+      # POSITIVE CONTROL FIRST. Each refute below is meaningless unless the
+      # legitimate load actually populated the same assign.
+      assert MapSet.member?(held_message_ids(view), ctx.own_message.id),
+             "the allowlisted space's own message never loaded, so the refutes below are vacuous"
+
+      assert MapSet.member?(held_canvas_ids(view), ctx.own_canvas.id),
+             "the allowlisted space's own canvas never loaded, so the refutes below are vacuous"
+
+      assert MapSet.member?(held_roster_ids(view), ctx.ext.id),
+             "the allowlisted space's roster never loaded, so the refutes below are vacuous"
+
+      refute MapSet.member?(held_message_ids(view), internal.message.id)
+      refute MapSet.member?(held_canvas_ids(view), internal.canvas.id)
+      refute MapSet.member?(held_roster_ids(view), internal.insider.id)
+      refute internal.space.id in channel_ids(view)
+      refute internal.space.id in Enum.map(assigns(view).spaces, & &1.id)
+    end
+
+    test "the three loaders themselves return nothing outside the allowlist", ctx do
+      internal = internal_space_with_content!()
+
+      external_scope = ExternalScope.for_user(ctx.ext.id)
+      internal_scope = ExternalScope.for_user(create_user!("Ivan Internal").id)
+
+      assert external_scope.external?, "the fixture user is not external, so nothing is narrowed"
+
+      refute internal_scope.external?,
+             "the control user is external too, so the pair proves nothing"
+
+      # POSITIVE CONTROL: the same three calls under an INTERNAL scope DO return
+      # the internal space's rows. Without this pair, an empty result would read
+      # as a security pass on a build where the loaders were simply broken.
+      assert internal.space.id in space_ids(
+               Chat.list_spaces(kind: "channel", scope: internal_scope)
+             )
+
+      assert Chat.list_messages(internal.space.id, scope: internal_scope) != []
+      assert Chat.list_canvases(internal.space.id, scope: internal_scope) != []
+
+      refute internal.space.id in space_ids(
+               Chat.list_spaces(kind: "channel", scope: external_scope)
+             )
+
+      assert Chat.list_messages(internal.space.id, scope: external_scope) == []
+      assert Chat.list_canvases(internal.space.id, scope: external_scope) == []
+
+      # And the allowlisted space still resolves under the external scope, so the
+      # narrowing is a filter rather than a blanket refusal.
+      assert ctx.allowed.id in space_ids(Chat.list_spaces(kind: "channel", scope: external_scope))
+      assert Chat.list_messages(ctx.allowed.id, scope: external_scope) != []
+    end
+
+    # THE MUTANT, carried in the suite rather than run once by hand. Everything
+    # above is also satisfied by a scope that returns nothing whenever the user
+    # is external, which is the wrong rule and would hide the day membership
+    # stops being consulted. So: a SECOND external user, one who IS a
+    # participant of the very same internal space, must see all three row kinds.
+    # What narrows is membership; externality only decides whether the narrowing
+    # applies at all.
+    test "an external user who IS a member of that space sees it, so membership is what narrows",
+         ctx do
+      internal = internal_space_with_content!()
+
+      guest = external_user!(tenant_org!())
+      join!(internal.space, guest)
+      guest_scope = ExternalScope.for_user(guest.id)
+
+      assert guest_scope.external?, "the guest is not external, so this proves the wrong thing"
+
+      assert internal.space.id in space_ids(Chat.list_spaces(kind: "channel", scope: guest_scope))
+      assert Chat.list_messages(internal.space.id, scope: guest_scope) != []
+      assert Chat.list_canvases(internal.space.id, scope: guest_scope) != []
+
+      # Same space, same instant, the non-member external user: still nothing.
+      other = ExternalScope.for_user(ctx.ext.id)
+      refute internal.space.id in space_ids(Chat.list_spaces(kind: "channel", scope: other))
+      assert Chat.list_messages(internal.space.id, scope: other) == []
+      assert Chat.list_canvases(internal.space.id, scope: other) == []
+    end
+  end
+
+  describe "path 2: the subscribe set excludes off-limits space topics" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+      active = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+      background = channel!("Client Archive", org_id: org.id) |> join!(ext)
+
+      %{conn: conn, ext: ext, org: org, active: active, background: background}
+    end
+
+    test "presence_subscribe_space_ids/2 intersects to the allowlist, and is identity internally",
+         ctx do
+      internal = internal_space_with_content!()
+      all = [ctx.active, ctx.background, internal.space]
+
+      external_set = ChatLive.presence_subscribe_space_ids(all, ctx.ext.id)
+
+      # POSITIVE CONTROL: the SAME list, for an internal user, keeps every id.
+      # A helper that returned [] for everyone would satisfy the refute alone.
+      internal_user = create_user!("Ivan Internal")
+      internal_set = ChatLive.presence_subscribe_space_ids(all, internal_user.id)
+
+      assert Enum.sort(internal_set) == Enum.sort(Enum.map(all, & &1.id)),
+             "the internal subscribe set was narrowed, so the helper is not identity internally"
+
+      assert ctx.active.id in external_set
+      assert ctx.background.id in external_set
+      refute internal.space.id in external_set
+
+      # THE MUTANT. The three assertions above are equally satisfied by a helper
+      # that drops any space an external user did not create, or any space in
+      # another org, or simply the last id in the list. Give the SAME internal
+      # space to an external user who is a member of it: it must stay in the set.
+      guest = external_user!(tenant_org!())
+      join!(internal.space, guest)
+
+      assert internal.space.id in ChatLive.presence_subscribe_space_ids(all, guest.id),
+             "an external MEMBER lost their own space's topic, so the intersect is not membership"
+    end
+
+    test "a message posted into an off-limits space reaches the external session by no path",
+         ctx do
+      internal = internal_space_with_content!()
+      insider_participant = participant_for(internal.space, internal.insider)
+
+      {:ok, view, _html} =
+        ctx.conn |> with_chat_host() |> authed(ctx.ext) |> live("/chat/#{ctx.active.slug}")
+
+      before_unread = assigns(view).unread_counts
+
+      # The foreign event, really on the wire: `Chat.post_message/1` broadcasts
+      # `{:new_message, msg}` on the space topic exactly as production does.
+      {:ok, foreign} =
+        Chat.post_message(%{
+          space_id: internal.space.id,
+          participant_id: insider_participant.id,
+          content_type: "text",
+          content: "internal-only-broadcast-body"
+        })
+
+      # POSITIVE CONTROL, same test and same mechanism: a message in an
+      # ALLOWLISTED background space DOES reach this session and moves its unread
+      # count. That proves the per-space subscribe + `{:new_message}` path is live,
+      # so the refutes below are measuring scope rather than a dead broadcast.
+      background_author = create_user!("Bea Background")
+      join!(ctx.background, background_author)
+      background_participant = participant_for(ctx.background, background_author)
+
+      {:ok, _allowed_msg} =
+        Chat.post_message(%{
+          space_id: ctx.background.id,
+          participant_id: background_participant.id,
+          content_type: "text",
+          content: "allowlisted-background-body"
+        })
+
+      html = render(view)
+      after_unread = assigns(view).unread_counts
+
+      assert Map.get(after_unread, ctx.background.id, 0) >
+               Map.get(before_unread, ctx.background.id, 0),
+             "the allowlisted background space never delivered, so this case proves nothing"
+
+      assert Map.get(after_unread, internal.space.id, 0) ==
+               Map.get(before_unread, internal.space.id, 0),
+             "an off-limits space's message reached the external session's unread counts"
+
+      refute MapSet.member?(held_message_ids(view), foreign.id)
+      refute html =~ "internal-only-broadcast-body"
+    end
+  end
+
+  describe "path 3: the global chat:spaces topic" do
+    # `chat:spaces` is joined by EVERY connected chat session, external ones
+    # included (`ChatLive.do_mount/3`), so `{:space_created, space}` for an
+    # internal channel does arrive here. What matters is what the handler then
+    # puts into the assigns.
+    #
+    # SCOPE OF THIS CASE, stated so a green result is not over-read: it covers
+    # the ASSIGNS only. The same clause also calls `ChatPubSub.subscribe/1` on
+    # the new space with no membership check, which is a separate defect already
+    # ticketed as 01a011d4 and deliberately not asserted here.
+    test "an internal channel created after mount enters nothing in the external assigns",
+         %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+      allowed = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+
+      internal_user = create_user!("Ivan Internal")
+      internal_home = channel!("Internal Landing") |> join!(internal_user)
+
+      {:ok, ext_view, _} =
+        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{allowed.slug}")
+
+      {:ok, int_view, _} = conn |> authed(internal_user) |> live("/chat/#{internal_home.slug}")
+
+      # Created AFTER both sessions mounted, so it can only arrive by broadcast.
+      fresh = channel!("Internal Skunkworks")
+
+      _ = render(ext_view)
+      _ = render(int_view)
+
+      # POSITIVE CONTROL: the internal session DID receive the broadcast and put
+      # the channel on its rail. Without it, a broadcast that never fired would
+      # read exactly like a correctly scoped one.
+      assert fresh.id in channel_ids(int_view),
+             "the internal session never received {:space_created, _}, so the refutes are vacuous"
+
+      ext_assigns = assigns(ext_view)
+
+      refute fresh.id in channel_ids(ext_view)
+      refute fresh.id in Enum.map(ext_assigns.spaces, & &1.id)
+      refute section_space_ids(ext_assigns.channel_sections) |> Enum.member?(fresh.id)
+      refute sidebar_section_space_ids(ext_assigns.sidebar_sections) |> Enum.member?(fresh.id)
+      refute render(ext_view) =~ fresh.name
+
+      # THE MUTANT, and the one that matters most here. Every refute above also
+      # passes on a session that never joined `chat:spaces` at all, or whose
+      # handler crashed, or that stopped processing broadcasts after mount, none
+      # of which is the property being claimed. Make the SAME external session
+      # entitled to the SAME channel and replay the SAME event: it must land.
+      join!(fresh, ext)
+      ChatPubSub.broadcast_space_event({:space_created, fresh})
+      _ = render(ext_view)
+
+      assert fresh.id in channel_ids(ext_view),
+             "the external session did not act on {:space_created, _} even when entitled, " <>
+               "so the refutes above were passing for the wrong reason"
+    end
+  end
+
+  describe "path 4: navigation between allowlisted spaces leaves nothing behind" do
+    test "after moving space to space, the session holds no off-limits message, canvas or roster row",
+         %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+
+      space_a = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+      space_b = channel!("Client Archive", org_id: org.id) |> join!(ext)
+      participant_a = participant_for(space_a, ext)
+      participant_b = participant_for(space_b, ext)
+
+      {:ok, canvas_a} = canvas!(space_a, participant_a, "Brief A")
+      {:ok, canvas_b} = canvas!(space_b, participant_b, "Brief B")
+
+      internal = internal_space_with_content!()
+
+      {:ok, view, _} = conn |> with_chat_host() |> authed(ext) |> live("/chat/#{space_a.slug}")
+
+      assert MapSet.member?(held_canvas_ids(view), canvas_a.id),
+             "space A's canvas never loaded, so the navigation below starts from nothing"
+
+      render_patch(view, ~p"/chat/#{space_b.slug}")
+
+      # POSITIVE CONTROL: the move actually happened and actually reloaded.
+      assert assigns(view).active_space.id == space_b.id
+
+      assert MapSet.member?(held_canvas_ids(view), canvas_b.id),
+             "space B's canvas never loaded, so the refutes below ride on an empty map"
+
+      # The canvas map is REPLACED on a space switch, not merged. This is the
+      # assertion that keeps the off-limits refute honest: a map that only ever
+      # grew would hide a stale entry behind a passing `refute Map.has_key?`.
+      refute MapSet.member?(held_canvas_ids(view), canvas_a.id),
+             "space A's canvas survived the move to space B, so @canvases_by_id accumulates"
+
+      refute MapSet.member?(held_message_ids(view), internal.message.id)
+      refute MapSet.member?(held_canvas_ids(view), internal.canvas.id)
+      refute MapSet.member?(held_roster_ids(view), internal.insider.id)
+
+      # And back again, because a return trip re-runs the loaders a second time.
+      render_patch(view, ~p"/chat/#{space_a.slug}")
+
+      assert assigns(view).active_space.id == space_a.id
+      assert MapSet.member?(held_canvas_ids(view), canvas_a.id)
+      refute MapSet.member?(held_canvas_ids(view), canvas_b.id)
+      refute MapSet.member?(held_message_ids(view), internal.message.id)
+      refute MapSet.member?(held_canvas_ids(view), internal.canvas.id)
+      refute MapSet.member?(held_roster_ids(view), internal.insider.id)
+      refute render(view) =~ "internal-only-message-body"
+    end
+  end
+
+  # ── REPRODUCTION for task 01a011ed-9ce1-7c8b-90d3-3d1b7527656d ─────────────
+  #
+  # SKIPPED BECAUSE IT FAILS ON TODAY'S CODE, not because it is flaky and not
+  # because the defect is in doubt. Task 019ffca8 stage 4 found this and its
+  # brief forbids fixing scoping code, so the reproduction lands here and the
+  # fix lands with the ticket. Remove the tag when the gate ships.
+  #
+  # THE DEFECT. `PlatformWeb.Plugs.ExternalUserScope` is the only gate deciding
+  # which space an external user may open, and plugs run on HTTP requests only.
+  # `ChatLive.handle_params/3` re-resolves and loads a space with no external
+  # scope check, and the socket accepts a client-sent `live_patch` frame that
+  # reaches it without passing any plug. `Phoenix.LiveViewTest.render_patch/2`
+  # pushes that exact frame, so this is the browser's own capability rather than
+  # a test-only affordance.
+  #
+  # Three resolver branches reach an off-limits space, and this case walks the
+  # one that matters most for the acceptance bar: a `task-exec-` slug, which
+  # `system_prefix_fallback/1` resolves with no org scoping at all.
+  #
+  # The read is not the worst of it. `ensure_participant/2` inserts a
+  # `chat_participants` row on entry with no authorization check, so the bypass
+  # converts itself into permanent membership: the space joins the rail, a cold
+  # HTTP mount at the same URL returns 200 instead of 403, and the external user
+  # can post into it.
+  @tag :skip
+  test "an external user cannot open an off-limits space over the live socket", %{conn: conn} do
+    org = tenant_org!()
+    ext = external_user!(org)
+    allowed = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+
+    internal =
+      internal_space_with_content!(
+        name: "Internal Execution Space",
+        slug: "task-exec-#{System.unique_integer([:positive])}"
+      )
+
+    # CONTROL: the plug refuses the same space over HTTP. Without this the case
+    # could not tell a missing gate from a space that does not resolve at all.
+    assert conn
+           |> with_chat_host()
+           |> authed(ext)
+           |> get(~p"/chat/#{internal.space.slug}")
+           |> Map.get(:status) == 403
+
+    {:ok, view, _} = conn |> with_chat_host() |> authed(ext) |> live("/chat/#{allowed.slug}")
+
+    render_patch(view, ~p"/chat/#{internal.space.slug}")
+
+    refute assigns(view).active_space.id == internal.space.id,
+           "a client-sent live_patch put an off-limits space in an external user's session"
+
+    refute MapSet.member?(held_message_ids(view), internal.message.id)
+    refute MapSet.member?(held_canvas_ids(view), internal.canvas.id)
+    refute MapSet.member?(held_roster_ids(view), internal.insider.id)
+    refute render(view) =~ "internal-only-message-body"
+
+    refute Chat.participant?(internal.space.id, ext.id),
+           "entering the space minted a chat_participants row, making the bypass permanent"
+  end
+
+  defp space_ids(spaces), do: Enum.map(spaces, & &1.id)
+
+  # `channel_sections/5` returns `%{pinned:, dms:, sub_orgs: %{bucket => [space]},
+  # hidden_sub_orgs: %{bucket => [space]}}`. Every bucket is walked, the hidden
+  # ones included: a channel parked in `hidden_sub_orgs` is still IN the assign,
+  # and the whole point of this stage is what the assign holds.
+  defp section_space_ids(%{
+         pinned: pinned,
+         dms: dms,
+         sub_orgs: sub_orgs,
+         hidden_sub_orgs: hidden_sub_orgs
+       }) do
+    bucket_spaces = fn buckets -> Enum.flat_map(buckets, fn {_bucket, spaces} -> spaces end) end
+
+    (pinned ++ dms ++ bucket_spaces.(sub_orgs) ++ bucket_spaces.(hidden_sub_orgs))
+    |> Enum.map(& &1.id)
+  end
+
+  defp sidebar_section_space_ids(sidebar_sections) do
+    sidebar_sections |> Sidebar.flatten_sections() |> Enum.map(& &1.id)
   end
 
   defp archived_channels(view) do
