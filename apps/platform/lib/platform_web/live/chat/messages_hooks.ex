@@ -1001,8 +1001,19 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     is_background_dm =
       is_nil(active_space) or msg.space_id != active_space.id
 
+    # Kept boolean at the point of assignment: `x && y` yields `nil` (not `false`)
+    # when `x` is nil, and `not/1` accepts only booleans.
+    #
+    # Stage 3 swept the whole chat surface (chat_live.ex, live/chat/*.ex,
+    # components/chat_message.ex) for the same `name = expr && expr` shape.
+    # Sixteen assignments carry an `&&` on the right; seven are the bare
+    # two-operand form; every one of the seven flows only into a context that
+    # tolerates nil (an explicit `nil ->` case clause, a catch-all function
+    # clause, `in`, or a class list Phoenix drops nil from). This site was the
+    # only one whose result reached a strict boolean operator, so there is no
+    # sibling defect to fix and no follow-up ticket to file.
     is_own_message =
-      current_participant && msg.participant_id == current_participant.id
+      not is_nil(current_participant) and msg.participant_id == current_participant.id
 
     socket =
       if is_background_dm and not is_own_message do
