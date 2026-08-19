@@ -210,6 +210,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "space_id comes off the `%Message{}` the router just loaded"},
     {"platform/chat/attention_router.ex", :get, "TaskRecord", 1, :safe_internal,
      "task_id read from the execution space's `metadata[\"task_id\"]`"},
+    {"platform/chat/attention_router.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "mention_names/1 guards the agent-name fallback lookup: agent_id is read off a %Participant{} row, and the guard folds a malformed value into `no mention` rather than raising inside the routing pipeline"},
     {"platform/chat/canvas/server.ex", :get, "Canvas", 1, :safe_internal,
      "`do_persist/1` uses the canvas_id the `CanvasServer` was started with, which `Chat.get_canvas/1` already resolved to a row"},
     {"platform/chat/canvas_access.ex", :get, "Canvas", 1, :safe_internal,
@@ -631,6 +633,15 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # 0 → 1 for `AttentionRouter.mention_names/1`, the agent-name fallback that
+    # makes `@[Name]` mention routing key on the PRINCIPAL rather than on the
+    # nullable `chat_participants.display_name` cache. Triaged by hand: the
+    # `where:` clause DOES pin an id (`a.id == ^agent_id`) and that id arrives
+    # from a participant row, so it is boundary-reachable — the call is
+    # therefore wrapped in a `Platform.UUID.valid?/1` guard, exactly as this
+    # file's guidance requires. A malformed id degrades to "no mention"
+    # instead of raising `Ecto.Query.CastError` inside the routing pipeline.
+    "platform/chat/attention_router.ex" => 1,
     # 10 → 11 for task 019fa1cc stage 3's `pending_bytes_in_range/4`.
     # Triaged by hand: the new call is `Repo.one` over a subquery of
     # `per_day_bytes_query/4`, whose `where:` clause pins only two

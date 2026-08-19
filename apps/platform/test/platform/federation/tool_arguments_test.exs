@@ -94,7 +94,11 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # identified, and an empty lease list is ALREADY a legitimate answer here
   # (leases are created only by the blocker path, never by dispatch), so the
   # two cases would be indistinguishable.
-  @surveyed_required_count 134
+  # 135 with `space_create`'s `name`. HONEST: the handler opens with
+  # `require_string(args, "name", "space_create")` and declares no alias. A
+  # tolerated absence would create a nameless channel, and the slug is derived
+  # from the name, so there would be nothing left to identify the space by.
+  @surveyed_required_count 135
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

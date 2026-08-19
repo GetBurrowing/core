@@ -1,6 +1,8 @@
 defmodule Platform.Chat.AttentionRouterTest do
   use Platform.DataCase, async: false
 
+  import Ecto.Query
+
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Agents.Agent
   alias Platform.Chat
@@ -1540,6 +1542,85 @@ defmodule Platform.Chat.AttentionRouterTest do
 
       assert tokens == ["Zip"]
       refute String.contains?(legacy_zone, "@[")
+    end
+  end
+
+  describe "agent mentions when participant display_name is NULL" do
+    # Regression: agent participant rows written through the raw
+    # `Chat.add_participant/2` path (RPC channel creation) carried a NULL
+    # `display_name`. `mentioned?/2` consulted ONLY that column, so `@[Dalton]`
+    # produced no `:mention` decision, no dispatch, no dead-letter row and no
+    # error — the message silently vanished. Mention identity now keys on the
+    # principal, with the participant column as a cache.
+    #
+    # These rows are inserted with `Repo.insert!` on purpose: the write side now
+    # resolves the name, so a legacy NULL row is no longer reachable through the
+    # public API and has to be forged to be tested.
+    defp legacy_null_name_participant(space_id, agent_id) do
+      {:ok, participant} = Chat.add_agent_participant(space_id, agent_id)
+
+      {1, _} =
+        Repo.update_all(
+          from(p in Platform.Chat.Participant, where: p.id == ^participant.id),
+          set: [display_name: nil]
+        )
+
+      Repo.get!(Platform.Chat.Participant, participant.id)
+    end
+
+    test "mention by agent NAME still routes when display_name is NULL" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Dalton"})
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+
+      participant = legacy_null_name_participant(space.id, agent.id)
+      assert is_nil(participant.display_name)
+
+      message = create_message(space.id, user.id, %{content: "hey @[Dalton] look at this"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      assert %{participant_id: participant.id, reason: :mention} in decisions
+    end
+
+    test "mention by agent SLUG still routes when display_name is NULL" do
+      space = create_space()
+      user = create_participant(space.id)
+
+      agent =
+        create_agent(%{name: "Dalton", slug: "dalton-#{System.unique_integer([:positive])}"})
+
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+
+      participant = legacy_null_name_participant(space.id, agent.id)
+      message = create_message(space.id, user.id, %{content: "ping @[#{agent.slug}] please"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      assert %{participant_id: participant.id, reason: :mention} in decisions
+    end
+
+    test "mentioned?/2 is true for a NULL-named agent participant" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Dalton"})
+      participant = legacy_null_name_participant(space.id, agent.id)
+
+      message = create_message(space.id, user.id, %{content: "@[dalton] hi"})
+
+      assert AttentionRouter.mentioned?(participant, message)
+    end
+
+    test "a NULL-named agent is NOT mentioned by an unrelated name" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Dalton"})
+      participant = legacy_null_name_participant(space.id, agent.id)
+
+      message = create_message(space.id, user.id, %{content: "@[Higgins] hi"})
+
+      refute AttentionRouter.mentioned?(participant, message)
     end
   end
 end

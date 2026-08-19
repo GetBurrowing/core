@@ -655,7 +655,7 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # false-alarm previously required SSH plus a hand-written SQL query, which
     # a federated agent does not have
     # (+runtime_event_list, +execution_lease_list → 97)
-    @t6_baseline_tool_count 97
+    @t6_baseline_tool_count 98
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

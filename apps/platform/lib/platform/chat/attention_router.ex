@@ -691,8 +691,9 @@ defmodule Platform.Chat.AttentionRouter do
       {bracketed_tokens, legacy_zone} = extract_bracketed_tokens(downcased)
 
       name_match =
-        is_binary(p.display_name) and p.display_name != "" and
-          name_mention?(String.downcase(p.display_name), bracketed_tokens, legacy_zone)
+        Enum.any?(mention_names(p), fn name ->
+          name_mention?(String.downcase(name), bracketed_tokens, legacy_zone)
+        end)
 
       id_match = id_mention?(String.downcase(p.id), bracketed_tokens, legacy_zone)
 
@@ -862,6 +863,53 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp classify_bracketed_token("here"), do: %{kind: :broadcast, target: :here}
   defp classify_bracketed_token(name), do: %{kind: :name, value: name}
+
+  # Names this participant answers to for @-mention purposes.
+  #
+  # `chat_participants.display_name` is a DENORMALISED CACHE of the principal's
+  # name, not the identity itself. It is nullable, and every caller that reaches
+  # `Platform.Chat.add_participant/2` directly (RPC channel creation, ad-hoc
+  # console work) could historically omit it and silently write NULL. When that
+  # happened for an agent, `@[Dalton]` produced NO `:mention` decision, NO
+  # dispatch, and NO error anywhere — the message simply vanished.
+  #
+  # So mention identity keys on the PRINCIPAL. A blank participant name falls
+  # back to the `agents` row and matches on both `name` and `slug`, because the
+  # two are equally likely to be what a human or an LLM typed.
+  #
+  # The fallback query only runs for participants whose cached name is blank —
+  # which the write-side resolution in `Platform.Chat.do_add_participant/2` and
+  # the NULL backfill migration make vanishingly rare. It exists so a future
+  # write path that reintroduces the hole degrades to "slightly slower" rather
+  # than "silently undeliverable".
+  @spec mention_names(Participant.t()) :: [String.t()]
+  defp mention_names(%Participant{display_name: display_name})
+       when is_binary(display_name) and display_name != "" do
+    [display_name]
+  end
+
+  # `Platform.UUID.valid?/1` guard, not a rescue: `where: a.id == ^value` raises
+  # the same `Ecto.Query.CastError` as `Repo.get/2` on a malformed id, and this
+  # value reaches us from a participant row rather than from code. Degrading to
+  # "no mention" is right; taking the routing pipeline down is not.
+  defp mention_names(%Participant{participant_type: "agent", participant_id: agent_id})
+       when is_binary(agent_id) do
+    if Platform.UUID.valid?(agent_id) do
+      from(a in Platform.Agents.Agent,
+        where: a.id == ^agent_id,
+        select: {a.name, a.slug}
+      )
+      |> Repo.one()
+      |> case do
+        {name, slug} -> Enum.filter([name, slug], &(is_binary(&1) and &1 != ""))
+        nil -> []
+      end
+    else
+      []
+    end
+  end
+
+  defp mention_names(_participant), do: []
 
   defp name_mention?(name, bracketed_tokens, legacy_zone) do
     name in bracketed_tokens or String.contains?(legacy_zone, "@#{name}")

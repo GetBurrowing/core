@@ -1014,6 +1014,47 @@ defmodule Platform.Federation.ToolSurface do
   defp space_tools do
     [
       %{
+        name: "space_create",
+        description:
+          "Create a channel in a Suite org. This is the supported way for an agent to create a channel — the alternative (a raw `Platform.Chat.create_channel/1` RPC) has repeatedly written participant rows with a NULL `display_name`, which silently drops every `@[Name]` mention of the affected agent. This tool resolves a display name for every participant it adds, so it cannot reproduce that. The calling agent is added as a participant (attention_mode `mention`) so it can hear the channel it just made; the role-pinned Historian auto-joins as it does for any channel.",
+        parameters: %{
+          name: %{
+            type: "string",
+            required: true,
+            description: "Human-readable channel name, e.g. \"Webhook Intake\""
+          },
+          slug: %{
+            type: "string",
+            required: false,
+            description:
+              "URL slug. Omit to derive it from `name` (lowercased, non-alphanumerics collapsed to hyphens). Must be unique within the org."
+          },
+          org_id: %{
+            type: "string",
+            required: false,
+            description:
+              "UUID of the org to create the channel in. Omit to use the calling agent's home org. A tenant-pinned agent may only pass its own org."
+          },
+          description: %{
+            type: "string",
+            required: false,
+            description: "Optional one-line description of what the channel is for"
+          },
+          agent_ids: %{
+            type: "array",
+            required: false,
+            description:
+              "Optional UUIDs or slugs of additional agents to add as participants. Each gets its display_name resolved from the `agents` row. Unresolvable entries are reported in `skipped` rather than failing the call."
+          }
+        },
+        returns:
+          "`{id, name, slug, org_id, description, kind: \"channel\", participants: [{participant_id, agent_id, display_name}], skipped: [...]}`. `participants` lists every agent row written, each with a non-null display_name.",
+        limitations:
+          "Creates channels only (never DMs or groups). Slug must be unique within the org — a collision returns a recoverable error rather than reusing the existing channel. Human users are not added; invite them in-app or via `add_participant`. A tenant-pinned agent cannot create channels in another org.",
+        when_to_use:
+          "Whenever you need a new channel. Prefer this over any RPC or console path: it is the only channel-creation route that guarantees resolved participant display names."
+      },
+      %{
         name: "space_list",
         description: "List Suite spaces the agent is a member of.",
         parameters: %{
@@ -3054,6 +3095,96 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # ── Space tools ─────────────────────────────────────────────────────────
+
+  def execute("space_create", args, context) do
+    with {:ok, name} <- require_string(args, "name", "space_create"),
+         {:ok, slug} <- space_create_slug(args, name),
+         {:ok, org_id} <- space_create_org(args, context) do
+      attrs =
+        %{
+          name: name,
+          slug: slug,
+          kind: "channel",
+          org_id: org_id,
+          description: Map.get(args, "description")
+        }
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Map.new()
+
+      case Chat.create_channel(attrs) do
+        {:ok, space} ->
+          # Every agent goes in through `add_agent_participant/3`, which resolves
+          # `display_name` from the `agents` row. That is the entire reason this
+          # tool exists rather than agents hand-rolling create_channel over RPC:
+          # a channel-creation path that can write a NULL name reintroduces the
+          # silent mention-drop it was built to prevent.
+          #
+          # The CALLER is added deliberately. `Chat.create_space/1` auto-joins
+          # the Historian and nobody else, so an agent creating a channel over
+          # RPC ends up outside it — and since there is no self-join tool, its
+          # only way back in is being @-mentioned by a human. Creating a room you
+          # cannot enter is never what the caller meant.
+          caller_id = Map.get(context, :agent_id)
+
+          requested =
+            case Map.get(args, "agent_ids") do
+              ids when is_list(ids) -> Enum.filter(ids, &(is_binary(&1) and &1 != ""))
+              _ -> []
+            end
+
+          {added, skipped} =
+            ([caller_id] ++ requested)
+            |> Enum.filter(&(is_binary(&1) and &1 != ""))
+            |> Enum.uniq()
+            |> Enum.reduce({[], []}, fn agent_id, {ok, bad} ->
+              case Chat.add_agent_participant(space.id, agent_id, attention_mode: "mention") do
+                {:ok, participant} ->
+                  {ok ++
+                     [
+                       %{
+                         participant_id: participant.id,
+                         agent_id: participant.participant_id,
+                         display_name: participant.display_name
+                       }
+                     ], bad}
+
+                {:error, reason} ->
+                  {ok, bad ++ [%{agent_id: agent_id, reason: inspect(reason)}]}
+              end
+            end)
+
+          {:ok,
+           %{
+             id: space.id,
+             name: space.name,
+             slug: space.slug,
+             org_id: space.org_id,
+             description: space.description,
+             kind: space.kind,
+             participants: added,
+             skipped: skipped
+           }}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error,
+           %{
+             error: "space_create: #{inspect_errors(changeset)}",
+             recoverable: true,
+             suggestion:
+               "A slug collision is the usual cause — pick a different `slug`, or call `space_list` to find the existing channel."
+           }}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "space_create failed: #{inspect(reason)}",
+             recoverable: true,
+             suggestion:
+               "Retry; if the org is archived or suspended, channel creation is blocked."
+           }}
+      end
+    end
+  end
 
   def execute("space_list", args, context) do
     agent_id = Map.get(context, :agent_id)
@@ -10721,6 +10852,55 @@ defmodule Platform.Federation.ToolSurface do
     do: Map.get(config, "brand_decision")
 
   defp brand_decision_of(_), do: nil
+
+  # Derive a slug from the channel name when the caller omits one. Agents
+  # routinely pass only a name, and inventing a slug for them is far better
+  # than a required-argument round trip.
+  defp space_create_slug(args, name) do
+    raw =
+      case Map.get(args, "slug") do
+        slug when is_binary(slug) and slug != "" -> slug
+        _ -> name
+      end
+
+    slug =
+      raw
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "-")
+      |> String.trim("-")
+
+    if slug == "" do
+      {:error,
+       %{
+         error: "space_create: could not derive a slug from `name`",
+         recoverable: true,
+         suggestion: "Pass an explicit `slug` containing at least one letter or digit."
+       }}
+    else
+      {:ok, slug}
+    end
+  end
+
+  # Org scoping mirrors `authorize_org_filter/2`: a tenant-pinned agent may only
+  # act in its own org, a root agent anywhere. Omitting `org_id` means "my home
+  # org", which is what an agent almost always wants.
+  defp space_create_org(args, context) do
+    agent = load_agent(context)
+
+    case Map.get(args, "org_id") do
+      org_id when is_binary(org_id) and org_id != "" ->
+        case authorize_org_filter(agent, org_id) do
+          :ok -> {:ok, org_id}
+          {:error, _} = err -> err
+        end
+
+      _ ->
+        case agent && agent_home_org(agent) do
+          {:tenant, org_id} -> {:ok, org_id}
+          _ -> {:ok, nil}
+        end
+    end
+  end
 
   defp inspect_errors_safe(%Ecto.Changeset{} = changeset), do: inspect_errors(changeset)
   defp inspect_errors_safe(reason), do: inspect(reason)

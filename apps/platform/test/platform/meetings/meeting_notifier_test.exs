@@ -11,6 +11,8 @@ defmodule Platform.Meetings.MeetingNotifierTest do
 
   use Platform.DataCase, async: false
 
+  import Ecto.Query
+
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.MeetingNotifier
@@ -81,6 +83,11 @@ defmodule Platform.Meetings.MeetingNotifierTest do
     meeting
   end
 
+  # `Chat.add_participant/2` now RESOLVES a blank display_name from the
+  # principal, so passing nil no longer produces a nameless row. Tests that
+  # deliberately exercise the notifier's "Someone" fallback need the row the
+  # resolver is designed to prevent, so force it back to NULL afterwards —
+  # exactly the legacy state that existed in production before the fix.
   defp add_user_participant(meeting, opts) do
     user_id = Keyword.get(opts, :user_id, Ecto.UUID.generate())
     display_name = Keyword.get(opts, :display_name)
@@ -93,7 +100,16 @@ defmodule Platform.Meetings.MeetingNotifierTest do
         display_name: display_name
       })
 
-    p
+    if is_nil(display_name) do
+      Platform.Repo.update_all(
+        from(x in Platform.Chat.Participant, where: x.id == ^p.id),
+        set: [display_name: nil]
+      )
+
+      Platform.Repo.get!(Platform.Chat.Participant, p.id)
+    else
+      p
+    end
   end
 
   # A real `users` row — invite rows carry a `user_id` FK, so the random UUIDs

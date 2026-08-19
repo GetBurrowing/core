@@ -13,8 +13,14 @@ defmodule Platform.Chat do
       Platform.Chat.list_spaces(workspace_id: id, kind: "channel", archived: false)
 
       # Participants
-      Platform.Chat.add_participant(space.id, %{participant_type: "user", participant_id: uid, joined_at: DateTime.utc_now()})
+      Platform.Chat.add_participant(space.id, %{participant_type: "user", participant_id: uid, display_name: "Ada", joined_at: DateTime.utc_now()})
+      Platform.Chat.add_participant(space.id, %{participant_type: "agent", participant_id: agent.id, display_name: agent.name, joined_at: DateTime.utc_now()})
       Platform.Chat.list_participants(space.id)
+
+      # `display_name` is resolved from the `agents` / `users` row when omitted,
+      # but pass it explicitly when you have it. A blank agent name used to be
+      # written as NULL, which silently dropped every `@[Name]` mention of that
+      # agent — see `resolve_display_name/1` and ADR 0037.
 
       # Messages
       Platform.Chat.post_message(%{space_id: id, participant_id: pid, content_type: "text", content: "hello"})
@@ -1166,7 +1172,10 @@ defmodule Platform.Chat do
   end
 
   defp do_add_participant(space_id, attrs) do
-    attrs = Map.put(attrs, :space_id, space_id)
+    attrs =
+      attrs
+      |> Map.put(:space_id, space_id)
+      |> resolve_display_name()
 
     result =
       %Participant{}
@@ -1193,6 +1202,75 @@ defmodule Platform.Chat do
 
     result
   end
+
+  # Fill in `display_name` from the principal whenever the caller did not
+  # supply a usable one.
+  #
+  # `display_name` is a denormalised cache of the agent's / user's name. It is
+  # nullable and absent from `Participant.changeset/2`'s `validate_required`,
+  # so any caller reaching `add_participant/2` directly — RPC channel creation
+  # being the common one — could omit it and silently write NULL. A NULL agent
+  # name then breaks three unrelated things at once: the roster renders the
+  # literal "Agent", the @-mention picker offers only "Agent", and
+  # `AttentionRouter.mentioned?/2` stops matching the agent's real name so
+  # every mention of it is dropped with no error and no dead-letter row.
+  #
+  # Resolving here rather than validating-required closes the hole for EVERY
+  # caller, present and future, without breaking the ones that legitimately
+  # pass only the principal id. Validation would merely move the silent failure
+  # to a loud one at each call site; resolution removes the failure.
+  #
+  # Both the missing key AND an explicit `nil`/blank value are handled — that
+  # asymmetry is the exact trap `Keyword.get(opts, :display_name, agent.name)`
+  # in `do_add_agent_participant/3` used to fall into, since a default does not
+  # apply when the key is present holding nil.
+  defp resolve_display_name(attrs) do
+    supplied =
+      Map.get(attrs, :display_name) || Map.get(attrs, "display_name")
+
+    case supplied do
+      name when is_binary(name) ->
+        if String.trim(name) == "" do
+          put_resolved_display_name(attrs)
+        else
+          attrs
+        end
+
+      _ ->
+        put_resolved_display_name(attrs)
+    end
+  end
+
+  defp put_resolved_display_name(attrs) do
+    type = Map.get(attrs, :participant_type) || Map.get(attrs, "participant_type")
+    principal_id = Map.get(attrs, :participant_id) || Map.get(attrs, "participant_id")
+
+    case principal_display_name(type, principal_id) do
+      nil -> attrs
+      name -> attrs |> Map.delete("display_name") |> Map.put(:display_name, name)
+    end
+  end
+
+  defp principal_display_name("agent", agent_id) when is_binary(agent_id) do
+    case resolve_agent(agent_id) do
+      %Agent{name: name} when is_binary(name) and name != "" -> name
+      %Agent{slug: slug} when is_binary(slug) and slug != "" -> slug
+      _ -> nil
+    end
+  end
+
+  defp principal_display_name("user", user_id) when is_binary(user_id) do
+    # `user_display_name/1` already falls back email → "User", so it never
+    # returns nil for a resolvable user; guard the unresolvable case anyway.
+    case user_display_name(user_id) do
+      name when is_binary(name) and name != "" -> name
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp principal_display_name(_type, _principal_id), do: nil
 
   @doc "Fetch a participant by primary key. Returns `nil` if not found."
   @spec get_participant(binary()) :: Participant.t() | nil
@@ -1365,6 +1443,20 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Resolve an agent principal's human-readable name (`agents.name`, falling back
+  to `agents.slug`). Returns `nil` when the agent no longer exists.
+
+  Exists so read surfaces can repair a blank
+  `chat_participants.display_name` instead of rendering the literal "Agent".
+  """
+  @spec agent_principal_name(binary() | nil) :: String.t() | nil
+  def agent_principal_name(agent_id) when is_binary(agent_id) do
+    principal_display_name("agent", agent_id)
+  end
+
+  def agent_principal_name(_), do: nil
+
+  @doc """
   Hard-delete a participant row (ADR 0038). Messages/pins/canvases
   authored by this participant survive via the author_* snapshot columns.
 
@@ -1432,7 +1524,12 @@ defmodule Platform.Chat do
         add_participant(space_id, %{
           participant_type: "agent",
           participant_id: agent.id,
-          display_name: Keyword.get(opts, :display_name, agent.name),
+          # `||`, not `Keyword.get(opts, :display_name, agent.name)`: the
+          # default does not apply when the key is PRESENT holding nil, which
+          # is exactly how callers that thread an unresolved name through
+          # (see `DispatchMembership.maybe_put_display_name/2`) used to write
+          # NULL. `do_add_participant/2` resolves it again as a backstop.
+          display_name: Keyword.get(opts, :display_name) || agent.name,
           attention_mode: Keyword.get(opts, :attention_mode, "mention"),
           joined_at: Keyword.get(opts, :joined_at, DateTime.utc_now())
         })

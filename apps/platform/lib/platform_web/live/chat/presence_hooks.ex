@@ -621,7 +621,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   def participant_identity(participant, user \\ nil, agent_avatars \\ %{})
 
   def participant_identity(%{participant_type: "agent"} = participant, _user, agent_avatars) do
-    name = participant.display_name || "Agent"
+    name = agent_participant_name(participant)
 
     %{
       participant_type: "agent",
@@ -669,6 +669,27 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       # reject them without losing the identity for render.
       archived: user_archived?(user)
     }
+  end
+
+  # `chat_participants.display_name` is a denormalised cache and is nullable, so
+  # a row written by a caller that skipped it renders as the literal "Agent" —
+  # in the roster, in presence, and in the @-mention autocomplete, which then
+  # offers "Agent" as the only thing you can insert.
+  #
+  # Fall back to the `agents` row before the literal. The lookup only fires for
+  # a blank cache, which the write-side resolution in
+  # `Platform.Chat.do_add_participant/2` plus the NULL backfill migration make
+  # rare — so this is not an N+1 on the normal path, it is a repair path that
+  # should idle at zero queries. "Agent" survives only as the last resort for a
+  # participant whose principal no longer exists.
+  defp agent_participant_name(participant) do
+    case participant.display_name do
+      name when is_binary(name) and name != "" ->
+        name
+
+      _ ->
+        Chat.agent_principal_name(Map.get(participant, :participant_id)) || "Agent"
+    end
   end
 
   defp user_archived?(%{archived_at: %DateTime{}}), do: true

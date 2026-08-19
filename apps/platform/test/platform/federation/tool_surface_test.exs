@@ -82,7 +82,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 92 tools with required components" do
+    test "returns all 98 tools with required components" do
       tools = ToolSurface.tool_definitions()
       # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
       # `task` bundle. 89 as of ADR-0046 member 5 stage 4, which added
@@ -108,13 +108,18 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # `execution_lease_list` to the `task` bundle — the runtime-event and
       # lease rows existed, but reading them back to refute a watchdog
       # no-ack alarm required database access nobody federated has.
-      assert length(tools) == 97
+      # 98 with `space_create` in the `space` bundle — channel creation had no
+      # tool at all, so agents fell back to a raw `Chat.create_channel/1` RPC
+      # that wrote NULL participant display names and silently broke mention
+      # routing for the agents in those channels.
+      assert length(tools) == 98
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
       assert "react" in tool_names
       assert "canvas.versions" in tool_names
       assert "canvas.restore" in tool_names
+      assert "space_create" in tool_names
       assert "space_list" in tool_names
       assert "space_list_agents" in tool_names
       assert "space_leave" in tool_names
