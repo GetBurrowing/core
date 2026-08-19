@@ -14,10 +14,10 @@ defmodule PlatformWeb.ChatLiveCanvasScopeLeakTest do
   space A's canvas panel is the `MessagesHooks.same_active_space?/2` check inside
   each clause.
 
-  Two clauses have it. `:canvas_restored` does not
-  (`canvas_hooks.ex:538` — a bare `put/2`), and `Chat.restore_canvas/1`
-  broadcasts `{:canvas_restored, canvas}` on the space topic from the Activity
-  panel's Restore action.
+  All three canvas lifecycle clauses have it. `:canvas_restored` was a bare
+  `put/2` until task `01a011a8-0038-76c5-8880-f41fa3dafaa8` gave it the same
+  check; `Chat.restore_canvas/1` broadcasts `{:canvas_restored, canvas}` on the
+  space topic from the Activity panel's Restore action.
 
   ## What is asserted, and why not on the HTML
 
@@ -52,13 +52,11 @@ defmodule PlatformWeb.ChatLiveCanvasScopeLeakTest do
   that comment is one of the findings already ticketed as
   `01a011e9-7811-74b7-9803-15200558f22a`.
 
-  ## The skipped test
+  ## The restore case
 
-  `:canvas_restored` is knowingly unguarded and the test for it is EXPECTED to
-  fail against `origin/main`. It is tagged `:skip` rather than softened or
-  deleted, and the fix belongs to task `01a011a8-0038-76c5-8880-f41fa3dafaa8`.
-  The two guarded siblings run green in the same file, which is what proves the
-  test shape works and that the skip is about the code rather than the test.
+  Written here against an unguarded `:canvas_restored` and tagged `:skip` until
+  task `01a011a8-0038-76c5-8880-f41fa3dafaa8` added the guard. The tag is gone
+  and all four cases run.
 
   `async: false` — the file drives connected LiveViews and reads their process
   state, and shares the PubSub bus with every other test in the run.
@@ -357,24 +355,11 @@ defmodule PlatformWeb.ChatLiveCanvasScopeLeakTest do
     end
   end
 
-  # ── The clause with no guard ───────────────────────────────────────────────
+  # ── The restore clause ─────────────────────────────────────────────────────
 
   describe "{:canvas_restored, canvas}" do
-    # EXPECTED TO FAIL against origin/main, and skipped rather than softened.
-    #
-    # `canvas_hooks.ex:538` is `defp handle_info({:canvas_restored, canvas},
-    # socket), do: {:halt, put(socket, canvas)}` — the same unguarded `put/2`
-    # vector as `:canvas_created` had, with no `same_active_space?/2` check, and
-    # `Chat.restore_canvas/1` broadcasts `{:canvas_restored, c}` on the space
-    # topic (`chat.ex:4689`) from the Activity panel's Restore action.
-    #
-    # The fix is owned by task 01a011a8-0038-76c5-8880-f41fa3dafaa8. Stage 5 of
-    # 019ffca8 writes tests and does not add guards, so this stays red and
-    # skipped; whoever lands 01a011a8 removes the tag and this test becomes the
-    # regression net. The two guarded siblings above run green in this same
-    # file, which is what shows the shape is sound and the skip is about the
-    # code rather than the test.
-    @tag :skip
+    # The guard landed under task 01a011a8-0038-76c5-8880-f41fa3dafaa8, so this
+    # case is the regression net for it.
     test "a restore in a background space stays out of the active space's hook state", ctx do
       # FOUNDATION CONTROL, per test. See `assert_background_topic_live/1`.
       assert_background_topic_live(ctx)

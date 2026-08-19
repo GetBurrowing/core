@@ -560,13 +560,20 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp handle_info({:canvas_deleted, canvas}, socket), do: {:halt, remove(socket, canvas)}
 
-  # NOT guarded, deliberately, and flagged rather than silently widened: this is
-  # the same unguarded `put/2` vector as `:canvas_created`, broadcast on the
-  # space topic by `Chat.restore_canvas/1`. The stage-2 brief names
-  # `:canvas_created` and `:canvas_updated` and nothing else, and restore is not
-  # reachable from the reproduction. Reported to the execution space and the
-  # project journal for its own ticket instead of being absorbed here.
-  defp handle_info({:canvas_restored, canvas}, socket), do: {:halt, put(socket, canvas)}
+  # Guarded on `MessagesHooks.same_active_space?/2`, the same check the two
+  # clauses above carry, so all three canvas lifecycle handlers now admit only
+  # the active space's canvases. `Chat.restore_canvas/1` broadcasts on the space
+  # topic, and this session holds a space-topic subscription for every space on
+  # its rail, so an unguarded clause hands `put/2` a foreign canvas. `put/2`
+  # merges it into both `@canvases_by_id` and `@canvases`, and the Live Canvases
+  # panel renders that second list with no message row involved.
+  defp handle_info({:canvas_restored, canvas}, socket) do
+    if MessagesHooks.same_active_space?(socket, canvas) do
+      {:halt, put(socket, canvas)}
+    else
+      {:halt, socket}
+    end
+  end
 
   # Patch broadcast from `Canvas.Server.apply_patches/3,4` — fired on every
   # successful patch (checklist toggle, form save, embed update, etc.). Without
