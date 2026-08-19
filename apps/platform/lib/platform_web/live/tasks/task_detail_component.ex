@@ -95,7 +95,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
       relative_time: 1,
       sponsor?: 2,
       sponsor_name: 2,
-      task_display_status: 1,
+      task_display_status: 2,
       unmet_dependency_count: 1
     ]
 
@@ -1106,7 +1106,16 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
           <%!-- Status + Priority --%>
           <div class="flex flex-wrap items-center gap-2">
-            <% {detail_status_label, detail_status_class} = task_display_status(@selected_task) %>
+            <%!-- One decider (task 01a01a4a stage 5): the status chip is keyed
+               on `Tasks.needs_human_action_reason/2`, resolved here from the
+               panel's OWN pending-review list — the same rows the gate panel
+               below renders — so the merge chip cannot appear on a task whose
+               merge gate precedence has demoted behind a live review request. --%>
+            <% {detail_status_label, detail_status_class} =
+              task_display_status(
+                @selected_task,
+                Tasks.needs_human_action_reason(@selected_task, length(@pending_reviews))
+              ) %>
             <span class={detail_status_class}>{detail_status_label}</span>
             <span :if={@selected_task.priority} class={priority_badge_class(@selected_task.priority)}>
               {String.capitalize(@selected_task.priority)}

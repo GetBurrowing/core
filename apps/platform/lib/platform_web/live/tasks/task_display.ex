@@ -21,14 +21,57 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
 
   import PlatformWeb.Tasks.StatusLabels, only: [status_label: 1]
 
+  # The chip component (`core_components.ex` `chip/1`) emits exactly
+  # `chip-soft chip-#{tone}`. This call site is a `{label, class}` TUPLE
+  # shared by four render sites, so a component cannot be returned — we
+  # emit the component's own classes instead so the rendered span is
+  # byte-identical, dark mode included (declared canvas deviation,
+  # approved on the design canvas rev 4).
+  #
+  # THE TWO CLASSES ARE A PAIR. `chip-warning` alone sets only
+  # `--chip-label`: no tint, no padding, no radius — it renders as bare
+  # amber text where a chip should be. The component made that
+  # unrepresentable; a tuple of strings makes it a typo, one edit degrades
+  # all four call sites at once, and it survives a screenshot. The
+  # both-classes assertion in the test suite is the only thing that
+  # catches it. Do not split this string.
+  @needs_merge_chip_class "chip-soft chip-warning"
+
   @doc """
-  Task-aware status badge: when a task is in `planning` AND has a plan
-  waiting on human review, surface "Plan Ready" with a warning badge to
-  signal action-needed. All other cases fall through to `status_label/1`
-  with the neutral outline badge. Requires `:plans` preloaded — both
+  Task-aware status badge, keyed on the ALREADY-RESOLVED human-action
+  reason from `Tasks.needs_human_action_reason/2`.
+
+  `action_reason` is the second argument on purpose. Before task 01a01a4a
+  stage 5 this function re-derived the merge gate itself from
+  `metadata["awaiting_human_action"] == "merge"`, which made it a SECOND
+  decider alongside the resolver's precedence `cond`. The two disagreed
+  exactly when precedence demoted the merge gate: a `deploying` task with
+  BOTH the merge stamp and an open pending review_request resolved to
+  `:review_request_pending` for every reason-keyed consumer, while this
+  function still emitted the `needs merge` chip — so the card carried the
+  chip AND the review badge, two "needs you" marks that overflowed the
+  card at 1280px. The fix is not another clause; it is deleting the second
+  decider. One resolver, consulted by every render site.
+
+  Emits the warning-toned `needs merge` chip in place of the neutral
+  `deploying` chip when — and only when — the resolved reason is
+  `:awaiting_human_merge`. Replace, never add: `board_component.ex` has
+  settled the doubled-chip question twice (`:1394-1400`, `:1406-1417`),
+  and this one function feeds all four card call sites.
+
+  Also: when a task is in `planning` AND has a plan waiting on human
+  review, surface "Plan Ready" with a warning badge to signal
+  action-needed. All other cases fall through to `status_label/1` with the
+  neutral outline badge. Requires `:plans` preloaded — both
   `Tasks.list_all_tasks/1` and `Tasks.get_task_detail/1` do this.
   """
-  def task_display_status(%Task{status: "planning", plans: plans} = _task)
+  def task_display_status(task, action_reason \\ nil)
+
+  def task_display_status(%Task{status: "deploying"} = _task, :awaiting_human_merge) do
+    {"needs merge", @needs_merge_chip_class}
+  end
+
+  def task_display_status(%Task{status: "planning", plans: plans} = _task, _action_reason)
       when is_list(plans) do
     if Enum.any?(plans, &(&1.status == "pending_review")) do
       {"Plan Ready", "badge badge-warning"}
@@ -37,7 +80,7 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
     end
   end
 
-  def task_display_status(%Task{status: status} = _task) do
+  def task_display_status(%Task{status: status} = _task, _action_reason) do
     {status_label(status), "badge badge-outline"}
   end
 

@@ -160,6 +160,27 @@ defmodule Platform.Orchestration.DispatchPhase do
       line: __ENV__.line
   end
 
+  # Validation kinds that no agent can pass on its own — passing them requires a
+  # person (or, for `pr_merged`, a person clicking merge). Compile-time checked
+  # against Platform.Tasks.Validation.kinds/0 in the same shape as @kind_phase
+  # above, so a renamed kind breaks the build instead of silently never matching.
+  #
+  # `ci_passed` / `ci_check` are DELIBERATELY absent: a deploy stage sitting on a
+  # red or never-reported CI gate IS a stuck agent and must keep alarming.
+  @agent_unpassable_kinds ["manual_approval", "pr_merged"]
+
+  @unknown_unpassable @agent_unpassable_kinds -- Validation.kinds()
+
+  if @unknown_unpassable != [] do
+    raise CompileError,
+      description:
+        "Platform.Orchestration.DispatchPhase: @agent_unpassable_kinds entr(ies) " <>
+          "#{inspect(@unknown_unpassable)} are not valid validation kinds " <>
+          "(Platform.Tasks.Validation.kinds/0). Likely a typo or a renamed kind.",
+      file: __ENV__.file,
+      line: __ENV__.line
+  end
+
   # Phases whose template body is written for a specific running stage. A
   # dispatch of one of these without a stage_id is the fabrication defect 4
   # describes, not a degraded-but-useful prompt.
@@ -311,6 +332,58 @@ defmodule Platform.Orchestration.DispatchPhase do
       true -> false
     end
   end
+
+  @doc """
+  True iff every pending validation kind is one no agent can pass alone.
+
+  Used by the no-ack path to distinguish "an agent has gone quiet" from "this
+  stage is legitimately waiting on a human". `pr_merged` only counts as
+  agent-unpassable when the strategy is a `pr_merge` WITHOUT `auto_merge` — with
+  `auto_merge: true` the deployer can drive the merge itself, so the stage is
+  agent-drivable and the alarm must still fire.
+
+  Why a predicate and not a strategy-name check: keying off `"pr_merge"` alone
+  would also silence a `pr_merge` stage stuck on a red `ci_passed`, which is a
+  real stall.
+
+  Why not extend `alarm_silence`: `silenced_until` is operator-initiated,
+  time-boxed and 24h-capped, and it suppresses UNCONDITIONALLY. Using it here
+  would turn a structural fact ("this gate needs a person") into recurring
+  nightly toil and would be unable to tell a healthy wait from a genuine stall.
+  This predicate can.
+  """
+  # MUTATION-COVERED (task 01a01a4a stage 3). Broadening this predicate to
+  # `pending_kinds != [] and agent_unpassable?("pr_merged", strategy)` — i.e.
+  # keeping the strategy check but dropping the per-kind `Enum.all?` — reds
+  # exactly one router test:
+  #
+  #   test/platform/orchestration/task_router_safety_net_suppression_test.exs
+  #   "CONTROL: an agent-passable ci_passed on the SAME strategy still fires"
+  #
+  # under that mutant a deploy stage stalled on a red `ci_passed` gets parked as
+  # `execution.awaiting_human_action` instead of alarming — the suppress-every-
+  # deploy-stage regression. The narrower unit tests in
+  # test/platform/orchestration/dispatch_phase_human_gate_test.exs kill it too.
+  # If you widen this predicate, that test is where the decision lives.
+  @spec human_gated_pending?(pending_kinds :: [String.t()], strategy :: map()) :: boolean()
+  def human_gated_pending?(pending_kinds, strategy)
+      when is_list(pending_kinds) and is_map(strategy) do
+    pending_kinds != [] and Enum.all?(pending_kinds, &agent_unpassable?(&1, strategy))
+  end
+
+  defp agent_unpassable?("pr_merged", strategy) do
+    config = Map.get(strategy, "config")
+    strategy_type = Map.get(strategy, "type")
+
+    # Read `auto_merge` exactly the way HeartbeatScheduler does (config first,
+    # falling back to the entry itself) so the two never disagree about where the
+    # key lives.
+    auto_merge = Map.get(config || strategy, "auto_merge", false)
+
+    strategy_type == "pr_merge" and !auto_merge
+  end
+
+  defp agent_unpassable?(kind, _strategy), do: kind in @agent_unpassable_kinds
 
   defp slug_for(phase), do: "dispatch." <> Atom.to_string(phase)
 

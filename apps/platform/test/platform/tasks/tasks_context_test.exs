@@ -1228,6 +1228,40 @@ defmodule Platform.Tasks.TasksContextTest do
       assert Tasks.needs_human_action_reason(reloaded, 5) == :review_request_pending
     end
 
+    test "needs_human_action_reason/2 ranks :review_request_pending above :awaiting_human_merge (01a01a4a stage 4)",
+         %{task: task} do
+      # A live review request is the more urgent ask than a parked merge
+      # gate, so when BOTH hold the predicate must surface
+      # `:review_request_pending`. The merge stamp is read straight off the
+      # loaded metadata map — no per-card DB query.
+      stepped = step_through_to(task, "deploying")
+      {:ok, stamped} = Tasks.stamp_awaiting_human_action(stepped, "merge")
+
+      reloaded =
+        stamped.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      # Positive control: the merge gate alone resolves to the new reason.
+      assert Tasks.needs_human_action_reason(reloaded, 0) == :awaiting_human_merge
+
+      # Both signals: the review request wins.
+      assert Tasks.needs_human_action_reason(reloaded, 1) == :review_request_pending
+    end
+
+    test "needs_human_action_reason/2 returns nil for a deploying task with no merge stamp (01a01a4a stage 4)",
+         %{task: task} do
+      stepped = step_through_to(task, "deploying")
+
+      reloaded =
+        stepped.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      refute Tasks.needs_human_action_reason(reloaded, 0) == :awaiting_human_merge
+      assert Tasks.needs_human_action_reason(reloaded, 0) == nil
+    end
+
     test "needs_human_action_reason/2 still returns :plan_pending_review when only plan signal applies",
          %{task: task} do
       # Stage-5 guardrail: re-ranking must not regress the single-signal

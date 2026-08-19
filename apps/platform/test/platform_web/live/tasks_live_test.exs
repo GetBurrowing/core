@@ -4260,6 +4260,177 @@ defmodule PlatformWeb.TasksLiveTest do
     refute html =~ "Delete task"
   end
 
+  # ── Deploy column: the needs-you chip (task 01a01a4a stage 4) ─────────
+  #
+  # The board renders ONE DOM for both breakpoints (`lg:hidden` /
+  # `hidden lg:grid` — CSS visibility, not presence), so every card-scoped
+  # count below is compared against the number of card wrappers rather than
+  # against the literal 1. `LazyHTML.query/2` returns a struct, so counting
+  # nodes (via `count_nodes/2`) is the only correct emptiness check.
+  #
+  # Selectors, not substrings: a substring refute over HTML is
+  # position-dependent, and "deploying" appears in the column header and in
+  # `id="column-deploying"` regardless of any card.
+
+  #
+  # `.badge-outline` alone is NOT the status chip: `priority_badge_class/1`
+  # also emits `badge-outline` for medium/high/low priorities. Every status
+  # selector below therefore excludes `.badge-sm`, which only the priority
+  # badge carries — otherwise the refute counts the wrong span and the
+  # positive control passes for the wrong reason.
+
+  defp needs_merge_board_html(conn, metadata) do
+    project = create_project()
+
+    task =
+      create_task(project, %{
+        title: "Retire the cross-client filing path",
+        status: "deploying",
+        metadata: metadata
+      })
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+    {html, task}
+  end
+
+  test "a deploying task WITH the merge stamp renders the needs-merge chip and not the deploying chip",
+       %{conn: conn} do
+    {html, task} = needs_merge_board_html(conn, %{"awaiting_human_action" => "merge"})
+
+    cards = count_nodes(html, ~s([data-task-id="#{task.id}"]))
+    assert cards > 0, "fixture did not render a card for the task"
+
+    # Positive: one warning chip per card wrapper, carrying BOTH classes.
+    # `.chip-soft.chip-warning` fails to match if either half is dropped —
+    # the failure mode the screenshot cannot see.
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .chip-soft.chip-warning|) == cards
+
+    # Refute (this side): the neutral `deploying` status chip is REPLACED,
+    # not joined. Paired with the positive control in the without-stamp
+    # test below, so a selector rename cannot make this pass vacuously.
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .badge-outline:not(.badge-sm)|) == 0
+
+    # The doubled-chip guard: exactly one chip per card. The action chip
+    # must NOT also render beside the replaced status chip.
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] [data-role="mobile-task-action"]|) ==
+             0
+
+    total_chips =
+      count_nodes(html, ~s|[data-task-id="#{task.id}"] .chip-soft|) +
+        count_nodes(html, ~s|[data-task-id="#{task.id}"] .badge-outline:not(.badge-sm)|)
+
+    assert total_chips == cards, "expected exactly one status chip per card wrapper"
+  end
+
+  test "a deploying task WITHOUT the merge stamp renders the deploying chip and not needs-merge",
+       %{conn: conn} do
+    {html, task} = needs_merge_board_html(conn, %{})
+
+    cards = count_nodes(html, ~s([data-task-id="#{task.id}"]))
+    assert cards > 0, "fixture did not render a card for the task"
+
+    # Positive control for the refute in the with-stamp test above.
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .badge-outline:not(.badge-sm)|) ==
+             cards
+
+    # Refute (other side).
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .chip-soft.chip-warning|) == 0
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .chip-warning|) == 0
+
+    total_chips =
+      count_nodes(html, ~s|[data-task-id="#{task.id}"] .chip-soft|) +
+        count_nodes(html, ~s|[data-task-id="#{task.id}"] .badge-outline:not(.badge-sm)|)
+
+    assert total_chips == cards, "expected exactly one status chip per card wrapper"
+  end
+
+  test "BOTH gates open: the review badge is the only needs-you mark, the needs-merge chip is gone",
+       %{conn: conn} do
+    # Task 01a01a4a stage 5 — the behavioural regression. The task carries the
+    # merge stamp AND has an open pending review_request. `needs_human_action_reason/2`
+    # ranks `:review_request_pending` above `:awaiting_human_merge`, so the card
+    # must show exactly ONE "needs you" mark: the review badge. Before stage 5
+    # the status chip re-derived the merge gate from metadata on its own, so the
+    # card rendered `needs merge` AND `1 review` side by side with the priority
+    # pill — three amber marks that overflowed the card at 1280px.
+    project = create_project()
+
+    task =
+      create_task(project, %{
+        title: "Retire the cross-client filing path",
+        status: "deploying",
+        metadata: %{"awaiting_human_action" => "merge"}
+      })
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        name: "Manual review",
+        position: 1,
+        status: "running"
+      })
+
+    {:ok, validation} =
+      Tasks.create_validation(%{
+        stage_id: stage.id,
+        kind: "manual_approval",
+        status: "pending"
+      })
+
+    {:ok, _request} =
+      ReviewRequests.create_review_request(%{
+        validation_id: validation.id,
+        task_id: task.id,
+        status: "pending",
+        items: [%{kind: "artifact", label: "Review me", status: "pending", content: "..."}]
+      })
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    cards = count_nodes(html, ~s([data-task-id="#{task.id}"]))
+    assert cards > 0, "fixture did not render a card for the task"
+
+    # The single needs-you mark: the review badge (desktop card) / the action
+    # chip (mobile card) — one per card wrapper, both driven by the resolver.
+    review_marks =
+      count_nodes(html, ~s|[data-task-id="#{task.id}"] .badge-warning:not(.badge-outline)|) +
+        count_nodes(html, ~s|[data-task-id="#{task.id}"] [data-role="mobile-task-action"]|)
+
+    assert review_marks > 0,
+           "the resolved reason is :review_request_pending but the card shows no review mark"
+
+    # The defect: the merge chip must NOT accompany it. Asserted on BOTH class
+    # names separately so a half-pair rename cannot make this vacuous.
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .chip-soft.chip-warning|) == 0
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .chip-soft|) == 0
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .chip-warning|) == 0
+
+    # Precedence demoted the merge gate, so the status chip falls back to the
+    # neutral `deploying` outline chip — exactly one per card wrapper.
+    assert count_nodes(html, ~s|[data-task-id="#{task.id}"] .badge-outline:not(.badge-sm)|) ==
+             cards
+  end
+
+  test "the resolver ranks a pending review_request above the human-only merge gate" do
+    # The precedence half, at the resolver. Kept next to the DOM assertion
+    # above so a change to either is visibly a change to both.
+    project = create_project()
+
+    task =
+      create_task(project, %{
+        title: "Retire the cross-client filing path",
+        status: "deploying",
+        metadata: %{"awaiting_human_action" => "merge"}
+      })
+
+    assert Tasks.needs_human_action_reason(task, 1) == :review_request_pending
+    assert Tasks.needs_human_action_reason(task, 0) == :awaiting_human_merge
+  end
+
   test "delete button does not appear for deploying task", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Deploy Task", status: "deploying"})

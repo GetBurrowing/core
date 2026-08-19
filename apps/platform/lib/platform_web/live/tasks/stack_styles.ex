@@ -196,6 +196,9 @@ defmodule PlatformWeb.Tasks.StackStyles do
   def stack_member_action_label(:review_request_pending),
     do: {"Needs review", "review_request_pending"}
 
+  def stack_member_action_label(:awaiting_human_merge),
+    do: {"needs merge", "awaiting_human_merge"}
+
   def stack_member_action_label(:validation_failed), do: {"Needs review", "validation_failed"}
   def stack_member_action_label(nil), do: {nil, nil}
 end

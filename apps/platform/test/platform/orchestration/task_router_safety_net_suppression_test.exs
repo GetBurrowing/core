@@ -151,7 +151,170 @@ defmodule Platform.Orchestration.TaskRouterSafetyNetSuppressionTest do
     end
   end
 
+  describe "the window elapses on a gate only a human can pass" do
+    test "a pending pr_merged under auto_merge:false parks instead of blocking", ctx do
+      park_on_gate!(ctx, "pr_merged", false)
+      pid = boot_router!(ctx.task, ctx.assignee)
+
+      before_blockers = blocker_count(ctx.task.id)
+      expire_safety_net_deadline!(ctx.task.id)
+
+      send(pid, :check_safety_net)
+      :ok = sync_router(ctx.task.id)
+
+      # One assertion per fact.
+      refute_received {:runtime_event, %{event_type: "execution.safety_net_fired"}}
+      assert_received {:runtime_event, %{event_type: "execution.awaiting_human_action"} = evt}
+      assert evt.payload.pending_kinds == ["pr_merged"]
+      assert evt.payload.gate == "pr_merge_auto_merge_false"
+
+      assert blocker_count(ctx.task.id) == before_blockers
+      assert notice_count(ctx.task.id) == 1
+      refute needs_human_posted?(ctx.task.id)
+
+      reloaded = Tasks.get_task_record(ctx.task.id)
+      assert reloaded.status == "deploying"
+      assert reloaded.metadata["awaiting_human_action"] == "merge"
+      assert is_binary(reloaded.metadata["awaiting_human_action_at"])
+
+      # Shared JSONB: the column also carries these two, and they must
+      # survive the stamp untouched.
+      assert reloaded.metadata["blocked_reason"] == "a pre-existing reason"
+      assert reloaded.metadata["unmet_dependencies"] == ["pre-existing-dep"]
+
+      assert %{safety_net_fired?: true} = LeaseManager.get(ctx.task.id)
+    end
+
+    test "CONTROL: an agent-passable ci_passed on the SAME strategy still fires", ctx do
+      # Differs from the parked fixture in exactly one field: the pending
+      # validation's kind. Strategy, auto_merge and stage are identical.
+      park_on_gate!(ctx, "ci_passed", false)
+      pid = boot_router!(ctx.task, ctx.assignee)
+
+      before_blockers = blocker_count(ctx.task.id)
+      expire_safety_net_deadline!(ctx.task.id)
+
+      send(pid, :check_safety_net)
+      :ok = sync_router(ctx.task.id)
+
+      assert_received {:runtime_event, %{event_type: "execution.safety_net_fired"}}
+      refute_received {:runtime_event, %{event_type: "execution.awaiting_human_action"}}
+      assert blocker_count(ctx.task.id) == before_blockers + 1
+
+      reloaded = Tasks.get_task_record(ctx.task.id)
+      assert reloaded.status == "blocked"
+      refute Map.has_key?(reloaded.metadata, "awaiting_human_action")
+    end
+
+    test "CONTROL: auto_merge:true makes pr_merged agent-passable, so it fires", ctx do
+      park_on_gate!(ctx, "pr_merged", true)
+      pid = boot_router!(ctx.task, ctx.assignee)
+
+      before_blockers = blocker_count(ctx.task.id)
+      expire_safety_net_deadline!(ctx.task.id)
+
+      send(pid, :check_safety_net)
+      :ok = sync_router(ctx.task.id)
+
+      assert_received {:runtime_event, %{event_type: "execution.safety_net_fired"}}
+      refute_received {:runtime_event, %{event_type: "execution.awaiting_human_action"}}
+      assert blocker_count(ctx.task.id) == before_blockers + 1
+    end
+
+    test "a second :check_safety_net after a park is a silent no-op", ctx do
+      park_on_gate!(ctx, "pr_merged", false)
+      pid = boot_router!(ctx.task, ctx.assignee)
+
+      expire_safety_net_deadline!(ctx.task.id)
+      send(pid, :check_safety_net)
+      :ok = sync_router(ctx.task.id)
+
+      assert_received {:runtime_event, %{event_type: "execution.awaiting_human_action"}}
+      first = Tasks.get_task_record(ctx.task.id)
+      notices_after_first = notice_count(ctx.task.id)
+
+      send(pid, :check_safety_net)
+      :ok = sync_router(ctx.task.id)
+
+      refute_received {:runtime_event, %{event_type: "execution.awaiting_human_action"}}
+      refute_received {:runtime_event, %{event_type: "execution.safety_net_fired"}}
+      assert notice_count(ctx.task.id) == notices_after_first
+
+      second = Tasks.get_task_record(ctx.task.id)
+      # No double-stamp: the timestamp is the one written by the first pass.
+      assert second.metadata["awaiting_human_action_at"] ==
+               first.metadata["awaiting_human_action_at"]
+    end
+
+    test "leaving deploying clears the stamp and leaves the other JSONB keys", ctx do
+      park_on_gate!(ctx, "pr_merged", false)
+      pid = boot_router!(ctx.task, ctx.assignee)
+
+      expire_safety_net_deadline!(ctx.task.id)
+      send(pid, :check_safety_net)
+      :ok = sync_router(ctx.task.id)
+
+      stamped = Tasks.get_task_record(ctx.task.id)
+      assert stamped.metadata["awaiting_human_action"] == "merge"
+
+      {:ok, moved} = Tasks.transition_task_status(stamped, "done")
+
+      refute Map.has_key?(moved.metadata, "awaiting_human_action")
+      refute Map.has_key?(moved.metadata, "awaiting_human_action_at")
+      assert moved.metadata["blocked_reason"] == "a pre-existing reason"
+      assert moved.metadata["unmet_dependencies"] == ["pre-existing-dep"]
+    end
+  end
+
   # ── helpers ────────────────────────────────────────────────────────────
+
+  # Reshape the shared fixture into a task parked in `deploying` on a deploy
+  # stage whose ONLY open validation is `kind`. Runs before the router boots
+  # so the lease is armed with the `deploying` stage kind.
+  defp park_on_gate!(ctx, kind, auto_merge) do
+    Enum.each(ctx.validations, &Repo.delete!/1)
+    {:ok, _} = Tasks.create_validation(%{stage_id: ctx.stage.id, kind: kind})
+
+    {:ok, _} =
+      ctx.stage
+      |> Ecto.Changeset.change(%{name: "deploy", description: "deploy — ship it"})
+      |> Repo.update()
+
+    {:ok, task} =
+      ctx.task
+      |> Ecto.Changeset.change(%{
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => auto_merge}},
+        metadata: %{
+          "blocked_reason" => "a pre-existing reason",
+          "unmet_dependencies" => ["pre-existing-dep"]
+        }
+      })
+      |> Repo.update()
+
+    {:ok, task} = Tasks.transition_task_status(task, "in_progress")
+    {:ok, task} = Tasks.transition_task_status(task, "deploying")
+    assert task.status == "deploying"
+    :ok
+  end
+
+  defp notice_count(task_id) do
+    space = ExecutionSpace.find_by_task_id(task_id)
+    assert space, "expected an execution space for the task"
+
+    space.id
+    |> ExecutionSpace.list_messages_with_participants()
+    |> Enum.count(&String.contains?(&1.content, "Waiting on a human merge"))
+  end
+
+  # The park must not post the accusing blocker in ANY wording, so this
+  # checks the prefix the blocker path hardcodes rather than its sentence.
+  defp needs_human_posted?(task_id) do
+    space = ExecutionSpace.find_by_task_id(task_id)
+
+    space.id
+    |> ExecutionSpace.list_messages_with_participants()
+    |> Enum.any?(&String.contains?(&1.content, "Blocker reported: "))
+  end
 
   defp boot_router!(task, assignee) do
     Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")

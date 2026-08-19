@@ -1478,8 +1478,24 @@ defmodule Platform.Tasks do
         # PREVIOUS phase's assignee.
         pointer_attrs = phase_pointer_attrs(task, new_status)
 
+        # The awaiting-human-action stamp is scoped to the deploy park: it
+        # says "this task is sitting in `deploying` on a gate only a person
+        # can pass". The moment the task leaves `deploying` that sentence is
+        # false, so the stamp clears here — folded into the SAME changeset as
+        # the status flip for the reason documented just above, and because a
+        # follow-up `Repo.update` would leave the `{:task_updated, ...}`
+        # broadcast below carrying metadata that still shows the stamp.
+        #
+        # NOTE (task 01a01a4a stage 2): the `unmet_dependencies` clear the
+        # spec pointed at lives in `unblock_task/1`, on the dependency sweep
+        # that runs when a blocked task's deps finish. That path is never
+        # reached from `deploying`, so this key is cleared at the status
+        # choke point instead — every caller, `transition_task/3` included,
+        # funnels through here.
+        clear_attrs = awaiting_human_action_clear_attrs(task, new_status)
+
         task
-        |> Task.changeset(Map.put(pointer_attrs, :status, new_status))
+        |> Task.changeset(pointer_attrs |> Map.merge(clear_attrs) |> Map.put(:status, new_status))
         |> Repo.update()
         |> case do
           {:ok, updated} ->
@@ -1601,6 +1617,28 @@ defmodule Platform.Tasks do
   # calls `transition_task_status/2` directly — also cascades. Does
   # NOT archive the execution space: plan-engine artifacts, canvases,
   # and message history persist for post-mortem access.
+  # `%{}` (no metadata write at all) unless the task is genuinely leaving
+  # `deploying` while stamped. Returning `%{metadata: ...}` unconditionally
+  # would rewrite shared JSONB on every single status transition in the app.
+  defp awaiting_human_action_clear_attrs(%Task{status: "deploying"} = task, new_status)
+       when new_status != "deploying" do
+    metadata = task.metadata || %{}
+
+    if Map.has_key?(metadata, "awaiting_human_action") or
+         Map.has_key?(metadata, "awaiting_human_action_at") do
+      cleared =
+        metadata
+        |> Map.delete("awaiting_human_action")
+        |> Map.delete("awaiting_human_action_at")
+
+      %{metadata: cleared}
+    else
+      %{}
+    end
+  end
+
+  defp awaiting_human_action_clear_attrs(_task, _new_status), do: %{}
+
   defp maybe_dispatch_teardown(%Task{} = task, "done") do
     Platform.Tasks.ChatPins.unpin_all_for_task(task.id)
     :ok
@@ -4110,6 +4148,68 @@ defmodule Platform.Tasks do
   defp ensure_blocked(%Task{} = task), do: transition_task_status(task, "blocked")
 
   @doc """
+  Stamp `metadata["awaiting_human_action"]` (plus an ISO-8601 `_at`) WITHOUT
+  transitioning the task's status.
+
+  The deliberate contrast is `stamp_blocked_reason/2` directly above, which
+  routes through `ensure_blocked/1` and therefore drops the task into
+  `blocked`. A task parked on a human merge gate is NOT blocked: the deploy PR
+  is open and correct, and the only outstanding validation (`pr_merged`) is one
+  no agent is permitted to pass. Transitioning it would accuse the executor of
+  being stuck and strand the task outside `deploying`.
+
+  `metadata` is shared JSONB — `blocked_reason` and `unmet_dependencies` live
+  in the same column — so this merges onto the LOADED map rather than replacing
+  it, exactly as `stamp_blocked_reason/2` does.
+  """
+  @spec stamp_awaiting_human_action(Task.t() | String.t(), String.t()) ::
+          {:ok, Task.t()} | {:error, term()}
+  def stamp_awaiting_human_action(id, action) when is_binary(id) and is_binary(action) do
+    case get_task_record(id) do
+      %Task{} = task -> stamp_awaiting_human_action(task, action)
+      nil -> {:error, :not_found}
+    end
+  end
+
+  def stamp_awaiting_human_action(%Task{} = task, action) when is_binary(action) do
+    merged_metadata =
+      (task.metadata || %{})
+      |> Map.put("awaiting_human_action", action)
+      |> Map.put("awaiting_human_action_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+    update_task(task, %{metadata: merged_metadata})
+  end
+
+  @doc """
+  Drop the awaiting-human-action stamp, leaving every other `metadata` key
+  untouched. A stamp that never clears turns every finished task into a
+  permanent amber chip on the board.
+  """
+  @spec clear_awaiting_human_action(Task.t() | String.t()) :: {:ok, Task.t()} | {:error, term()}
+  def clear_awaiting_human_action(id) when is_binary(id) do
+    case get_task_record(id) do
+      %Task{} = task -> clear_awaiting_human_action(task)
+      nil -> {:error, :not_found}
+    end
+  end
+
+  def clear_awaiting_human_action(%Task{} = task) do
+    metadata = task.metadata || %{}
+
+    if Map.has_key?(metadata, "awaiting_human_action") or
+         Map.has_key?(metadata, "awaiting_human_action_at") do
+      cleared =
+        metadata
+        |> Map.delete("awaiting_human_action")
+        |> Map.delete("awaiting_human_action_at")
+
+      update_task(task, %{metadata: cleared})
+    else
+      {:ok, task}
+    end
+  end
+
+  @doc """
   Reject a plan, optionally persisting a free-text reason.
 
   Accepts plans in `pending_review` (the original planning-rejection flow)
@@ -4475,6 +4575,13 @@ defmodule Platform.Tasks do
       so a single-reason predicate must surface the review-request label.
     * `:plan_pending_review` — the task's latest plan is in `pending_review`
       ("Plan ready" badge). Reported when no open review_request exists.
+    * `:awaiting_human_merge` — the task is `deploying` and its metadata
+      carries the `"awaiting_human_action" => "merge"` stamp written by
+      `stamp_awaiting_human_action/2` when the dispatcher parks a
+      human-only merge gate. Ranked BELOW `:review_request_pending` and
+      `:plan_pending_review` (a live review request is the more urgent
+      ask) and ABOVE the `in_review` fallback. Read straight off the
+      loaded `metadata` map — no per-task DB query.
     * `:validation_failed` — the task is parked on `in_review` after a
       manual_approval gate (status-driven fallback that covers the common
       case).
@@ -4486,7 +4593,11 @@ defmodule Platform.Tasks do
   `:plans` is not loaded.
   """
   @spec needs_human_action_reason(Task.t(), non_neg_integer() | nil) ::
-          :plan_pending_review | :review_request_pending | :validation_failed | nil
+          :plan_pending_review
+          | :review_request_pending
+          | :awaiting_human_merge
+          | :validation_failed
+          | nil
   def needs_human_action_reason(%Task{} = task, nil) do
     needs_human_action_reason(task, pending_review_count_for_task(task.id))
   end
@@ -4496,10 +4607,22 @@ defmodule Platform.Tasks do
     cond do
       pending_review_count > 0 -> :review_request_pending
       plan_pending_review?(task) -> :plan_pending_review
+      awaiting_human_merge?(task) -> :awaiting_human_merge
       task.status == "in_review" -> :validation_failed
       true -> nil
     end
   end
+
+  # True when the task is parked on a human-only merge gate: status
+  # `deploying` PLUS the `metadata["awaiting_human_action"] == "merge"`
+  # stamp written in stage 2. Read off the already-loaded `metadata` map so
+  # a board of N cards costs zero extra queries — same shape as
+  # `unmet_dependency_count/1` in `board_component.ex`.
+  defp awaiting_human_merge?(%Task{status: "deploying", metadata: metadata})
+       when is_map(metadata),
+       do: Map.get(metadata, "awaiting_human_action") == "merge"
+
+  defp awaiting_human_merge?(_task), do: false
 
   # Counts pending review_requests for a single task. Used by the 1-arity
   # `needs_human_action?/1`. Batch callers should use the LV's

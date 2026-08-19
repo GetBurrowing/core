@@ -847,7 +847,24 @@ defmodule Platform.Orchestration.TaskRouter do
                     "suppressing execution.safety_net_fired"
                 )
               else
-                fire_safety_net_alert(state, lease)
+                # Task 01a01a4a stage 2. Second suppression, deliberately in
+                # the SAME position and the SAME order as the one above: the
+                # one-shot is already consumed, so a suppressed check cannot
+                # be re-evaluated on the next timer wake.
+                #
+                # The plan here is NOT settled — there IS an open validation.
+                # It is simply one no agent is allowed to pass: a `pr_merged`
+                # on a `pr_merge` strategy with `auto_merge: false` waits on a
+                # person clicking merge. "Check whether the agent is stuck" is
+                # a false accusation, so this path emits a DISTINCT event and
+                # leaves the task in `deploying`.
+                case awaiting_human_gate(task_id) do
+                  {:ok, pending_kinds} ->
+                    note_awaiting_human_action(state, lease, pending_kinds)
+
+                  nil ->
+                    fire_safety_net_alert(state, lease)
+                end
               end
 
               {:noreply, state}
@@ -2376,6 +2393,18 @@ defmodule Platform.Orchestration.TaskRouter do
     :ok
   end
 
+  # Informational sibling of `post_router_blocker/3` (task 01a01a4a stage 2).
+  # A separate function rather than a flag on the blocker path because the
+  # blocker path is SHARED by every other router alarm: parameterising its
+  # "Blocker reported: " prefix would put a way to un-blocker those alarms
+  # one wrong argument away. This one cannot post a blocker at all.
+  defp post_router_notice(%State{execution_space_id: nil}, _description, _metadata), do: :ok
+
+  defp post_router_notice(%State{execution_space_id: space_id}, description, metadata) do
+    ExecutionSpace.post_engagement(space_id, description, metadata: metadata)
+    :ok
+  end
+
   # Boot rehydration — stage-scoped when a stage is already running (task
   # 019f6791). Leases whose `stage_id` matches a `passed` stage are
   # historical and MUST NOT rehydrate into `state.lease_status`; carrying a
@@ -3280,6 +3309,117 @@ defmodule Platform.Orchestration.TaskRouter do
     _ -> false
   catch
     :exit, _ -> false
+  end
+
+  # Task 01a01a4a stage 2 — the human-gate suppression predicate.
+  #
+  # Returns `{:ok, pending_kinds}` when every open validation on the CURRENTLY
+  # RUNNING stage is one an agent is structurally unable to pass, and `nil`
+  # otherwise. `nil` means "fire the alert" — the same polarity its sibling
+  # `plan_settled_no_open_work?/1` uses for its own false.
+  #
+  # Scoped to the running stage on purpose, which is where it diverges from
+  # `any_open_validation?/1`: a `pr_merged` left pending on some LATER stage
+  # says nothing about whether the stage we are timing is parked on a human.
+  #
+  # Best-effort in the same shape as its siblings: any lookup failure yields
+  # `nil`, i.e. fire the alert. A safety net that goes quiet when it cannot
+  # read the plan is worse than one that cries wolf.
+  defp awaiting_human_gate(task_id) do
+    with plan when not is_nil(plan) <- Tasks.current_plan(task_id),
+         %Stage{} = stage <- current_running_stage(plan),
+         task when not is_nil(task) <- Tasks.get_task_record(task_id) do
+      pending_kinds = open_validation_kinds(stage)
+      strategy = Tasks.resolve_deploy_strategy(task)
+
+      if DispatchPhase.human_gated_pending?(pending_kinds, strategy || %{}) do
+        {:ok, pending_kinds}
+      else
+        nil
+      end
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  # The `kind`s of the stage's own open validations. Shares the flat-map
+  # shape of `any_open_validation?/1` and none of its plan-wide scope.
+  defp open_validation_kinds(stage) do
+    case stage.validations do
+      vs when is_list(vs) -> vs
+      _ -> []
+    end
+    |> Enum.filter(&(&1.status in ["pending", "running"]))
+    |> Enum.map(& &1.kind)
+  end
+
+  # The suppressed counterpart of `fire_safety_net_alert/2`. Everything that
+  # accuses somebody is removed: no `execution.safety_net_fired`, no
+  # `needs_human => true` blocker, and above all no `stamp_blocked_reason/2`
+  # — that helper routes through `Tasks.ensure_blocked/1`, which is the exact
+  # line that dropped a parked task into `blocked`. The task stays `deploying`.
+  defp note_awaiting_human_action(%State{} = state, lease, pending_kinds) do
+    elapsed_ms = DateTime.diff(DateTime.utc_now(), lease.dispatched_at, :millisecond)
+
+    Logger.info(
+      "[TaskRouter] task #{state.task_id} stage #{lease.stage_id} (#{lease.stage_kind}) — " <>
+        "safety-net window elapsed after #{div(elapsed_ms, 60_000)}m, but the only open " <>
+        "validation(s) #{inspect(pending_kinds)} require a human; emitting " <>
+        "execution.awaiting_human_action instead of execution.safety_net_fired"
+    )
+
+    broadcast_router_event("execution.awaiting_human_action", state.task_id, lease.stage_id, %{
+      task_id: state.task_id,
+      stage_id: lease.stage_id,
+      stage_kind: lease.stage_kind,
+      elapsed_ms: elapsed_ms,
+      pending_kinds: pending_kinds,
+      gate: "pr_merge_auto_merge_false"
+    })
+
+    stamp_awaiting_human_action(state.task_id)
+
+    post_router_notice(
+      state,
+      "Waiting on a human merge — the deploy PR is open and correct; the outstanding " <>
+        "validation (#{Enum.join(pending_kinds, ", ")}) can only pass when a person merges. " <>
+        "Nothing is stuck.",
+      %{
+        "reason" => "execution.awaiting_human_action",
+        "stage_id" => lease.stage_id,
+        "stage_kind" => lease.stage_kind,
+        "needs_human" => false,
+        "pending_kinds" => pending_kinds,
+        "elapsed_ms" => elapsed_ms
+      }
+    )
+  end
+
+  # Durable per-task home for the park, with NO status transition. Failure
+  # path in the same shape as `stamp_blocked_reason/2`: log and continue.
+  defp stamp_awaiting_human_action(task_id) do
+    case Tasks.stamp_awaiting_human_action(task_id, "merge") do
+      {:ok, _task} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[TaskRouter] task #{task_id} — could not stamp awaiting_human_action: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[TaskRouter] task #{task_id} — awaiting_human_action stamp raised: #{Exception.message(error)}"
+      )
+
+      :ok
   end
 
   defp any_open_validation?(nil), do: false

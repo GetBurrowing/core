@@ -79,7 +79,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       deletable_task?: 1,
       priority_badge_class: 1,
       relative_time: 1,
-      task_display_status: 1,
+      task_display_status: 2,
       unmet_dependency_count: 1
     ]
 
@@ -458,8 +458,6 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                         class="flex flex-col gap-1.5 px-3 pb-3 pl-4"
                       >
                         <%= for member <- Enum.sort_by(board_data.members, & &1.stack_position) do %>
-                          <% {member_status_label, member_status_class} =
-                            task_display_status(member) %>
                           <% member_dep_text = dep_annotation_text(member, board_data.members) %>
                           <%!-- Badges-for-tasks-that-need-feedback (task
                              019e2c25 stage 4): mobile stack-member rows
@@ -476,6 +474,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           <% member_review_count = Map.get(@review_counts, member.id, 0) %>
                           <% member_action_reason =
                             Tasks.needs_human_action_reason(member, member_review_count) %>
+                          <%!-- One decider (task 01a01a4a stage 5): the status
+                             chip is keyed on the SAME resolved reason the
+                             action chip is, so the merge gate cannot be shown
+                             by one site while precedence has demoted it for
+                             the other. --%>
+                          <% {member_status_label, member_status_class} =
+                            task_display_status(member, member_action_reason) %>
                           <%!-- Post-rejection fix (stage 4): use
                              `mobile_action_label/1` instead of
                              `stack_member_action_label/1` so the
@@ -560,7 +565,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                        suppress the action chip there. --%>
                     <% {mobile_action_label, mobile_action_reason_attr} =
                       mobile_stack_member_action_label(mobile_action_reason) %>
-                    <% {mobile_status_label, mobile_status_class} = task_display_status(task) %>
+                    <% {mobile_status_label, mobile_status_class} =
+                      task_display_status(task, mobile_action_reason) %>
                     <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 2, mobile half.
                        Same wrapper shape as the desktop card. The `data-role`
                        values MUST differ from the desktop ones: `frontend/ui-ux.md`
@@ -968,7 +974,19 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                       class="flex flex-col gap-1.5 px-3 pb-3 pl-4"
                     >
                       <%= for member <- Enum.sort_by(board_data.members, & &1.stack_position) do %>
-                        <% {status_label, status_class} = task_display_status(member) %>
+                        <%!-- One decider (task 01a01a4a stage 5): resolve the
+                           human-action reason from `@review_counts` — the same
+                           map the review badge reads — and key the status chip
+                           on it, so a member whose merge gate is outranked by a
+                           live review request shows the review mark only. --%>
+                        <% {status_label, status_class} =
+                          task_display_status(
+                            member,
+                            Tasks.needs_human_action_reason(
+                              member,
+                              Map.get(@review_counts, member.id, 0)
+                            )
+                          ) %>
                         <% dep_text =
                           dep_annotation_text(member, board_data.members) %>
                         <div
@@ -1191,7 +1209,19 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           <span :if={task.priority} class={priority_badge_class(task.priority)}>
                             {task.priority}
                           </span>
-                          <% {status_badge_label, status_badge_class} = task_display_status(task) %>
+                          <%!-- One decider (task 01a01a4a stage 5): this card's
+                             review badge below is driven by `@review_counts`,
+                             so the status chip resolves its reason from the
+                             same count. When a pending review outranks the
+                             merge gate the badge is the only "needs you" mark. --%>
+                          <% {status_badge_label, status_badge_class} =
+                            task_display_status(
+                              task,
+                              Tasks.needs_human_action_reason(
+                                task,
+                                Map.get(@review_counts, task.id, 0)
+                              )
+                            ) %>
                           <span
                             :if={task.status in ~w(blocked planning in_review deploying)}
                             class={"#{status_badge_class} badge-xs"}
@@ -1400,6 +1430,15 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # produces a doubled chip on the same row. Suppress it — the status chip
   # is the single signal.
   defp mobile_stack_member_action_label(:plan_pending_review), do: {nil, nil}
+
+  # Same doubled-chip rule for the human-only merge gate (task 01a01a4a
+  # stage 4). `task_display_status/1` ALREADY replaces the neutral
+  # `deploying` chip with the warning-toned "needs merge" chip on these
+  # surfaces, and both the mobile solo card and the mobile stack-member row
+  # render the status chip beside the action chip — so emitting the action
+  # chip too would put "needs merge" on the card twice. One chip per card,
+  # always. The reason atom stays intact for every other consumer.
+  defp mobile_stack_member_action_label(:awaiting_human_merge), do: {nil, nil}
 
   # Post-rejection fix (task 01a00578 stage 1 rework). The
   # `:validation_failed` branch of `Tasks.needs_human_action_reason/2` is
