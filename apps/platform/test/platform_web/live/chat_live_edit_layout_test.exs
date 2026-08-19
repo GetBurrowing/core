@@ -8,8 +8,10 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
 
     * toggling edit mode renders grab handles, per-section Hide controls,
       keyboard move controls, and the "Reset to default layout" button;
-    * `channel_moved` persists via `users.preferences["chat_channel_order"]`
-      and re-renders the channel under its new section;
+    * `channel_moved` reorders a channel WITHIN its own section and persists
+      via `users.preferences["chat_channel_order"]`, and refuses any payload
+      that would file it under a different one (task 019fd76a stage 2 —
+      cross-org filing is the "Move to organisation…" action's job);
     * `move_channel` (the keyboard alternative) reorders within a section;
     * hiding a section drops it, and reset restores it;
     * reset clears all per-user overrides.
@@ -156,14 +158,20 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
     end
   end
 
-  # ── (b) channel_moved persists + re-renders under the new section ───────
+  # ── (b) channel_moved reorders WITHIN a section and refuses to leave it ──
+  #
+  # A row drag is a within-section reorder and nothing more (task 019fd76a
+  # stage 2). Cross-org filing moved to the explicit "Move to organisation…"
+  # action with its confirmation dialog, so `channel_moved` must refuse to
+  # perform it however the payload is shaped — and must still reorder, which
+  # is what the positive control below is for.
 
   describe "channel_moved" do
-    test "moving a channel persists to prefs and re-renders it under the target section",
+    test "a cross-section move is refused: the channel stays put and nothing is written",
          %{conn: conn} do
       user = insert_user("move")
       conn = authenticated_conn(conn, user)
-      # One channel defaulting to the Fabrikam section; we move it into SXI.
+      # One channel defaulting to the Fabrikam section; we try to move it to SXI.
       channel = create_channel("roamer", "fabrikam")
       fabrikam_section = section_id_for_org("fabrikam")
       sxi_section = section_id_for_org("sxi")
@@ -175,7 +183,7 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       assert section_fragment(sidebar, fabrikam_section) =~ ~s(data-channel-id="#{channel.id}")
       refute section_fragment(sidebar, sxi_section) =~ ~s(data-channel-id="#{channel.id}")
 
-      # Simulate the drag hook's drop into the SXI section.
+      # The drag hook no longer offers this drop; a forged event still can.
       html_after =
         render_hook(view, "channel_moved", %{
           "channel_id" => channel.id,
@@ -184,13 +192,67 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
         })
 
       sidebar_after = desktop_sidebar(html_after)
-      # The channel now renders inside SXI and no longer inside Fabrikam.
-      assert section_fragment(sidebar_after, sxi_section) =~ ~s(data-channel-id="#{channel.id}")
-      refute section_fragment(sidebar_after, fabrikam_section) =~ ~s(data-channel-id="#{channel.id}")
+      # Still under Fabrikam, still absent from SXI.
+      assert section_fragment(sidebar_after, fabrikam_section) =~ ~s(data-channel-id="#{channel.id}")
+      refute section_fragment(sidebar_after, sxi_section) =~ ~s(data-channel-id="#{channel.id}")
 
-      # Persisted into the user's preferences (channel order under SXI).
+      # A refused move writes NOTHING — not a placement under SXI, and not an
+      # empty SXI entry either. Asserting only "the channel is not under SXI"
+      # would be satisfied by a handler that still called
+      # `Sidebar.put_channel_order/3` with an empty list, which touches the
+      # user's prefs and announces a move that never happened.
+      assert Accounts.get_user_preferences(user.id) == %{}
+    end
+
+    test "a within-section reorder still persists", %{conn: conn} do
+      user = insert_user("reorder")
+      conn = authenticated_conn(conn, user)
+      first = create_channel("alpha", "fabrikam")
+      second = create_channel("bravo", "fabrikam")
+      fabrikam_section = section_id_for_org("fabrikam")
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      # The payload the drag hook sends when a row is dropped above its
+      # neighbour: same section, both of that section's ids, new order.
+      render_hook(view, "channel_moved", %{
+        "channel_id" => second.id,
+        "target_section_id" => fabrikam_section,
+        "ordered_ids" => [second.id, first.id]
+      })
+
       cco = Accounts.get_user_preferences(user.id)["chat_channel_order"]
-      assert cco[sxi_section] == [channel.id]
+      assert cco[fabrikam_section] == [second.id, first.id]
+    end
+
+    test "a foreign channel smuggled into ordered_ids is not filed into the section",
+         %{conn: conn} do
+      user = insert_user("smuggle")
+      conn = authenticated_conn(conn, user)
+      # `channel_id` names a channel that legitimately lives in Fabrikam, so a
+      # guard reading only that half of the payload would let this through —
+      # and `Sidebar.put_channel_order/3` writes `ordered_ids` verbatim, so
+      # the smuggled id would be filed under Fabrikam and stripped from SXI.
+      resident = create_channel("resident", "fabrikam")
+      outsider = create_channel("outsider", "sxi")
+      fabrikam_section = section_id_for_org("fabrikam")
+      sxi_section = section_id_for_org("sxi")
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      html_after =
+        render_hook(view, "channel_moved", %{
+          "channel_id" => resident.id,
+          "target_section_id" => fabrikam_section,
+          "ordered_ids" => [outsider.id, resident.id]
+        })
+
+      sidebar_after = desktop_sidebar(html_after)
+      assert section_fragment(sidebar_after, sxi_section) =~ ~s(data-channel-id="#{outsider.id}")
+      refute section_fragment(sidebar_after, fabrikam_section) =~ ~s(data-channel-id="#{outsider.id}")
+
+      cco = Accounts.get_user_preferences(user.id)["chat_channel_order"] || %{}
+      refute outsider.id in Map.get(cco, fabrikam_section, [])
     end
 
     test "move_channel (keyboard) reorders two channels within a section", %{conn: conn} do
@@ -260,14 +322,16 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       user = insert_user("reset")
       conn = authenticated_conn(conn, user)
       channel = create_channel("mover", "fabrikam")
-      sxi_section = section_id_for_org("sxi")
+      fabrikam_section = section_id_for_org("fabrikam")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
-      # Build up overrides: a moved channel, a hidden section, a section order.
+      # Build up overrides: a reordered channel, a hidden section, a section
+      # order. The reorder stays inside the channel's own section — a
+      # cross-section payload is refused and would leave nothing to reset.
       render_hook(view, "channel_moved", %{
         "channel_id" => channel.id,
-        "target_section_id" => sxi_section,
+        "target_section_id" => fabrikam_section,
         "ordered_ids" => [channel.id]
       })
 
@@ -308,19 +372,19 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       other = insert_user("victim")
       conn = authenticated_conn(conn, user)
       channel = create_channel("scoped-ch", "fabrikam")
-      sxi_section = section_id_for_org("sxi")
+      fabrikam_section = section_id_for_org("fabrikam")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "channel_moved", %{
         "channel_id" => channel.id,
-        "target_section_id" => sxi_section,
+        "target_section_id" => fabrikam_section,
         "ordered_ids" => [channel.id]
       })
 
       # The acting user's prefs changed; the other user's are untouched —
       # there is no client-supplied user id, so a payload can't cross users.
-      assert Accounts.get_user_preferences(user.id)["chat_channel_order"][sxi_section] ==
+      assert Accounts.get_user_preferences(user.id)["chat_channel_order"][fabrikam_section] ==
                [channel.id]
 
       assert Accounts.get_user_preferences(other.id) == %{}

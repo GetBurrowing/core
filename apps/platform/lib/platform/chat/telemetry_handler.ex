@@ -23,6 +23,23 @@ defmodule Platform.Chat.TelemetryHandler do
     | `[:platform, :chat, :canvas_created]`     | `"chat.canvas.created"`      |
     | `[:platform, :chat, :canvas_updated]`     | `"chat.canvas.updated"`      |
     | `[:platform, :chat, :attention_routed]`   | `"chat.attention.routed"`    |
+    | `[:platform, :chat, :channel_reassigned]` | `"chat.channel.reassigned"`  |
+
+  Note the shape of the audit `event_type`: this handler drops the `platform`
+  segment and splits the action atom on its first underscore, so
+  `[:platform, :chat, :channel_reassigned]` persists as
+  `"chat.channel.reassigned"`. `Platform.Audit.TelemetryHandler` joins every
+  segment verbatim instead (`"platform.chat.space_archived"`). The two event
+  lists are disjoint on purpose: registering one event in both would write two
+  audit rows for a single emit.
+
+  Which handler a chat event belongs to is a live seam. The `chat_spaces`
+  LIFECYCLE events (archive, delete, purge) sit on the audit handler, so a
+  query for `"platform.chat.*"` will not see `channel_reassigned` even though
+  it mutates the same table. Reassignment is registered here because it is a
+  sidebar-shape event rather than a lifecycle one, and because this is the
+  handler the stage specified. Moving the whole family onto one handler is
+  worth doing, and is bigger than one event.
   """
 
   require Logger
@@ -42,7 +59,15 @@ defmodule Platform.Chat.TelemetryHandler do
     [:platform, :chat, :pin_removed],
     [:platform, :chat, :canvas_created],
     [:platform, :chat, :canvas_updated],
-    [:platform, :chat, :attention_routed]
+    [:platform, :chat, :attention_routed],
+    # Task 019fd76a stage 3: a Fabrikam admin moving a channel between orgs via
+    # `Platform.Chat.Sidebar.reassign_channel/3`. Metadata carries the space
+    # id, the acting user, and both org ids (`from_org_id` / `to_org_id`,
+    # each omitted when it is nil). This is the only durable record of the
+    # move: the write itself is an in-place `chat_spaces.org_id` update with
+    # no history. Section rename, recolour and reorder have the same gap and
+    # are deliberately NOT covered here (separate follow-up).
+    [:platform, :chat, :channel_reassigned]
   ]
 
   @doc """

@@ -138,6 +138,9 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
   defp destination_selector(section_id),
     do: ~s([data-role="move-to-org-destination"][data-section-id="#{section_id}"])
 
+  defp trigger_selector(channel_id),
+    do: ~s([data-role="move-to-org-trigger"][phx-value-channel_id="#{channel_id}"])
+
   # One rail row, addressed by BOTH the channel it draws and the section it is
   # drawn under. `.channel-row-wrap` carries both attributes, so a single
   # selector answers "is this row in this section?" without slicing html.
@@ -286,7 +289,6 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       sidebar_after = desktop_sidebar(html_after)
       assert sidebar_after =~ ~s(phx-submit="rename_section_default")
       assert sidebar_after =~ ~s(phx-click="recolor_section_default")
-      assert sidebar_after =~ ~s(data-admin-edit="true")
       # The exit button is just "Done" now — the accented mode label
       # ("Editing company default") already says which mode is active, and the
       # rail can't fit "Done (admin)" alongside the label without overflowing.
@@ -294,6 +296,37 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert sidebar_after =~ "Editing company default"
       # The overflow menu is gone in edit mode — only the "Done" exit shows.
       refute sidebar_after =~ ~s(phx-click="toggle_sidebar_menu")
+    end
+
+    test "admin-edit renders the move-to-org control and NO channel-row grab handle",
+         %{conn: conn} do
+      # The pair is the point (task 019fd76a stage 2). Refiling a channel used
+      # to be a drag in this mode; it is now an explicit menu item with a
+      # confirmation dialog. Asserting the handle's absence alone would also
+      # pass if the capability had simply been deleted, so the replacement is
+      # asserted in the same breath.
+      admin = admin_user!("no_grab")
+      conn = authenticated_conn(conn, admin)
+      channel = create_channel("wanderer", "fabrikam")
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      sidebar_admin = desktop_sidebar(enter_admin_edit(view))
+      refute sidebar_admin =~ "channel-row-grab"
+
+      # The replacement is asserted where it LIVES, which is no longer the
+      # rail: task 019ff8ba stage 1 moved "Move to organisation…" into the
+      # row's overflow menu, and that menu renders at the template root,
+      # outside every `desktop_sidebar/1` slice in this file. Reading it out
+      # of the sidebar would refute the pairing this test exists to prove.
+      assert open_row_menu(view, channel.id) =~ ~s(data-role="move-to-org-trigger")
+
+      # Personal-edit is where a row drag still means something, so the handle
+      # is there — the gesture moved modes, it did not disappear from the app.
+      # Switched by dispatching the other toggle, because an edit mode renders
+      # only "Done" in the header: the overflow menu isn't there to click.
+      sidebar_personal = desktop_sidebar(render_hook(view, "toggle_sidebar_edit", %{}))
+      assert sidebar_personal =~ "channel-row-grab"
     end
 
     test "admin-edit and personal-edit are mutually exclusive", %{conn: conn} do
@@ -311,7 +344,10 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       html = render_hook(view, "toggle_sidebar_admin_edit", %{})
       sidebar = desktop_sidebar(html)
 
-      assert sidebar =~ ~s(data-admin-edit="true")
+      # Admin-edit is identified by a control only it renders, rather than by
+      # a mode flag on the wrapper: the flag was `data-admin-edit`, which went
+      # away with the drag it fed (task 019fd76a stage 2).
+      assert sidebar =~ ~s(phx-submit="rename_section_default")
       # Personal-edit-only affordances are gone (keyboard move controls render
       # only in personal-edit).
       refute sidebar =~ ~s(phx-click="move_channel")
@@ -319,7 +355,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # Toggling personal-edit back on exits admin-edit.
       html2 = render_hook(view, "toggle_sidebar_edit", %{})
       sidebar2 = desktop_sidebar(html2)
-      assert sidebar2 =~ ~s(data-admin-edit="false")
+      refute sidebar2 =~ ~s(phx-submit="rename_section_default")
       assert sidebar2 =~ ~s(phx-click="move_channel")
     end
   end
@@ -785,6 +821,73 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert Chat.get_space(bystander.id).org_id == fabrikam_org_id
     end
 
+    test "a forged request naming the org the channel is already in opens no confirmation",
+         %{conn: conn} do
+      admin = admin_user!("reassign_noop")
+      conn = authenticated_conn(conn, admin)
+      channel = create_channel("stayput", "fabrikam")
+      fabrikam_section = section_id_for_org("fabrikam")
+      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      # The chooser never offers the org a channel is already in, so this can
+      # only arrive forged. "Move #stayput to Fabrikam?" for a channel already in
+      # Fabrikam is a question with no answer, and confirming it would write a
+      # no-op the admin had been told was a move.
+      html =
+        render_hook(view, "request_channel_reassign", %{
+          "channel_id" => channel.id,
+          "target_section_id" => fabrikam_section
+        })
+
+      refute html =~ ~s(data-role="move-to-org-dialog")
+      assert Chat.get_space(channel.id).org_id == fabrikam_org_id
+    end
+
+    test "a channel filed under no organisation gets no move control", %{conn: conn} do
+      admin = admin_user!("reassign_unfiled")
+      conn = authenticated_conn(conn, admin)
+
+      # No `assign_space_org`, so `org_id` stays nil. The resolver still
+      # RENDERS the row (unfiled channels fall back to the lowest-position
+      # section), so the row is present and only the control is absent.
+      # Filing a channel for the first time is a different action from moving
+      # it between two named orgs, and the confirmation copy has no honest way
+      # to name the org it would be leaving.
+      {:ok, unfiled} = Chat.create_space(%{name: "Unfiled", slug: "unfiled", kind: "channel"})
+      filed = create_channel("filed", "fabrikam")
+
+      {:ok, view, html} = live_following_redirect(conn)
+
+      # Positive control in the SAME session: a filed channel does get one, so
+      # this is not passing because the control is broken everywhere. Since
+      # task 019ff8ba stage 1 the item lives in the row's overflow menu, which
+      # holds one row at a time, so the two rows are opened in turn rather
+      # than read off a single render.
+      _ = open_row_menu(view, filed.id)
+      assert has_element?(view, trigger_selector(filed.id))
+
+      unfiled_menu = open_row_menu(view, unfiled.id)
+
+      assert unfiled_menu =~ ~s(data-role="row-actions-dialog"),
+             "the unfiled row's menu did not open, so the refutation below is vacuous"
+
+      refute has_element?(view, trigger_selector(unfiled.id))
+      # ...and the row itself is on screen, so it is the control that is
+      # missing rather than the channel.
+      assert desktop_sidebar(html) =~ unfiled.id
+
+      forged =
+        render_hook(view, "request_channel_reassign", %{
+          "channel_id" => unfiled.id,
+          "target_section_id" => section_id_for_org("sxi")
+        })
+
+      refute forged =~ ~s(data-role="move-to-org-dialog")
+      assert Chat.get_space(unfiled.id).org_id == nil
+    end
+
     test "a name already taken in the destination org says so, not 'could not move'",
          %{conn: conn} do
       admin = admin_user!("reassign_collision")
@@ -1075,8 +1178,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       html = render_hook(view, "toggle_sidebar_admin_edit", %{})
       sidebar = desktop_sidebar(html)
 
-      assert sidebar =~ ~s(data-admin-edit="false")
       refute sidebar =~ ~s(phx-submit="rename_section_default")
+      refute sidebar =~ ~s(phx-click="recolor_section_default")
     end
   end
 end

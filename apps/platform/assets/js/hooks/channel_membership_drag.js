@@ -1,6 +1,15 @@
-// ChannelMembershipDrag — HTML5 drag-and-drop for moving a channel row
-// between (or within) sub-org sections in EDIT MODE only (chat sidebar
+// ChannelMembershipDrag — HTML5 drag-and-drop for REORDERING a channel row
+// WITHIN its own sub-org section, in personal edit mode only (chat sidebar
 // Stage 5, desktop only).
+//
+// A row drag means exactly one thing: change this channel's position in my
+// own copy of the section it already belongs to. It cannot move a channel
+// into a different section (task 019fd76a stage 2). Cross-section filing is
+// a company-wide act — it re-points canvas read access at the destination
+// org — so it lives behind the explicit "Move to organisation…" action and
+// its confirmation dialog, not behind a drop. The server refuses a
+// cross-section `channel_moved` regardless of what this file does; the
+// guards here are affordance only.
 //
 // Attach to the dedicated <div id="channel-membership-drag"> that the
 // template nests INSIDE the SectionReorder <nav> and wraps around the
@@ -26,13 +35,15 @@
 // and (b) that dragstart calls e.stopPropagation() so it never bubbles up
 // to the <nav>'s SectionReorder listener.
 //
-// Drop semantics: when a channel row is dropped onto (or into) a target
-// section, we compute the resulting DOM order of channel ids in the
-// TARGET section after re-inserting the dragged row at the drop position,
-// then push `channel_moved` with {channel_id, target_section_id,
-// ordered_ids}. The server (`Sidebar.put_channel_order/3`) is the source
-// of truth and re-renders; the client DOM mutation is only to read the
-// intended order — the LiveView patch corrects any drift.
+// Drop semantics: when a channel row is dropped inside ITS OWN section, we
+// compute that section's resulting DOM order of channel ids after
+// re-inserting the dragged row at the drop position, then push
+// `channel_moved` with {channel_id, target_section_id, ordered_ids}. The
+// server (`Sidebar.put_channel_order/3`) is the source of truth and
+// re-renders; the client DOM mutation is only to read the intended order —
+// the LiveView patch corrects any drift. A hover over any OTHER section is
+// left un-`preventDefault`ed, so the browser shows the "no drop" cursor and
+// no drop event fires there at all.
 //
 // Movement threshold: native HTML5 drag already requires a press-and-move
 // to begin, so a plain click never starts a drag. We additionally guard
@@ -87,14 +98,32 @@ const rowContainer = (target) => {
 const ChannelMembershipDrag = {
   mounted() {
     this._draggedId = null;
+    // The section the dragged row lives in, captured at dragstart. Every
+    // later guard compares the hovered section against this, which is what
+    // confines a drag to one section. Written in lockstep with `_draggedId`
+    // and only ever read while that is non-null, so it needs no separate
+    // teardown in `_onDragEnd`.
+    //
+    // `null` when the dragged row carries no `data-section-id` — a pinned row
+    // is the live case, since the Pinned block is one flat list rather than a
+    // client section. That is NOT "the same section as everything else
+    // lacking one": a missing id means this rule has no opinion on the row,
+    // so `_sameSection` below refuses only rows that DO belong to a section
+    // and would be leaving it. Leaving it to `undefined === undefined` would
+    // rest the whole property on two absent attributes matching by accident.
+    this._draggedSectionId = null;
 
-    // The hook is active in EITHER edit mode: personal "Edit layout"
-    // (data-sidebar-edit) reorders/moves channels in the user's own prefs;
-    // admin "Edit default" (data-admin-edit, Stage 6) reassigns a channel's
-    // org GLOBALLY. `_adminMode()` picks which event the drop pushes.
-    this._adminMode = () => this.el.dataset.adminEdit === "true";
-    this._editMode = () =>
-      this.el.dataset.sidebarEdit === "true" || this._adminMode();
+    // Personal "Edit layout" only. Admin "Edit default" no longer renders a
+    // channel-row grab handle at all: refiling a channel across orgs is the
+    // "Move to organisation…" action's job now.
+    this._editMode = () => this.el.dataset.sidebarEdit === "true";
+
+    // May the dragged row be dropped in this section? Only a row that BELONGS
+    // to a section is confined to it. A sectionless row (see
+    // `_draggedSectionId` above) is outside this rule's scope and is left to
+    // whatever governs its own block.
+    this._sameSection = (section) =>
+      !this._draggedSectionId || section.dataset.sectionId === this._draggedSectionId;
 
     // ── Drag start — only from a channel-row grab handle ────────────────
     this._onDragStart = (e) => {
@@ -108,6 +137,7 @@ const ChannelMembershipDrag = {
       if (!id) return;
 
       this._draggedId = id;
+      this._draggedSectionId = row.dataset.sectionId || null;
 
       // Stop the section-header reorder hook from also treating this as a
       // section drag (it ignores non-handle starts, but be explicit).
@@ -124,6 +154,11 @@ const ChannelMembershipDrag = {
 
       const section = rowContainer(e.target);
       if (!section) return;
+      // Another section is not a drop target. Returning BEFORE
+      // `preventDefault()` is what makes that visible: the browser keeps its
+      // default "cannot drop here" cursor and fires no drop event, so the
+      // refusal reads during the drag instead of after it.
+      if (!this._sameSection(section)) return;
 
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
@@ -150,6 +185,11 @@ const ChannelMembershipDrag = {
 
       const section = rowContainer(e.target);
       if (!section) return;
+      // Same gate as `_onDragOver`, repeated rather than assumed: a drop can
+      // still arrive on a section this hook never allowed (a nested handler
+      // elsewhere may have called preventDefault), and the server refuses it
+      // anyway, so there is nothing to gain by pushing it.
+      if (!this._sameSection(section)) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -171,21 +211,9 @@ const ChannelMembershipDrag = {
       const targetSectionId = section.dataset.sectionId;
       if (!targetSectionId) return;
 
-      // Admin-edit (Stage 6): a channel drop is a GLOBAL org reassignment, not
-      // a per-user reorder. We only need the channel + the target section; the
-      // server resolves the section's org_id and writes chat_spaces.org_id.
-      // No ordered_ids — position within the new section is org-default order.
-      if (this._adminMode()) {
-        this.pushEvent("channel_reassigned", {
-          channel_id: this._draggedId,
-          target_section_id: targetSectionId,
-        });
-        return;
-      }
-
-      // Personal-edit: find the row we're dropping before (the row under the
-      // cursor), so a within-section reorder lands at the right slot. If
-      // dropped below all rows (or onto the header / empty-state), append.
+      // Find the row we're dropping before (the row under the cursor), so the
+      // reorder lands at the right slot. If dropped below all rows (or onto
+      // the header / empty-state), append.
       const overRow = e.target.closest(ROW_SELECTOR);
       const orderedIds = this._computeOrder(section, overRow, e.clientY);
 

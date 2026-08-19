@@ -8,6 +8,7 @@ defmodule Platform.Chat.SidebarTest do
 
   alias Platform.Accounts
   alias Platform.Accounts.User
+  alias Platform.Audit
   alias Platform.Chat
   alias Platform.Chat.PinnedSpaces
   alias Platform.Chat.Section
@@ -87,6 +88,22 @@ defmodule Platform.Chat.SidebarTest do
   # In-memory fixtures for the pure resolve/3 tests (no DB needed).
   defp sec(id, org_id, pos), do: %Section{id: id, org_id: org_id, name: id, position: pos}
   defp chan(id, org_id), do: %Space{id: id, org_id: org_id, kind: "channel"}
+
+  # The seeded default section for an org (one per org, per the migration).
+  defp section_for!(org) do
+    Enum.find(Sidebar.list_default_sections(), &(&1.org_id == org.id)) ||
+      raise "no default section seeded for org #{org.slug}"
+  end
+
+  # Channel ids resolved into one section. Returns nil rather than [] when the
+  # section is absent from the resolver output, so "section vanished" cannot
+  # read as "section is empty".
+  defp section_channel_ids(resolved, section_id) do
+    case Enum.find(resolved, &(&1.section.id == section_id)) do
+      nil -> nil
+      entry -> Enum.map(entry.channels, & &1.id)
+    end
+  end
 
   defp resolve_fixture do
     sections = [sec("sA", "oA", 0), sec("sB", "oB", 1)]
@@ -702,20 +719,152 @@ defmodule Platform.Chat.SidebarTest do
     end
   end
 
-  describe "reassign_channel/3 prunes per-user placement (decision 1a)" do
-    test "admin reassign removes the channel from a user's chat_channel_order" do
+  # ── Admin reassignment vs personal arrangement (task 019fd76a stage 3) ───
+  #
+  # Design decision 1a used to prune the reassigned channel out of every
+  # user's `chat_channel_order`, so an admin move silently rearranged a
+  # sidebar the user had arranged by hand. Reversed on 2026-08-06.
+  #
+  # The two tests below are a PAIR and neither is optional. The first alone
+  # is satisfied by an implementation that ignores admin reassignment
+  # entirely; the second alone is satisfied by the old prune-everything
+  # behaviour. Only together do they pin the split.
+
+  describe "reassign_channel/3 vs per-user placement (decision 1a, REVERSED)" do
+    test "a user's explicit placement survives the admin move" do
       admin = admin_user!()
       member = create_user!()
-      space = channel!()
-      sxi = Tenancy.get_org_by_slug!("sxi")
+      from_org = Tenancy.get_org_by_slug!("sxi")
+      to_org = Tenancy.get_org_by_slug!("paragon")
+      chosen = section_for!(Tenancy.get_org_by_slug!("fabrikam"))
 
-      # member personally placed the channel somewhere
-      {:ok, _} = Sidebar.put_channel_order(member.id, "some-section", [space.id, "other"])
+      channel = channel!(%{name: "Wharfside"})
+      {:ok, channel} = Chat.assign_space_org(channel, from_org.id)
 
-      assert {:ok, _} = Sidebar.reassign_channel(admin, space.id, sxi.id)
+      # The member drags the channel into a section of their own choosing,
+      # one that belongs to NEITHER org in the move, so a resolver that
+      # re-derived placement from org_id could not accidentally agree.
+      {:ok, _} = Sidebar.put_channel_order(member.id, chosen.id, [channel.id])
 
+      assert {:ok, moved} = Sidebar.reassign_channel(admin, channel.id, to_org.id)
+      assert moved.org_id == to_org.id
+
+      resolved = Sidebar.resolve_for_user(member.id, [moved])
+      assert section_channel_ids(resolved, chosen.id) == [channel.id]
+      assert section_channel_ids(resolved, section_for!(to_org).id) == []
+      assert section_channel_ids(resolved, section_for!(from_org).id) == []
+
+      # The stored preference, not only the resolver's reading of it. A prune
+      # that ran plus a resolver that re-placed the channel by luck is a
+      # different bug with the same visible symptom.
       cco = Accounts.get_user_preferences(member.id)["chat_channel_order"]
-      assert cco["some-section"] == ["other"]
+      assert cco[chosen.id] == [channel.id]
+    end
+
+    test "a user who never placed the channel sees it follow the org" do
+      admin = admin_user!()
+      bystander = create_user!()
+      from_org = Tenancy.get_org_by_slug!("sxi")
+      to_org = Tenancy.get_org_by_slug!("paragon")
+
+      channel = channel!(%{name: "Copperline"})
+      {:ok, channel} = Chat.assign_space_org(channel, from_org.id)
+
+      before = Sidebar.resolve_for_user(bystander.id, [channel])
+      assert section_channel_ids(before, section_for!(from_org).id) == [channel.id]
+      assert section_channel_ids(before, section_for!(to_org).id) == []
+
+      assert {:ok, moved} = Sidebar.reassign_channel(admin, channel.id, to_org.id)
+
+      resolved = Sidebar.resolve_for_user(bystander.id, [moved])
+      assert section_channel_ids(resolved, section_for!(to_org).id) == [channel.id]
+      assert section_channel_ids(resolved, section_for!(from_org).id) == []
+
+      # No override was invented on the user's behalf to achieve it.
+      assert (Accounts.get_user_preferences(bystander.id)["chat_channel_order"] || %{}) == %{}
+    end
+  end
+
+  describe "prune_channel_from_overrides/1 (kept, no longer wired to reassign)" do
+    test "clears the channel out of every user's order when called directly" do
+      member = create_user!()
+      other = create_user!()
+      section = section_for!(Tenancy.get_org_by_slug!("fabrikam"))
+
+      pruned = channel!(%{name: "Tollgate"})
+      keeper = channel!(%{name: "Ninebark"})
+
+      {:ok, _} = Sidebar.put_channel_order(member.id, section.id, [pruned.id, keeper.id])
+      {:ok, _} = Sidebar.put_channel_order(other.id, section.id, [keeper.id])
+
+      assert :ok = Sidebar.prune_channel_from_overrides(pruned.id)
+
+      assert Accounts.get_user_preferences(member.id)["chat_channel_order"][section.id] ==
+               [keeper.id]
+
+      assert Accounts.get_user_preferences(other.id)["chat_channel_order"][section.id] ==
+               [keeper.id]
+    end
+  end
+
+  # ── Audit trail for the identity move (task 019fd76a stage 3) ────────────
+  #
+  # `chat_spaces.org_id` is updated in place and keeps no history, so the
+  # audit row is the ONLY durable record that an admin moved the channel.
+  # The failure this pins is silent: drop
+  # `[:platform, :chat, :channel_reassigned]` from `TelemetryHandler`
+  # `@chat_events` and the emit still succeeds, nothing raises, and the row
+  # simply never appears. So assert the persisted row, not just the event.
+
+  describe "reassign_channel/3 audit trail" do
+    setup do
+      # The sanctioned form. The boot-attached handler is VM-global, and the
+      # copy-pasted `on_exit(fn -> detach(); attach() end)` idiom is what
+      # task 019f9d80 traced five leaked handlers to.
+      Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Chat.TelemetryHandler)
+      :ok
+    end
+
+    test "a confirmed move persists a bridged audit row carrying BOTH org ids" do
+      admin = admin_user!()
+      from_org = Tenancy.get_org_by_slug!("sxi")
+      to_org = Tenancy.get_org_by_slug!("paragon")
+
+      channel = channel!(%{name: "Rookery"})
+      {:ok, channel} = Chat.assign_space_org(channel, from_org.id)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :chat, :channel_reassigned]
+        ])
+
+      assert {:ok, _} = Sidebar.reassign_channel(admin, channel.id, to_org.id)
+
+      assert_receive {[:platform, :chat, :channel_reassigned], ^ref, _measurements, meta}
+      assert meta.space_id == channel.id
+      assert meta.actor_id == admin.id
+      assert meta.from_org_id == from_org.id
+      assert meta.to_org_id == to_org.id
+
+      # A count-only assertion here would pass with empty metadata, which is
+      # the whole reason the row exists.
+      assert [event] = Audit.list(event_type: "chat.channel.reassigned", resource_id: channel.id)
+      assert event.actor_id == admin.id
+      assert event.actor_type == "user"
+      assert event.resource_type == "chat_space"
+      assert event.action == "channel_reassigned"
+      assert event.metadata["space_id"] == channel.id
+      assert event.metadata["from_org_id"] == from_org.id
+      assert event.metadata["to_org_id"] == to_org.id
+    end
+
+    test "a rejected move writes no audit row" do
+      member = member_user!()
+      to_org = Tenancy.get_org_by_slug!("paragon")
+      channel = channel!(%{name: "Sedgewick"})
+
+      assert {:error, :unauthorized} = Sidebar.reassign_channel(member, channel.id, to_org.id)
+      assert [] = Audit.list(event_type: "chat.channel.reassigned", resource_id: channel.id)
     end
   end
 

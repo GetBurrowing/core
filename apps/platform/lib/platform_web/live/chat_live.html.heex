@@ -778,12 +778,14 @@
            different draggables (channel rows here vs. section headers there).
            Both hooks are bubble-phase listeners; each ignores the other's
            dragstart source, so they coexist on overlapping DOM. The hook is
-           inert unless `data-sidebar-edit="true"`. --%>
+           inert unless `data-sidebar-edit="true"`, which is the only mode it
+           reads now: admin-edit used to hand it a second, cross-org meaning
+           via `data-admin-edit`, and that path was retired in favour of the
+           explicit "Move to organisation…" action (task 019fd76a). --%>
       <div
         id="channel-membership-drag"
         phx-hook="ChannelMembershipDrag"
         data-sidebar-edit={to_string(@sidebar_edit)}
-        data-admin-edit={to_string(@sidebar_admin_edit)}
       >
         <%!-- `data-row-reorderable` says rows inside this section may be
              reordered. Separate from `data-section-reorderable`, which answers
@@ -1057,26 +1059,27 @@
               data-space-id={space.id}
               data-section-id={section.id}
             >
-              <%!-- Grab handle (Stage 5 personal-edit + Stage 6 admin-edit).
+              <%!-- Grab handle — PERSONAL edit only (Stage 5).
                    This span — not the row-wrap — carries draggable so it is the
                    HTML5 drag SOURCE node: dragstart's e.target is then this span,
                    so the ChannelMembershipDrag hook's `.channel-row-grab` gate
                    matches (mirroring SectionReorder, whose handle is the source
                    too). A click on the row link still navigates because the link
                    isn't draggable. tabindex=-1 because the keyboard alternative
-                   is the Up/Down buttons (personal-edit only). Rendered in EITHER
-                   edit mode — in personal-edit the drop pushes `channel_moved`
-                   (per-user), in admin-edit it pushes `channel_reassigned`
-                   (global org_id); the hook reads `data-admin-edit` to decide. --%>
+                   is the Up/Down buttons.
+
+                   Admin-edit renders NO handle (task 019fd76a stage 2). The
+                   gesture used to mean "refile this channel's org for
+                   everyone", which is a company-wide act with an invisible
+                   consequence — it re-points canvas read access — and it now
+                   lives behind the "Move to organisation…" item on the row's
+                   overflow menu, with a confirmation dialog. Dragging a row
+                   means one thing in one mode: reorder it in my own rail. --%>
               <span
-                :if={@sidebar_edit || @sidebar_admin_edit}
+                :if={@sidebar_edit}
                 class="channel-row-grab"
                 aria-hidden="true"
-                title={
-                  if @sidebar_admin_edit,
-                    do: "Drag to reassign for everyone",
-                    else: "Drag to move"
-                }
+                title="Drag to move"
                 draggable="true"
               >
                 ⠿

@@ -172,10 +172,37 @@ defmodule Platform.Chat.Sidebar do
   `chat_spaces.org_id` (Fabrikam admin only). This is the "everyone sees it
   there" action.
 
-  Also prunes the reassigned channel from every user's `chat_channel_order`
-  so the admin move wins over a stale personal placement (design decision
-  1a) — after pruning, the channel falls back to its new org_id default
-  section in each user's view.
+  Personal arrangement is NOT touched. Design decision 1a (prune the channel
+  out of every user's `chat_channel_order` so the admin move overrides a
+  personal placement) was REVERSED on 2026-08-06. None of the products
+  surveyed for that decision (Slack, Linear, Teams, Notion, Discord)
+  overwrites a user's own arrangement from an admin action, and Microsoft
+  shipped the equivalent in Teams and then withdrew it. Wiping a placement
+  the user made by hand is the specific behaviour that was rejected here.
+  `prune_channel_from_overrides/1` survives as a public operation for a
+  caller that deliberately wants the wipe; the reassign path is not one.
+
+  The split this produces needs no machinery, because `place_channels/4`
+  already draws the line: a user who never placed this channel has no
+  `chat_channel_order` entry for it, so it resolves through its (new)
+  `org_id` and relocates to the destination section on its own; a user who
+  did place it stays in that function's `explicitly_placed` set, so the
+  channel keeps their section and cannot also appear in the destination.
+
+  That second half holds only while the section they chose is still VISIBLE
+  to them. `place_channels/4` builds `explicitly_placed` from the whole
+  `chat_channel_order` map but walks `visible_sections` only, so a channel
+  placed into a section the user has hidden, or one whose org has since been
+  archived, renders nowhere: the destination skips it as explicitly placed,
+  and its own section is not in the list. For a hidden section that is the
+  intended contract (hidden takes its channels with it). For an archived org
+  it is a pre-existing gap that the old prune happened to paper over on this
+  one path, and `reset_to_default/1` is currently the only way out of it.
+  Deliberately NOT repaired here: a repair belongs with the archive cascade,
+  not behind an admin reassign.
+
+  Emits `[:platform, :chat, :channel_reassigned]` after a successful write.
+  `Platform.Chat.TelemetryHandler` bridges it to the audit store.
   """
   @spec reassign_channel(map(), binary(), binary() | nil) ::
           {:ok, Chat.Space.t()} | {:error, :unauthorized | :not_found | Ecto.Changeset.t()}
@@ -187,7 +214,7 @@ defmodule Platform.Chat.Sidebar do
 
         space ->
           with {:ok, updated} <- Chat.assign_space_org(space, org_id) do
-            prune_channel_from_overrides(channel_id)
+            emit_channel_reassigned(actor, updated, space.org_id)
             {:ok, updated}
           end
       end
@@ -478,10 +505,16 @@ defmodule Platform.Chat.Sidebar do
   end
 
   @doc """
-  Remove a channel from every user's `chat_channel_order` (used when an admin
-  reassigns its org_id, decision 1a). Scans users with a non-empty channel
-  order; fine at current scale (rare admin action) — a JSONB-targeted query
-  is a future optimization if user counts grow.
+  Remove a channel from every user's `chat_channel_order`.
+
+  NOT called from `reassign_channel/3` any more: design decision 1a was
+  reversed on 2026-08-06 (the reasoning lives on that function). This stays
+  public because it is the only way to clear a channel out of personal
+  arrangements wholesale, and it is spec'd and tested on its own terms.
+
+  Scans every user and rewrites the ones that reference the channel. Fine at
+  current scale for a rare, deliberate action; a JSONB-targeted query is the
+  optimization if user counts grow.
   """
   @spec prune_channel_from_overrides(binary()) :: :ok
   def prune_channel_from_overrides(channel_id) when is_binary(channel_id) do
@@ -500,6 +533,42 @@ defmodule Platform.Chat.Sidebar do
   end
 
   # ── internal ──────────────────────────────────────────────────────────
+
+  # The audit trail for the admin identity move. `Platform.Audit` documents
+  # `record/1` as NOT the preferred entry point: emitting on the
+  # `[:platform, domain, action]` convention is what gets the row written, via
+  # `Platform.Chat.TelemetryHandler`. That is why neither this module nor the
+  # LiveView calls `Audit.record/1` directly. Registration in that handler's
+  # `@chat_events` is load-bearing: an unregistered emit fails SILENTLY, with
+  # nothing raised and simply no audit row.
+  #
+  # A nil org id (the channel had none, or is being cleared) is OMITTED rather
+  # than passed as nil. The handler's `ensure_json_safe/1` stringifies atoms
+  # and nil is an atom, so a nil value would persist as the literal "nil".
+  defp emit_channel_reassigned(actor, space, from_org_id) do
+    metadata =
+      %{
+        actor_id: Map.get(actor, :id),
+        actor_type: "user",
+        resource_type: "chat_space",
+        action: "channel_reassigned",
+        # The handler derives the `resource_id` COLUMN from `space_id`
+        # (`resource_id_from/1`), so a `resource_id` key here would be inert
+        # and would read as though it were the one that lands.
+        space_id: space.id
+      }
+      |> put_present(:from_org_id, from_org_id)
+      |> put_present(:to_org_id, space.org_id)
+
+    :telemetry.execute(
+      [:platform, :chat, :channel_reassigned],
+      %{system_time: System.system_time()},
+      metadata
+    )
+  end
+
+  defp put_present(metadata, _key, nil), do: metadata
+  defp put_present(metadata, key, value), do: Map.put(metadata, key, value)
 
   defp channel_referenced?(channel_order, channel_id) do
     Enum.any?(channel_order, fn {_sid, ids} -> is_list(ids) and channel_id in ids end)

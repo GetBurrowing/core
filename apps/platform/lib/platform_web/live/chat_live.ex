@@ -1416,42 +1416,14 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Reassign a channel to another section GLOBALLY (admin-edit channel drag).
-  # The ChannelMembershipDrag hook pushes this (instead of `channel_moved`)
-  # when `data-admin-edit="true"`. We resolve the TARGET section's owning
-  # `org_id` from `@sidebar_sections` (already loaded) and call
-  # `Sidebar.reassign_channel/3`, which sets `chat_spaces.org_id` globally and
-  # prunes per-user placement overrides so the admin move wins everywhere.
-  #
-  # DEPRECATED by the explicit "Move to organisation…" action below (task
-  # 019fd76a stage 1) and deleted along with the drag hook in stage 2. It
-  # stays here only so the old gesture keeps working until its replacement
-  # has shipped; nothing new should push it.
-  def handle_event(
-        "channel_reassigned",
-        %{"channel_id" => channel_id, "target_section_id" => section_id},
-        socket
-      )
-      when is_binary(channel_id) and is_binary(section_id) do
-    case section_org_id(socket.assigns.sidebar_sections, section_id) do
-      nil ->
-        {:noreply, socket}
-
-      org_id ->
-        case Sidebar.reassign_channel(%{id: socket.assigns.user_id}, channel_id, org_id) do
-          {:ok, _space} ->
-            {:noreply, recompute_sidebar_after_admin_write(socket)}
-
-          {:error, :unauthorized} ->
-            {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
-
-          {:error, _other} ->
-            {:noreply, put_flash(socket, :error, "Could not move the channel.")}
-        end
-    end
-  end
-
   # ── Explicit "Move to organisation…" (task 019fd76a stage 1) ────────────
+  #
+  # This replaced a `channel_reassigned` event that the admin-edit channel
+  # drag used to push: a drop resolved the target section's org and wrote
+  # `chat_spaces.org_id` for everyone, with no confirmation. Both the gesture
+  # and that handler were deleted in stage 2. There is no longer ANY event
+  # that refiles a channel across orgs without passing through the two steps
+  # below, which is the point of the pair.
   #
   # Refiling a channel is a company-wide act with a consequence that is not
   # visible in the gesture: `CanvasAccess.org_readable_space?/2` grants read
@@ -1728,22 +1700,46 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Channel drag-drop OR keyboard move. The hook emits the TARGET section's
-  # resulting channel-id order; `Sidebar.put_channel_order/3` records that
-  # order for the section AND removes those channels from every other section
-  # (single-placement invariant), which is exactly how a cross-section move
-  # is persisted. We re-derive `@sidebar_sections` so the row appears under
-  # its new section immediately.
+  # Channel row drag-drop — a WITHIN-SECTION reorder, and nothing else (task
+  # 019fd76a stage 2). The hook emits the section's resulting channel-id
+  # order and `Sidebar.put_channel_order/3` records it.
+  #
+  # THIS IS THE GATE, not the hook. `put_channel_order/3` writes whatever ids
+  # it is handed into `section_id` and strips them from every other section,
+  # so an unguarded `channel_moved` is a complete cross-org filing primitive
+  # for any client that can send an event. Refiling a channel is a
+  # company-wide act (it re-points `CanvasAccess.org_readable_space?/2` at
+  # the destination org) and belongs to `request_channel_reassign` /
+  # `confirm_channel_reassign` alone.
+  #
+  # So both halves of the payload are checked against the render state, and
+  # the second half is the one that is easy to miss: guarding `channel_id`
+  # while trusting `ordered_ids` leaves the hole wide open, because the
+  # ordered list is itself a placement instruction. A channel absent from
+  # `@sidebar_sections` (pinned, or hidden) has no current section and so
+  # cannot be dragged anywhere — matching the rail, where those rows render
+  # outside the drag hook's element and carry no handle.
   def handle_event(
         "channel_moved",
         %{"channel_id" => channel_id, "target_section_id" => section_id, "ordered_ids" => ids},
         socket
       )
       when is_binary(channel_id) and is_binary(section_id) and is_list(ids) do
-    {:noreply,
-     socket
-     |> apply_channel_move(section_id, ids)
-     |> announce_channel_move(channel_id, nil)}
+    current_ids = section_channel_ids(socket.assigns.sidebar_sections, section_id)
+
+    if channel_id in current_ids do
+      # Keep only ids that already live in this section. A legitimate drop
+      # sends exactly those (it is read off the section's own rows), so this
+      # is a no-op for the real gesture and a hard stop for a forged one.
+      retained = Enum.filter(ids, &(&1 in current_ids))
+
+      {:noreply,
+       socket
+       |> apply_channel_move(section_id, retained)
+       |> announce_channel_move(channel_id, nil)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Keyboard alternative to the drag (WCAG 2.1.1 — no drag-only affordance).
@@ -2993,16 +2989,6 @@ defmodule PlatformWeb.ChatLive do
               {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
           end
         end
-    end
-  end
-
-  # Resolve a section's owning `org_id` from the rendered sections — used by
-  # the admin channel-reassign handler to translate a TARGET section id into
-  # the org_id `Sidebar.reassign_channel/3` writes onto the channel.
-  defp section_org_id(sidebar_sections, section_id) do
-    case Enum.find(sidebar_sections, fn %{section: s} -> s.id == section_id end) do
-      %{section: %{org_id: org_id}} -> org_id
-      _ -> nil
     end
   end
 
