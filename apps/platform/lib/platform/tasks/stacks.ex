@@ -1460,10 +1460,13 @@ defmodule Platform.Tasks.Stacks do
   @doc """
   Terminal transition: mark a stack `done`.
 
-  Only allowed when every member task is already `done`. The natural close
-  for a stack whose work has fully shipped — including the manual-ship lane
-  where members merged via individual PRs rather than the rollup branch,
+  Only allowed when every *live* member task is already `done`. The natural
+  close for a stack whose work has fully shipped — including the manual-ship
+  lane where members merged via individual PRs rather than the rollup branch,
   which `recompute_stack_status/1` doesn't recognize as completion.
+
+  Soft-deleted members do not count. They are already absent from `members/1`,
+  so counting them here would block on a task no caller can see, name or reach.
 
   Returns `{:error, :members_not_done, %{pending: [%{id, title, status}]}}`
   when any member is still in flight. Returns `{:error, changeset}` on a
@@ -1487,9 +1490,19 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
+  # The `is_nil(t.deleted_at)` clause is load-bearing and matches `members/1`
+  # at the bottom of this module. Deletion is soft everywhere
+  # (`Tasks.soft_delete_task/1` is the only delete path a task has), so a
+  # deleted member keeps both its `stack_id` and its non-`done` status. Without
+  # the filter this query counts a row that no read surface will ever show
+  # again, and the stack can never satisfy "every member is done" — permanently,
+  # since `stack_update` cannot set status and `eject_task/2` needs an id the
+  # caller has no way to learn. Stack `019fd80f-531e-7dab-ab61-c26c2e4748ba`
+  # froze in `deploying` exactly this way, with all four surviving members done
+  # and a gap at stack_position 3 as the only visible trace.
   defp pending_members(stack_id) do
     Task
-    |> where([t], t.stack_id == ^stack_id and t.status != "done")
+    |> where([t], t.stack_id == ^stack_id and t.status != "done" and is_nil(t.deleted_at))
     |> select([t], %{id: t.id, title: t.title, status: t.status})
     |> Repo.all()
   end

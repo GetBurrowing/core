@@ -6,6 +6,8 @@ defmodule PlatformWeb.MCPControllerTest do
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
+  alias Platform.Tasks
+  alias Platform.Tasks.Stacks
   alias Platform.Tenancy
 
   defp create_runtime(attrs \\ %{}) do
@@ -214,6 +216,62 @@ defmodule PlatformWeb.MCPControllerTest do
       assert is_binary(envelope["suggestion"])
       assert String.trim(envelope["suggestion"]) != ""
       assert envelope["error"] =~ "reason is required"
+    end
+
+    # A whitelist of four keys is the same flattening one width narrower: the
+    # keys a handler attaches to explain ITSELF were dropped. `stack_complete`
+    # documents `pending: [%{id, title, status}]` in its `returns` prose and
+    # names the member blocking the close; without it the caller is told "some
+    # member is not done" and has no way to learn which, which is precisely how
+    # a real stack stranded in `deploying` with no recovery path.
+    test "a handler's structured payload survives to the wire", %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+
+      {:ok, project} =
+        Tasks.create_project(%{name: "Envelope #{System.unique_integer([:positive])}"})
+
+      slug = "envelope-#{System.unique_integer([:positive])}"
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          name: "Envelope stack",
+          slug: slug,
+          rollup_branch: Stacks.rollup_branch_name(slug)
+        })
+
+      {:ok, blocker} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Still in flight",
+          status: "in_progress"
+        })
+
+      {:ok, blocker} = Tasks.update_task(blocker, %{stack_id: stack.id, stack_position: 1})
+
+      conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "stack_complete",
+            "arguments" => %{"stack_id" => stack.id}
+          })
+        )
+
+      %{"result" => result} = json_response(conn, 200)
+      assert result["isError"] == true
+
+      [%{"text" => text}] = result["content"]
+      envelope = Jason.decode!(text)
+
+      assert envelope["code"] == "members_not_done"
+
+      # The point of the test: the list, its shape, and enough of it to act on.
+      assert [pending] = envelope["pending"]
+      assert pending["id"] == blocker.id
+      assert pending["title"] == "Still in flight"
+      assert pending["status"] == "in_progress"
     end
 
     test "nil-valued keys are dropped but a false recoverable survives", %{conn: conn} do

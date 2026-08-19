@@ -215,16 +215,31 @@ defmodule PlatformWeb.MCPController do
   # as `"missing_reason"`. Nil-valued keys are dropped rather than emitted as
   # `null`, so "this refusal declares no code" reads differently from "this
   # refusal is not recoverable" — `recoverable: false` survives.
+  #
+  # Every key the handler set is carried, not an enumerated four. The comment
+  # above describes flattening a refusal down to what one layer happened to
+  # know about, and a whitelist is that same bug at a different width: it kept
+  # `code`/`recoverable`/`suggestion` and dropped everything else a handler
+  # attached. What it dropped was the diagnostic half of the contract —
+  # `stack_complete`'s `pending: [%{id, title, status}]` names the member
+  # blocking the close, and `stack_eject`'s `dependents: [%{id, title}]` names
+  # the tasks its own `suggestion` tells you to eject first. Both are promised
+  # in the tools' documented `limitations` prose. Neither reached an HTTP
+  # caller, so `stack_complete` refused with "some member is not done" and no
+  # way to learn which — the failure that stranded stack
+  # `019fd80f-531e-7dab-ab61-c26c2e4748ba`.
+  #
+  # `RuntimeChannel.execute_tool_call/4` already pushes the handler map intact.
+  # Carrying every key is what makes the two federation transports agree, which
+  # is what the fix above set out to do.
   defp error_envelope(%Ecto.Changeset{} = changeset),
     do: %{error: inspect(changeset.errors)}
 
   defp error_envelope(reason) when is_map(reason) and not is_struct(reason) do
-    %{
-      error: error_message(reason),
-      code: jsonable(Map.get(reason, :code)),
-      recoverable: jsonable(Map.get(reason, :recoverable)),
-      suggestion: jsonable(Map.get(reason, :suggestion))
-    }
+    reason
+    |> Map.drop([:error])
+    |> Map.new(fn {key, value} -> {key, jsonable(value)} end)
+    |> Map.put(:error, error_message(reason))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
   end
@@ -243,6 +258,27 @@ defmodule PlatformWeb.MCPController do
   # Guarantees the envelope encodes. Every `code:` in the tool surface today
   # is an atom or a binary, but an unencodable value here would turn a
   # handled refusal into a 500 — strictly worse than the bug being fixed.
+  #
+  # Lists and plain maps recurse instead of collapsing to `inspect/1`, because
+  # the payloads worth carrying are shaped like `[%{id: _, title: _}]` and a
+  # client branching on them needs structure, not a debug string. Structs are
+  # kept only when they already implement `Jason.Encoder` (`DateTime` and
+  # friends do); anything else still falls through to `inspect/1`, so the 500
+  # this clause exists to prevent stays prevented.
   defp jsonable(value) when is_atom(value) or is_binary(value) or is_number(value), do: value
+  defp jsonable(value) when is_list(value), do: Enum.map(value, &jsonable/1)
+
+  defp jsonable(%_{} = value) do
+    if Jason.Encoder.impl_for(value), do: value, else: inspect(value)
+  end
+
+  defp jsonable(value) when is_map(value),
+    do: Map.new(value, fn {key, val} -> {jsonable_key(key), jsonable(val)} end)
+
   defp jsonable(value), do: inspect(value)
+
+  # Jason encodes atom, binary and numeric keys; anything else (a tuple key,
+  # a pid) would raise mid-encode, which is the 500 again.
+  defp jsonable_key(key) when is_atom(key) or is_binary(key) or is_number(key), do: key
+  defp jsonable_key(key), do: inspect(key)
 end

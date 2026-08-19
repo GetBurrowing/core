@@ -719,6 +719,51 @@ defmodule Platform.Tasks.StacksTest do
       assert {:ok, completed} = Stacks.complete_stack(stack, "empty close")
       assert completed.status == "done"
     end
+
+    # The bug this pins: deletion is soft, so a deleted member keeps its
+    # `stack_id` and its non-`done` status. It is gone from `members/1` and
+    # from every read surface built on it, but the completion check used to
+    # count it — and could never stop counting it, because no caller can
+    # finish or eject a task it cannot see. The stack froze permanently.
+    test "ignores soft-deleted members" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+
+      live = stamp_unmerged_member!(project, stack, position: 1)
+      ghost = stamp_unmerged_member!(project, stack, position: 2)
+
+      set_member_status(stack, live, "done")
+      # `soft_delete_task/1` refuses in_progress; park it somewhere deletable.
+      ghost = set_member_status(stack, ghost, "backlog")
+      {:ok, _deleted} = Tasks.soft_delete_task(ghost)
+
+      # Precondition: the ghost is invisible to the member list but still
+      # carries this stack's id. Without both halves the test proves nothing.
+      refute Enum.any?(Stacks.members(stack), &(&1.id == ghost.id))
+      assert Repo.get(Task, ghost.id).stack_id == stack.id
+      assert Repo.get(Task, ghost.id).status == "backlog"
+
+      assert {:ok, completed} = Stacks.complete_stack(stack, "shipped")
+      assert completed.status == "done"
+    end
+
+    test "still refuses when a live member is not done alongside a deleted one" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+
+      open = stamp_unmerged_member!(project, stack, position: 1)
+      ghost = stamp_unmerged_member!(project, stack, position: 2)
+
+      ghost = set_member_status(stack, ghost, "backlog")
+      {:ok, _deleted} = Tasks.soft_delete_task(ghost)
+
+      assert {:error, :members_not_done, %{pending: pending}} =
+               Stacks.complete_stack(stack, "trying")
+
+      # The live one blocks; the deleted one is not even named.
+      assert [%{id: pending_id, status: "in_progress"}] = pending
+      assert pending_id == open.id
+    end
   end
 
   describe "rollup_branch_name/1" do

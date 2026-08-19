@@ -509,11 +509,11 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       assert envelope["error"] =~ "Access denied"
       assert envelope["suggestion"] =~ "task_design_decline"
 
-      # The task id is NOT in the envelope, even though stage 3 put it there.
-      # See `"the hosted transport drops the id keys"` below — the id survives
-      # in the sentence, which is the only reason this refusal is still
-      # actionable.
-      refute Map.has_key?(envelope, "task_id")
+      # The task id stage 3 put there now reaches the caller as a key, and
+      # still appears in the sentence. Both are asserted: the sentence is what
+      # kept this refusal actionable while the transport dropped the key, and
+      # shortening it would go red in section 8b regardless.
+      assert envelope["task_id"] == ctx.target.id
       assert envelope["error"] =~ ctx.target.id
 
       # POSITIVE CONTROL: the same agent, same token, same canvas, against the
@@ -1226,32 +1226,34 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   end
 
   # ══════════════════════════════════════════════════════════════════════════
-  # 8b. The hosted transport drops the id keys — found by driving the wire
+  # 8b. The hosted transport carries the id keys — found by driving the wire
   # ══════════════════════════════════════════════════════════════════════════
 
-  describe "the hosted transport drops the id keys" do
+  describe "the hosted transport carries the id keys" do
     # THE FINDING THIS FILE EXISTS FOR, and the one no `execute/3` test can
-    # see. `MCPController.error_envelope/1` (`mcp_controller.ex:221-230`) is a
-    # FIXED FOUR-KEY ALLOWLIST — `error`, `code`, `recoverable`, `suggestion`
-    # — and rejects everything else.
+    # see. `MCPController.error_envelope/1` was a FIXED FOUR-KEY ALLOWLIST —
+    # `error`, `code`, `recoverable`, `suggestion` — that rejected everything
+    # else, so `task_id` (task 019fb581 stage 3, all three denial envelopes)
+    # and `canvas_id` (task 019e2c4b, the canvas denial) reached no HTTP
+    # caller. `tool_surface_test.exs` asserted `error.task_id == ctx.task.id`
+    # and passed, because it reads the map BEFORE the transport touches it.
     #
-    # So `task_id`, which task 019fb581 stage 3 added to all three denial
-    # envelopes, and `canvas_id`, which task 019e2c4b added to the canvas
-    # denial, reach no HTTP caller. `tool_surface_test.exs` asserts
-    # `error.task_id == ctx.task.id` and passes, because it reads the map
-    # BEFORE the transport touches it.
+    # The stage that found it declined to widen the allowlist, correctly: that
+    # is a wire change across every tool in the surface and did not belong in
+    # an adversarial test stage. It pinned the drop as the contract and raised
+    # it. Task 01a01b75 did the widening, after `stack_complete`'s `pending`
+    # list — which names the member blocking a close — went the same way and
+    # left a stack frozen with no way to learn what was holding it.
     #
-    # The WebSocket runtime channel pushes the same map intact
-    # (`runtime_channel.ex:589-594`, `error: error`), so the two federation
-    # transports still disagree about this payload — a narrower version of the
-    # split `mcp_controller_test.exs`'s "tools/call error envelope" block was
-    # written to close.
+    # Why widening does not move the boundary: `RuntimeChannel` pushes the
+    # handler map INTACT to the same class of caller
+    # (`runtime_channel.ex:594`, `error: error`). Every key this test now sees
+    # was already reaching agents on the WebSocket transport. The asymmetry
+    # was the defect; the drop was never the control. What still protects the
+    # id is authorization, and section 8 above is where that is pinned.
     #
-    # NOT FIXED HERE. Widening the allowlist changes the refusal envelope of
-    # every tool in the surface, which is a wire change with a blast radius
-    # well outside an adversarial test stage. Pinned as the current contract
-    # and raised to the review stage.
-    test "task_id and canvas_id are set by the handler and discarded by /mcp",
+    # This test keeps its shape: the exact key set, asserted both ways.
+    test "task_id and canvas_id are set by the handler and survive /mcp",
          %{org_a: org_a, conn: conn} do
       project = project!(org_a)
       target = task!(project)
@@ -1287,18 +1289,22 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       assert handler_canvas.canvas_id == unreadable.id
 
       # …and neither survives the projection.
+      # …and both now survive the projection, carrying the id the CALLER
+      # supplied — not one it could not already name.
       assert {:error, wire_task} = attach(conn, token, target, canvas)
-      refute Map.has_key?(wire_task, "task_id")
+      assert wire_task["task_id"] == target.id
 
       assert {:error, wire_canvas} = attach(conn, token, own, unreadable)
-      refute Map.has_key?(wire_canvas, "canvas_id")
+      assert wire_canvas["canvas_id"] == unreadable.id
 
-      # The four keys that DO survive, asserted positively so "the key is
-      # missing" cannot be satisfied by an empty or malformed envelope.
+      # The exact key set, still the real detector. A handler that starts
+      # attaching a key to THIS refusal now reaches the wire, so it has to
+      # be declared here first. Widening the transport did not widen this.
       assert Map.keys(wire_task) |> Enum.sort() ==
-               ["code", "error", "recoverable", "suggestion"]
+               ["code", "error", "recoverable", "suggestion", "task_id"]
 
-      assert Map.keys(wire_canvas) |> Enum.sort() == ["error", "recoverable", "suggestion"]
+      assert Map.keys(wire_canvas) |> Enum.sort() ==
+               ["canvas_id", "error", "recoverable", "suggestion"]
     end
 
     # The consequence, stated as the thing that keeps the denial usable: the
