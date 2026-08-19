@@ -1706,6 +1706,38 @@ defmodule PlatformWeb.ChatLiveTest do
 
       assert render(view) =~ "is thinking"
     end
+
+    test "a typing broadcast with no :space_id key at all is dropped, even on the active space",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      general = Chat.get_space_by_slug("general")
+      agent = insert_chat_agent(%{slug: "quillon-test", name: "Quillon"})
+
+      {:ok, agent_participant} =
+        Chat.add_participant(general.id, %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          display_name: agent.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      # The payload carries NO :space_id key. It is delivered on the ACTIVE
+      # space's topic and names a participant of that space, so everything
+      # except the scope key lines up — the only reason to drop it is that
+      # the scope predicate must fail closed on a payload it cannot scope.
+      # Until this stage a catch-all clause returned `true` here, which
+      # accepted such a payload from ANY subscribed topic.
+      Platform.Chat.PubSub.broadcast(
+        general.id,
+        {:agent_typing, %{participant_id: agent_participant.id, typing: true}}
+      )
+
+      :ok = Process.sleep(50)
+
+      refute render(view) =~ "is thinking"
+    end
   end
 
   # ── Reactions ────────────────────────────────────────────────────────────────

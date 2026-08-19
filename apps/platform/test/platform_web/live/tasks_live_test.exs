@@ -12053,6 +12053,81 @@ defmodule PlatformWeb.TasksLiveTest do
   # nor the post-notify state. These helpers dispatch to the component and
   # then re-render the whole view, which is what every assertion here wants.
 
+  # Subscription state is read DIRECTLY from Platform.PubSub's Registry.
+  # Reading it through `resubscribe_execution_space/2` or through the
+  # `:subscribed_execution_space_id` assign would be circular — both are
+  # written by the code under test.
+  defp subscribed_to_space?(view, space_id) do
+    Platform.PubSub
+    |> Registry.lookup(Platform.Chat.PubSub.space_topic(space_id))
+    |> Enum.any?(fn {pid, _} -> pid == view.pid end)
+  end
+
+  describe "project switch clears the detail panel and its execution-space topic" do
+    test "switching projects clears :selected_task and stops rendering the panel",
+         %{conn: conn} do
+      project_a = create_project()
+      project_b = create_project()
+      task_a = create_task(project_a, %{title: "Nettlefold Ledger Sweep"})
+      _task_b = create_task(project_b, %{title: "Quillon Intake Rewrite"})
+
+      {conn, _user} = authenticated_conn_with_user(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task_a.id}")
+
+      # Positive control: the panel is genuinely open before the switch, in
+      # BOTH observables, so neither assertion below can pass vacuously.
+      assert :sys.get_state(view.pid).socket.assigns.selected_task.id == task_a.id
+      assert has_element?(view, "#detail-title-#{task_a.id}")
+
+      _ = sidebar_click(view, "sidebar_select_project", %{"id" => project_b.id})
+
+      # The assign AND the rendered panel — an assign-only assertion cannot
+      # see the template still drawing the panel, and a rendered-HTML refute
+      # alone can pass because the markup moved rather than went away.
+      assert :sys.get_state(view.pid).socket.assigns.selected_task == nil
+      refute :sys.get_state(view.pid).socket.assigns.show_detail
+      refute has_element?(view, "#detail-title-#{task_a.id}")
+    end
+
+    test "switching projects releases project A's execution-space subscription",
+         %{conn: conn} do
+      project_a = create_project()
+      project_b = create_project()
+      task_a = create_task(project_a, %{title: "Marlowe Freight Audit", status: "in_progress"})
+      _task_b = create_task(project_b, %{title: "Quillon Intake Rewrite"})
+
+      {:ok, space} = ExecutionSpace.find_or_create(task_a.id)
+
+      {conn, _user} = authenticated_conn_with_user(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task_a.id}")
+
+      # POSITIVE CONTROL, in the same test: before the switch the very same
+      # broadcast DOES reach this LiveView. Without it, a broadcast that never
+      # fires would read as a pass below.
+      # SteeringComponent reports its space to the shell with a send_update
+      # round trip, so the subscription is only in place once the shell has
+      # drained that message — sync before observing, or the control races.
+      _ = render(view)
+      _ = :sys.get_state(view.pid)
+      assert subscribed_to_space?(view, space.id)
+
+      {:ok, _} = ExecutionSpace.post_engagement(space.id, "Marlowe control ping")
+      _ = :sys.get_state(view.pid)
+      assert render(view) =~ "Marlowe control ping"
+
+      _ = sidebar_click(view, "sidebar_select_project", %{"id" => project_b.id})
+
+      # The registry assertion is the load-bearing one. The render refute
+      # below cannot be non-vacuous by construction — the same change closes
+      # the panel, so the steering log is not drawn at all after the switch —
+      # so it is kept only as a corroborating observation, never as the proof.
+      refute subscribed_to_space?(view, space.id)
+      {:ok, _} = ExecutionSpace.post_engagement(space.id, "Marlowe post-switch ping")
+      _ = :sys.get_state(view.pid)
+      refute render(view) =~ "Marlowe post-switch ping"
+    end
+  end
+
   defp sidebar_click(view, event, params \\ %{}) do
     _ = render_click(with_target(view, "#tasks-sidebar"), event, params)
     render(view)

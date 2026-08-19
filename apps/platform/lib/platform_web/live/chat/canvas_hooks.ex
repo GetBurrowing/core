@@ -78,10 +78,19 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
       |> Kernel.++([canvas])
       |> Enum.sort_by(& &1.inserted_at, DateTime)
 
-    # Subscribe to the canvas topic if this is a first-sight canvas for this
-    # LiveView. Phoenix.PubSub dedups within a single pid, so re-subscribing
-    # on an already-known canvas is a no-op.
-    ChatPubSub.subscribe_canvas(canvas.id)
+    # Subscribe only when this canvas is first-sight for this LiveView.
+    # `put/2` runs on every `{:canvas_patched, _}` delivery, and
+    # `Phoenix.PubSub` does NOT dedup within a single pid: its registry is
+    # `keys: :duplicate` (deps/phoenix_pubsub/lib/phoenix/pubsub/supervisor.ex)
+    # and `subscribe/3` is a bare `Registry.register/3`
+    # (deps/phoenix_pubsub/lib/phoenix/pubsub.ex), so an unconditional
+    # re-subscribe would add ANOTHER registration per patch and multiply
+    # delivery for the rest of the space visit.
+    #
+    # Safe assigns access: a canvas broadcast can arrive before mount finishes
+    # initializing `:canvases_by_id`, which is why `remove/2` reads safely too.
+    known = Map.get(socket.assigns, :canvases_by_id, %{})
+    unless Map.has_key?(known, canvas.id), do: ChatPubSub.subscribe_canvas(canvas.id)
 
     socket
     |> assign(:canvases, canvases)
@@ -104,6 +113,28 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
         %{id: id} when id == canvas.id -> nil
         other -> other
       end
+
+    # Release the topic, but only when we actually held this canvas:
+    # `{:canvas_deleted, _}` fires for foreign ids too, and an unconditional
+    # unsubscribe — while a harmless no-op — would misstate intent here.
+    #
+    # NOTE the asymmetry, because the obvious inference from the comment in
+    # `put/2` ("a repeat subscribe adds a second registration, so pair every
+    # subscribe with an unsubscribe") is WRONG. `Phoenix.PubSub.unsubscribe/2`
+    # is `Registry.unregister/2`, which removes ALL of this pid's entries for
+    # the key: two registrations go to zero, not one. Unsubscribing therefore
+    # CLEARS the topic for this process rather than decrementing it.
+    #
+    # That is correct here only because this module is the sole subscriber to
+    # `chat:canvas:<id>` in the LiveView process — checked with
+    # `git grep -n 'subscribe_canvas'`: the only other call site is
+    # `Platform.Chat.Canvas.ToolHandlers.maybe_subscribe/1`, which runs in an
+    # agent tool process, not this pid. If another path in this process ever
+    # subscribes the same topic, this line silently kills its subscription too,
+    # with no error and no symptom until something stops updating.
+    if Enum.any?(Map.get(socket.assigns, :canvases, []), &(&1.id == canvas.id)) do
+      ChatPubSub.unsubscribe_canvas(canvas.id)
+    end
 
     socket
     |> assign(:canvases, canvases)

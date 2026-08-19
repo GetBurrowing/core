@@ -558,11 +558,25 @@ defmodule PlatformWeb.TasksLive do
   # Project selection is three writes plus a re-query plus a localStorage
   # push, and both `{:sidebar_project_selected, _}` and
   # `{:tasks_filters_cleared}` need all five.
+  #
+  # Clearing the detail panel comes BEFORE `refresh_board/1`, which funnels
+  # into `full_refresh/1` -> `Selection.reload_selected_task/1` and would
+  # otherwise re-hydrate the previous project's task. DISPLAY DEFECT ONLY:
+  # `tasks` carries no `org_id`, so nothing crosses an org boundary.
+  #
+  # `resubscribe_execution_space(nil)` is safe as an unsubscribe only because
+  # this process owns `chat:space:<execution space>` outright — the sole other
+  # subscribe here is `ChatPubSub.subscribe_spaces/0`, a different topic.
+  # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2` and drops EVERY
+  # registration this pid holds for a topic, so do not copy this call to a
+  # surface that has not checked the same thing.
   defp select_project(socket, project_id) do
     socket
     |> assign(:selected_project_id, project_id)
     |> assign(:selected_epic_id, nil)
     |> reload_epics()
+    |> clear_detail()
+    |> resubscribe_execution_space(nil)
     |> BoardHooks.refresh_board()
     |> push_selected_project_changed()
   end

@@ -73,9 +73,16 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:roster_space_id, nil)
       # Task 019fe4b1 stage 3: the presence badge is no longer scoped to one
       # arbitrary space. The viewer's observable set is a LIST of space ids
-      # (resolved by `Chat.list_viewer_presence_space_ids/1`), and this assign
-      # holds the exact set this LV process holds PubSub subscriptions for, so
-      # a `presence_diff` on any of them can rebuild the union.
+      # (resolved by `Chat.list_viewer_presence_space_ids/1`), so a
+      # `presence_diff` on any of them can rebuild the union.
+      #
+      # This assign does NOT name the set currently held: the
+      # `{:presence_spaces_resolved, _}` branch below only ever APPENDS
+      # (`Enum.uniq(already ++ space_ids)`) and never unsubscribes, so it
+      # accumulates the union of every set resolved during this session. Ids
+      # that have since dropped out of the viewer's visibility stay in the
+      # list — and, more importantly, their PubSub subscriptions are still
+      # live, so this process keeps receiving their diffs.
       |> assign(:presence_space_ids, [])
 
     # Schedule async load + PubSub subscribes only on the WS-connected mount.
@@ -241,6 +248,8 @@ defmodule PlatformWeb.ShellLive do
           # Idempotent guard — assign_async could re-run on reset; only
           # subscribe once per space_id per LV.
           if socket.assigns[:roster_space_id] != sid do
+            release_roster_subscriptions(socket)
+
             Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{sid}")
             ChatPubSub.subscribe(sid)
             {:halt, assign(socket, :roster_space_id, sid)}
@@ -716,6 +725,42 @@ defmodule PlatformWeb.ShellLive do
   # The incoming space_id is only a *ping*: the meter is the viewer-scoped
   # union over every visible space, so recomputing from that one space would
   # overwrite the union with a subset. We always recompute the full set.
+  # Release the subscriptions the ROSTER branch took out for the space it is
+  # about to stop tracking. Without this the old space's topics stay registered
+  # for the life of the LV and nothing records that we hold them, so they can
+  # never be dropped even deliberately.
+  #
+  # THE ASYMMETRY BELOW IS DELIBERATE — DO NOT "SIMPLIFY" IT INTO ONE
+  # UNCONDITIONAL PAIR. `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2`,
+  # which removes EVERY registration this pid holds for the topic, not the one
+  # this branch added. Subscribing twice and unsubscribing once leaves zero
+  # subscriptions, not one.
+  #
+  #   * `space_agents:<id>` is roster-EXCLUSIVE — line 251 above is the only
+  #     place in `apps/platform` that subscribes it — so the roster branch is
+  #     the sole owner and may always release it.
+  #   * `chat:space:<id>` (via `ChatPubSub`) is SHARED: the
+  #     `:presence_spaces_resolved` branch below subscribes the same topic for
+  #     every space in `:presence_space_ids`. Releasing it while presence still
+  #     wants it would silently kill presence for that space with no error —
+  #     which is exactly how the unread badge died in `cb429830`. So we release
+  #     it only when presence is not also holding it.
+  defp release_roster_subscriptions(socket) do
+    case socket.assigns[:roster_space_id] do
+      prev when is_binary(prev) ->
+        Phoenix.PubSub.unsubscribe(Platform.PubSub, "space_agents:#{prev}")
+
+        unless prev in (socket.assigns[:presence_space_ids] || []) do
+          ChatPubSub.unsubscribe(prev)
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
   def refresh_roster(socket, _space_id) do
     %{roster_items: items, composite: composite, principal_name: principal_name} =
       visible_roster(

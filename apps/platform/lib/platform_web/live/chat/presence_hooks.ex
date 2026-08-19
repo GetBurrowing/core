@@ -42,9 +42,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       every space the user is in (for unread-count updates), typing
       broadcasts from unrelated spaces would otherwise drive the active
       space's "thinking" indicator. Messages whose `space_id` does not
-      match `socket.assigns.active_space.id` are dropped here. Older
-      broadcasts without `:space_id` are accepted (backwards-compatible)
-      so in-flight runtimes don't flicker during rollout.
+      match `socket.assigns.active_space.id` are dropped here, and so is
+      a payload carrying no `:space_id` at all — the predicate fails
+      closed. (A rolling-deploy shim accepted keyless payloads until
+      2026-08-18; see the comment on `space_scoped_to_active?/2`.)
 
   ## Usage
 
@@ -351,13 +352,16 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   end
 
-  # Backwards-compat: pre-fix broadcasts omit :space_id. Accept them so
-  # in-flight runtime processes from before the deploy don't have their
-  # typing indicators silently dropped. Every in-repo caller has been
-  # updated to include :space_id — this clause exists only for the rolling
-  # deploy window and can be removed once federation runtimes are known to
-  # have rebooted.
-  defp space_scoped_to_active?(_payload, _socket), do: true
+  # Fail closed on a payload we cannot scope. The rolling-deploy shim that
+  # used to `do: true` here (78cd3248, 2026-05-01) accepted a :space_id-less
+  # payload from ANY topic this session subscribes to — and chat_live
+  # subscribes one session to every space in the sidebar — so it inverted the
+  # convention every other scope predicate follows. Its own stated removal
+  # condition (federation runtimes rebooted) is met: all six in-repo
+  # constructions of `{:agent_typing, …}` build the map literally with
+  # `space_id:`, and RuntimeChannel never forwards a runtime-supplied payload
+  # map, so no sender core can see — internal or external — can produce one.
+  defp space_scoped_to_active?(_payload, _socket), do: false
 
   # ── M10 external presence/typing scope guards ────────────────────────
   #

@@ -540,10 +540,25 @@ defmodule PlatformWeb.ChatLive do
 
     # Pin-to-Chat stage 4: pinned task-exec spaces ride the same PubSub
     # subscribe loop as channels + DMs so unread counts + `:new_message`
-    # broadcasts stay live on the pinned rail rows. `ChatPubSub.subscribe/1`
-    # is idempotent by topic so a pinned space that also happens to be an
-    # active channel (unlikely — exec spaces have their own kind) is a
-    # no-op double-subscribe.
+    # broadcasts stay live on the pinned rail rows.
+    #
+    # CAUTION: `ChatPubSub.subscribe/1` is NOT idempotent per pid. The
+    # `Phoenix.PubSub` registry is started with `keys: :duplicate`
+    # (deps/phoenix_pubsub/lib/phoenix/pubsub/supervisor.ex) and `subscribe/3`
+    # is a bare `Registry.register/3`
+    # (deps/phoenix_pubsub/lib/phoenix/pubsub.ex), so a second subscribe from
+    # the same pid to the same topic adds a SECOND registration and every
+    # broadcast on it is delivered twice.
+    #
+    # The list below concatenates three independently-sourced sets, so the
+    # same space id CAN appear twice (e.g. a pinned exec space that is also
+    # listed as a channel). Today the loop subscribes once per element and
+    # therefore accepts duplicate delivery for any repeated id. The correct
+    # defence is either to de-duplicate this id list before the subscribe
+    # loop, or to keep accepting duplicate delivery knowingly — but not to
+    # assume PubSub collapses it, because it does not. See the unsubscribe-
+    # then-subscribe pattern below in `handle_params/3` for the shape that
+    # does guarantee a single registration.
     all_spaces = channels ++ pinned_task_spaces ++ dm_conversations
 
     # Subscribe to chat pubsub for unread counts in background conversations

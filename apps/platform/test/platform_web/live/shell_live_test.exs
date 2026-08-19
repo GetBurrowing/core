@@ -3486,4 +3486,195 @@ defmodule PlatformWeb.ShellLiveTest do
                "held #{inspect(subscribers(strangers.id))}"
     end
   end
+
+  # ── roster subscription release on a space switch (task 01a011e9 stage 5) ──
+  #
+  # The roster branch of the `:roster_updates` hook subscribes TWO topics for
+  # the space it resolves: `space_agents:<id>` (roster-exclusive) and
+  # `chat:space:<id>` via `Chat.PubSub` (SHARED with the presence branch).
+  # Before this stage a switch A -> B silently abandoned both and overwrote
+  # `:roster_space_id`, so nothing recorded what was held.
+  #
+  # HOW ARRIVAL IS OBSERVED. Not via `:roster_space_id` — the code under test
+  # writes it, so reading it back would be circular. Instead each test renames
+  # an agent DIRECTLY in the database (a plain `Repo.update!`, which emits no
+  # broadcast of its own) and then broadcasts on the topic under test. The
+  # shell answers any roster ping by recomputing the whole viewer union, so
+  # the new name reaches `assigns.roster_items` IF AND ONLY IF the message was
+  # delivered to the LiveView. Every absence assertion below is paired, in the
+  # same test, with a delivery that MUST land.
+  # REBASE NOTE (2026-08-19, onto 86ea77b0). This helper gained a `viewer`
+  # argument and the `join_space!/2` call below. Task 01a011e6 stage 3 fenced
+  # `visible_roster/2` to spaces the viewer holds a `participant_type: "user"`
+  # row on, so the original fixture — which seeded a space and an agent but
+  # never joined the viewer — now yields an EMPTY roster. Both tests below read
+  # arrival through `roster_items`, so without the join every `roster_names/1`
+  # call returns `[]` and the negative assertions would pass for the wrong
+  # reason. The anti-vacuity assertions (`assert agent_a.name in
+  # roster_names(view)`) caught it as a hard failure rather than letting it go
+  # quiet. The FIXTURE was fixed, not the assertions: the tests are about
+  # subscription release, and membership is a precondition they always intended
+  # rather than anything they mean to vary.
+  defp roster_probe_space!(name, slug_prefix, viewer) do
+    n = System.unique_integer([:positive])
+    {:ok, space} = Chat.create_space(%{name: name, slug: "#{slug_prefix}-#{n}"})
+
+    agent =
+      Repo.insert!(%Agent{
+        name: "#{slug_prefix}-bot-#{n}",
+        slug: "#{slug_prefix}bot-#{n}",
+        status: "active",
+        runtime_type: "builtin"
+      })
+
+    Chat.set_principal_agent(space.id, agent.id)
+
+    # The membership row the roster fence requires. Without it this space is
+    # invisible to the viewer's meter no matter what is broadcast on its topics.
+    join_space!(space, viewer)
+
+    {space, agent}
+  end
+
+  defp roster_names(view) do
+    _ = render(view)
+    assigns = :sys.get_state(view.pid).socket.assigns
+
+    case assigns.roster_items do
+      %AsyncResult{ok?: true, result: items} when is_list(items) ->
+        Enum.map(items, fn
+          {%{agent: %{name: name}}, _status} -> name
+          {%{name: name}, _status} -> name
+          %{agent: %{name: name}} -> name
+          %{name: name} -> name
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  describe "roster space switch releases the subscriptions it took out" do
+    test "the previous space's space_agents topic stops being delivered, while the new one is",
+         %{conn: conn} do
+      # The viewer is resolved FIRST so each probe space can join it at
+      # creation time — see the rebase note on `roster_probe_space!/3`.
+      {conn, viewer} = authenticated_conn_with_user(conn)
+
+      {space_a, agent_a} = roster_probe_space!("Roster Probe A", "test-shell-roster-a", viewer)
+      {space_b, _agent_b} = roster_probe_space!("Roster Probe B", "test-shell-roster-b", viewer)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+
+      # Drive the switch explicitly rather than relying on which space the
+      # async loader happened to resolve first.
+      send(view.pid, {:roster_resolved, space_a.id})
+      send(view.pid, {:roster_resolved, space_b.id})
+      _ = render(view)
+
+      # ANTI-VACUITY: the agent we are about to rename is genuinely in the
+      # viewer's union right now, so a later absence means "no refresh ran",
+      # not "this agent was never visible".
+      assert agent_a.name in roster_names(view)
+
+      renamed = "renamed-#{System.unique_integer([:positive])}"
+      Repo.update!(Ecto.Changeset.change(agent_a, name: renamed))
+
+      # NEGATIVE. The LV released `space_agents:<A>` when it switched to B.
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        "space_agents:#{space_a.id}",
+        {:roster_changed, space_a.id}
+      )
+
+      refute renamed in roster_names(view),
+             "a broadcast on the ABANDONED space_agents:<A> topic still reached the LiveView"
+
+      # POSITIVE CONTROL, same test, same observable. If the rename simply
+      # never surfaced in `roster_items` the refutation above would be
+      # vacuous; this proves the observable can see it.
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        "space_agents:#{space_b.id}",
+        {:roster_changed, space_b.id}
+      )
+
+      assert renamed in roster_names(view),
+             "a broadcast on the CURRENT space_agents:<B> topic did not reach the LiveView"
+    end
+
+    # THE OVERLAP CASE — the reason this stage exists.
+    #
+    # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2`: it drops EVERY
+    # registration this pid holds for the topic. The presence branch subscribes
+    # `chat:space:<id>` for every space in `:presence_space_ids`, so releasing
+    # the roster's chat subscription unconditionally would take presence's with
+    # it — silently, with no error. That is how the unread badge died in
+    # `cb429830`. This test fails if the release is made unconditional.
+    test "a chat-topic broadcast on the previous space still arrives when presence holds it",
+         %{conn: conn} do
+      {conn, viewer} = authenticated_conn_with_user(conn)
+
+      {space_a, agent_a} = roster_probe_space!("Overlap Probe A", "test-shell-overlap-a", viewer)
+      {space_b, _agent_b} = roster_probe_space!("Overlap Probe B", "test-shell-overlap-b", viewer)
+
+      # Space C is the NEGATIVE CONTROL and the viewer DELIBERATELY DOES NOT
+      # JOIN IT — hence `nil` rather than `viewer`. Membership is not a
+      # neutral detail here: the presence branch subscribes `chat:space:<id>`
+      # for EVERY id in `Chat.list_viewer_presence_space_ids/1`, which is
+      # exactly "spaces the viewer holds a user row on". Joining C would
+      # therefore put C's chat topic in this LV's subscribe set and the
+      # broadcast below would legitimately arrive, collapsing the control.
+      #
+      # C is a space "this LiveView never subscribed", and that is a claim
+      # about SUBSCRIPTION, not about roster visibility — so it neither needs
+      # nor tolerates the membership row that spaces A and B require.
+      {space_c, _agent_c} = roster_probe_space!("Overlap Probe C", "test-shell-overlap-c", nil)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+
+      # Presence independently holds space A's chat topic.
+      send(view.pid, {:presence_spaces_resolved, [space_a.id]})
+      send(view.pid, {:roster_resolved, space_a.id})
+      send(view.pid, {:roster_resolved, space_b.id})
+      _ = render(view)
+
+      assert space_a.id in (:sys.get_state(view.pid).socket.assigns[:presence_space_ids] || [])
+      assert agent_a.name in roster_names(view)
+
+      renamed = "overlap-#{System.unique_integer([:positive])}"
+      Repo.update!(Ecto.Changeset.change(agent_a, name: renamed))
+
+      # The PROBE is a `{:roster_changed, _}` message published on the CHAT
+      # topic. What is under test is delivery of that topic to this pid, not
+      # the payload: the `:roster_updates` hook dispatches on message shape,
+      # so a roster ping is simply the shape whose handling is observable in
+      # `roster_items`. (`presence_diff`, the payload this topic really
+      # carries, lands in `presence_list` instead and would not discriminate.)
+
+      # NEGATIVE CONTROL, same observable: a space this LV never subscribed.
+      # Without it the assertion below could pass on an observable that
+      # refreshes for reasons of its own.
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        Platform.Chat.PubSub.space_topic(space_c.id),
+        {:roster_changed, space_c.id}
+      )
+
+      refute renamed in roster_names(view),
+             "a broadcast on a chat topic this LiveView never subscribed still reached it"
+
+      # Presence's own hold on space A must survive the roster switch.
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        Platform.Chat.PubSub.space_topic(space_a.id),
+        {:roster_changed, space_a.id}
+      )
+
+      assert renamed in roster_names(view),
+             "the roster switch released a chat topic that :presence_space_ids still holds"
+    end
+  end
 end

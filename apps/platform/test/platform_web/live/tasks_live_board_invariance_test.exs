@@ -898,7 +898,35 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # `SettingsMenu` is a pair of FUNCTION components, not a LiveComponent, so
   # `toggle_settings_menu` and `:settings_menu_open` stay on the shell and no
   # `phx-target` was introduced — a JS-hook `pushEvent` would have ignored one.
-  @shell_line_count 635
+  # REBASED 635 -> 649 (+14), 2026-08-19, task 01a011e9 stage 4 rebased onto
+  # `86ea77b0`. ARITHMETIC: 635 + 14 = 649.
+  #
+  # THE PIN WAS RE-DERIVED, NOT TAKEN FROM EITHER SIDE OF THE MERGE. This line
+  # conflicted because both sides moved it from a shared 653: `main` ratcheted
+  # DOWN to 635 by extracting `EpicLoaders` and `SettingsMenu`, while this
+  # branch rose to 667 by adding stage 4's two call sites. Neither number is
+  # true of the merged tree — 667 counts a shell that still contains the two
+  # concerns `main` extracted, and 635 counts one without stage 4 — so the
+  # deltas must not be summed and neither side's literal may be kept. The
+  # value below is measured on the MERGED tree: `tasks_live.ex` reports 649.
+  #
+  # The +14 over `main` is stage 4's own delta, unchanged by the rebase: two
+  # piped calls into `select_project/2` (`clear_detail/1` and
+  # `resubscribe_execution_space/2`, both ALREADY in the shell) plus the
+  # 12-line comment that explains why the unsubscribe is safe here. No concern
+  # re-entered the shell: nothing moved back from a component, no new private
+  # function was added, and the two callees are the shell's own
+  # subscription/selection state. The comment is not padding —
+  # `Phoenix.PubSub.unsubscribe/2` drops every registration a pid holds for a
+  # topic, so an unsubscribe site that does not argue its ownership is the
+  # defect this task exists to stop repeating.
+  #
+  # The stage-4 delta and `main`'s extractions are disjoint: stage 4 touches
+  # `select_project/2` only, and neither `reload_epics/1` nor the settings
+  # dropdown is on that path. That independence is why the two deltas compose
+  # to exactly 649 and the CI `Check surface line budgets` step (shell budget
+  # 653) still passes at 649.
+  @shell_line_count 649
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 
