@@ -3317,7 +3317,26 @@ defmodule PlatformWeb.ChatLive do
     # Re-fetch sidebar lists so the new channel appears immediately for every
     # connected session, not just the creator. Subscribe to the new space's
     # topic for unread counts.
-    ChatPubSub.subscribe(space.id)
+    #
+    # Task 01a011d4: through the SAME subscribe-scope decision `do_mount/3`
+    # builds the mount-time set from and `rail_subscribe_space_ids/1` derives
+    # the held set from, so all three sites agree by construction. Without the
+    # guard an external session picked up the topic of every internal-only
+    # channel created after it mounted. `presence_subscribe_space_ids/2` is a
+    # pass-through for internal and anonymous sessions, so the workspace-wide
+    # internal rail and its unread badges are unchanged.
+    #
+    # Evaluated once, at creation time: a user granted access to a channel
+    # AFTER it was created gets no subscription until reload. Known, accepted
+    # when this shipped, and external-only for the same pass-through reason.
+    #
+    # No paired `unsubscribe` anywhere. Phoenix.PubSub's registry runs with
+    # `keys: :duplicate` and `unsubscribe/2` drops ALL of a pid's registrations
+    # for a topic at once, so a paired call here would silently kill another
+    # code path's subscription with no error and no log.
+    if space.id in presence_subscribe_space_ids([space], socket.assigns.user_id) do
+      ChatPubSub.subscribe(space.id)
+    end
 
     # rbac-external-users M5: scope the reload so a channel created elsewhere in
     # the workspace never pops into an external user's rail (the external

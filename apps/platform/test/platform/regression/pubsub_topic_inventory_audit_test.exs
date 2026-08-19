@@ -377,22 +377,35 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
   end
 
   describe "global-topic verdicts" do
-    test "chat:spaces subscribes the session to the new space before the rail re-scopes" do
+    test "chat:spaces subscribes a new space's topic only within the session's subscribe scope" do
       source = File.read!(Path.join(@lib_root, "platform_web/live/chat_live.ex"))
 
       assert source =~ ~r/handle_info\(\{:space_created, %\{kind: "channel"\} = space\}/, """
       The `{:space_created, %{kind: "channel"}}` clause in chat_live.ex has
       moved or changed shape. Re-check the stage-2 verdict on "chat:spaces"
-      before trusting it: the verdict rests on that clause calling
-      ChatPubSub.subscribe(space.id) unconditionally, so every connected
-      session ends up holding a live subscription to every channel created
-      after it mounted, whether or not it is a member.
-
-      Nothing renders from that subscription today (rail_channels/1 re-scopes,
-      and the content-carrying handlers gate on active_space), which is why the
-      finding is a defect to fix rather than a leak to stop the line for. If
-      the clause changed, that chain has to be re-walked.
+      before trusting it: the verdict rests on where that clause subscribes
+      the new space's topic, so the guard asserted below has nothing left to
+      anchor to.
       """
+
+      assert source =~
+               ~r/if space\.id in presence_subscribe_space_ids\(\[space\], socket\.assigns\.user_id\) do\s+ChatPubSub\.subscribe\(space\.id\)\s+end/,
+             """
+             The `{:space_created, %{kind: "channel"}}` clause no longer guards
+             `ChatPubSub.subscribe(space.id)` with `presence_subscribe_space_ids/2`
+             (task 01a011d4). Unguarded, every connected session holds a live
+             subscription to every channel created after it mounted, whether or
+             not that channel is in its subscribe scope, and an external session
+             picks up internal-only channel topics that way.
+
+             `presence_subscribe_space_ids/2` is the single source of truth for
+             this decision at all three sites that make it: `do_mount/3`'s
+             mount-time set, `rail_subscribe_space_ids/1`'s held set, and this
+             one. Swapping in a second predicate here is the drift this audit
+             exists to remove. The behavioural case lives in
+             test/platform_web/live/chat_live_external_rail_test.exs,
+             "path 3: the global chat:spaces topic".
+             """
     end
 
     test "the global transcript topic is only subscribed by supervised singletons" do

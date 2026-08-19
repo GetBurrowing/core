@@ -830,8 +830,9 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
     #
     # SCOPE OF THIS CASE, stated so a green result is not over-read: it covers
     # the ASSIGNS only. The same clause also calls `ChatPubSub.subscribe/1` on
-    # the new space with no membership check, which is a separate defect already
-    # ticketed as 01a011d4 and deliberately not asserted here.
+    # the new space; that decision is now guarded by
+    # `presence_subscribe_space_ids/2` (task 01a011d4) and is asserted by the
+    # sibling case below, which measures the SUBSCRIPTION rather than the rail.
     test "an internal channel created after mount enters nothing in the external assigns",
          %{conn: conn} do
       org = tenant_org!()
@@ -878,6 +879,77 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       assert fresh.id in channel_ids(ext_view),
              "the external session did not act on {:space_created, _} even when entitled, " <>
                "so the refutes above were passing for the wrong reason"
+    end
+
+    # Task 01a011d4. The case above asserts the ASSIGNS, and it passed before
+    # this guard existed, because `rail_channels/1` already re-scoped the rail.
+    # What the unguarded clause still did was call `ChatPubSub.subscribe/1` on
+    # the new space, so the session held that topic's subscription with nothing
+    # rendering from it. A render assertion cannot see that. `unread_counts`
+    # can: `MessagesHooks.handle_info({:new_message, _})` increments it for any
+    # background message the process receives, with no membership or scope
+    # check of its own, so the count moves if and only if this session holds
+    # the space's subscription.
+    test "an internal channel created after mount never enters the external subscribe set",
+         %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+      allowed = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+
+      {:ok, view, _} =
+        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{allowed.slug}")
+
+      before_unread = assigns(view).unread_counts
+
+      # NEGATIVE HALF. Created AFTER the mount, so `{:space_created, _}` is the
+      # only route by which its topic can reach this session. `render/1` is a
+      # synchronous call to the view, so it flushes that broadcast before the
+      # message below is posted.
+      insider = create_user!("Ivan Internal")
+      internal = channel!("Internal Skunkworks") |> join!(insider)
+      insider_participant = participant_for(internal, insider)
+      _ = render(view)
+
+      {:ok, _foreign} =
+        Chat.post_message(%{
+          space_id: internal.id,
+          participant_id: insider_participant.id,
+          content_type: "text",
+          content: "internal-only-after-mount-body"
+        })
+
+      # POSITIVE CONTROL, same session and same mechanism, on a channel this
+      # external user IS entitled to. Without it, a broadcast that never fired,
+      # a crashed handler, or a session that stopped processing broadcasts all
+      # read as a pass. `channel!/2` broadcast `:space_created` before `join!/2`
+      # landed, so replay the event after the join.
+      entitled = channel!("Client Archive", org_id: org.id) |> join!(ext)
+      ChatPubSub.broadcast_space_event({:space_created, entitled})
+      _ = render(view)
+
+      entitled_author = create_user!("Bea Background")
+      join!(entitled, entitled_author)
+      entitled_participant = participant_for(entitled, entitled_author)
+
+      {:ok, _entitled_msg} =
+        Chat.post_message(%{
+          space_id: entitled.id,
+          participant_id: entitled_participant.id,
+          content_type: "text",
+          content: "entitled-after-mount-body"
+        })
+
+      _ = render(view)
+      after_unread = assigns(view).unread_counts
+
+      assert Map.get(after_unread, entitled.id, 0) > Map.get(before_unread, entitled.id, 0),
+             "an entitled channel created after mount never delivered its message, so the " <>
+               "refute below is measuring a dead path rather than the subscribe scope"
+
+      assert Map.get(after_unread, internal.id, 0) ==
+               Map.get(before_unread, internal.id, 0),
+             "the external session holds a subscription to an internal-only channel created " <>
+               "after it mounted, so {:space_created, _} is subscribing outside its scope"
     end
   end
 
