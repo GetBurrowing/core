@@ -18,6 +18,7 @@ defmodule Platform.Tenancy.ExternalGrants do
   import Ecto.Query
 
   alias Platform.Chat.Participant
+  alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
   alias Platform.Tenancy
   alias Platform.Tenancy.PendingExternalGrant
@@ -195,6 +196,7 @@ defmodule Platform.Tenancy.ExternalGrants do
         apply_all(grant, user_id)
       end
     end)
+    |> notify_sidebar(user_id)
   end
 
   @doc """
@@ -222,6 +224,7 @@ defmodule Platform.Tenancy.ExternalGrants do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+    |> notify_sidebar(user_id)
     |> case do
       {:ok, :ok} -> :ok
       {:error, reason} -> {:error, reason}
@@ -234,6 +237,32 @@ defmodule Platform.Tenancy.ExternalGrants do
   def delete_grant(%PendingExternalGrant{} = grant), do: Repo.delete(grant)
 
   # ── internals ─────────────────────────────────────────────────────────
+
+  # Task 01a017a3. Both public choke points that seat a user in a channel
+  # (`apply_grant/2`, `add_space_participants/2`) funnel through the private
+  # `add_participants/2` below, which is the only writer of a `chat_participants`
+  # row in this module. Neither goes through `Chat.add_participant/2`, so
+  # `{:participant_joined, _}` never fires for a grant made here, and a session
+  # that was already mounted held no subscription for the newly granted channel:
+  # the channel appeared in its rail with an unread badge that could never move.
+  #
+  # AFTER the transaction returns, never inside it. A receiver re-reads the rail
+  # on this event, and a read issued while the writer's transaction is still open
+  # sees pre-commit state in production. Emitting inside would also have already
+  # sent the event by the time a rollback undid the grant.
+  #
+  # ONCE PER CALL, not once per space: the event carries no space id and the
+  # handler reconciles the whole subscribe set.
+  #
+  # No `_from` exclusion here. The acting process is an operator's LiveView (or a
+  # login-provisioning process), subscribed to a DIFFERENT user's sidebar topic,
+  # so there is no self-echo to suppress.
+  defp notify_sidebar({:ok, _} = result, user_id) do
+    ChatPubSub.broadcast_sidebar_changed(user_id)
+    result
+  end
+
+  defp notify_sidebar(result, _user_id), do: result
 
   # Runs every provisioning step; on the first failure `Repo.rollback/1`
   # aborts the transaction so nothing is half-applied.

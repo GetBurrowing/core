@@ -172,6 +172,83 @@ defmodule PlatformWeb.ChatLive do
     |> MapSet.new()
   end
 
+  # The space topics this session ACTUALLY holds a registration for, and the
+  # only two functions in this module allowed to change that (task 01a017a3).
+  #
+  # `Phoenix.PubSub`'s registry runs `keys: :duplicate`, so `subscribe/1` is not
+  # idempotent per pid — a second call adds a SECOND registration and every
+  # broadcast on the topic is then delivered twice — and `unsubscribe/2` is
+  # `Registry.unregister/2`, which drops EVERY registration this pid holds for
+  # the topic at once. Neither call can be issued safely without knowing what is
+  # already held, and the registry is not something to interrogate on every rail
+  # rebuild. Hence the assign.
+  #
+  # EVERY `ChatPubSub.subscribe/1` and `ChatPubSub.unsubscribe/1` in this module
+  # goes through this pair. Not most of them: an assign that only some sites
+  # maintain is worse than no assign at all, because it reads as authoritative
+  # while lying, and the reconcile in `handle_info(:sidebar_changed, _)` takes
+  # its subscribe-or-skip decision straight off it.
+  #
+  # `rail_subscribe_space_ids/1` above is the DESIRED set, derived from the rail
+  # assigns. This is the HELD set. They answer different questions, and the gap
+  # between them is what the reconcile closes.
+  @spec subscribe_space(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
+  defp subscribe_space(socket, space_id) do
+    if MapSet.member?(socket.assigns.subscribed_space_ids, space_id) do
+      socket
+    else
+      ChatPubSub.subscribe(space_id)
+
+      assign(
+        socket,
+        :subscribed_space_ids,
+        MapSet.put(socket.assigns.subscribed_space_ids, space_id)
+      )
+    end
+  end
+
+  # Records ZERO for the topic rather than decrementing a count, because
+  # `unsubscribe/2` really does drop all of this pid's registrations at once.
+  @spec unsubscribe_space(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
+  defp unsubscribe_space(socket, space_id) do
+    ChatPubSub.unsubscribe(space_id)
+
+    assign(
+      socket,
+      :subscribed_space_ids,
+      MapSet.delete(socket.assigns.subscribed_space_ids, space_id)
+    )
+  end
+
+  # ADD-ONLY, deliberately. Every id comes through `presence_subscribe_space_ids/2`
+  # (via `rail_subscribe_space_ids/1`), so this can never widen back to
+  # subscribe-to-everything, which is the defect task 01a011d4 exists to remove.
+  #
+  # Releasing the subscription for a space that DROPPED OUT of the rail is task
+  # 01a0181f (revoke) and is out of scope here. Taking the difference in both
+  # directions would mean issuing an `unsubscribe`, and on a `keys: :duplicate`
+  # registry that drops every registration this pid holds for the topic at once,
+  # which is what task 01a011e9 had to repair on the navigation path.
+  #
+  # Costs one `external_user?/1` existence query per `:sidebar_changed`. The
+  # same cost is already accepted per navigation (see `rail_subscribe_space_ids/1`);
+  # a cache of the answer is the shape of the bug being fixed.
+  #
+  # KNOWN GAP, pre-existing and deliberately not widened here: the caller
+  # reloads `@channels` and `@archived_channels` but NOT `@dm_conversations` or
+  # `@pinned_task_spaces`, so those two arms of `rail_subscribe_space_ids/1` are
+  # read off assigns that this path never refreshes. A DM or group conversation
+  # a user is added to after mount is therefore still not reached from here.
+  defp reconcile_rail_subscriptions(socket) do
+    if connected?(socket) do
+      socket
+      |> rail_subscribe_space_ids()
+      |> Enum.reduce(socket, &subscribe_space(&2, &1))
+    else
+      socket
+    end
+  end
+
   defp do_mount(session, socket, opts) do
     embedded? = Keyword.fetch!(opts, :embedded?)
     user_id = session["current_user_id"] || Ecto.UUID.generate()
@@ -284,6 +361,10 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:mask_names?, false)
       |> assign(:revealed_section_ids, MapSet.new())
       |> assign(:user_id, user_id)
+      # The HELD PubSub subscribe set (task 01a017a3). Seeded empty and
+      # maintained ONLY by `subscribe_space/2` / `unsubscribe_space/2`; the
+      # mount-time subscribe loop below is its first writer.
+      |> assign(:subscribed_space_ids, MapSet.new())
       # rbac-external-users M5: the render-branch flag + the read-scope it is
       # keyed on. `@external?` gates the discovery chrome off in the template
       # (sub-org headers, admin entry, new-channel, scope-pills, archived /
@@ -552,13 +633,11 @@ defmodule PlatformWeb.ChatLive do
     #
     # The list below concatenates three independently-sourced sets, so the
     # same space id CAN appear twice (e.g. a pinned exec space that is also
-    # listed as a channel). Today the loop subscribes once per element and
-    # therefore accepts duplicate delivery for any repeated id. The correct
-    # defence is either to de-duplicate this id list before the subscribe
-    # loop, or to keep accepting duplicate delivery knowingly — but not to
-    # assume PubSub collapses it, because it does not. See the unsubscribe-
-    # then-subscribe pattern below in `handle_params/3` for the shape that
-    # does guarantee a single registration.
+    # listed as a channel). Task 01a017a3 closed that: the loop now runs
+    # through `subscribe_space/2`, which skips any id already in
+    # `@subscribed_space_ids`, so a repeated id takes exactly one registration.
+    # Do not reach past that helper for a bare `ChatPubSub.subscribe/1` here or
+    # anywhere else in this module.
     all_spaces = channels ++ pinned_task_spaces ++ dm_conversations
 
     # Subscribe to chat pubsub for unread counts in background conversations
@@ -568,35 +647,42 @@ defmodule PlatformWeb.ChatLive do
     # In embedded mode we skip both: the embed only renders ONE space and
     # has no sidebar to keep in sync, so the cross-space subscriptions
     # would just be noise.
-    if connected?(socket) and not embedded? do
-      # M10 (presence/typing scope, rbac-external-users): external users must
-      # receive presence + typing ONLY within spaces they are a chat_participant
-      # of. We INTERSECT the subscribe set with their allowlisted scope
-      # (`presence_subscribe_space_ids/2`) rather than swapping in the membership
-      # list — an intersect can only ever REMOVE non-allowlisted topics, so it is
-      # correct and order-independent regardless of whether M5/M7 have already
-      # narrowed `channels` on the merge branch. Internal users are unrestricted.
-      #
-      # BOUNDARY: we scope ONLY the SUBSCRIBE set here. The rendered sidebar
-      # assigns (`:channels` / `:spaces` / `channel_sections`) belong to M5 and
-      # are deliberately left workspace-wide on this branch — the data FEED
-      # (presence/typing) is already scoped even where the render is not, and the
-      # two agree once M5's filtered render merges.
-      all_spaces
-      |> presence_subscribe_space_ids(user_id)
-      |> Enum.each(&ChatPubSub.subscribe/1)
+    socket =
+      if connected?(socket) and not embedded? do
+        # M10 (presence/typing scope, rbac-external-users): external users must
+        # receive presence + typing ONLY within spaces they are a chat_participant
+        # of. We INTERSECT the subscribe set with their allowlisted scope
+        # (`presence_subscribe_space_ids/2`) rather than swapping in the membership
+        # list — an intersect can only ever REMOVE non-allowlisted topics, so it is
+        # correct and order-independent regardless of whether M5/M7 have already
+        # narrowed `channels` on the merge branch. Internal users are unrestricted.
+        #
+        # BOUNDARY: we scope ONLY the SUBSCRIBE set here. The rendered sidebar
+        # assigns (`:channels` / `:spaces` / `channel_sections`) belong to M5 and
+        # are deliberately left workspace-wide on this branch — the data FEED
+        # (presence/typing) is already scoped even where the render is not, and the
+        # two agree once M5's filtered render merges.
+        socket =
+          all_spaces
+          |> presence_subscribe_space_ids(user_id)
+          |> Enum.reduce(socket, &subscribe_space(&2, &1))
 
-      ChatPubSub.subscribe_spaces()
-      # Per-user sidebar-invalidation topic (Stage 4): a `:sidebar_changed`
-      # broadcast (Stage 5 personal arrangement writes) triggers a resolver
-      # recompute for this user's OTHER tabs.
-      ChatPubSub.subscribe_sidebar(user_id)
-      # Shared org-default topic (Stage 6): a `:sidebar_defaults_changed`
-      # broadcast from a Fabrikam-admin curation write (rename / recolor / reorder
-      # / reassign) triggers a resolver recompute in EVERY connected session,
-      # so an admin's default change is visible to all users live.
-      ChatPubSub.subscribe_sidebar_defaults()
-    end
+        ChatPubSub.subscribe_spaces()
+        # Per-user sidebar-invalidation topic (Stage 4): a `:sidebar_changed`
+        # broadcast (Stage 5 personal arrangement writes) triggers a resolver
+        # recompute for this user's OTHER tabs. Task 01a017a3 also hangs the
+        # subscribe-set reconcile off this topic, so a channel granted after
+        # mount picks up its subscription without a reload.
+        ChatPubSub.subscribe_sidebar(user_id)
+        # Shared org-default topic (Stage 6): a `:sidebar_defaults_changed`
+        # broadcast from a Fabrikam-admin curation write (rename / recolor / reorder
+        # / reassign) triggers a resolver recompute in EVERY connected session,
+        # so an admin's default change is visible to all users live.
+        ChatPubSub.subscribe_sidebar_defaults()
+        socket
+      else
+        socket
+      end
 
     space_ids = Enum.map(all_spaces, & &1.id)
 
@@ -685,10 +771,14 @@ defmodule PlatformWeb.ChatLive do
         socket
 
       space ->
-        if connected?(socket) do
-          ChatPubSub.subscribe(space.id)
-          Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
-        end
+        socket =
+          if connected?(socket) do
+            socket = subscribe_space(socket, space.id)
+            Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
+            socket
+          else
+            socket
+          end
 
         participant = find_user_participant(space.id, socket.assigns.user_id)
         participants = Chat.list_participants(space.id)
@@ -747,11 +837,14 @@ defmodule PlatformWeb.ChatLive do
         # mount. Gating the restore on the rail's own subscribe set ends leaving
         # on mount-time state either way: exactly one registration for a rail
         # space, zero for anything else.
-        ChatPubSub.unsubscribe(prev.id)
+        socket = unsubscribe_space(socket, prev.id)
 
-        if connected?(socket) and MapSet.member?(rail_subscribe_space_ids(socket), prev.id) do
-          ChatPubSub.subscribe(prev.id)
-        end
+        socket =
+          if connected?(socket) and MapSet.member?(rail_subscribe_space_ids(socket), prev.id) do
+            subscribe_space(socket, prev.id)
+          else
+            socket
+          end
 
         # Deliberately NOT given the same treatment: only the enter path below
         # subscribes `active_agent:`, so removing every entry is the whole of the
@@ -823,17 +916,20 @@ defmodule PlatformWeb.ChatLive do
        |> handle_route_stale("chat")
        |> push_navigate(to: ~p"/chat")}
     else
-      if connected?(socket) do
-        # Mount's subscribe loop (see `mount/3`) already subscribed this LV
-        # to every space in the user's channel + DM list — which includes
-        # whichever one is about to become active. Phoenix.PubSub does NOT
-        # dedupe subscriptions per pid: a second subscribe adds a second
-        # registry entry and a single broadcast fires handle_info twice.
-        # Unsubscribe first to guarantee a single active subscription here.
-        ChatPubSub.unsubscribe(space.id)
-        ChatPubSub.subscribe(space.id)
-        Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
-      end
+      socket =
+        if connected?(socket) do
+          # Mount's subscribe loop (see `mount/3`) already subscribed this LV
+          # to every space in the user's channel + DM list — which includes
+          # whichever one is about to become active. Phoenix.PubSub does NOT
+          # dedupe subscriptions per pid: a second subscribe adds a second
+          # registry entry and a single broadcast fires handle_info twice.
+          # Unsubscribe first to guarantee a single active subscription here.
+          socket = socket |> unsubscribe_space(space.id) |> subscribe_space(space.id)
+          Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
+          socket
+        else
+          socket
+        end
 
       participant = ensure_participant(space.id, socket.assigns.user_id)
       participants = Chat.list_participants(space.id)
@@ -3342,16 +3438,23 @@ defmodule PlatformWeb.ChatLive do
     # internal rail and its unread badges are unchanged.
     #
     # Evaluated once, at creation time: a user granted access to a channel
-    # AFTER it was created gets no subscription until reload. Known, accepted
-    # when this shipped, and external-only for the same pass-through reason.
+    # AFTER it was created gets no subscription from THIS clause. Task 01a017a3
+    # closed that gap on the `:sidebar_changed` reconcile rather than here,
+    # because the grant is a different event from the creation and the grant
+    # choke points (`ExternalGrants.apply_grant/2`,
+    # `ExternalGrants.add_space_participants/2`, `Chat.do_add_participant/2`)
+    # already emit a per-user sidebar invalidation.
     #
     # No paired `unsubscribe` anywhere. Phoenix.PubSub's registry runs with
     # `keys: :duplicate` and `unsubscribe/2` drops ALL of a pid's registrations
     # for a topic at once, so a paired call here would silently kill another
     # code path's subscription with no error and no log.
-    if space.id in presence_subscribe_space_ids([space], socket.assigns.user_id) do
-      ChatPubSub.subscribe(space.id)
-    end
+    socket =
+      if space.id in presence_subscribe_space_ids([space], socket.assigns.user_id) do
+        subscribe_space(socket, space.id)
+      else
+        socket
+      end
 
     # rbac-external-users M5: scope the reload so a channel created elsewhere in
     # the workspace never pops into an external user's rail (the external
@@ -3400,7 +3503,7 @@ defmodule PlatformWeb.ChatLive do
         socket
       ) do
     if participant_id != nil and participant_id == socket.assigns[:current_user_email] do
-      if connected?(socket), do: ChatPubSub.subscribe(space_id)
+      socket = if connected?(socket), do: subscribe_space(socket, space_id), else: socket
       {:noreply, refresh_pinned_task_spaces(socket)}
     else
       {:noreply, socket}
@@ -3527,12 +3630,24 @@ defmodule PlatformWeb.ChatLive do
       # The re-read lives here, not inside `recompute_pinned/1`: its other two
       # callers act on the tab that just wrote, where the assign is already
       # fresh, and would pay a preferences read for nothing.
-      {:noreply,
-       socket
-       |> assign(:channels, channels)
-       |> assign(:archived_channels, archived_channels)
-       |> assign(:closed_dm_at, Accounts.get_closed_dm_at(socket.assigns.user_id))
-       |> recompute_pinned()}
+      socket =
+        socket
+        |> assign(:channels, channels)
+        |> assign(:archived_channels, archived_channels)
+        |> assign(:closed_dm_at, Accounts.get_closed_dm_at(socket.assigns.user_id))
+        |> recompute_pinned()
+
+      # Task 01a017a3: reconcile the PubSub subscribe set against the REFRESHED
+      # rail. A session granted access to a channel that already existed gets
+      # no `{:space_created, _}` (that fired when the channel was created, and
+      # its guard correctly declined), so without this the channel appeared in
+      # the rail with a badge that could never move.
+      #
+      # This is where it belongs rather than on a bespoke grant event: nine
+      # sites already emit `:sidebar_changed`, every one of them changes what
+      # the viewer can see, and a grant path added later that forgets a second
+      # bespoke broadcast would re-create this exact defect one layer up.
+      {:noreply, reconcile_rail_subscriptions(socket)}
     end
   end
 

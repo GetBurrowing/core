@@ -389,14 +389,14 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
       """
 
       assert source =~
-               ~r/if space\.id in presence_subscribe_space_ids\(\[space\], socket\.assigns\.user_id\) do\s+ChatPubSub\.subscribe\(space\.id\)\s+end/,
+               ~r/if space\.id in presence_subscribe_space_ids\(\[space\], socket\.assigns\.user_id\) do\s+subscribe_space\(socket, space\.id\)\s+else\s+socket\s+end/,
              """
              The `{:space_created, %{kind: "channel"}}` clause no longer guards
-             `ChatPubSub.subscribe(space.id)` with `presence_subscribe_space_ids/2`
-             (task 01a011d4). Unguarded, every connected session holds a live
-             subscription to every channel created after it mounted, whether or
-             not that channel is in its subscribe scope, and an external session
-             picks up internal-only channel topics that way.
+             its subscribe with `presence_subscribe_space_ids/2` (task 01a011d4).
+             Unguarded, every connected session holds a live subscription to
+             every channel created after it mounted, whether or not that channel
+             is in its subscribe scope, and an external session picks up
+             internal-only channel topics that way.
 
              `presence_subscribe_space_ids/2` is the single source of truth for
              this decision at all three sites that make it: `do_mount/3`'s
@@ -405,6 +405,14 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
              exists to remove. The behavioural case lives in
              test/platform_web/live/chat_live_external_rail_test.exs,
              "path 3: the global chat:spaces topic".
+
+             The subscribe itself is `subscribe_space(socket, space.id)`, not a
+             bare `ChatPubSub.subscribe/1` (task 01a017a3). That private helper
+             is the only writer of `@subscribed_space_ids`, which the
+             `:sidebar_changed` reconcile reads to decide what it already holds.
+             A bare call here would register a second entry on a `keys:
+             :duplicate` registry without the assign noticing, and every
+             broadcast on that topic would then be delivered twice.
              """
     end
 

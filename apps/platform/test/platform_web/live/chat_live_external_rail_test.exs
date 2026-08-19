@@ -24,6 +24,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
   alias Platform.Chat.Sidebar
   alias Platform.Repo
   alias Platform.Tenancy
+  alias Platform.Tenancy.ExternalGrants
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.ChatLive
@@ -953,6 +954,192 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
     end
   end
 
+  # Task 01a017a3. `{:space_created, _}` above evaluates the subscribe decision
+  # ONCE, at creation time. A session granted access to a channel that already
+  # existed therefore held no subscription for it, and its unread badge stayed
+  # dead until the next reload. The fix reconciles the subscribe set on the
+  # per-user `:sidebar_changed` invalidation that the grant choke points now
+  # emit, so the observable here is the SUBSCRIPTION, not the render:
+  # `MessagesHooks.handle_info({:new_message, msg}, _)` increments the count
+  # with no membership or scope check of its own, so `@unread_counts` moves if
+  # and only if this session holds that space's topic.
+  describe "path 5: a channel granted AFTER the session mounted" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+      landing = channel!("Client Workspace", org_id: org.id) |> join!(ext)
+
+      %{conn: conn, org: org, ext: ext, landing: landing}
+    end
+
+    # THE ORDER OF THESE STEPS IS THE TEST. The grant happens AFTER the mount.
+    # A version that grants first passes against this defect, because the
+    # mount-time subscribe set already covers it. Do not re-order them.
+    test "the admin-hub grant path subscribes the session and moves its unread badge", ctx do
+      # Mounting on a channel the viewer already has keeps `@active_space`
+      # non-nil. With no accessible channel it is nil, and `MessagesHooks` then
+      # treats every arriving message as a background DM, which changes what the
+      # assertions below measure.
+      {:ok, view, _html} =
+        ctx.conn |> with_chat_host() |> authed(ctx.ext) |> live("/chat/#{ctx.landing.slug}")
+
+      before_unread = assigns(view).unread_counts
+
+      # The ACTIVE space's registration count is captured, not asserted to be 1.
+      # `PlatformWeb.ShellLive.on_mount/4` attaches a `:roster_updates`
+      # `handle_info` hook INTO this LiveView's own process, and its
+      # `{:roster_resolved, sid}` clause calls `ChatPubSub.subscribe/1` for the
+      # active space outside ChatLive's accounting, so a freshly mounted session
+      # already holds two registrations for whatever space it landed on. That is
+      # pre-existing (reproduced on an unmodified checkout of this file's lib
+      # sources) and belongs to whoever reconciles ShellLive's subscriptions.
+      # What this task must not do is ADD to it, which is what the re-assertions
+      # below measure.
+      landing_registrations = registrations(view, ctx.landing)
+
+      # Created WITHOUT the viewer, so the `{:space_created, _}` guard correctly
+      # declines to subscribe. This is the channel the grant below confers.
+      granted = channel!("Client Handover", org_id: ctx.org.id)
+
+      # NEGATIVE CONTROL: same shape, never granted to this viewer. Without it,
+      # a fix that went back to subscribing to everything passes every other
+      # assertion in this test.
+      never = channel!("Client Escrow", org_id: ctx.org.id)
+      never_author = create_user!("Nadia Never")
+      join!(never, never_author)
+      never_participant = participant_for(never, never_author)
+
+      _ = render(view)
+
+      # The path the admin hub actually takes (`external_recovery_live.ex` calls
+      # exactly this), NOT `Chat.add_participant/2`. The reported scenario never
+      # reaches `Chat.do_add_participant/2`, so a test built on `join!/2` alone
+      # would pass against a fix that cannot work on the reported path.
+      :ok =
+        ExternalGrants.add_space_participants(ctx.ext, [
+          %{"space_id" => granted.id, "role" => "member"}
+        ])
+
+      # `Phoenix.PubSub.broadcast` resolves its subscribers by `Registry.lookup`
+      # in the CALLING process at broadcast time, and this LiveView only appears
+      # in that registry once it has PROCESSED the invalidation. `render/1` is a
+      # synchronous call and therefore a mailbox barrier; posting without one
+      # races the registration and flakes.
+      _ = render(view)
+
+      # The author must not be the viewer: `increment_unread/2` skips a message
+      # whose participant is the current one.
+      stranger = create_user!("Sam Stranger")
+      join!(granted, stranger)
+      stranger_participant = participant_for(granted, stranger)
+
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: granted.id,
+          participant_id: stranger_participant.id,
+          content_type: "text",
+          content: "granted-after-mount-body"
+        })
+
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: never.id,
+          participant_id: never_participant.id,
+          content_type: "text",
+          content: "never-granted-body"
+        })
+
+      _ = render(view)
+      after_unread = assigns(view).unread_counts
+
+      assert Map.get(after_unread, granted.id, 0) > Map.get(before_unread, granted.id, 0),
+             "the badge stayed dead for a channel this session was granted after it mounted"
+
+      assert Map.get(after_unread, never.id, 0) == Map.get(before_unread, never.id, 0),
+             "a channel this session was never granted moved its unread count, so the " <>
+               "reconcile is subscribing outside the allowlist"
+
+      # The rail half, read before any navigation.
+      assert granted.id in channel_ids(view),
+             "the granted channel never appeared in the rail"
+
+      refute never.id in channel_ids(view)
+
+      # `Phoenix.PubSub`'s registry runs `keys: :duplicate`: two registrations
+      # deliver every broadcast twice and STILL satisfy the unread assertion
+      # above. This is the only check that catches a `@subscribed_space_ids`
+      # assign that has drifted from the real registry.
+      assert registrations(view, granted) == 1
+      assert registrations(view, ctx.landing) == landing_registrations
+
+      # IDEMPOTENCE. `:sidebar_changed` already fires from nine other sites, so
+      # the reconcile runs repeatedly in a normal session. A single-shot test
+      # cannot see a double subscribe.
+      ChatPubSub.broadcast_sidebar_changed(ctx.ext.id)
+      _ = render(view)
+
+      assert registrations(view, granted) == 1
+      assert registrations(view, ctx.landing) == landing_registrations
+
+      assert assigns(view).unread_counts == after_unread,
+             "a second :sidebar_changed moved the unread counts on its own, which is the " <>
+               "double-delivery signature"
+    end
+
+    test "the in-chat add-participant path subscribes the session too", ctx do
+      {:ok, view, _html} =
+        ctx.conn |> with_chat_host() |> authed(ctx.ext) |> live("/chat/#{ctx.landing.slug}")
+
+      before_unread = assigns(view).unread_counts
+      granted = channel!("Client Retainer", org_id: ctx.org.id)
+      _ = render(view)
+
+      # `Chat.add_participant/2`, which is the add-participant sheet's path and
+      # a different choke point from the one the test above exercises.
+      join!(granted, ctx.ext)
+      _ = render(view)
+
+      stranger = create_user!("Sam Stranger")
+      join!(granted, stranger)
+      stranger_participant = participant_for(granted, stranger)
+
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: granted.id,
+          participant_id: stranger_participant.id,
+          content_type: "text",
+          content: "sheet-granted-body"
+        })
+
+      _ = render(view)
+
+      assert Map.get(assigns(view).unread_counts, granted.id, 0) >
+               Map.get(before_unread, granted.id, 0),
+             "the add-participant-sheet path left the badge dead"
+
+      assert registrations(view, granted) == 1
+    end
+
+    # Task 01a011e9's fix lives on the leave/enter path, and routing all eight
+    # subscribe / unsubscribe sites through the tracking helpers is the most
+    # likely thing to break it.
+    test "navigating away and back leaves exactly one registration per rail space", ctx do
+      other = channel!("Client Archive", org_id: ctx.org.id) |> join!(ctx.ext)
+
+      {:ok, view, _html} =
+        ctx.conn |> with_chat_host() |> authed(ctx.ext) |> live("/chat/#{ctx.landing.slug}")
+
+      render_patch(view, ~p"/chat/#{other.slug}")
+      assert assigns(view).active_space.id == other.id
+
+      render_patch(view, ~p"/chat/#{ctx.landing.slug}")
+      assert assigns(view).active_space.id == ctx.landing.id
+
+      assert registrations(view, ctx.landing) == 1
+      assert registrations(view, other) == 1
+    end
+  end
+
   describe "path 4: navigation between allowlisted spaces leaves nothing behind" do
     test "after moving space to space, the session holds no off-limits message, canvas or roster row",
          %{conn: conn} do
@@ -1356,6 +1543,17 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
 
   defp channel_ids(view) do
     :sys.get_state(view.pid).socket.assigns.channels |> Enum.map(& &1.id)
+  end
+
+  # How many PubSub registrations the LiveView process holds for a space's
+  # topic. `Phoenix.PubSub.subscribe/2` is `Registry.register/3` on a
+  # `keys: :duplicate` registry, so this counts entries rather than answering a
+  # yes/no, which is the whole point: two entries fire `handle_info` twice.
+  # Copied from `chat_live_unread_after_leaving_test.exs` (task 01a011e9).
+  defp registrations(view, space) do
+    Platform.PubSub
+    |> Registry.lookup(ChatPubSub.space_topic(space.id))
+    |> Enum.count(fn {pid, _meta} -> pid == view.pid end)
   end
 
   # `live/2` follows the `/chat` → first-space redirect so the index cases can

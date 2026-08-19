@@ -1196,6 +1196,23 @@ defmodule Platform.Chat do
 
         ChatPubSub.broadcast(space_id, {:participant_joined, p})
 
+        # Task 01a017a3. Seating a user in a space changes that user's rail, and
+        # a session that mounted before this write holds no subscription for the
+        # new space. The per-user sidebar invalidation is what makes that session
+        # reconcile its subscribe set, so the unread badge on the just-granted
+        # space is live instead of dead until the next reload.
+        #
+        # `_from self()` matters HERE and at neither of the two `ExternalGrants`
+        # emit sites. `ChatLive.ensure_participant/2` inserts a row on a user's
+        # first navigation into a space, and on that path the acting process IS
+        # that user's own LiveView, already subscribed to its own sidebar topic.
+        # A self-echo would make it reconcile against itself mid-navigation. At
+        # the `ExternalGrants` sites the acting process is an operator's session
+        # on a different user's topic, so nothing needs excluding there.
+        if p.participant_type == "user" do
+          ChatPubSub.broadcast_sidebar_changed_from(p.participant_id, self())
+        end
+
       _ ->
         :ok
     end
