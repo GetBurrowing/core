@@ -1,6 +1,7 @@
 defmodule PlatformWeb.ShellLiveTest do
   use PlatformWeb.ConnCase, async: false
   import Phoenix.LiveViewTest
+  import Ecto.Query, only: [from: 2]
 
   alias Phoenix.LiveView.AsyncResult
   alias Platform.Accounts.User
@@ -10,7 +11,7 @@ defmodule PlatformWeb.ShellLiveTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
-  defp authenticated_conn(conn, opts \\ []) do
+  defp authenticated_conn_with_user(conn, opts \\ []) do
     role = Keyword.get(opts, :role, "admin")
 
     user =
@@ -35,7 +36,12 @@ defmodule PlatformWeb.ShellLiveTest do
       })
     end
 
-    init_test_session(conn, current_user_id: user.id)
+    {init_test_session(conn, current_user_id: user.id), user}
+  end
+
+  defp authenticated_conn(conn, opts \\ []) do
+    {conn, _user} = authenticated_conn_with_user(conn, opts)
+    conn
   end
 
   # PWA app-shell scroll lock regression. The root shell container must
@@ -216,7 +222,10 @@ defmodule PlatformWeb.ShellLiveTest do
 
     Chat.set_principal_agent(space.id, agent.id)
 
-    conn = authenticated_conn(conn)
+    {conn, user} = authenticated_conn_with_user(conn)
+    # Task 01a011e6 stage 3: the roster is fenced to spaces the viewer is a
+    # participant of, so the fixture has to join them.
+    join_space!(space, user)
     {:ok, view, _html} = live(conn, ~p"/tasks")
 
     # Inspect the LV's assigns directly. After the async load resolves, all
@@ -262,7 +271,8 @@ defmodule PlatformWeb.ShellLiveTest do
 
     Chat.set_principal_agent(space.id, agent.id)
 
-    conn = authenticated_conn(conn)
+    {conn, user} = authenticated_conn_with_user(conn)
+    join_space!(space, user)
     {:ok, view, _html} = live(conn, ~p"/tasks")
     _html = render_async(view, 1_000)
 
@@ -310,6 +320,17 @@ defmodule PlatformWeb.ShellLiveTest do
 
     space
   end
+
+  # Task 01a011e6 stage 3. `ShellLive.visible_roster/2` now requires the viewer
+  # to hold a `participant_type: "user"` row on the space, so a roster fixture
+  # that seeds agents but never joins the viewer produces an empty meter. Every
+  # fixture below therefore joins its viewer explicitly — which also makes the
+  # membership precondition of each test visible at its call site instead of
+  # being an accident of the old org-only fence.
+  defp join_space!(space, %{id: _} = user),
+    do: presence_participant!(space, user, "Fixture Viewer")
+
+  defp join_space!(_space, nil), do: nil
 
   defp presence_participant!(space, user, display_name) do
     {:ok, p} =
@@ -1677,6 +1698,8 @@ defmodule PlatformWeb.ShellLiveTest do
         {:ok, _} = Chat.add_space_agent(space.id, member.id, role: "member")
       end
 
+      join_space!(space, Keyword.get(opts, :viewer))
+
       %{space: space, principal: principal, member: member}
     end
 
@@ -1687,9 +1710,8 @@ defmodule PlatformWeb.ShellLiveTest do
     # does not raise, (3) the panel is actually POPULATED with the member and
     # carries the real space id on its Remove control.
     test "roster button opens a populated panel without crashing", %{conn: conn} do
-      %{space: space, member: member} = seed_roster_space()
-
-      conn = authenticated_conn(conn)
+      {conn, user} = authenticated_conn_with_user(conn)
+      %{space: space, member: member} = seed_roster_space(viewer: user)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       html = render_async(view, 2_000)
 
@@ -1724,11 +1746,10 @@ defmodule PlatformWeb.ShellLiveTest do
     # contract-legal value the template must survive. The row must still
     # RENDER — an orphan should be visible, not silently dropped.
     test "roster panel renders a fallback label for an orphaned participant", %{conn: conn} do
-      %{member: member} = seed_roster_space()
+      {conn, user} = authenticated_conn_with_user(conn)
+      %{member: member} = seed_roster_space(viewer: user)
 
       Repo.delete!(member)
-
-      conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       _ = render_async(view, 2_000)
 
@@ -1778,7 +1799,7 @@ defmodule PlatformWeb.ShellLiveTest do
       {init_test_session(conn, current_user_id: user.id), user}
     end
 
-    defp seed_org_space(org, label) do
+    defp seed_org_space(org, label, opts \\ []) do
       n = System.unique_integer([:positive])
 
       {:ok, space} =
@@ -1807,6 +1828,8 @@ defmodule PlatformWeb.ShellLiveTest do
       {:ok, _} = Chat.set_principal_agent(space.id, principal.id)
       {:ok, _} = Chat.add_space_agent(space.id, member.id, role: "member")
 
+      join_space!(space, Keyword.get(opts, :viewer))
+
       %{space: space, principal: principal, member: member}
     end
 
@@ -1819,10 +1842,11 @@ defmodule PlatformWeb.ShellLiveTest do
     test "a foreign org's agents are absent while the viewer's own org's are present",
          %{conn: conn} do
       {sxi, soylent} = tenant_orgs()
-      mine = seed_org_space(sxi, "Mine")
+      {conn, user} = scoped_conn(conn, sxi)
+      mine = seed_org_space(sxi, "Mine", viewer: user)
+      # Deliberately NOT joined: the viewer is an org-mate of this space but
+      # not a member of it, which is exactly the case the stage-3 fence adds.
       theirs = seed_org_space(soylent, "Theirs")
-
-      {conn, _user} = scoped_conn(conn, sxi)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       opened_html = render_async(view, 2_000)
 
@@ -1854,12 +1878,12 @@ defmodule PlatformWeb.ShellLiveTest do
       {sxi, soylent} = tenant_orgs()
 
       # Seeded first, so it is the oldest.
+      {conn, user} = scoped_conn(conn, sxi)
+
       theirs = seed_org_space(soylent, "Oldest")
-      mine = seed_org_space(sxi, "Newer")
+      mine = seed_org_space(sxi, "Newer", viewer: user)
 
       assert DateTime.compare(theirs.space.inserted_at, mine.space.inserted_at) in [:lt, :eq]
-
-      {conn, _user} = scoped_conn(conn, sxi)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       _ = render_async(view, 2_000)
 
@@ -1871,13 +1895,12 @@ defmodule PlatformWeb.ShellLiveTest do
 
     test "an agent on two visible spaces is listed once and counted once", %{conn: conn} do
       {sxi, _soylent} = tenant_orgs()
-      a = seed_org_space(sxi, "First")
-      b = seed_org_space(sxi, "Second")
+      {conn, user} = scoped_conn(conn, sxi)
+      a = seed_org_space(sxi, "First", viewer: user)
+      b = seed_org_space(sxi, "Second", viewer: user)
 
       # Put A's member on B's roster too — same agent, two visible spaces.
       {:ok, _} = Chat.add_space_agent(b.space.id, a.member.id, role: "member")
-
-      {conn, _user} = scoped_conn(conn, sxi)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       _ = render_async(view, 2_000)
 
@@ -1903,9 +1926,8 @@ defmodule PlatformWeb.ShellLiveTest do
     test "a {:roster_changed_any, _} broadcast refreshes the composite without a remount",
          %{conn: conn} do
       {sxi, _soylent} = tenant_orgs()
-      mine = seed_org_space(sxi, "Live")
-
-      {conn, _user} = scoped_conn(conn, sxi)
+      {conn, user} = scoped_conn(conn, sxi)
+      mine = seed_org_space(sxi, "Live", viewer: user)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       _ = render_async(view, 2_000)
 
@@ -1932,11 +1954,10 @@ defmodule PlatformWeb.ShellLiveTest do
     test "a viewer with no org memberships sees an empty roster, not every agent",
          %{conn: conn} do
       {sxi, _soylent} = tenant_orgs()
-      mine = seed_org_space(sxi, "Fenced")
-
       # Positive control: an sxi member DOES see this agent, so the empty
       # result below is the `:none` fence firing and not an empty database.
-      {member_conn, _} = scoped_conn(conn, sxi)
+      {member_conn, member_user} = scoped_conn(conn, sxi)
+      mine = seed_org_space(sxi, "Fenced", viewer: member_user)
       {:ok, member_view, _} = live(member_conn, ~p"/tasks")
       _ = render_async(member_view, 2_000)
       assert mine.principal.name in roster_agent_names(member_view)
@@ -1991,7 +2012,7 @@ defmodule PlatformWeb.ShellLiveTest do
       pid
     end
 
-    defp seed_meter_space(org, healthy_count, unhealthy_count) do
+    defp seed_meter_space(org, healthy_count, unhealthy_count, opts \\ []) do
       n = System.unique_integer([:positive])
 
       {:ok, space} =
@@ -2010,6 +2031,8 @@ defmodule PlatformWeb.ShellLiveTest do
       [principal | members] = agents
       {:ok, _} = Chat.set_principal_agent(space.id, principal.id)
       for m <- members, do: {:ok, _} = Chat.add_space_agent(space.id, m.id, role: "member")
+
+      join_space!(space, Keyword.get(opts, :viewer))
 
       %{space: space, agents: agents}
     end
@@ -2032,12 +2055,11 @@ defmodule PlatformWeb.ShellLiveTest do
 
     test "the button renders the seeded roster as a literal n/m ratio", %{conn: conn} do
       {sxi, _} = tenant_orgs()
-      %{agents: agents} = seed_meter_space(sxi, 2, 1)
+      {conn, user} = scoped_conn(conn, sxi)
+      %{agents: agents} = seed_meter_space(sxi, 2, 1, viewer: user)
       [a, b, _c] = agents
       _ = make_agent_active(a)
       _ = make_agent_active(b)
-
-      {conn, _user} = scoped_conn(conn, sxi)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       html = render_async(view, 2_000)
 
@@ -2054,12 +2076,11 @@ defmodule PlatformWeb.ShellLiveTest do
     # the same class.
     test "the dot class and the ratio both CHANGE when roster health changes", %{conn: conn} do
       {sxi, _} = tenant_orgs()
-      %{space: space, agents: agents} = seed_meter_space(sxi, 2, 1)
+      {conn, user} = scoped_conn(conn, sxi)
+      %{space: space, agents: agents} = seed_meter_space(sxi, 2, 1, viewer: user)
       [a, b, c] = agents
       _ = make_agent_active(a)
       _ = make_agent_active(b)
-
-      {conn, _user} = scoped_conn(conn, sxi)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       before_html = render_async(view, 2_000)
 
@@ -2097,10 +2118,9 @@ defmodule PlatformWeb.ShellLiveTest do
     # or in the module that supplies its colours.
     test "no raw Tailwind status colours in the agents meter or its colour module", %{conn: conn} do
       {sxi, _} = tenant_orgs()
-      %{agents: [a | _]} = seed_meter_space(sxi, 1, 2)
+      {conn, user} = scoped_conn(conn, sxi)
+      %{agents: [a | _]} = seed_meter_space(sxi, 1, 2, viewer: user)
       _ = make_agent_active(a)
-
-      {conn, _user} = scoped_conn(conn, sxi)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       _ = render_async(view, 2_000)
       opened = view |> element(~s([data-test-id="shell-roster-button"])) |> render_click()
@@ -2128,12 +2148,11 @@ defmodule PlatformWeb.ShellLiveTest do
 
     test "an orphaned roster row reads 'Deleted agent' with no dot and no status", %{conn: conn} do
       {sxi, _} = tenant_orgs()
-      %{agents: agents} = seed_meter_space(sxi, 1, 1)
+      {conn, user} = scoped_conn(conn, sxi)
+      %{agents: agents} = seed_meter_space(sxi, 1, 1, viewer: user)
       [principal, member] = agents
       _ = make_agent_active(principal)
       Repo.delete!(member)
-
-      {conn, _user} = scoped_conn(conn, sxi)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       _ = render_async(view, 2_000)
       opened = view |> element(~s([data-test-id="shell-roster-button"])) |> render_click()
@@ -2168,10 +2187,9 @@ defmodule PlatformWeb.ShellLiveTest do
     # (no scrollbar, scrollWidth == clientWidth).
     test "the roster panel anchors to the header, not to the trigger button", %{conn: conn} do
       {sxi, _} = tenant_orgs()
-      %{agents: [a | _]} = seed_meter_space(sxi, 1, 1)
+      {conn, user} = scoped_conn(conn, sxi)
+      %{agents: [a | _]} = seed_meter_space(sxi, 1, 1, viewer: user)
       _ = make_agent_active(a)
-
-      {conn, _user} = scoped_conn(conn, sxi)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       html = render_async(view, 2_000)
 
@@ -2664,6 +2682,808 @@ defmodule PlatformWeb.ShellLiveTest do
       nodes = badge_nodes(html)
       assert Enum.count(nodes) == 1
       assert nodes |> LazyHTML.text() |> String.trim() == "2"
+    end
+  end
+
+  # ── Reproduction: does the roster's per-space subscribe reach a NON-member? ──
+  #
+  # Task 01a011e6 stage 1. REPRODUCTION ONLY — these tests characterise the
+  # current behaviour of `visible_roster/1` + the `{:roster_resolved, sid}`
+  # hook. They assert what the code does today, not what it ought to do.
+  #
+  # The traced path: `visible_roster/1` picks `sid` as the space_id of the
+  # most-recently-updated row it selected, `async_load_roster/2` sends
+  # `{:roster_resolved, sid}` to the LV, and the `:roster_updates` hook then
+  # calls `ChatPubSub.subscribe(sid)` — subscribing the viewer's shell LV to
+  # `chat:space:<sid>`. The only fence on that query is
+  # `Tenancy.scope(visibility, binding: :space, field: :org_id)`. There is NO
+  # viewer-membership clause and no `s.kind` clause, so an org-mate who is not
+  # a participant of the space can still be handed its topic.
+  #
+  # But the query ALSO carries `where: p.participant_type == "agent"`, which is
+  # what separates the two fixtures below. A human-to-human DM contributes no
+  # "agent" row at all (and `Chat.create_space/1` explicitly skips the
+  # historian auto-join for `kind: "dm"`), so it can never be `sid`.
+  #
+  # Subscription membership is read from the PubSub registry directly
+  # (`Registry.lookup(Platform.PubSub, ...)`) rather than from
+  # `socket.assigns[:roster_space_id]`. That assign is written by the code
+  # under test; asserting on it would be circular.
+  describe "roster_resolved per-space subscribe vs. a non-participant viewer" do
+    setup %{conn: conn} do
+      # A seeded child org — a freshly created top-level org has
+      # `parent_org_id == nil`, which resolves `:root_all` and disables the
+      # very org fence these fixtures depend on.
+      org = Tenancy.get_org_by_slug!("sxi")
+
+      # Two staff in a private conversation, and a third org-mate who is NOT a
+      # participant of it. Invented names only; `core` is public.
+      insider_a = presence_user!("Dana Duofirst")
+      insider_b = presence_user!("Errol Duosecond")
+      outsider = presence_user!("Nina Nonmember")
+
+      Enum.each([insider_a, insider_b, outsider], &presence_org_member!(&1, org))
+
+      %{
+        conn: init_test_session(conn, current_user_id: outsider.id),
+        org: org,
+        insider_a: insider_a,
+        insider_b: insider_b,
+        outsider: outsider
+      }
+    end
+
+    defp dm_space!(org) do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Two Person Thread",
+          slug: "shell-leak-dm-#{System.unique_integer([:positive])}",
+          kind: "dm",
+          org_id: org.id
+        })
+
+      space
+    end
+
+    # Force this space to be the newest `s.updated_at` in the viewer's visible
+    # set, so `visible_roster/1`'s `sort_by(:desc)` cannot pick a seeded space
+    # instead and make the result an accident of fixture ordering.
+    defp make_newest!(space, offset_seconds \\ 3600) do
+      future =
+        DateTime.utc_now() |> DateTime.add(offset_seconds, :second) |> DateTime.truncate(:second)
+
+      {1, _} =
+        Repo.update_all(
+          from(s in Platform.Chat.Space, where: s.id == ^space.id),
+          set: [updated_at: future]
+        )
+
+      space
+    end
+
+    defp leak_agent!(name) do
+      Repo.insert!(%Agent{
+        name: name,
+        slug: "shell-leak-agent-#{System.unique_integer([:positive])}",
+        status: "active",
+        runtime_type: "builtin"
+      })
+    end
+
+    defp subscribers(space_id) do
+      Registry.lookup(Platform.PubSub, Platform.Chat.PubSub.space_topic(space_id))
+    end
+
+    test "(a) a DM with two user participants and NO agent is never selected as sid", ctx do
+      # Control channel first, so it is the OLDER of the two spaces.
+      control = presence_space!(ctx.org)
+      # Stage 3: the control must be a space the viewer is a MEMBER of, or the
+      # fence (correctly) keeps it out and the positive control below is dead.
+      presence_participant!(control, ctx.outsider, "Nina Nonmember")
+      {:ok, _} = Chat.add_agent_participant(control.id, leak_agent!("Control Scribe"))
+      # Ahead of any seeded space, but behind the DM below.
+      make_newest!(control, 1800)
+
+      dm = dm_space!(ctx.org) |> make_newest!()
+      presence_participant!(dm, ctx.insider_a, "Dana Duofirst")
+      presence_participant!(dm, ctx.insider_b, "Errol Duosecond")
+
+      # Anti-vacuity: the fixture really is a DM with two user rows and zero
+      # agent rows. Without this, an empty space would satisfy the refute.
+      assert Repo.aggregate(
+               from(p in Chat.Participant,
+                 where: p.space_id == ^dm.id and p.participant_type == "user"
+               ),
+               :count
+             ) == 2
+
+      assert Repo.aggregate(
+               from(p in Chat.Participant,
+                 where: p.space_id == ^dm.id and p.participant_type == "agent"
+               ),
+               :count
+             ) == 0
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      # The subscribe is installed on a send/2 round trip out of the async
+      # Task, so it is not in place when live/2 returns. Sync on the LV's own
+      # mailbox rather than sleeping.
+      _ = :sys.get_state(view.pid)
+
+      dm_pids = subscribers(dm.id) |> Enum.map(&elem(&1, 0))
+      control_pids = subscribers(control.id) |> Enum.map(&elem(&1, 0))
+
+      # POSITIVE CONTROL, and a discriminating one. The subscribe mechanism
+      # demonstrably ran for this very LV — it holds the control channel's
+      # topic. So the refute below is about the DM being excluded, not about a
+      # dead LiveView or an un-synced assertion. And because the DM is the
+      # NEWER space of the two, recency cannot explain the difference: the only
+      # clause that separates them is `p.participant_type == "agent"`.
+      assert view.pid in control_pids,
+             "control channel subscribe did not happen; registry held " <>
+               "#{inspect(subscribers(control.id))} — the refute below would be vacuous"
+
+      refute view.pid in dm_pids
+    end
+
+    # Task 01a011e6 stage 3 INVERTED this test. Before the fence it asserted
+    # that the non-participant DID receive the topic (that was the bug). It now
+    # asserts the fence holds, and it keeps a discriminating positive control
+    # so the refute cannot pass for the wrong reason.
+    test "(b) a DM WITH an agent participant is NOT handed to a non-participant", ctx do
+      # A space the viewer really is a member of, and OLDER than the DM. If the
+      # fence works, `sid` falls through to this one — so a passing refute on
+      # the DM comes with proof that the subscribe mechanism ran on this very
+      # LV, and that recency did not explain the difference.
+      own = presence_space!(ctx.org) |> make_newest!(1800)
+      presence_participant!(own, ctx.outsider, "Nina Nonmember")
+      {:ok, _} = Chat.add_agent_participant(own.id, leak_agent!("Own Scribe"))
+      make_newest!(own, 1800)
+
+      dm = dm_space!(ctx.org) |> make_newest!()
+      presence_participant!(dm, ctx.insider_a, "Dana Duofirst")
+      presence_participant!(dm, ctx.insider_b, "Errol Duosecond")
+
+      agent = leak_agent!("Deputy Scribe")
+      {:ok, _} = Chat.add_agent_participant(dm.id, agent)
+      # `add_agent_participant/3` touches the space; re-pin it as newest.
+      make_newest!(dm)
+
+      assert Repo.aggregate(
+               from(p in Chat.Participant,
+                 where: p.space_id == ^dm.id and p.participant_type == "agent"
+               ),
+               :count
+             ) == 1
+
+      # The viewer is definitively NOT a participant of this space.
+      refute Repo.exists?(
+               from(p in Chat.Participant,
+                 where: p.space_id == ^dm.id and p.participant_id == ^ctx.outsider.id
+               )
+             )
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      _ = :sys.get_state(view.pid)
+
+      lookup = subscribers(dm.id)
+      pids = Enum.map(lookup, &elem(&1, 0))
+
+      assert view.pid in Enum.map(subscribers(own.id), &elem(&1, 0)),
+             "the roster subscribe did not run on this LV at all (own space " <>
+               "#{own.id} held #{inspect(subscribers(own.id))}), so the refute " <>
+               "below would be vacuous"
+
+      refute view.pid in pids,
+             "the non-participant shell LV #{inspect(view.pid)} still holds " <>
+               "chat:space:#{dm.id}; registry held #{inspect(lookup)}"
+    end
+
+    # Also inverted by stage 3: delivery, not just registration.
+    test "(b') no broadcast on that DM's topic reaches the non-participant's mailbox",
+         ctx do
+      own = presence_space!(ctx.org)
+      presence_participant!(own, ctx.outsider, "Nina Nonmember")
+      {:ok, _} = Chat.add_agent_participant(own.id, leak_agent!("Own Scribe"))
+      make_newest!(own, 1800)
+
+      dm = dm_space!(ctx.org) |> make_newest!()
+      presence_participant!(dm, ctx.insider_a, "Dana Duofirst")
+      presence_participant!(dm, ctx.insider_b, "Errol Duosecond")
+
+      agent = leak_agent!("Deputy Scribe")
+      {:ok, _} = Chat.add_agent_participant(dm.id, agent)
+      make_newest!(dm)
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      _ = :sys.get_state(view.pid)
+
+      # A second, independent channel. The registry says who is REGISTERED;
+      # this says what is DELIVERED. Suspending the LV first makes the mailbox
+      # read race-free — a suspended `:sys` process accepts messages but
+      # processes none, so the probe cannot be drained by the `_msg -> {:cont,
+      # socket}` catch-all before we look.
+      topic = Platform.Chat.PubSub.space_topic(dm.id)
+      own_topic = Platform.Chat.PubSub.space_topic(own.id)
+      :sys.suspend(view.pid)
+
+      try do
+        Phoenix.PubSub.broadcast(Platform.PubSub, topic, {:shell_leak_probe, :leaked})
+        Phoenix.PubSub.broadcast(Platform.PubSub, own_topic, {:shell_leak_probe, :own})
+        {:messages, mailbox} = Process.info(view.pid, :messages)
+
+        # ANTI-VACUITY: the member-space probe, broadcast the same way in the
+        # same suspended window, IS delivered. So "nothing was delivered at
+        # all" cannot be what makes the refute pass.
+        assert {:shell_leak_probe, :own} in mailbox,
+               "expected the member-space probe on #{own_topic} in the mailbox; " <>
+                 "mailbox held #{inspect(mailbox)}"
+
+        refute {:shell_leak_probe, :leaked} in mailbox,
+               "the probe on #{topic} still reached the non-participant LV mailbox; " <>
+                 "mailbox held #{inspect(mailbox)}"
+      after
+        :sys.resume(view.pid)
+      end
+    end
+  end
+
+  # ── Stage 2: does the leaked topic reach the ASSIGNS, or only the MAILBOX? ──
+  #
+  # Task 01a011e6 stage 2. Stage 1 established that a non-participant org-mate's
+  # shell LiveView ends up registered on `chat:space:<sid>` for an
+  # agent-bearing space. That is a MAILBOX finding. It is NOT the same claim as
+  # "a user saw someone else's message", and this block exists to keep the two
+  # apart with independent evidence.
+  #
+  # The route that matters is `/chat`, not `/tasks`: `ShellLive`'s
+  # `:roster_updates` hook halts only on `{:roster_resolved, _}`,
+  # `{:roster_changed, _}` and the presence messages, and its catch-all
+  # (`shell_live.ex` `_msg, socket -> {:cont, socket}`) passes every chat
+  # broadcast THROUGH to the host LiveView. Of the host LiveViews in the
+  # `:authenticated` live_session, only `ChatLive` (via
+  # `PlatformWeb.Chat.MessagesHooks`) has a `handle_info({:new_message, msg}, _)`
+  # that touches the payload at all. `TasksLive`'s clause discards `msg` and
+  # re-reads its OWN `:execution_space_id`; `MeetingLive`'s participant clauses
+  # discard the payload and re-read their own `chat_space_id`.
+  #
+  # So `/chat` is the worst case, and these two tests pin the two answers
+  # separately. A single test that passed if EITHER were true would pin neither.
+  describe "roster leak: mailbox reach vs. assigns reach on /chat" do
+    setup %{conn: conn} do
+      org = Tenancy.get_org_by_slug!("sxi")
+
+      insider_a = presence_user!("Dana Duofirst")
+      insider_b = presence_user!("Errol Duosecond")
+      outsider = presence_user!("Nina Nonmember")
+
+      Enum.each([insider_a, insider_b, outsider], &presence_org_member!(&1, org))
+
+      dm = dm_space!(org) |> make_newest!()
+      insider_a_p = presence_participant!(dm, insider_a, "Dana Duofirst")
+      presence_participant!(dm, insider_b, "Errol Duosecond")
+
+      # The `participant_type == "agent"` clause in `visible_roster/1` is the
+      # ONLY reason a plain staff-to-staff DM is not exposed (stage 1 fixture
+      # (a)). It is an accidental confidentiality fence, not a designed one —
+      # broadening that query would silently widen this leak. The agent row
+      # below is what puts this space inside the leak's blast radius.
+      {:ok, _} = Chat.add_agent_participant(dm.id, leak_agent!("Deputy Scribe"))
+      make_newest!(dm)
+
+      # Stage 3 control: a space the viewer really IS a member of, so every
+      # refute below has a same-run positive counterpart on the same LV.
+      own = presence_space!(org)
+      presence_participant!(own, outsider, "Nina Nonmember")
+      {:ok, _} = Chat.add_agent_participant(own.id, leak_agent!("Own Scribe"))
+      make_newest!(own, 1800)
+
+      # A second org-mate who is a member of NOTHING. `/chat` index does not
+      # redirect for them, so they are the fixture for the residual `not nil`
+      # defect below — which needs a mount with no active space at all.
+
+      %{
+        conn: init_test_session(conn, current_user_id: outsider.id),
+        org: org,
+        dm: dm,
+        own: own,
+        insider_a_p: insider_a_p,
+        outsider: outsider
+      }
+    end
+
+    # `/chat` index live_redirects into the viewer's first space once they
+    # have one — which, post-fence, every fixture viewer with a roster does.
+    # Follow it rather than asserting a shape the route no longer has.
+    defp live_chat_index(conn) do
+      case live(conn, ~p"/chat") do
+        {:ok, view, html} ->
+          {view, html}
+
+        {:error, {:live_redirect, %{to: to}}} ->
+          live(conn, to) |> then(fn {:ok, v, h} -> {v, h} end)
+      end
+    end
+
+    @leaked_body "quarantine-canary-do-not-render-7f3a1c"
+
+    defp post_leaked!(ctx) do
+      {:ok, msg} =
+        Chat.post_message(%{
+          space_id: ctx.dm.id,
+          participant_id: ctx.insider_a_p.id,
+          content_type: "text",
+          content: @leaked_body
+        })
+
+      msg
+    end
+
+    # Stage 3 inverted this. It measured the leak; it now guards the fence.
+    test "MAILBOX: the /chat mount of a non-participant receives NO space broadcast", ctx do
+      {view, _html} = live_chat_index(ctx.conn)
+      _html = render_async(view, 2_000)
+      # The subscribe is installed on a send/2 round trip out of the async
+      # roster Task, so it is not in place when live/2 returns. Sync on the
+      # LV's own mailbox rather than sleeping.
+      _ = :sys.get_state(view.pid)
+
+      lookup = subscribers(ctx.dm.id)
+
+      assert view.pid in Enum.map(subscribers(ctx.own.id), &elem(&1, 0)),
+             "the roster subscribe did not run on this /chat LV at all, so the " <>
+               "refutes below would be vacuous"
+
+      refute view.pid in Enum.map(lookup, &elem(&1, 0)),
+             "the non-participant /chat LV #{inspect(view.pid)} still holds " <>
+               "chat:space:#{ctx.dm.id}; registry held #{inspect(lookup)}"
+
+      # Registry membership says who is REGISTERED. This says what is
+      # DELIVERED. Suspending first makes the read race-free: a suspended
+      # `:sys` process accepts messages but processes none, so the hooks
+      # cannot drain the probe before we look.
+      :sys.suspend(view.pid)
+
+      try do
+        _msg = post_leaked!(ctx)
+
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          Platform.Chat.PubSub.space_topic(ctx.own.id),
+          {:shell_leak_probe, :own}
+        )
+
+        {:messages, mailbox} = Process.info(view.pid, :messages)
+
+        # ANTI-VACUITY on the same mailbox read.
+        assert {:shell_leak_probe, :own} in mailbox,
+               "expected the member-space probe in the mailbox; mailbox held " <>
+                 "#{inspect(mailbox)}"
+
+        refute Enum.any?(mailbox, fn
+                 {:new_message, %{space_id: sid}} -> sid == ctx.dm.id
+                 _ -> false
+               end),
+               "a {:new_message, _} for chat:space:#{ctx.dm.id} still reached the " <>
+                 "non-participant LV mailbox; mailbox held #{inspect(mailbox)}"
+      after
+        :sys.resume(view.pid)
+      end
+    end
+
+    # STAGE 3 — the fence holds, AND a residual defect it now hides.
+    #
+    # Before the fence this test asserted the leaked broadcast CRASHED the
+    # LiveView: `is_own_message` in `MessagesHooks.handle_info({:new_message,
+    # msg}, _)` is `current_participant && ...`, which is `nil` — not `false` —
+    # when the viewer holds no participant row, and `not nil` is an
+    # ArgumentError. The roster leak was the only thing delivering a
+    # background-space message to a viewer in that state, so removing the leak
+    # removes the only observed symptom.
+    #
+    # **The `not nil` is still wrong and is NOT fixed here.** It is out of this
+    # stage's scope and burying a real defect inside a security change would be
+    # worse than leaving it visible. It is recorded here and in the stage
+    # report so it can carry its own ticket: any future caller that reaches
+    # that clause with a nil participant will crash exactly the same way.
+    #
+    # It is not asserted here because there is no longer a mount that reaches
+    # it: every route into `ChatLive` now auto-creates the viewer's
+    # participant row on the space it lands in.
+    test "the leaked broadcast no longer arrives and the LV survives", ctx do
+      {view, _html} = live_chat_index(ctx.conn)
+      _html = render_async(view, 2_000)
+      _ = :sys.get_state(view.pid)
+
+      # Anti-vacuity: the LV is alive and subscribed to the space the viewer
+      # IS in, so "it survived" is not "it never ran".
+      assert view.pid in Enum.map(subscribers(ctx.own.id), &elem(&1, 0))
+
+      refute view.pid in Enum.map(subscribers(ctx.dm.id), &elem(&1, 0))
+
+      _msg = post_leaked!(ctx)
+      _ = render(view)
+
+      assert Process.alive?(view.pid),
+             "the LV died on a broadcast it should never have received"
+    end
+
+    # Stage 2 found that the only assigns-level consequence of the leak was a
+    # phantom unread key for a space the viewer is not in (metadata, never
+    # content). Stage 3 removes it.
+    test "ASSIGNS(own space open): no phantom unread key for the non-member space", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/chat/#{ctx.own.slug}")
+      _html = render_async(view, 2_000)
+      _ = :sys.get_state(view.pid)
+
+      # ANTI-VACUITY: the LV is subscribed to the space the viewer IS in, so
+      # the unread machinery is demonstrably live on this process.
+      assert view.pid in Enum.map(subscribers(ctx.own.id), &elem(&1, 0)),
+             "the member-space subscription is absent, so the refutes below " <>
+               "would be vacuous"
+
+      _msg = post_leaked!(ctx)
+
+      html = render(view)
+      assert Process.alive?(view.pid)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      dump =
+        inspect(Map.drop(assigns, [:__changed__]),
+          limit: :infinity,
+          printable_limit: :infinity,
+          structs: false
+        )
+
+      refute Map.has_key?(assigns.unread_counts, ctx.dm.id),
+             "a phantom unread key for a space the viewer is not in survived; " <>
+               "unread_counts held #{inspect(assigns.unread_counts)}"
+
+      refute dump =~ ctx.dm.id
+      refute dump =~ @leaked_body
+      refute html =~ @leaked_body
+    end
+  end
+
+  # ── Stage 3: the fence itself — narrowing, and only narrowing ──────────────
+  #
+  # Task 01a011e6 stage 3. `visible_roster/2` now intersects with the viewer's
+  # own `participant_type: "user"` rows and drops `kind: "dm"` outright. Both
+  # clauses only ever REMOVE rows, and that is the property these tests pin:
+  # the post-fix agent set is compared against the pre-fix query recomputed in
+  # the test, and asserted to be a strict subset of it. A change that made the
+  # roster "more complete" would fail here, which is the point — the
+  # `participant_type == "agent"` clause is an accidental confidentiality
+  # fence and broadening this query widens the leak.
+  describe "roster fence: viewer membership and private kinds" do
+    setup %{conn: conn} do
+      org = Tenancy.get_org_by_slug!("sxi")
+
+      viewer = presence_user!("Vera Viewer")
+      other = presence_user!("Oscar Otherstaff")
+      Enum.each([viewer, other], &presence_org_member!(&1, org))
+
+      %{conn: conn, org: org, viewer: viewer, other: other}
+    end
+
+    # The pre-fix query, recomputed here rather than read through the code
+    # under test: agent participant rows on non-archived spaces, org-fenced
+    # only. This is the SUPERSET the fenced result must sit inside.
+    defp prefix_agent_ids(org) do
+      from(p in Chat.Participant,
+        join: s in Platform.Chat.Space,
+        on: s.id == p.space_id,
+        where:
+          p.participant_type == "agent" and is_nil(s.archived_at) and
+            s.org_id == ^org.id,
+        select: p.participant_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+    end
+
+    defp roster_agent_ids(view) do
+      :sys.get_state(view.pid).socket.assigns.roster_items.result
+      |> Enum.map(fn {entry, _status} -> entry.agent_id end)
+      |> MapSet.new()
+    end
+
+    test "narrows to member spaces, excludes DMs, and never adds a row", ctx do
+      mine = presence_space!(ctx.org)
+      presence_participant!(mine, ctx.viewer, "Vera Viewer")
+      mine_agent = leak_agent!("Mine Scribe")
+      {:ok, _} = Chat.add_agent_participant(mine.id, mine_agent)
+
+      # Same org, agent-bearing, viewer NOT a participant. This is the row the
+      # pre-fix query handed out.
+      theirs = presence_space!(ctx.org)
+      presence_participant!(theirs, ctx.other, "Oscar Otherstaff")
+      theirs_agent = leak_agent!("Theirs Scribe")
+      {:ok, _} = Chat.add_agent_participant(theirs.id, theirs_agent)
+
+      # A DM the viewer IS a participant of, with an agent on it. Membership
+      # alone would admit this one; the kind clause is what excludes it.
+      dm = dm_space!(ctx.org)
+      presence_participant!(dm, ctx.viewer, "Vera Viewer")
+      dm_agent = leak_agent!("Dm Scribe")
+      {:ok, _} = Chat.add_agent_participant(dm.id, dm_agent)
+      make_newest!(dm)
+
+      before = prefix_agent_ids(ctx.org)
+
+      conn = init_test_session(ctx.conn, current_user_id: ctx.viewer.id)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      _ = :sys.get_state(view.pid)
+
+      after_ids = roster_agent_ids(view)
+
+      # THE NARROWING PROPERTY. Not "the result is what I expected" — "the
+      # result cannot contain anything the old one did not".
+      assert MapSet.subset?(after_ids, before),
+             "the fenced roster admitted rows the pre-fix query rejected: " <>
+               "#{inspect(MapSet.difference(after_ids, before))}"
+
+      # Anti-vacuity for the subset assertion: the superset is genuinely
+      # bigger, so `subset?` is not passing because both sides are equal (or
+      # empty).
+      assert MapSet.member?(before, theirs_agent.id)
+      assert MapSet.member?(before, dm_agent.id)
+      assert MapSet.size(after_ids) < MapSet.size(before)
+
+      # And the specific removals, each for its own reason.
+      assert MapSet.member?(after_ids, mine_agent.id),
+             "the viewer's OWN space was dropped — this is over-narrowing"
+
+      refute MapSet.member?(after_ids, theirs_agent.id)
+      refute MapSet.member?(after_ids, dm_agent.id)
+
+      # The DM is the newest space, so before the kind clause it would have
+      # been `sid`. It is not.
+      #
+      # Asserted on `roster_space_id` rather than on the PubSub registry ON
+      # PURPOSE: the viewer IS a member of this DM, so the SEPARATE
+      # viewer-presence path (`Chat.list_viewer_presence_space_ids/1`)
+      # legitimately holds a `chat:space:<dm>` registration on this same pid.
+      # The registry therefore cannot discriminate the roster path here — and
+      # that shared registration is also why this stage adds no unsubscribe:
+      # `Phoenix.PubSub.unsubscribe/2` would drop BOTH.
+      assert :sys.get_state(view.pid).socket.assigns.roster_space_id == mine.id
+    end
+
+    test "a viewer who is a member of nothing gets an empty meter and a nil principal", ctx do
+      theirs = presence_space!(ctx.org)
+      presence_participant!(theirs, ctx.other, "Oscar Otherstaff")
+      {:ok, _} = Chat.add_agent_participant(theirs.id, leak_agent!("Theirs Scribe"))
+      make_newest!(theirs)
+
+      # Anti-vacuity: there IS an agent-bearing space in the viewer's org, so
+      # the empty result below is the fence, not an empty database.
+      assert MapSet.size(prefix_agent_ids(ctx.org)) > 0
+
+      conn = init_test_session(ctx.conn, current_user_id: ctx.viewer.id)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      _ = :sys.get_state(view.pid)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      assert assigns.roster_items.result == []
+
+      # `shell.html.heex` gates the whole Agents button on `principal_name`,
+      # and its legacy-dot branch covers nil. A non-member viewer losing the
+      # button is the expected UI consequence of the fence, not a regression —
+      # it is why this stage carries a human gate.
+      assert assigns.principal_name.result == nil
+
+      refute view.pid in Enum.map(subscribers(theirs.id), &elem(&1, 0))
+    end
+  end
+
+  # ── Stage 4: the membership clause, isolated, with a paired positive control ─
+  #
+  # Task 01a011e6 stage 4. Stage 3 already inverted a refute for a NON-MEMBER
+  # (`(b) a DM WITH an agent participant is NOT handed to a non-participant`),
+  # but its positive control differs from the refuted space in BOTH membership
+  # AND kind: `kind: "dm"` vs `kind: "channel"`. `@private_roster_kinds` alone
+  # is enough to make that refute pass, so it cannot tell whether the
+  # membership `exists/1` subquery does anything at all. Stage 3's own fence
+  # tests read the answer back through `roster_items` / `roster_space_id` —
+  # assigns written by the code under test.
+  #
+  # This block closes that gap. The two spaces below are the SAME kind, in the
+  # SAME org, both agent-bearing, seeded in ONE test body from ONE fixture, and
+  # differ in exactly one fact: whether the viewer holds a `participant_type:
+  # "user"` row. Subscription state is read from the PubSub registry
+  # (`Registry.lookup(Platform.PubSub, "chat:space:" <> id)`), never from
+  # `:roster_space_id` or `:presence_space_ids`.
+  #
+  # The positive control is a REGISTRATION COUNT, not a membership test, and
+  # that is load-bearing. For a member space both the roster path
+  # (`{:roster_resolved, sid}` → `ChatPubSub.subscribe/1`) and the presence path
+  # (`{:presence_spaces_resolved, ids}` → `ChatPubSub.subscribe/1`) legitimately
+  # register the same topic on the same pid, so mere presence in the registry
+  # cannot distinguish "the roster path ran" from "only presence ran". Two
+  # registrations can. A fence that excluded everything would leave one.
+  describe "roster fence: membership is the discriminator (registry-read)" do
+    setup %{conn: conn} do
+      # A seeded CHILD org. A freshly created top-level org has
+      # `parent_org_id == nil`, which resolves `:root_all`, and
+      # `Tenancy.scope(q, :root_all, _)` is identity — that would silently
+      # disable the org fence and make everything below pass for the wrong
+      # reason. Asserted, not assumed.
+      org = Tenancy.get_org_by_slug!("sxi")
+
+      refute is_nil(org.parent_org_id),
+             "fixture org #{org.slug} is top-level, so visibility resolves to " <>
+               ":root_all and Tenancy.scope/3 is identity — these tests would " <>
+               "be vacuous"
+
+      viewer = presence_user!("Wanda Watcher")
+      other = presence_user!("Gil Gatekept")
+      Enum.each([viewer, other], &presence_org_member!(&1, org))
+
+      %{
+        conn: init_test_session(conn, current_user_id: viewer.id),
+        org: org,
+        viewer: viewer,
+        other: other
+      }
+    end
+
+    # How many registrations this pid holds on the space's topic. Duplicate
+    # keys are allowed, so a pid that subscribed twice appears twice — which is
+    # the only registry-visible difference between "roster + presence" and
+    # "presence only".
+    defp registration_count(space_id, pid) do
+      space_id |> subscribers() |> Enum.count(fn {p, _} -> p == pid end)
+    end
+
+    # MUTATION PROOF (both sides), against `ShellLive.visible_roster/2`:
+    #
+    #   refute side  — delete the `exists(...)` viewer-membership clause,
+    #                  restoring the pre-fix query. `foreign` is the newest
+    #                  agent-bearing channel, so it becomes `sid` and the LV
+    #                  subscribes to it: the refute reds.
+    #   control side — replace that clause's `vp.participant_type == "user"`
+    #                  with a value no row carries, fencing every space out.
+    #                  The roster path then subscribes to nothing, `member`
+    #                  keeps only its presence-path registration, and the
+    #                  count-of-2 control reds.
+    test "a non-member holds no registration while the member space holds both paths'",
+         ctx do
+      # The viewer's own space: same kind, agent-bearing, viewer joined.
+      member = presence_space!(ctx.org)
+      presence_participant!(member, ctx.viewer, "Wanda Watcher")
+      {:ok, _} = Chat.add_agent_participant(member.id, leak_agent!("Member Scribe"))
+      make_newest!(member, 1800)
+
+      # The org-mate's space: SAME kind, SAME org, also agent-bearing, viewer
+      # NOT joined — and deliberately the NEWER of the two, so that recency
+      # would hand it to the viewer if the membership clause were gone. Kind
+      # cannot explain the divergence below; only membership can.
+      foreign = presence_space!(ctx.org)
+      presence_participant!(foreign, ctx.other, "Gil Gatekept")
+      {:ok, _} = Chat.add_agent_participant(foreign.id, leak_agent!("Foreign Scribe"))
+      make_newest!(foreign, 3600)
+
+      # Anti-vacuity on the fixture itself: the two spaces really are alike
+      # except for the viewer's row.
+      assert member.kind == foreign.kind
+      assert member.org_id == foreign.org_id
+
+      for s <- [member, foreign] do
+        assert Repo.aggregate(
+                 from(p in Chat.Participant,
+                   where: p.space_id == ^s.id and p.participant_type == "agent"
+                 ),
+                 :count
+               ) == 1,
+               "space #{s.id} is not agent-bearing, so the roster query could " <>
+                 "never select it for either reason"
+      end
+
+      assert Repo.exists?(
+               from(p in Chat.Participant,
+                 where:
+                   p.space_id == ^member.id and p.participant_type == "user" and
+                     p.participant_id == ^ctx.viewer.id
+               )
+             )
+
+      refute Repo.exists?(
+               from(p in Chat.Participant,
+                 where: p.space_id == ^foreign.id and p.participant_id == ^ctx.viewer.id
+               )
+             )
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      # Both subscribes are installed on a send/2 round trip out of an async
+      # Task, so neither is in place when live/2 returns. Sync on the LV's own
+      # mailbox rather than sleeping.
+      _ = :sys.get_state(view.pid)
+
+      member_count = registration_count(member.id, view.pid)
+      foreign_count = registration_count(foreign.id, view.pid)
+
+      # THE REFUTE, asserted FIRST so the two mutations below get separate,
+      # attributable kills: removing the membership clause makes `foreign` the
+      # `sid` and reds THIS line, while fencing everything out leaves this line
+      # green (nothing is subscribed) and reds the control instead. Ordered the
+      # other way round, the control fires for both and the refute is never
+      # evaluated under either mutant.
+      #
+      # Same kind, same org, agent-bearing, and NEWER than the member space —
+      # the only difference is the missing participant row.
+      assert foreign_count == 0,
+             "the non-member shell LV #{inspect(view.pid)} holds " <>
+               "#{foreign_count} registration(s) on chat:space:#{foreign.id}; " <>
+               "registry held #{inspect(subscribers(foreign.id))}"
+
+      # POSITIVE CONTROL. Two registrations = the roster path AND the presence
+      # path both ran on this very LV. An unpaired refute would pass against a
+      # build that subscribed nobody at all; this is what rules that out.
+      assert member_count == 2,
+             "expected the member space #{member.id} to hold BOTH the roster and " <>
+               "the presence registration for #{inspect(view.pid)}, got " <>
+               "#{member_count}: #{inspect(subscribers(member.id))} — the refute " <>
+               "above is vacuous without this"
+    end
+
+    # The sibling guard. `Phoenix.PubSub.unsubscribe/2` drops EVERY
+    # registration a pid holds on a topic, and for a member both paths land on
+    # the same topic on the same pid — so a fence that reached the presence
+    # path would be invisible in the test above (the count would just fall to
+    # 1, which reads like "roster excluded it"). This isolates the presence
+    # path on a space the roster query provably cannot supply: a member channel
+    # with NO agent participant. `visible_roster/2` requires
+    # `p.participant_type == "agent"`, so any registration here came from
+    # `Chat.list_viewer_presence_space_ids/1`.
+    test "the presence path still registers a member space the roster query cannot supply",
+         ctx do
+      # Keeps the roster path alive and pointed elsewhere, so this test is not
+      # quietly measuring a dead LiveView.
+      rostered = presence_space!(ctx.org)
+      presence_participant!(rostered, ctx.viewer, "Wanda Watcher")
+      {:ok, _} = Chat.add_agent_participant(rostered.id, leak_agent!("Rostered Scribe"))
+      make_newest!(rostered, 3600)
+
+      agentless = presence_space!(ctx.org)
+      presence_participant!(agentless, ctx.viewer, "Wanda Watcher")
+
+      # Same shape, but the viewer is not a member: the presence path is
+      # membership-fenced too, so this pairs the assertion below.
+      strangers = presence_space!(ctx.org)
+      presence_participant!(strangers, ctx.other, "Gil Gatekept")
+
+      for s <- [agentless, strangers] do
+        assert Repo.aggregate(
+                 from(p in Chat.Participant,
+                   where: p.space_id == ^s.id and p.participant_type == "agent"
+                 ),
+                 :count
+               ) == 0,
+               "space #{s.id} has an agent participant, so the roster path " <>
+                 "could have supplied it and this test would not isolate presence"
+      end
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+      _html = render_async(view, 2_000)
+      _ = :sys.get_state(view.pid)
+
+      assert registration_count(agentless.id, view.pid) == 1,
+             "the presence-path registration on chat:space:#{agentless.id} did " <>
+               "not survive the roster fence; registry held " <>
+               "#{inspect(subscribers(agentless.id))}"
+
+      refute view.pid in Enum.map(subscribers(strangers.id), &elem(&1, 0)),
+             "a non-member space reached the presence subscribe set; registry " <>
+               "held #{inspect(subscribers(strangers.id))}"
     end
   end
 end

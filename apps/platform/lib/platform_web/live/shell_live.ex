@@ -113,7 +113,7 @@ defmodule PlatformWeb.ShellLive do
         socket
         |> assign_async(
           [:roster_items, :composite_status, :principal_name],
-          fn -> async_load_roster(lv_pid, roster_visibility) end
+          fn -> async_load_roster(lv_pid, roster_visibility, raw_user_id) end
         )
         |> assign_async(:presence_list, fn -> async_load_presence(lv_pid, user_record) end)
         |> maybe_subscribe_meeting_state(raw_user_id)
@@ -718,7 +718,10 @@ defmodule PlatformWeb.ShellLive do
   # overwrite the union with a subset. We always recompute the full set.
   def refresh_roster(socket, _space_id) do
     %{roster_items: items, composite: composite, principal_name: principal_name} =
-      visible_roster(socket.assigns[:roster_visibility] || :none)
+      visible_roster(
+        socket.assigns[:roster_visibility] || :none,
+        viewer_id(socket.assigns[:current_user_record])
+      )
 
     socket
     |> assign(:roster_items, async_ok(socket.assigns[:roster_items], items))
@@ -738,13 +741,75 @@ defmodule PlatformWeb.ShellLive do
   #
   # Returns `%{roster_items: [{roster_entry, status}], composite: composite,
   # principal_name: binary | nil, space_id: binary | nil}`.
-  defp visible_roster(visibility) do
+  # Task 01a011e6 stage 3 — CONFIDENTIALITY FENCE. Read before editing this
+  # query, and NARROW ONLY: every clause below removes rows, and any change
+  # that admits rows the current query rejects widens a metadata leak.
+  #
+  # `visible_roster/2` feeds two things: the Agents meter, and — via
+  # `space_id` → `{:roster_resolved, sid}` → `ChatPubSub.subscribe/1` — the
+  # per-space PubSub subscription this LiveView installs. So a space that
+  # reaches this result set is a space this session receives broadcasts for.
+  # It used to be fenced by `Tenancy.scope/3` alone, which (its own docs say)
+  # "answers which ORGS only" and expects the caller to add which specific
+  # rows. The caller never did, so any org-mate's session subscribed to the
+  # org's most-recently-active agent-bearing space whether or not they were a
+  # member of it. Nothing leaked into assigns or the render — every content
+  # write in `ChatLive.MessagesHooks` is gated on `msg.space_id ==
+  # active_space.id` — but the space's existence and activity timing did.
+  #
+  # Two clauses do the fencing now:
+  #
+  #   1. membership — an `exists/1` subquery requiring the viewer to hold a
+  #      `participant_type: "user"` row on the space. This is deliberately the
+  #      same shape as `Chat.list_viewer_presence_space_ids/1`, which this
+  #      same LiveView already uses on the presence path. It is NOT the shape
+  #      of `ChatLive.presence_subscribe_space_ids/2`, which intersects only
+  #      for external users and passes every id through for internal staff.
+  #
+  #   2. kind — `@private_roster_kinds` is excluded outright, on top of
+  #      membership, so a DM can never enter the subscribe set even via a
+  #      membership row. `"execution"` is deliberately NOT in that list: it is
+  #      private, but clause (1) already reduces it to execution spaces the
+  #      viewer participates in, and excluding it outright would empty the
+  #      meter for the spaces agents actually work in.
+  #
+  # A third fence is accidental and MUST NOT be relaxed: `p.participant_type
+  # == "agent"` means a space with only human participants contributes no
+  # rows at all. That is the only reason human-to-human DMs were never
+  # exposed by the pre-fix query, and it is reinforced by `Chat.create_space/1`
+  # skipping the default agent for DMs. Making this query "more complete" by
+  # relaxing it would widen the leak rather than close it.
+  #
+  # Narrowing is visible in the UI, which is why it carries a human gate: a
+  # viewer who is a member of no agent-bearing space now gets an empty meter
+  # and a nil `principal_name`, and `shell.html.heex:107` gates the Agents
+  # button on that. Expected, not a regression.
+  @private_roster_kinds ["dm"]
+
+  # No viewer id (anonymous / non-user mount) means no membership rows can
+  # match, so short-circuit rather than running a query that can only be
+  # empty. Fails closed by construction.
+  defp visible_roster(_visibility, viewer_id) when not is_binary(viewer_id),
+    do: empty_roster()
+
+  defp visible_roster(visibility, viewer_id) do
     rows =
       from(p in Chat.Participant,
         join: s in Platform.Chat.Space,
         as: :space,
         on: s.id == p.space_id,
         where: p.participant_type == "agent" and is_nil(s.archived_at),
+        where: s.kind not in @private_roster_kinds,
+        where:
+          exists(
+            from(vp in Chat.Participant,
+              where:
+                vp.space_id == parent_as(:space).id and
+                  vp.participant_type == "user" and
+                  vp.participant_id == ^viewer_id,
+              select: 1
+            )
+          ),
         select: %{
           space_id: p.space_id,
           agent_id: p.participant_id,
@@ -814,6 +879,18 @@ defmodule PlatformWeb.ShellLive do
     }
   end
 
+  defp empty_roster do
+    %{
+      roster_items: [],
+      composite: SpaceAgentPresence.composite([]),
+      principal_name: nil,
+      space_id: nil
+    }
+  end
+
+  defp viewer_id(%{id: id}) when is_binary(id), do: id
+  defp viewer_id(_), do: nil
+
   @doc """
   Canonical wrap-or-rewrap helper for the AsyncResult-bound shell assigns
   (`:roster_items`, `:composite_status`, `:principal_name`, `:presence_list`).
@@ -835,13 +912,13 @@ defmodule PlatformWeb.ShellLive do
   # roster keys. Sends {:roster_resolved, sid} back to the LV so it can install
   # PubSub subscribes on its own process (Tasks can't subscribe on the LV's
   # behalf — messages would land in the wrong mailbox).
-  defp async_load_roster(lv_pid, visibility) do
+  defp async_load_roster(lv_pid, visibility, viewer_id) do
     %{
       roster_items: items,
       composite: composite,
       principal_name: principal_name,
       space_id: sid
-    } = visible_roster(visibility)
+    } = visible_roster(visibility, viewer_id)
 
     # `:roster_resolved` still carries a single space id — it drives the
     # per-space ChatPubSub subscription, which remains per-space. The
