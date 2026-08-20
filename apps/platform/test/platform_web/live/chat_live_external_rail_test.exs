@@ -1140,6 +1140,156 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
     end
   end
 
+  describe "path 6: a channel REVOKED after the session mounted" do
+    setup %{conn: conn} do
+      org = tenant_org!()
+      ext = external_user!(org)
+
+      %{conn: conn, org: org, ext: ext}
+    end
+
+    # THE ORDER OF THESE STEPS IS THE TEST. The revoke happens AFTER the mount.
+    # A version that revokes first passes against this defect, because the
+    # mount-time subscribe set never covered the space. Do not re-order them.
+    test "revoking a channel releases its subscription and stops its badge", ctx do
+      # `landing` keeps `@active_space` non-nil. Mounting with no accessible
+      # channel leaves it nil, and `MessagesHooks` then treats EVERY arriving
+      # message as background, which changes what the assertions below measure.
+      landing = channel!("Client Workspace", org_id: ctx.org.id) |> join!(ctx.ext)
+
+      # POSITIVE CONTROL: a background channel the viewer keeps throughout.
+      kept = channel!("Client Retainer", org_id: ctx.org.id) |> join!(ctx.ext)
+
+      # The case: a background channel whose participant row is deleted below.
+      revoked = channel!("Client Handover", org_id: ctx.org.id) |> join!(ctx.ext)
+
+      {:ok, view, _html} =
+        ctx.conn |> with_chat_host() |> authed(ctx.ext) |> live("/chat/#{landing.slug}")
+
+      before_unread = assigns(view).unread_counts
+
+      # Captured, never asserted to be a literal. See the note on the next
+      # assertion for why the count is not ChatLive's to predict.
+      kept_registrations = registrations(view, kept)
+
+      # `> 0`, not `== 1`, and measured rather than predicted. ShellLive's
+      # `:roster_updates` hook subscribes the WHOLE presence set from inside
+      # this LiveView process (`{:presence_spaces_resolved, ids}`), so every
+      # space already in the rail at mount carries two registrations: ChatLive's
+      # and ShellLive's. That is pre-existing and is why the post-revoke
+      # assertion below is 0 rather than a decrement — `Registry.unregister/2`
+      # drops both at once. What this assertion is for is refusing to measure a
+      # session that held nothing to begin with.
+      assert registrations(view, revoked) > 0,
+             "the session did not hold a subscription for the background channel before the " <>
+               "revoke, so nothing below this line is measuring the defect"
+
+      # `Phoenix.PubSub.broadcast` resolves subscribers by `Registry.lookup` in
+      # the CALLING process at broadcast time, and this LiveView only reflects
+      # the release once it has PROCESSED the event. `render/1` is a
+      # synchronous call and therefore a mailbox barrier; without one this
+      # flakes.
+      _ = render(view)
+
+      {:ok, _} = Chat.remove_participant(participant_for(revoked, ctx.ext))
+
+      _ = render(view)
+
+      # The author must not be the viewer: `increment_unread/2` skips a message
+      # whose participant is the current one.
+      revoked_author = create_user!("Sam Stranger")
+      join!(revoked, revoked_author)
+      revoked_participant = participant_for(revoked, revoked_author)
+
+      kept_author = create_user!("Nadia Neighbour")
+      join!(kept, kept_author)
+      kept_participant = participant_for(kept, kept_author)
+
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: revoked.id,
+          participant_id: revoked_participant.id,
+          content_type: "text",
+          content: "revoked-after-mount-body"
+        })
+
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: kept.id,
+          participant_id: kept_participant.id,
+          content_type: "text",
+          content: "still-a-member-body"
+        })
+
+      _ = render(view)
+      after_unread = assigns(view).unread_counts
+
+      assert Map.get(after_unread, revoked.id, 0) == Map.get(before_unread, revoked.id, 0),
+             "a channel this session was removed from still moved its unread count"
+
+      assert registrations(view, revoked) == 0,
+             "the session still holds a PubSub registration for a channel it was removed from"
+
+      assert Map.get(after_unread, kept.id, 0) > Map.get(before_unread, kept.id, 0),
+             "the badge went dead for a channel the viewer still belongs to, so the release " <>
+               "is over-unsubscribing (task 01a011e9)"
+
+      assert registrations(view, kept) == kept_registrations,
+             "the release changed the registration count for a channel the viewer still " <>
+               "belongs to"
+    end
+
+    # The guard on the predicate. An internal user's rail is `Chat.list_spaces`
+    # with no membership filter, so they see every workspace channel whether or
+    # not a participant row exists. Releasing on "my participant row was
+    # deleted" instead of on "this space left my subscribe scope" would kill
+    # live chat for every internal user ever removed from a channel.
+    test "an internal user removed from a channel keeps receiving it", %{conn: conn} do
+      internal = create_user!("Ivan Internal")
+      landing = channel!("Internal Landing") |> join!(internal)
+      background = channel!("Internal Background") |> join!(internal)
+
+      {:ok, view, _html} =
+        conn |> authed(internal) |> live("/chat/#{Chat.space_path_segment(landing)}")
+
+      before_unread = assigns(view).unread_counts
+      background_registrations = registrations(view, background)
+
+      assert background_registrations > 0,
+             "the internal session held no subscription for the background channel at mount, " <>
+               "so the re-assertion below cannot detect an over-release"
+
+      _ = render(view)
+
+      {:ok, _} = Chat.remove_participant(participant_for(background, internal))
+
+      _ = render(view)
+
+      author = create_user!("Nadia Neighbour")
+      join!(background, author)
+      author_participant = participant_for(background, author)
+
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: background.id,
+          participant_id: author_participant.id,
+          content_type: "text",
+          content: "internal-still-subscribed-body"
+        })
+
+      _ = render(view)
+
+      assert Map.get(assigns(view).unread_counts, background.id, 0) >
+               Map.get(before_unread, background.id, 0),
+             "an internal user's badge went dead after their participant row was deleted, so " <>
+               "the release is keying on identity instead of on loss of access"
+
+      assert registrations(view, background) == background_registrations,
+             "the release dropped an internal session's subscription to a channel it can " <>
+               "still open"
+    end
+  end
+
   describe "path 4: navigation between allowlisted spaces leaves nothing behind" do
     test "after moving space to space, the session holds no off-limits message, canvas or roster row",
          %{conn: conn} do

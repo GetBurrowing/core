@@ -3679,6 +3679,48 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, refresh_chat_containers(socket)}
   end
 
+  # Task 01a0181f: release the space subscription when the viewer LOSES access
+  # to it. `:sidebar_changed`'s reconcile above is ADD-ONLY on purpose, so
+  # without this clause a revoked session keeps the registration for the rest of
+  # its life: the rail row disappears on the next reload, the topic does not.
+  # Message bodies do not leak (MessagesHooks halts for any non-active space),
+  # but `{:participant_joined, _}` keeps writing strangers into
+  # `@participants_map` — and so into the @-mention autocomplete of the space
+  # the viewer IS in — and `{:pin_added, _}` keeps writing foreign rows into
+  # `@pins`. Releasing the registration closes both at the choke point instead
+  # of bolting a space guard onto each handler.
+  #
+  # The predicate is LOSS OF ACCESS, never "my participant row was deleted".
+  # `presence_subscribe_space_ids/2` returns its input unchanged for an internal
+  # or anonymous session, so this clause is inert for them: internal users see
+  # every workspace channel in the rail with or without a participant row, and
+  # keying on identity would kill live chat for any internal user removed from a
+  # channel they can still open.
+  #
+  # KNOWN, DOCUMENTED DEVIATION. `chat:space:<id>` is held by two independent
+  # subscribers on this same pid: `subscribe_space/2` here, and ShellLive's
+  # `:roster_updates` hook. `Phoenix.PubSub.unsubscribe/2` is
+  # `Registry.unregister/2`, so this drops ShellLive's registration too while
+  # its own `@presence_space_ids` still lists the space. The end state is the
+  # one we want — nothing held for a space the viewer cannot see — but it
+  # reaches across the ownership boundary ADR 0013 draws, where a registration
+  # is released by the surface that took it. Reconciling ShellLive's bookkeeping
+  # is owed as a follow-up and is deliberately not attempted from here.
+  def handle_info({:participant_left, %{participant_type: "user"} = participant}, socket) do
+    socket =
+      if participant.participant_id == socket.assigns.user_id and
+           participant.space_id not in presence_subscribe_space_ids(
+             [%{id: participant.space_id}],
+             socket.assigns.user_id
+           ) do
+        unsubscribe_space(socket, participant.space_id)
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # Valid slug pattern: lowercase alphanumerics separated by hyphens (1–64 chars).

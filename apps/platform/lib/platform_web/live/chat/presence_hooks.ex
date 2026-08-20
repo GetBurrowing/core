@@ -260,6 +260,17 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
      |> reinsert_rendered_messages(MessagesHooks.active_space_id(socket))}
   end
 
+  # The viewer's OWN removal continues down the chain; everybody else's stops
+  # here. This hook owns the roster render and has nothing to do on a leave
+  # either way — the roster is rebuilt from the DB on the next presence pass —
+  # but ChatLive owns the subscription lifecycle (task 01a0181f) and its
+  # release clause cannot see an event this hook halts.
+  defp handle_info({:participant_left, %{participant_type: "user"} = participant}, socket) do
+    if participant.participant_id == socket.assigns[:user_id],
+      do: {:cont, socket},
+      else: {:halt, socket}
+  end
+
   defp handle_info({:participant_left, _participant}, socket), do: {:halt, socket}
 
   defp handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
