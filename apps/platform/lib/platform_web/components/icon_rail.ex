@@ -85,6 +85,15 @@ defmodule PlatformWeb.Components.IconRail do
         "Inbox badge is a separate future stage."
   )
 
+  attr(:chat_unread_count, :integer,
+    default: 0,
+    doc:
+      "current user's total unread chat messages across the channels they participate in " <>
+        "(Platform.Chat.total_unread_for_viewer/1); renders an unread badge on the Chat tile. " <>
+        "0 omits the badge node entirely. Desktop icon_rail/1 only — the mobile bottom_rail " <>
+        "badge is a separate future stage."
+  )
+
   attr(:destinations, :list,
     default: nil,
     doc:
@@ -198,6 +207,7 @@ defmodule PlatformWeb.Components.IconRail do
         active_key={@active_key}
         sidebar_collapsed={@sidebar_collapsed}
         inbox_unread_count={@inbox_unread_count}
+        chat_unread_count={@chat_unread_count}
       />
 
       <.rail_eyebrow label="Working" sidebar_collapsed={@sidebar_collapsed} />
@@ -207,6 +217,7 @@ defmodule PlatformWeb.Components.IconRail do
         active_key={@active_key}
         sidebar_collapsed={@sidebar_collapsed}
         inbox_unread_count={@inbox_unread_count}
+        chat_unread_count={@chat_unread_count}
       />
 
       <div class="mt-auto" aria-hidden="true"></div>
@@ -221,6 +232,7 @@ defmodule PlatformWeb.Components.IconRail do
           active_key={@active_key}
           sidebar_collapsed={@sidebar_collapsed}
           inbox_unread_count={@inbox_unread_count}
+          chat_unread_count={@chat_unread_count}
         />
       <% end %>
     </nav>
@@ -254,6 +266,7 @@ defmodule PlatformWeb.Components.IconRail do
   attr(:active_key, :atom, default: nil)
   attr(:sidebar_collapsed, :boolean, default: false)
   attr(:inbox_unread_count, :integer, default: 0)
+  attr(:chat_unread_count, :integer, default: 0)
 
   defp rail_cluster(assigns) do
     ~H"""
@@ -268,21 +281,16 @@ defmodule PlatformWeb.Components.IconRail do
           aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
         >
-          <%!-- Icon wrapped in a relative anchor so the Inbox unread badge can
-               pin to its top-right corner. The badge is icon-anchored (not
+          <%!-- Icon wrapped in a relative anchor so an unread badge can pin to
+               its top-right corner. The badge is icon-anchored (not
                label-anchored) so it survives the collapsed rail. Hidden at 0:
-               badge_text/1 returns nil, so the `:if` drops the node from the
-               DOM entirely rather than rendering an empty/transparent pill. --%>
+               badge_spec/3 returns nil, so rail_badge/1's `:if` drops the node
+               from the DOM entirely rather than rendering an empty or
+               transparent pill. Which tiles carry one, and why they differ,
+               lives in badge_spec/3 — not here. --%>
           <span class="relative flex-shrink-0">
             <.icon name={dest.hero_icon} class="icon-rail-icon size-5" />
-            <span
-              :if={dest.key == :inbox && badge_text(@inbox_unread_count)}
-              class="badge badge-error badge-xs absolute -top-1.5 -right-1.5 min-w-[1rem] px-1 leading-none tabular-nums pointer-events-none"
-              data-role="inbox-badge"
-              aria-label={"#{@inbox_unread_count} unread"}
-            >
-              {badge_text(@inbox_unread_count)}
-            </span>
+            <.rail_badge badge={badge_spec(dest.key, @inbox_unread_count, @chat_unread_count)} />
           </span>
           <span :if={!@sidebar_collapsed} class="icon-rail-label">{dest.label}</span>
         </.link>
@@ -301,6 +309,36 @@ defmodule PlatformWeb.Components.IconRail do
         </.link>
       <% end %>
     </div>
+    """
+  end
+
+  # One unread badge, pinned to a tile's icon. `nil` renders nothing at all:
+  # the `:if` drops the node from the DOM rather than leaving an empty or
+  # transparent pill, which is badge_text/1's and chat_badge_text/1's zero
+  # contract and the reason a quiet rail looks exactly as it did before this
+  # feature existed.
+  #
+  # Everything except the fill lives here rather than in badge_spec/3, and that
+  # is the design call, not a shortcut: the Inbox and Chat pills sit two tiles
+  # apart in one 56px column, so COLOUR is the only difference they are allowed
+  # to have. Two pills in the same column with different geometry, type or halo
+  # would read as a rendering fault instead of as a distinction.
+  attr(:badge, :map, default: nil)
+
+  defp rail_badge(assigns) do
+    ~H"""
+    <span
+      :if={@badge}
+      class={[
+        "icon-rail-badge badge badge-xs absolute -top-1.5 -right-1.5 min-w-[1rem] px-1",
+        "leading-none tabular-nums pointer-events-none",
+        @badge.class
+      ]}
+      data-role={@badge.role}
+      aria-label={@badge.aria}
+    >
+      {@badge.text}
+    </span>
     """
   end
 
@@ -477,6 +515,90 @@ defmodule PlatformWeb.Components.IconRail do
   end
 
   def badge_text(_), do: nil
+
+  @doc """
+  Chat unread-badge label.
+
+  Returns nil at or below 0 (badge node omitted from the DOM), the integer as
+  a string for 1..8, and "9+" for 9 and above.
+
+  The cap is 9+ and NOT `badge_text/1`'s 99+. That is deliberate on two
+  counts. The reader's reference point for a chat unread number is the
+  per-channel pill they already see inside Chat, and `ChatLive`'s
+  `unread_label/1` caps that at 9+ — so the rail total and the channel pills
+  speak one grammar instead of two. And the collapsed rail is 56px wide, where
+  a three-glyph pill overhangs the tile it belongs to. Past nine, the exact
+  number changes no decision anyone makes.
+
+  Inbox keeps 99+ (`badge_text/1`, untouched): a queue you work down earns the
+  extra width, and its count is filtered upstream so it stays small.
+  """
+  @spec chat_badge_text(term()) :: String.t() | nil
+  def chat_badge_text(count) when is_integer(count) do
+    cond do
+      count <= 0 -> nil
+      count >= 9 -> "9+"
+      true -> Integer.to_string(count)
+    end
+  end
+
+  def chat_badge_text(_), do: nil
+
+  # Which tiles carry an unread badge, and what is different about each.
+  #
+  # One function with a `dest.key` case, not a second copy of the markup
+  # block: the geometry, type and halo are shared by rail_badge/1 and only the
+  # FILL and the count grammar are per-destination. Returns nil for every
+  # other key, and nil at a zero count, so an absent badge is an absent DOM
+  # node.
+  #
+  # Inbox is `badge-error` (red) and Chat is `badge-primary` (cyan), and the
+  # split is the whole design decision here. Red is severity: something is
+  # addressed to you and you are expected to clear it. Chat unread is ambient
+  # and near-permanently non-zero, so copying `badge-error` onto it — one line
+  # away, and the obvious move — would leave the rail permanently red, and a
+  # permanently red rail is one nobody reads. That takes the Inbox badge down
+  # with it. Cyan also already carries this exact number inside Chat
+  # (`.channel-row-unread-pill`, app.css), so the rail total and the
+  # per-channel pill are one object seen at two zoom levels.
+  #
+  # The `data-role` values differ so the two nodes are separable in tests and
+  # in devtools. "inbox-badge" is load-bearing: existing tests query it.
+  defp badge_spec(:inbox, inbox_count, _chat_count) do
+    case badge_text(inbox_count) do
+      nil ->
+        nil
+
+      text ->
+        %{
+          text: text,
+          class: "badge-error",
+          role: "inbox-badge",
+          aria: "#{inbox_count} unread"
+        }
+    end
+  end
+
+  defp badge_spec(:chat, _inbox_count, chat_count) do
+    case chat_badge_text(chat_count) do
+      nil ->
+        nil
+
+      text ->
+        # The aria-label is the only place the word "unread" appears on this
+        # surface; the visible badge is a bare number. It reports the true
+        # count, not the capped label, because a screen reader has no 56px
+        # problem.
+        %{
+          text: text,
+          class: "badge-primary",
+          role: "chat-badge",
+          aria: "#{chat_count} unread messages"
+        }
+    end
+  end
+
+  defp badge_spec(_key, _inbox_count, _chat_count), do: nil
 
   # Canonical 11-entry destination list. Order within a cluster determines
   # render order in the rail. Paths marked `# TODO` don't have routes yet

@@ -4370,6 +4370,40 @@ defmodule Platform.Chat do
     |> Map.new()
   end
 
+  @doc """
+  One number for the whole viewer: unread messages summed across the spaces
+  this viewer both participates in and can observe.
+
+  Takes the LOADED user struct, not an id, because it composes two functions
+  with different arities. `unread_counts_for_user/1` keys off the user id;
+  `list_viewer_presence_space_ids/1` needs the struct so `Tenancy.visibility/1`
+  can take its zero-query preloaded-`:org_memberships` clause.
+
+  Counting exactly the subscribed set is what makes the badge honest.
+  `unread_counts_for_user/1` does NOT filter archived spaces and
+  `list_viewer_presence_space_ids/1` does, so the `Map.take/2` intersection
+  below is load-bearing rather than tidiness: summing the raw map would count
+  spaces the shell receives no broadcasts for, and an archived space holding
+  unread would pin the badge at a number that can never move.
+
+  Deliberately composes rather than adding a counting query.
+  `unread_counts_for_user/1` is the single definition of "unread" in this
+  codebase and a second one is the defect this repo keeps producing. Anything
+  that is not a user struct with a binary id returns 0.
+  """
+  @spec total_unread_for_viewer(map() | nil) :: non_neg_integer()
+  def total_unread_for_viewer(%{id: user_id} = user) when is_binary(user_id) do
+    counts = unread_counts_for_user(user_id)
+    ids = list_viewer_presence_space_ids(user)
+
+    counts
+    |> Map.take(ids)
+    |> Map.values()
+    |> Enum.sum()
+  end
+
+  def total_unread_for_viewer(_user), do: 0
+
   # participant_pk is the internal chat_participants.id (PK), which is what
   # chat_messages.participant_id references via foreign key.
   defp count_unread(space_id, nil, participant_pk) do

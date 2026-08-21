@@ -155,6 +155,14 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:is_fabrikam_user, is_fabrikam_user)
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:inbox_unread_count, compute_inbox_count(raw_user_id))
+      # Task 01a01b29 stage 1: one chat-unread total for the whole viewer, so
+      # the rail can show it from /tasks without a second tab. Seeded here so
+      # the number is right on first paint rather than only after the next
+      # chat event. Stage 2 renders it; nothing reads this assign yet.
+      |> assign(:chat_unread_count, compute_chat_unread(user_record))
+      # Coalescing flag for the deferred recompute below. See
+      # `queue_chat_unread_refresh/1`.
+      |> assign(:chat_unread_refresh_queued, false)
       |> assign(:roster_open, false)
       |> assign(:show_presence_panel, false)
       |> assign(:meeting_active, false)
@@ -234,10 +242,31 @@ defmodule PlatformWeb.ShellLive do
             (space_id && uri.path == "/chat/#{space_id}") ||
             (meeting_slug && uri.path == "/meetings/#{meeting_slug}") || false
 
-        {:cont,
-         socket
-         |> assign(:current_path, uri.path)
-         |> assign(:on_meeting_page, on_meeting_page)}
+        # Task 01a01b29 stage 1: navigating INTO a channel is what calls
+        # `mark_read_at_channel_tip/2` (`chat/messages_hooks.ex`), which moves
+        # the read watermark for that space. Queue the recompute rather than
+        # running it inline: the same one-mailbox-turn deferral used for
+        # `{:new_message, _}` puts it after that write, so the number reflects
+        # the read instead of the state just before it.
+        #
+        # Gated on `chat_surface?/1` because `MessagesHooks.enter_space/3` and
+        # `enter_space_anchored/4` are called from `chat_live.ex` and nowhere
+        # else, so `/chat` and `/chat/:space_slug` are the complete set of
+        # paths that can move a watermark. Queuing on every navigation of every
+        # surface would schedule a recompute that provably cannot change the
+        # answer, and the cost is not theoretical: the extra mailbox turn is
+        # enough to lose an unrelated `send_update/2` race in the meeting-bar
+        # tests. Measured, not guessed.
+        socket =
+          socket
+          |> assign(:current_path, uri.path)
+          |> assign(:on_meeting_page, on_meeting_page)
+
+        if chat_surface?(uri.path) do
+          {:cont, queue_chat_unread_refresh(socket)}
+        else
+          {:cont, socket}
+        end
       end)
       |> attach_hook(:roster_updates, :handle_info, fn
         # The async roster loader sends this once it knows the space_id.
@@ -274,7 +303,24 @@ defmodule PlatformWeb.ShellLive do
 
           Enum.each(space_ids -- already, &ChatPubSub.subscribe/1)
 
-          {:halt, assign(socket, :presence_space_ids, Enum.uniq(already ++ space_ids))}
+          # Task 01a01b29 stage 1: between the mount-time seed and this branch
+          # resolving, this process hears nothing, so a message arriving in
+          # that window would stay invisible until the next event. Recomputing
+          # once the subscriptions are installed closes the window
+          # deterministically.
+          #
+          # Skipped for an empty resolved set: `total_unread_for_viewer/1`
+          # intersects the counts with exactly this list, so with no spaces the
+          # recompute can only reproduce the seed's 0. Same reason as the
+          # `chat_surface?/1` gate above, and it keeps a viewer with no
+          # channels from paying a mailbox turn on every mount.
+          socket = assign(socket, :presence_space_ids, Enum.uniq(already ++ space_ids))
+
+          if space_ids == [] do
+            {:halt, socket}
+          else
+            {:halt, queue_chat_unread_refresh(socket)}
+          end
 
         # Global fan-out for the viewer-scoped union: any roster mutation
         # anywhere pings us, and `refresh_roster/2` re-scopes from the
@@ -454,6 +500,41 @@ defmodule PlatformWeb.ShellLive do
             # no PubSub subscription and no polling of its own — task
             # 019ffb7b stage 6.
             {:cont, socket |> assign(:inbox_unread_count, new_count) |> push_app_badge()}
+          end
+
+        _msg, socket ->
+          {:cont, socket}
+      end)
+      # Chat PubSub (`chat:space:<id>`) -> keep the shell's chat-unread total
+      # live on every surface, /tasks included (task 01a01b29 stage 1).
+      #
+      # THIS HOOK TAKES OUT NO SUBSCRIPTION, DELIBERATELY. The
+      # `{:presence_spaces_resolved, _}` branch above already subscribed this
+      # process to `chat:space:<id>` for every space the viewer participates
+      # in, which is exactly the set counted here. `Phoenix.PubSub`'s registry
+      # runs `keys: :duplicate`, so subscribing a topic this pid already holds
+      # registers it twice and every broadcast then fires `handle_info` twice,
+      # while a single `unsubscribe` (`Registry.unregister/2`) drops ALL of
+      # this pid's registrations for it. That pair is how the unread badge died
+      # in `cb429830`. This is a consumer of an existing subscription and must
+      # stay one.
+      |> attach_hook(:chat_count_refresh, :handle_info, fn
+        {evt, _payload}, socket when evt in [:new_message, :message_deleted] ->
+          # `:cont`, never `:halt`. On `/chat`, `ChatLive`'s `MessagesHooks`
+          # consumes the same `{:new_message, _}`; halting here would kill the
+          # message list.
+          {:cont, queue_chat_unread_refresh(socket)}
+
+        :chat_unread_refresh, socket ->
+          # `:halt` because nothing else consumes this message and an
+          # unhandled `handle_info` logs a warning.
+          new_count = compute_chat_unread(socket.assigns[:current_user_record])
+          socket = assign(socket, :chat_unread_refresh_queued, false)
+
+          if new_count == socket.assigns[:chat_unread_count] do
+            {:halt, socket}
+          else
+            {:halt, assign(socket, :chat_unread_count, new_count)}
           end
 
         _msg, socket ->
@@ -1178,6 +1259,70 @@ defmodule PlatformWeb.ShellLive do
   end
 
   defp compute_inbox_count(_), do: 0
+
+  # Task 01a01b29 stage 1. Chat-unread total for the icon-rail Chat tile.
+  # Same fail-open posture as `compute_inbox_count/1`: a count error renders 0
+  # rather than failing a shell mount. Takes the loaded user struct because
+  # `Chat.total_unread_for_viewer/1` needs it for `Tenancy.visibility/1`.
+  #
+  # Cost, stated so a reviewer does not have to go find it:
+  # `Chat.unread_counts_for_user/1` is one `Repo.all` plus one `count` per
+  # participant row (N+1). Acceptable at the coalesced rate this is called at
+  # (see `queue_chat_unread_refresh/1`); collapsing it into one grouped
+  # aggregate is a real follow-up and belongs inside that function, never in a
+  # fork of it.
+  defp compute_chat_unread(%{id: user_id} = user) when is_binary(user_id) do
+    Chat.total_unread_for_viewer(user)
+  rescue
+    e ->
+      Logger.warning("[ShellLive] chat_unread compute failed: #{inspect(e)}")
+      0
+  end
+
+  defp compute_chat_unread(_), do: 0
+
+  # `/chat` and `/chat/:space_slug` (both live_sessions declare exactly these)
+  # are the only routes that mount `ChatLive`, which is the only caller of
+  # `MessagesHooks.enter_space/3` and `enter_space_anchored/4`, which are the
+  # only writers of the read watermark on entry.
+  defp chat_surface?("/chat"), do: true
+  defp chat_surface?("/chat/" <> _), do: true
+  defp chat_surface?(_), do: false
+
+  # Coalesce a burst of chat events into ONE recompute on the next mailbox
+  # turn, and never increment in memory.
+  #
+  # THE DEFERRAL IS THE POINT. Do not "simplify" this into an inline
+  # recompute. ShellLive's hooks attach at `on_mount`, so they run BEFORE
+  # `ChatLive`'s `MessagesHooks` on the same `{:new_message, _}`, and
+  # `MessagesHooks` calls `Chat.mark_space_read/2` for a message in the active
+  # space. An inline recompute would read the watermark from before that write
+  # and over-report by one for the whole time the viewer sits on `/chat`.
+  # Sending ourselves a message guarantees the recompute runs after
+  # `MessagesHooks` has finished, by process semantics rather than by luck.
+  #
+  # Recomputing (rather than a running +1) is also what makes this idempotent
+  # under double delivery, which is a live possibility in this process:
+  # `ChatLive` subscribes to overlapping topics in the same pid.
+  #
+  # Connected-only, same posture as `push_app_badge/1`. The `:track_path`
+  # `handle_params` hook also runs on the DISCONNECTED (static) render, which
+  # executes in the HTTP request process rather than a LiveView process, so
+  # `send(self(), ...)` there would post to a mailbox that never runs
+  # `handle_info` and then dies. The connected mount that follows queues it
+  # properly.
+  defp queue_chat_unread_refresh(socket) do
+    cond do
+      not connected?(socket) -> socket
+      socket.assigns[:chat_unread_refresh_queued] -> socket
+      true -> queue_chat_unread_refresh!(socket)
+    end
+  end
+
+  defp queue_chat_unread_refresh!(socket) do
+    send(self(), :chat_unread_refresh)
+    assign(socket, :chat_unread_refresh_queued, true)
+  end
 
   # Task 01a00066 stage 3. One idempotent reconcile pass per mount. Same
   # rescue-and-log posture as compute_inbox_count/1: a reconcile failure must

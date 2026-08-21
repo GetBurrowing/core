@@ -1041,6 +1041,215 @@ defmodule PlatformWeb.ShellLiveTest do
   end
 
   # ---------------------------------------------------------------------
+  # Chat unread total in the shell (task 01a01b29 stage 1)
+  #
+  # Nothing renders this number yet (stage 2 puts it on the rail), so every
+  # assertion here reads the assign directly.
+  #
+  # The vacuous version of this suite seeds unread rows and asserts the assign
+  # is non-zero at mount. That passes against a shell that never updates. The
+  # assertion that does the work is CHANGE OVER TIME: mount on `/tasks`, post
+  # into a channel the viewer is not viewing, and watch the assign move with no
+  # remount.
+  # ---------------------------------------------------------------------
+  describe "chat unread count live wiring" do
+    test "a stranger's message moves the count live, and the mount seed is the right number",
+         %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      channel = chat_unread_channel!("larkspur")
+      chat_unread_join!(channel, user)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      chat_unread_settle(view)
+
+      assert chat_unread(view) == 0
+
+      chat_unread_post_from_a_stranger(channel, "first fixture message")
+      chat_unread_barrier(view)
+
+      assert chat_unread(view) == 1,
+             "a message in a channel the viewer is not viewing did not move the shell count: " <>
+               "the /tasks session is subscribed to the space but nothing consumes {:new_message, _}"
+
+      # Positive control, deliberately in the same test. The assertion above
+      # measures movement; this one measures that the number is CORRECT rather
+      # than merely present. A shell broken in both states (seed always 0,
+      # refresh always +1) satisfies the first assertion on its own.
+      {:ok, seeded, _html} = live(conn, ~p"/tasks")
+      chat_unread_settle(seeded)
+
+      assert chat_unread(seeded) == 1,
+             "a fresh mount seeded the wrong number for one already-unread message"
+
+      chat_unread_post_from_a_stranger(channel, "second fixture message")
+      chat_unread_barrier(seeded)
+
+      assert chat_unread(seeded) == 2,
+             "the live refresh did not add to a non-zero seed"
+    end
+
+    test "a participating channel with nothing unread counts zero", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      channel = chat_unread_channel!("marigold")
+      chat_unread_join!(channel, user)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      chat_unread_settle(view)
+
+      # The absent-badge half of the zero contract belongs to stage 2. Here it
+      # is the integer.
+      assert chat_unread(view) == 0
+    end
+
+    test "a channel the viewer does not participate in does not count", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      joined = chat_unread_channel!("nasturtium")
+      chat_unread_join!(joined, user)
+
+      stranger_only = chat_unread_channel!("oleander")
+
+      # Unread in somebody else's channel, present before the mount so the
+      # seed has to reject it too.
+      chat_unread_post_from_a_stranger(stranger_only, "not the viewer's channel")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      chat_unread_settle(view)
+
+      assert chat_unread(view) == 0,
+             "the seed counted a channel the viewer holds no participant row on"
+
+      chat_unread_post_from_a_stranger(joined, "the viewer's channel")
+      chat_unread_barrier(view)
+
+      assert chat_unread(view) == 1,
+             "count everything: the refresh picked up a channel the viewer does not participate in"
+    end
+
+    test "an archived channel with unread does not contribute", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      # `Chat.unread_counts_for_user/1` does NOT filter archived spaces and
+      # `Chat.list_viewer_presence_space_ids/1` does, so this is the only test
+      # that exercises the `Map.take/2` intersection in
+      # `Chat.total_unread_for_viewer/1`. Without it, an archived space holding
+      # unread pins the number at a value no broadcast can ever move.
+      archived = chat_unread_channel!("periwinkle")
+      chat_unread_join!(archived, user)
+      chat_unread_post_from_a_stranger(archived, "unread that must not be counted")
+      {:ok, _} = Chat.archive_space(archived)
+
+      live_channel = chat_unread_channel!("quince")
+      chat_unread_join!(live_channel, user)
+      chat_unread_post_from_a_stranger(live_channel, "unread that must be counted")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      chat_unread_settle(view)
+
+      assert chat_unread(view) == 1,
+             "an archived channel's unread reached the total; the intersection is not holding"
+    end
+
+    test "entering the channel clears the count", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      channel = chat_unread_channel!("rosemary")
+      chat_unread_join!(channel, user)
+      chat_unread_post_from_a_stranger(channel, "one unread")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      chat_unread_settle(view)
+      assert chat_unread(view) == 1
+
+      # Navigating into the channel is what calls `mark_read_at_channel_tip/2`,
+      # which moves the read watermark. This is the `handle_params` queue path,
+      # and it is also what proves the deferral: the hook runs BEFORE
+      # `MessagesHooks`, so an inline recompute would still read 1 here.
+      {:ok, chat_view, _html} = live(conn, ~p"/chat/#{Chat.space_path_segment(channel)}")
+      chat_unread_settle(chat_view)
+      chat_unread_barrier(chat_view)
+
+      assert chat_unread(chat_view) == 0,
+             "reading the channel left the shell count at its pre-read value"
+    end
+
+    # ── Fixtures ──────────────────────────────────────────────────────────
+
+    defp chat_unread(view), do: :sys.get_state(view.pid).socket.assigns.chat_unread_count
+
+    defp chat_unread_channel!(slug) do
+      {:ok, channel} =
+        Chat.create_space(%{
+          name: String.capitalize(slug),
+          slug: "#{slug}-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      channel
+    end
+
+    # `chat_unread_channel!/1` adds nobody. Without an explicit
+    # `participant_type: "user"` row for the viewer,
+    # `Chat.list_viewer_presence_space_ids/1` returns `[]`, the shell subscribes
+    # to nothing, and every assertion above goes red for the wrong reason.
+    defp chat_unread_join!(channel, user) do
+      {:ok, participant} =
+        Chat.add_participant(channel.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "Fixture Viewer",
+          joined_at: DateTime.utc_now()
+        })
+
+      participant
+    end
+
+    # The author must not be the viewer: `count_unread/3` excludes
+    # `m.participant_id != participant_pk`, so a self-authored message moves
+    # nothing and the assertions would pass vacuously.
+    defp chat_unread_post_from_a_stranger(space, body) do
+      {:ok, author} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Fixture Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, message} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: body
+        })
+
+      message
+    end
+
+    # The subscribe only happens once `assign_async` resolves AND the LiveView
+    # has processed `{:presence_spaces_resolved, _}`. Posting before that races
+    # the registration and flakes.
+    defp chat_unread_settle(view) do
+      render_async(view, 2_000)
+      _ = render(view)
+      :ok
+    end
+
+    # TWO barriers, and the second is NOT redundant. Do not delete it. The
+    # first `render/1` lets the process handle `{:new_message, _}`, which only
+    # QUEUES the refresh; the queued `:chat_unread_refresh` is still behind it
+    # in the mailbox. A single barrier reads the pre-refresh value.
+    defp chat_unread_barrier(view) do
+      _ = render(view)
+      _ = render(view)
+      :ok
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # Meeting state hydration (task 019ee06b Stage 2)
   #
   # The shell's mini-bar relies on a synchronous hydration from

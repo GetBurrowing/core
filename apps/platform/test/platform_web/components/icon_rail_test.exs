@@ -778,4 +778,202 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert :inbox_unread_count in attrs
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Chat unread badge (task 01a01b29 stage 2)
+  #
+  # `chat_unread_count` renders an unread pill on the Chat tile only. Same
+  # zero contract as Inbox — 0 omits the node entirely — and the same
+  # icon-anchoring, so it survives the collapsed rail. Two things differ, and
+  # both are design decisions rather than incidental:
+  #
+  #   * the overflow cap is 9+, matching ChatLive's `unread_label/1` and the
+  #     per-channel pills the same number appears on inside Chat, NOT
+  #     `badge_text/1`'s 99+;
+  #   * the fill is `badge-primary` (cyan), NOT `badge-error`. Red is reserved
+  #     for Inbox, which means "addressed to you". Chat unread is ambient and
+  #     near-permanently non-zero, and a permanently red rail is one nobody
+  #     reads.
+  # ---------------------------------------------------------------------
+  describe "icon_rail/1 chat unread badge" do
+    # Sibling of render_rail_with_count/2 that passes BOTH counts, so a test
+    # can put the two badges in one rail and check they stay distinct.
+    defp render_rail_with_counts(chat_count, inbox_count \\ 0, opts \\ %{}) do
+      assigns =
+        Map.merge(
+          %{
+            current_path: "/tasks",
+            is_fabrikam_user: false,
+            sidebar_collapsed: false,
+            inbox_unread_count: inbox_count,
+            chat_unread_count: chat_count
+          },
+          opts
+        )
+
+      rendered_to_string(~H"""
+      <.icon_rail
+        current_path={@current_path}
+        is_fabrikam_user={@is_fabrikam_user}
+        sidebar_collapsed={@sidebar_collapsed}
+        inbox_unread_count={@inbox_unread_count}
+        chat_unread_count={@chat_unread_count}
+      />
+      """)
+    end
+
+    defp chat_badge_node_text(doc) do
+      doc |> LazyHTML.query(~s([data-role="chat-badge"])) |> LazyHTML.text() |> String.trim()
+    end
+
+    defp badge_class(doc, role) do
+      [class] = doc |> LazyHTML.query(~s([data-role="#{role}"])) |> LazyHTML.attribute("class")
+      class
+    end
+
+    test "count 0 renders the Chat tile with NO badge node present" do
+      doc = render_rail_with_counts(0) |> LazyHTML.from_fragment()
+
+      # The tile half of this assertion is not padding: without it, a typo in
+      # the badge selector would pass the absence check against any render at
+      # all, including an empty one.
+      assert doc |> LazyHTML.query(~s([data-destination="chat"])) |> Enum.count() == 1
+      assert doc |> LazyHTML.query(~s([data-role="chat-badge"])) |> Enum.count() == 0
+    end
+
+    test "count 3 renders a badge containing \"3\" on the Chat tile" do
+      doc = render_rail_with_counts(3) |> LazyHTML.from_fragment()
+
+      assert doc |> LazyHTML.query(~s([data-role="chat-badge"])) |> Enum.count() == 1
+      assert chat_badge_node_text(doc) == "3"
+
+      assert doc
+             |> LazyHTML.query(~s([data-destination="chat"] [data-role="chat-badge"]))
+             |> Enum.count() == 1
+    end
+
+    test "the 9+ cap is pinned on BOTH sides of the boundary" do
+      assert render_rail_with_counts(8) |> LazyHTML.from_fragment() |> chat_badge_node_text() ==
+               "8"
+
+      assert render_rail_with_counts(9) |> LazyHTML.from_fragment() |> chat_badge_node_text() ==
+               "9+"
+    end
+
+    test "count 40 renders \"9+\" — not \"40\", and not Inbox's \"99+\"" do
+      text = render_rail_with_counts(40) |> LazyHTML.from_fragment() |> chat_badge_node_text()
+
+      assert text == "9+"
+      refute text == "40"
+      refute text == "99+"
+    end
+
+    test "chat_badge_text/1 caps at 9+ and never borrows badge_text/1's 99+" do
+      assert chat_badge_text(0) == nil
+      assert chat_badge_text(-1) == nil
+      assert chat_badge_text(1) == "1"
+      assert chat_badge_text(8) == "8"
+      assert chat_badge_text(9) == "9+"
+      assert chat_badge_text(99) == "9+"
+      assert chat_badge_text(100) == "9+"
+
+      # Exactly nine distinct labels in 1..250: "1".."8" and then "9+".
+      distinct = 1..250 |> Enum.map(&chat_badge_text/1) |> Enum.uniq()
+      assert Enum.count(distinct) == 9
+      assert List.last(distinct) == "9+"
+
+      # And the Inbox grammar is untouched by any of it.
+      assert badge_text(40) == "40"
+      assert badge_text(150) == "99+"
+    end
+
+    test "the badge carries the primary fill and NOT badge-error, with no raw hex" do
+      class = render_rail_with_counts(3) |> LazyHTML.from_fragment() |> badge_class("chat-badge")
+
+      assert class =~ "badge-primary"
+      # Both halves matter. A node carrying BOTH classes would satisfy the
+      # assertion above on its own, and that node is exactly what copying the
+      # Inbox markup produces.
+      refute class =~ "badge-error"
+      refute class =~ ~r/#[0-9a-fA-F]{3,6}/
+    end
+
+    test "the aria-label is the only place the word unread appears on the badge" do
+      doc = render_rail_with_counts(3) |> LazyHTML.from_fragment()
+
+      [label] =
+        doc |> LazyHTML.query(~s([data-role="chat-badge"])) |> LazyHTML.attribute("aria-label")
+
+      assert label == "3 unread messages"
+      # The visible glyph is a bare number.
+      assert chat_badge_node_text(doc) == "3"
+    end
+
+    test "generalising the badge leaves the Inbox badge exactly as it was" do
+      doc = render_rail_with_counts(5, 120) |> LazyHTML.from_fragment()
+
+      # Two nodes, one each, on their own tiles.
+      assert doc |> LazyHTML.query(~s([data-role="chat-badge"])) |> Enum.count() == 1
+      assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 1
+
+      assert doc
+             |> LazyHTML.query(~s([data-destination="inbox"] [data-role="inbox-badge"]))
+             |> Enum.count() == 1
+
+      assert doc
+             |> LazyHTML.query(~s([data-destination="chat"] [data-role="inbox-badge"]))
+             |> Enum.count() == 0
+
+      assert doc
+             |> LazyHTML.query(~s([data-destination="inbox"] [data-role="chat-badge"]))
+             |> Enum.count() == 0
+
+      # Inbox keeps its own cap and its own fill.
+      inbox_text =
+        doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> LazyHTML.text() |> String.trim()
+
+      assert inbox_text == "99+"
+      assert badge_class(doc, "inbox-badge") =~ "badge-error"
+      refute badge_class(doc, "inbox-badge") =~ "badge-primary"
+
+      # ...and Chat keeps its own.
+      assert chat_badge_node_text(doc) == "5"
+      assert badge_class(doc, "chat-badge") =~ "badge-primary"
+    end
+
+    test "the badge attaches ONLY to the Chat tile" do
+      doc = render_rail_with_counts(4) |> LazyHTML.from_fragment()
+
+      for other <- ~w(tasks inbox activity) do
+        assert doc
+               |> LazyHTML.query(~s([data-destination="#{other}"] [data-role="chat-badge"]))
+               |> Enum.count() == 0,
+               ~s(expected no chat badge on the "#{other}" tile)
+      end
+    end
+
+    test "the badge survives the collapsed rail (icon-anchored, not label-anchored)" do
+      for collapsed <- [true, false] do
+        doc =
+          render_rail_with_counts(6, 0, %{sidebar_collapsed: collapsed})
+          |> LazyHTML.from_fragment()
+
+        assert doc |> LazyHTML.query(~s([data-role="chat-badge"])) |> Enum.count() == 1,
+               "expected a Chat badge with sidebar_collapsed=#{collapsed}"
+
+        assert chat_badge_node_text(doc) == "6"
+      end
+    end
+
+    test "icon_rail/1 declares chat_unread_count alongside inbox_unread_count" do
+      attrs =
+        PlatformWeb.Components.IconRail.__components__()
+        |> Map.fetch!(:icon_rail)
+        |> Map.fetch!(:attrs)
+        |> Enum.map(& &1.name)
+
+      assert :chat_unread_count in attrs
+      assert :inbox_unread_count in attrs
+    end
+  end
 end

@@ -2706,10 +2706,67 @@ body, .font-fabrikam {
   border-radius: 0.5rem;
   color: var(--color-base-content);
   text-decoration: none;
+  /* Halo colour for an unread badge sitting on this tile (task 01a01b29
+     stage 2). Declared on the TILE, not on the badge, and overridden below
+     for hover and active, because the halo has to be whatever the tile
+     itself is painted: base-200 at rest, base-300 once the tile lifts. A
+     hardcoded base-200 ring would read as a seam on the active tile. */
+  --icon-rail-badge-halo: var(--color-base-200);
 }
 
 .icon-rail-tab:hover {
   background: var(--color-base-300);
+  --icon-rail-badge-halo: var(--color-base-300);
+}
+
+/* Same fill as desktop_active_class/2's `bg-base-300`, so the halo tracks it.
+   Declared after the base rule because the two selectors tie on specificity. */
+.icon-rail-tab--active {
+  --icon-rail-badge-halo: var(--color-base-300);
+}
+
+/* Unread badge on a rail tile (task 01a01b29 stage 2). Shared by the Inbox
+   pill and the Chat pill; only the daisyUI fill class differs between them
+   (`badge-error` vs `badge-primary`), which is the point — two pills two
+   tiles apart in one column that also ring or set type differently would read
+   as a rendering fault rather than as a distinction.
+
+   Unlayered on purpose. daisyUI's `.badge-xs` lands in the `components`
+   layer, and an unlayered rule beats a layered one in the Tailwind v4
+   cascade, so the 10px numeral here wins without an `!important`. */
+.icon-rail-badge {
+  font-size: 10px;
+  font-weight: 700;
+  /* Tabular so 1 -> 2 cannot resize the pill and jitter the glyph beside it. */
+  font-variant-numeric: tabular-nums;
+  /* 2px ring in the tile's own background, so the pill punches out of the
+     icon it overlaps instead of smearing into it. box-shadow rather than a
+     border: a border would eat into the pill's 16px min-width. */
+  box-shadow: 0 0 0 2px var(--icon-rail-badge-halo);
+  /* Appearance only, never increment. The node is INSERTED when the count
+     crosses zero and then persists across every later increment (LiveView
+     patches the text node, not the element), so this animation runs exactly
+     once, on 0 -> 1, with no Elixir-side logic deciding that. 2 -> 3
+     twitching in peripheral vision is a distraction; the badge showing up at
+     all is the event worth announcing.
+
+     No prefers-reduced-motion rule here, deliberately: the universal reduce
+     block near the top of this file already forces
+     `animation-duration: 0.01ms !important` on every element, this one
+     included. A second rule would be dead code. */
+  animation: icon-rail-badge-in var(--duration-base) var(--ease-standard);
+}
+
+@keyframes icon-rail-badge-in {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .icon-rail-label {
