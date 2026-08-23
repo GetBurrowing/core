@@ -3634,14 +3634,36 @@ defmodule PlatformWeb.ShellLiveTest do
                "#{foreign_count} registration(s) on chat:space:#{foreign.id}; " <>
                "registry held #{inspect(subscribers(foreign.id))}"
 
-      # POSITIVE CONTROL. Two registrations = the roster path AND the presence
-      # path both ran on this very LV. An unpaired refute would pass against a
-      # build that subscribed nobody at all; this is what rules that out.
-      assert member_count == 2,
-             "expected the member space #{member.id} to hold BOTH the roster and " <>
-               "the presence registration for #{inspect(view.pid)}, got " <>
+      # POSITIVE CONTROL. An unpaired refute would pass against a build that
+      # subscribed nobody at all; this is what rules that out.
+      #
+      # AMENDED BY TASK 01a01a1b STAGE 2: this read `== 2`, one registration
+      # per path. Both paths now hold the space through
+      # `PlatformWeb.SpaceTopics`, which subscribes only when the holder set
+      # was empty, so the correct count is 1 and the REGISTRY CAN NO LONGER
+      # DISTINGUISH "both paths ran" from "one did". The count keeps its
+      # original job (non-zero rules out a build that subscribed nobody); the
+      # two-paths claim moves to the holder map below, which is the only
+      # surface that still records per-owner intent.
+      assert member_count == 1,
+             "expected the member space #{member.id} to hold exactly one shared " <>
+               "registration for #{inspect(view.pid)}, got " <>
                "#{member_count}: #{inspect(subscribers(member.id))} — the refute " <>
                "above is vacuous without this"
+
+      # Per-owner bookkeeping, read deliberately and labelled as such: this is
+      # an assign written by the code under test, so it is NOT evidence about
+      # the registry (the line above is). It is evidence that BOTH branches
+      # reached this space, which is what the old `== 2` used to carry.
+      holders_socket = :sys.get_state(view.pid).socket
+
+      assert PlatformWeb.SpaceTopics.held_by?(holders_socket, member.id, :roster),
+             "the roster branch did not reach the member space, so the refute above " <>
+               "could be green because the roster path is dead rather than fenced"
+
+      assert PlatformWeb.SpaceTopics.held_by?(holders_socket, member.id, :presence),
+             "the presence branch did not reach the member space, so the refute above " <>
+               "could be green because the presence path is dead rather than fenced"
     end
 
     # The sibling guard. `Phoenix.PubSub.unsubscribe/2` drops EVERY

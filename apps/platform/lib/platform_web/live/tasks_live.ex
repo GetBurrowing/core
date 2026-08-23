@@ -50,6 +50,7 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Tasks
   alias Platform.Tasks.ReviewRequests
   alias Platform.Tenancy
+  alias PlatformWeb.SpaceTopics
   alias PlatformWeb.Tasks.BoardData
   alias PlatformWeb.Tasks.BoardHooks
   alias PlatformWeb.Tasks.EpicLoaders
@@ -84,6 +85,7 @@ defmodule PlatformWeb.TasksLive do
 
     {:ok,
      socket
+     |> SpaceTopics.ensure_holders()
      |> assign(:page_title, "Tasks")
      |> assign(:current_user_id, session["current_user_id"])
      |> assign(:selected_project_id, nil)
@@ -564,12 +566,10 @@ defmodule PlatformWeb.TasksLive do
   # otherwise re-hydrate the previous project's task. DISPLAY DEFECT ONLY:
   # `tasks` carries no `org_id`, so nothing crosses an org boundary.
   #
-  # `resubscribe_execution_space(nil)` is safe as an unsubscribe only because
-  # this process owns `chat:space:<execution space>` outright — the sole other
-  # subscribe here is `ChatPubSub.subscribe_spaces/0`, a different topic.
-  # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2` and drops EVERY
-  # registration this pid holds for a topic, so do not copy this call to a
-  # surface that has not checked the same thing.
+  # `resubscribe_execution_space(nil)` releases only TasksLive's OWN hold.
+  # This pid does NOT own `chat:space:<exec>`: ShellLive is an `on_mount`
+  # hook HERE and its presence branch holds the same topic, so release goes
+  # via `SpaceTopics`. Old claim: a ONE-FILE survey. File scope != process scope.
   defp select_project(socket, project_id) do
     socket
     |> assign(:selected_project_id, project_id)
@@ -608,8 +608,8 @@ defmodule PlatformWeb.TasksLive do
     previous = socket.assigns[:subscribed_execution_space_id]
 
     if previous != space_id do
-      if previous, do: Chat.PubSub.unsubscribe(previous)
-      if space_id, do: Chat.PubSub.subscribe(space_id)
+      socket = if previous, do: SpaceTopics.release(socket, previous, :tasks_exec), else: socket
+      socket = if space_id, do: SpaceTopics.hold(socket, space_id, :tasks_exec), else: socket
       assign(socket, :subscribed_execution_space_id, space_id)
     else
       socket

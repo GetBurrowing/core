@@ -12260,7 +12260,7 @@ defmodule PlatformWeb.TasksLiveTest do
       refute has_element?(view, "#detail-title-#{task_a.id}")
     end
 
-    test "switching projects releases project A's execution-space subscription",
+    test "switching projects hands project A's execution-space topic back to the shell",
          %{conn: conn} do
       project_a = create_project()
       project_b = create_project()
@@ -12288,11 +12288,25 @@ defmodule PlatformWeb.TasksLiveTest do
 
       _ = sidebar_click(view, "sidebar_select_project", %{"id" => project_b.id})
 
-      # The registry assertion is the load-bearing one. The render refute
-      # below cannot be non-vacuous by construction — the same change closes
-      # the panel, so the steering log is not drawn at all after the switch —
-      # so it is kept only as a corroborating observation, never as the proof.
-      refute subscribed_to_space?(view, space.id)
+      # RE-AIMED by task 01a01a1b stage 4, because this test was pinning the
+      # defect. It used to `refute subscribed_to_space?/2` — it asserted the
+      # registration was GONE after the switch. `PlatformWeb.ShellLive` is an
+      # `on_mount` hook running in THIS pid, and its presence branch holds this
+      # very topic (measured here: the holder set is `[:presence]`, and the
+      # viewer is a participant of the execution space). The old unsubscribe
+      # was `Registry.unregister/2`, which drops EVERY registration a pid holds
+      # for a topic, so the switch destroyed the shell's hold along with the
+      # board's — silently, for the rest of the session. TasksLive now releases
+      # only its own `:tasks_exec` hold, so the topic legitimately survives.
+      #
+      # This test therefore no longer proves the release. That proof, at
+      # registration granularity and with a probe that discriminates the
+      # release from the subscribe, lives in
+      # `tasks_live_exec_space_holder_test.exs`.
+      assert subscribed_to_space?(view, space.id)
+      # Corroborating only, and NOT a claim about subscription: the same change
+      # closes the detail panel, so the steering log is not drawn at all after
+      # the switch and this refute cannot be non-vacuous by construction.
       {:ok, _} = ExecutionSpace.post_engagement(space.id, "Marlowe post-switch ping")
       _ = :sys.get_state(view.pid)
       refute render(view) =~ "Marlowe post-switch ping"

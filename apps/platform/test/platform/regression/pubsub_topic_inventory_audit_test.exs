@@ -389,7 +389,7 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
       """
 
       assert source =~
-               ~r/if space\.id in presence_subscribe_space_ids\(\[space\], socket\.assigns\.user_id\) do\s+subscribe_space\(socket, space\.id\)\s+else\s+socket\s+end/,
+               ~r/if space\.id in presence_subscribe_space_ids\(\[space\], socket\.assigns\.user_id\) do\s+subscribe_space\(socket, space\.id, :chat_rail\)\s+else\s+socket\s+end/,
              """
              The `{:space_created, %{kind: "channel"}}` clause no longer guards
              its subscribe with `presence_subscribe_space_ids/2` (task 01a011d4).
@@ -406,13 +406,22 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
              test/platform_web/live/chat_live_external_rail_test.exs,
              "path 3: the global chat:spaces topic".
 
-             The subscribe itself is `subscribe_space(socket, space.id)`, not a
-             bare `ChatPubSub.subscribe/1` (task 01a017a3). That private helper
-             is the only writer of `@subscribed_space_ids`, which the
-             `:sidebar_changed` reconcile reads to decide what it already holds.
-             A bare call here would register a second entry on a `keys:
-             :duplicate` registry without the assign noticing, and every
-             broadcast on that topic would then be delivered twice.
+             The subscribe itself is `subscribe_space(socket, space.id,
+             :chat_rail)`, not a bare `ChatPubSub.subscribe/1` (tasks 01a017a3,
+             01a01a1b). That private helper is a thin wrapper over
+             `PlatformWeb.SpaceTopics.hold/3`, the single writer of the
+             `chat:space:<id>` registration for EVERY surface on this pid —
+             ShellLive's roster and presence hooks included, since ShellLive is
+             an `on_mount` hook and runs in the same process. A bare call here
+             would register a second entry on a `keys: :duplicate` registry
+             without the holder map noticing, and every broadcast on that topic
+             would then be delivered twice.
+
+             The owner is `:chat_rail` and not `:chat_active`: this subscribes a
+             channel that just appeared in the rail, which the viewer is by
+             construction not looking at. An `:chat_active` hold here would be
+             released by the next navigation's teardown and the new channel's
+             badge would stop moving.
              """
     end
 

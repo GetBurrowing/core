@@ -49,6 +49,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.UploadHooks
   alias PlatformWeb.LifecycleActions
   alias PlatformWeb.ShellLive
+  alias PlatformWeb.SpaceTopics
 
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
   @max_upload_entries 5
@@ -173,52 +174,54 @@ defmodule PlatformWeb.ChatLive do
     |> MapSet.new()
   end
 
-  # The space topics this session ACTUALLY holds a registration for, and the
-  # only two functions in this module allowed to change that (task 01a017a3).
+  # The space topics this session holds a registration for, and the only two
+  # functions in this module allowed to change that (tasks 01a017a3, 01a01a1b).
   #
   # `Phoenix.PubSub`'s registry runs `keys: :duplicate`, so `subscribe/1` is not
   # idempotent per pid — a second call adds a SECOND registration and every
   # broadcast on the topic is then delivered twice — and `unsubscribe/2` is
   # `Registry.unregister/2`, which drops EVERY registration this pid holds for
   # the topic at once. Neither call can be issued safely without knowing what is
-  # already held, and the registry is not something to interrogate on every rail
-  # rebuild. Hence the assign.
+  # already held.
   #
-  # EVERY `ChatPubSub.subscribe/1` and `ChatPubSub.unsubscribe/1` in this module
-  # goes through this pair. Not most of them: an assign that only some sites
-  # maintain is worse than no assign at all, because it reads as authoritative
-  # while lying, and the reconcile in `handle_info(:sidebar_changed, _)` takes
-  # its subscribe-or-skip decision straight off it.
+  # The bookkeeping that answers "what is already held" is PROCESS-scoped, not
+  # module-scoped, and lives in `PlatformWeb.SpaceTopics`. That distinction is
+  # the whole of task 01a01a1b: `PlatformWeb.ShellLive` is an `on_mount` hook
+  # (`router.ex`, `live_session :authenticated`) and so runs in THIS pid, and
+  # `PlatformWeb.TasksLive` shares the socket too. A held set private to this
+  # module could see its registrations destroyed by a sibling surface's
+  # `unsubscribe` and would then decline to re-subscribe — a silently dead
+  # topic, which is strictly worse than the duplicate delivery it set out to
+  # fix. `SpaceTopics` is the single writer for every surface on the pid, and
+  # these two helpers are this module's only door to it.
+  #
+  # EVERY `ChatPubSub.subscribe/1` and `ChatPubSub.unsubscribe/1` for a
+  # `chat:space:<id>` topic in this module goes through this pair. The `owner`
+  # is explicit at every call site and never inferred: `:chat_rail` for the
+  # rail's background subscriptions (mount loop, `:sidebar_changed` reconcile,
+  # `:space_created`, `:task_pin_added`) and `:chat_active` for the space the
+  # viewer is actually looking at. They are separate holds on purpose — a rail
+  # space that becomes active and is then navigated away from must KEEP its
+  # rail hold, and that is what makes the old unsubscribe-then-restore dance in
+  # `handle_params/3` unnecessary.
   #
   # `rail_subscribe_space_ids/1` above is the DESIRED set, derived from the rail
-  # assigns. This is the HELD set. They answer different questions, and the gap
-  # between them is what the reconcile closes.
-  @spec subscribe_space(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
-  defp subscribe_space(socket, space_id) do
-    if MapSet.member?(socket.assigns.subscribed_space_ids, space_id) do
-      socket
-    else
-      ChatPubSub.subscribe(space_id)
-
-      assign(
-        socket,
-        :subscribed_space_ids,
-        MapSet.put(socket.assigns.subscribed_space_ids, space_id)
-      )
-    end
+  # assigns. The HELD set is `SpaceTopics`'. They answer different questions, and
+  # the gap between them is what the reconcile closes.
+  @spec subscribe_space(Phoenix.LiveView.Socket.t(), binary(), SpaceTopics.owner()) ::
+          Phoenix.LiveView.Socket.t()
+  defp subscribe_space(socket, space_id, owner) do
+    SpaceTopics.hold(socket, space_id, owner)
   end
 
-  # Records ZERO for the topic rather than decrementing a count, because
-  # `unsubscribe/2` really does drop all of this pid's registrations at once.
-  @spec unsubscribe_space(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
-  defp unsubscribe_space(socket, space_id) do
-    ChatPubSub.unsubscribe(space_id)
-
-    assign(
-      socket,
-      :subscribed_space_ids,
-      MapSet.delete(socket.assigns.subscribed_space_ids, space_id)
-    )
+  # Releases only THIS owner's hold. The topic is unsubscribed iff no other
+  # surface on the pid still holds it, because `unsubscribe/2` really does drop
+  # all of this pid's registrations at once and a release by a non-holder would
+  # therefore destroy somebody else's registration.
+  @spec unsubscribe_space(Phoenix.LiveView.Socket.t(), binary(), SpaceTopics.owner()) ::
+          Phoenix.LiveView.Socket.t()
+  defp unsubscribe_space(socket, space_id, owner) do
+    SpaceTopics.release(socket, space_id, owner)
   end
 
   # ADD-ONLY, deliberately. Every id comes through `presence_subscribe_space_ids/2`
@@ -230,6 +233,14 @@ defmodule PlatformWeb.ChatLive do
   # directions would mean issuing an `unsubscribe`, and on a `keys: :duplicate`
   # registry that drops every registration this pid holds for the topic at once,
   # which is what task 01a011e9 had to repair on the navigation path.
+  #
+  # No held-set query in front of the loop, and none is needed: `hold/3` is
+  # idempotent for a repeated hold by the same owner, so re-holding a
+  # `:chat_rail` space this session already holds registers nothing. That is why
+  # task 01a01a1b could delete `:subscribed_space_ids` outright rather than
+  # re-express it as a `SpaceTopics` query — the decision this reconcile used to
+  # take off the held set is now taken inside the single writer, where it cannot
+  # be taken off a stale copy.
   #
   # Costs one `external_user?/1` existence query per `:sidebar_changed`. The
   # same cost is already accepted per navigation (see `rail_subscribe_space_ids/1`);
@@ -244,7 +255,7 @@ defmodule PlatformWeb.ChatLive do
     if connected?(socket) do
       socket
       |> rail_subscribe_space_ids()
-      |> Enum.reduce(socket, &subscribe_space(&2, &1))
+      |> Enum.reduce(socket, &subscribe_space(&2, &1, :chat_rail))
     else
       socket
     end
@@ -362,10 +373,14 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:mask_names?, false)
       |> assign(:revealed_section_ids, MapSet.new())
       |> assign(:user_id, user_id)
-      # The HELD PubSub subscribe set (task 01a017a3). Seeded empty and
-      # maintained ONLY by `subscribe_space/2` / `unsubscribe_space/2`; the
-      # mount-time subscribe loop below is its first writer.
-      |> assign(:subscribed_space_ids, MapSet.new())
+      # The HELD PubSub subscribe set is NOT an assign of this module. Task
+      # 01a01a1b moved it to `PlatformWeb.SpaceTopics`, whose `:chat_space_holders`
+      # assign is shared by every surface on this pid. Two records of one fact
+      # can only disagree about time, so `:subscribed_space_ids` was deleted
+      # rather than kept in step. Seeded here as well as in ShellLive's
+      # `on_mount` hook because `ensure_holders/1` is idempotent and neither
+      # mount may assume it ran first.
+      |> SpaceTopics.ensure_holders()
       # rbac-external-users M5: the render-branch flag + the read-scope it is
       # keyed on. `@external?` gates the discovery chrome off in the template
       # (sub-org headers, admin entry, new-channel, scope-pills, archived /
@@ -634,11 +649,14 @@ defmodule PlatformWeb.ChatLive do
     #
     # The list below concatenates three independently-sourced sets, so the
     # same space id CAN appear twice (e.g. a pinned exec space that is also
-    # listed as a channel). Task 01a017a3 closed that: the loop now runs
-    # through `subscribe_space/2`, which skips any id already in
-    # `@subscribed_space_ids`, so a repeated id takes exactly one registration.
-    # Do not reach past that helper for a bare `ChatPubSub.subscribe/1` here or
-    # anywhere else in this module.
+    # listed as a channel). Task 01a017a3 closed that and task 01a01a1b widened
+    # the guarantee past this module: the loop runs through `subscribe_space/3`,
+    # which is `PlatformWeb.SpaceTopics.hold/3`, and that subscribes only when
+    # NOBODY on this pid already holds the topic. A repeated id — or an id
+    # ShellLive's roster/presence hooks already hold, which is the common case
+    # since those hooks run in this same process — takes exactly one
+    # registration between them. Do not reach past that helper for a bare
+    # `ChatPubSub.subscribe/1` here or anywhere else in this module.
     all_spaces = channels ++ pinned_task_spaces ++ dm_conversations
 
     # Subscribe to chat pubsub for unread counts in background conversations
@@ -666,7 +684,7 @@ defmodule PlatformWeb.ChatLive do
         socket =
           all_spaces
           |> presence_subscribe_space_ids(user_id)
-          |> Enum.reduce(socket, &subscribe_space(&2, &1))
+          |> Enum.reduce(socket, &subscribe_space(&2, &1, :chat_rail))
 
         ChatPubSub.subscribe_spaces()
         # Per-user sidebar-invalidation topic (Stage 4): a `:sidebar_changed`
@@ -774,7 +792,9 @@ defmodule PlatformWeb.ChatLive do
       space ->
         socket =
           if connected?(socket) do
-            socket = subscribe_space(socket, space.id)
+            # Embedded surfaces render exactly ONE space and have no rail, so
+            # this is the active-space hold, not a rail hold.
+            socket = subscribe_space(socket, space.id, :chat_active)
             Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
             socket
           else
@@ -823,29 +843,19 @@ defmodule PlatformWeb.ChatLive do
     # send-eligible in space B's composer (BACKLOG #10).
     socket =
       if prev = socket.assigns.active_space do
-        # Task 01a011e9. `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2`
-        # on a `keys: :duplicate` registry: it removes EVERY entry this pid holds
-        # for the topic, not one of them. The enter path below has already
-        # normalised the outgoing space down to exactly one registration, so this
-        # call drops it outright — including the one `mount/3` established to feed
-        # the unread badge for a space nobody is looking at. Left as it was, the
-        # channel went silent for the rest of the session and its badge sat on the
-        # zero `clear_unread/2` wrote on the way in.
-        #
-        # Restore rather than skip the unsubscribe: deleting the call instead
-        # would leave a space reached only by URL — an execution space, say,
-        # which the rail never lists — holding a subscription it never had at
-        # mount. Gating the restore on the rail's own subscribe set ends leaving
-        # on mount-time state either way: exactly one registration for a rail
-        # space, zero for anything else.
-        socket = unsubscribe_space(socket, prev.id)
-
-        socket =
-          if connected?(socket) and MapSet.member?(rail_subscribe_space_ids(socket), prev.id) do
-            subscribe_space(socket, prev.id)
-          else
-            socket
-          end
+        # Release ONLY the active-space hold. Task 01a011e9 had to
+        # unsubscribe-then-conditionally-resubscribe here, because
+        # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2` on a
+        # `keys: :duplicate` registry and so dropped every entry this pid held
+        # for the topic — including the one `mount/3` took to feed the unread
+        # badge of a space nobody is looking at. That workaround is gone
+        # (task 01a01a1b): `SpaceTopics.release/3` unsubscribes only when the
+        # holder set empties, so a rail space keeps its `:chat_rail` hold
+        # through the navigation and a space reached only by URL — an execution
+        # space, say, which the rail never lists — has nothing left holding it
+        # and is unsubscribed. Same two end states as the restore branch
+        # produced, with no window in which the registration does not exist.
+        socket = unsubscribe_space(socket, prev.id, :chat_active)
 
         # Deliberately NOT given the same treatment: only the enter path below
         # subscribes `active_agent:`, so removing every entry is the whole of the
@@ -919,13 +929,15 @@ defmodule PlatformWeb.ChatLive do
     else
       socket =
         if connected?(socket) do
-          # Mount's subscribe loop (see `mount/3`) already subscribed this LV
-          # to every space in the user's channel + DM list — which includes
-          # whichever one is about to become active. Phoenix.PubSub does NOT
-          # dedupe subscriptions per pid: a second subscribe adds a second
-          # registry entry and a single broadcast fires handle_info twice.
-          # Unsubscribe first to guarantee a single active subscription here.
-          socket = socket |> unsubscribe_space(space.id) |> subscribe_space(space.id)
+          # Mount's subscribe loop (see `mount/3`) has usually already taken a
+          # `:chat_rail` hold on whichever space is about to become active, and
+          # ShellLive's hooks may hold it too. Phoenix.PubSub does NOT dedupe
+          # subscriptions per pid, so this used to unsubscribe first to
+          # normalise down to a single registration. It no longer has to: a
+          # second HOLD by a different owner registers nothing new, and taking
+          # the active hold as its own entry is what lets the teardown above
+          # drop it without touching the rail's (task 01a01a1b).
+          socket = subscribe_space(socket, space.id, :chat_active)
           Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
           socket
         else
@@ -3479,7 +3491,7 @@ defmodule PlatformWeb.ChatLive do
     # code path's subscription with no error and no log.
     socket =
       if space.id in presence_subscribe_space_ids([space], socket.assigns.user_id) do
-        subscribe_space(socket, space.id)
+        subscribe_space(socket, space.id, :chat_rail)
       else
         socket
       end
@@ -3531,7 +3543,9 @@ defmodule PlatformWeb.ChatLive do
         socket
       ) do
     if participant_id != nil and participant_id == socket.assigns[:current_user_email] do
-      socket = if connected?(socket), do: subscribe_space(socket, space_id), else: socket
+      socket =
+        if connected?(socket), do: subscribe_space(socket, space_id, :chat_rail), else: socket
+
       {:noreply, refresh_pinned_task_spaces(socket)}
     else
       {:noreply, socket}
@@ -3725,15 +3739,17 @@ defmodule PlatformWeb.ChatLive do
   # keying on identity would kill live chat for any internal user removed from a
   # channel they can still open.
   #
-  # KNOWN, DOCUMENTED DEVIATION. `chat:space:<id>` is held by two independent
-  # subscribers on this same pid: `subscribe_space/2` here, and ShellLive's
-  # `:roster_updates` hook. `Phoenix.PubSub.unsubscribe/2` is
-  # `Registry.unregister/2`, so this drops ShellLive's registration too while
-  # its own `@presence_space_ids` still lists the space. The end state is the
-  # one we want — nothing held for a space the viewer cannot see — but it
-  # reaches across the ownership boundary ADR 0013 draws, where a registration
-  # is released by the surface that took it. Reconciling ShellLive's bookkeeping
-  # is owed as a follow-up and is deliberately not attempted from here.
+  # The deviation this clause used to document — that its unsubscribe reached
+  # across the ADR 0013 ownership boundary and destroyed ShellLive's
+  # registration for the same topic on this shared pid — is CLOSED (task
+  # 01a01a1b). Both surfaces now go through `PlatformWeb.SpaceTopics`, so this
+  # releases only chat's own two holds and ShellLive's are released by ShellLive
+  # alone, off its own `:roster_resolved` / `:presence_spaces_resolved` paths.
+  #
+  # Both holds, not one: losing access must drop this module's interest in the
+  # space entirely, which was the existing intent when a single unsubscribe did
+  # the job. Whether the registration itself survives is now correctly a
+  # question about the OTHER surfaces' holds.
   def handle_info({:participant_left, %{participant_type: "user"} = participant}, socket) do
     socket =
       if participant.participant_id == socket.assigns.user_id and
@@ -3741,7 +3757,9 @@ defmodule PlatformWeb.ChatLive do
              [%{id: participant.space_id}],
              socket.assigns.user_id
            ) do
-        unsubscribe_space(socket, participant.space_id)
+        socket
+        |> unsubscribe_space(participant.space_id, :chat_rail)
+        |> unsubscribe_space(participant.space_id, :chat_active)
       else
         socket
       end

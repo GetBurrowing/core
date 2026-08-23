@@ -5,13 +5,19 @@ defmodule PlatformWeb.ChatLiveUnreadAfterLeavingTest do
 
   `mount/3` subscribes the LiveView to every rail space exactly once, and that
   single registration per topic is what moves the badge on a channel nobody is
-  looking at. Entering a channel unsubscribes then subscribes it, which
-  normalises the pid down to exactly one registration so a broadcast cannot
-  fire `handle_info` twice. Leaving used to unsubscribe and stop there, and
+  looking at. Leaving used to unsubscribe and stop there, and
   `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2` — it drops EVERY
-  entry the pid holds for that topic. After the enter path there is exactly
-  one, so the space went silent and its badge froze at zero, which
-  `clear_unread/2` had already set on the way in.
+  entry the pid holds for that topic — so the space went silent and its badge
+  froze at zero, which `clear_unread/2` had already set on the way in.
+
+  HOW THE FIX IS SHAPED NOW (task 01a01a1b stage 3). 01a011e9 repaired this by
+  unsubscribing and then conditionally re-subscribing, gated on the rail's own
+  subscribe set. That workaround is deleted. Every `chat:space:<id>`
+  subscription on the pid is held through `PlatformWeb.SpaceTopics` under a
+  named owner, and leaving releases only `:chat_active` — the rail's
+  `:chat_rail` hold keeps the topic registered, so there is no window in which
+  the registration does not exist and nothing to restore. The end states this
+  file measures are unchanged, which is the point of keeping it.
 
   The two assertions in the test below are a matched pair and neither stands
   alone. The never-visited channel is a positive control: it proves the
@@ -69,13 +75,15 @@ defmodule PlatformWeb.ChatLiveUnreadAfterLeavingTest do
                "leaving dropped the mount-time PubSub subscription and never restored it"
     end
 
-    test "leaving restores one registration for a rail space and none for a space off it",
+    test "leaving retains one registration for a rail space and none for a space off it",
          %{conn: conn} do
       # The badge test above measures the direction that was broken. This one
       # measures the registration count on both sides of the gate, because the
       # obvious wrong fix — drop the `unsubscribe` and stop — passes the badge
       # test and leaks in the other direction, and a space with no rail row has
-      # no badge to read.
+      # no badge to read. Still load-bearing after task 01a01a1b: the
+      # per-owner release has to produce BOTH of these end states, and an
+      # implementation that released nothing would also pass the badge test.
       conn = authed(conn)
 
       in_rail = create_channel("larkspur")
@@ -84,7 +92,7 @@ defmodule PlatformWeb.ChatLiveUnreadAfterLeavingTest do
       {:ok, view, _html} = live(conn, ~p"/chat/#{Chat.space_path_segment(in_rail)}")
 
       assert registrations(view, in_rail) == 1,
-             "mount plus the enter path should normalise to exactly one registration"
+             "the :chat_rail and :chat_active holds should share exactly one registration"
 
       # Leave the rail channel for a space the rail does not list.
       render_patch(view, ~p"/chat/#{Chat.space_path_segment(off_rail)}")
