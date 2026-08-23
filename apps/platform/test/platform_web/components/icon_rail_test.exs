@@ -780,20 +780,27 @@ defmodule PlatformWeb.Components.IconRailTest do
   end
 
   # ---------------------------------------------------------------------
-  # Chat unread badge (task 01a01b29 stage 2)
+  # Chat unread badge (task 01a01b29 stage 2; cap raised in 01a02491 stage 2)
   #
   # `chat_unread_count` renders an unread pill on the Chat tile only. Same
-  # zero contract as Inbox — 0 omits the node entirely — and the same
-  # icon-anchoring, so it survives the collapsed rail. Two things differ, and
-  # both are design decisions rather than incidental:
+  # zero contract as Inbox (0 omits the node entirely) and the same
+  # icon-anchoring, so it survives the collapsed rail.
   #
-  #   * the overflow cap is 9+, matching ChatLive's `unread_label/1` and the
-  #     per-channel pills the same number appears on inside Chat, NOT
-  #     `badge_text/1`'s 99+;
-  #   * the fill is `badge-primary` (cyan), NOT `badge-error`. Red is reserved
-  #     for Inbox, which means "addressed to you". Chat unread is ambient and
-  #     near-permanently non-zero, and a permanently red rail is one nobody
-  #     reads.
+  # ONE thing differs from Inbox, and it is a design decision rather than
+  # incidental: the fill is `badge-primary` (cyan), NOT `badge-error`. Red is
+  # reserved for Inbox, which means "addressed to you". Chat unread is ambient
+  # and near-permanently non-zero, and a permanently red rail is one nobody
+  # reads.
+  #
+  # The overflow cap USED to differ too, at 9+, matched to ChatLive's
+  # `unread_label/1`. Task 01a02491 stage 2 raised it to 99+, matching
+  # `badge_text/1`. The rail total sums every channel, DM and group the viewer
+  # participates in, so it was never the same quantity as a single per-channel
+  # pill; the badge's real sibling is the Inbox badge two tiles away in the
+  # same 56px column. Three glyphs were measured to fit that column, and the
+  # geometry is recorded above `badge_spec/3` in icon_rail.ex.
+  #
+  # `ChatLive.unread_label/1` stays at 9+ on purpose and is out of scope here.
   # ---------------------------------------------------------------------
   describe "icon_rail/1 chat unread badge" do
     # Sibling of render_rail_with_count/2 that passes BOTH counts, so a test
@@ -852,38 +859,57 @@ defmodule PlatformWeb.Components.IconRailTest do
              |> Enum.count() == 1
     end
 
-    test "the 9+ cap is pinned on BOTH sides of the boundary" do
-      assert render_rail_with_counts(8) |> LazyHTML.from_fragment() |> chat_badge_node_text() ==
-               "8"
+    test "the 99+ cap is pinned on BOTH sides of the boundary" do
+      assert render_rail_with_counts(99) |> LazyHTML.from_fragment() |> chat_badge_node_text() ==
+               "99"
 
-      assert render_rail_with_counts(9) |> LazyHTML.from_fragment() |> chat_badge_node_text() ==
-               "9+"
+      assert render_rail_with_counts(100) |> LazyHTML.from_fragment() |> chat_badge_node_text() ==
+               "99+"
     end
 
-    test "count 40 renders \"9+\" — not \"40\", and not Inbox's \"99+\"" do
+    test "count 40 renders the exact \"40\", not the old \"9+\" and not \"99+\"" do
       text = render_rail_with_counts(40) |> LazyHTML.from_fragment() |> chat_badge_node_text()
 
-      assert text == "9+"
-      refute text == "40"
+      assert text == "40"
+      # The cap this stage removed.
+      refute text == "9+"
+      # And no premature overflow either: 40 is under the new cap, not at it.
       refute text == "99+"
     end
 
-    test "chat_badge_text/1 caps at 9+ and never borrows badge_text/1's 99+" do
+    test "chat_badge_text/1 caps at 99+ and has NO second cap below it" do
       assert chat_badge_text(0) == nil
       assert chat_badge_text(-1) == nil
       assert chat_badge_text(1) == "1"
+
+      # The old cap's boundary. 9 is an ordinary number now.
       assert chat_badge_text(8) == "8"
-      assert chat_badge_text(9) == "9+"
-      assert chat_badge_text(99) == "9+"
-      assert chat_badge_text(100) == "9+"
+      assert chat_badge_text(9) == "9"
 
-      # Exactly nine distinct labels in 1..250: "1".."8" and then "9+".
+      # Mid-range, which is what proves there is no second cap between 9 and 99.
+      assert chat_badge_text(40) == "40"
+
+      assert chat_badge_text(99) == "99"
+      assert chat_badge_text(100) == "99+"
+      assert chat_badge_text(1_000) == "99+"
+
+      # Exactly 100 distinct labels in 1..250: "1".."99" and then "99+".
       distinct = 1..250 |> Enum.map(&chat_badge_text/1) |> Enum.uniq()
-      assert Enum.count(distinct) == 9
-      assert List.last(distinct) == "9+"
+      assert Enum.count(distinct) == 100
+      assert List.last(distinct) == "99+"
+    end
 
-      # And the Inbox grammar is untouched by any of it.
+    # Both caps are 99+ from this stage on, so the two functions agree at every
+    # input and the obvious next move is to collapse them into one. This test
+    # is what stops that refactor moving Inbox by accident: `badge_text/1` is
+    # public and ALSO feeds ShellLive's `AppBadge` document-title label, so its
+    # contract has to be pinned independently of Chat's. Keep this test whether
+    # or not the implementations are ever shared.
+    test "badge_text/1 is unmoved at the inputs chat_badge_text/1 just changed on" do
+      assert badge_text(0) == nil
       assert badge_text(40) == "40"
+      assert badge_text(99) == "99"
+      assert badge_text(100) == "99+"
       assert badge_text(150) == "99+"
     end
 
@@ -907,6 +933,28 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert label == "3 unread messages"
       # The visible glyph is a bare number.
       assert chat_badge_node_text(doc) == "3"
+    end
+
+    test "over the cap the aria-label keeps the TRUE count while the glyph caps" do
+      doc = render_rail_with_counts(150, 150) |> LazyHTML.from_fragment()
+
+      [chat_label] =
+        doc |> LazyHTML.query(~s([data-role="chat-badge"])) |> LazyHTML.attribute("aria-label")
+
+      [inbox_label] =
+        doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> LazyHTML.attribute("aria-label")
+
+      inbox_text =
+        doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> LazyHTML.text() |> String.trim()
+
+      # A screen reader has no 56px problem, so it gets the count and not the
+      # label. Asserted on BOTH badges: on one alone the assertion could pass
+      # while the other silently started announcing "99+".
+      assert chat_label == "150 unread messages"
+      assert inbox_label == "150 unread"
+
+      assert chat_badge_node_text(doc) == "99+"
+      assert inbox_text == "99+"
     end
 
     test "generalising the badge leaves the Inbox badge exactly as it was" do

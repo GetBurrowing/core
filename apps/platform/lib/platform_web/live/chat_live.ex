@@ -48,6 +48,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.SettingsComponent
   alias PlatformWeb.ChatLive.UploadHooks
   alias PlatformWeb.LifecycleActions
+  alias PlatformWeb.ShellLive
 
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
   @max_upload_entries 5
@@ -1444,6 +1445,33 @@ defmodule PlatformWeb.ChatLive do
   # click outside or the Escape key dismisses the popover.
   def handle_event("close_sidebar_menu", _params, socket) do
     {:noreply, assign(socket, :sidebar_menu_open, false)}
+  end
+
+  # "Mark all as read" (sidebar header menu, task
+  # `01a02491-a407-794f-a13e-d18398e4b092` stage 3). Clears exactly the set the
+  # left rail's Chat badge counts, through the one query that defines that set.
+  # See `Chat.mark_all_chat_spaces_read/1` for why the badge and the dismiss
+  # must not own separate membership queries.
+  #
+  # The viewer comes from `@current_user_record` (seeded by
+  # `PlatformWeb.ShellLive`'s on_mount), never from the client payload: that
+  # struct carries the tenancy visibility the clearing query fences on.
+  def handle_event("mark_all_read", _params, socket) do
+    {:ok, _advanced} = Chat.mark_all_chat_spaces_read(socket.assigns[:current_user_record])
+
+    user_id = socket.assigns[:user_id]
+
+    {:noreply,
+     socket
+     |> assign(:sidebar_menu_open, false)
+     # The per-channel pills read the WIDE unread map, so recompute it rather
+     # than emptying it: a pinned task conversation renders a pill the rail
+     # badge deliberately does not count, and this action does not clear it.
+     |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
+     # The rail badge is ShellLive's assign in THIS process (it mounts as a
+     # hook on the same socket). Queue its recompute so the number the reader
+     # just dismissed goes away without a navigation.
+     |> ShellLive.queue_chat_unread_refresh()}
   end
 
   # ── Fabrikam-admin "Edit default" mode (chat sidebar Stage 6) ──────────────

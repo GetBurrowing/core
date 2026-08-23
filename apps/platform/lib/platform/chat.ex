@@ -513,9 +513,16 @@ defmodule Platform.Chat do
       `participant_type: "user"` row on a non-archived space, exactly the
       query shape `list_member_space_ids/2` uses.
     * **org visibility is the fence** — the resolved `t:Platform.Tenancy.visibility/0`
-      is applied via `Tenancy.scope/3` with `binding: :last`, so the org
-      narrowing lands on `chat_spaces.org_id` rather than on the participant
-      row. A viewer resolving to `:none` therefore gets `[]`, never everything.
+      is applied via `Tenancy.scope/3` against the `:space` binding, so the
+      org narrowing lands on `chat_spaces.org_id` rather than on the
+      participant row. A viewer resolving to `:none` therefore gets `[]`,
+      never everything.
+
+  Returns EVERY space kind, and it has to stay that way. `Platform.Chat.Presence`
+  and `ShellLive`'s PubSub subscribe set both read this list, so narrowing it
+  here would silently shrink presence and drop broadcast subscriptions. A
+  caller that wants fewer kinds adds its own predicate to
+  `viewer_space_ids_query/2` instead, the way `total_unread_for_viewer/1` does.
 
   Takes the loaded user struct (not an id) so `Tenancy.visibility/1` can take
   its zero-query preloaded-`:org_memberships` clause. Anything that is not a
@@ -523,22 +530,44 @@ defmodule Platform.Chat do
   """
   @spec list_viewer_presence_space_ids(map() | nil) :: [binary()]
   def list_viewer_presence_space_ids(%{id: user_id} = user) when is_binary(user_id) do
-    vis = Tenancy.visibility(user)
-
-    from(p in Participant,
-      join: s in Space,
-      on: s.id == p.space_id,
-      where:
-        p.participant_type == "user" and
-          p.participant_id == ^user_id and
-          is_nil(s.archived_at),
-      select: p.space_id
-    )
-    |> Tenancy.scope(vis, binding: :last)
+    user_id
+    |> viewer_space_ids_query(Tenancy.visibility(user))
     |> Repo.all()
   end
 
   def list_viewer_presence_space_ids(_user), do: []
+
+  # THE SEAM. The two gates documented above, as a QUERY rather than a result
+  # set, so a caller can add its own predicate AND its own select before
+  # running it. This is the single definition of "spaces this viewer both
+  # participates in and is allowed to see"; `list_viewer_presence_space_ids/1`
+  # and `countable_participant_rows/2` (the rail badge's count and the bulk
+  # mark-all-read that clears it) all build on it, and anything else needing
+  # that set should extend this rather than hand-roll a second copy that
+  # drifts.
+  #
+  # Both bindings are NAMED (`as: :participant`, `as: :space`). Callers filter
+  # and select through the names, so inserting another join here cannot
+  # silently move what a positional `[_p, s]` pattern points at.
+  defp viewer_spaces_query(user_id, vis) when is_binary(user_id) do
+    from(p in Participant,
+      as: :participant,
+      join: s in Space,
+      as: :space,
+      on: s.id == p.space_id,
+      where:
+        p.participant_type == "user" and
+          p.participant_id == ^user_id and
+          is_nil(s.archived_at)
+    )
+    |> Tenancy.scope(vis, binding: :space)
+  end
+
+  defp viewer_space_ids_query(user_id, vis) when is_binary(user_id) do
+    user_id
+    |> viewer_spaces_query(vis)
+    |> select([participant: p], p.space_id)
+  end
 
   @doc "Update a space's attributes."
   @spec update_space(Space.t(), map()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
@@ -4370,21 +4399,53 @@ defmodule Platform.Chat do
     |> Map.new()
   end
 
+  # The space kinds the Chat surface actually renders as conversations, and so
+  # the only kinds the rail badge counts. Channels reach the sidebar through
+  # `list_spaces(kind: "channel")`, dms and groups through an inline
+  # `kind in ["dm", "group"]` filter in `ChatLive`.
+  #
+  # ALLOW-LIST, not a deny-list, deliberately: a space kind added later then
+  # stays uncounted (a pill with no badge, which is annoying and
+  # self-explaining) instead of reappearing in a badge the reader cannot drive
+  # to zero, which is the defect this list exists to close.
+  #
+  # KNOWN, DELIBERATE UNDER-COUNT, decided in task
+  # `01a02491-a407-794f-a13e-d18398e4b092` stage 1 and pinned by a test in
+  # `test/platform/chat/member_space_ids_test.exs`: the Chat sidebar renders a
+  # fourth stream this list cannot express. Pinned task conversations are
+  # `kind: "execution"` spaces selected by
+  # `Platform.Tasks.ChatPins.list_pinned_task_spaces_for/1` and they do render
+  # unread pills, so such a row can show a pill that contributes nothing here.
+  # Membership in that set is a row in `task_chat_pins` rather than a kind, so
+  # no kind predicate can cover it, and pulling it in would couple the badge to
+  # the Tasks context.
+  @chat_surface_kinds ~w(channel dm group)
+
   @doc """
-  One number for the whole viewer: unread messages summed across the spaces
-  this viewer both participates in and can observe.
+  One number for the whole viewer: unread messages summed across the Chat
+  conversations this viewer both participates in and can observe.
 
   Takes the LOADED user struct, not an id, because it composes two functions
   with different arities. `unread_counts_for_user/1` keys off the user id;
-  `list_viewer_presence_space_ids/1` needs the struct so `Tenancy.visibility/1`
-  can take its zero-query preloaded-`:org_memberships` clause.
+  the member query needs the struct so `Tenancy.visibility/1` can take its
+  zero-query preloaded-`:org_memberships` clause.
 
-  Counting exactly the subscribed set is what makes the badge honest.
-  `unread_counts_for_user/1` does NOT filter archived spaces and
-  `list_viewer_presence_space_ids/1` does, so the `Map.take/2` intersection
-  below is load-bearing rather than tidiness: summing the raw map would count
-  spaces the shell receives no broadcasts for, and an archived space holding
-  unread would pin the badge at a number that can never move.
+  Counting exactly the set Chat RENDERS is what makes the badge honest, and
+  three predicates do that work:
+
+    * **kind**: only `#{Enum.join(@chat_surface_kinds, "`, `")}`. Every other
+      kind seats real `participant_type: "user"` rows (`meeting` and
+      `guest_meeting` via `Meetings.ensure_delivery_invitee/2`, `execution` via
+      `ChatLive.ensure_participant/2` on every space the viewer opens) while
+      rendering nowhere in Chat, so counting them produced a badge that could
+      not be cleared by reading. See `@chat_surface_kinds` for the allow-list
+      rationale and the one deliberate gap in it.
+    * **archived**: `unread_counts_for_user/1` does NOT filter archived spaces
+      and the member query does, so the `Map.take/2` intersection below is
+      load-bearing rather than tidiness: an archived space holding unread would
+      otherwise pin the badge at a number that can never move.
+    * **org visibility**: the shell receives no broadcasts for a space outside
+      the viewer's fence, so a count that included one could never move either.
 
   Deliberately composes rather than adding a counting query.
   `unread_counts_for_user/1` is the single definition of "unread" in this
@@ -4394,7 +4455,11 @@ defmodule Platform.Chat do
   @spec total_unread_for_viewer(map() | nil) :: non_neg_integer()
   def total_unread_for_viewer(%{id: user_id} = user) when is_binary(user_id) do
     counts = unread_counts_for_user(user_id)
-    ids = list_viewer_presence_space_ids(user)
+
+    ids =
+      user_id
+      |> countable_participant_rows(Tenancy.visibility(user))
+      |> Enum.map(& &1.space_id)
 
     counts
     |> Map.take(ids)
@@ -4403,6 +4468,115 @@ defmodule Platform.Chat do
   end
 
   def total_unread_for_viewer(_user), do: 0
+
+  @doc """
+  Mark every Chat conversation the rail badge counts as read for `user`.
+
+  Returns `{:ok, spaces_advanced}`, the number of read cursors this call
+  actually moved. A viewer with nothing unread gets `{:ok, 0}` and no writes.
+
+  Clears EXACTLY the set `total_unread_for_viewer/1` counts, because both read
+  `countable_participant_rows/2`. If the two ever name different sets the
+  reader presses dismiss and the badge survives, which is the defect this
+  function exists to close, so do not give either one its own membership query.
+
+  Each space is stamped with ITS OWN newest top-level, non-deleted message id.
+  Never one shared "latest" id: message ids are UUIDv7, `count_unread/3`
+  compares `m.id > last_read`, and an id borrowed from a busier space carries a
+  later timestamp, which would suppress genuinely new messages in a quiet space
+  until wall clock caught up.
+
+  The cursor only ever moves FORWARD. `mark_space_read/2` is a blind
+  `update_all` with no monotonic guard, and a cursor that moves backward
+  resurrects unread on a conversation the reader just finished
+  (`PlatformWeb.ChatLive.MessagesHooks` documents the single-space version of
+  the same hazard), so the guard lives in the `where` clause here.
+
+  A cosmetic mismatch, written down so it is not filed as a bug: the no-cursor
+  clause of `count_unread/3` is capped at `min(10)`, so a conversation the
+  viewer has never opened contributes at most 10 to the badge however many
+  messages it holds. This function clears all of them, so it can clear more
+  messages than the badge displayed. Harmless, and confusing if undocumented.
+  """
+  @spec mark_all_chat_spaces_read(map() | nil) :: {:ok, non_neg_integer()}
+  def mark_all_chat_spaces_read(%{id: user_id} = user) when is_binary(user_id) do
+    rows = countable_participant_rows(user_id, Tenancy.visibility(user))
+    tips = newest_top_level_message_ids(Enum.map(rows, & &1.space_id))
+
+    advanced =
+      Enum.count(rows, fn row ->
+        case Map.get(tips, row.space_id) do
+          nil -> false
+          tip_id -> advance_read_cursor(row, tip_id)
+        end
+      end)
+
+    {:ok, advanced}
+  end
+
+  def mark_all_chat_spaces_read(_user), do: {:ok, 0}
+
+  # THE COUNTABLE SET, defined once. Every participant row whose space the rail
+  # badge counts: the viewer's own membership, not archived, inside the tenancy
+  # fence, of a kind the Chat surface renders. All four predicates are applied
+  # in SQL by the seam plus the kind allow-list.
+  #
+  # Returns the three columns a caller needs to either count the row
+  # (`space_id`) or move its read cursor (`participant_id` — the
+  # `chat_participants` PK `mark_space_read/2` takes, not the user id — and
+  # `last_read_message_id`).
+  defp countable_participant_rows(user_id, vis) do
+    user_id
+    |> viewer_spaces_query(vis)
+    |> where([space: s], s.kind in @chat_surface_kinds)
+    |> select([participant: p], %{
+      participant_id: p.id,
+      space_id: p.space_id,
+      last_read_message_id: p.last_read_message_id
+    })
+    |> Repo.all()
+  end
+
+  # `%{space_id => newest top-level, non-deleted message id}`, one row per
+  # space via `DISTINCT ON`, so each space gets its own tip out of a single
+  # query rather than N.
+  #
+  # Thread replies and soft-deleted rows are excluded on purpose: they are the
+  # same rows `count_unread/3` refuses to count, so stamping the cursor past
+  # one would move the watermark over a message that was never unread and
+  # change what the next genuine post reports.
+  defp newest_top_level_message_ids([]), do: %{}
+
+  defp newest_top_level_message_ids(space_ids) do
+    from(m in Message,
+      where: m.space_id in ^space_ids and is_nil(m.thread_id) and is_nil(m.deleted_at),
+      distinct: [asc: m.space_id],
+      order_by: [asc: m.space_id, desc: m.id],
+      select: {m.space_id, m.id}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # Forward-only cursor write. The clause below skips the space entirely when
+  # the cursor already sits at or past the tip (the common case for a viewer
+  # who reads as they go, and it keeps a no-op call to zero writes); the `where`
+  # in the update is the real guard, and it also holds if a message lands
+  # between the read above and this write.
+  defp advance_read_cursor(%{last_read_message_id: current}, tip_id)
+       when is_binary(current) and current >= tip_id,
+       do: false
+
+  defp advance_read_cursor(row, tip_id) do
+    {updated, _} =
+      from(p in Participant,
+        where: p.id == ^row.participant_id,
+        where: is_nil(p.last_read_message_id) or p.last_read_message_id < ^tip_id
+      )
+      |> Repo.update_all(set: [last_read_message_id: tip_id])
+
+    updated > 0
+  end
 
   # participant_pk is the internal chat_participants.id (PK), which is what
   # chat_messages.participant_id references via foreign key.

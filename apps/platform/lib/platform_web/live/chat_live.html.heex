@@ -293,7 +293,7 @@
               class="channel-sidebar-menu-button"
               aria-haspopup="menu"
               aria-expanded={to_string(@sidebar_menu_open)}
-              aria-label="Sidebar layout options"
+              aria-label="Sidebar options"
             >
               <span class="hero-ellipsis-vertical size-4"></span>
             </button>
@@ -301,11 +301,24 @@
               :if={@sidebar_menu_open}
               class="channel-sidebar-menu-popover"
               role="menu"
-              aria-label="Sidebar layout options"
+              aria-label="Sidebar options"
               phx-click-away="close_sidebar_menu"
               phx-window-keydown="close_sidebar_menu"
               phx-key="escape"
             >
+              <%!-- FIRST, above the layout items: this one acts on the
+                    conversations, the other two act on how the rail is
+                    arranged. Ordinary menu-row styling on purpose — no
+                    warning colour and no confirmation step, because reading
+                    a conversation undoes it. --%>
+              <button
+                type="button"
+                role="menuitem"
+                phx-click="mark_all_read"
+                class="channel-sidebar-menu-item"
+              >
+                Mark all as read
+              </button>
               <button
                 type="button"
                 role="menuitem"

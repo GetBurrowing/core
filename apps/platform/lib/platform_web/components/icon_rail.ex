@@ -520,24 +520,38 @@ defmodule PlatformWeb.Components.IconRail do
   Chat unread-badge label.
 
   Returns nil at or below 0 (badge node omitted from the DOM), the integer as
-  a string for 1..8, and "9+" for 9 and above.
+  a string for 1..99, and "99+" above 99. Same overflow grammar as
+  `badge_text/1`, which is the point of task 01a02491 stage 2.
 
-  The cap is 9+ and NOT `badge_text/1`'s 99+. That is deliberate on two
-  counts. The reader's reference point for a chat unread number is the
-  per-channel pill they already see inside Chat, and `ChatLive`'s
-  `unread_label/1` caps that at 9+ — so the rail total and the channel pills
-  speak one grammar instead of two. And the collapsed rail is 56px wide, where
-  a three-glyph pill overhangs the tile it belongs to. Past nine, the exact
-  number changes no decision anyone makes.
+  The cap used to be 9+, matched to `ChatLive`'s `unread_label/1` on the
+  reasoning that the rail total and a per-channel pill were one quantity seen
+  at two zoom levels. They are not the same quantity. The rail total is a sum
+  over every channel, DM and group the viewer participates in, so it is not
+  equal to any single pill, and stage 1 narrowed the summed set to exactly
+  those three kinds, which makes the mismatch explicit. The badge's real
+  sibling is the Inbox badge two tiles away in the same 56px column. Two
+  badges in one column with two different overflow grammars read as a
+  rendering fault rather than as a distinction.
 
-  Inbox keeps 99+ (`badge_text/1`, untouched): a queue you work down earns the
-  extra width, and its count is filtered upstream so it stays small.
+  Three glyphs fit; measured, not assumed. See the geometry note above
+  `badge_spec/3`.
+
+  `ChatLive.unread_label/1` deliberately stays at 9+. A per-channel pill
+  counts a different thing from the rail total and is allowed its own
+  grammar; changing it would be a change to the Chat sidebar, not to this
+  rail.
+
+  Kept as its own function rather than delegating to `badge_text/1`, even
+  though the two bodies now agree. `badge_text/1` is public and also feeds
+  ShellLive's `AppBadge` document-title label, so a later change to the Chat
+  cap must not be able to move the Inbox pill and the browser tab with it.
+  The two caps agreeing is a design decision, not a shared implementation.
   """
   @spec chat_badge_text(term()) :: String.t() | nil
   def chat_badge_text(count) when is_integer(count) do
     cond do
       count <= 0 -> nil
-      count >= 9 -> "9+"
+      count > 99 -> "99+"
       true -> Integer.to_string(count)
     end
   end
@@ -547,20 +561,39 @@ defmodule PlatformWeb.Components.IconRail do
   # Which tiles carry an unread badge, and what is different about each.
   #
   # One function with a `dest.key` case, not a second copy of the markup
-  # block: the geometry, type and halo are shared by rail_badge/1 and only the
-  # FILL and the count grammar are per-destination. Returns nil for every
+  # block: the geometry, type, halo and overflow grammar are all shared, and
+  # the FILL is the only thing that is per-destination. Returns nil for every
   # other key, and nil at a zero count, so an absent badge is an absent DOM
   # node.
   #
   # Inbox is `badge-error` (red) and Chat is `badge-primary` (cyan), and the
   # split is the whole design decision here. Red is severity: something is
   # addressed to you and you are expected to clear it. Chat unread is ambient
-  # and near-permanently non-zero, so copying `badge-error` onto it — one line
-  # away, and the obvious move — would leave the rail permanently red, and a
+  # and near-permanently non-zero, so copying `badge-error` onto it, one line
+  # away and the obvious move, would leave the rail permanently red, and a
   # permanently red rail is one nobody reads. That takes the Inbox badge down
-  # with it. Cyan also already carries this exact number inside Chat
-  # (`.channel-row-unread-pill`, app.css), so the rail total and the
-  # per-channel pill are one object seen at two zoom levels.
+  # with it. Cyan is also what the per-channel pills inside Chat use
+  # (`.channel-row-unread-pill`, app.css), so the rail total and a pill read
+  # as one family. They are not one quantity, which is why they no longer
+  # share an overflow cap: see `chat_badge_text/1`.
+  #
+  # COLLAPSED-RAIL GEOMETRY, measured rather than assumed (task 01a02491
+  # stage 2, Chrome 151, `lg:w-14`, both themes, at a count of 150):
+  #
+  #   rail           0.00 .. 56.00
+  #   tile           8.00 .. 47.00   (the nav's px-2)
+  #   icon          16.00 .. 36.00   (size-5)
+  #   badge "1"     25.00 .. 42.00   (17.00 wide)
+  #   badge "99"    18.00 .. 42.00   (24.00 wide)
+  #   badge "99+"   12.11 .. 42.00   (29.89 wide)
+  #
+  # The pill is anchored by its RIGHT edge (`-right-1.5` in rail_badge/1), so
+  # a wider label grows LEFTWARD across the icon and the right edge does not
+  # move: 42.00 at all three labels, 5px inside the tile and 14px inside the
+  # rail. Three glyphs fit with no truncation and no horizontal overflow
+  # (`documentElement.scrollWidth` stayed at the viewport width). Raising the
+  # Chat cap to 99+ therefore needed no anchoring change, and the halo stays a
+  # box-shadow for the reason recorded at app.css.
   #
   # The `data-role` values differ so the two nodes are separable in tests and
   # in devtools. "inbox-badge" is load-bearing: existing tests query it.

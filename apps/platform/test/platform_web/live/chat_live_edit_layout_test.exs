@@ -121,7 +121,7 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       # the old "Edit layout" text toggle. The menu is closed (no item yet),
       # and none of the edit affordances render.
       assert sidebar =~ ~s(phx-click="toggle_sidebar_menu")
-      assert sidebar =~ ~s(aria-label="Sidebar layout options")
+      assert sidebar =~ ~s(aria-label="Sidebar options")
       refute sidebar =~ "Edit my layout"
       refute sidebar =~ "channel-row-grab"
       refute sidebar =~ ~s(phx-click="reset_sidebar")

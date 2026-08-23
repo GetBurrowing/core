@@ -6,13 +6,29 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
   are the single source of truth for the allowlist consumed by the ChatLive
   subscribe loop (stage 2) and the PresenceHooks consumer guards (stage 3), so
   they are unit-tested here without a LiveView.
+
+  `Chat.total_unread_for_viewer/1` joined them (task
+  `01a02491-a407-794f-a13e-d18398e4b092` stage 1) because it reads the same
+  member query. It is the number behind the left icon rail's Chat badge, and
+  the two sets have to be tested together: the badge counted spaces the Chat
+  surface never renders, so no amount of reading could take it to zero, and
+  the obvious repair (narrowing the member query itself) would have silently
+  shrunk presence and dropped ShellLive's broadcast subscriptions.
   """
   use Platform.DataCase, async: true
 
+  import Ecto.Query, only: [from: 2]
+
   alias Platform.Accounts.User
   alias Platform.Chat
+  alias Platform.Chat.Message
+  alias Platform.Chat.Participant
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Repo
+  alias Platform.Tasks
+  alias Platform.Tasks.ChatPin
+  alias Platform.Tasks.ChatPins
+  alias Platform.Tasks.Task, as: TaskRow
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
@@ -229,5 +245,409 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
       refute MapSet.member?(scope, archived.id)
       refute MapSet.member?(scope, foreign.id)
     end
+  end
+
+  describe "total_unread_for_viewer/1 counts only the kinds Chat renders" do
+    setup do
+      # A root-org member, which is the shape of every user this app creates
+      # and the shape of the account the defect was reported from. Root
+      # membership resolves `Tenancy.visibility/1` to `:root_all`, and
+      # `Tenancy.scope(q, :root_all, _)` returns the query untouched.
+      #
+      # That is load-bearing for every refute in this block. `Tenancy`'s org
+      # fence is `org_id IN (...)` and SQL `IN` never matches NULL, so an
+      # ordinary meeting space (created with no `org_id`) is already dropped
+      # for an `{:orgs, ids}` viewer. Build this block on such a viewer and
+      # the refutes would pass against a tree with no kind filter at all.
+      root = Tenancy.get_org_by_slug!("fabrikam")
+      viewer = create_user!()
+      member!(viewer, root)
+
+      assert Tenancy.visibility(viewer) == :root_all,
+             "the fixture viewer must resolve :root_all, or the org fence does the work these tests attribute to the kind filter"
+
+      %{viewer: viewer, root: root}
+    end
+
+    test "a meeting space holding unread is not counted; a channel holding unread is",
+         ctx do
+      chan = space_of_kind("channel")
+      meeting = space_of_kind("meeting")
+
+      seat_with_unread!(chan, ctx.viewer, 2)
+      seat_with_unread!(meeting, ctx.viewer, 3)
+
+      # PRECONDITION, and the test turns on it. `total_unread_for_viewer/1` is
+      # an intersection of two sets; assert the meeting space is in BOTH of
+      # them before refuting the total, or the refute proves only that some
+      # unrelated gate already excluded it.
+      counts = Chat.unread_counts_for_user(ctx.viewer.id)
+      assert Map.get(counts, chan.id) == 2
+      assert Map.get(counts, meeting.id) == 3
+
+      member_ids = Chat.list_viewer_presence_space_ids(ctx.viewer)
+      assert chan.id in member_ids
+      assert meeting.id in member_ids
+
+      # Paired with the channel deliberately: a `total_unread_for_viewer/1`
+      # that returned 0 for everything would pass a bare refute.
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 2
+    end
+
+    test "dm and group are counted; guest_meeting and execution are not", ctx do
+      dm = space_of_kind("dm")
+      group = space_of_kind("group")
+      # A guest-meeting space DOES carry an org_id in production, so this one
+      # is not screened out by the org fence for any viewer. It is a live
+      # contributor to the reported number, not a hypothetical.
+      guest_meeting = space_of_kind("guest_meeting", %{org_id: ctx.root.id})
+      execution = space_of_kind("execution")
+
+      seat_with_unread!(dm, ctx.viewer, 1)
+      seat_with_unread!(group, ctx.viewer, 2)
+      seat_with_unread!(guest_meeting, ctx.viewer, 4)
+      seat_with_unread!(execution, ctx.viewer, 5)
+
+      counts = Chat.unread_counts_for_user(ctx.viewer.id)
+      assert Map.get(counts, guest_meeting.id) == 4
+      assert Map.get(counts, execution.id) == 5
+
+      member_ids = Chat.list_viewer_presence_space_ids(ctx.viewer)
+      assert guest_meeting.id in member_ids
+      assert execution.id in member_ids
+
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 3
+    end
+
+    test "reading every Chat conversation drives the total to 0, even with an unread meeting",
+         ctx do
+      chan = space_of_kind("channel")
+      dm = space_of_kind("dm")
+      group = space_of_kind("group")
+      meeting = space_of_kind("meeting")
+
+      seats = Enum.map([chan, dm, group], &{&1, seat_with_unread!(&1, ctx.viewer, 2)})
+      # Never read, and it must not matter.
+      seat_with_unread!(meeting, ctx.viewer, 7)
+
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 6
+
+      Enum.each(seats, fn {_space, seat} ->
+        Chat.mark_space_read(seat.participant.id, seat.newest.id)
+      end)
+
+      # The state the reporter said was unreachable: read everything Chat
+      # shows you, and the rail badge disappears.
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 0
+    end
+
+    test "list_viewer_presence_space_ids/1 still returns every kind", ctx do
+      chan = space_of_kind("channel")
+      meeting = space_of_kind("meeting")
+      execution = space_of_kind("execution")
+
+      add_user(chan.id, ctx.viewer.id)
+      add_user(meeting.id, ctx.viewer.id)
+      add_user(execution.id, ctx.viewer.id)
+
+      ids = Chat.list_viewer_presence_space_ids(ctx.viewer)
+
+      # This is the assertion that protects `Chat.Presence` and ShellLive's
+      # PubSub subscribe set, which both read this list. Narrowing it to the
+      # badge's kinds would shrink presence and drop broadcast subscriptions
+      # with no visible failure, so the kind predicate lives in
+      # `total_unread_for_viewer/1` alone.
+      assert chan.id in ids
+      assert meeting.id in ids
+      assert execution.id in ids
+    end
+
+    test "unread on a PINNED task conversation is not counted, a known gap", ctx do
+      # DECISION PIN, not a bug. Task `01a02491-a407-794f-a13e-d18398e4b092`
+      # stage 1 is where this was called. The Chat sidebar renders a fourth
+      # stream the badge's allow-list cannot express: pinned task
+      # conversations are `kind: "execution"` spaces and they DO render unread
+      # pills, so one can show a pill that adds nothing to the rail badge.
+      #
+      # Accepted, because the two errors are not symmetric. Over-counting is
+      # the uncleariable badge being fixed here; under-counting is a pill with
+      # no badge, which is self-explaining. Membership in the pinned set is a
+      # row in `task_chat_pins` rather than a kind, so no kind predicate can
+      # express it and pulling it in would couple the badge to the Tasks
+      # context. Raised as a follow-up product question rather than absorbed.
+      chan = space_of_kind("channel")
+      seat_with_unread!(chan, ctx.viewer, 2)
+
+      pinned = pinned_task_space!(ctx.viewer, ctx.root)
+      seat_with_unread!(pinned, ctx.viewer, 4)
+
+      assert pinned.kind == "execution"
+
+      # It really is on this viewer's rail: the same query the Pinned block
+      # renders from returns it.
+      pinned_ids =
+        ctx.viewer
+        |> pin_identity()
+        |> ChatPins.list_pinned_task_spaces_for()
+        |> Enum.map(& &1.id)
+
+      assert pinned.id in pinned_ids
+
+      assert Map.get(Chat.unread_counts_for_user(ctx.viewer.id), pinned.id) == 4
+
+      # Only the channel. Change this number and you are changing the decision
+      # above, not fixing a test.
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 2
+    end
+  end
+
+  describe "mark_all_chat_spaces_read/1 clears exactly the set the badge counts" do
+    setup do
+      # Same root-org viewer as the block above, for the same reason: an
+      # `{:orgs, ids}` viewer never sees an org_id-less meeting space at all,
+      # so the meeting assertions below would prove nothing.
+      root = Tenancy.get_org_by_slug!("fabrikam")
+      viewer = create_user!()
+      member!(viewer, root)
+
+      assert Tenancy.visibility(viewer) == :root_all,
+             "the fixture viewer must resolve :root_all, or the org fence does the work these tests attribute to the kind filter"
+
+      %{viewer: viewer, root: root}
+    end
+
+    test "takes the badge to zero and leaves a meeting space's cursor untouched", ctx do
+      chan = space_of_kind("channel")
+      dm = space_of_kind("dm")
+      group = space_of_kind("group")
+      meeting = space_of_kind("meeting")
+
+      seat_with_unread!(chan, ctx.viewer, 3)
+      seat_with_unread!(dm, ctx.viewer, 1)
+      seat_with_unread!(group, ctx.viewer, 2)
+      meeting_seat = seat_with_unread!(meeting, ctx.viewer, 4)
+
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 6
+      assert is_nil(cursor(meeting_seat))
+
+      # Three cursors moved: the channel, the dm and the group. Not four.
+      assert {:ok, 3} = Chat.mark_all_chat_spaces_read(ctx.viewer)
+
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 0
+
+      # THE HALF THAT MAKES THE REST MEAN SOMETHING. A version that marked
+      # every participant row read passes every assertion above while silently
+      # destroying the unread state of a conversation the viewer has never
+      # opened.
+      assert is_nil(cursor(meeting_seat))
+      assert Map.get(Chat.unread_counts_for_user(ctx.viewer.id), meeting.id) == 4
+    end
+
+    test "every cursor lands on its OWN tip, and none of them moves backward", ctx do
+      caught_up = space_of_kind("channel")
+      behind = space_of_kind("channel")
+      ahead = space_of_kind("channel")
+
+      caught_up_seat = seat_with_unread!(caught_up, ctx.viewer, 2)
+      behind_seat = seat_with_unread!(behind, ctx.viewer, 3)
+      ahead_seat = seat_with_unread!(ahead, ctx.viewer, 1)
+
+      # Already read to this space's newest message.
+      Chat.mark_space_read(caught_up_seat.participant.id, caught_up_seat.newest.id)
+
+      # Parked PAST the top-level tip, which is what a thread reply's id does:
+      # the reply is newer than every top-level message, and `mark_space_read/2`
+      # stamps whatever id it is handed.
+      tick!()
+      reply = thread_reply!(ahead, ahead_seat.newest)
+      Chat.mark_space_read(ahead_seat.participant.id, reply.id)
+
+      # Only `behind` has anywhere to move.
+      assert {:ok, 1} = Chat.mark_all_chat_spaces_read(ctx.viewer)
+
+      # Each space's own newest message, never one shared id. Ids are UUIDv7,
+      # so a cursor carrying a busier space's id sits in that space's future
+      # and would suppress genuinely new messages here until wall clock caught
+      # up.
+      assert cursor(caught_up_seat) == caught_up_seat.newest.id
+      assert cursor(behind_seat) == behind_seat.newest.id
+      refute cursor(caught_up_seat) == cursor(behind_seat)
+
+      # Backward is the corruption being guarded: it resurrects unread on a
+      # conversation the reader had already finished.
+      assert cursor(ahead_seat) == reply.id
+      assert cursor(ahead_seat) > ahead_seat.newest.id
+    end
+
+    test "a second call with nothing unread is a no-op, and so is an empty viewer", ctx do
+      chan = space_of_kind("channel")
+      seat = seat_with_unread!(chan, ctx.viewer, 2)
+
+      assert {:ok, 1} = Chat.mark_all_chat_spaces_read(ctx.viewer)
+      first = cursor(seat)
+
+      assert {:ok, 0} = Chat.mark_all_chat_spaces_read(ctx.viewer)
+      assert cursor(seat) == first
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 0
+
+      assert {:ok, 0} = Chat.mark_all_chat_spaces_read(create_user!())
+      assert {:ok, 0} = Chat.mark_all_chat_spaces_read(nil)
+    end
+
+    test "the cursor stops at the newest top-level, non-deleted message", ctx do
+      chan = space_of_kind("channel")
+      seat = seat_with_unread!(chan, ctx.viewer, 2)
+
+      # Both are newer than every top-level message and neither is unread:
+      # `count_unread/3` filters `thread_id` and `deleted_at` out.
+      tick!()
+      reply = thread_reply!(chan, seat.newest)
+      deleted = deleted_message!(chan, seat.newest.participant_id)
+
+      assert Map.get(Chat.unread_counts_for_user(ctx.viewer.id), chan.id) == 2
+
+      # A space holding nothing but rows that cannot be unread is skipped
+      # entirely rather than stamped with something.
+      quiet = space_of_kind("channel")
+      quiet_seat = seat_with_unread!(quiet, ctx.viewer, 1)
+      Chat.mark_space_read(quiet_seat.participant.id, quiet_seat.newest.id)
+      tick!()
+      _ = thread_reply!(quiet, quiet_seat.newest)
+
+      assert {:ok, 1} = Chat.mark_all_chat_spaces_read(ctx.viewer)
+
+      assert cursor(seat) == seat.newest.id
+      refute cursor(seat) == reply.id
+      refute cursor(seat) == deleted.id
+      assert cursor(seat) < reply.id
+      assert cursor(seat) < deleted.id
+      assert cursor(quiet_seat) == quiet_seat.newest.id
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 0
+
+      # And the next real message still arrives as exactly one unread, which is
+      # what a cursor parked past those rows would put at risk.
+      tick!()
+      next = post_from_author!(chan, seat.newest.participant_id)
+      assert next.id > cursor(seat)
+      assert Chat.total_unread_for_viewer(ctx.viewer) == 1
+    end
+  end
+
+  # ── Helpers for the badge block ─────────────────────────────────────────────
+
+  defp space_of_kind(kind, attrs \\ %{}) do
+    n = System.unique_integer([:positive])
+
+    {:ok, space} =
+      Chat.create_space(Map.merge(%{name: "Space #{n}", slug: "space-#{n}", kind: kind}, attrs))
+
+    space
+  end
+
+  # Seat `viewer` on `space` and leave `count` unread messages there from
+  # someone else. Returns the viewer's participant row and the newest message,
+  # which is the pair `Chat.mark_space_read/2` takes.
+  defp seat_with_unread!(space, viewer, count) when count > 0 do
+    viewer_participant = add_user(space.id, viewer.id)
+    author = add_user(space.id, create_user!().id)
+
+    Enum.each(1..count, fn i ->
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "message #{i}"
+        })
+    end)
+
+    # The space's tip by ID, NOT the last row inserted. `Platform.Types.UUIDv7`
+    # is a 48-bit millisecond timestamp plus pure randomness, so two messages
+    # written inside one millisecond are unordered relative to each other and
+    # "posted last" is not "greatest id". Every consumer of this watermark
+    # (`count_unread/3`, `mark_space_read/2`) compares ids, so the fixture has
+    # to hand back the same message they will.
+    %{participant: viewer_participant, newest: newest_top_level!(space.id)}
+  end
+
+  defp newest_top_level!(space_id) do
+    Repo.one!(
+      from(m in Message,
+        where: m.space_id == ^space_id and is_nil(m.thread_id) and is_nil(m.deleted_at),
+        order_by: [desc: m.id],
+        limit: 1
+      )
+    )
+  end
+
+  # Let the clock leave the current millisecond, so the NEXT id generated is
+  # strictly greater than every id generated before it. See the note in
+  # `seat_with_unread!/3`: inside one millisecond the ordering is random.
+  defp tick! do
+    Process.sleep(2)
+  end
+
+  defp cursor(%{participant: %{id: participant_id}}) do
+    Repo.get!(Participant, participant_id).last_read_message_id
+  end
+
+  defp post_from_author!(space, author_participant_id, attrs \\ %{}) do
+    {:ok, msg} =
+      Chat.post_message(
+        Map.merge(
+          %{
+            space_id: space.id,
+            participant_id: author_participant_id,
+            content_type: "text",
+            content: "later message"
+          },
+          attrs
+        )
+      )
+
+    msg
+  end
+
+  defp thread_reply!(space, parent) do
+    {:ok, thread} = Chat.create_thread_for_message(space.id, parent.id)
+
+    post_from_author!(space, parent.participant_id, %{thread_id: thread.id, content: "reply"})
+  end
+
+  defp deleted_message!(space, author_participant_id) do
+    post_from_author!(space, author_participant_id, %{
+      content: "removed",
+      deleted_at: DateTime.utc_now()
+    })
+  end
+
+  defp pin_identity(user), do: %{kind: "user", id: user.email}
+
+  # A task execution space pinned to this viewer's Chat rail. Built from the
+  # schemas directly rather than through `Tasks.create_task/1`, which emits an
+  # inbox item and a push for a sponsor and would drag both into an async test
+  # that is about neither.
+  defp pinned_task_space!(user, org) do
+    n = System.unique_integer([:positive])
+
+    {:ok, project} = Tasks.create_project(%{name: "Badge Fixture Project #{n}", org_id: org.id})
+
+    task =
+      %TaskRow{}
+      |> TaskRow.changeset(%{project_id: project.id, title: "Badge Fixture Task #{n}"})
+      |> Repo.insert!()
+
+    space = space_of_kind("execution", %{metadata: %{"task_id" => task.id}})
+
+    %ChatPin{}
+    |> ChatPin.changeset(%{
+      task_id: task.id,
+      participant_kind: "user",
+      participant_id: user.email,
+      pinned_by: user.email
+    })
+    |> Repo.insert!()
+
+    space
   end
 end

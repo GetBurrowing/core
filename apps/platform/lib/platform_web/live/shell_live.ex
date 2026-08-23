@@ -1311,7 +1311,18 @@ defmodule PlatformWeb.ShellLive do
   # `send(self(), ...)` there would post to a mailbox that never runs
   # `handle_info` and then dies. The connected mount that follows queues it
   # properly.
-  defp queue_chat_unread_refresh(socket) do
+  @doc """
+  Queue one recompute of the icon rail's Chat-unread badge on the next mailbox
+  turn. Public because a sibling hook in the SAME LiveView process
+  (`PlatformWeb.ChatLive`'s "Mark all as read") moves read cursors outside the
+  `{:new_message, _}` path this module already listens to, and the badge has to
+  follow that write without waiting for a navigation.
+
+  A no-op on a disconnected socket and while a refresh is already queued, so
+  callers may call it freely.
+  """
+  @spec queue_chat_unread_refresh(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def queue_chat_unread_refresh(socket) do
     cond do
       not connected?(socket) -> socket
       socket.assigns[:chat_unread_refresh_queued] -> socket
