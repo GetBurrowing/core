@@ -251,20 +251,21 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
     setup do
       # A root-org member, which is the shape of every user this app creates
       # and the shape of the account the defect was reported from. Root
-      # membership resolves `Tenancy.visibility/1` to `:root_all`, and
-      # `Tenancy.scope(q, :root_all, _)` returns the query untouched.
+      # membership resolves `Tenancy.visibility/1` to `:root_all`.
       #
-      # That is load-bearing for every refute in this block. `Tenancy`'s org
-      # fence is `org_id IN (...)` and SQL `IN` never matches NULL, so an
-      # ordinary meeting space (created with no `org_id`) is already dropped
-      # for an `{:orgs, ids}` viewer. Build this block on such a viewer and
-      # the refutes would pass against a tree with no kind filter at all.
+      # Since task 01a01f4c the count carries NO org fence, so this viewer is
+      # no longer the only shape under which the refutes below mean something:
+      # they are the kind allow-list's work at any visibility. The `:root_all`
+      # guard is kept as a POSITIVE CONTROL rather than as a fence-defeater.
+      # This block is the case that already worked before the fence came off,
+      # and nothing in it may move. The zero-org and cross-org blocks further
+      # down are where the fence's removal is measured.
       root = Tenancy.get_org_by_slug!("fabrikam")
       viewer = create_user!()
       member!(viewer, root)
 
       assert Tenancy.visibility(viewer) == :root_all,
-             "the fixture viewer must resolve :root_all, or the org fence does the work these tests attribute to the kind filter"
+             "the fixture viewer must resolve :root_all: this block is the positive control, the case that already worked"
 
       %{viewer: viewer, root: root}
     end
@@ -285,7 +286,11 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
       assert Map.get(counts, chan.id) == 2
       assert Map.get(counts, meeting.id) == 3
 
-      member_ids = Chat.list_viewer_presence_space_ids(ctx.viewer)
+      # Read from `list_member_space_ids/1`, which is the set
+      # `total_unread_for_viewer/1` derives from since task 01a01f4c. Reading
+      # the org-fenced list here would assert a precondition on a query the
+      # count no longer touches.
+      member_ids = Chat.list_member_space_ids(ctx.viewer.id)
       assert chan.id in member_ids
       assert meeting.id in member_ids
 
@@ -312,7 +317,7 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
       assert Map.get(counts, guest_meeting.id) == 4
       assert Map.get(counts, execution.id) == 5
 
-      member_ids = Chat.list_viewer_presence_space_ids(ctx.viewer)
+      member_ids = Chat.list_member_space_ids(ctx.viewer.id)
       assert guest_meeting.id in member_ids
       assert execution.id in member_ids
 
@@ -352,11 +357,15 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
 
       ids = Chat.list_viewer_presence_space_ids(ctx.viewer)
 
-      # This is the assertion that protects `Chat.Presence` and ShellLive's
-      # PubSub subscribe set, which both read this list. Narrowing it to the
-      # badge's kinds would shrink presence and drop broadcast subscriptions
-      # with no visible failure, so the kind predicate lives in
+      # This is the assertion that protects `Chat.Presence`, which reads this
+      # list. Narrowing it to the badge's kinds would shrink presence with no
+      # visible failure, so the kind predicate lives in
       # `total_unread_for_viewer/1` alone.
+      #
+      # ShellLive's subscribe set no longer reads this function: since task
+      # 01a01f4c it reads `Chat.list_member_space_ids/1`, which is
+      # participation-only. This one stays org-fenced precisely because
+      # `Chat.Presence.list_online_for_viewer/1` carries other people's names.
       assert chan.id in ids
       assert meeting.id in ids
       assert execution.id in ids
@@ -403,15 +412,15 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
 
   describe "mark_all_chat_spaces_read/1 clears exactly the set the badge counts" do
     setup do
-      # Same root-org viewer as the block above, for the same reason: an
-      # `{:orgs, ids}` viewer never sees an org_id-less meeting space at all,
-      # so the meeting assertions below would prove nothing.
+      # Same root-org viewer as the block above, and for the same reason: this
+      # is the positive control, the shape that already worked before task
+      # 01a01f4c took the org fence off the count and off the write.
       root = Tenancy.get_org_by_slug!("fabrikam")
       viewer = create_user!()
       member!(viewer, root)
 
       assert Tenancy.visibility(viewer) == :root_all,
-             "the fixture viewer must resolve :root_all, or the org fence does the work these tests attribute to the kind filter"
+             "the fixture viewer must resolve :root_all: this block is the positive control, the case that already worked"
 
       %{viewer: viewer, root: root}
     end
@@ -533,7 +542,184 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
     end
   end
 
+  describe "the count follows participation, not org visibility" do
+    # ANTI-VACUITY NOTE FOR THE WHOLE BLOCK. Every other badge test in this
+    # file runs on a `:root_all` viewer, and `Tenancy.scope(q, :root_all, _)`
+    # is the identity, so taking the org fence off the count (task 01a01f4c)
+    # reddens nothing that shipped before it. These tests are the evidence.
+    # The `Tenancy.visibility/1` precondition in each one is load-bearing: a
+    # viewer who picked up a membership by accident would exercise nothing.
+
+    test "a viewer with zero org memberships: the badge agrees with the pills" do
+      viewer = create_user!()
+      chan = space_of_kind("channel")
+      seat_with_unread!(chan, viewer, 2)
+
+      assert Tenancy.visibility(viewer) == :none
+
+      counts = Chat.unread_counts_for_user(viewer.id)
+      assert Map.get(counts, chan.id) == 2
+
+      # THE REPORTED DEFECT, as one line: these two returned 2 and 0.
+      assert Chat.total_unread_for_viewer(viewer) == counts |> Map.values() |> Enum.sum()
+      assert Chat.total_unread_for_viewer(viewer) == 2
+
+      # POSITIVE CONTROL, same test body. A `total_unread_for_viewer/1` that
+      # had dropped the membership predicate along with the fence passes every
+      # line above and fails this one.
+      assert Chat.total_unread_for_viewer(create_user!()) == 0
+    end
+
+    test "a viewer of one org participating in another org's channel is counted" do
+      # A `:none`-only test can be made green by special-casing `:none` inside
+      # `Tenancy.scope/3` while leaving the fence intact for every other
+      # visibility. This is the test that reds on that quiet re-fence.
+      home = Tenancy.get_org_by_slug!("sxi")
+      foreign = Tenancy.get_org_by_slug!("soylent")
+
+      viewer = create_user!()
+      member!(viewer, home)
+
+      assert {:orgs, org_ids} = Tenancy.visibility(viewer)
+      refute foreign.id in org_ids
+
+      foreign_chan = space_of_kind("channel", %{org_id: foreign.id})
+      seat_with_unread!(foreign_chan, viewer, 3)
+
+      assert Map.get(Chat.unread_counts_for_user(viewer.id), foreign_chan.id) == 3
+      assert foreign_chan.id in Chat.list_member_space_ids(viewer.id)
+      assert Chat.total_unread_for_viewer(viewer) == 3
+
+      # The other half of the same fact, and the reason this is safe: the
+      # org-fenced query still excludes the space, so nothing that reads it
+      # gained a row.
+      refute foreign_chan.id in Chat.list_viewer_presence_space_ids(viewer)
+    end
+
+    test "the exact member set, and the counted set as a subset of it" do
+      viewer = create_user!()
+
+      chan = space_of_kind("channel")
+      meeting = space_of_kind("meeting")
+      archived = space_of_kind("channel")
+
+      seat_with_unread!(chan, viewer, 2)
+      seat_with_unread!(meeting, viewer, 3)
+      seat_with_unread!(archived, viewer, 4)
+      {:ok, _} = Chat.archive_space(archived)
+
+      assert Tenancy.visibility(viewer) == :none
+
+      members = Chat.list_member_space_ids(viewer.id)
+
+      # EXACT, not a membership check. An over-widened base query, a lost
+      # `participant_id` predicate say, passes every `in` assertion there is.
+      assert Enum.sort(members) == Enum.sort([chan.id, meeting.id])
+      assert Chat.total_unread_for_viewer(viewer) == 2
+
+      # "The counted set", OBSERVED rather than assumed. The dismiss clears
+      # exactly the rows the badge counts (both read
+      # `countable_participant_rows/1`), so the spaces whose unread disappears
+      # are that set made visible without reaching into a private function.
+      before = Chat.unread_counts_for_user(viewer.id)
+      {:ok, _} = Chat.mark_all_chat_spaces_read(viewer)
+      counted = Map.keys(before) -- Map.keys(Chat.unread_counts_for_user(viewer.id))
+
+      assert counted == [chan.id]
+
+      # Containment, asserted rather than assumed. A counted space the shell
+      # does not subscribe freezes the badge at a number no broadcast moves.
+      assert MapSet.subset?(MapSet.new(counted), MapSet.new(members))
+
+      # The two absences, each with its positive control on the line above.
+      refute meeting.id in counted
+      refute archived.id in counted
+    end
+
+    test "a zero-org viewer's meeting space is neither counted nor cleared, and their channel is both" do
+      viewer = create_user!()
+      assert Tenancy.visibility(viewer) == :none
+
+      chan = space_of_kind("channel")
+      meeting = space_of_kind("meeting")
+
+      chan_seat = seat_with_unread!(chan, viewer, 2)
+      meeting_seat = seat_with_unread!(meeting, viewer, 3)
+
+      # Both are in the shell's subscribe set. The kind allow-list belongs to
+      # the count, never to the subscription: narrowing the subscribe set would
+      # stop `presence_diff` reaching the shell for meeting spaces.
+      members = Chat.list_member_space_ids(viewer.id)
+      assert chan.id in members
+      assert meeting.id in members
+
+      assert Chat.total_unread_for_viewer(viewer) == 2
+
+      # One cursor moved, not two. The badge and the dismiss stay in lockstep
+      # at `:none` exactly as they do at `:root_all`.
+      assert {:ok, 1} = Chat.mark_all_chat_spaces_read(viewer)
+
+      assert cursor(chan_seat) == chan_seat.newest.id
+      assert is_nil(cursor(meeting_seat))
+      assert Map.get(Chat.unread_counts_for_user(viewer.id), meeting.id) == 3
+      assert Chat.total_unread_for_viewer(viewer) == 0
+    end
+
+    test "a cross-org space in the subscribe set still withholds its people from presence" do
+      # THE IDENTITY BOUNDARY. This is the test that reds when someone later
+      # optimises `Chat.Presence.list_online_for_viewer/1` to reuse the set the
+      # shell already subscribed instead of re-deriving its own fenced one.
+      home = Tenancy.get_org_by_slug!("sxi")
+      foreign = Tenancy.get_org_by_slug!("soylent")
+
+      viewer = create_user!()
+      member!(viewer, home)
+
+      assert {:orgs, org_ids} = Tenancy.visibility(viewer)
+      refute foreign.id in org_ids
+
+      foreign_chan = space_of_kind("channel", %{org_id: foreign.id})
+      add_user(foreign_chan.id, viewer.id)
+
+      stranger = create_user!()
+      add_user(foreign_chan.id, stranger.id)
+      online!(foreign_chan, stranger, "Nadia Nightshift")
+
+      # POSITIVE CONTROL, seeded before the refutes so an empty presence
+      # backend cannot pass this test. A space INSIDE the fence, tracked the
+      # same way.
+      home_chan = space_of_kind("channel", %{org_id: home.id})
+      add_user(home_chan.id, viewer.id)
+      colleague = create_user!()
+      add_user(home_chan.id, colleague.id)
+      online!(home_chan, colleague, "Bram Bellhop")
+
+      # The change: the shell now subscribes the cross-org space.
+      assert foreign_chan.id in Chat.list_member_space_ids(viewer.id)
+
+      assert {:ok, online} = ChatPresence.list_online_for_viewer(viewer)
+      names = Enum.map(online, & &1.name)
+
+      assert "Bram Bellhop" in names
+      refute "Nadia Nightshift" in names
+      refute stranger.id in Enum.map(online, & &1.user_id)
+    end
+  end
+
   # ── Helpers for the badge block ─────────────────────────────────────────────
+
+  # Track `user` as online in `space`, the same shape
+  # `test/platform/chat/presence_test.exs` uses. `participant_type: "user"` is
+  # what `Chat.Presence.list_online_for_viewer/1` filters on.
+  defp online!(space, user, display_name) do
+    {:ok, _} =
+      ChatPresence.track_in_space(self(), space.id, user.id, %{
+        participant_type: "user",
+        display_name: display_name
+      })
+
+    :ok
+  end
 
   defp space_of_kind(kind, attrs \\ %{}) do
     n = System.unique_integer([:positive])

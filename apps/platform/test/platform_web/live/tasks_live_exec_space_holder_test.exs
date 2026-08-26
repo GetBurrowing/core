@@ -82,10 +82,11 @@ defmodule PlatformWeb.TasksLiveExecSpaceHolderTest do
     task
   end
 
-  # Membership is what puts a space in `Chat.list_viewer_presence_space_ids/1`,
-  # which is what makes ShellLive's presence branch take a `:presence` hold on
-  # it. Without this row the whole test is vacuous: there would be no second
-  # holder for the old over-broad unsubscribe to have destroyed.
+  # Membership is what puts a space in `Chat.list_member_space_ids/1`, the
+  # shell's chat subscribe set, which is what makes ShellLive's presence branch
+  # take a `:presence` hold on it. Without this row the whole test is vacuous:
+  # there would be no second holder for the old over-broad unsubscribe to have
+  # destroyed.
   defp join!(space_id, %User{} = user) do
     {:ok, p} =
       Chat.add_participant(space_id, %{

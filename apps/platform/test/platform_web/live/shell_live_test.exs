@@ -442,7 +442,7 @@ defmodule PlatformWeb.ShellLiveTest do
       {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
       _html = render_async(view, 2_000)
 
-      subscribed = :sys.get_state(view.pid).socket.assigns.presence_space_ids
+      subscribed = :sys.get_state(view.pid).socket.assigns.shell_chat_space_ids
 
       # Both spaces, not just the oldest — a single-topic subscription shows up
       # as a permanently stale list, which looks perfectly fine on first load.
@@ -1132,7 +1132,7 @@ defmodule PlatformWeb.ShellLiveTest do
       {conn, user} = authenticated_conn_with_user(conn)
 
       # `Chat.unread_counts_for_user/1` does NOT filter archived spaces and
-      # `Chat.list_viewer_presence_space_ids/1` does, so this is the only test
+      # `Chat.list_member_space_ids/1` does, so this is the only test
       # that exercises the `Map.take/2` intersection in
       # `Chat.total_unread_for_viewer/1`. Without it, an archived space holding
       # unread pins the number at a value no broadcast can ever move.
@@ -1192,8 +1192,8 @@ defmodule PlatformWeb.ShellLiveTest do
 
     # `chat_unread_channel!/1` adds nobody. Without an explicit
     # `participant_type: "user"` row for the viewer,
-    # `Chat.list_viewer_presence_space_ids/1` returns `[]`, the shell subscribes
-    # to nothing, and every assertion above goes red for the wrong reason.
+    # `Chat.list_member_space_ids/1` returns `[]`, the shell subscribes to
+    # nothing, and every assertion above goes red for the wrong reason.
     defp chat_unread_join!(channel, user) do
       {:ok, participant} =
         Chat.add_participant(channel.id, %{
@@ -3456,7 +3456,7 @@ defmodule PlatformWeb.ShellLiveTest do
       #
       # Asserted on `roster_space_id` rather than on the PubSub registry ON
       # PURPOSE: the viewer IS a member of this DM, so the SEPARATE
-      # viewer-presence path (`Chat.list_viewer_presence_space_ids/1`)
+      # viewer-presence path (`Chat.list_member_space_ids/1` since 01a01f4c)
       # legitimately holds a `chat:space:<dm>` registration on this same pid.
       # The registry therefore cannot discriminate the roster path here — and
       # that shared registration is also why this stage adds no unsubscribe:
@@ -3509,7 +3509,7 @@ defmodule PlatformWeb.ShellLiveTest do
   # differ in exactly one fact: whether the viewer holds a `participant_type:
   # "user"` row. Subscription state is read from the PubSub registry
   # (`Registry.lookup(Platform.PubSub, "chat:space:" <> id)`), never from
-  # `:roster_space_id` or `:presence_space_ids`.
+  # `:roster_space_id` or `:shell_chat_space_ids`.
   #
   # The positive control is a REGISTRATION COUNT, not a membership test, and
   # that is load-bearing. For a member space both the roster path
@@ -3674,7 +3674,7 @@ defmodule PlatformWeb.ShellLiveTest do
     # path on a space the roster query provably cannot supply: a member channel
     # with NO agent participant. `visible_roster/2` requires
     # `p.participant_type == "agent"`, so any registration here came from
-    # `Chat.list_viewer_presence_space_ids/1`.
+    # the shell's chat subscribe set, `Chat.list_member_space_ids/1`.
     test "the presence path still registers a member space the roster query cannot supply",
          ctx do
       # Keeps the roster path alive and pointed elsewhere, so this test is not
@@ -3839,7 +3839,7 @@ defmodule PlatformWeb.ShellLiveTest do
     #
     # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2`: it drops EVERY
     # registration this pid holds for the topic. The presence branch subscribes
-    # `chat:space:<id>` for every space in `:presence_space_ids`, so releasing
+    # `chat:space:<id>` for every space in `:shell_chat_space_ids`, so releasing
     # the roster's chat subscription unconditionally would take presence's with
     # it — silently, with no error. That is how the unread badge died in
     # `cb429830`. This test fails if the release is made unconditional.
@@ -3853,7 +3853,7 @@ defmodule PlatformWeb.ShellLiveTest do
       # Space C is the NEGATIVE CONTROL and the viewer DELIBERATELY DOES NOT
       # JOIN IT — hence `nil` rather than `viewer`. Membership is not a
       # neutral detail here: the presence branch subscribes `chat:space:<id>`
-      # for EVERY id in `Chat.list_viewer_presence_space_ids/1`, which is
+      # for EVERY id in `Chat.list_member_space_ids/1`, which is
       # exactly "spaces the viewer holds a user row on". Joining C would
       # therefore put C's chat topic in this LV's subscribe set and the
       # broadcast below would legitimately arrive, collapsing the control.
@@ -3872,7 +3872,7 @@ defmodule PlatformWeb.ShellLiveTest do
       send(view.pid, {:roster_resolved, space_b.id})
       _ = render(view)
 
-      assert space_a.id in (:sys.get_state(view.pid).socket.assigns[:presence_space_ids] || [])
+      assert space_a.id in (:sys.get_state(view.pid).socket.assigns[:shell_chat_space_ids] || [])
       assert agent_a.name in roster_names(view)
 
       renamed = "overlap-#{System.unique_integer([:positive])}"
@@ -3905,7 +3905,7 @@ defmodule PlatformWeb.ShellLiveTest do
       )
 
       assert renamed in roster_names(view),
-             "the roster switch released a chat topic that :presence_space_ids still holds"
+             "the roster switch released a chat topic that :shell_chat_space_ids still holds"
     end
   end
 end

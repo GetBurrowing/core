@@ -32,7 +32,7 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
   Every count is read DIRECTLY off `Registry.lookup(Platform.PubSub,
   ChatPubSub.space_topic(id))`, filtered to the LiveView pid. Deliberately NOT
   through a `Platform.Chat.PubSub` helper, and NOT through
-  `:chat_space_holders`, `:presence_space_ids` or `:subscribed_space_ids` —
+  `:chat_space_holders`, `:shell_chat_space_ids` or `:subscribed_space_ids` —
   all three are written by the code under test, so reading them back to check
   it would be circular. The one place an assign is read is an ANTI-VACUITY
   precondition, never a result.
@@ -53,8 +53,9 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
   ## CONTROL-SPACE TRAP
 
   ShellLive's presence branch holds `chat:space:<id>` for EVERY space in the
-  viewer's presence set, and that set is `Chat.list_viewer_presence_space_ids/1`
-  — every non-archived space the viewer participates in. Joining the viewer to
+  shell's chat subscribe set, and that set is `Chat.list_member_space_ids/1`:
+  every non-archived space the viewer participates in, with no org fence (task
+  01a01f4c). Joining the viewer to
   a "control" space would make the shell subscribe to it and DESTROY THE
   CONTROL. Every control here is a space the viewer is deliberately NOT joined
   to, and each zero is asserted in the same test body as a positive count, so
@@ -386,9 +387,11 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
 
   # ── Fixtures (invented names only — `core` is PUBLIC) ─────────────────────
 
-  # Roster and presence are both org-scoped by `Tenancy.scope/3`, so a user
-  # with no org membership resolves an empty visibility and every branch under
-  # test no-ops. The membership is plumbing that makes the code reachable.
+  # The ROSTER is org-scoped by `Tenancy.scope/3`, so a user with no org
+  # membership resolves an empty visibility and the roster branch no-ops. The
+  # membership is plumbing that makes the code reachable. Since task 01a01f4c
+  # the shell's chat subscribe set is NOT org-scoped, so it no longer depends
+  # on this membership; the roster assertions here still do.
   defp create_user!(name) do
     n = System.unique_integer([:positive])
 

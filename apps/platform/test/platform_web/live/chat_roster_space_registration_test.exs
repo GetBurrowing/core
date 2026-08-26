@@ -17,20 +17,35 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
     2. ShellLive's `{:roster_resolved, sid}` branch subscribes it
        (`shell_live.ex:288-300`, the hold at `:298`).
     3. ShellLive's `{:presence_spaces_resolved, space_ids}` branch subscribes
-       it AGAIN (`shell_live.ex:362-374`, the hold at `:373`), because the
+       it AGAIN (`shell_live.ex:370-389`, the hold at `:381`), because the
        roster space is tracked in the separate `:roster_space_id` assign and
-       never appears in `:presence_space_ids`, so the `space_ids -- current`
-       difference at `:372` never removes it.
+       never appears in `:shell_chat_space_ids`, so the `space_ids -- current`
+       difference at `:380` never removes it.
+
+       The assign was called `:presence_space_ids` when this file was written.
+       Task 01a01f4c renamed it to `:shell_chat_space_ids`, because it stopped
+       naming the presence set: see the correction to the paragraph below.
 
   Step 3 is guaranteed rather than incidental, and that is what makes this
   case worth its own file. `visible_roster/2` (`shell_live.ex:1001`) requires
   an `exists/1` viewer row with `participant_type: "user"` on a non-archived
   space under `Tenancy.scope`, then narrows twice more: the space must carry
   an agent participant, and its kind must not be in `@private_roster_kinds`
-  (`["dm"]`, `:993`). `Chat.list_viewer_presence_space_ids/1` (`chat.ex:532`)
-  is the same predicate WITHOUT those two narrowings, under the same scope and
-  the same resolved visibility. The roster set is therefore a strict SUBSET of
-  the presence set, and the roster space is always in `space_ids`.
+  (`["dm"]`, `:993`). The `space_ids` in step 3 is `Chat.list_member_space_ids/1`
+  since task 01a01f4c: the same participation predicate WITHOUT those two
+  narrowings AND without the org fence, resolved at `shell_live.ex:1190`. It
+  was `Chat.list_viewer_presence_space_ids/1` when this file was written, and
+  the subset relation survives the swap in the same direction it always ran.
+  The roster set is fenced and twice narrowed; the subscribe set is neither,
+  and `Tenancy.scope/3` can only remove rows. So the roster set is still a
+  strict SUBSET of `space_ids`, and the roster space is always in it.
+
+  What did change is the reason a zero-org viewer is now affected too. Before
+  01a01f4c their `space_ids` was `[]` and step 3 could not fire; now it is
+  their full participation set, so a zero-org viewer reaches this file's
+  three-registration case on the same terms as an org-affiliated one. Nothing
+  asserted below depends on that, because this fixture's viewer holds a
+  membership.
 
   Arrival order does not change the count. If presence resolves first,
   `release_roster_subscriptions/1` (`shell_live.ex:903`) finds

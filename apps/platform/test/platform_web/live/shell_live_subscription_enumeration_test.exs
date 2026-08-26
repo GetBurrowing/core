@@ -88,16 +88,16 @@ defmodule PlatformWeb.ShellLiveSubscriptionEnumerationTest do
 
   Counts are read **only** through `Registry.lookup/2` and `Registry.keys/2`
   against `Platform.PubSub`. They are deliberately *not* read through a
-  `ChatPubSub` helper, and *not* through the `:presence_space_ids` or
+  `ChatPubSub` helper, and *not* through the `:shell_chat_space_ids` or
   `:roster_space_id` assigns — those assigns are written by the very code under
   measurement, so reading them to check that code would be circular.
 
   ## The control-space trap
 
   The presence branch (`shell_live.ex:275`) subscribes `chat:space:<id>` for
-  **every** space in the viewer's presence set, and that set is
-  `Chat.list_viewer_presence_space_ids/1` — i.e. every non-archived space the
-  viewer participates in (`lib/platform/chat.ex:519-533`). So joining the
+  **every** space in the shell's chat subscribe set, and that set is
+  `Chat.list_member_space_ids/1` — i.e. every non-archived space the viewer
+  participates in, with no org fence (task 01a01f4c). So joining the
   viewer to the "control" space would make the shell subscribe to it and
   destroy the control. The control here is therefore a space the viewer is
   deliberately **not** joined to. Its assertion is a claim about
@@ -324,8 +324,8 @@ defmodule PlatformWeb.ShellLiveSubscriptionEnumerationTest do
       Chat.set_principal_agent(overlap.id, agent.id)
 
       # CONTROL space — the viewer is deliberately NOT joined. Joining them
-      # would put it in `list_viewer_presence_space_ids/1` and the presence
-      # branch would subscribe it, destroying the control. See the moduledoc.
+      # would put it in `list_member_space_ids/1` and the presence branch
+      # would subscribe it, destroying the control. See the moduledoc.
       control = create_channel!("census-control")
       Chat.set_principal_agent(control.id, create_agent!("ControlBot").id)
 
@@ -365,7 +365,7 @@ defmodule PlatformWeb.ShellLiveSubscriptionEnumerationTest do
       # the roster branch (`shell_live.ex:254`) and the presence branch
       # (`shell_live.ex:275`) both reach this space and neither consults the
       # other's bookkeeping. `release_roster_subscriptions/1`
-      # (`shell_live.ex:748-762`) does check `presence_space_ids` before
+      # (`shell_live.ex:748-762`) does check `shell_chat_space_ids` before
       # unsubscribing — but it only runs on a roster_space_id CHANGE, so it
       # never fires on a first mount and does nothing to prevent the pair.
       # Recorded as an equality so a later stage's fix moves this line

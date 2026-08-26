@@ -23,7 +23,7 @@ defmodule PlatformWeb.SpaceTopics do
     3. `chat_live.ex` — `subscribe_space/2` / `unsubscribe_space/2`
     4. `tasks_live.ex` — `resubscribe_execution_space/2`
 
-  Each keeps its own bookkeeping (`:roster_space_id`, `:presence_space_ids`,
+  Each keeps its own bookkeeping (`:roster_space_id`, `:shell_chat_space_ids`,
   `:subscribed_space_ids`, `:subscribed_execution_space_id`) and each issues raw
   subscribe/unsubscribe calls. Two registrations on one pid mean every broadcast
   is delivered twice.

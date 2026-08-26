@@ -14,14 +14,33 @@ defmodule PlatformWeb.ChatSpaceTopicOverlapTest do
   `handle_info` delivered once per registration.
 
   The double registration needs a space in BOTH sets on one pid. That means a
-  viewer with at least one org membership holding a `participant_type: "user"`
-  row on the space, and a space of kind `channel`, `dm`, `group` or
-  `execution` while pinned to the rail. It is not external-only and it is not
-  universal. Zero-org viewers never suffer it: `Tenancy.visibility/1` resolves
-  `:none` for them (`tenancy.ex:460`, `to_visibility([])` at `:462`) and
-  `scope(q, :none, _)` is `where fragment("false")` (`tenancy.ex:510`), so
-  their ShellLive presence set is `[]`. Kinds that reach ShellLive's presence
-  set but never the Chat rail, `meeting` most notably, take exactly one.
+  viewer holding a `participant_type: "user"` row on the space, and a space of
+  kind `channel`, `dm`, `group` or `execution` while pinned to the rail. It is
+  not external-only and it is not universal. Kinds that reach ShellLive's
+  subscribe set but never the Chat rail, `meeting` most notably, take exactly
+  one.
+
+  ## CORRECTION (task 01a01f4c): zero-org viewers now suffer it too
+
+  This file was written when ShellLive resolved its subscribe set from the
+  org-fenced `Chat.list_viewer_presence_space_ids/1`, which made an org
+  membership one of the conditions above: `Tenancy.visibility/1` resolves
+  `:none` for a viewer with no membership (`tenancy.ex:460`, `to_visibility([])`
+  at `:462`), `scope(q, :none, _)` is `where fragment("false")`
+  (`tenancy.ex:510`), so the set came back `[]` and ShellLive took no
+  registration at all.
+
+  Since 01a01f4c ShellLive resolves `Chat.list_member_space_ids/1`
+  (`shell_live.ex:1190`), which carries no org fence, so a zero-org viewer's
+  subscribe set is their full participation set and the overlap condition
+  reaches them on the same terms as anyone else. The org membership is no
+  longer one of the conditions.
+
+  Nothing asserted in this file measures registrations. `overlap/2` below
+  intersects the still-fenced `Chat.list_viewer_presence_space_ids/1` with the
+  rail set, so every assertion here reads the same before and after 01a01f4c.
+  What the helper describes changed: it is the presence-and-rail overlap, and
+  it is a SUBSET of the registration overlap rather than equal to it.
 
   For an internal viewer the everyday case is a channel opened in an earlier
   session, seen on a fresh session before it is reopened: `Chat.list_spaces/1`
@@ -34,9 +53,15 @@ defmodule PlatformWeb.ChatSpaceTopicOverlapTest do
 
   ## The two sets, and the two functions that own them
 
-    * `Chat.list_viewer_presence_space_ids/1` (`chat.ex:532`) is ShellLive's
-      presence set, resolved at `shell_live.ex:1154` and subscribed by the
-      `{:presence_spaces_resolved, ids}` branch at `shell_live.ex:362-378`.
+    * `Chat.list_member_space_ids/1` is ShellLive's chat subscribe set since
+      task 01a01f4c, resolved at `shell_live.ex:1190` and subscribed by the
+      `{:presence_spaces_resolved, ids}` branch at `shell_live.ex:370-389`.
+      Participation-only, every kind, no org fence.
+    * `Chat.list_viewer_presence_space_ids/1` is the org-fenced projection of
+      the same participation predicate. It is what `overlap/2` below reads,
+      and its only live consumer in the application is
+      `Chat.Presence.list_online_for_viewer/1`, which carries other people's
+      names. ShellLive no longer reads it.
     * `PlatformWeb.ChatLive.presence_subscribe_space_ids/2`
       (`chat_live.ex:135`) is ChatLive's rail subscribe set, driven from the
       mount loop at `chat_live.ex:684-687` through `subscribe_space/3` at
@@ -273,7 +298,15 @@ defmodule PlatformWeb.ChatSpaceTopicOverlapTest do
                "takes exactly one registration"
     end
 
-    test "a zero-org viewer's overlap is empty even with the participant row", ctx do
+    # RENAMED by task 01a01f4c. This was "a zero-org viewer's overlap is empty
+    # even with the participant row", which read as a claim about the registry:
+    # that such a viewer takes one registration rather than two. That claim was
+    # true when ShellLive subscribed the org-fenced query and is false now that
+    # it subscribes `Chat.list_member_space_ids/1`. The assertions below were
+    # always about the fenced query alone and are unchanged, so the name is
+    # what moved.
+    test "a zero-org viewer is absent from the org-fenced presence query, even with the participant row",
+         ctx do
       joined = channel(%{org_id: ctx.org.id})
       unaffiliated = create_user!()
 
@@ -287,10 +320,15 @@ defmodule PlatformWeb.ChatSpaceTopicOverlapTest do
       assert MapSet.member?(overlap(ctx.viewer, rail), joined.id)
 
       # The rail half is unaffected by the missing membership. An internal
-      # viewer with no org is still unrestricted there, so the empty overlap
-      # is produced entirely by the presence half.
+      # viewer with no org is still unrestricted there, so the empty
+      # intersection is produced entirely by the fenced half.
       assert ChatLive.presence_subscribe_space_ids(rail, unaffiliated.id) == [joined.id]
       assert MapSet.size(overlap(unaffiliated, rail)) == 0
+
+      # And the fenced half is no longer what ShellLive subscribes. Asserted
+      # here so the rename above is backed by a fact rather than by a comment:
+      # this viewer IS in the shell's chat subscribe set for the same space.
+      assert joined.id in Chat.list_member_space_ids(unaffiliated.id)
     end
 
     test "an archived space cannot overlap", ctx do

@@ -71,10 +71,9 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:principal_name, AsyncResult.loading())
       |> assign(:presence_list, AsyncResult.loading())
       |> assign(:roster_space_id, nil)
-      # Task 019fe4b1 stage 3: the presence badge is no longer scoped to one
-      # arbitrary space. The viewer's observable set is a LIST of space ids
-      # (resolved by `Chat.list_viewer_presence_space_ids/1`), so a
-      # `presence_diff` on any of them can rebuild the union.
+      # Task 019fe4b1 stage 3: the shell's chat coverage is no longer scoped to
+      # one arbitrary space. It is a LIST of space ids, so a `presence_diff` or
+      # a `{:new_message, _}` on any of them can rebuild what the shell shows.
       #
       # Task 01a01a1b stage 2: this assign NAMES THE SET CURRENTLY HELD by
       # the `:presence` owner. The `{:presence_spaces_resolved, ids}` branch
@@ -83,12 +82,21 @@ defmodule PlatformWeb.ShellLive do
       # exactly that incoming set. It no longer accumulates the union of
       # every set resolved during the session.
       #
+      # Task 01a01f4c: the set is now `Chat.list_member_space_ids/1`, which is
+      # participation-only. It is named `:shell_chat_space_ids` and NOT
+      # `:presence_space_ids`, because it is deliberately WIDER than what
+      # `Chat.Presence.list_online_for_viewer/1` may read: that function
+      # re-derives its own org-fenced set. Scoping a presence render off this
+      # assign, exactly the use the old name invited, is a cross-org identity
+      # leak. It is also NOT `:subscribed_space_ids`, which belongs to
+      # `ChatLive` on this same socket.
+      #
       # Both the hold and the release go through `PlatformWeb.SpaceTopics`,
       # which owns the single `chat:space:<id>` registration on this pid, so a
       # release here unsubscribes only when no other surface still holds the
       # space. Do not subscribe or unsubscribe `chat:space:<id>` directly from
       # this module.
-      |> assign(:presence_space_ids, [])
+      |> assign(:shell_chat_space_ids, [])
 
     # Schedule async load + PubSub subscribes only on the WS-connected mount.
     # Static/disconnected render skips this entirely (placeholders ship to the
@@ -320,23 +328,23 @@ defmodule PlatformWeb.ShellLive do
         # leak task 01a0181f closed. Correct ownership has to be paired with the
         # owner actually doing its half.
         #
-        # `:presence_space_ids` is `Chat.list_viewer_presence_space_ids/1`,
-        # which is precisely "the spaces this viewer has a participant row in".
-        # So this is not a second predicate that could drift from that one —
-        # the row this event announces the deletion of IS the row that query
-        # selects on, and the space has left the set by construction.
+        # `:shell_chat_space_ids` is `Chat.list_member_space_ids/1`, which is
+        # precisely "the spaces this viewer has a participant row in". So this
+        # is not a second predicate that could drift from that one — the row
+        # this event announces the deletion of IS the row that query selects
+        # on, and the space has left the set by construction.
         #
         # `:cont`, not `:halt`: ChatLive's own release clause is downstream of
         # this hook and has to see the same event.
         {:participant_left, %{participant_type: "user"} = participant}, socket ->
           if participant.participant_id == socket.assigns[:current_user_id] do
             sid = participant.space_id
-            held = socket.assigns[:presence_space_ids] || []
+            held = socket.assigns[:shell_chat_space_ids] || []
 
             socket =
               socket
               |> SpaceTopics.release(sid, :presence)
-              |> assign(:presence_space_ids, List.delete(held, sid))
+              |> assign(:shell_chat_space_ids, List.delete(held, sid))
 
             # The roster hold is a single space, so this is a no-op unless the
             # revoked space happens to be the one the roster resolved to.
@@ -366,7 +374,7 @@ defmodule PlatformWeb.ShellLive do
           # the viewer's presence set kept both its live subscription and its
           # entry in the assign, forever. Now it is a genuine reconcile
           # against the incoming set, and the assign names what is held.
-          current = socket.assigns[:presence_space_ids] || []
+          current = socket.assigns[:shell_chat_space_ids] || []
 
           socket =
             Enum.reduce(space_ids -- current, socket, fn id, acc ->
@@ -378,7 +386,7 @@ defmodule PlatformWeb.ShellLive do
               SpaceTopics.release(acc, id, :presence)
             end)
 
-          socket = assign(socket, :presence_space_ids, space_ids)
+          socket = assign(socket, :shell_chat_space_ids, space_ids)
 
           # Task 01a01b29 stage 1: between the mount-time seed and this branch
           # resolving, this process hears nothing, so a message arriving in
@@ -387,10 +395,10 @@ defmodule PlatformWeb.ShellLive do
           # deterministically.
           #
           # Skipped for an empty resolved set: `total_unread_for_viewer/1`
-          # intersects the counts with exactly this list, so with no spaces the
-          # recompute can only reproduce the seed's 0. Same reason as the
-          # `chat_surface?/1` gate above, and it keeps a viewer with no
-          # channels from paying a mailbox turn on every mount.
+          # intersects the counts with a KIND-FILTERED SUBSET of this list, so
+          # with no spaces at all the recompute can only reproduce the seed's
+          # 0. Same reason as the `chat_surface?/1` gate above, and it keeps a
+          # viewer with no channels from paying a mailbox turn on every mount.
           if space_ids == [] do
             {:halt, socket}
           else
@@ -586,7 +594,10 @@ defmodule PlatformWeb.ShellLive do
       # THIS HOOK TAKES OUT NO SUBSCRIPTION, DELIBERATELY. The
       # `{:presence_spaces_resolved, _}` branch above already subscribed this
       # process to `chat:space:<id>` for every space the viewer participates
-      # in, which is exactly the set counted here. `Phoenix.PubSub`'s registry
+      # in. That set CONTAINS the set counted here: the count adds a kind
+      # allow-list on top of the same participation predicate, so every counted
+      # space is one this process hears from, and the extra subscriptions cost
+      # a recompute that returns the same integer. `Phoenix.PubSub`'s registry
       # runs `keys: :duplicate`, so subscribing a topic this pid already holds
       # registers it twice and every broadcast then fires `handle_info` twice,
       # while a single `unsubscribe` (`Registry.unregister/2`) drops ALL of
@@ -885,7 +896,7 @@ defmodule PlatformWeb.ShellLive do
   # What changed (task 01a01a1b stage 2) is who is allowed to make that call.
   # `chat:space:<id>` is SHARED — roster, presence, the chat rail and the
   # tasks execution pane all want it on this one pid — so this function used
-  # to guard its unsubscribe behind `unless prev in :presence_space_ids`. That
+  # to guard its unsubscribe behind `unless prev in :shell_chat_space_ids`. That
   # asymmetry is now WRONG, not merely redundant: `PlatformWeb.SpaceTopics` is
   # the single writer and refcounts the holders, so a conditional release
   # would leave `:roster` recorded as a holder forever and pin the
@@ -971,6 +982,12 @@ defmodule PlatformWeb.ShellLive do
   #      same LiveView already uses on the presence path. It is NOT the shape
   #      of `ChatLive.presence_subscribe_space_ids/2`, which intersects only
   #      for external users and passes every id through for internal staff.
+  #
+  #      Since task 01a01f4c this roster query is also WIDER-FENCED than the
+  #      shell's own chat subscribe set, which is participation-only. The
+  #      asymmetry is deliberate and the roster is an explicit NON-GOAL of that
+  #      change: the roster exposes which agents exist where, and the subscribe
+  #      set exposes nothing on its own. Do not unfence this to match it.
   #
   #   2. kind — `@private_roster_kinds` is excluded outright, on top of
   #      membership, so a DM can never enter the subscribe set even via a
@@ -1140,19 +1157,43 @@ defmodule PlatformWeb.ShellLive do
   end
 
   # Task 019fe4b1 stage 3: the shell presence badge is the VIEWER's answer, not
-  # the oldest space's. The observable set comes from
-  # `Chat.list_viewer_presence_space_ids/1` (membership is the grant, resolved
-  # org visibility is the fence) and the online union from
+  # the oldest space's, and the online union comes from
   # `Presence.list_online_for_viewer/1`.
+  #
+  # This one Task resolves TWO different sets, and they must not be conflated:
+  #
+  #   * the shell's CHAT SUBSCRIBE SET is `Chat.list_member_space_ids/1`,
+  #     participation-only and every kind (task 01a01f4c). It decides which
+  #     `chat:space:<id>` topics this pid holds, so it decides whether the rail
+  #     badge can move on a live post from `/tasks`. It exposes nothing on its
+  #     own, which is why it carries no org fence.
+  #   * the PRESENCE LIST is `Presence.list_online_for_viewer/1`, which
+  #     re-derives its own org-fenced set from
+  #     `Chat.list_viewer_presence_space_ids/1`. It carries other people's
+  #     names, so it stays fenced. Do not "optimise" it to reuse the subscribe
+  #     set resolved above.
+  #
+  # `list_member_space_ids/2` is guarded `when is_binary(user_id)` and has no
+  # total clause, unlike `list_viewer_presence_space_ids/1`, so the nil
+  # `user_record` is matched explicitly below rather than left to raise. Nil is
+  # reachable: `ShellLive` runs first in every `on_mount` chain, ahead of
+  # `LiveAuth`, so `assign_async/3` has already spawned this Task before any
+  # auth redirect can halt the mount (see `router.ex`, which states
+  # nil-tolerance as a property of this hook).
   #
   # The `{:ok, list}` / `{:error, reason}` tuple is stored AS the assign value
   # rather than being unwrapped here, because "nobody else is online" and "the
   # read failed" are different facts and the template has to be able to render
   # them differently. Unwrapping to `[]` on error is exactly the bug this task
   # exists to remove.
+  defp async_load_presence(lv_pid, %{id: user_id} = user_record) when is_binary(user_id) do
+    send(lv_pid, {:presence_spaces_resolved, Chat.list_member_space_ids(user_id)})
+
+    {:ok, %{presence_list: ChatPresence.list_online_for_viewer(user_record)}}
+  end
+
   defp async_load_presence(lv_pid, user_record) do
-    space_ids = Chat.list_viewer_presence_space_ids(user_record)
-    send(lv_pid, {:presence_spaces_resolved, space_ids})
+    send(lv_pid, {:presence_spaces_resolved, []})
 
     {:ok, %{presence_list: ChatPresence.list_online_for_viewer(user_record)}}
   end
@@ -1343,7 +1384,8 @@ defmodule PlatformWeb.ShellLive do
   # Task 01a01b29 stage 1. Chat-unread total for the icon-rail Chat tile.
   # Same fail-open posture as `compute_inbox_count/1`: a count error renders 0
   # rather than failing a shell mount. Takes the loaded user struct because
-  # `Chat.total_unread_for_viewer/1` needs it for `Tenancy.visibility/1`.
+  # that is what `Chat.total_unread_for_viewer/1` accepts; since task 01a01f4c
+  # the count itself needs only the id.
   #
   # Cost, stated so a reviewer does not have to go find it:
   # `Chat.unread_counts_for_user/1` is one `Repo.all` plus one `count` per

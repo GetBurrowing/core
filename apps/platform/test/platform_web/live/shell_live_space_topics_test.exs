@@ -30,7 +30,7 @@ defmodule PlatformWeb.ShellLiveSpaceTopicsTest do
 
   Counts are read ONLY through `Registry.lookup(Platform.PubSub, topic)`,
   filtered to the LiveView pid. They are deliberately NOT read through a
-  `Platform.Chat.PubSub` helper, and NOT through the `:presence_space_ids` or
+  `Platform.Chat.PubSub` helper, and NOT through the `:shell_chat_space_ids` or
   `:chat_space_holders` assigns — those assigns are written by the very code
   under test, so reading them to check that code would be circular. The topic
   string itself comes from `Platform.Chat.PubSub.space_topic/1` rather than
@@ -55,9 +55,9 @@ defmodule PlatformWeb.ShellLiveSpaceTopicsTest do
   ## CONTROL-SPACE TRAP
 
   The presence branch subscribes `chat:space:<id>` for EVERY space in the
-  viewer's presence set, and that set is
-  `Chat.list_viewer_presence_space_ids/1` — every non-archived space the viewer
-  participates in. Joining the viewer to a "control" space would make the shell
+  shell's chat subscribe set, and that set is `Chat.list_member_space_ids/1`:
+  every non-archived space the viewer participates in, with no org fence (task
+  01a01f4c). Joining the viewer to a "control" space would make the shell
   subscribe to it and DESTROY THE CONTROL. Every control below is therefore a
   space the viewer is deliberately NOT joined to, and its assertion is a claim
   about subscription only, never about what the viewer may read.

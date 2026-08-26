@@ -40,12 +40,24 @@ defmodule PlatformWeb.ChatUnreadBackgroundChannelTest do
   asserted as an executable precondition, so a future edit that breaks one
   reds a labelled line instead of quietly making the whole file vacuous.
 
-    1. The viewer holds an `OrgMembership` row. `Tenancy.visibility/1`
-       resolves `:none` for zero memberships (`tenancy.ex:462`, `[] -> :none`
-       at `:464`) and `scope(q, :none, _)` is `where fragment("false")`
-       (`:510`), so a zero-org viewer's presence set is `[]`, ShellLive
-       subscribes NOTHING, and the channel takes one registration whatever the
-       code does.
+    1. The viewer holds an `OrgMembership` row. AMENDED by task 01a01f4c: this
+       condition no longer decides whether ShellLive subscribes, and it is
+       kept for a narrower reason.
+
+       As written, the reason was that `Tenancy.visibility/1` resolves `:none`
+       for zero memberships (`tenancy.ex:462`, `[] -> :none` at `:464`) and
+       `scope(q, :none, _)` is `where fragment("false")` (`:510`), so a
+       zero-org viewer's set came back `[]`, ShellLive subscribed NOTHING, and
+       the channel took one registration whatever the code did. That held
+       while ShellLive read the org-fenced query.
+
+       ShellLive now reads `Chat.list_member_space_ids/1`
+       (`shell_live.ex:1190`), which carries no org fence, so a zero-org
+       viewer takes the second registration too and would reproduce this
+       defect. The membership stays in the fixture because condition 2 states
+       the overlap through the fenced query as well as the unfenced one, and
+       because an org-affiliated viewer is the shape this file was measured
+       on. Nothing here needs it to see the defect any more.
     2. The background channel carries `org_id` set to THAT SAME org, and the
        viewer holds a `participant_type: "user"` row on it.
        `Chat.list_viewer_presence_space_ids/1` (`chat.ex:532`) scopes on
@@ -107,16 +119,34 @@ defmodule PlatformWeb.ChatUnreadBackgroundChannelTest do
 
       # ── Preconditions. The fixture is asserted, not assumed. ──────────────
 
-      # CONDITION 1.
+      # CONDITION 1. Since task 01a01f4c this pins the fixture's SHAPE rather
+      # than a fence the registration depends on: see the amended condition 1
+      # in the moduledoc.
       assert {:orgs, _} = Tenancy.visibility(viewer),
              "the viewer resolved to :none or :root_all, so the org fence under test is " <>
                "not the thing being exercised"
 
       # CONDITION 2, as the overlap itself. THIS is the anti-vacuity keystone:
-      # if `background` were not in the presence set, ShellLive would never
-      # take its second registration and the whole file would pass against a
-      # broken build.
+      # if `background` were not in ShellLive's subscribe set, ShellLive would
+      # never take its second registration and the whole file would pass
+      # against a broken build.
+      #
+      # AMENDED by task 01a01f4c. The set ShellLive actually subscribes is
+      # `Chat.list_member_space_ids/1`, so that is read here and asserted
+      # first. The org-fenced `Chat.list_viewer_presence_space_ids/1` is kept
+      # alongside it, with its assertions unchanged: this viewer is
+      # org-affiliated on a same-org channel, so the two sets coincide here,
+      # and holding both pins the coincidence instead of assuming it.
+      subscribe_set = Chat.list_member_space_ids(viewer.id)
       presence_set = Chat.list_viewer_presence_space_ids(viewer)
+
+      assert background.id in subscribe_set,
+             "the background channel is not in ShellLive's chat subscribe set, so this " <>
+               "fixture cannot produce the double registration it exists to pin"
+
+      refute rail_only.id in subscribe_set,
+             "the control channel is in the subscribe set too, so it is a second subject " <>
+               "rather than a control and the asymmetry below proves nothing"
 
       assert background.id in presence_set,
              "the background channel is not in ShellLive's presence set, so this fixture " <>
