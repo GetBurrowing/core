@@ -1030,7 +1030,7 @@ defmodule PlatformWeb.ShellLiveTest do
       assert_push_event(view, "app_badge", %{count: 2, label: "2"})
     end
 
-    test "reading the last item pushes zero so the hook clears the badge", %{conn: conn} do
+    test "clearing the last item pushes zero so the hook clears the badge", %{conn: conn} do
       conn = authenticated_conn(conn)
       user_id = conn.private.plug_session["current_user_id"]
 
@@ -1039,14 +1039,38 @@ defmodule PlatformWeb.ShellLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
       assert_push_event(view, "app_badge", %{count: 1, label: "1"})
 
-      # mark_read/2 broadcasts the coarse {:inbox_changed, user_id}; the
-      # recompute drops the read row, so the client must be told to clear.
-      # A nil label is the hook's "no prefix" signal, matching the rail
-      # dropping its badge node at 0.
-      {:ok, _} = Inbox.mark_read(item.id, user_id)
+      # This drove the badge to zero with `mark_read/2` until task `01a00108`
+      # stage 4 retired read-as-cleared. Reading no longer changes the count, so
+      # the trigger is now a dismissal — the property under test (a recompute
+      # that lands on 0 pushes a clear to the client) is unchanged.
+      #
+      # mark_dismissed/2 broadcasts on the user's inbox topic; the recompute
+      # drops the dismissed row, so the client must be told to clear. A nil
+      # label is the hook's "no prefix" signal, matching the rail dropping its
+      # badge node at 0.
+      {:ok, _} = Inbox.mark_dismissed(item.id, user_id)
       _ = render(view)
 
       assert_push_event(view, "app_badge", %{count: 0, label: nil})
+    end
+
+    test "reading an item does NOT move the badge (stage 4: reading is not clearing)",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, item} = Inbox.emit(inbox_attrs(user_id))
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert_push_event(view, "app_badge", %{count: 1, label: "1"})
+
+      # The recompute runs (mark_read/2 still broadcasts) and lands on the same
+      # number, so the count the client is holding stays 1.
+      {:ok, _} = Inbox.mark_read(item.id, user_id)
+      _ = render(view)
+
+      refute_push_event(view, "app_badge", %{count: 0, label: nil})
+      assert Platform.Inbox.unread_count(user_id) == 1
     end
 
     test "the pushed label uses the rail's cap, not a second one", %{conn: _conn} do

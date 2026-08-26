@@ -60,6 +60,31 @@ defmodule PlatformWeb.InboxLiveTest do
 
   defp row_selector(%Item{id: id}), do: ~s([data-item-id="#{id}"])
 
+  # Toggle one row's select checkbox.
+  defp tick(lv, %Item{} = item) do
+    lv
+    |> element(~s(#{row_selector(item)} [data-role="inbox-item-select"]))
+    |> render_click()
+  end
+
+  defp clear_selected(lv) do
+    lv |> element(~s([data-role="clear-selected"])) |> render_click()
+  end
+
+  defp clear_all(lv) do
+    lv |> element(~s([data-role="clear-all"])) |> render_click()
+  end
+
+  defp undo(lv) do
+    lv |> element(~s([data-role="toast-undo"])) |> render_click()
+  end
+
+  # The nonce the LiveView minted for the toast currently on screen. Read off
+  # the socket because it is deliberately NOT rendered — the guard is server
+  # state, and a test that asserted on a DOM copy of it would be asserting on
+  # markup added for the test rather than on the mechanism.
+  defp toast_nonce(lv), do: :sys.get_state(lv.pid).socket.assigns.toast.nonce
+
   defp add_user_participant(space_id, %User{} = user, display_name) do
     {:ok, p} =
       Chat.add_participant(space_id, %{
@@ -634,6 +659,429 @@ defmodule PlatformWeb.InboxLiveTest do
     end
   end
 
+  # ── Bulk selection (task 01a00108 stage 2) ─────────────────────────────
+  #
+  # Harper's report was "I have to click each and every message to clear it
+  # out". Clicking a row IS today's clear mechanism (open → mark_read → the row
+  # leaves `unread_scope/1`), so the fix is not to the badge but to the batch:
+  # tick rows, clear them together.
+
+  describe "bulk selection" do
+    test "ticking a row reveals the bar, and the count tracks the selection",
+         %{conn: conn} do
+      user = insert_user()
+      a = emit!(user, kind: "chat_mention", title: "first")
+      b = emit!(user, kind: "chat_mention", title: "second")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      # Nothing ticked: no bar at all.
+      refute has_element?(lv, ~s([data-role="selection-bar"]))
+
+      tick(lv, a)
+      assert has_element?(lv, ~s([data-role="selection-bar"]))
+      assert render(lv) =~ "1 selected"
+
+      tick(lv, b)
+      assert render(lv) =~ "2 selected"
+      refute render(lv) =~ "1 selected"
+    end
+
+    test "unticking back to zero unmounts the bar", %{conn: conn} do
+      user = insert_user()
+      only = emit!(user, kind: "chat_mention", title: "lone row")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      tick(lv, only)
+      assert has_element?(lv, ~s([data-role="selection-bar"]))
+
+      tick(lv, only)
+      refute has_element?(lv, ~s([data-role="selection-bar"]))
+
+      # Unticking is not dismissing.
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, only.id)
+    end
+
+    test "Clear selected dismisses exactly the ticked rows and leaves the rest",
+         %{conn: conn} do
+      user = insert_user()
+      drop_a = emit!(user, kind: "chat_mention", title: "clear me")
+      drop_b = emit!(user, kind: "chat_mention", title: "clear me too")
+      keep = emit!(user, kind: "chat_mention", title: "leave me alone")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      tick(lv, drop_a)
+      tick(lv, drop_b)
+      assert render(lv) =~ "2 selected"
+
+      clear_selected(lv)
+
+      refute has_element?(lv, row_selector(drop_a))
+      refute has_element?(lv, row_selector(drop_b))
+      assert has_element?(lv, row_selector(keep))
+
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, drop_a.id)
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, drop_b.id)
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, keep.id)
+
+      # The sweep also empties the selection, so the bar goes with it.
+      refute has_element?(lv, ~s([data-role="selection-bar"]))
+
+      # Re-mount: the cleared rows must not come back.
+      {:ok, lv2, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv2, row_selector(drop_a))
+      assert has_element?(lv2, row_selector(keep))
+    end
+
+    test "clearing every row in a section hides the section header too", %{conn: conn} do
+      user = insert_user()
+
+      one =
+        emit!(user,
+          kind: "meeting_starting",
+          source_type: "meeting",
+          title: "standup",
+          url: "/meetings/a"
+        )
+
+      two =
+        emit!(user,
+          kind: "meeting_starting",
+          source_type: "meeting",
+          title: "retro",
+          url: "/meetings/b"
+        )
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv, ~s([data-section="meetings"]))
+
+      tick(lv, one)
+      tick(lv, two)
+      clear_selected(lv)
+
+      # Section visibility is driven by the count assign, not the stream — a
+      # stream_delete that forgot to decrement would leave this header behind.
+      refute has_element?(lv, ~s([data-section="meetings"]))
+      assert render(lv) =~ "empty-minimal"
+    end
+
+    test "Cancel drops the selection without dismissing anything", %{conn: conn} do
+      user = insert_user()
+      item = emit!(user, kind: "chat_mention", title: "spared")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      tick(lv, item)
+      lv |> element(~s([data-role="cancel-selection"])) |> render_click()
+
+      refute has_element?(lv, ~s([data-role="selection-bar"]))
+      assert has_element?(lv, row_selector(item))
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, item.id)
+    end
+
+    test "a selection survives an unrelated live insert", %{conn: conn} do
+      user = insert_user()
+      held = emit!(user, kind: "chat_mention", title: "held")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      tick(lv, held)
+      assert render(lv) =~ "1 selected"
+
+      # A brand-new row arrives while the bar is open. `:inbox_item_added`
+      # patches one row in and touches no other, so the selection is untouched.
+      fresh = emit!(user, kind: "chat_mention", title: "just landed")
+
+      assert has_element?(lv, row_selector(fresh))
+      assert render(lv) =~ "1 selected"
+      assert has_element?(lv, ~s([data-role="selection-bar"]))
+    end
+
+    # ANTI-VACUITY TARGET. Deleting the `prune_selection/1` call at the end of
+    # `init_sections/2` must turn this red.
+    #
+    # The vanish mechanism changed with task `01a00108` stage 4 and the probe
+    # had to be re-rigged. It used to be `mark_read` on another tab: that left
+    # `dismissed_at` nil, so a final `dismissed_at: nil` assertion proved the
+    # sweep had not reached for an off-screen row. Reading no longer removes
+    # anything, so the row now vanishes by being DISMISSED elsewhere — which
+    # means `dismissed_at` is already set and its mere presence proves nothing.
+    #
+    # The probe is preserved by pinning the TIMESTAMP instead: if the sweep
+    # wrongly reached the pruned row it would rewrite `dismissed_at` to its own
+    # `now()`. Asserting the value is byte-identical to the earlier dismissal
+    # keeps this a behavioural check and not a count check.
+    test "a stale selection drops rows that vanished, and the sweep never touches them",
+         %{conn: conn} do
+      user = insert_user()
+      vanishes = emit!(user, kind: "chat_mention", title: "cleared on another tab")
+      stays = emit!(user, kind: "chat_mention", title: "still here")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      tick(lv, vanishes)
+      tick(lv, stays)
+      assert render(lv) =~ "2 selected"
+
+      # Another tab clears the first row.
+      {:ok, _} = Inbox.mark_dismissed(vanishes.id, user.id)
+      dismissed_at = Repo.get!(Item, vanishes.id).dismissed_at
+      assert %DateTime{} = dismissed_at
+
+      send(lv.pid, {:inbox_changed, user.id})
+
+      refute has_element?(lv, row_selector(vanishes))
+      assert render(lv) =~ "1 selected"
+
+      clear_selected(lv)
+
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, stays.id)
+
+      # Untouched: the sweep did not re-dismiss the row it could no longer see.
+      assert Repo.get!(Item, vanishes.id).dismissed_at == dismissed_at
+    end
+  end
+
+  # ── Clear all, and the undo behind it (task 01a00108 stage 3) ──────────
+
+  describe "clear all" do
+    test "clears every unread row, not just the ticked ones, and names the count",
+         %{conn: conn} do
+      user = insert_user()
+      review = emit!(user, kind: "task_plan_review", source_type: "task", title: "plan")
+      mention = emit!(user, kind: "chat_mention", title: "mentioned")
+
+      meeting =
+        emit!(user,
+          kind: "meeting_starting",
+          source_type: "meeting",
+          title: "standup",
+          url: "/meetings/a"
+        )
+
+      {:ok, lv, html} = live(auth(conn, user), "/inbox")
+
+      # The button names what it will clear, before it is pressed.
+      assert html =~ "Clear all (3)"
+
+      # Tick exactly one row: "Clear all" must ignore the selection entirely.
+      tick(lv, mention)
+      assert render(lv) =~ "1 selected"
+
+      clear_all(lv)
+
+      for item <- [review, mention, meeting] do
+        assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, item.id)
+        refute has_element?(lv, row_selector(item))
+      end
+
+      # Every section is gone, so is the bar, so is the button that did it.
+      assert render(lv) =~ "empty-minimal"
+      refute has_element?(lv, ~s([data-role="selection-bar"]))
+      refute has_element?(lv, ~s([data-role="clear-all"]))
+
+      # And they do not come back on a fresh mount.
+      {:ok, lv2, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv2, row_selector(review))
+    end
+
+    test "the sweep reaches a row that is unread but was never rendered as selectable",
+         %{conn: conn} do
+      # Guards the "acts on every unread row, not on what is drawn" contract from
+      # the other side: a row that arrives AFTER the page was rendered is still
+      # swept, because the scope is evaluated by Postgres inside the write.
+      user = insert_user()
+      old = emit!(user, kind: "chat_mention", title: "was here at load")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      late = emit!(user, kind: "chat_mention", title: "landed after load")
+
+      clear_all(lv)
+
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, old.id)
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, late.id)
+    end
+
+    test "the toast reports the count and offers an Undo", %{conn: conn} do
+      user = insert_user()
+      emit!(user, kind: "chat_mention", title: "one")
+      emit!(user, kind: "chat_mention", title: "two")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      refute has_element?(lv, ~s([data-role="inbox-toast"]))
+
+      clear_all(lv)
+
+      assert has_element?(lv, ~s([data-role="inbox-toast"]))
+      assert has_element?(lv, ~s([data-role="toast-undo"]))
+      assert render(lv) =~ "2 notifications cleared"
+
+      # Act-then-confirm: the toast is the confirmation, so there is no
+      # pre-action modal in front of the button.
+      refute has_element?(lv, ~s([data-role="clear-all-confirm"]))
+    end
+
+    test "a one-row sweep says notification, not notifications", %{conn: conn} do
+      user = insert_user()
+      emit!(user, kind: "chat_mention", title: "lonely")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      clear_all(lv)
+
+      assert render(lv) =~ "1 notification cleared"
+      refute render(lv) =~ "1 notifications cleared"
+    end
+
+    test "undo restores exactly the swept rows and never a row dismissed earlier",
+         %{conn: conn} do
+      user = insert_user()
+      earlier = emit!(user, kind: "chat_mention", title: "I dealt with this yesterday")
+      a = emit!(user, kind: "chat_mention", title: "swept a")
+      b = emit!(user, kind: "task_plan_review", source_type: "task", title: "swept b")
+
+      # The user dismissed this one deliberately, BEFORE the clear-all. Undo must
+      # not resurrect it — `dismiss_all_unread/1`'s scope excludes it, so it is
+      # absent from the id list the toast carries.
+      {:ok, _} = Inbox.mark_dismissed(earlier.id, user.id)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      clear_all(lv)
+
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, a.id)
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, b.id)
+
+      undo(lv)
+
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, a.id)
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, b.id)
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, earlier.id)
+
+      # The rows are back on the surface and the toast has retired with its undo.
+      assert has_element?(lv, row_selector(a))
+      assert has_element?(lv, row_selector(b))
+      refute has_element?(lv, row_selector(earlier))
+      refute has_element?(lv, ~s([data-role="inbox-toast"]))
+
+      # Restored means restored: a fresh mount agrees.
+      {:ok, lv2, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv2, row_selector(a))
+      assert has_element?(lv2, row_selector(b))
+    end
+
+    test "undo re-broadcasts, so the rail/Dock/title badge repaints", %{conn: conn} do
+      user = insert_user()
+      emit!(user, kind: "chat_mention", title: "counts toward the badge")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      :ok = Inbox.subscribe(user.id)
+
+      clear_all(lv)
+      assert_receive {:inbox_changed, changed_user}, 1_000
+      assert changed_user == user.id
+
+      # The one that matters: an undo that skipped this leaves the Dock icon and
+      # the document-title prefix showing a count the DB no longer agrees with.
+      undo(lv)
+      assert_receive {:inbox_changed, undone_user}, 1_000
+      assert undone_user == user.id
+
+      assert Inbox.unread_count(user.id) == 1
+    end
+
+    # ANTI-VACUITY TARGET. Removing the `%{nonce: ^nonce}` match from the
+    # `{:clear_toast, nonce}` handler — so ANY timer clears ANY toast — must turn
+    # this red.
+    #
+    # The scenario is two clears inside `@toast_ttl_ms`: the first sweep's timer
+    # is still in flight when the second toast is on screen, and unguarded it
+    # would fire into it and cut the undo window short with no trace. The second
+    # half of the test sends the CURRENT nonce and asserts the toast does go, so
+    # the first assertion cannot pass merely because `:clear_toast` never works.
+    test "an older sweep's timer cannot clear a newer sweep's toast", %{conn: conn} do
+      user = insert_user()
+      emit!(user, kind: "chat_mention", title: "first batch")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      clear_all(lv)
+      first_nonce = toast_nonce(lv)
+
+      # A second batch lands and is cleared well inside the TTL, so the first
+      # sweep's `Process.send_after/3` is still pending.
+      emit!(user, kind: "chat_mention", title: "second batch")
+      clear_all(lv)
+      second_nonce = toast_nonce(lv)
+
+      refute first_nonce == second_nonce
+      assert render(lv) =~ "1 notification cleared"
+
+      # The stale timer fires.
+      send(lv.pid, {:clear_toast, first_nonce})
+
+      assert has_element?(lv, ~s([data-role="inbox-toast"])),
+             "an older sweep's timer cleared the current toast — the undo window " <>
+               "was truncated silently"
+
+      assert has_element?(lv, ~s([data-role="toast-undo"]))
+
+      # ...and the CURRENT timer still retires it, so the guard is a guard and
+      # not a permanently-stuck toast.
+      send(lv.pid, {:clear_toast, second_nonce})
+      refute has_element?(lv, ~s([data-role="inbox-toast"]))
+    end
+
+    test "undo after the toast expires is simply unavailable, and nothing is resurrected",
+         %{conn: conn} do
+      user = insert_user()
+      item = emit!(user, kind: "chat_mention", title: "gone for good")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      clear_all(lv)
+      send(lv.pid, {:clear_toast, toast_nonce(lv)})
+
+      refute has_element?(lv, ~s([data-role="inbox-toast"]))
+      refute has_element?(lv, ~s([data-role="toast-undo"]))
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, item.id)
+    end
+
+    test "an empty inbox offers no Clear all", %{conn: conn} do
+      user = insert_user()
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      refute has_element?(lv, ~s([data-role="clear-all"]))
+    end
+
+    test "Clear selected raises the same toast, and its undo brings those rows back",
+         %{conn: conn} do
+      # Stage 2 stashed the ids `dismiss_many/2` reported changing with the note
+      # that stage 3 turns them into undo. This is that.
+      user = insert_user()
+      swept = emit!(user, kind: "chat_mention", title: "ticked")
+      kept = emit!(user, kind: "chat_mention", title: "untouched")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      tick(lv, swept)
+      clear_selected(lv)
+
+      assert render(lv) =~ "1 notification cleared"
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, swept.id)
+
+      undo(lv)
+
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, swept.id)
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, kept.id)
+      assert has_element?(lv, row_selector(swept))
+    end
+  end
+
   # ── Badge / list unification (one unread source of truth) ──────────────
 
   describe "badge equals streamed rows (unified unread scope)" do
@@ -691,9 +1139,19 @@ defmodule PlatformWeb.InboxLiveTest do
       assert streamed_row_count(lv) == 2
       assert badge_number(lv) == streamed_row_count(lv)
 
-      # After mark_read (a silent read that broadcasts :inbox_changed): the read
-      # row drops from BOTH the list and the badge.
+      # After mark_read: task `01a00108` stage 4 retired read-as-cleared, so the
+      # read row stays on the list AND in the badge. This assertion used to be
+      # `== 1` on both. The #589/#592 invariant being guarded here — badge and
+      # rows are the same number — is NOT retired and is asserted on every line;
+      # only the definition of a cleared row moved, and it moved for both sides
+      # at once because both build on `Inbox.unread_scope/1`.
       {:ok, _} = Inbox.mark_read(a.id, user.id)
+      assert streamed_row_count(lv) == 2
+      assert badge_number(lv) == streamed_row_count(lv)
+
+      # Dismissing the row that was read clears it from both, so a read row is
+      # still reachable by the ordinary clear path.
+      {:ok, _} = Inbox.mark_dismissed(a.id, user.id)
       assert streamed_row_count(lv) == 1
       assert badge_number(lv) == streamed_row_count(lv)
 
@@ -708,8 +1166,14 @@ defmodule PlatformWeb.InboxLiveTest do
   # ── Open (mark read + navigate) ────────────────────────────────────────
 
   describe "open" do
-    test "marks read_at, navigates to item.url, and the read item is gone on re-mount",
+    test "marks read_at, navigates to item.url, and the read item REMAINS on re-mount",
          %{conn: conn} do
+      # INVERTED by task `01a00108` stage 4, and this one is the heart of the
+      # stage. It read "Read items drop off the inbox on the next load" and
+      # asserted `refute has_element?`. Opening was the clear mechanism; that is
+      # exactly what Harper was complaining about, because it meant the only way
+      # to clear an item was to open it. Reading now records "seen" and nothing
+      # more, and dismissal is the only clear.
       user = insert_user()
       item = emit!(user, kind: "chat_mention", title: "open me", url: "/chat/general")
 
@@ -720,11 +1184,19 @@ defmodule PlatformWeb.InboxLiveTest do
                |> element(~s(#{row_selector(item)} [data-role="inbox-item-open"]))
                |> render_click()
 
+      # `read_at` is still written — the field and the write both survive the
+      # change; only its meaning as a filter was retired.
       assert %Item{read_at: %DateTime{}} = Repo.get!(Item, item.id)
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, item.id)
 
-      # Read items drop off the inbox on the next load.
+      # An opened-but-undone item is still on your list.
       {:ok, lv2, _html} = live(auth(conn, user), "/inbox")
-      refute has_element?(lv2, row_selector(item))
+      assert has_element?(lv2, row_selector(item))
+
+      # And dismissal still takes it off, so the row is not stuck there.
+      {:ok, _} = Inbox.mark_dismissed(item.id, user.id)
+      {:ok, lv3, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv3, row_selector(item))
     end
   end
 

@@ -130,7 +130,19 @@ defmodule Platform.InboxTest do
   end
 
   describe "unread_count/1" do
-    test "counts unread, non-dismissed rows and excludes read AND dismissed ones" do
+    # HISTORY — the two tests below asserted the OPPOSITE until task `01a00108`
+    # stage 4, and the inversion is intentional, not a broken guard.
+    #
+    # They were written for #589/#592, where the badge and the list disagreed
+    # about read rows. That invariant — badge and list agree — is NOT retired
+    # and is still what these assert. What changed underneath it is the
+    # definition of a cleared row: `unread_scope/1` now keys on `dismissed_at`
+    # alone, so reading an item no longer removes it from either side. The
+    # tests had to move because they pinned the OLD definition (count decrements
+    # on read) as well as the invariant. Do not read the diff as #589/#592
+    # being reopened; a test asserting badge == rows is directly below.
+
+    test "counts non-dismissed rows — reading one does NOT decrement it" do
       user = insert_user()
 
       assert Inbox.unread_count(user.id) == 0
@@ -141,35 +153,38 @@ defmodule Platform.InboxTest do
 
       assert Inbox.unread_count(user.id) == 3
 
-      # The badge must match what the Inbox list renders. The list drops
-      # read-but-not-dismissed rows, so the count decrements on read too —
-      # otherwise a read item inflates the badge while showing nothing in the
-      # list (the #589/#592 badge/list divergence bug).
+      # Opening an item is not doing it. The row stays on the list, so it stays
+      # in the badge — the badge and the list still agree, they just agree on a
+      # larger set than they used to.
       {:ok, _} = Inbox.mark_read(a.id, user.id)
+      assert Inbox.unread_count(user.id) == 3
+
+      # Dismissal is now the only thing that decrements it.
+      {:ok, _} = Inbox.mark_dismissed(c.id, user.id)
       assert Inbox.unread_count(user.id) == 2
 
-      {:ok, _} = Inbox.mark_dismissed(c.id, user.id)
+      # Including dismissing the row that was already read.
+      {:ok, _} = Inbox.mark_dismissed(a.id, user.id)
       assert Inbox.unread_count(user.id) == 1
     end
 
-    test "badge equals the read-filtered list the Inbox surface renders" do
+    test "badge equals the list the Inbox surface renders, read rows included" do
       user = insert_user()
 
       {:ok, _a} = Inbox.emit(valid_attrs(user, %{title: "A"}))
       {:ok, b} = Inbox.emit(valid_attrs(user, %{title: "B"}))
       {:ok, c} = Inbox.emit(valid_attrs(user, %{title: "C"}))
 
-      # Read one, dismiss one — leaving a single unread, non-dismissed row.
+      # Read one, dismiss one — leaving two rows on the surface, one of them read.
       {:ok, _} = Inbox.mark_read(b.id, user.id)
       {:ok, _} = Inbox.mark_dismissed(c.id, user.id)
 
-      # The Inbox surface renders list_unread_for_user minus read rows.
-      rendered =
-        user.id
-        |> Inbox.list_unread_for_user()
-        |> Enum.reject(&(not is_nil(&1.read_at)))
+      # The surface renders `unread_scope/1` (see `InboxLive.load_items/1`) —
+      # the same query `unread_count/1` aggregates, which is the whole point.
+      rendered = user.id |> Inbox.unread_scope() |> Repo.all()
 
-      assert length(rendered) == 1
+      assert length(rendered) == 2
+      assert b.id in Enum.map(rendered, & &1.id)
       assert Inbox.unread_count(user.id) == length(rendered)
     end
 
@@ -290,6 +305,180 @@ defmodule Platform.InboxTest do
 
       refute dismissed?(ctx.review.id)
       refute dismissed?(ctx.sponsor.id)
+    end
+  end
+
+  describe "dismiss_many/2 and restore_many/2" do
+    # The returned id list — not the table — is what stage 3's undo replays, so
+    # every assertion here reads the RETURNED list. Re-querying the table would
+    # pass whether or not the row was in the result, and prove nothing.
+    test "returns exactly the ids it changed, omitting a row dismissed before the call" do
+      user = insert_user()
+
+      {:ok, first} = Inbox.emit(valid_attrs(user))
+      {:ok, second} = Inbox.emit(valid_attrs(user))
+      {:ok, already} = Inbox.emit(valid_attrs(user))
+
+      {:ok, _} = Inbox.mark_dismissed(already.id, user.id)
+
+      assert {:ok, changed} = Inbox.dismiss_many(user.id, [first.id, second.id, already.id])
+
+      # `already` WAS passed in, so its absence is the filter working, not the
+      # id never having been offered.
+      refute already.id in changed
+      assert Enum.sort(changed) == Enum.sort([first.id, second.id])
+
+      assert dismissed?(first.id)
+      assert dismissed?(second.id)
+    end
+
+    test "a row belonging to another user is untouched even when its id is passed" do
+      user = insert_user()
+      other = insert_user()
+
+      {:ok, mine} = Inbox.emit(valid_attrs(user))
+      {:ok, theirs} = Inbox.emit(valid_attrs(other))
+
+      assert {:ok, changed} = Inbox.dismiss_many(user.id, [mine.id, theirs.id])
+
+      assert changed == [mine.id]
+      refute theirs.id in changed
+      assert dismissed?(mine.id)
+      refute dismissed?(theirs.id)
+    end
+
+    test "restore_many/2 clears exactly the given ids and leaves a separately-dismissed row dismissed" do
+      user = insert_user()
+
+      {:ok, first} = Inbox.emit(valid_attrs(user))
+      {:ok, second} = Inbox.emit(valid_attrs(user))
+      {:ok, separate} = Inbox.emit(valid_attrs(user))
+
+      {:ok, _} = Inbox.dismiss_many(user.id, [first.id, second.id])
+      {:ok, _} = Inbox.mark_dismissed(separate.id, user.id)
+
+      assert {:ok, restored} = Inbox.restore_many(user.id, [first.id, second.id])
+      assert Enum.sort(restored) == Enum.sort([first.id, second.id])
+
+      refute dismissed?(first.id)
+      refute dismissed?(second.id)
+      assert dismissed?(separate.id)
+    end
+
+    test "a bulk dismiss broadcasts ONE {:inbox_changed, user_id}, not one per row" do
+      user = insert_user()
+
+      {:ok, first} = Inbox.emit(valid_attrs(user))
+      {:ok, second} = Inbox.emit(valid_attrs(user))
+      {:ok, third} = Inbox.emit(valid_attrs(user))
+
+      # Subscribe after the emits so their add-broadcasts are not in the mailbox.
+      :ok = Inbox.subscribe(user.id)
+      user_id = user.id
+
+      assert {:ok, changed} = Inbox.dismiss_many(user.id, [first.id, second.id, third.id])
+      assert length(changed) == 3
+
+      assert_receive {:inbox_changed, ^user_id}
+      refute_received {:inbox_changed, ^user_id}
+    end
+  end
+
+  describe "dismiss_all_unread/1" do
+    # Same posture as dismiss_many/2 above: the RETURNED list is what stage 3's
+    # undo replays, so it is what gets asserted on.
+    test "sweeps the whole unread scope and returns exactly those ids" do
+      user = insert_user()
+
+      {:ok, a} = Inbox.emit(valid_attrs(user))
+      {:ok, b} = Inbox.emit(valid_attrs(user, %{kind: "task_plan_review", source_type: "task"}))
+
+      {:ok, c} =
+        Inbox.emit(valid_attrs(user, %{kind: "meeting_starting", source_type: "meeting"}))
+
+      assert {:ok, changed} = Inbox.dismiss_all_unread(user.id)
+      assert Enum.sort(changed) == Enum.sort([a.id, b.id, c.id])
+
+      assert dismissed?(a.id)
+      assert dismissed?(b.id)
+      assert dismissed?(c.id)
+      assert Inbox.unread_count(user.id) == 0
+    end
+
+    test "omits a row dismissed before the call, so undo cannot resurrect it" do
+      user = insert_user()
+
+      {:ok, live_row} = Inbox.emit(valid_attrs(user))
+      {:ok, already} = Inbox.emit(valid_attrs(user))
+      {:ok, _} = Inbox.mark_dismissed(already.id, user.id)
+
+      assert {:ok, changed} = Inbox.dismiss_all_unread(user.id)
+
+      assert changed == [live_row.id]
+      refute already.id in changed
+
+      # Replaying the returned list is exactly what the undo does — the
+      # earlier-dismissed row stays dismissed through it.
+      {:ok, _} = Inbox.restore_many(user.id, changed)
+      refute dismissed?(live_row.id)
+      assert dismissed?(already.id)
+    end
+
+    test "SWEEPS a read-but-not-dismissed row — it is on the surface, so the button named it" do
+      # INVERTED by task `01a00108` stage 4. This asserted the exact opposite —
+      # that a read row is spared — on the reasoning that it was absent from
+      # /inbox and from the badge, so a button counting the rendered sections
+      # could not have named it. That reasoning is unchanged and still governs;
+      # what changed is that a read row IS now rendered and IS now counted, so
+      # sparing it would be the lie the original test guarded against.
+      user = insert_user()
+
+      {:ok, unread} = Inbox.emit(valid_attrs(user))
+      {:ok, read} = Inbox.emit(valid_attrs(user))
+      {:ok, _} = Inbox.mark_read(read.id, user.id)
+
+      # Both are on the surface, so the button's count is 2, not 1.
+      assert Inbox.unread_count(user.id) == 2
+
+      assert {:ok, changed} = Inbox.dismiss_all_unread(user.id)
+
+      assert Enum.sort(changed) == Enum.sort([unread.id, read.id])
+      assert dismissed?(unread.id)
+      assert dismissed?(read.id)
+      assert Inbox.unread_count(user.id) == 0
+    end
+
+    test "another user's rows are untouched" do
+      user = insert_user()
+      other = insert_user()
+
+      {:ok, mine} = Inbox.emit(valid_attrs(user))
+      {:ok, theirs} = Inbox.emit(valid_attrs(other))
+
+      assert {:ok, changed} = Inbox.dismiss_all_unread(user.id)
+
+      assert changed == [mine.id]
+      refute dismissed?(theirs.id)
+    end
+
+    test "broadcasts ONE {:inbox_changed, user_id} for the sweep, and nothing when empty" do
+      user = insert_user()
+
+      {:ok, _} = Inbox.emit(valid_attrs(user))
+      {:ok, _} = Inbox.emit(valid_attrs(user))
+
+      :ok = Inbox.subscribe(user.id)
+      user_id = user.id
+
+      assert {:ok, changed} = Inbox.dismiss_all_unread(user.id)
+      assert length(changed) == 2
+
+      assert_receive {:inbox_changed, ^user_id}
+      refute_received {:inbox_changed, ^user_id}
+
+      # A second sweep changes nothing, so it stays quiet.
+      assert {:ok, []} = Inbox.dismiss_all_unread(user.id)
+      refute_received {:inbox_changed, ^user_id}
     end
   end
 
@@ -786,23 +975,36 @@ defmodule Platform.InboxTest do
       assert Repo.aggregate(Inbox.reachable_unread_scope(user.id, false), :count) == 2
     end
 
-    test "the internal scope is `unread_scope/1` verbatim — read and dismissed rows still drop" do
+    test "the internal scope is `unread_scope/1` verbatim — dismissed rows drop, read rows do not" do
+      # Task `01a00108` stage 4: this used to assert that reading dropped a row
+      # here too. The property under test is unchanged — this scope is
+      # `unread_scope/1` verbatim for an internal viewer — so it inverts exactly
+      # as `unread_scope/1` did, which is the point of composing on it.
       user = insert_user()
       %{sponsor: sponsor, mention: mention} = mixed_rows!(user)
 
       {:ok, _} = Inbox.mark_read(mention.id, user.id)
-      assert Inbox.reachable_unread_count(user.id) == 1
+      assert Inbox.reachable_unread_count(user.id) == 2
+      assert Inbox.reachable_unread_count(user.id) == Inbox.unread_count(user.id)
 
       {:ok, _} = Inbox.mark_dismissed(sponsor.id, user.id)
+      assert Inbox.reachable_unread_count(user.id) == 1
+
+      {:ok, _} = Inbox.mark_dismissed(mention.id, user.id)
       assert Inbox.reachable_unread_count(user.id) == 0
     end
 
-    test "an external user's reachable count drops to 0 when the mention is read" do
+    test "an external user's reachable count drops to 0 when the mention is DISMISSED, not read" do
       user = external_user!()
       %{mention: mention} = mixed_rows!(user)
 
       assert Inbox.reachable_unread_count(user.id) == 1
+
+      # Reading it leaves it standing (stage 4: reading is not clearing).
       {:ok, _} = Inbox.mark_read(mention.id, user.id)
+      assert Inbox.reachable_unread_count(user.id) == 1
+
+      {:ok, _} = Inbox.mark_dismissed(mention.id, user.id)
 
       # Nothing reachable left → 0 → no badge at all, not a zero and not a
       # dot. The unreachable sponsor row is still live and still uncounted.

@@ -2,26 +2,62 @@ defmodule PlatformWeb.Components.InboxItem do
   @moduledoc """
   A single Inbox row — one `Platform.Inbox.Item` rendered as a stream child.
 
-  Layout is two sibling controls under one `<li>`, deliberately NOT nested:
+  Layout is up to THREE sibling controls under one `<li>`, deliberately NOT
+  nested:
 
+    * the **select** checkbox (`phx-click="toggle_select"`), leftmost, present
+      only when `selectable`.
     * the **open** control (`phx-click="open"`) fills the row and carries the
       item's `id` + `url`; clicking it marks the item read and navigates to
       `item.url`.
     * the **dismiss** affordance (`phx-click="dismiss"`) is a right-aligned X.
-      It is a SIBLING of the open control, never a descendant, so a click on
-      the X fires only `dismiss` and never bubbles into `open`.
+
+  All three are SIBLINGS, never descendants of one another, so a click on the
+  X fires only `dismiss` and a click on the checkbox fires only
+  `toggle_select` — neither ever bubbles into `open`. This is the rule the
+  whole row layout exists to protect: `open` marks the item read and navigates
+  away, so any control that accidentally nests inside it becomes a trapdoor.
 
   The dismiss X is always tappable on mobile (the touch equivalent of the
   desktop swipe-left / hover-reveal), and hover-revealed on desktop
   (`md:opacity-0 md:group-hover:opacity-100`) so the resting row stays calm.
 
+  ## The checkbox REPLACES the unread dot (task 01a00108 stage 2)
+
+  The dot used to hold the leftmost slot, inside the open button. The checkbox
+  cannot live there — see the sibling rule above — so it has to claim that slot
+  from outside the button, and the two cannot share it without stacking two
+  small primary-toned marks a few pixels apart.
+
+  The dot loses. It renders unconditionally — it has never read `read_at` — so
+  it is true of every row at once and discriminates nothing, while the checkbox
+  in the same slot carries real per-row state and is actionable. The
+  `bg-primary` signature survives as `checkbox-primary`. When `selectable` is
+  false the dot still renders, so a non-selecting caller keeps today's row
+  verbatim.
+
+  ## The premise moved (task 01a00108 stage 4)
+
+  The paragraph above originally justified the dot's removal by saying every
+  rendered row was unread BY CONSTRUCTION, because `InboxLive` rendered only
+  `Inbox.unread_scope/1` and that scope excluded read rows. Stage 4 retired
+  read-as-cleared, so the surface now renders read and unread rows side by side
+  and that premise is false.
+
+  The decision survives it, because the dot never keyed on `read_at` in the
+  first place — an unconditional mark discriminates nothing regardless of what
+  is on the list. But note what is now true and was not: read vs. unread is a
+  REAL distinction on this surface, and no affordance expresses it. Reviving
+  the dot as a genuine `is_nil(@item.read_at)` indicator is a live design
+  question, deliberately left to a later stage rather than smuggled into a
+  semantics change.
+
   The dom id (`inbox-item-<id>`) is supplied by the caller so it matches the
   stream `dom_id` and `stream_delete_by_dom_id/3` target exactly.
 
   Styling reads only from semantic DaisyUI token slots (primary / base-* /
-  error) per `docs/design-system/01-foundations.md` — no raw hex. The unread
-  dot is the row's signature element (`bg-primary`); the kind badge and the
-  per-item space label give each row its taxonomy at a glance.
+  error) per `docs/design-system/01-foundations.md` — no raw hex. The kind
+  badge and the per-item space label give each row its taxonomy at a glance.
   """
 
   use Phoenix.Component
@@ -37,6 +73,12 @@ defmodule PlatformWeb.Components.InboxItem do
     default: nil,
     doc: "Space label for chat_mention rows (grouping cue); nil for other kinds."
 
+  attr :selectable, :boolean,
+    default: false,
+    doc: "Render the leftmost select checkbox in place of the unread dot."
+
+  attr :selected, :boolean, default: false, doc: "Checked state of the select checkbox."
+
   def inbox_item(assigns) do
     ~H"""
     <li
@@ -46,16 +88,34 @@ defmodule PlatformWeb.Components.InboxItem do
       data-item-id={@item.id}
       data-item-kind={@item.kind}
     >
+      <%!-- Select checkbox — FIRST sibling, outside the open button. --%>
+      <div :if={@selectable} class="flex shrink-0 items-center pl-4">
+        <input
+          type="checkbox"
+          data-role="inbox-item-select"
+          checked={@selected}
+          phx-click="toggle_select"
+          phx-value-id={@item.id}
+          class="checkbox checkbox-primary checkbox-sm [--radius-selector:0.25rem] focus-visible-ring"
+          aria-label={"Select #{@item.title}"}
+        />
+      </div>
+
       <button
         type="button"
         phx-click="open"
         phx-value-id={@item.id}
         phx-value-url={@item.url}
-        class="flex min-w-0 flex-1 items-start gap-3 rounded-2xl px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100"
+        class={[
+          "flex min-w-0 flex-1 items-start gap-3 rounded-2xl py-3 pr-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100",
+          if(@selectable, do: "pl-3", else: "pl-4")
+        ]}
         data-role="inbox-item-open"
       >
-        <%!-- Signature element: the unread dot. --%>
+        <%!-- Signature element: the unread dot. Yields the slot to the
+             checkbox when the row is selectable (see moduledoc). --%>
         <span
+          :if={not @selectable}
           class="mt-1.5 size-2 shrink-0 rounded-full bg-primary"
           data-role="inbox-item-unread-dot"
           aria-hidden="true"

@@ -12,8 +12,12 @@ defmodule Platform.Inbox do
   dismissal is per-ROW. Re-emitting for the same
   `(user_id, source_type, source_id)` triple ALWAYS inserts a fresh row even if
   a prior row for that triple was dismissed — there is no dedup or resurrection.
-  Read status is orthogonal to dismissal: `list_unread_for_user/2` surfaces both
-  read and unread rows, excluding only dismissed ones.
+
+  **Dismissal is the ONLY clear** (task `01a00108` stage 4). Reading a row
+  (`mark_read/2`, written when the user opens an item) records that it was seen
+  and nothing more; it does not take the row off the list or out of the badge.
+  Every scope in this module keys on `dismissed_at` alone — see
+  `unread_scope/1`, which carries the full note.
   """
   import Ecto.Query
 
@@ -58,10 +62,22 @@ defmodule Platform.Inbox do
   end
 
   @doc """
-  List a user's non-dismissed inbox items, newest first.
+  List a user's non-dismissed inbox items, newest first. Pass `opts[:kind]` to
+  filter to a single kind.
 
-  Read status is orthogonal to dismissal — read-but-not-dismissed rows are
-  included. Pass `opts[:kind]` to filter to a single kind.
+  > #### Dead in production, and now a duplicate {: .warning}
+  >
+  > This has ZERO production call sites — the `/inbox` list is
+  > `InboxLive.load_items/1`, built on `unread_scope/1`. Its only callers are
+  > tests using it as a "did a row get emitted" helper.
+  >
+  > Since stage 4 of task `01a00108` it also returns exactly what
+  > `unread_scope/1` selects (both key on `dismissed_at` alone), so it is a
+  > second spelling of the canonical scope with an ordering baked in. It is
+  > kept, unrenamed, only because rewriting its test call sites would inflate a
+  > diff whose risk lives elsewhere. Do not reach for it in new production
+  > code: compose `unread_scope/1` instead, so there stays exactly one query
+  > the badge and the list can be read off.
   """
   @spec list_unread_for_user(Ecto.UUID.t(), keyword()) :: [Item.t()]
   def list_unread_for_user(user_id, opts \\ []) do
@@ -76,10 +92,31 @@ defmodule Platform.Inbox do
   defp maybe_filter_kind(query, kind), do: where(query, [i], i.kind == ^kind)
 
   @doc """
-  The single canonical "unread" scope — the Ecto query the badge COUNT and the
-  `/inbox` list both build on, so the two can never diverge again (the
-  #589/#592 badge-vs-list drift). A row is unread iff it is neither dismissed
-  (`dismissed_at`) nor read (`read_at`), scoped to `user_id`.
+  The single canonical "live" scope — the Ecto query the badge COUNT and the
+  `/inbox` list both build on, so the two can never diverge (the #589/#592
+  badge-vs-list drift). A row is live iff it is not dismissed (`dismissed_at`),
+  scoped to `user_id`.
+
+  ## Reading is not clearing (task `01a00108` stage 4)
+
+  This predicate used to be `is_nil(dismissed_at) and is_nil(read_at)`, which
+  made OPENING a row the way you cleared it. The inbox is a to-do list, so
+  reading and doing are two different acts: opening an item is now just having
+  seen it, and only an explicit dismissal takes it off the list.
+
+  `mark_read/2` still writes `read_at` and it still means something — "has been
+  seen" — it simply no longer means "done". Nothing reads it as a filter any
+  more; do not reintroduce it here without reopening the decision.
+
+  Migration `20260817120000_backfill_read_as_dismissed_inbox_items.exs` copied
+  `read_at` into `dismissed_at` for every historical row, so the rows users
+  cleared under the old meaning stayed cleared through the change rather than
+  resurfacing in a heap.
+
+  The name is kept. `unread_scope/1` is referenced from `shell_live.ex`,
+  `inbox_live.ex` and four functions below, and renaming it would touch far
+  more than the meaning change warrants — but read it as "not cleared", not as
+  "never opened".
 
   Returns a composable query (no `order_by`, no execution) — callers add their
   own ordering/aggregation:
@@ -91,7 +128,7 @@ defmodule Platform.Inbox do
   @spec unread_scope(Ecto.UUID.t()) :: Ecto.Query.t()
   def unread_scope(user_id) do
     from(i in Item,
-      where: i.user_id == ^user_id and is_nil(i.dismissed_at) and is_nil(i.read_at)
+      where: i.user_id == ^user_id and is_nil(i.dismissed_at)
     )
   end
 
@@ -175,15 +212,16 @@ defmodule Platform.Inbox do
   end
 
   @doc """
-  Count a user's unread, non-dismissed inbox items — the live-badge number.
+  Count a user's non-dismissed inbox items — the live-badge number.
 
   A single aggregate query, cheaper than materializing rows just to take a
-  length. It counts exactly what the Inbox surface renders: rows that are
-  neither read (`read_at`) nor dismissed (`dismissed_at`). Read-but-not-dismissed
-  rows are excluded here just as `InboxLive` drops them from the list, so the
-  badge and the list can never diverge (a read item inflating the badge while
-  showing nothing was the #589/#592 badge/list bug). This is intentionally
-  narrower than `list_unread_for_user/2`, which still surfaces read rows.
+  length. It counts exactly what the Inbox surface renders, because it is the
+  SAME query: one `Repo.aggregate` over `unread_scope/1`, which is what
+  `InboxLive.load_items/1` selects rows from. That shared predicate is the
+  standing fix for #589/#592 (a read item inflating the badge while the list
+  showed nothing), and it is why stage 4 of task `01a00108` could change the
+  meaning of "cleared" in one place: move the scope and the badge and the list
+  move together, or they drift apart again in the opposite direction.
 
   Scoping is inherent: only rows whose `user_id` matches are counted, so an
   external user's count is naturally limited to their own (allowlisted) rows
@@ -195,7 +233,20 @@ defmodule Platform.Inbox do
   end
 
   @doc """
-  Mark an item read for `user_id`.
+  Mark an item read for `user_id` — "the user has seen this", and nothing more.
+
+  Reading does NOT clear a row. Since stage 4 of task `01a00108` the row stays
+  on `/inbox` and in the badge until it is explicitly dismissed; only
+  `dismissed_at` takes it off. `read_at` is kept, and kept written, because
+  "seen" is a real fact worth having — it is what migration `20260817120000`
+  read to preserve historical clears, and it is the natural input to any future
+  seen/unseen affordance.
+
+  Be clear-eyed about what that leaves, though: as of this stage `read_at` is a
+  column with a writer and NO reader. Nothing filters on it and nothing renders
+  it (the row's dot is unconditional — see `PlatformWeb.Components.InboxItem`).
+  It is retained on purpose, not by oversight, and a later stage that adds a
+  seen/unseen affordance is where it earns its keep again.
 
   The `user_id` is a defensive cross-user guard: the update is scoped by both
   `id` and `user_id`, so a mismatched user mutates nothing and gets
@@ -205,12 +256,20 @@ defmodule Platform.Inbox do
   def mark_read(item_id, user_id) do
     case set_timestamp(item_id, user_id, :read_at) do
       {:ok, item} = ok ->
-        # Reading drops a row from `unread_scope/1` (the badge count and the
-        # `/inbox` list), yet it mutates neither via an add/dismiss event —
-        # this used to be a SILENT mutation the live badge missed. Broadcast a
-        # coarse `{:inbox_changed, user_id}` so every mounted shell recomputes
-        # the badge from the DB and InboxLive re-derives its list. A cross-user
-        # guard miss (`{:error, :not_found}`) broadcasts nothing.
+        # Kept deliberately, and deliberately NOT load-bearing today. Reading
+        # used to drop a row from `unread_scope/1` without any add/dismiss event
+        # to announce it — a silent mutation the live badge missed, which is
+        # what this broadcast was added to fix. Now that reading clears nothing,
+        # the coarse `{:inbox_changed, user_id}` moves neither the count nor the
+        # rendered set: shells recompute to the same number and InboxLive
+        # re-derives the same rows.
+        #
+        # It stays because every other writer here signals the same way, and the
+        # uniform "a row changed, re-derive" rule is what keeps surfaces from
+        # drifting; a writer that stays quiet is the shape of the original bug.
+        # Do not read this as proof that a read is observable — it is not, until
+        # something renders `read_at`. A cross-user guard miss
+        # (`{:error, :not_found}`) broadcasts nothing.
         broadcast_changed(item.user_id)
         ok
 
@@ -306,6 +365,129 @@ defmodule Platform.Inbox do
   # kept as the default so no current caller changes shape.
   defp filter_kind(query, nil), do: query
   defp filter_kind(query, kind) when is_binary(kind), do: where(query, [i], i.kind == ^kind)
+
+  @doc """
+  Dismiss many rows by id for `user_id`. Returns `{:ok, changed_ids}` — EXACTLY
+  the ids this call transitioned, never merely the ids it was handed.
+
+  The inbox is a to-do list, so ticking several things off is one gesture. This
+  is `dismiss_by_source/4`'s write-then-single-broadcast shape keyed on a
+  caller-supplied id list instead of a source triple: ONE `update_all`, then ONE
+  coarse `{:inbox_changed, user_id}` — not N per-row events for an N-row sweep.
+
+  ## Why the returned list is the point
+
+  The `is_nil(i.dismissed_at)` filter does double duty. It keeps the write
+  idempotent, and — because `RETURNING` reports only rows the statement actually
+  touched — it makes the returned list precisely "what this call changed". A row
+  the user dismissed an hour ago is silently skipped and is ABSENT from the
+  result even when its id is passed.
+
+  That absence is the contract an undo depends on: an undo built from this list
+  can only ever restore rows this call dismissed, so it cannot resurrect
+  something the user dismissed deliberately and earlier. Dropping the filter
+  would still dismiss the right rows, and would still look correct — the damage
+  would surface only later, as an undo reviving rows nobody asked back.
+
+  Ordering is Postgres's and is not guaranteed; callers that compare should sort.
+
+  Cross-user guarded like `mark_dismissed/2`: the `user_id` scope is part of the
+  WHERE, so ids belonging to another user match nothing, mutate nothing, and are
+  absent from the returned list.
+  """
+  @spec dismiss_many(Ecto.UUID.t(), [Ecto.UUID.t()]) :: {:ok, [Ecto.UUID.t()]}
+  def dismiss_many(user_id, ids) do
+    now = DateTime.utc_now()
+
+    {_count, changed_ids} =
+      Item
+      |> where([i], i.user_id == ^user_id and i.id in ^ids and is_nil(i.dismissed_at))
+      |> select([i], i.id)
+      |> Repo.update_all(set: [dismissed_at: now])
+
+    # One coarse broadcast for the whole sweep, mirroring `dismiss_by_source/4`:
+    # shells recompute the badge and InboxLive re-derives its list once. A sweep
+    # that changed nothing stays quiet.
+    if changed_ids != [], do: broadcast_changed(user_id)
+
+    {:ok, changed_ids}
+  end
+
+  @doc """
+  Dismiss EVERY row the user's inbox surface is showing — the "Clear all" sweep.
+  Returns `{:ok, changed_ids}` under exactly `dismiss_many/2`'s contract: the ids
+  this call transitioned, and only those.
+
+  ## Why this takes no id list
+
+  "Clear all" must not be a clear-what-is-drawn. Handing the LiveView's rendered
+  ids to `dismiss_many/2` would read the set in one query and write it in
+  another, so a row that arrived in between survives a gesture that said "all" —
+  and the surface would then re-derive and show it, which reads as the button
+  having failed. Selecting and updating in ONE statement removes the gap: the
+  scope is evaluated by Postgres at write time.
+
+  ## The scope is `unread_scope/1`, and the rule is "clear what you can see"
+
+  The governing rule is that the count on the button and the set this writes
+  must be the SAME set, or the button lies — and an undo built from the write
+  would restore rows into invisibility.
+
+  `unread_scope/1` is what satisfies that: the badge counts it, `/inbox`
+  renders it, and this clears it. One scope, so no call site has to guess.
+
+  This paragraph used to argue something narrower — that the sweep must skip
+  read-but-not-dismissed rows, because such a row was absent from the surface
+  and the button's count could not name it. Stage 4 of task `01a00108` retired
+  read-as-cleared, so that case no longer exists: a row you opened is on the
+  list, is in the count, and is therefore swept, which is correct under the
+  same rule that previously excluded it. The rule did not change; what counts
+  as visible did. Keep deriving both from `unread_scope/1` and this stays true
+  through whatever the predicate becomes next.
+
+  One `update_all`, then ONE coarse `{:inbox_changed, user_id}` — shells recompute
+  the badge (rail, Dock icon and title prefix all hang off that one number) and
+  `InboxLive` re-derives. A sweep that changed nothing stays quiet.
+  """
+  @spec dismiss_all_unread(Ecto.UUID.t()) :: {:ok, [Ecto.UUID.t()]}
+  def dismiss_all_unread(user_id) do
+    now = DateTime.utc_now()
+
+    {_count, changed_ids} =
+      user_id
+      |> unread_scope()
+      |> select([i], i.id)
+      |> Repo.update_all(set: [dismissed_at: now])
+
+    if changed_ids != [], do: broadcast_changed(user_id)
+
+    {:ok, changed_ids}
+  end
+
+  @doc """
+  The inverse of `dismiss_many/2`: clear `dismissed_at` for the given ids,
+  returning `{:ok, restored_ids}`. Same single-write, single-broadcast shape and
+  the same non-optional `user_id` scope.
+
+  Note the deliberate asymmetry with `dismiss_many/2`: there is NO
+  `not is_nil(i.dismissed_at)` guard here, so the returned list is every row the
+  scope matched rather than only rows that changed state. Restoring an
+  already-live row is a no-op on that row's value, and the caller that needs
+  exactness — an undo — gets it from `dismiss_many/2`'s list, which is the one
+  that has to be precise.
+  """
+  @spec restore_many(Ecto.UUID.t(), [Ecto.UUID.t()]) :: {:ok, [Ecto.UUID.t()]}
+  def restore_many(user_id, ids) do
+    {_count, restored_ids} =
+      Item
+      |> where([i], i.user_id == ^user_id and i.id in ^ids)
+      |> select([i], i.id)
+      |> Repo.update_all(set: [dismissed_at: nil])
+
+    if restored_ids != [], do: broadcast_changed(user_id)
+
+    {:ok, restored_ids}
+  end
 
   @doc """
   Lazy reconciler: dismiss every live inbox row for `user_id` whose underlying

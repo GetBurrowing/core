@@ -1,13 +1,31 @@
-<div class="h-full overflow-y-auto" data-role="inbox-surface">
-  <div class="mx-auto max-w-3xl p-6">
-    <header class="mb-6">
-      <h1 class="text-2xl font-bold text-base-content">Inbox</h1>
-      <p class="mt-1 text-sm text-base-content/60">
-        Everything waiting on you across Suite. Dismiss what's handled; open an item to jump to it.
-      </p>
-    </header>
+<div class="relative h-full min-h-0">
+  <div class="h-full overflow-y-auto" data-role="inbox-surface">
+    <div class="mx-auto max-w-3xl p-6">
+      <header class="mb-6 flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold text-base-content">Inbox</h1>
+          <p class="mt-1 text-sm text-base-content/60">
+            Everything waiting on you across Suite. Tick rows and clear them in one go, or open an item to jump to it.
+          </p>
+        </div>
+        <%!-- The pile-up escape hatch. Act-then-confirm, so there is NO pre-action
+             modal: the count is named on the button itself and the undo lives in
+             the toast that follows. `--color-error` is spent here and only here —
+             this is the destructive action; the toast reports a success and stays
+             on plain surface + border. Hidden entirely at zero, so an empty inbox
+             offers nothing to clear. --%>
+        <button
+          :if={clearable_count(@review_count, @mention_count, @meeting_count) > 0}
+          type="button"
+          phx-click="clear_all"
+          data-role="clear-all"
+          class="btn btn-ghost btn-sm focus-visible-ring shrink-0 text-error hover:bg-error/10"
+        >
+          Clear all ({clearable_count(@review_count, @mention_count, @meeting_count)})
+        </button>
+      </header>
 
-    <%!-- Notification-permission state (task 019ffb7b stage 4). The rail bell
+      <%!-- Notification-permission state (task 019ffb7b stage 4). The rail bell
          this replaces was rejected on review: it collided with the Inbox tile,
          which is where the actual notifications live. The state belongs on the
          page those notifications land on. `@push_permission` arrives via
@@ -24,108 +42,198 @@
          `granted` render anything at all, and it carries WHY rather than a
          yes/no, because "nobody can fix this for you yet" and "reload and it
          may work" are different instructions. --%>
-    <.notification_state_row
-      push_permission={@push_permission}
-      user_agent={@user_agent}
-      auto_denied={@push_auto_denied}
-      registration_failed={@push_registration_failed}
-    />
+      <.notification_state_row
+        push_permission={@push_permission}
+        user_agent={@user_agent}
+        auto_denied={@push_auto_denied}
+        registration_failed={@push_registration_failed}
+      />
 
-    <%!-- Empty inbox: no section headers, no rows — just the calm minimal
+      <%!-- Empty inbox: no section headers, no rows — just the calm minimal
          state. Sections below are each gated on their own count, so when
          every count is zero only this renders. --%>
-    <.empty_state
-      :if={@review_count == 0 and @mention_count == 0 and @meeting_count == 0}
-      variant={:minimal}
-    >
-      <:body>
-        You're all caught up. Tasks with plans needing review, your channel
-        mentions, and meetings about to start will land here as they happen.
-      </:body>
-    </.empty_state>
-
-    <div class="space-y-8">
-      <%!-- Awaiting your review --%>
-      <section
-        :if={@review_count > 0}
-        aria-labelledby="inbox-section-review"
-        data-role="inbox-section"
-        data-section="review"
+      <.empty_state
+        :if={@review_count == 0 and @mention_count == 0 and @meeting_count == 0}
+        variant={:minimal}
       >
-        <h2
-          id="inbox-section-review"
-          class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
-        >
-          Awaiting your review
-        </h2>
-        <ul
-          id="inbox-review-list"
-          role="list"
-          class="space-y-2"
-          phx-update="stream"
-        >
-          <.inbox_item
-            :for={{dom_id, item} <- @streams.review_items}
-            id={dom_id}
-            item={item}
-          />
-        </ul>
-      </section>
+        <:body>
+          You're all caught up. Tasks with plans needing review, your channel
+          mentions, and meetings about to start will land here as they happen.
+        </:body>
+      </.empty_state>
 
-      <%!-- Mentions (grouped by space via per-row label + adjacency) --%>
-      <section
-        :if={@mention_count > 0}
-        aria-labelledby="inbox-section-mentions"
-        data-role="inbox-section"
-        data-section="mentions"
-      >
-        <h2
-          id="inbox-section-mentions"
-          class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+      <div class="space-y-8">
+        <%!-- Awaiting your review --%>
+        <section
+          :if={@review_count > 0}
+          aria-labelledby="inbox-section-review"
+          data-role="inbox-section"
+          data-section="review"
         >
-          Mentions
-        </h2>
-        <ul
-          id="inbox-mention-list"
-          role="list"
-          class="space-y-2"
-          phx-update="stream"
-        >
-          <.inbox_item
-            :for={{dom_id, item} <- @streams.mention_items}
-            id={dom_id}
-            item={item}
-            space_label={mention_space_label(item, @mention_space_labels)}
-          />
-        </ul>
-      </section>
+          <h2
+            id="inbox-section-review"
+            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+          >
+            Awaiting your review
+          </h2>
+          <ul
+            id="inbox-review-list"
+            role="list"
+            class="space-y-2"
+            phx-update="stream"
+          >
+            <.inbox_item
+              :for={{dom_id, item} <- @streams.review_items}
+              id={dom_id}
+              item={item}
+              selectable={true}
+              selected={Map.has_key?(@selected, item.id)}
+            />
+          </ul>
+        </section>
 
-      <%!-- Meetings --%>
-      <section
-        :if={@meeting_count > 0}
-        aria-labelledby="inbox-section-meetings"
-        data-role="inbox-section"
-        data-section="meetings"
+        <%!-- Mentions (grouped by space via per-row label + adjacency) --%>
+        <section
+          :if={@mention_count > 0}
+          aria-labelledby="inbox-section-mentions"
+          data-role="inbox-section"
+          data-section="mentions"
+        >
+          <h2
+            id="inbox-section-mentions"
+            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+          >
+            Mentions
+          </h2>
+          <ul
+            id="inbox-mention-list"
+            role="list"
+            class="space-y-2"
+            phx-update="stream"
+          >
+            <.inbox_item
+              :for={{dom_id, item} <- @streams.mention_items}
+              id={dom_id}
+              item={item}
+              space_label={mention_space_label(item, @mention_space_labels)}
+              selectable={true}
+              selected={Map.has_key?(@selected, item.id)}
+            />
+          </ul>
+        </section>
+
+        <%!-- Meetings --%>
+        <section
+          :if={@meeting_count > 0}
+          aria-labelledby="inbox-section-meetings"
+          data-role="inbox-section"
+          data-section="meetings"
+        >
+          <h2
+            id="inbox-section-meetings"
+            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+          >
+            Meetings
+          </h2>
+          <ul
+            id="inbox-meeting-list"
+            role="list"
+            class="space-y-2"
+            phx-update="stream"
+          >
+            <.inbox_item
+              :for={{dom_id, item} <- @streams.meeting_items}
+              id={dom_id}
+              item={item}
+              selectable={true}
+              selected={Map.has_key?(@selected, item.id)}
+            />
+          </ul>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <%!-- Pinned chrome: the bulk-selection bar. A direct sibling of the scroll
+       region (NOT nested inside it, and NOT inside a conditional wrapper that
+       morphdom re-patches) so it stays stable while rows toggle — it mounts on
+       0→1 selected and unmounts on 1→0, and only its count patches in between.
+       Lifted from RecoveryLive, where this placement was paid for with a real
+       flicker/detach bug. --%>
+  <div
+    :if={@selected != %{}}
+    data-role="selection-bar"
+    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] left-1/2 z-40 -translate-x-1/2"
+  >
+    <div class="flex items-center gap-3 rounded-full border border-base-300 bg-base-100 px-4 py-2 shadow-md">
+      <span
+        class="text-sm font-medium tabular-nums text-base-content"
+        data-role="selection-count"
       >
-        <h2
-          id="inbox-section-meetings"
-          class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
-        >
-          Meetings
-        </h2>
-        <ul
-          id="inbox-meeting-list"
-          role="list"
-          class="space-y-2"
-          phx-update="stream"
-        >
-          <.inbox_item
-            :for={{dom_id, item} <- @streams.meeting_items}
-            id={dom_id}
-            item={item}
-          />
-        </ul>
-      </section>
+        {map_size(@selected)} selected
+      </span>
+      <.button
+        variant="primary"
+        phx-click="dismiss_selected"
+        data-role="clear-selected"
+        class="btn btn-primary btn-sm focus-visible-ring"
+      >
+        <.icon name="hero-check" class="size-4" /> Clear selected
+      </.button>
+      <%!-- "Cancel", not Recovery's "Clear": the primary action beside it is
+           already called "Clear selected", and two controls a thumb apart both
+           reading "Clear" is a coin flip on whether the rows survive. --%>
+      <button
+        type="button"
+        phx-click="clear_selection"
+        data-role="cancel-selection"
+        class="focus-visible-ring rounded px-1 text-sm text-base-content/60 hover:text-base-content"
+      >
+        Cancel
+      </button>
+    </div>
+  </div>
+
+  <%!-- Pinned chrome: the act-then-confirm success toast, lifted from
+       RecoveryLive. Server-driven show/hide (assign + nonce-guarded auto-dismiss
+       timer) — no JS hook and no inline styles, so morphdom has nothing to clear
+       on patch. A sibling of the scroll region for the same reason as the bar
+       above it.
+
+       Bottom-RIGHT while the selection bar is bottom-centre, so the two never
+       overlap even though a sweep can raise the toast as the bar unmounts.
+
+       Surface + border only. This reports a success, so it must NOT wear the
+       destructive slot the button that raised it wears. --%>
+  <div
+    :if={@toast}
+    data-role="inbox-toast"
+    role="status"
+    aria-live="polite"
+    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] right-4 z-50 max-w-sm"
+  >
+    <div class="flex items-start gap-3 rounded-lg border border-base-300 bg-base-100 px-4 py-3 shadow-md">
+      <div class="min-w-0 flex-1">
+        <p class="text-sm text-base-content" data-role="toast-message">{@toast.message}</p>
+        <div class="mt-2">
+          <button
+            type="button"
+            phx-click="undo_clear"
+            data-role="toast-undo"
+            class="focus-visible-ring rounded text-xs font-medium text-base-content/70 hover:text-base-content"
+          >
+            Undo
+          </button>
+        </div>
+      </div>
+      <button
+        type="button"
+        phx-click="dismiss_toast"
+        aria-label="Dismiss"
+        class="focus-visible-ring shrink-0 rounded"
+      >
+        <.icon name="hero-x-mark" class="size-4 opacity-40 hover:opacity-70" />
+      </button>
     </div>
   </div>
 </div>
