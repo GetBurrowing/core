@@ -42,6 +42,15 @@
 //    doesn't fight this hook or InfiniteScroll's manual prepend anchoring.
 
 const NEAR_BOTTOM_PX = 150;
+// The initial-arrival phase ends when layout has been quiet for this long.
+// Fonts, images, tables and code-block scrollers all settle within a few
+// frames of each other; 250ms of no size change means the conversation has
+// finished arriving. See `_endInitialPhase`.
+const SETTLE_QUIET_MS = 250;
+// Absolute ceiling on the arrival phase, so a container that never stops
+// resizing (a live-updating embed, a pathological image) cannot hold the
+// reader pinned forever.
+const SETTLE_MAX_MS = 3000;
 // The rail width transition is 200ms (icon_rail.ex). Hold a little past it
 // to cover post-transition layout settle; also covers reduced-motion (0ms).
 const REFLOW_HOLD_MS = 400;
@@ -69,6 +78,18 @@ const ScrollToBottom = {
     this.handleEvent("sidebar_collapsed_changed", () =>
       this.holdAnchorThroughReflow(),
     );
+
+    // A reader who takes control during the arrival phase must keep it.
+    // Deliberately NOT the "scroll" event: our own `scrollTop` assignments
+    // fire that too, so it cannot distinguish the reader from the hook and
+    // would end the phase on the very first snap. These three are only ever
+    // produced by a person.
+    this._onUserIntent = () => this._endInitialPhase("user gesture");
+    for (const evt of ["wheel", "touchmove", "keydown"]) {
+      this.scrollEl.addEventListener(evt, this._onUserIntent, {
+        passive: true,
+      });
+    }
 
     // MutationObserver fires when stream inserts new message rows
     this._observer = new MutationObserver(() => {
@@ -117,6 +138,11 @@ const ScrollToBottom = {
     // scrolled away. Cleared here so a deep link into a DIFFERENT space is
     // honoured on arrival.
     this._anchoredFor = null;
+    this._clearSettleTimers();
+    this._settleCeiling = setTimeout(
+      () => this._endInitialPhase("ceiling"),
+      SETTLE_MAX_MS,
+    );
     this._connectResizeObserver();
   },
   // iOS PWA cold-launch fix (task 019ff6c9): ResizeObserver detects when the
@@ -127,13 +153,48 @@ const ScrollToBottom = {
     this._disconnectResizeObserver();
     this._resizeObserver = new ResizeObserver(() => {
       if (this._initialScroll) {
+        // Still arriving: hold the reader at the live edge as content grows
+        // underneath, and treat the resize as evidence that layout has not
+        // settled yet.
         this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+        this._armSettleTimer();
       } else {
         // Initial phase ended — no longer needed
         this._disconnectResizeObserver();
       }
     });
     this._resizeObserver.observe(this.scrollEl);
+  },
+  // Restart the quiet-period countdown. Called on every snap and every
+  // observed resize during the arrival phase, so the phase ends only once
+  // layout has genuinely stopped moving.
+  _armSettleTimer() {
+    if (!this._initialScroll) return;
+    if (this._settleTimer) clearTimeout(this._settleTimer);
+    this._settleTimer = setTimeout(
+      () => this._endInitialPhase("settled"),
+      SETTLE_QUIET_MS,
+    );
+  },
+  // End the arrival phase exactly once, from whichever of the three reasons
+  // gets there first: layout went quiet, the ceiling expired, or the reader
+  // took control with a real gesture. Idempotent — `honourAnchor` and
+  // `destroyed` both call it.
+  _endInitialPhase(_reason) {
+    if (!this._initialScroll) return;
+    this._initialScroll = false;
+    this._clearSettleTimers();
+    this._disconnectResizeObserver();
+  },
+  _clearSettleTimers() {
+    if (this._settleTimer) {
+      clearTimeout(this._settleTimer);
+      this._settleTimer = null;
+    }
+    if (this._settleCeiling) {
+      clearTimeout(this._settleCeiling);
+      this._settleCeiling = null;
+    }
   },
   _disconnectResizeObserver() {
     if (this._resizeObserver) {
@@ -164,6 +225,13 @@ const ScrollToBottom = {
     this._safeUpdate();
   },
   destroyed() {
+    if (this._onUserIntent) {
+      for (const evt of ["wheel", "touchmove", "keydown"]) {
+        this.scrollEl.removeEventListener(evt, this._onUserIntent);
+      }
+      this._onUserIntent = null;
+    }
+    this._clearSettleTimers();
     if (this._observer) this._observer.disconnect();
     if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
     this._disconnectResizeObserver();
@@ -198,8 +266,7 @@ const ScrollToBottom = {
     // End the initial-snap phase explicitly. It normally ends only once
     // the container overflows; leaving it open would re-snap on the
     // very next stream batch and undo the arrival.
-    this._initialScroll = false;
-    this._disconnectResizeObserver();
+    this._endInitialPhase("anchored");
     return true;
   },
   scrollToBottom() {
@@ -207,13 +274,19 @@ const ScrollToBottom = {
 
     if (this._initialScroll) {
       this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
-      // The initial phase ends once the container actually overflows —
-      // stream batches land async after mount, and each gets the hard
-      // snap until there is real scrollable content to anchor against.
-      if (this.scrollEl.scrollHeight > this.scrollEl.clientHeight) {
-        this._initialScroll = false;
-        this._disconnectResizeObserver();
-      }
+      // The phase deliberately does NOT end here (task 01a03f3a). It used to
+      // end the first time the container merely overflowed, which is a proxy
+      // for "the conversation has arrived" and a bad one: a single tall
+      // message overflows the box on frame one, long before fonts, images and
+      // tables have settled. Ending here also tore down the ResizeObserver
+      // added by 019ff6c9 for exactly that late layout, on the same frame —
+      // so on a channel of tall messages both protections were dead before
+      // any of the growth they guard against had happened, stranding the
+      // reader thousands of pixels above the newest message.
+      //
+      // The phase now ends on arrival rather than on overflow: quiet layout,
+      // a hard ceiling, or a real scroll gesture. See `_endInitialPhase`.
+      this._armSettleTimer();
       return;
     }
     // After initial load, only auto-scroll if the user is near the bottom
