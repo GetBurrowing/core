@@ -3449,6 +3449,7 @@
           phx-update="stream"
           phx-hook="ScrollToBottom"
           data-anchor-message-id={@anchor_message_id}
+          data-space-id={@active_space && @active_space.id}
         >
           <.chat_message
             :for={{dom_id, msg} <- @streams.messages}

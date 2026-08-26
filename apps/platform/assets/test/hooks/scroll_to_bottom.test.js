@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js";
 
 /**
  * Tests for the `ScrollToBottom` hook's deep-link anchor branch
@@ -28,7 +28,7 @@ import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js"
 // ── Fakes ──────────────────────────────────────────────────────────────
 
 function fakeRow(messageId, participantId = "p-1") {
-  const classes = new Set()
+  const classes = new Set();
   return {
     dataset: { messageId, participantId },
     style: {},
@@ -37,20 +37,20 @@ function fakeRow(messageId, participantId = "p-1") {
     // `classList.toggle`. Only the two-argument form is used.
     classList: {
       toggle(name, force) {
-        if (force) classes.add(name)
-        else classes.delete(name)
-        return Boolean(force)
+        if (force) classes.add(name);
+        else classes.delete(name);
+        return Boolean(force);
       },
       contains: (name) => classes.has(name),
     },
     scrollIntoViewCalls: [],
     scrollIntoView(opts) {
-      this.scrollIntoViewCalls.push(opts)
+      this.scrollIntoViewCalls.push(opts);
     },
     querySelector() {
-      return null
+      return null;
     },
-  }
+  };
 }
 
 // `#message-list`. In the real DOM the hook climbs to the
@@ -63,6 +63,7 @@ function fakeList({
   scrollHeight = 4000,
   clientHeight = 600,
   scrollTop = 0,
+  spaceId = undefined,
 } = {}) {
   const el = {
     dataset: {},
@@ -72,235 +73,239 @@ function fakeList({
     _scrollTop: scrollTop,
     scrollTopWrites: [],
     get scrollTop() {
-      return this._scrollTop
+      return this._scrollTop;
     },
     set scrollTop(v) {
-      this._scrollTop = v
-      this.scrollTopWrites.push(v)
+      this._scrollTop = v;
+      this.scrollTopWrites.push(v);
     },
     closest() {
-      return null
+      return null;
     },
     querySelectorAll(sel) {
       if (sel === "[data-participant-id]") {
-        return this.rows.filter((r) => r.dataset.participantId)
+        return this.rows.filter((r) => r.dataset.participantId);
       }
-      return []
+      return [];
     },
     querySelector(sel) {
-      const match = /^\[data-message-id="(.+)"\]$/.exec(sel)
-      if (!match) return null
-      return this.rows.find((r) => r.dataset.messageId === match[1]) || null
+      const match = /^\[data-message-id="(.+)"\]$/.exec(sel);
+      if (!match) return null;
+      return this.rows.find((r) => r.dataset.messageId === match[1]) || null;
     },
-  }
-  if (anchorId) el.dataset.anchorMessageId = anchorId
-  return el
+  };
+  if (anchorId) el.dataset.anchorMessageId = anchorId;
+  // Mirrors `data-space-id={@active_space && @active_space.id}`: a nil
+  // assign renders NO attribute at all, so the undefined default is the
+  // real no-space landing shape, not an oversight.
+  if (spaceId !== undefined) el.dataset.spaceId = spaceId;
+  return el;
 }
 
 function buildHook(el) {
-  const hook = Object.create(ScrollToBottom)
-  hook.el = el
-  hook.handleEvent = vi.fn()
-  return hook
+  const hook = Object.create(ScrollToBottom);
+  hook.el = el;
+  hook.handleEvent = vi.fn();
+  return hook;
 }
 
 function anchoredRows(el) {
-  return el.rows.flatMap((r) => r.scrollIntoViewCalls)
+  return el.rows.flatMap((r) => r.scrollIntoViewCalls);
 }
 
 // `applyGrouping` marks continuations AND run boundaries; these read the two
 // class flags back off the rows in list order.
 function groupings(el) {
-  return el.rows.map((r) => r.classList.contains("message-row--grouped"))
+  return el.rows.map((r) => r.classList.contains("message-row--grouped"));
 }
 
 function runEnds(el) {
-  return el.rows.map((r) => r.classList.contains("message-row--run-end"))
+  return el.rows.map((r) => r.classList.contains("message-row--run-end"));
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
 describe("ScrollToBottom — deep-link anchor holds the arrival position", () => {
-  let priorMO, priorRO, priorRAF
+  let priorMO, priorRO, priorRAF;
 
   beforeEach(() => {
-    priorMO = globalThis.MutationObserver
+    priorMO = globalThis.MutationObserver;
     globalThis.MutationObserver = class {
       constructor(cb) {
-        this.cb = cb
+        this.cb = cb;
       }
       observe() {}
       disconnect() {}
-    }
+    };
 
     // Polyfill ResizeObserver for node test env (task 019ff6c9)
-    priorRO = globalThis.ResizeObserver
+    priorRO = globalThis.ResizeObserver;
     globalThis.ResizeObserver = class {
       constructor(cb) {
-        this.cb = cb
+        this.cb = cb;
       }
       observe() {}
       disconnect() {}
-    }
+    };
 
     // Polyfill requestAnimationFrame / cancelAnimationFrame
-    priorRAF = globalThis.requestAnimationFrame
-    globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0)
-    globalThis.cancelAnimationFrame = (id) => clearTimeout(id)
-  })
+    priorRAF = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+    globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+  });
 
   afterEach(() => {
-    globalThis.MutationObserver = priorMO
-    if (priorRO !== undefined) globalThis.ResizeObserver = priorRO
-    else delete globalThis.ResizeObserver
-    if (priorRAF !== undefined) globalThis.requestAnimationFrame = priorRAF
-    else delete globalThis.requestAnimationFrame
-  })
+    globalThis.MutationObserver = priorMO;
+    if (priorRO !== undefined) globalThis.ResizeObserver = priorRO;
+    else delete globalThis.ResizeObserver;
+    if (priorRAF !== undefined) globalThis.requestAnimationFrame = priorRAF;
+    else delete globalThis.requestAnimationFrame;
+  });
 
   it("BASELINE: with no anchor attribute, mount hard-snaps to the bottom", () => {
-    const el = fakeList({ rows: [fakeRow("m-1"), fakeRow("m-2")] })
-    const hook = buildHook(el)
+    const el = fakeList({ rows: [fakeRow("m-1"), fakeRow("m-2")] });
+    const hook = buildHook(el);
 
-    hook.mounted()
+    hook.mounted();
 
     // This is the untouched behaviour every other test is measured
     // against. If this ever stops snapping, the "anchor suppressed the
     // snap" assertions below become vacuous.
-    expect(el.scrollTopWrites).toEqual([4000])
-    expect(hook._initialScroll).toBe(false)
-    expect(anchoredRows(el)).toEqual([])
-  })
+    expect(el.scrollTopWrites).toEqual([4000]);
+    expect(hook._initialScroll).toBe(false);
+    expect(anchoredRows(el)).toEqual([]);
+  });
 
   it("honours the anchor instead of the initial snap", () => {
-    const target = fakeRow("m-42")
+    const target = fakeRow("m-42");
     const el = fakeList({
       rows: [fakeRow("m-40"), target, fakeRow("m-44")],
       anchorId: "m-42",
-    })
-    const hook = buildHook(el)
+    });
+    const hook = buildHook(el);
 
-    hook.mounted()
+    hook.mounted();
 
     // Negative: the bottom snap did not fire.
-    expect(el.scrollTopWrites).toEqual([])
+    expect(el.scrollTopWrites).toEqual([]);
     // Positive control in the same test: the anchored scroll DID fire,
     // centred, on the right row. A hook that simply never ran would
     // fail here.
-    expect(target.scrollIntoViewCalls).toEqual([{ block: "center" }])
+    expect(target.scrollIntoViewCalls).toEqual([{ block: "center" }]);
     // The initial-snap phase is over, so later stream batches take the
     // ordinary near-bottom path rather than re-snapping.
-    expect(hook._initialScroll).toBe(false)
-  })
+    expect(hook._initialScroll).toBe(false);
+  });
 
   it("keeps holding the anchor across the async stream batches that follow mount", () => {
-    const target = fakeRow("m-42")
-    const el = fakeList({ rows: [target], anchorId: "m-42" })
-    const hook = buildHook(el)
+    const target = fakeRow("m-42");
+    const el = fakeList({ rows: [target], anchorId: "m-42" });
+    const hook = buildHook(el);
 
-    hook.mounted()
-    expect(target.scrollIntoViewCalls).toHaveLength(1)
+    hook.mounted();
+    expect(target.scrollIntoViewCalls).toHaveLength(1);
 
     // Stream batches land after mount and mutate childList; each one
     // used to get an unconditional yank to the bottom.
-    el.rows.push(fakeRow("m-43"), fakeRow("m-44"))
-    el.scrollHeight = 6000
-    hook.updated()
-    el.rows.push(fakeRow("m-45"))
-    el.scrollHeight = 7000
-    hook.updated()
+    el.rows.push(fakeRow("m-43"), fakeRow("m-44"));
+    el.scrollHeight = 6000;
+    hook.updated();
+    el.rows.push(fakeRow("m-45"));
+    el.scrollHeight = 7000;
+    hook.updated();
 
-    expect(el.scrollTopWrites).toEqual([])
+    expect(el.scrollTopWrites).toEqual([]);
     // Honoured exactly once for that id — no repeated re-centring that
     // would fight a reader who has started scrolling.
-    expect(target.scrollIntoViewCalls).toHaveLength(1)
-  })
+    expect(target.scrollIntoViewCalls).toHaveLength(1);
+  });
 
   it("re-anchors when the attribute changes to a new id", () => {
-    const first = fakeRow("m-1")
-    const second = fakeRow("m-2")
-    const el = fakeList({ rows: [first, second], anchorId: "m-1" })
-    const hook = buildHook(el)
+    const first = fakeRow("m-1");
+    const second = fakeRow("m-2");
+    const el = fakeList({ rows: [first, second], anchorId: "m-1" });
+    const hook = buildHook(el);
 
-    hook.mounted()
-    expect(first.scrollIntoViewCalls).toHaveLength(1)
-    expect(second.scrollIntoViewCalls).toHaveLength(0)
+    hook.mounted();
+    expect(first.scrollIntoViewCalls).toHaveLength(1);
+    expect(second.scrollIntoViewCalls).toHaveLength(0);
 
     // A second deep-link arrival in the same LiveView session patches
     // the attribute; the once-per-id guard must not swallow it.
-    el.dataset.anchorMessageId = "m-2"
-    hook.updated()
+    el.dataset.anchorMessageId = "m-2";
+    hook.updated();
 
-    expect(second.scrollIntoViewCalls).toEqual([{ block: "center" }])
-    expect(first.scrollIntoViewCalls).toHaveLength(1)
-    expect(el.scrollTopWrites).toEqual([])
-  })
+    expect(second.scrollIntoViewCalls).toEqual([{ block: "center" }]);
+    expect(first.scrollIntoViewCalls).toHaveLength(1);
+    expect(el.scrollTopWrites).toEqual([]);
+  });
 
   it("falls back to the bottom snap when the anchor row is not in the DOM yet, then anchors once it arrives", () => {
-    const el = fakeList({ rows: [fakeRow("m-1")], anchorId: "m-99" })
-    const hook = buildHook(el)
+    const el = fakeList({ rows: [fakeRow("m-1")], anchorId: "m-99" });
+    const hook = buildHook(el);
 
-    hook.mounted()
+    hook.mounted();
 
     // Byte-identical to the no-attribute baseline: an anchor we cannot
     // resolve must never leave the reader mid-nowhere.
-    expect(el.scrollTopWrites).toEqual([4000])
-    expect(anchoredRows(el)).toEqual([])
+    expect(el.scrollTopWrites).toEqual([4000]);
+    expect(anchoredRows(el)).toEqual([]);
 
     // Positive control that the fallback is not permanent: when the
     // target row lands in a later stream batch the hook still anchors.
-    const late = fakeRow("m-99")
-    el.rows.push(late)
-    hook.updated()
+    const late = fakeRow("m-99");
+    el.rows.push(late);
+    hook.updated();
 
-    expect(late.scrollIntoViewCalls).toEqual([{ block: "center" }])
-    expect(el.scrollTopWrites).toEqual([4000])
-  })
+    expect(late.scrollIntoViewCalls).toEqual([{ block: "center" }]);
+    expect(el.scrollTopWrites).toEqual([4000]);
+  });
 
   it("resumes the ordinary near-bottom rule after the anchor is honoured", () => {
-    const target = fakeRow("m-42")
-    const el = fakeList({ rows: [target], anchorId: "m-42" })
-    const hook = buildHook(el)
+    const target = fakeRow("m-42");
+    const el = fakeList({ rows: [target], anchorId: "m-42" });
+    const hook = buildHook(el);
 
-    hook.mounted()
-    expect(target.scrollIntoViewCalls).toHaveLength(1)
-    expect(el.scrollTopWrites).toEqual([])
+    hook.mounted();
+    expect(target.scrollIntoViewCalls).toHaveLength(1);
+    expect(el.scrollTopWrites).toEqual([]);
 
     // Reader is parked mid-history (distance from bottom 3400px): a new
     // message must NOT yank them down.
-    el._scrollTop = 0
-    hook.updated()
-    expect(el.scrollTopWrites).toEqual([])
+    el._scrollTop = 0;
+    hook.updated();
+    expect(el.scrollTopWrites).toEqual([]);
 
     // Positive control for the same rule: once the reader scrolls back
     // down to within NEAR_BOTTOM_PX, live tailing resumes exactly as it
     // does on a normal entry. Without this the previous assertion would
     // also pass on a hook that had stopped scrolling entirely.
-    el._scrollTop = 3350 // 4000 - 600 - 3350 = 50px from the bottom
-    hook.updated()
-    expect(el.scrollTopWrites).toEqual([4000])
-  })
+    el._scrollTop = 3350; // 4000 - 600 - 3350 = 50px from the bottom
+    hook.updated();
+    expect(el.scrollTopWrites).toEqual([4000]);
+  });
 
   it("leaves message grouping untouched on the anchored path", () => {
-    const grouped = fakeRow("m-2", "p-1")
+    const grouped = fakeRow("m-2", "p-1");
     const el = fakeList({
       rows: [fakeRow("m-1", "p-1"), grouped, fakeRow("m-3", "p-2")],
       anchorId: "m-2",
-    })
-    const hook = buildHook(el)
+    });
+    const hook = buildHook(el);
 
-    hook.mounted()
+    hook.mounted();
 
     // `applyGrouping` runs before `scrollToBottom` in `_safeUpdate`;
     // returning early from the anchor branch must not skip it.
-    expect(grouped.classList.contains("message-row--grouped")).toBe(true)
+    expect(grouped.classList.contains("message-row--grouped")).toBe(true);
     // …and the row after it opens a new author group, so it stays ungrouped.
-    expect(el.rows[2].classList.contains("message-row--grouped")).toBe(false)
+    expect(el.rows[2].classList.contains("message-row--grouped")).toBe(false);
 
     // Run boundaries ride the same pass, so they must survive the anchored
     // path too. m-2 closes p-1's run (m-3 switches author) and m-3 is last in
     // the container, so both end runs; m-1 is mid-run and does not.
-    expect(runEnds(el)).toEqual([false, true, true])
-  })
+    expect(runEnds(el)).toEqual([false, true, true]);
+  });
 
   it("marks the last row of each author run, on the ordinary snap path", () => {
     const el = fakeList({
@@ -311,38 +316,38 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
         fakeRow("m-4", "p-2"),
         fakeRow("m-5", "p-1"),
       ],
-    })
-    const hook = buildHook(el)
+    });
+    const hook = buildHook(el);
 
-    hook.mounted()
+    hook.mounted();
 
     // Only the LAST row of each run is a boundary. The two middles of the
     // opening three-row run are the rows a "mark everything" implementation
     // would get wrong.
-    expect(runEnds(el)).toEqual([false, false, true, true, true])
+    expect(runEnds(el)).toEqual([false, false, true, true, true]);
     // m-4 and m-5 are single-message runs: no `--grouped`, but still a
     // run end each, which is what keeps them fully rounded.
-    expect(groupings(el)).toEqual([false, true, true, false, false])
-  })
+    expect(groupings(el)).toEqual([false, true, true, false, false]);
+  });
 
   it("clears a stale run-end once a later row joins the run", () => {
     // The re-render case: `toggle` must UNmark a row that has stopped being
     // the end of its run, exactly as it already does for `--grouped`.
-    const first = fakeRow("m-1", "p-1")
-    const second = fakeRow("m-2", "p-2")
-    const el = fakeList({ rows: [first, second] })
-    const hook = buildHook(el)
+    const first = fakeRow("m-1", "p-1");
+    const second = fakeRow("m-2", "p-2");
+    const el = fakeList({ rows: [first, second] });
+    const hook = buildHook(el);
 
-    hook.mounted()
-    expect(runEnds(el)).toEqual([true, true])
+    hook.mounted();
+    expect(runEnds(el)).toEqual([true, true]);
 
     // Server re-renders m-2 under the same author, merging the two runs.
-    second.dataset.participantId = "p-1"
-    hook.updated()
+    second.dataset.participantId = "p-1";
+    hook.updated();
 
-    expect(runEnds(el)).toEqual([false, true])
-    expect(groupings(el)).toEqual([false, true])
-  })
+    expect(runEnds(el)).toEqual([false, true]);
+    expect(groupings(el)).toEqual([false, true]);
+  });
 
   // Task 019ffe5e stage 3 — the JS half of the reclaimed-height guard.
   //
@@ -367,15 +372,15 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
         fakeRow("m-3", "p-1"),
         fakeRow("m-4", "p-2"),
       ],
-    })
-    const hook = buildHook(el)
+    });
+    const hook = buildHook(el);
 
-    hook.mounted()
+    hook.mounted();
 
     // Positive control: grouping really did run on these rows, so the
     // "no inline style" assertion below is a statement about a hook that
     // did its job rather than one that never executed.
-    expect(groupings(el)).toEqual([false, true, true, false])
+    expect(groupings(el)).toEqual([false, true, true, false]);
 
     for (const row of el.rows) {
       expect(
@@ -383,7 +388,172 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
         `applyGrouping wrote inline style ${JSON.stringify(row.style)} on ` +
           `${row.dataset.messageId}. Row geometry belongs in app.css — an ` +
           `inline style can only hide something, never reclaim its space.`,
-      ).toEqual([])
+      ).toEqual([]);
     }
-  })
-})
+  });
+});
+
+/**
+ * Conversation-change reset (task 01a03c75 stage 2).
+ *
+ * Every channel/DM link in `chat_live.html.heex` is `patch=`, so switching
+ * conversations runs `handle_params/3` without a remount: `#message-list`
+ * keeps its DOM id and this hook instance, and `mounted()` does NOT re-run.
+ * The initial-snap phase was therefore spent once per page load, and a
+ * reader who had scrolled up carried their old offset into the next
+ * conversation — by construction they are not within NEAR_BOTTOM_PX, so
+ * nothing snapped them to the newest message.
+ *
+ * The reset is keyed strictly on `data-space-id` CHANGING VALUE. `updated()`
+ * fires on every stream batch inside one conversation; resetting there would
+ * reinstate the unconditional yank-to-bottom that task 019f51d1 removed.
+ * That is why the "did not snap" case below is paired with a near-bottom
+ * positive control on the same unchanged id.
+ */
+describe("ScrollToBottom — conversation change re-arms the initial snap", () => {
+  let priorMO, priorRO, priorRAF;
+  // Every ResizeObserver the hook constructs, in order, with the elements it
+  // observed. Counting constructions is how a re-arm is distinguished from a
+  // flag flip: the observer disconnects itself as soon as the initial phase
+  // ends, so reading `hook._resizeObserver` after `updated()` returns always
+  // finds null whether or not it was ever re-armed.
+  let observers;
+
+  beforeEach(() => {
+    observers = [];
+    priorMO = globalThis.MutationObserver;
+    globalThis.MutationObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+
+    priorRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        this.observed = [];
+        observers.push(this);
+      }
+      observe(el) {
+        this.observed.push(el);
+      }
+      disconnect() {}
+    };
+
+    priorRAF = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+    globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+  });
+
+  afterEach(() => {
+    globalThis.MutationObserver = priorMO;
+    if (priorRO !== undefined) globalThis.ResizeObserver = priorRO;
+    else delete globalThis.ResizeObserver;
+    if (priorRAF !== undefined) globalThis.requestAnimationFrame = priorRAF;
+    else delete globalThis.requestAnimationFrame;
+  });
+
+  // Mount in one conversation, then park the reader well above the bottom
+  // and clear the mount's own writes so each test measures ONLY what the
+  // subsequent `updated()` did.
+  function mountedAndScrolledUp(opts = {}) {
+    const el = fakeList({ rows: [fakeRow("m-1"), fakeRow("m-2")], ...opts });
+    const hook = buildHook(el);
+    hook.mounted();
+    // The mount snap ended the initial phase; anything later is the
+    // near-bottom gate's business.
+    expect(hook._initialScroll).toBe(false);
+    el._scrollTop = 500;
+    el.scrollTopWrites = [];
+    return { el, hook };
+  }
+
+  it("snaps a scrolled-up reader to the bottom when the space id changes", () => {
+    const { el, hook } = mountedAndScrolledUp({ spaceId: "space-larkspur" });
+
+    // 4000 - 500 - 600 = 2900px up: far outside NEAR_BOTTOM_PX, so nothing
+    // but a genuine phase reset can produce a snap here.
+    expect(el.scrollHeight - el._scrollTop - el.clientHeight).toBe(2900);
+
+    el.dataset.spaceId = "space-marigold";
+    hook.updated();
+
+    expect(el.scrollTopWrites).toEqual([4000]);
+    expect(hook._spaceId).toBe("space-marigold");
+    // Re-armed, not merely flipped: the ResizeObserver is disconnected the
+    // moment the initial phase ends, so a flag-only reset would leave the
+    // late-layout re-snap protection dead for every later conversation. One
+    // observer came from `mounted()`; the second is the re-arm, and it is
+    // watching the same scroller.
+    expect(observers.length).toBe(2);
+    expect(observers[1].observed).toEqual([el]);
+  });
+
+  it("does NOT snap a scrolled-up reader when the space id is unchanged", () => {
+    const { el, hook } = mountedAndScrolledUp({ spaceId: "space-larkspur" });
+
+    // Same value re-read, exactly as a stream batch inside one conversation
+    // presents it.
+    el.dataset.spaceId = "space-larkspur";
+    hook.updated();
+
+    expect(el.scrollTopWrites).toEqual([]);
+    expect(hook._initialScroll).toBe(false);
+    // No reset happened at all — only `mounted()`'s observer exists.
+    expect(observers.length).toBe(1);
+  });
+
+  it("POSITIVE CONTROL: still snaps a near-bottom reader on an unchanged space id", () => {
+    const { el, hook } = mountedAndScrolledUp({ spaceId: "space-larkspur" });
+
+    // 4000 - 3300 - 600 = 100px, inside NEAR_BOTTOM_PX. This is what stops
+    // the test above passing merely because the hook never ran.
+    el._scrollTop = 3300;
+    el.scrollTopWrites = [];
+    hook.updated();
+
+    expect(el.scrollTopWrites).toEqual([4000]);
+  });
+
+  it("honours a deep link into the new space instead of snapping to its bottom", () => {
+    const target = fakeRow("m-77");
+    const { el, hook } = mountedAndScrolledUp({
+      rows: [fakeRow("m-70"), target, fakeRow("m-80")],
+      spaceId: "space-larkspur",
+    });
+
+    el.dataset.spaceId = "space-marigold";
+    el.dataset.anchorMessageId = "m-77";
+    hook.updated();
+
+    // `honourAnchor()` runs before the `_initialScroll` branch inside
+    // `scrollToBottom()`, so re-arming the snap cannot override an anchored
+    // arrival. Clearing `_anchoredFor` on the change is what makes the new
+    // space's anchor eligible at all.
+    expect(el.scrollTopWrites).toEqual([]);
+    expect(target.scrollIntoViewCalls).toEqual([{ block: "center" }]);
+    expect(hook._initialScroll).toBe(false);
+  });
+
+  it("treats a space id going away and coming back as two changes", () => {
+    const { el, hook } = mountedAndScrolledUp({ spaceId: "space-larkspur" });
+
+    // A no-space landing: `data-space-id={@active_space && @active_space.id}`
+    // renders no attribute when the assign is nil.
+    delete el.dataset.spaceId;
+    expect(() => hook.updated()).not.toThrow();
+    expect(hook._spaceId).toBe(null);
+    expect(el.scrollTopWrites).toEqual([4000]);
+
+    el._scrollTop = 500;
+    el.scrollTopWrites = [];
+    el.dataset.spaceId = "space-larkspur";
+    hook.updated();
+
+    expect(hook._spaceId).toBe("space-larkspur");
+    expect(el.scrollTopWrites).toEqual([4000]);
+  });
+});

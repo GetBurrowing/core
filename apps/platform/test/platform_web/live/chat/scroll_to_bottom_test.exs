@@ -341,4 +341,46 @@ defmodule PlatformWeb.ChatLive.ScrollToBottomTest do
       assert accepted_html =~ ~r/id="message-list"[^>]*data-anchor-message-id="#{real.id}"/
     end
   end
+
+  describe "task 01a03c75 stage 1: data-space-id on #message-list" do
+    test "names the active space, and CHANGES when patching to a second space", %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      space_a = ensure_space("scroll-spaceid-a-#{System.unique_integer([:positive])}")
+      space_b = ensure_space("scroll-spaceid-b-#{System.unique_integer([:positive])}")
+      {_participant, _} = post_message(space_a, user, "a message in the first space")
+      {_participant, _} = post_message(space_b, user, "a message in the second space")
+
+      refute space_a.id == space_b.id,
+             "fixture precondition: the two spaces must have distinct ids or the " <>
+               "inequality assertion below cannot discriminate"
+
+      {:ok, view, html_a} = live(conn, ~p"/chat/#{space_a.slug}")
+
+      assert html_a =~ ~r/id="message-list"[^>]*data-space-id="#{space_a.id}"/,
+             "#message-list must carry data-space-id — it is the only channel by which " <>
+               "the ScrollToBottom hook learns which conversation it is looking at"
+
+      # Load-bearing: patch to a SECOND space and require the rendered
+      # value to CHANGE. A presence-only check in one space is satisfied
+      # by a hardcoded or stale attribute, which is exactly the bug class
+      # this contract exists to rule out.
+      html_b = render_patch(view, ~p"/chat/#{space_b.slug}")
+
+      [_, rendered_a] = Regex.run(~r/id="message-list"[^>]*data-space-id="([^"]+)"/, html_a)
+      [_, rendered_b] = Regex.run(~r/id="message-list"[^>]*data-space-id="([^"]+)"/, html_b)
+
+      assert rendered_a == space_a.id
+      assert rendered_b == space_b.id
+
+      refute rendered_a == rendered_b,
+             """
+             data-space-id did not change across a channel patch. The hook
+             would treat the second conversation as a continuation of the
+             first, so its per-conversation scroll state never resets.
+
+             space_a: #{inspect(rendered_a)}
+             space_b: #{inspect(rendered_b)}
+             """
+    end
+  end
 end

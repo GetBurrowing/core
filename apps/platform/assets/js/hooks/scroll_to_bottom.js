@@ -59,12 +59,12 @@ const ScrollToBottom = {
       this.el.closest("[data-scroll-container]") ||
       this.el.closest("main") ||
       this.el;
-    this._initialScroll = true;
     this._holdFrame = null;
-    // Message id whose arrival position has already been honoured, so a
-    // later stream batch doesn't re-centre a reader who has since
-    // scrolled away.
-    this._anchoredFor = null;
+    // Seeds `_spaceId`, `_initialScroll` and `_anchoredFor`, and arms the
+    // ResizeObserver. `updated()` calls the SAME method when the rendered
+    // conversation changes, so there is exactly one definition of what
+    // "entering a conversation" means and the two entry paths cannot drift.
+    this._beginConversation(this.el.dataset.spaceId ?? null);
 
     this.handleEvent("sidebar_collapsed_changed", () =>
       this.holdAnchorThroughReflow(),
@@ -85,18 +85,6 @@ const ScrollToBottom = {
     // ResizeObserver detects when the container's dimensions stabilize
     // after fonts, images, and layout settle. We keep snapping to bottom
     // during the initial phase, then disconnect once stable.
-    if (typeof ResizeObserver !== "undefined") {
-      this._resizeObserver = new ResizeObserver(() => {
-        if (this._initialScroll) {
-          this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
-        } else {
-          // Initial phase ended — no longer needed
-          this._disconnectResizeObserver();
-        }
-      });
-      this._resizeObserver.observe(this.scrollEl);
-    }
-
     // Wrap the first scrollToBottom in rAF so the browser has done at
     // least one layout pass before we read scrollHeight.
     requestAnimationFrame(() => {
@@ -115,6 +103,38 @@ const ScrollToBottom = {
     this._safeUpdate();
     this._observer.observe(this.el, { childList: true, subtree: false });
   },
+  // Entering a conversation — on mount, and again whenever `updated()`
+  // observes `data-space-id` take a NEW value. Both callers get the same
+  // state, including a freshly armed ResizeObserver: the observer is
+  // disconnected the moment the initial phase ends (`honourAnchor`,
+  // `scrollToBottom`), so flipping `_initialScroll` alone would leave the
+  // iOS / late-layout re-snap protection dead from conversation two on.
+  _beginConversation(spaceId) {
+    this._spaceId = spaceId;
+    this._initialScroll = true;
+    // Message id whose arrival position has already been honoured, so a
+    // later stream batch doesn't re-centre a reader who has since
+    // scrolled away. Cleared here so a deep link into a DIFFERENT space is
+    // honoured on arrival.
+    this._anchoredFor = null;
+    this._connectResizeObserver();
+  },
+  // iOS PWA cold-launch fix (task 019ff6c9): ResizeObserver detects when the
+  // container's dimensions stabilize after fonts, images and layout settle.
+  // Keep snapping during the initial phase, then disconnect once stable.
+  _connectResizeObserver() {
+    if (typeof ResizeObserver === "undefined") return;
+    this._disconnectResizeObserver();
+    this._resizeObserver = new ResizeObserver(() => {
+      if (this._initialScroll) {
+        this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+      } else {
+        // Initial phase ended — no longer needed
+        this._disconnectResizeObserver();
+      }
+    });
+    this._resizeObserver.observe(this.scrollEl);
+  },
   _disconnectResizeObserver() {
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();
@@ -132,6 +152,15 @@ const ScrollToBottom = {
     }
   },
   updated() {
+    // A `patch=` navigation to another channel/DM re-renders `#message-list`
+    // in place: same DOM id, same hook instance, so `mounted()` does NOT
+    // re-run and the initial-snap phase would stay spent from page load. Only
+    // an ACTUAL change of value resets — `updated()` fires on every stream
+    // batch within one conversation, and resetting there would reinstate the
+    // unconditional yank-to-bottom that task 019f51d1 removed (see header).
+    const spaceId = this.el.dataset.spaceId ?? null;
+    if (spaceId !== this._spaceId) this._beginConversation(spaceId);
+
     this._safeUpdate();
   },
   destroyed() {
