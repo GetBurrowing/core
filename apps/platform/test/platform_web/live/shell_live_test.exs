@@ -39,6 +39,45 @@ defmodule PlatformWeb.ShellLiveTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
+  # ── Synchronising on a `send_update/2`-driven LiveComponent change ───────
+  #
+  # `render/1` is synchronous with the LiveView process for exactly ONE
+  # mailbox turn: `Phoenix.LiveViewTest.ClientProxy` pings the LV, so every
+  # message queued BEFORE the ping has been handled by the time the proxy
+  # renders its cached tree.
+  #
+  # That is one turn short whenever the assertion's target is produced by
+  # `send_update/2`, because `send_update/2` is `send(self(), ...)` — the
+  # component's `update/2` runs on the LV's NEXT turn, and the diff it
+  # produces reaches the proxy after the proxy has already decided what to
+  # render. Concretely, for the meeting bar:
+  #
+  #   1. the test broadcasts `:meeting_media_state`      -> LV queue [B]
+  #   2. the test calls `render(view)`; the proxy pings  -> LV queue [B, P]
+  #   3. LV handles B; ShellLive's `:roster_updates` hook calls
+  #      `send_update(MeetingBarLive, ...)`               -> LV queue [P, U]
+  #   4. LV answers the ping P; the proxy renders — but U has not run, so
+  #      the bar in the rendered tree still carries its previous mic state.
+  #
+  # Whether the assertion passes therefore depends on a genuine race between
+  # two processes: whether the LV happens to get scheduled for U (and its
+  # diff reaches the proxy) before the proxy dequeues its own render
+  # request. Under load it loses. Measured at 1 failure / 30 isolated runs
+  # on this test before this helper existed (seed 12 of 1..30).
+  #
+  # A SECOND `render/1` closes it deterministically rather than
+  # probabilistically: U is already queued ahead of the second ping, so the
+  # LV must run U — and push its diff — before it can answer that ping, and
+  # the proxy only self-schedules its render after the ping returns. No
+  # sleeps, no polling, no weakened assertion.
+  #
+  # Use this instead of `render/1` for any assertion whose subject is
+  # written by `send_update/2`.
+  defp render_settled(view) do
+    _ = render(view)
+    render(view)
+  end
+
   defp authenticated_conn(conn, opts \\ []) do
     {conn, _user} = authenticated_conn_with_user(conn, opts)
     conn
@@ -1433,8 +1472,10 @@ defmodule PlatformWeb.ShellLiveTest do
           camera_enabled: true
         })
 
-      # Force a render flush so the LiveComponent's update/2 runs.
-      post_html = render(view)
+      # Two flushes, not one: the bar's mic state is written by
+      # `send_update/2`, which lands a turn after the broadcast. See
+      # `render_settled/1`.
+      post_html = render_settled(view)
 
       assert post_html =~ "hero-microphone-slash"
       assert post_html =~ "text-error"
@@ -1630,7 +1671,10 @@ defmodule PlatformWeb.ShellLiveTest do
           camera_enabled: false
         })
 
-      html = render(view)
+      # `send_update/2`-written state — see `render_settled/1`. Same race as
+      # the mic-button test above; this one had simply not been observed
+      # losing it yet.
+      html = render_settled(view)
       assert html =~ "hero-microphone-slash"
       assert html =~ "hero-video-camera-slash"
 
