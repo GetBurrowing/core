@@ -18,16 +18,53 @@ defmodule PlatformWeb.ChatLive.Partials do
     * `canvas_overlay/1` — active-canvas side panel + mobile full-screen
     * `meeting_panel/1` — in-meeting UI (desktop sidebar + mobile overlay)
     * `image_lightbox/1` — full-screen image viewer
+    * `brand_new_user_empty_state/1` — the §5.1 "no spaces yet" state, shared
+      by the desktop rail and the mobile content pane
   """
 
   use Phoenix.Component
+  use PlatformWeb, :verified_routes
 
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1, human_avatar: 1]
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
+  import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
 
   alias Phoenix.LiveView.JS
   alias PlatformWeb.ChatLive.CanvasHooks
+
+  @doc """
+  The brand-new-user empty state — `docs/design-system/03-voice.md` §5.1,
+  "no spaces yet": what is empty, why, and the two agent-mediated actions
+  (create a space / connect an agent).
+
+  Lives HERE, in the shared module, because it renders on TWO surfaces that
+  are mutually exclusive at any one viewport width: the desktop rail
+  (`Rail.rail/1`, inside `#chat-sidebar`, which is `display: none` below
+  `lg`) and the mobile content pane (`Conversation.mobile_no_spaces_pane/1`,
+  which is `lg:hidden`). Before task 01a0312e stage 8 only the rail copy
+  existed, so a brand-new user on a phone got a literally blank content pane
+  with no create, join or browse affordance anywhere on screen — the
+  `MobileBrowser` zero-state that should have covered them is opened by
+  `toggle_mobile_browser`, and that trigger lives in the channel-pills strip,
+  which is itself gated on `@active_space` and therefore never renders for a
+  user who has no spaces to be active in. The empty state was behind a door
+  with no handle.
+
+  One definition rather than two so the §5.1 copy cannot drift between the
+  two breakpoints. The component renders no wrapper of its own — each caller
+  owns its own positioning and its own render condition.
+  """
+  def brand_new_user_empty_state(assigns) do
+    ~H"""
+    <.empty_state variant={:conversational}>
+      <:system_message>— no spaces yet —</:system_message>
+      <:body>Welcome to Suite. To get started, create a space or connect your agent.</:body>
+      <:chips label="+ Create a space" event="new_channel_open" />
+      <:chips label="+ Connect an agent" event={JS.navigate(~p"/control")} />
+    </.empty_state>
+    """
+  end
 
   @doc """
   Notification opt-in banner, rendered when push permission is exactly

@@ -106,6 +106,33 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `apps/platform` — this file lives at `test/platform_web/live/`.
   @app_root Path.expand("../../..", __DIR__)
   @chat_live_path Path.join(@app_root, "lib/platform_web/live/chat_live.ex")
+  @render_helpers_path Path.join(@app_root, "lib/platform_web/live/chat/render_helpers.ex")
+  @external_rail_path Path.join(@app_root, "lib/platform_web/live/chat/partials/external_rail.ex")
+  @rail_path Path.join(@app_root, "lib/platform_web/live/chat/partials/rail.ex")
+  @mobile_browser_path Path.join(
+                         @app_root,
+                         "lib/platform_web/live/chat/partials/mobile_browser.ex"
+                       )
+  @conversation_path Path.join(
+                       @app_root,
+                       "lib/platform_web/live/chat/partials/conversation.ex"
+                     )
+  @composer_path Path.join(@app_root, "lib/platform_web/live/chat/partials/composer.ex")
+  @overlays_path Path.join(@app_root, "lib/platform_web/live/chat/partials/overlays.ex")
+
+  # Every file the chat surface's load-bearing explanation is allowed to live
+  # in. The comment FLOOR below sums over this list so an extraction cannot
+  # look like a deletion, and a deletion cannot hide behind an extraction.
+  @explained_paths [
+    @chat_live_path,
+    @render_helpers_path,
+    @external_rail_path,
+    @rail_path,
+    @mobile_browser_path,
+    @conversation_path,
+    @composer_path,
+    @overlays_path
+  ]
 
   # MEASURED on `origin/main` @ f1311a42, 2026-08-25, by `code_line_count/1`
   # below. The arithmetic, so a reader can check it rather than trust it:
@@ -137,7 +164,142 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # step. Listing chat_live there would re-create comment-deletion pressure
   # through the CI door this test closes — the two guards would pull in
   # opposite directions. The pin lives here and only here.
-  @chat_live_code_line_count 2346
+  # RE-MEASURED on `task/01a0312e-3f44-7dc5-8b90-52658cd04228` (base
+  # `origin/main` @ efe28d06), 2026-08-26, after task 01a0312e stage 1 moved
+  # sixteen template-only `defp` helpers (plus their private dependencies
+  # `mask_space_name/2`, `movable_channel?/1`, `drawer_match?/2`,
+  # `pinned_task_actions_target/3`, `blank?/1`) into
+  # `PlatformWeb.ChatLive.RenderHelpers`. The pin DROPS, which is the guard
+  # working: it fires on any delta, and this stage removes code.
+  #
+  #     4,776  total lines (`wc -l`)
+  #     -  482  blank / whitespace-only         (rule 1)
+  #     -1,988  leading-`#` comment lines       (rule 2)
+  #     -  115  @doc/@moduledoc heredoc lines   (rule 3)
+  #     =2,191  <- the new pin
+  #
+  # Reconciling against the old pin: 2,346 - 2,191 = 156 code lines left the
+  # file and 1 arrived (`import PlatformWeb.ChatLive.RenderHelpers`), so the
+  # net is -155. `render_helpers.ex` measures 160 code lines by the same rule:
+  # the 156 moved bodies plus its own `defmodule` / `import` / `alias` / `end`.
+  # No helper body was rewritten and no comment was dropped to reach this
+  # number — the reduction is entirely relocation.
+  # RE-MEASURED again on the same branch, 2026-08-26, after task 01a0312e
+  # stage 2 moved the external rail and its mobile switcher out of
+  # `chat_live.html.heex` into `PlatformWeb.ChatLive.Partials.ExternalRail`.
+  # That stage removes ~290 lines of MARKUP, which this pin does not count —
+  # it measures `chat_live.ex` only. The single code line it adds there is
+  # `import PlatformWeb.ChatLive.Partials.ExternalRail`, so:
+  #
+  #     2,191  stage 1 pin
+  #     +    1  the new import
+  #     =2,192  <- the pin
+  #
+  # `partials/external_rail.ex` is in `@explained_paths` above, so the comment
+  # prose that travelled with the markup still counts toward the floor rather
+  # than leaving the guard's sight.
+  # RE-MEASURED again on the same branch, 2026-08-26, after task 01a0312e
+  # stage 3 moved `<aside id="chat-sidebar">` — the whole internal desktop
+  # channel rail, ~1,348 lines of markup — out of `chat_live.html.heex` into
+  # `PlatformWeb.ChatLive.Partials.Rail`. Same shape as stage 2: the markup
+  # this pin does not count leaves a `.heex`, and the single code line it adds
+  # to `chat_live.ex` is the new `import`:
+  #
+  #     2,192  stage 2 pin
+  #     +    1  `import PlatformWeb.ChatLive.Partials.Rail`
+  #     =2,193  <- the pin
+  #
+  # `partials/rail.ex` is registered in `@explained_paths` above. Stated
+  # plainly because the number does NOT move and a reader will expect it to:
+  # `comment_line_count/1` counts LEADING-`#` lines, and the prose that
+  # travelled with this markup is `<%!-- --%>` HEEx comments plus `@moduledoc`
+  # / `@doc` heredocs — none of which the floor counts. `chat_live.ex` still
+  # measures 1,988. The registration is prophylactic: it earns its keep the
+  # first time a slice carries real `#` comments out of one of these files.
+  #
+  # It is worth naming the blind spot rather than leaving it implied. For a
+  # task whose entire purpose is relocating markup and its explanation out of
+  # a `.heex`, THE COMMENT FLOOR CANNOT SEE THE THING MOST AT RISK. It guards
+  # `#` comments in `.ex` files; the ~700 lines of `<%!-- --%>` design
+  # rationale that moved in stages 2 and 3 are outside its reach entirely.
+  # Nothing here is a reason to lower the floor — it is a reason not to read a
+  # green ratchet as proof the prose survived. The proof that it survived in
+  # stage 3 is the diff: the move was byte-identical.
+  # RE-MEASURED again on the same branch, 2026-08-26, after task 01a0312e
+  # stage 4 moved `<div id="mobile-channel-browser">` — the mobile channel
+  # browser drawer, ~917 lines of markup — out of `chat_live.html.heex` into
+  # `PlatformWeb.ChatLive.Partials.MobileBrowser`. Same shape as stages 2 and
+  # 3: the markup this pin does not count leaves a `.heex`, and the single
+  # code line it adds to `chat_live.ex` is the new `import`:
+  #
+  #     2,193  stage 3 pin
+  #     +    1  `import PlatformWeb.ChatLive.Partials.MobileBrowser`
+  #     =2,194  <- the pin
+  #
+  # `partials/mobile_browser.ex` is registered in `@explained_paths` above,
+  # and the comment floor does NOT move for the same reason stage 3 recorded:
+  # the prose that travelled with this drawer is `<%!-- --%>` HEEx comments
+  # and `@moduledoc` / `@doc` heredocs, and `comment_line_count/1` counts
+  # leading-`#` lines only. That is expected, not a miss. The proof this move
+  # preserved the drawer is again the diff, not this pin: 19 fixture states
+  # rendered before and after, with a byte-identical tag-and-attribute
+  # surface (2,720 elements) in every one.
+  # RE-MEASURED again on the same branch, 2026-08-26, after task 01a0312e
+  # stage 5 moved the top half of the conversation pane — the space
+  # `<header>`, the mobile Pinned strip, the mobile channel-pills strip and
+  # the search / pins / canvases drawers, ~720 lines of markup — out of
+  # `chat_live.html.heex` into `PlatformWeb.ChatLive.Partials.Conversation`.
+  # Unlike stages 2-4 the pin DROPS, and the arithmetic is worth stating
+  # because "an extraction that lowers the code count" is exactly the shape
+  # this guard exists to catch:
+  #
+  #     2,194  stage 4 pin
+  #     +    1  `import PlatformWeb.ChatLive.Partials.Conversation`
+  #     -    1  `import PlatformWeb.Components.ChatHelpers` (now unused)
+  #     -    1  `import PlatformWeb.Components.ScopePill` (now unused)
+  #     =2,193  <- the pin
+  #
+  # The two removed imports are not a deletion of behaviour: `present?/1`,
+  # `local_time/1` (dropped from the `ChatMessage` import list, which is why
+  # that line is edited rather than removed) and `scope_pill/1` were called
+  # ONLY from the markup that moved. They are imported by
+  # `partials/conversation.ex` now. Leaving them behind would have compiled
+  # with three `unused import` warnings.
+  #
+  # `partials/conversation.ex` is registered in `@explained_paths` above. The
+  # comment FLOOR does not move, for the third stage running and for the same
+  # reason: `comment_line_count/1` counts leading-`#` lines, and everything
+  # that travelled here is `<%!-- --%>` HEEx prose plus `@moduledoc` / `@doc`
+  # heredocs. Expected, not a miss. The proof this move preserved the header
+  # is the render diff, not this pin — and specifically that BOTH breakpoint
+  # branches of the space title still mask (task 01a00c66's bug shape), which
+  # no line count can see.
+  # Stage 7 (task 01a0312e) — `partials/overlays.ex`. The template's overlay
+  # layer (reaction picker, long-press pill, edit-removal warning, the
+  # message-actions `<.sheet>`, junk-batch modal) moved out of
+  # `chat_live.html.heex`. `chat_live.ex` itself gains exactly ONE code line:
+  #
+  #     2,193  the stage-6 pin
+  #     +    1  `import PlatformWeb.ChatLive.Partials.Overlays`
+  #     -    1  `alias Phoenix.LiveView.JS` (now unused)
+  #     =2,193  <- the pin, unchanged by coincidence, not by construction
+  #
+  # No IMPORT was removed — `sheet/1` arrives through `use PlatformWeb,
+  # :live_view`, not through a line in this module — but the `Phoenix.LiveView.JS`
+  # ALIAS went with the markup. The long-press pill's `JS.push(...) |> JS.push(...)`
+  # chain was the last caller of the short form in `chat_live.html.heex`; the
+  # message-actions sheet spells `Phoenix.LiveView.JS` out in full, so it never
+  # needed the alias. Leaving it behind would have compiled with an
+  # `unused alias JS` warning. `partials/overlays.ex` carries the alias now.
+  #
+  # `partials/overlays.ex` is registered in `@explained_paths` above. The
+  # comment FLOOR does not move, for the fourth stage running and for the same
+  # reason: everything that travelled is `<%!-- --%>` HEEx prose plus
+  # `@moduledoc` / `@doc` heredocs, and `comment_line_count/1` counts
+  # leading-`#` lines only. Expected, not a miss. The proof this move was pure
+  # is the per-overlay OPEN-state render diff, not this pin — no line count can
+  # see an overlay that never opened.
+  @chat_live_code_line_count 2193
 
   @doc """
   Count the CODE lines of a source file.
@@ -282,16 +444,33 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
              Do NOT delete this assertion to make the suite green.
              """
 
-      assert comment_line_count(@chat_live_path) > 2_000,
+      # The floor is a SUM over both files, not a floor on `chat_live.ex`
+      # alone (amended task 01a0312e stage 1). Stage 1 moved sixteen
+      # template-only helpers into `ChatLive.RenderHelpers` and their comments
+      # went with them, which dropped `chat_live.ex` from 2,133 comment lines
+      # to 1,988 and fired this assertion — correctly, since a floor on one
+      # file cannot tell a deletion from a move.
+      #
+      # Summing keeps the threshold at 2,000 rather than lowering it, so the
+      # guard is not weakened to accommodate the move: the explanation still
+      # has to exist, it is simply allowed to live in either file. A deletion
+      # from EITHER file still counts against the same number. Raise this
+      # floor, never lower it, and add the new file to `@explained_paths` when
+      # the next slice is extracted — otherwise the next extraction buys
+      # itself budget by moving comments out of the guard's sight.
+      explained = Enum.sum(Enum.map(@explained_paths, &comment_line_count/1))
+
+      assert explained > 2_000,
              """
              THE THING THIS GUARD PROTECTS HAS MOSTLY VANISHED.
-             `chat_live.ex` now holds only #{comment_line_count(@chat_live_path)} comment
-             lines; this guard was built when it held 2,133 (42% of the file).
+             #{Enum.map_join(@explained_paths, ", ", &Path.basename/1)} now hold only
+             #{explained} comment lines between them; this guard was built when
+             `chat_live.ex` alone held 2,133 (42% of the file).
              Either a large amount of load-bearing explanation was deleted — in
              which case restore it, that deletion is the defect this task
-             exists to prevent — or the comment style changed wholesale, in
-             which case update this floor in the SAME commit with the reason in
-             the commit message.
+             exists to prevent — or a helper slice was extracted to a file that
+             is not in `@explained_paths`, in which case ADD IT rather than
+             lowering this floor.
              """
 
       # (3) THE PIN ITSELF.

@@ -229,10 +229,17 @@ defmodule PlatformWeb.ChatLiveMobilePinnedStripTest do
       #
       # Scoping to the region between the chip's data-role and its closing tag
       # makes every assertion below answer a question about the chip itself.
+      # RE-AIMED, not relaxed (task 01a0312e stage 5): the strip's markup moved
+      # out of `chat_live.html.heex` into
+      # `ChatLive.Partials.Conversation.mobile_pinned_strip/1`. The path is the
+      # only thing that changed — every assertion below is byte-for-byte the
+      # one that guarded the markup in its old home, at the same specificity.
+      # Left pointing at the `.heex` this would fail for the reason "the file
+      # no longer contains its subject", which is not the reason it exists.
       template_path =
         Path.join([
           File.cwd!(),
-          "lib/platform_web/live/chat_live.html.heex"
+          "lib/platform_web/live/chat/partials/conversation.ex"
         ])
 
       template = File.read!(template_path)

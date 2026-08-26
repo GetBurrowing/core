@@ -778,6 +778,20 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       # markup captured on the stage-2 tip (b6c18974) before a line of stage 3
       # was written — not a `=~`, which would pass while another variant's
       # nodes sat beside it.
+      #
+      # RE-AIMED, not relaxed (task 01a0312e stage 3). The toast moved from
+      # `chat_live.html.heex` into `ChatLive.Partials.Rail.rail_footer/1`,
+      # which renders it four levels shallower, so the two INDENTATION runs
+      # inside it went 8 spaces -> 4 and 6 -> 2. Nothing else about the string
+      # changed: same tags, same attributes, same order, same copy. The
+      # literal below is the new render's exact bytes, re-captured on that
+      # commit.
+      #
+      # The equality is kept as an equality on purpose. It is the only
+      # assertion in the suite that would notice a whitespace-level change to
+      # this element, and softening it to a `=~` or normalising the
+      # whitespace to survive the move would delete the guard while appearing
+      # to keep it — the move is exactly the event it should report.
       conn = conn |> authed() |> elem(0)
       channel = create_channel("hide-me")
 
@@ -787,10 +801,10 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       expected =
         ~s(<div role="status" aria-live="polite" class="channel-undo-toast">) <>
           ~s(<span class="channel-undo-toast-message">\n) <>
-          ~s(        Hidden <span class="font-medium">#Hide-me</span></span>) <>
+          ~s(    Hidden <span class="font-medium">#Hide-me</span></span>) <>
           ~s(<button type="button" class="channel-undo-toast-button" ) <>
           ~s(phx-click="undo_hide" phx-value-id="#{channel.id}">\n) <>
-          ~s(        Undo\n      </button></div>)
+          ~s(    Undo\n  </button></div>)
 
       assert rail_toast_raw(html) == expected,
              "Hide's toast markup changed:\n#{inspect(rail_toast_raw(html))}"
