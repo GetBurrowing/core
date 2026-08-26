@@ -8,7 +8,11 @@ import ClientState, { __resetForTests } from "../../js/client_state.js"
  * Coverage:
  *   - Persisted status is read from `ClientState.get("tasks_ui",
  *     "status_filter")` on mount and pushed to LV when it differs from the
- *     default.
+ *     default. The `filter_by_status` handler lives on FiltersComponent
+ *     (`id="tasks-filters"`), so the hook must use `pushEventTo` with that
+ *     component selector — a bare `pushEvent` would land on the parent
+ *     LiveView, which has no such handler. The harness therefore stubs both
+ *     and the tests assert the retarget explicitly.
  *   - Legacy un-namespaced key `"tasks-active-status-filter"` is read once,
  *     migrated into ClientState, and deleted from localStorage.
  *   - A click on a `filter_by_status` button writes the new value into
@@ -68,6 +72,11 @@ function uninstallStorage() {
 
 function buildHook() {
   const hook = Object.create(TasksStatusFilter)
+  // Both are stubbed: `pushEventTo` is the call the hook is expected to make,
+  // `pushEvent` is stubbed only so an accidental regression back to the
+  // untargeted call is observable as a failed assertion rather than a
+  // TypeError.
+  hook.pushEventTo = vi.fn()
   hook.pushEvent = vi.fn()
   const listeners = []
   hook.el = {
@@ -119,7 +128,10 @@ describe("TasksStatusFilter — ClientState migration", () => {
     const hook = buildHook()
     hook.mounted()
 
-    expect(hook.pushEvent).toHaveBeenCalledWith("filter_by_status", { status: "done" })
+    expect(hook.pushEventTo).toHaveBeenCalledWith("#tasks-filters", "filter_by_status", {
+      status: "done",
+    })
+    expect(hook.pushEvent).not.toHaveBeenCalled()
   })
 
   it("does not push when the stored status equals the default", () => {
@@ -127,6 +139,7 @@ describe("TasksStatusFilter — ClientState migration", () => {
     const hook = buildHook()
     hook.mounted()
 
+    expect(hook.pushEventTo).not.toHaveBeenCalled()
     expect(hook.pushEvent).not.toHaveBeenCalled()
   })
 
@@ -138,7 +151,10 @@ describe("TasksStatusFilter — ClientState migration", () => {
     hook.mounted()
 
     // Push happened using the migrated value.
-    expect(hook.pushEvent).toHaveBeenCalledWith("filter_by_status", { status: "blocked" })
+    expect(hook.pushEventTo).toHaveBeenCalledWith("#tasks-filters", "filter_by_status", {
+      status: "blocked",
+    })
+    expect(hook.pushEvent).not.toHaveBeenCalled()
 
     // The value now lives in ClientState under the new namespace…
     expect(ClientState.get("tasks_ui", "status_filter")).toBe("blocked")
@@ -154,7 +170,10 @@ describe("TasksStatusFilter — ClientState migration", () => {
     const hook = buildHook()
     hook.mounted()
 
-    expect(hook.pushEvent).toHaveBeenCalledWith("filter_by_status", { status: "review" })
+    expect(hook.pushEventTo).toHaveBeenCalledWith("#tasks-filters", "filter_by_status", {
+      status: "review",
+    })
+    expect(hook.pushEvent).not.toHaveBeenCalled()
     expect(storage.getItem("tasks-active-status-filter")).toBeNull()
   })
 
@@ -173,6 +192,7 @@ describe("TasksStatusFilter — ClientState migration", () => {
     hook.mounted()
 
     // No push — nothing stored anywhere.
+    expect(hook.pushEventTo).not.toHaveBeenCalled()
     expect(hook.pushEvent).not.toHaveBeenCalled()
   })
 })
