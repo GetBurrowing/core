@@ -14,6 +14,14 @@ defmodule Platform.Meetings.TelemetryHandler do
     | `[:platform, :meetings, :tasks_created_from_meeting]` | `"meetings.tasks_created"`    |
     | `[:platform, :meetings, :triage_cap_hit]`             | `"meetings.triage.cap_hit"`   |
 
+  Plus the three intent-classifier FAILURE events, each pinned to an
+  explicit slug (see "Why the intent-classifier failures are overridden
+  too" below):
+
+    | `[:platform, :meetings, :intent_classifier, :truncated_output]` | `"meetings.intent_classifier.truncated_output"` |
+    | `[:platform, :meetings, :intent_classifier, :model_error]`      | `"meetings.intent_classifier.model_error"`      |
+    | `[:platform, :meetings, :intent_classifier, :parse_error]`      | `"meetings.intent_classifier.parse_error"`      |
+
   ## Why a dedicated Meetings handler vs extending Chat's
 
   Audit type namespace + handler_id per subsystem is the existing pattern
@@ -30,6 +38,23 @@ defmodule Platform.Meetings.TelemetryHandler do
   discriminator) because the audit consumers key off the domain-scoped
   slug and the "from meeting" context is already implied by the
   `meetings.` prefix. The handler recognizes both event names.
+
+  ## Why the intent-classifier failures are overridden too
+
+  The three `intent_classifier` failure events are FOUR-segment names,
+  and the default derivation splits every atom on its first underscore —
+  so `[:platform, :meetings, :intent_classifier, :model_error]` would
+  derive `"meetings.intent.classifier.model.error"`, a five-level
+  hierarchy that does not exist, and it buries the outcome name the
+  classifier deliberately keeps separate. Each is therefore pinned to an
+  explicit slug that keeps `intent_classifier` whole and keeps the three
+  outcomes DISTINCT — telling `truncated_output` from `model_error` from
+  `parse_error` is the entire reason they are separate events.
+
+  Only the FAILURE events are bridged. The success event
+  `[:platform, :meetings, :intent_classified]` fires on every transcript
+  chunk of every meeting and would flood `audit_events`; it is
+  deliberately NOT attached.
   """
 
   require Logger
@@ -39,14 +64,23 @@ defmodule Platform.Meetings.TelemetryHandler do
   @meetings_events [
     [:platform, :meetings, :triage_dispatch],
     [:platform, :meetings, :tasks_created_from_meeting],
-    [:platform, :meetings, :triage_cap_hit]
+    [:platform, :meetings, :triage_cap_hit],
+    [:platform, :meetings, :intent_classifier, :truncated_output],
+    [:platform, :meetings, :intent_classifier, :model_error],
+    [:platform, :meetings, :intent_classifier, :parse_error]
   ]
 
   # Overrides for the default `event_name_to_string/1` derivation when
   # the desired audit type does not match the telemetry event's atom
   # segments 1:1 (see moduledoc "Naming exception" section).
   @audit_type_overrides %{
-    [:platform, :meetings, :tasks_created_from_meeting] => "meetings.tasks_created"
+    [:platform, :meetings, :tasks_created_from_meeting] => "meetings.tasks_created",
+    [:platform, :meetings, :intent_classifier, :truncated_output] =>
+      "meetings.intent_classifier.truncated_output",
+    [:platform, :meetings, :intent_classifier, :model_error] =>
+      "meetings.intent_classifier.model_error",
+    [:platform, :meetings, :intent_classifier, :parse_error] =>
+      "meetings.intent_classifier.parse_error"
   }
 
   @doc """

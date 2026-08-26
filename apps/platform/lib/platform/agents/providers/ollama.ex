@@ -39,6 +39,7 @@ defmodule Platform.Agents.Providers.Ollama do
       }
       |> maybe_put("temperature", Keyword.get(opts, :temperature))
       |> maybe_put("max_tokens", Keyword.get(opts, :max_tokens))
+      |> maybe_put("chat_template_kwargs", Keyword.get(opts, :chat_template_kwargs))
 
     headers = request_headers(credentials)
     started_at = System.monotonic_time()
@@ -156,5 +157,7 @@ defmodule Platform.Agents.Providers.Ollama do
     _ -> :ok
   end
 
-  defp req_client, do: Req.new()
+  defp req_client do
+    Application.get_env(:platform, :ollama_req_client, Req.new())
+  end
 end

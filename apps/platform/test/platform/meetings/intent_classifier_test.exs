@@ -11,7 +11,8 @@ defmodule Platform.Meetings.IntentClassifierTest do
   prompt render + LLM call + JSON parse + dedupe + `IntentQueue.enqueue/2`
   + terminal telemetry. Coverage below extends the stage-3 guard
   assertions with the pipeline's happy-path, idempotent-replay,
-  template-fallback, model-error, and parse-error branches. The
+  template-fallback, model-error, truncated-output, and parse-error
+  branches. The
   provider is stubbed via the `provider_module` opt on `start_link/1`
   so tests can pipe any response through without hitting a real Ollama.
   """
@@ -317,6 +318,60 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       # Silence the "unused" compiler warning for the injected agent.
       assert agent.slug == "intent-agent-happy"
+    end
+  end
+
+  # Task 01a03fb8 stage 2: the classifier's model is a ~2B reasoning
+  # model. Without an explicit opt-out it burns the entire completion
+  # budget on `reasoning_content` and hands back `content: ""` with
+  # `finish_reason: "length"`, so the classification never arrives.
+  # `chat_template_kwargs` is what llama.cpp reads (the provider's
+  # `think: false` is the Ollama-side flag and llama-server ignores it),
+  # and stage 1 taught the Ollama provider to forward the key. This
+  # guard pins the opt onto the request the classifier actually builds.
+  describe "call_provider/5 — request shape disables model thinking" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-thinking"})
+      assign_intent_role!(agent)
+      drop_queue_for_room("room-thinking")
+      %{agent: agent}
+    end
+
+    test "sends chat_template_kwargs enable_thinking=false to the provider" do
+      test_pid = self()
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, _messages, opts ->
+        send(test_pid, {:captured_opts, opts})
+
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "schedule_follow_up",
+               "target_role" => "scribe",
+               "confidence" => 0.9
+             })
+         }}
+      end)
+
+      capture_log(fn ->
+        _ = broadcast_chunk("room-thinking")
+
+        assert_receive {:captured_opts, opts}, 500
+
+        assert Keyword.get(opts, :chat_template_kwargs) == %{"enable_thinking" => false},
+               """
+               The classifier must ask the model to skip its reasoning pass. \
+               Got opts: #{inspect(opts)}\
+               """
+
+        # The flag rides ALONGSIDE the existing budget — stage 2 is not a
+        # token-budget re-tune, so a change to either of these is a
+        # regression this guard should catch too.
+        assert Keyword.get(opts, :temperature) == 0.0
+        assert Keyword.get(opts, :max_tokens) == 1024
+      end)
     end
   end
 
@@ -1127,6 +1182,190 @@ defmodule Platform.Meetings.IntentClassifierTest do
       end)
 
       assert queued_for_room("room-parse-missing-keys") == []
+    end
+  end
+
+  describe "classify_and_enqueue — truncated output" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-truncated"})
+      assign_intent_role!(agent)
+
+      Enum.each(
+        ~w(room-truncated-empty room-truncated-whitespace room-truncated-length
+           room-truncated-string-key room-truncated-negative room-truncated-shape),
+        &drop_queue_for_room/1
+      )
+
+      %{agent: agent}
+    end
+
+    # EVERY test in this block attaches all THREE recorders —
+    # `truncated_output`, `parse_error` and `model_error` — and asserts
+    # both what DID fire and what did NOT.
+    #
+    # That is the entire point of the block. On main an empty
+    # completion was a BINARY, so the success clause accepted it,
+    # `Jason.decode("")` failed, and the event that reached the
+    # operator was `parse_error` — indistinguishable from a model
+    # emitting malformed JSON, which is why an exhausted token budget
+    # was triaged for weeks as a flaky classifier. If any pair of these
+    # three names collapses into one, that bug recurs invisibly.
+
+    test "empty content emits truncated_output and NEITHER parse_error NOR model_error" do
+      _ = attach_recorder!(:truncated_output, :truncated)
+      _ = attach_recorder!(:parse_error, :parse_error)
+      _ = attach_recorder!(:model_error, :model_error)
+      {pid, _name} = start_classifier!()
+
+      # Exactly what `Ollama.extract_message_content/1` hands back when
+      # the model burned its budget on `reasoning_content`: `""`, a
+      # binary, with no `finish_reason` key at all — stubs omit it and
+      # the classifier must not crash on the absence.
+      plant_stub_fun(pid, fn _c, _m, _o -> {:ok, %{content: ""}} end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          _ = broadcast_chunk("room-truncated-empty")
+
+          assert_receive {:truncated, %{count: 1},
+                          %{room_id: "room-truncated-empty", finish_reason: nil}},
+                         500
+        end)
+
+      refute_receive {:parse_error, _, _}, 200
+      refute_receive {:model_error, _, _}, 200
+
+      # A human reading production logs must see "budget", not "flaky".
+      assert String.downcase(log) =~ "budget"
+      assert log =~ "room-truncated-empty"
+
+      # Control flow is UNCHANGED — only the name is new.
+      assert queued_for_room("room-truncated-empty") == []
+      assert Process.alive?(pid), "classifier crashed on empty model output"
+    end
+
+    test "whitespace-only content is empty too — truncated_output, not parse_error" do
+      _ = attach_recorder!(:truncated_output, :truncated)
+      _ = attach_recorder!(:parse_error, :parse_error)
+      _ = attach_recorder!(:model_error, :model_error)
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _c, _m, _o -> {:ok, %{content: "  \n\t  "}} end)
+
+      capture_log([level: :warning], fn ->
+        _ = broadcast_chunk("room-truncated-whitespace")
+
+        assert_receive {:truncated, %{count: 1}, %{room_id: "room-truncated-whitespace"}}, 500
+      end)
+
+      refute_receive {:parse_error, _, _}, 200
+      refute_receive {:model_error, _, _}, 200
+
+      assert queued_for_room("room-truncated-whitespace") == []
+      assert Process.alive?(pid)
+    end
+
+    test "finish_reason \"length\" rides through into the telemetry metadata" do
+      _ = attach_recorder!(:truncated_output, :truncated)
+      _ = attach_recorder!(:parse_error, :parse_error)
+      _ = attach_recorder!(:model_error, :model_error)
+      {pid, _name} = start_classifier!()
+
+      # The production shape: the provider succeeded, reported it ran
+      # out of completion tokens, and handed back nothing.
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        {:ok, %{content: "", finish_reason: "length", model: "qwen3:1.7b"}}
+      end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          _ = broadcast_chunk("room-truncated-length")
+
+          assert_receive {:truncated, %{count: 1},
+                          %{room_id: "room-truncated-length", finish_reason: "length"}},
+                         500
+        end)
+
+      refute_receive {:parse_error, _, _}, 200
+      refute_receive {:model_error, _, _}, 200
+
+      assert log =~ "length"
+      assert queued_for_room("room-truncated-length") == []
+    end
+
+    test "string-key provider shape is normalised in the same place" do
+      _ = attach_recorder!(:truncated_output, :truncated)
+      _ = attach_recorder!(:parse_error, :parse_error)
+      _ = attach_recorder!(:model_error, :model_error)
+      {pid, _name} = start_classifier!()
+
+      # The guard must live in ONE place: applying it to the atom-key
+      # shape and forgetting the string-key shape is how this comes
+      # back.
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        {:ok, %{"content" => "   ", "finish_reason" => "length"}}
+      end)
+
+      capture_log([level: :warning], fn ->
+        _ = broadcast_chunk("room-truncated-string-key")
+
+        assert_receive {:truncated, %{count: 1},
+                        %{room_id: "room-truncated-string-key", finish_reason: "length"}},
+                       500
+      end)
+
+      refute_receive {:parse_error, _, _}, 200
+      refute_receive {:model_error, _, _}, 200
+    end
+
+    test "non-empty non-JSON content still emits parse_error and NOT truncated_output" do
+      _ = attach_recorder!(:truncated_output, :truncated)
+      _ = attach_recorder!(:parse_error, :parse_error)
+      _ = attach_recorder!(:model_error, :model_error)
+      {pid, _name} = start_classifier!()
+
+      # The reverse direction. `finish_reason` is "length" here ON
+      # PURPOSE: the classifier keys off EMPTINESS, not off the finish
+      # reason, so a truncated-but-non-empty completion is still a
+      # parse failure and must not be renamed.
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        {:ok, %{content: "definitely not json {{{", finish_reason: "length"}}
+      end)
+
+      capture_log([level: :warning], fn ->
+        _ = broadcast_chunk("room-truncated-negative")
+
+        assert_receive {:parse_error, %{count: 1}, %{room_id: "room-truncated-negative"}}, 500
+      end)
+
+      refute_receive {:truncated, _, _}, 200
+      refute_receive {:model_error, _, _}, 200
+
+      assert queued_for_room("room-truncated-negative") == []
+    end
+
+    test "an unrecognised map is still model_error, not truncated_output" do
+      _ = attach_recorder!(:truncated_output, :truncated)
+      _ = attach_recorder!(:parse_error, :parse_error)
+      _ = attach_recorder!(:model_error, :model_error)
+      {pid, _name} = start_classifier!()
+
+      # The third name. No binary `content` key at all — the shape the
+      # classifier genuinely does not recognise. This branch stays
+      # exactly as it was.
+      plant_stub_fun(pid, fn _c, _m, _o -> {:ok, %{message: "no content key here"}} end)
+
+      capture_log([level: :warning], fn ->
+        _ = broadcast_chunk("room-truncated-shape")
+
+        assert_receive {:model_error, %{count: 1}, %{room_id: "room-truncated-shape"}}, 500
+      end)
+
+      refute_receive {:truncated, _, _}, 200
+      refute_receive {:parse_error, _, _}, 200
+
+      assert queued_for_room("room-truncated-shape") == []
+      assert Process.alive?(pid)
     end
   end
 

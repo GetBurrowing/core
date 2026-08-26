@@ -15,6 +15,24 @@ defmodule Platform.Meetings.TelemetryHandlerTest do
   alias Platform.Audit.Event
   alias Platform.Meetings.TelemetryHandler
 
+  # The three intent-classifier FAILURE events, with metadata shaped the
+  # way `Platform.Meetings.IntentClassifier` actually emits it
+  # (`intent_classifier.ex` emit_truncated_output/2, emit_model_error/2,
+  # emit_parse_error/2). The `room_id` values differ per event so a row
+  # can be attributed to its source event even if two slugs were to
+  # collide.
+  @classifier_failures [
+    {[:platform, :meetings, :intent_classifier, :truncated_output],
+     "meetings.intent_classifier.truncated_output",
+     %{room_id: "room-truncated", finish_reason: "length"}},
+    {[:platform, :meetings, :intent_classifier, :model_error],
+     "meetings.intent_classifier.model_error",
+     %{room_id: "room-model-error", reason: "{:error, :timeout}"}},
+    {[:platform, :meetings, :intent_classifier, :parse_error],
+     "meetings.intent_classifier.parse_error",
+     %{room_id: "room-parse-error", raw_content: "Sure! Here is the JSON:"}}
+  ]
+
   setup do
     # Unconditional restore on exit: the lifecycle case below detaches
     # mid-body, so a failure between that detach and its re-attach would
@@ -59,12 +77,30 @@ defmodule Platform.Meetings.TelemetryHandlerTest do
       assert Enum.any?(events, fn e -> e.action == "captured" end)
     end
 
-    test "events/0 lists exactly the registered triage events" do
+    test "events/0 lists exactly the registered triage + classifier-failure events" do
       assert TelemetryHandler.events() == [
                [:platform, :meetings, :triage_dispatch],
                [:platform, :meetings, :tasks_created_from_meeting],
-               [:platform, :meetings, :triage_cap_hit]
+               [:platform, :meetings, :triage_cap_hit],
+               [:platform, :meetings, :intent_classifier, :truncated_output],
+               [:platform, :meetings, :intent_classifier, :model_error],
+               [:platform, :meetings, :intent_classifier, :parse_error]
              ]
+    end
+
+    test "the classifier SUCCESS event is deliberately not attached" do
+      # `[:platform, :meetings, :intent_classified]` fires on every
+      # transcript chunk of every meeting; bridging it would flood
+      # `audit_events`. Failure paths only.
+      refute [:platform, :meetings, :intent_classified] in TelemetryHandler.events()
+
+      :telemetry.execute([:platform, :meetings, :intent_classified], %{count: 1}, %{
+        room_id: "room-ok",
+        intent: :action_item
+      })
+
+      assert Audit.list(event_type: "meetings.intent_classified") == []
+      assert Audit.list(event_type: "meetings.intent.classified") == []
     end
   end
 
@@ -203,6 +239,59 @@ defmodule Platform.Meetings.TelemetryHandlerTest do
       actions = Enum.map(events, & &1.action)
       assert "before" in actions
       assert "after" in actions
+    end
+  end
+
+  describe "intent classifier failure events -> audit" do
+    test "each failure event persists an audit row under its own slug" do
+      for {event_name, expected_slug, metadata} <- @classifier_failures do
+        :telemetry.execute(event_name, %{count: 1}, metadata)
+
+        assert [%Event{event_type: ^expected_slug} = event] =
+                 Audit.list(event_type: expected_slug),
+               "expected exactly 1 audit row for #{expected_slug} from #{inspect(event_name)}"
+
+        assert event.resource_type == "meetings"
+        assert event.actor_type == "system"
+        assert event.metadata["room_id"] == metadata.room_id
+        assert event.metadata["count"] == 1
+      end
+    end
+
+    test "truncated_output carries the finish_reason that named it" do
+      :telemetry.execute(
+        [:platform, :meetings, :intent_classifier, :truncated_output],
+        %{count: 1},
+        %{room_id: "room-truncated", finish_reason: "length"}
+      )
+
+      assert [event] = Audit.list(event_type: "meetings.intent_classifier.truncated_output")
+      assert event.metadata["finish_reason"] == "length"
+    end
+
+    test "the three failure slugs are PAIRWISE DIFFERENT" do
+      # Read the slug the handler ACTUALLY wrote rather than trusting the
+      # expected constants: this is what breaks if two overrides are ever
+      # pointed at the same string, which would re-merge the outcomes that
+      # stage 3 went to the trouble of naming apart.
+      observed =
+        for {event_name, _expected_slug, metadata} <- @classifier_failures do
+          before_ids = Audit.list(limit: 500) |> MapSet.new(& &1.id)
+
+          :telemetry.execute(event_name, %{count: 1}, metadata)
+
+          new_rows =
+            Audit.list(limit: 500) |> Enum.reject(&MapSet.member?(before_ids, &1.id))
+
+          assert [%Event{} = row] = new_rows,
+                 "#{inspect(event_name)} wrote #{length(new_rows)} audit rows, expected 1"
+
+          row.event_type
+        end
+
+      assert length(Enum.uniq(observed)) == 3,
+             "the three intent_classifier failure events must land as three DISTINCT " <>
+               "audit slugs, got: #{inspect(observed)}"
     end
   end
 end

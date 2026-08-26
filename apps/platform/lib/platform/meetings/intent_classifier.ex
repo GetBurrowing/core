@@ -123,14 +123,36 @@ defmodule Platform.Meetings.IntentClassifier do
        `:warning` on the FIRST fallback per boot only and emitted as
        telemetry `[:platform, :meetings, :intent_classifier, :template_fallback]`.
     2. Call the LLM via the injected `state.provider_module` (default
-       `Platform.Agents.Providers.Ollama`). Errors — HTTP 500s,
-       timeouts, connection refused — log at `:warning`, emit
-       `[:platform, :meetings, :intent_classifier, :model_error]`,
-       and return `:ok`. No crash, no queue write, no restart loop.
-    3. `Jason.decode/1` the response content. Bad JSON or missing
-       required keys emit
+       `Platform.Agents.Providers.Ollama`). THREE distinct failure
+       names come out of the pipeline, and they must stay mutually
+       exclusive — conflating them is exactly how the token-budget
+       bug hid for weeks as a "flaky classifier" (task 01a03fb8):
+
+         * `model_error` — the call itself failed (HTTP 500s,
+           timeouts, connection refused, a raise/throw), OR the
+           provider handed back a map the classifier does not
+           recognise at all: no binary `content` key
+           (`{:unexpected_shape, _}`). Emits
+           `[:platform, :meetings, :intent_classifier, :model_error]`.
+         * `truncated_output` — the call SUCCEEDED and returned no
+           usable text: `content` is `""` or whitespace-only, whether
+           or not `finish_reason` is `"length"`. That is the ~2B
+           reasoning model spending its whole completion budget on
+           `reasoning_content`, i.e. an exhausted TOKEN BUDGET, not a
+           flaky model and not malformed JSON. Emits
+           `[:platform, :meetings, :intent_classifier, :truncated_output]`
+           with `room_id` and `finish_reason` in the metadata.
+         * `parse_error` — see step 3: content was NON-EMPTY but not
+           usable JSON.
+
+       All three log at `:warning`, drop the chunk, and return `:ok`.
+       No crash, no queue write, no restart loop.
+    3. `Jason.decode/1` the (non-empty) response content. Bad JSON or
+       missing required keys emit
        `[:platform, :meetings, :intent_classifier, :parse_error]`
-       and drop the chunk.
+       and drop the chunk. Empty content never reaches this step — it
+       is intercepted as `truncated_output` in step 2, so a starved
+       completion can never be mistaken for a malformed one.
     4. Compute a `sha256(intent <> target_role <> chunk_text)`
        dedupe key. That IS the idempotence semantic: two classifier
        passes over the same chunk collapse against the owning queue's
@@ -1134,7 +1156,16 @@ defmodule Platform.Meetings.IntentClassifier do
         base_url: Map.get(agent, :base_url),
         model: Map.get(agent, :model),
         temperature: 0.0,
-        max_tokens: 1024
+        max_tokens: 1024,
+        # The classifier runs against a ~2B reasoning model. Left to its
+        # own devices it spends the whole completion budget on
+        # `reasoning_content` and returns `content: ""` with
+        # `finish_reason: "length"` — a classification that never
+        # arrives. llama.cpp honours `chat_template_kwargs` (the Ollama
+        # provider's `think: false` is the Ollama-side equivalent and is
+        # simply ignored by llama-server); with thinking off the model
+        # answers in 17–29 completion tokens.
+        chat_template_kwargs: %{"enable_thinking" => false}
       ]
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
@@ -1142,15 +1173,26 @@ defmodule Platform.Meetings.IntentClassifier do
 
     try do
       case provider_module.chat(credentials, messages, opts) do
-        {:ok, %{content: content}} when is_binary(content) ->
-          {:ok, content}
+        {:ok, result} ->
+          case provider_content(result) do
+            {:ok, content} ->
+              # A SUCCESSFUL call that carried no usable text. Caught
+              # HERE and never allowed to reach `parse_content/2`,
+              # where `Jason.decode("")` would report it as a
+              # `parse_error` and bury the real cause. Whitespace-only
+              # counts as empty: a lone "\n" is no more classifiable
+              # than "".
+              if String.trim(content) == "" do
+                emit_truncated_output(room_id, provider_finish_reason(result))
+                :error
+              else
+                {:ok, content}
+              end
 
-        {:ok, %{"content" => content}} when is_binary(content) ->
-          {:ok, content}
-
-        {:ok, other} ->
-          emit_model_error(room_id, {:unexpected_shape, other})
-          :error
+            :error ->
+              emit_model_error(room_id, {:unexpected_shape, result})
+              :error
+          end
 
         {:error, reason} ->
           emit_model_error(room_id, reason)
@@ -1165,6 +1207,46 @@ defmodule Platform.Meetings.IntentClassifier do
         emit_model_error(room_id, {:caught, kind, reason})
         :error
     end
+  end
+
+  # Both provider response shapes — the atom-key map returned by
+  # `Platform.Agents.Providers.Ollama.chat/3` and the string-key map a
+  # raw OpenAI-compatible payload can produce — carry the completion
+  # text under a `content` key. Normalise in ONE place so the
+  # empty-output guard cannot be applied to one shape and silently
+  # forgotten on the other. Anything without a BINARY `content` is not
+  # a recognised shape at all and stays `{:unexpected_shape, _}`.
+  defp provider_content(%{content: content}) when is_binary(content), do: {:ok, content}
+  defp provider_content(%{"content" => content}) when is_binary(content), do: {:ok, content}
+  defp provider_content(_), do: :error
+
+  # `finish_reason` is already on the wire (`ollama.ex:72`) but was
+  # thrown away by matching only on `:content`. Handle atom keys,
+  # string keys, and its complete ABSENCE (test stubs and other
+  # providers may omit it) — nil is a legal value, not a crash.
+  defp provider_finish_reason(%{finish_reason: reason}), do: reason
+  defp provider_finish_reason(%{"finish_reason" => reason}), do: reason
+  defp provider_finish_reason(_), do: nil
+
+  # The provider call SUCCEEDED and still handed back nothing usable.
+  # This is the reasoning-model TOKEN BUDGET failure, not a flaky
+  # classifier and not malformed JSON — the log line says "budget" out
+  # loud so a human reading production logs triages it correctly.
+  # Control flow is identical to every other failure branch: return
+  # `:error`, `classify_and_enqueue/3` drops the chunk, no queue write,
+  # no crash, no restart loop. Only the NAME changes.
+  defp emit_truncated_output(room_id, finish_reason) do
+    Logger.warning(
+      "[IntentClassifier] model returned empty content — completion TOKEN BUDGET exhausted " <>
+        "before any answer was produced room=#{inspect(room_id)} " <>
+        "finish_reason=#{inspect(finish_reason)}"
+    )
+
+    :telemetry.execute(
+      [:platform, :meetings, :intent_classifier, :truncated_output],
+      %{count: 1},
+      %{room_id: room_id, finish_reason: finish_reason}
+    )
   end
 
   defp emit_model_error(room_id, reason) do
