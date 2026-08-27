@@ -205,6 +205,28 @@ defmodule Platform.Orchestration.TaskRouterBootReengagementTest do
     |> Repo.update!()
   end
 
+  # `restamp/2` MERGES, and merging cannot express absence: `Map.merge/2` has
+  # no way to remove a key, and a key present with a `nil` value is a
+  # different input from a key that is not there at all (only the latter fires
+  # a `Map.get/3` default). Deleting is therefore its own helper rather than a
+  # flag on `restamp/2`, so the two shapes can never be confused at a call
+  # site.
+  defp unstamp(row, keys) do
+    message = Repo.get!(Message, row.id)
+
+    message
+    |> Ecto.Changeset.change(%{metadata: Map.drop(message.metadata, keys)})
+    |> Repo.update!()
+  end
+
+  defp drain_attention_broadcasts do
+    receive do
+      %Phoenix.Socket.Broadcast{event: "attention"} -> drain_attention_broadcasts()
+    after
+      0 -> :ok
+    end
+  end
+
   defp await_engagement_count(space_id, n, timeout_ms \\ 3_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_await_engagement_count(space_id, n, deadline)
@@ -451,6 +473,108 @@ defmodule Platform.Orchestration.TaskRouterBootReengagementTest do
       assert reloaded.id == first.id
       assert second.content == first.content
       assert second.metadata["delivered_online"] == true
+    end
+
+    # (e) again, for the ABSENT key — a different input from the `=> false`
+    # row above, and the one with the dangerous neighbour.
+    #
+    # Today `Map.get(metadata, "delivered_online")` returns `nil` for a missing
+    # key and `nil == true` is false, so an engagement whose metadata never
+    # recorded delivery does not suppress. The two shapes are separated by
+    # exactly one plausible edit: a default for the read — `Map.get/3`'s third
+    # argument, or a `Map.merge(%{"delivered_online" => true}, metadata)` on the
+    # way in — leaves the `=> false` row reading false and flips the ABSENT key
+    # to `true`, permitting suppression of a prompt that was never delivered.
+    # The `=> false` test above stays green through that edit, so it is not a
+    # detector for it. This one is.
+    #
+    # That direction strands the task and does it silently:
+    # `AttentionDispatch.broadcast/3` returns `:ok` for a topic with no
+    # subscriber and TaskRouter dispatches are not dead-lettered, so a
+    # suppressed-but-undelivered prompt leaves no signal anywhere.
+    #
+    # The shape is not hypothetical: every engagement row written before the
+    # metadata stamp was introduced has exactly this metadata.
+    #
+    # Phrased as BEHAVIOUR — the prompt is dispatched again — not as "an absent
+    # key is handled" or "does not crash". Those phrasings are satisfied by the
+    # `rescue` arm, which dispatches too, and would leave the suppression path
+    # itself untested.
+    test "an engagement whose metadata has no delivered_online key does not suppress",
+         %{task: task} do
+      description = identifying_text(task.id)
+      %{assignee: assignee} = federated_agent()
+      RuntimePresence.track(assignee.id)
+      on_exit(fn -> RuntimePresence.untrack(assignee.id) end)
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      start_router(task.id, assignee)
+      space = ExecutionSpace.find_by_task_id(task.id)
+      [first] = await_engagement_count(space.id, 1)
+
+      # The row must carry the PROMPT, or every `content ==` comparison below
+      # holds just as well over two empty strings.
+      assert first.content =~ description
+      assert first.metadata["delivered_online"] == true
+
+      stop_router(task.id)
+
+      # Content and `dispatch_runtime_id` are left byte-identical on purpose:
+      # conjuncts (c) and (d) both still hold, so a dispatch below is
+      # attributable to (e) and to nothing else.
+      unstamp(first, ["delivered_online"])
+
+      # Read the ABSENCE back from the row. Without this the test would be
+      # green if the delete silently no-opped — it would then be re-running the
+      # `=> true` suppression case with an inverted expectation, failing for a
+      # reason that says nothing about a missing key.
+      stripped = Repo.get!(Message, first.id)
+      refute Map.has_key?(stripped.metadata, "delivered_online")
+      assert stripped.metadata["dispatch_runtime_id"] == assignee.id
+      assert stripped.content == first.content
+
+      # ── The assertion: an absent key does NOT suppress ───────────────────
+      start_router(task.id, assignee)
+
+      # Not a `^first` pin: `unstamp/2` rewrote that row.
+      [reloaded, second] = await_engagement_count(space.id, 2)
+      assert reloaded.id == first.id
+      assert second.content == first.content
+      assert second.metadata["delivered_online"] == true
+      assert second.metadata["dispatch_runtime_id"] == assignee.id
+
+      # ── POSITIVE CONTROL, and the reason this test is not vacuous ────────
+      #
+      # "Does not suppress" is a claim that a guard DELETED ENTIRELY also
+      # satisfies, so the half above constrains nothing on its own. `second` is
+      # now the latest engagement and satisfies all five conjuncts, so a third
+      # restart must be WITHHELD. That half goes red if the guard is removed or
+      # stuck false, which is what makes the dispatch above attributable to the
+      # absent key rather than to a guard that never suppresses anything.
+      stop_router(task.id)
+
+      # Drop the two broadcasts already delivered, so what is refuted below can
+      # only be a third.
+      drain_attention_broadcasts()
+
+      log_count_before = length(logs(space.id))
+
+      start_router(task.id, assignee)
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 3_000
+
+      # The durable assertion. Row count, not the mailbox.
+      assert [^reloaded, ^second] = engagements(space.id),
+             "a restart on a fully stamped engagement re-sent the planning prompt"
+
+      withheld =
+        logs(space.id)
+        |> Enum.drop(log_count_before)
+        |> Enum.filter(&(&1.content =~ "Dispatch withheld"))
+
+      assert length(withheld) == 1,
+             "expected exactly one suppression evidence line, saw #{inspect(Enum.map(withheld, & &1.content))}"
     end
   end
 
