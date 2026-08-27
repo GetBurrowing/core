@@ -2104,128 +2104,278 @@ defmodule Platform.Orchestration.TaskRouter do
     # whole prompt on the wire as `message.content`. A guard wrapped around
     # `post_engagement/3` instead would remove the execution-space message
     # and still wake the runtime, which is the opposite of the fix.
-    if unchanged_boot_engagement?(state, task, stage, prompt, boot_dispatch?) do
-      suppress_unchanged_boot_engagement(state, task)
-    else
-      delivered_online = RuntimePresence.online?(state.assignee.id)
+    cond do
+      # Task 01a04135 / 01a00915. Checked BEFORE the boot-engagement guard
+      # because it is the more general condition: that guard only ever fires
+      # for a planning dispatch with no resolved stage, and this one only ever
+      # fires for a resolved stage, so the two are disjoint and the order is
+      # documentation rather than precedence.
+      live_acked_executor?(state, stage) ->
+        suppress_live_acked_executor(state, task, stage)
 
-      case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
-        :ok ->
-          # Post log message to execution space after successful runtime dispatch so
-          # boot retries do not duplicate task-assigned chatter.
-          if state.execution_space_id do
-            stage_count = if plan, do: length(plan.stages || []), else: 0
+      unchanged_boot_engagement?(state, task, stage, prompt, boot_dispatch?) ->
+        suppress_unchanged_boot_engagement(state, task)
 
-            # NEVER `else: 1` (task 019fa469 stage 4). That default rendered
-            # `Stage: 1/7` on tasks demonstrably past stage 1 all day on
-            # 2026-07-27 — a fabrication of the one fact the log line exists to
-            # report. When no stage resolved, say so.
-            stage_pos = if stage, do: Integer.to_string(stage.position), else: "-"
+      true ->
+        delivered_online = RuntimePresence.online?(state.assignee.id)
 
-            # A runtime id ALONE does not tell a human reading the execution
-            # space which AGENT was chosen, nor for which phase — that opacity
-            # is why the 2026-07-31 phase-blind dispatch took a human staring at
-            # a dirty worktree to diagnose (task 019fb977). `agent` is the
-            # `Federation.lookup_assignment/1` result a few lines up and is nil
-            # for an unlinked runtime, so name it only when we have it.
-            agent_log = if agent, do: " (agent #{agent.slug})", else: ""
+        case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
+          :ok ->
+            # Post log message to execution space after successful runtime dispatch so
+            # boot retries do not duplicate task-assigned chatter.
+            if state.execution_space_id do
+              stage_count = if plan, do: length(plan.stages || []), else: 0
 
-            assignee_log =
-              "Assignee: #{state.assignee.id}#{agent_log} | Phase: #{Tasks.current_phase(task)}"
+              # NEVER `else: 1` (task 019fa469 stage 4). That default rendered
+              # `Stage: 1/7` on tasks demonstrably past stage 1 all day on
+              # 2026-07-27 — a fabrication of the one fact the log line exists to
+              # report. When no stage resolved, say so.
+              stage_pos = if stage, do: Integer.to_string(stage.position), else: "-"
 
-            log_content =
-              "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | #{assignee_log}"
+              # A runtime id ALONE does not tell a human reading the execution
+              # space which AGENT was chosen, nor for which phase — that opacity
+              # is why the 2026-07-31 phase-blind dispatch took a human staring at
+              # a dirty worktree to diagnose (task 019fb977). `agent` is the
+              # `Federation.lookup_assignment/1` result a few lines up and is nil
+              # for an unlinked runtime, so name it only when we have it.
+              agent_log = if agent, do: " (agent #{agent.slug})", else: ""
 
-            ExecutionSpace.post_log(state.execution_space_id, log_content)
+              assignee_log =
+                "Assignee: #{state.assignee.id}#{agent_log} | Phase: #{Tasks.current_phase(task)}"
 
-            # The engagement row is the ONLY durable trace of a dispatch that
-            # resolved no stage: `arm_liveness_timers/3` no-ops on a nil stage,
-            # so a planning dispatch writes no LeaseManager row. Stamping who it
-            # was addressed to and whether that runtime was connected is what
-            # lets a later reader tell a repeat that was never delivered from one
-            # that was.
-            ExecutionSpace.post_engagement(state.execution_space_id, prompt,
-              metadata: %{
-                "reason" => "task_assigned",
-                "dispatch_runtime_id" => state.assignee.id,
-                "delivered_online" => delivered_online
-              }
+              log_content =
+                "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | #{assignee_log}"
+
+              ExecutionSpace.post_log(state.execution_space_id, log_content)
+
+              # The engagement row is the ONLY durable trace of a dispatch that
+              # resolved no stage: `arm_liveness_timers/3` no-ops on a nil stage,
+              # so a planning dispatch writes no LeaseManager row. Stamping who it
+              # was addressed to and whether that runtime was connected is what
+              # lets a later reader tell a repeat that was never delivered from one
+              # that was.
+              ExecutionSpace.post_engagement(state.execution_space_id, prompt,
+                metadata: %{
+                  "reason" => "task_assigned",
+                  "dispatch_runtime_id" => state.assignee.id,
+                  "delivered_online" => delivered_online
+                }
+              )
+            end
+
+            # Event-driven liveness arm (task 019f640d stage 3). Record the
+            # dispatch in LeaseManager and arm one-shot ack + safety-net timers
+            # for this stage-instance. `arm_liveness_timers/2` no-ops on
+            # manual_approval stage kinds (no timers armed at all).
+            stage_kind = current_stage_type(%{state | current_stage_id: stage && stage.id})
+            arm_liveness_timers(state.task_id, stage, stage_kind)
+
+            state =
+              state
+              |> Map.put(:status, :running)
+              |> Map.put(:last_dispatch_at, DateTime.utc_now())
+              |> Map.put(:task_status, task.status)
+              |> maybe_set_stage(stage)
+
+            state =
+              if waiting_for_human_review?(state) do
+                # EPISODE START for the stage gate (task 019f9b34). This tail park
+                # is silent on main, and it is the site that actually opens a
+                # mid-task suppression episode: a review request created while the
+                # router is running lands here (the `:dispatch` handler's
+                # `pending_review_request?/1` branch was false on entry, which is
+                # why control reached `do_dispatch/2` at all), parks at
+                # `:waiting_human`, and every downstream narrating site then sees
+                # an already-parked router and correctly skips. Without an
+                # emission here the episode would be narrated ZERO times.
+                #
+                # Edge is `entry_status`, not `state.status`: the latter was set to
+                # `:running` unconditionally a few lines above, so it would emit on
+                # every dispatch — the 019e00cb pile-up regression.
+                if entry_status != :waiting_human do
+                  maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
+                end
+
+                state |> clear_liveness() |> Map.put(:status, :waiting_human)
+              else
+                state
+              end
+
+            {:noreply, state}
+
+          {:error, :endpoint_not_ready} ->
+            Logger.warning(
+              "[TaskRouter] endpoint not ready for task #{state.task_id}; retrying dispatch"
             )
-          end
 
-          # Event-driven liveness arm (task 019f640d stage 3). Record the
-          # dispatch in LeaseManager and arm one-shot ack + safety-net timers
-          # for this stage-instance. `arm_liveness_timers/2` no-ops on
-          # manual_approval stage kinds (no timers armed at all).
-          stage_kind = current_stage_type(%{state | current_stage_id: stage && stage.id})
-          arm_liveness_timers(state.task_id, stage, stage_kind)
+            Process.send_after(self(), :dispatch, 1_000)
+            {:noreply, state}
 
-          state =
-            state
-            |> Map.put(:status, :running)
-            |> Map.put(:last_dispatch_at, DateTime.utc_now())
-            |> Map.put(:task_status, task.status)
-            |> maybe_set_stage(stage)
+          {:error, _reason} ->
+            state =
+              state
+              |> Map.put(:status, :running)
+              |> Map.put(:last_dispatch_at, DateTime.utc_now())
+              |> Map.put(:task_status, task.status)
+              |> maybe_set_stage(stage)
 
-          state =
-            if waiting_for_human_review?(state) do
-              # EPISODE START for the stage gate (task 019f9b34). This tail park
-              # is silent on main, and it is the site that actually opens a
-              # mid-task suppression episode: a review request created while the
-              # router is running lands here (the `:dispatch` handler's
-              # `pending_review_request?/1` branch was false on entry, which is
-              # why control reached `do_dispatch/2` at all), parks at
-              # `:waiting_human`, and every downstream narrating site then sees
-              # an already-parked router and correctly skips. Without an
-              # emission here the episode would be narrated ZERO times.
-              #
-              # Edge is `entry_status`, not `state.status`: the latter was set to
-              # `:running` unconditionally a few lines above, so it would emit on
-              # every dispatch — the 019e00cb pile-up regression.
-              if entry_status != :waiting_human do
-                maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
+            state =
+              if waiting_for_human_review?(state) do
+                # Same episode-start narration as the `{:ok, ...}` tail above
+                # (task 019f9b34); this branch parks identically on a failed
+                # dispatch and must not leave the episode unnarrated.
+                if entry_status != :waiting_human do
+                  maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
+                end
+
+                state |> clear_liveness() |> Map.put(:status, :waiting_human)
+              else
+                state
               end
 
-              state |> clear_liveness() |> Map.put(:status, :waiting_human)
-            else
-              state
-            end
-
-          {:noreply, state}
-
-        {:error, :endpoint_not_ready} ->
-          Logger.warning(
-            "[TaskRouter] endpoint not ready for task #{state.task_id}; retrying dispatch"
-          )
-
-          Process.send_after(self(), :dispatch, 1_000)
-          {:noreply, state}
-
-        {:error, _reason} ->
-          state =
-            state
-            |> Map.put(:status, :running)
-            |> Map.put(:last_dispatch_at, DateTime.utc_now())
-            |> Map.put(:task_status, task.status)
-            |> maybe_set_stage(stage)
-
-          state =
-            if waiting_for_human_review?(state) do
-              # Same episode-start narration as the `{:ok, ...}` tail above
-              # (task 019f9b34); this branch parks identically on a failed
-              # dispatch and must not leave the episode unnarrated.
-              if entry_status != :waiting_human do
-                maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
-              end
-
-              state |> clear_liveness() |> Map.put(:status, :waiting_human)
-            else
-              state
-            end
-
-          {:noreply, state}
-      end
+            {:noreply, state}
+        end
     end
+  end
+
+  # ── Live-acked-executor guard (tasks 01a04135, 01a00915) ──────────────
+  #
+  # Do not re-prompt a stage that already has an executor working it.
+  #
+  # Nothing in the dispatch path used to ask whether the stage had been
+  # staffed. `LeaseManager` learned (task 019fa469 stage 6) to stop a
+  # re-dispatch DESTROYING an ack, but its moduledoc puts suppressing the
+  # redundant dispatch itself explicitly out of scope. So the router kept
+  # re-sending, and because every dispatch body opens with "spawn the subagent
+  # FIRST, then ack with its id", a recipient following the text literally
+  # staffs the same stage twice: two executors in one worktree on task
+  # `01a00108`, and three deploy agents racing to open one PR on `019f9cb7`.
+  #
+  # ## Why the ack has to come from Postgres
+  #
+  # The obvious source — `LeaseManager.get/1`'s `ack_at` and `safety_net_at` —
+  # is empty in the case that matters. `terminate/2` calls `clear_liveness/1`,
+  # which deletes the entire ETS row, so a router that stops and restarts reads
+  # back nothing while its executor is still running. That IS the reported
+  # incident: ack at 02:09 with a 03:39 safety net, "Task router stopped", and
+  # the same stage re-dispatched at 02:17. A guard reading the lease would have
+  # suppressed nothing on the one occasion it was needed most.
+  #
+  # `Platform.Orchestration.last_stage_ack_at/2` reads `runtime_events`, which
+  # survives `clear_liveness/1`, a `LeaseManager` restart and a node restart —
+  # the same durability argument ADR 0051 makes for `stage_acked?/2` on the
+  # alarm path.
+  #
+  # ## Why the window, and not simply "has it ever acked"
+  #
+  # An ack is not a permanent claim on a stage. `stage_acked?/2` stays true
+  # forever, so suppressing on it alone would park a stage whose executor died
+  # after acking, with nothing left to re-dispatch it — the failure this system
+  # is least able to notice. Bounding the suppression by the stage kind's own
+  # `safety_net_ms` makes the guard self-healing: while the executor is inside
+  # its safety net it is presumed alive and is not disturbed; once the net
+  # lapses the guard stops suppressing and the normal re-dispatch resumes, on
+  # exactly the deadline the safety-net alarm already fires on.
+  #
+  # `manual_approval` has `safety_net_ms: nil` and is therefore never
+  # suppressed. That is deliberate: those stages park on a human, arm no
+  # timers, and withholding their dispatch has no deadline that would ever
+  # release it.
+  #
+  # Fails OPEN on anything unexpected, like every sibling predicate here — a
+  # redundant prompt costs tokens, a wrongly withheld one costs a stalled task.
+  defp live_acked_executor?(%State{} = state, %Stage{} = stage) do
+    stage_kind = current_stage_type(%{state | current_stage_id: stage.id})
+
+    timeouts =
+      LeaseManager.stage_kind_timeouts()
+      |> Map.get(stage_kind, %{ack_ms: nil, safety_net_ms: nil})
+
+    case {timeouts.safety_net_ms,
+          Platform.Orchestration.last_stage_ack_at(state.task_id, stage.id)} do
+      {safety_net_ms, %DateTime{} = acked_at} when is_integer(safety_net_ms) ->
+        DateTime.diff(DateTime.utc_now(), acked_at, :millisecond) < safety_net_ms and
+          not finished_since?(state.task_id, stage.id, acked_at)
+
+      _ ->
+        false
+    end
+  rescue
+    error -> live_ack_fail_open(state.task_id, error)
+  catch
+    kind, reason -> live_ack_fail_open(state.task_id, {kind, reason})
+  end
+
+  # No resolved stage (the planning dispatch) can have a stage-scoped ack, so
+  # there is nothing to suppress against.
+  defp live_acked_executor?(_state, _stage), do: false
+
+  # Same reasoning as `fail_open/2`: falling open here reproduces the exact
+  # pre-fix behaviour, so a predicate that raised on every call would look
+  # identical to one that was never added. This line is the only way to tell a
+  # live guard from a dead one. `Logger.warning`, not `info`, because the test
+  # env pins the logger at `:warning`.
+  defp live_ack_fail_open(task_id, error) do
+    Logger.warning(
+      "[TaskRouter] live-acked-executor guard failed open for task=#{task_id}: " <>
+        "#{inspect(error)}; dispatching anyway"
+    )
+
+    :telemetry.execute(
+      [:platform, :orchestration, :live_ack_guard, :failed_open],
+      %{count: 1},
+      %{task_id: task_id, error: inspect(error)}
+    )
+
+    false
+  end
+
+  # An `execution.finished` newer than the ack means the subagent that acked has
+  # already exited. The ack is then a record of something that HAPPENED, not
+  # evidence of something still running, so re-dispatching the stage is the
+  # correct recovery rather than a duplicate. Without this the finished-executor
+  # path would sit out the rest of its safety-net window before anything moved —
+  # a regression against `task_router_acked_stage_no_ack_test.exs`'s REPRO B,
+  # which drives exactly that sequence.
+  defp finished_since?(task_id, stage_id, %DateTime{} = acked_at) do
+    case Platform.Orchestration.last_stage_event_at(task_id, stage_id, "execution.finished") do
+      %DateTime{} = finished_at -> DateTime.compare(finished_at, acked_at) != :lt
+      _ -> false
+    end
+  end
+
+  # WITHHOLDS THE PROMPT, KEEPS THE WATCHDOG. Arming the liveness timers here is
+  # not an optimisation, it is what makes the guard safe: `clear_liveness/1`
+  # runs on review gates, phase boundaries and `execution.finished`, so the
+  # router regularly reaches this point with no lease and no timers at all.
+  # Suppressing in that state would leave the stage with nothing scheduled to
+  # notice it had gone quiet — the withheld dispatch would be undetectable,
+  # which is the precise failure mode the boot-engagement guard refused to risk
+  # when it stopped at `is_nil(stage)`.
+  #
+  # `record_dispatch/4` preserves `ack_at` when the row already names this stage
+  # and builds a fresh zero-ack row when it does not, so re-arming here cannot
+  # erase an ack (task 019fa469 stage 6) and cannot invent one. The no-ack alarm
+  # reads Postgres via `stage_acked?/2` regardless, per ADR 0051.
+  defp suppress_live_acked_executor(state, task, stage) do
+    stage_kind = current_stage_type(%{state | current_stage_id: stage.id})
+    arm_liveness_timers(state.task_id, stage, stage_kind)
+
+    Logger.info(
+      "[TaskRouter] suppressed dispatch for task=#{state.task_id} stage=#{stage.id}: " <>
+        "stage already acked by a live executor inside its safety net"
+    )
+
+    emit_dispatch_suppressed_telemetry(state.task_id, :live_acked_executor)
+
+    ExecutionSpace.post_log(
+      state.execution_space_id,
+      "Dispatch withheld: #{task.title} | stage #{stage.position} already has an acked " <>
+        "executor inside its safety net — not re-sending it. If that executor is gone, " <>
+        "the safety net will re-dispatch this stage when it lapses."
+    )
+
+    {:noreply, %{state | task_status: task.status}}
   end
 
   # ── Unchanged-boot-engagement guard (task 01a03ed3 stage 3) ───────────

@@ -850,6 +850,17 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Nothing hands this function a raw path segment or tool argument. If a
     # caller ever does, it needs the guard — and this count is the tripwire
     # that will make somebody look.
+    # 0 → 1 for tasks 01a04135 / 01a00915's `last_stage_event_at/3`, which the
+    # TaskRouter's live-acked-executor guard uses to ask when a stage was last
+    # acked. HAND TRIAGE: the `where:` does pin `e.task_id` as a uuid, and it
+    # carries no `Platform.UUID.valid?/1` guard for the same reason its sibling
+    # `stage_acked?/2` directly above it does not — the only caller shape is a
+    # `task_id` off the router's own `state.task_id` and a `stage_id` read from
+    # a `%Stage{}` already loaded from the plan. Nothing hands either one a raw
+    # path segment or tool argument. The `stage_id` half is compared as text
+    # through `payload->>'stage_id'` and cannot cast-raise at all. If a boundary
+    # caller ever appears, it needs the guard — and this count is the tripwire.
+    "platform/orchestration.ex" => 1,
     "platform/orchestration/execution_space.ex" => 4,
     "platform/orchestration/runtime_supervision.ex" => 4,
     "platform/org/context.ex" => 4,

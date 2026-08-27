@@ -90,6 +90,68 @@ defmodule Platform.Orchestration do
   def stage_acked?(_task_id, _stage_id), do: false
 
   @doc """
+  When a stage was most recently acked, from the durable `runtime_events` log.
+
+  The recency twin of `stage_acked?/2`, and it exists because the boolean is
+  not enough to answer "is an executor still working this stage?". Callers
+  that need to compare an ack against a deadline need the instant, not the
+  fact.
+
+  ## Why not read `LeaseManager`'s `safety_net_at` instead
+
+  Because it is gone exactly when the question is hardest. `TaskRouter.terminate/2`
+  calls `clear_liveness/1`, which deletes the whole ETS lease row, so a router
+  that stops and restarts reads back no deadline at all — while the executor it
+  dispatched is still running. That is the shape reported in task `01a04135`:
+  an ack at 02:09 with a 03:39 safety net, a router restart, and a re-dispatch
+  of the same stage at 02:17. Postgres is the only store that survives it.
+
+  Returns `nil` when the stage has never been acked, and for a nil/blank
+  `stage_id` — planning-phase acks are emitted with `stage_id: ""` and matching
+  those would hand back an ack belonging to no stage, the same trap
+  `stage_acked?/2` documents.
+
+  Ordered by `occurred_at` then `id` so a re-ack in the same microsecond still
+  resolves to the newer row (ids are UUIDv7, monotonic in time). Shares
+  `stage_acked?/2`'s deliberately un-indexed query shape — see that function's
+  cost note before adding an index for this.
+  """
+  @spec last_stage_ack_at(String.t(), String.t() | nil) :: DateTime.t() | nil
+  def last_stage_ack_at(task_id, stage_id),
+    do: last_stage_event_at(task_id, stage_id, "execution.acked")
+
+  @doc """
+  When a stage last emitted `event_type`, from the durable `runtime_events` log.
+
+  The general form behind `last_stage_ack_at/2`. It exists because "was this
+  stage acked recently" is not on its own the same question as "is an executor
+  still on it": an `execution.finished` arriving AFTER the ack says the
+  subagent is gone, and a caller comparing the two instants can tell the
+  difference. `TaskRouter`'s live-acked-executor guard does exactly that.
+
+  Same `stage_id` guard and the same deliberately un-indexed query shape as
+  `stage_acked?/2` — read that function's cost note before adding an index.
+  """
+  @spec last_stage_event_at(String.t(), String.t() | nil, String.t()) :: DateTime.t() | nil
+  def last_stage_event_at(_task_id, stage_id, _event_type) when stage_id in [nil, ""], do: nil
+
+  def last_stage_event_at(task_id, stage_id, event_type)
+      when is_binary(task_id) and is_binary(stage_id) and is_binary(event_type) do
+    Repo.one(
+      from(e in RuntimeEvent,
+        where:
+          e.task_id == ^task_id and e.event_type == ^event_type and
+            fragment("?->>'stage_id' = ?", e.payload, ^stage_id),
+        order_by: [desc: e.occurred_at, desc: e.id],
+        limit: 1,
+        select: e.occurred_at
+      )
+    )
+  end
+
+  def last_stage_event_at(_task_id, _stage_id, _event_type), do: nil
+
+  @doc """
   Resolve the agent runtime for a task with an agent assignee.
 
   Delegates to `TaskRouterWatcher.resolve_runtime_for_task/1`.
