@@ -229,6 +229,29 @@ if guest_host = System.get_env("MEETING_GUEST_HOST") do
   config :platform, meeting_guest_host: guest_host
 end
 
+# :public_site_host is the public web address this deployment offers to
+# EXTERNAL GUESTS who land on a guest meeting card that cannot let them in
+# (expired invite, invalid invite, meetings temporarily unavailable). It is
+# the only outbound link on those cards.
+#
+# Deliberately NO `||` default, for a reason the other host keys share and
+# this one sharpens: `core` is a PUBLIC, open-source repository, and a
+# default here would send every OTHER deployment's guests — a client's staff,
+# people with no relationship to us — to one particular company's website.
+# A per-deployment value belongs in per-deployment configuration.
+#
+# UNSET OR BLANK REMOVES THE ACTION from the card entirely (see
+# `PlatformWeb.PublicSite.configured?/0`); it never falls back to a host.
+# The cards read sensibly without it — each one already tells the guest to
+# ask whoever invited them, which is the action that actually helps.
+#
+# Only WRITTEN when the env var is present, matching MEETING_GUEST_HOST
+# above: an unconditional write of `nil` would clobber any value set in
+# `config/dev.exs` / `config/test.exs`, since runtime config applies last.
+if public_site_host = System.get_env("PUBLIC_SITE_HOST") do
+  config :platform, :public_site_host, public_site_host
+end
+
 # Request-time meet host. Read here rather than only inside the prod
 # block so a dev/CI process can set it; unset means the meet surface
 # does not exist and every external request on any host is denied the

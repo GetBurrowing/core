@@ -243,6 +243,7 @@ defmodule PlatformWeb.MeetingLive do
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.Components.Meetings.IntentsCollapse
   alias PlatformWeb.MeetingLive.CalendarWindow
+  alias PlatformWeb.PublicSite
   alias PlatformWeb.SpaceTopics
 
   # The role that may see and drive the intents-collapse bar. Passed to
@@ -494,6 +495,14 @@ defmodule PlatformWeb.MeetingLive do
   # empty defaults; no data leaks into the guest surface's DOM.
   defp seed_guest_index_fallback_assigns(socket) do
     socket
+    # The single outbound action on every guest FAILURE card (expired,
+    # invalid, unavailable) — all three route through here. Both assigns
+    # are `nil` unless `PUBLIC_SITE_HOST` is configured, and the cards
+    # gate the whole `card-actions` block on that nil (task 01a04352).
+    # No default host: this repo is public, and a baked-in one points a
+    # different deployment's guests at somebody else's company.
+    |> assign(:public_site_url, PublicSite.url())
+    |> assign(:public_site_host, PublicSite.display_host())
     |> assign(:meetings, [])
     |> assign(:grouped_meetings, %{live: [], upcoming: [], ended: []})
     # `false`, not `meetings == []`, even though the list above is empty:

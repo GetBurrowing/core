@@ -81,6 +81,7 @@ The app will be available at [http://localhost:4000](http://localhost:4000).
 | `AGENT_WORKSPACE_PATH` | Path to the agent workspace directory | — |
 | `PHX_HOST` | Production hostname | `localhost` |
 | `MEET_HOST` | Optional sibling hostname for the guest-meeting entry surface (e.g. `meet.example.com`). Added to `check_origin` so LiveView WebSocket upgrades from this hostname succeed. Unset → guest-meeting sockets from a sibling host are rejected. | — |
+| `PUBLIC_SITE_HOST` | Optional public web address for this deployment (e.g. `example.com`). It is the single outbound action on the guest meeting cards an external visitor sees when an invite is expired, invalid, or meetings are unavailable. Unset → that action is omitted entirely; there is deliberately no default, since a baked-in one would send your guests to somebody else's website. | — |
 | `PORT` | HTTP port | `4000` |
 
 ### Dev Login

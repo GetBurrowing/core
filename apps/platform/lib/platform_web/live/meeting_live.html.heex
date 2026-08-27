@@ -38,6 +38,14 @@
     * `@meeting != nil` — full meeting shell (both `chrome_mode == :shell` and
       guest `:in_meeting`; shell-only regions gated with `@shell?` below).
     * Fallthrough — `:index` action (grouped meetings list + Start-meeting FAB).
+  The three FAILURE cards share one outbound action, gated on
+  `@public_site_url` (task 01a04352). It is the deployment's own public
+  address, from `PUBLIC_SITE_HOST` via `PlatformWeb.PublicSite`, and where
+  that is unset THE WHOLE `card-actions` BLOCK IS ABSENT — no empty label,
+  no dead `href`. That absence is the supported state, not a degraded one:
+  `core` is public and a compiled-in default would point one deployment's
+  guests at another company. Every card's body copy therefore has to stand
+  on its own, and each names who to ask.
   Guest sub-cards are rendered inline (with the outer `min-h-dvh` wrapper
   supplied by the `:guest` layout in `layouts.ex`). Stage 5 consolidated
   the guest surface onto MeetingLive; there is no longer a separate
@@ -53,9 +61,9 @@
           <p class="text-sm text-base-content/70">
             Guest invite links are only valid for a short window. Please ask the meeting host to send you a fresh link.
           </p>
-          <div class="card-actions mt-2">
-            <a href="https://example.com" class="btn btn-primary btn-sm">
-              Go to example.com
+          <div :if={@public_site_url} class="card-actions mt-2">
+            <a href={@public_site_url} class="btn btn-primary btn-sm">
+              Go to {@public_site_host}
             </a>
           </div>
         </div>
@@ -68,11 +76,11 @@
           <span class="hero-exclamation-triangle size-10 text-error" aria-hidden="true"></span>
           <h1 class="card-title text-lg">Invite link is not valid</h1>
           <p class="text-sm text-base-content/70">
-            We couldn't verify this invite. It may have been mistyped, revoked, or refers to a meeting that no longer exists.
+            We couldn't verify this invite. It may have been mistyped, revoked, or refers to a meeting that no longer exists. Please ask whoever invited you for a new link.
           </p>
-          <div class="card-actions mt-2">
-            <a href="https://example.com" class="btn btn-primary btn-sm">
-              Go to example.com
+          <div :if={@public_site_url} class="card-actions mt-2">
+            <a href={@public_site_url} class="btn btn-primary btn-sm">
+              Go to {@public_site_host}
             </a>
           </div>
         </div>
@@ -92,9 +100,9 @@
           <p class="text-sm text-base-content/70">
             Your invite link is fine — we're unable to connect you to {@meeting.name} right now. Please try again in a few minutes, or contact whoever invited you.
           </p>
-          <div class="card-actions mt-2">
-            <a href="https://example.com" class="btn btn-primary btn-sm">
-              Go to example.com
+          <div :if={@public_site_url} class="card-actions mt-2">
+            <a href={@public_site_url} class="btn btn-primary btn-sm">
+              Go to {@public_site_host}
             </a>
           </div>
         </div>
