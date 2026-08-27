@@ -29,6 +29,11 @@
   Top-level `cond` (task 019f498d stage 4):
     * `@chrome_mode == :none and @state == :expired` — guest expired-invite card.
     * `@chrome_mode == :none and @state == :invalid` — guest invalid-invite card.
+    * `@chrome_mode == :none and @state == :unavailable` — guest
+      service-unavailable card (task 019f9cb7 stage 2). MUST stay distinct
+      from `:invalid`: this one says the fault is OURS and the link is
+      fine, and it is the only guest card that keeps `@meeting` so it can
+      name the meeting the visitor was actually invited to.
     * `@chrome_mode == :none and @state == :name_entry` — guest name-entry card.
     * `@meeting != nil` — full meeting shell (both `chrome_mode == :shell` and
       guest `:in_meeting`; shell-only regions gated with `@shell?` below).
@@ -64,6 +69,28 @@
           <h1 class="card-title text-lg">Invite link is not valid</h1>
           <p class="text-sm text-base-content/70">
             We couldn't verify this invite. It may have been mistyped, revoked, or refers to a meeting that no longer exists.
+          </p>
+          <div class="card-actions mt-2">
+            <a href="https://example.com" class="btn btn-primary btn-sm">
+              Go to example.com
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% @chrome_mode == :none and @state == :unavailable -> %>
+    <%!-- Operational fault, NOT a bad invite (task 019f9cb7 stage 2).
+       This surface is shown to external guests, so the copy names no
+       host, no service, no error atom and no internal identifier — the
+       diagnosis goes to the server log, and the visitor gets the two
+       things they can act on: their link is fine, and who to ask. --%>
+    <div class="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4">
+      <div class="card w-full bg-base-200 shadow-lg">
+        <div class="card-body items-center text-center">
+          <span class="hero-signal-slash size-10 text-warning" aria-hidden="true"></span>
+          <h1 class="card-title text-lg">Meetings are temporarily unavailable</h1>
+          <p class="text-sm text-base-content/70">
+            Your invite link is fine — we're unable to connect you to {@meeting.name} right now. Please try again in a few minutes, or contact whoever invited you.
           </p>
           <div class="card-actions mt-2">
             <a href="https://example.com" class="btn btn-primary btn-sm">

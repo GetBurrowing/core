@@ -165,9 +165,13 @@ defmodule PlatformWeb.MeetingLive do
       Same task/stage semantics as `:chrome_mode`.
     * `:state` — guest ingress state (task 019f498d stage 3), ONLY assigned
       when `chrome_mode == :none`. One of `:expired`, `:invalid`,
-      `:name_entry`, `:in_meeting`. Absent in the shell path; the heex
-      cond in stage 4 branches on `chrome_mode == :none and state == …`
-      to render the guest sub-surfaces.
+      `:unavailable`, `:name_entry`, `:in_meeting`. Absent in the shell
+      path; the heex cond in stage 4 branches on
+      `chrome_mode == :none and state == …` to render the guest
+      sub-surfaces. `:unavailable` (task 019f9cb7 stage 2) is the
+      OPERATIONAL failure state — our media plane could not admit a guest
+      whose invite verified fine — and is deliberately distinct from
+      `:invalid`, which is a claim about the guest's link.
 
   ## PubSub (`:show`)
 
@@ -322,7 +326,9 @@ defmodule PlatformWeb.MeetingLive do
   # carries `slug` + `token` in the path. This clause resolves the invite
   # through `Meetings.resolve_guest_invite/2` (extracted in stage 2) and
   # lands one of four states: `:expired`, `:invalid`, `:name_entry`, or
-  # `:in_meeting`.
+  # `:in_meeting`. `enter_meeting_as_guest/3` can subsequently divert
+  # `:in_meeting` to `:unavailable` or back to `:name_entry` when the
+  # LiveKit mint fails — see `guest_mint_failure/3`.
   #
   # In `:in_meeting` we mint the LiveKit bundle, seed the media-state
   # assigns via `MeetingHooks.attach_guest/1` (a guest-safe variant that
@@ -650,7 +656,8 @@ defmodule PlatformWeb.MeetingLive do
   @impl true
   # Guest ingress (task 019f498d stage 3): the guest mount clause above
   # already resolved the invite + seeded every assign the guest states
-  # need (`:state` in `[:expired, :invalid, :name_entry, :in_meeting]`).
+  # need (`:state` in
+  # `[:expired, :invalid, :unavailable, :name_entry, :in_meeting]`).
   # handle_params is a no-op here to avoid the shell-path
   # `Meetings.fetch_meeting_for_user/2` re-lookup and MeetingHooks.attach/2
   # (which requires a binary user_id and would double-subscribe the guest
@@ -659,7 +666,7 @@ defmodule PlatformWeb.MeetingLive do
   # route (chrome_mode :none, no token, no `:state`) still falls through
   # to the shell path and its `:meeting` assign lands.
   def handle_params(_params, _url, %{assigns: %{state: state}} = socket)
-      when state in [:expired, :invalid, :name_entry, :in_meeting] do
+      when state in [:expired, :invalid, :unavailable, :name_entry, :in_meeting] do
     {:noreply, socket}
   end
 
@@ -2588,24 +2595,26 @@ defmodule PlatformWeb.MeetingLive do
       true ->
         %{meeting: meeting} = socket.assigns
 
-        case Meetings.mint_guest_join_bundle(meeting, trimmed) do
-          {:ok, _bundle} ->
-            {:noreply,
-             socket
-             |> assign(:name_error, nil)
-             |> enter_meeting_as_guest(meeting, trimmed)}
-
-          {:error, :livekit_not_configured} ->
-            {:noreply,
-             assign(
-               socket,
-               :name_error,
-               "Meetings are not available right now. Please try again later."
-             )}
-
-          {:error, _other} ->
-            {:noreply, assign(socket, :name_error, "Something went wrong. Please try again.")}
-        end
+        # NO pre-flight mint (task 019f9cb7 stage 2). This used to call
+        # `Meetings.mint_guest_join_bundle/2`, throw the bundle away as
+        # `{:ok, _bundle}`, and then call `enter_meeting_as_guest/3` — which
+        # mints a SECOND bundle — purely so this site could word its own
+        # failure copy. Two JWTs per submission to produce a duplicate
+        # message.
+        #
+        # It could not even see a different outcome: every
+        # `mint_guest_join_bundle/2` failure is deterministic in
+        # `(meeting, display_name, livekit config)`, so the pre-flight and
+        # the real mint always agreed. What it DID produce was a second set
+        # of guest-facing strings for the same operational fault, worded
+        # differently from the mount path's — the pair that drifts. The
+        # single mint inside `enter_meeting_as_guest/3` now answers for both
+        # entry points, and `guest_mint_failure/3` routes a recoverable name
+        # problem straight back to this form.
+        {:noreply,
+         socket
+         |> assign(:name_error, nil)
+         |> enter_meeting_as_guest(meeting, trimmed)}
     end
   end
 
@@ -3574,9 +3583,17 @@ defmodule PlatformWeb.MeetingLive do
   # defaults so the render doesn't crash on missing keys), install the
   # guest-safe meeting-event hook via `MeetingHooks.attach_guest/1`, and
   # push `join-meeting` with the exact payload shape MeetingClient
-  # consumes. On mint failure land on `:state = :invalid` — same failure
-  # surface as an unverifiable token, since a downstream mint issue is
-  # indistinguishable from an invalid invite from the guest's POV.
+  # consumes.
+  #
+  # ON MINT FAILURE, DO NOT LAND ON `:invalid` (task 019f9cb7 stage 2).
+  # This comment used to argue the opposite — that a mint issue is
+  # "indistinguishable from an invalid invite from the guest's POV", so
+  # both should share the invalid-invite card. That reasoning is wrong in
+  # the only direction that matters: the two are trivially distinguishable
+  # to US, and we are the only party who can act on the difference. The
+  # guest, told their link is bad, goes back to their host for a
+  # replacement that fails identically, while the real fault stays silent
+  # to operators. `guest_mint_failure/3` below now splits the outcomes.
   #
   # Called from both the mount clause (invite payload carried a
   # display_name) and the `"submit_name"` event handler (guest typed
@@ -3633,13 +3650,108 @@ defmodule PlatformWeb.MeetingLive do
         |> assign(:in_meeting, true)
         |> push_event("join-meeting", Meetings.guest_join_event_payload(bundle, meeting))
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        guest_mint_failure(socket, meeting, reason)
+    end
+  end
+
+  # ── Mint-failure presentation for the guest surface (019f9cb7 stage 2) ──
+  #
+  # A `mint_guest_join_bundle/2` failure is NOT a statement about the
+  # invite. The invite was verified by `Meetings.resolve_guest_invite/2`
+  # before this helper is reachable, and that resolver — not this one — owns
+  # the genuine `:invalid` / `:revoked` / `:expired` decisions. Everything
+  # reachable here is ours.
+  #
+  # Three outcomes, split by what the guest can DO next:
+  #
+  #   * `:livekit_not_configured` — our media plane is not switched on.
+  #     Nothing the guest can fix, so a terminal `:unavailable` card, and a
+  #     `Logger.warning` because this was previously silent to operators
+  #     while the visitor got blamed for it.
+  #   * `:missing_display_name` on a meeting that HAS a chat space — the
+  #     name we were handed is unusable (an invite signed with a
+  #     whitespace-only name resolves to `:in_meeting` and only fails
+  #     here). Recoverable input: back to the name-entry form, which is a
+  #     working exit, not a dead end.
+  #   * anything else — operational. Logged, `:unavailable`.
+  #
+  # The CATCH-ALL takes the operational branch deliberately. An unknown
+  # future reason must be loud to us; it must never be quietly recast as
+  # the visitor's fault. `mint_guest_join_bundle/2` has a closed error set
+  # today (`:livekit_not_configured`, `:missing_display_name` — confirmed
+  # against the implementation, not just the `@spec`), so the catch-all is
+  # currently unreachable and exists to keep the NEXT atom safe.
+  defp guest_mint_failure(socket, meeting, reason) do
+    case classify_guest_mint_failure(meeting, reason) do
+      {:recoverable_name, message} ->
+        # Deliberately NOT `:meeting, nil` — the name-entry card titles
+        # itself with `@meeting.name`, and the guest is being asked to
+        # retry against a meeting they were legitimately invited to.
         socket
-        |> assign(:state, :invalid)
-        |> assign(:page_title, "Invite link is not valid")
-        |> assign(:meeting, nil)
+        |> assign(:state, :name_entry)
+        |> assign(:page_title, "Join #{meeting.name}")
+        |> assign(:display_name, nil)
+        |> assign(:name_value, "")
+        |> assign(:name_error, message)
+        |> seed_guest_shell_tree_assigns(meeting)
+
+      {:fault, log_detail} ->
+        # GUEST SURFACE: the log may name the fault and the meeting, never
+        # the guest. `meeting.id` is an internal UUID and never rendered.
+        Logger.warning(
+          "Guest meeting ingress refused by a LiveKit mint failure: " <>
+            log_detail <>
+            ". The invite itself verified; the guest was shown the " <>
+            "temporarily-unavailable card. meeting_id=" <> to_string(meeting.id)
+        )
+
+        # `:meeting` is KEPT here, where the old clause nil'd it (task
+        # 019f9cb7 stage 2). The card names the meeting the guest was
+        # invited to, which is the whole difference between "we can't get
+        # you into <meeting>" and "your link is junk". Seeding the index
+        # fallback rather than the shell tree mirrors `:invalid`: this is a
+        # terminal card, it reads `@meeting.name` and nothing else, and one
+        # of the faults it renders is a meeting with no chat space — which
+        # the shell-tree seeder is not built to survive.
+        socket
+        |> assign(:state, :unavailable)
+        |> assign(:page_title, "Meetings are temporarily unavailable")
+        |> assign(:meeting, meeting)
         |> seed_guest_index_fallback_assigns()
     end
+  end
+
+  defp classify_guest_mint_failure(_meeting, :livekit_not_configured) do
+    {:fault, "the LiveKit media server is not configured on this node"}
+  end
+
+  # `:missing_display_name` has TWO causes and only one of them is about a
+  # name. `Meetings.guest_livekit_token/2` guards its happy clause on
+  # `is_binary(chat_space_id)`, so a meeting with a nil chat-space FK falls
+  # to the catch-all clause and is reported as `:missing_display_name` even
+  # when the name was perfect — pinned by
+  # `test/platform/meetings/guest_token_test.exs`, whose own comment calls
+  # it "an odd label for the shape".
+  #
+  # Taking the atom at face value would send that guest back to the
+  # name-entry form to retype a name that was never the problem, and the
+  # retry would fail identically: a loop with no exit. The mislabel lives
+  # in `meetings.ex` and cannot be fixed from here, so we discriminate on
+  # the shape the atom is hiding instead.
+  defp classify_guest_mint_failure(%Meeting{chat_space_id: nil}, :missing_display_name) do
+    {:fault,
+     "the meeting has no backing chat space, so no room name can be derived " <>
+       "(the mint reports this as a missing display name)"}
+  end
+
+  defp classify_guest_mint_failure(_meeting, :missing_display_name) do
+    {:recoverable_name,
+     "We couldn't read the name on your invite. Please enter the name others in the meeting will see."}
+  end
+
+  defp classify_guest_mint_failure(_meeting, reason) do
+    {:fault, "an unrecognised mint failure, " <> inspect(reason)}
   end
 
   # The guest surface's THREE meetings-family subscriptions, taken together
