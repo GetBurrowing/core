@@ -88,6 +88,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
      |> assign(:stack_assignee_modal_mode, :simple)
      |> assign(:stack_feedback_reject_open, MapSet.new())
      |> assign(:stack_feedback_reject_text, %{})
+     |> assign(:stack_feedback_reject_error, %{})
      |> assign(:stack_graph_expanded, false)
      |> assign(:stack_review_request_subscriptions, MapSet.new())}
   end
@@ -796,35 +797,47 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                          `:stack_feedback_reject_text`) so opening this
                          drawer here does NOT also expand the per-task
                          review panel's separate reject UI underneath. --%>
-                      <div
+                      <%!-- The reason is a real form field, NOT a
+                         `phx-value-feedback` echo of keystroke events. The
+                         echo only carried keystrokes whose round-trip had
+                         already re-rendered, so it dropped the tail of what
+                         the reviewer typed and dropped pasted text entirely.
+                         See `GatePanelComponent`'s "Why a form" note. --%>
+                      <form
                         :if={MapSet.member?(@stack_feedback_reject_open, item.id)}
                         class="mb-2 space-y-2"
                         data-role="stack-feedback-overlay-reject-form"
                         data-review-item-id={item.id}
+                        phx-submit="stack_feedback_reject_item"
+                        phx-change="stack_update_feedback_reject_text"
+                        phx-target={@myself}
                       >
+                        <input type="hidden" name="item-id" value={item.id} />
                         <textarea
+                          name="feedback"
                           class="textarea textarea-bordered textarea-xs w-full"
                           aria-label="Rejection feedback"
                           placeholder="Describe what needs to change..."
-                          phx-keyup="stack_update_feedback_reject_text"
-                          phx-target={@myself}
-                          phx-value-id={item.id}
+                          phx-debounce="blur"
                           data-role="stack-feedback-overlay-reject-text"
                           data-review-item-id={item.id}
                         >{Map.get(@stack_feedback_reject_text, item.id, "")}</textarea>
+                        <p
+                          :if={Map.has_key?(@stack_feedback_reject_error, item.id)}
+                          class="text-xs text-error"
+                          role="alert"
+                        >
+                          {Map.fetch!(@stack_feedback_reject_error, item.id)}
+                        </p>
                         <button
-                          type="button"
+                          type="submit"
                           class="btn btn-warning btn-xs"
-                          phx-click="stack_feedback_reject_item"
-                          phx-target={@myself}
-                          phx-value-id={item.id}
-                          phx-value-feedback={Map.get(@stack_feedback_reject_text, item.id, "")}
                           data-role="stack-feedback-overlay-reject-submit"
                           data-review-item-id={item.id}
                         >
                           Submit feedback
                         </button>
-                      </div>
+                      </form>
                       <%!-- Canvas content (inline) — same component the per-
                          task `active_review_canvas` modal uses. If the item
                          carries free-form `content` instead of a canvas
@@ -1255,43 +1268,48 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   # without their drafts colliding.
   def handle_event(
         "stack_update_feedback_reject_text",
-        %{"id" => item_id, "value" => text},
+        %{"item-id" => item_id, "feedback" => text},
         socket
       ) do
     {:noreply,
-     assign(
-       socket,
+     socket
+     |> assign(
        :stack_feedback_reject_text,
        Map.put(socket.assigns.stack_feedback_reject_text, item_id, text)
+     )
+     |> assign(
+       :stack_feedback_reject_error,
+       Map.delete(socket.assigns.stack_feedback_reject_error, item_id)
      )}
   end
 
   # Submit a reject + feedback for a single overlay item. Same optimistic
   # drop as the approve handler, plus clearing the in-flight draft.
-  def handle_event("stack_feedback_reject_item", %{"id" => item_id} = params, socket) do
+  def handle_event("stack_feedback_reject_item", %{"item-id" => item_id} = params, socket) do
     reviewed_by = socket.assigns[:current_user_id] || "unknown"
 
-    feedback =
-      Map.get(params, "feedback") ||
-        Map.get(socket.assigns.stack_feedback_reject_text, item_id, "")
+    # Form-serialized, so whole by construction. The old `||` fallback to the
+    # keystroke buffer is deliberately gone: it silently substituted a stale
+    # draft for the value the reviewer actually submitted.
+    feedback = Map.get(params, "feedback", "")
 
-    case ReviewRequests.reject_item(item_id, reviewed_by, feedback) do
-      {:ok, _item} ->
-        {:noreply,
-         socket
-         |> assign(
-           :stack_feedback_reject_open,
-           MapSet.delete(socket.assigns.stack_feedback_reject_open, item_id)
+    if String.trim(feedback) == "" do
+      {:noreply,
+       socket
+       |> assign(
+         :stack_feedback_reject_text,
+         Map.put(socket.assigns.stack_feedback_reject_text, item_id, feedback)
+       )
+       |> assign(
+         :stack_feedback_reject_error,
+         Map.put(
+           socket.assigns.stack_feedback_reject_error,
+           item_id,
+           "Enter a reason before sending feedback."
          )
-         |> assign(
-           :stack_feedback_reject_text,
-           Map.delete(socket.assigns.stack_feedback_reject_text, item_id)
-         )
-         |> drop_overlay_item(item_id)}
-
-      {:error, _} ->
-        send(self(), {:stacks_flash, :error, "Failed to submit feedback."})
-        {:noreply, socket}
+       )}
+    else
+      stack_submit_reject(socket, item_id, reviewed_by, feedback)
     end
   end
 
@@ -1589,6 +1607,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
     |> assign(:show_stack_feedback_overlay, false)
     |> assign(:stack_feedback_reject_open, MapSet.new())
     |> assign(:stack_feedback_reject_text, %{})
+    |> assign(:stack_feedback_reject_error, %{})
   end
 
   # Optimistic per-item removal in the overlay after an approve / reject
@@ -1672,4 +1691,29 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   end
 
   defp stack_phase_assignee_id(_, _), do: nil
+
+  defp stack_submit_reject(socket, item_id, reviewed_by, feedback) do
+    case ReviewRequests.reject_item(item_id, reviewed_by, feedback) do
+      {:ok, _item} ->
+        {:noreply,
+         socket
+         |> assign(
+           :stack_feedback_reject_open,
+           MapSet.delete(socket.assigns.stack_feedback_reject_open, item_id)
+         )
+         |> assign(
+           :stack_feedback_reject_error,
+           Map.delete(socket.assigns.stack_feedback_reject_error, item_id)
+         )
+         |> assign(
+           :stack_feedback_reject_text,
+           Map.delete(socket.assigns.stack_feedback_reject_text, item_id)
+         )
+         |> drop_overlay_item(item_id)}
+
+      {:error, _} ->
+        send(self(), {:stacks_flash, :error, "Failed to submit feedback."})
+        {:noreply, socket}
+    end
+  end
 end

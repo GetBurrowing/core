@@ -15,6 +15,23 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
   `gate_canvas_open`) — this module finishes the job for the module name
   and the rest of the event namespace.
 
+  ## Why a form, and not `phx-value-feedback`
+
+  The rejection reason is submitted as a real `<form>` field. It used to ride
+  on a `phx-value-feedback` attribute that the server rendered from a
+  `:gate_feedback_text` assign fed by `phx-keyup`, and that lost data on
+  every rejection where the reviewer typed and clicked without pausing: the
+  attribute only carries keystrokes whose round-trip had already been
+  re-rendered into the DOM, so the last few characters — and any text the
+  reviewer pasted, which fires no keyup at all — never reached the server.
+  A production rejection stored 43 characters of a longer sentence, cut
+  mid-phrase, with no error shown to anyone.
+
+  A form field is serialized by the browser from the live DOM at click time,
+  so the value is whole regardless of latency, paste, IME, or autofill.
+  `:gate_feedback_text` survives only to repopulate the textarea across
+  unrelated re-renders; it is never the source of the submitted value.
+
   ## Ownership
 
   Assigns owned here — the shell holds none of them:
@@ -22,6 +39,11 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
     * `:gate_feedback_open` — MapSet of review-item ids whose feedback
       textarea is expanded.
     * `:gate_feedback_text` — map of review-item id → in-progress feedback.
+    * `:gate_feedback_error` — map of review-item id → inline validation
+      message. Rendered in the drawer rather than flashed: `put_flash/3` from
+      a live component does not reach the shell's flash container, so a
+      flashed refusal would be invisible — which is the failure mode this
+      whole change exists to remove.
     * `:gate_superseded_expanded` — the "Earlier submissions" disclosure.
     * `:gate_canvas` — the review canvas currently open in the modal. Set
       either by `gate_canvas_open` here, or by the shell forwarding
@@ -75,6 +97,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
      socket
      |> assign(:gate_feedback_open, MapSet.new())
      |> assign(:gate_feedback_text, %{})
+     |> assign(:gate_feedback_error, %{})
      |> assign(:gate_superseded_expanded, false)
      |> assign(:gate_canvas, nil)}
   end
@@ -197,23 +220,37 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
               :if={item.status == "pending" && MapSet.member?(@gate_feedback_open, item.id)}
               class="space-y-2"
             >
-              <textarea
-                class="textarea textarea-bordered textarea-xs w-full"
-                aria-label="Review feedback"
-                placeholder="Describe what needs to change..."
-                phx-keyup="gate_feedback_changed"
+              <%!--
+                The reason travels as a real form field, NOT as a
+                server-rendered `phx-value-feedback` echo of keystroke
+                events. See the "Why a form" note in the @moduledoc: the
+                echo lost whatever the reviewer typed in the last round-trip
+                before they clicked, and lost pasted text entirely.
+              --%>
+              <form
+                phx-submit="gate_submit_feedback"
+                phx-change="gate_feedback_changed"
                 phx-target={@myself}
-                phx-value-item-id={item.id}
-              >{Map.get(@gate_feedback_text, item.id, "")}</textarea>
-              <button
-                class="btn btn-warning btn-xs"
-                phx-click="gate_submit_feedback"
-                phx-target={@myself}
-                phx-value-item-id={item.id}
-                phx-value-feedback={Map.get(@gate_feedback_text, item.id, "")}
               >
-                Submit Feedback
-              </button>
+                <input type="hidden" name="item-id" value={item.id} />
+                <textarea
+                  name="feedback"
+                  class="textarea textarea-bordered textarea-xs w-full"
+                  aria-label="Review feedback"
+                  placeholder="Describe what needs to change..."
+                  phx-debounce="blur"
+                >{Map.get(@gate_feedback_text, item.id, "")}</textarea>
+                <p
+                  :if={Map.has_key?(@gate_feedback_error, item.id)}
+                  class="mt-1 text-xs text-error"
+                  role="alert"
+                >
+                  {Map.fetch!(@gate_feedback_error, item.id)}
+                </p>
+                <button type="submit" class="btn btn-warning btn-xs mt-2">
+                  Submit Feedback
+                </button>
+              </form>
             </div>
           </div>
         </div>
@@ -280,6 +317,10 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
     end
   end
 
+  # `feedback` arrives as a form field serialized from the live DOM at submit
+  # time, so it is whole by construction. Do NOT reintroduce a
+  # `phx-value-feedback` attribute here: that reads a server-rendered echo of
+  # earlier keystrokes and silently drops the tail (see @moduledoc).
   def handle_event(
         "gate_submit_feedback",
         %{"item-id" => item_id, "feedback" => feedback},
@@ -287,20 +328,23 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
       ) do
     reviewed_by = socket.assigns[:current_user_id] || "unknown"
 
-    case ReviewRequests.reject_item(item_id, reviewed_by, feedback) do
-      {:ok, _} ->
-        send(self(), {:gate_reviews_changed})
-
-        {:noreply,
-         socket
-         |> assign(:gate_feedback_text, Map.delete(socket.assigns.gate_feedback_text, item_id))
-         |> assign(
-           :gate_feedback_open,
-           MapSet.delete(socket.assigns.gate_feedback_open, item_id)
-         )}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to submit feedback.")}
+    if String.trim(feedback) == "" do
+      {:noreply,
+       socket
+       |> assign(
+         :gate_feedback_text,
+         Map.put(socket.assigns.gate_feedback_text, item_id, feedback)
+       )
+       |> assign(
+         :gate_feedback_error,
+         Map.put(
+           socket.assigns.gate_feedback_error,
+           item_id,
+           "Enter a reason before sending feedback."
+         )
+       )}
+    else
+      submit_feedback(socket, item_id, reviewed_by, feedback)
     end
   end
 
@@ -329,12 +373,40 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
     {:noreply, assign(socket, :gate_canvas, nil)}
   end
 
-  def handle_event("gate_feedback_changed", %{"item-id" => item_id, "value" => text}, socket) do
+  # Draft-preservation only. `phx-change` keeps the textarea populated across
+  # unrelated re-renders; it is NOT the source of the submitted value.
+  def handle_event("gate_feedback_changed", %{"item-id" => item_id, "feedback" => text}, socket) do
     {:noreply,
-     assign(
-       socket,
+     socket
+     |> assign(
        :gate_feedback_text,
        Map.put(socket.assigns.gate_feedback_text, item_id, text)
+     )
+     |> assign(
+       :gate_feedback_error,
+       Map.delete(socket.assigns.gate_feedback_error, item_id)
      )}
+  end
+
+  defp submit_feedback(socket, item_id, reviewed_by, feedback) do
+    case ReviewRequests.reject_item(item_id, reviewed_by, feedback) do
+      {:ok, _} ->
+        send(self(), {:gate_reviews_changed})
+
+        {:noreply,
+         socket
+         |> assign(:gate_feedback_text, Map.delete(socket.assigns.gate_feedback_text, item_id))
+         |> assign(
+           :gate_feedback_error,
+           Map.delete(socket.assigns.gate_feedback_error, item_id)
+         )
+         |> assign(
+           :gate_feedback_open,
+           MapSet.delete(socket.assigns.gate_feedback_open, item_id)
+         )}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Failed to submit feedback.")}
+    end
   end
 end

@@ -11090,7 +11090,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # Submitting reject lands in the DB with the feedback string.
       after_html =
         stacks_click(view, "stack_feedback_reject_item", %{
-          "id" => item.id,
+          "item-id" => item.id,
           "feedback" => "Needs more detail in section two."
         })
 
@@ -11107,6 +11107,53 @@ defmodule PlatformWeb.TasksLiveTest do
       refute Map.has_key?(stacks_assigns(view).stack_feedback_reject_text, item.id)
 
       refute after_html =~ ~s(data-review-item-id="#{item.id}")
+    end
+
+    # Companion to (b), pinning the MECHANISM rather than the outcome. (b)
+    # passes even with the old wiring because it pushes the event directly
+    # and so never exercises the browser-side path that lost the text. The
+    # reason must ride a `name`d field inside a `phx-submit` form; the old
+    # `phx-value-feedback` echo carried only keystrokes whose round-trip had
+    # already re-rendered, which is how a production rejection stored 43
+    # characters of a much longer sentence.
+    test "(b2) the reject reason is a form field, not a keystroke-echo attribute",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s4_member(stack, "in_progress", 1)
+      {_v, _rr, item} = seed_s4_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = stacks_click(view, "stack_open_detail", %{"id" => stack.id})
+      _ = stacks_click(view, "stack_open_feedback_overlay", %{})
+
+      html = stacks_click(view, "stack_toggle_feedback_reject", %{"id" => item.id})
+
+      # POSITIVE CONTROL — without this the two assertions below are vacuous.
+      assert count_nodes(html, ~s([data-role="stack-feedback-overlay-reject-text"])) == 1
+
+      assert count_nodes(
+               html,
+               ~s(form[phx-submit="stack_feedback_reject_item"] textarea[name="feedback"])
+             ) == 1
+
+      assert count_nodes(html, ~s([phx-value-feedback])) == 0
+
+      reason =
+        "Use the AI gateway on lightning for a real model. " <>
+          String.duplicate("Do not ship the stub. ", 20)
+
+      view
+      |> form(~s(form[phx-submit="stack_feedback_reject_item"]), %{
+        "item-id" => item.id,
+        "feedback" => reason
+      })
+      |> render_submit()
+
+      stored = Repo.get!(ReviewItem, item.id)
+      assert stored.status == "needs_revision"
+
+      assert stored.feedback == reason,
+             "reason was altered in transit: stored #{String.length(stored.feedback || "")} " <>
+               "of #{String.length(reason)} characters"
     end
 
     test "(c) external PubSub :review_request_resolved converges the overlay to server state",
@@ -11138,7 +11185,15 @@ defmodule PlatformWeb.TasksLiveTest do
       assert stacks_assigns(view).selected_stack_pending_review_count == 0
     end
 
-    test "(d) reject_item handler tolerates pre-collected text when no `feedback` param is supplied",
+    # This test previously asserted the OPPOSITE: that a submit carrying no
+    # `feedback` param must fall back to the keystroke buffer. That fallback
+    # is the data-loss mechanism, not a safety net — it silently substitutes
+    # a stale draft for whatever the reviewer actually had on screen, and it
+    # is exactly how a production rejection stored a mid-word prefix. With
+    # the reason serialized from the live DOM at submit time, the param is
+    # always present and always whole; a submit without it is a bug, and the
+    # right answer is to refuse rather than to invent a reason.
+    test "(d) a submit carrying no reason is refused rather than backfilled from a stale draft",
          %{conn: conn, stack: stack} do
       m1 = seed_s4_member(stack, "in_progress", 1)
       {_v, _rr, item} = seed_s4_review_request(m1)
@@ -11148,24 +11203,22 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = stacks_click(view, "stack_open_feedback_overlay", %{})
       _ = stacks_click(view, "stack_toggle_feedback_reject", %{"id" => item.id})
 
-      # Type into the textarea (the buffer assign is the source of truth).
       _ =
-        render_keyup(with_target(view, "#tasks-stacks"), "stack_update_feedback_reject_text", %{
-          "id" => item.id,
-          "value" => "Buffered feedback"
-        })
+        render_change(
+          with_target(view, "#tasks-stacks"),
+          "stack_update_feedback_reject_text",
+          %{"item-id" => item.id, "feedback" => "Stale half-typed draft"}
+        )
 
-      buffered = stacks_assigns(view).stack_feedback_reject_text
-      assert Map.get(buffered, item.id) == "Buffered feedback"
+      assert Map.get(stacks_assigns(view).stack_feedback_reject_text, item.id) ==
+               "Stale half-typed draft"
 
-      # Submit WITHOUT the feedback key — handler must fall back to the
-      # buffered draft so the in-flight assign is the source of truth
-      # even if the template's `phx-value-feedback` is stripped.
-      _ = stacks_click(view, "stack_feedback_reject_item", %{"id" => item.id})
+      html = stacks_click(view, "stack_feedback_reject_item", %{"item-id" => item.id})
 
       reloaded = Repo.get!(ReviewItem, item.id)
-      assert reloaded.status == "needs_revision"
-      assert reloaded.feedback == "Buffered feedback"
+      assert reloaded.status == "pending"
+      assert is_nil(reloaded.feedback)
+      assert html =~ "Enter a reason before sending feedback."
     end
 
     test "(e) stack_close_feedback_overlay clears in-flight reject form state",
@@ -11179,10 +11232,11 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = stacks_click(view, "stack_toggle_feedback_reject", %{"id" => item.id})
 
       _ =
-        render_keyup(with_target(view, "#tasks-stacks"), "stack_update_feedback_reject_text", %{
-          "id" => item.id,
-          "value" => "half typed"
-        })
+        render_change(
+          with_target(view, "#tasks-stacks"),
+          "stack_update_feedback_reject_text",
+          %{"item-id" => item.id, "feedback" => "half typed"}
+        )
 
       mid = :sys.get_state(view.pid).socket.assigns
       assert MapSet.member?(stacks_assigns(view).stack_feedback_reject_open, item.id)
@@ -12374,6 +12428,167 @@ defmodule PlatformWeb.TasksLiveTest do
   # it to the shell as `{:tasks_filters_changed, _}`. The shell's board work
   # therefore lands in the render AFTER the event reply, so a test that reads
   # the reply html directly is reading the pre-mediation board.
+
+  # ── Rejection reason must survive the trip from textarea to DB ────────
+  #
+  # Production incident: a `manual_approval` rejection stored 43 characters
+  # of a longer sentence, cut mid-phrase, and the truncated text was what
+  # got posted into the execution space. The reason travelled on a
+  # `phx-value-feedback` attribute that the server rendered from a
+  # `phx-keyup`-fed assign, so it only ever carried keystrokes whose
+  # round-trip had already been re-rendered — the tail, and anything
+  # pasted, was dropped with no error.
+  #
+  # These tests pin the mechanism, not the symptom: the reason must be a
+  # real form field serialized from the live DOM at submit time.
+  describe "manual_approval rejection reason (hotfix/rejection-reason-persistence)" do
+    defp seed_gate_item(conn) do
+      project = create_project()
+      task = create_task(project, %{title: "Reason Task", status: "in_progress"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval", status: "pending"})
+
+      {:ok, request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          items: [%{label: "Evidence canvas"}]
+        })
+
+      %{task: task, validation: validation, request: request, item: hd(request.items)}
+    end
+
+    test "the full typed reason reaches the database, not a keystroke-echo prefix",
+         %{conn: conn} do
+      %{task: task, item: item} = seed_gate_item(conn)
+      {conn, _user} = authenticated_conn_with_user(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html =
+        render_click(
+          element(view, ~s([phx-click="gate_toggle_feedback"][phx-value-item-id="#{item.id}"]))
+        )
+
+      # POSITIVE CONTROL. If the drawer never opened, every assertion below
+      # would be vacuous.
+      assert count_nodes(html, ~s(textarea[aria-label="Review feedback"])) == 1
+
+      # The mechanism assertion. A `name`d textarea inside a `phx-submit`
+      # form is what makes the browser serialize the live DOM value at click
+      # time; the echo attribute is what lost the tail.
+      assert count_nodes(
+               html,
+               ~s(form[phx-submit="gate_submit_feedback"] textarea[name="feedback"])
+             ) == 1
+
+      assert count_nodes(html, ~s([phx-value-feedback])) == 0
+
+      # And the behaviour. Long enough that any silent cut shows up.
+      reason =
+        "Use the AI gateway on lightning for a real model instead of the stub, " <>
+          String.duplicate("and re-run the whole trace end to end. ", 20)
+
+      view
+      |> form(~s(form[phx-submit="gate_submit_feedback"]), %{
+        "item-id" => item.id,
+        "feedback" => reason
+      })
+      |> render_submit()
+
+      stored = Repo.get!(Platform.Tasks.ReviewItem, item.id)
+
+      assert stored.status == "needs_revision"
+
+      assert stored.feedback == reason,
+             "reason was altered in transit: stored #{String.length(stored.feedback || "")} " <>
+               "of #{String.length(reason)} characters"
+    end
+
+    test "a blank reason is refused with a visible error rather than written through",
+         %{conn: conn} do
+      %{task: task, item: item} = seed_gate_item(conn)
+      {conn, _user} = authenticated_conn_with_user(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(
+        element(view, ~s([phx-click="gate_toggle_feedback"][phx-value-item-id="#{item.id}"]))
+      )
+
+      html =
+        view
+        |> form(~s(form[phx-submit="gate_submit_feedback"]), %{
+          "item-id" => item.id,
+          "feedback" => "   "
+        })
+        |> render_submit()
+
+      assert html =~ "Enter a reason before sending feedback."
+
+      stored = Repo.get!(Platform.Tasks.ReviewItem, item.id)
+      assert stored.status == "pending"
+      assert is_nil(stored.feedback)
+    end
+
+    test "the reason posted into the execution space is whole and names the rejecting human",
+         %{conn: conn} do
+      %{task: task, item: item} = seed_gate_item(conn)
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+      Repo.update_all(
+        from(rr in Platform.Tasks.ReviewRequest, where: rr.id == ^item.review_request_id),
+        set: [execution_space_id: space.id]
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(
+        element(view, ~s([phx-click="gate_toggle_feedback"][phx-value-item-id="#{item.id}"]))
+      )
+
+      reason =
+        "Use the AI gateway on lightning for a real model. " <>
+          String.duplicate("Do not ship the stub. ", 20)
+
+      view
+      |> form(~s(form[phx-submit="gate_submit_feedback"]), %{
+        "item-id" => item.id,
+        "feedback" => reason
+      })
+      |> render_submit()
+
+      posted =
+        from(m in Platform.Chat.Message,
+          where: m.space_id == ^space.id,
+          order_by: [desc: m.inserted_at],
+          limit: 20
+        )
+        |> Repo.all()
+        |> Enum.find(&String.contains?(&1.content, "Review Feedback"))
+
+      assert posted, "no consolidated feedback message reached the execution space"
+
+      assert String.contains?(posted.content, reason),
+             "the execution-space message carried a truncated reason"
+
+      assert String.contains?(posted.content, "Rejected by #{user.name}"),
+             "the execution-space message did not name the rejecting human"
+    end
+  end
+
   defp after_filter(view) do
     _ = :sys.get_state(view.pid)
     Phoenix.LiveViewTest.render(view)

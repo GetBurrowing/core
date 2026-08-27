@@ -493,6 +493,7 @@ defmodule Platform.Tasks.ReviewRequests do
 
         consolidated =
           "## Review Feedback\n\n" <>
+            rejected_by_line(request.items) <>
             "The following items need revision:\n\n" <>
             Enum.join(feedback_lines, "\n\n")
 
@@ -502,11 +503,21 @@ defmodule Platform.Tasks.ReviewRequests do
           evaluated_by: "review_gate"
         })
 
-        # Post consolidated feedback to execution space if available
+        # Post consolidated feedback to the execution space. The reason a human
+        # typed is the single most load-bearing thing the next dispatched agent
+        # reads, so a missing execution space is worth a log line rather than a
+        # silent skip.
         if request.execution_space_id do
           Platform.Orchestration.ExecutionSpace.post_engagement(
             request.execution_space_id,
             consolidated
+          )
+        else
+          require Logger
+
+          Logger.warning(
+            "review request #{request.id} rejected with feedback but has no execution_space_id; " <>
+              "the reason reached the validation row only"
           )
         end
 
@@ -529,6 +540,30 @@ defmodule Platform.Tasks.ReviewRequests do
     maybe_dismiss_reviewer_inbox(request)
 
     :resolved
+  end
+
+  # Names the human whose judgment this is. The message is posted by the
+  # system participant (agents are not guaranteed to share a participant row
+  # with every reviewer), so without this line the next dispatched agent reads
+  # the rejection as if the router authored it.
+  defp rejected_by_line(items) do
+    items
+    |> Enum.filter(&(&1.status == "needs_revision"))
+    |> Enum.map(& &1.reviewed_by)
+    |> Enum.reject(&(is_nil(&1) or &1 == "" or &1 == "unknown"))
+    |> Enum.uniq()
+    |> Enum.map(&reviewer_display_name/1)
+    |> case do
+      [] -> ""
+      names -> "Rejected by " <> Enum.join(names, ", ") <> ".\n\n"
+    end
+  end
+
+  defp reviewer_display_name(reviewed_by) do
+    case Platform.Accounts.get_user(reviewed_by) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      _ -> reviewed_by
+    end
   end
 
   # Task `019fed8d` stage 3, defect 2. Runs INSIDE the create transaction, so a
