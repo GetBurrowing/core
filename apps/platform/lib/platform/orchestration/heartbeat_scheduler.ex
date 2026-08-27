@@ -3,9 +3,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   Stage-aware prompt generation for `TaskRouter`.
 
   Provides pure functions for composing the two dispatch payload shapes the
-  router sends into a runtime, plus legacy cadence/threshold config the
-  polling scheduler used to consume (retained for the deploy_failure
-  regression tests; slated for removal in the stage 6 ADR cleanup pass).
+  router sends into a runtime.
 
   ## Two payload shapes (task 019f640d stage 4)
 
@@ -32,19 +30,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   release so any migration reader isn't surprised — stage 6's ADR cleanup
   pass removes it.
 
-  ## Legacy cadence table (ADR 0025 — retired)
-
-  Retained only so `deploy_failure` cadence-config tests keep passing until
-  the stage 6 sweep drops the accessors entirely. No production caller reads
-  these values — the event-driven `LeaseManager` timeouts govern liveness.
-
-  | Stage type        | Heartbeat interval | Stall threshold | Escalation after    |
-  |-------------------|--------------------|-----------------|---------------------|
-  | planning          | 15 min             | 30 min          | 2 missed heartbeats |
-  | coding            | 10 min             | 25 min          | 2 missed heartbeats |
-  | ci_check          | 5 min              | 15 min          | 3 missed heartbeats |
-  | review            | 20 min             | 60 min          | 1 missed heartbeat  |
-  | manual_approval   | n/a                | n/a             | n/a (human gate)    |
+  Stage liveness deadlines are NOT defined here. They live in
+  `Platform.Orchestration.LeaseManager.stage_kind_timeouts/0` (`ack_ms` /
+  `safety_net_ms` per stage kind), which is what `TaskRouter` arms its
+  `:check_no_ack` / `:check_safety_net` timers from.
   """
 
   alias Platform.Orchestration.DispatchPhase
@@ -59,20 +48,6 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   require Logger
 
   @type stage_type :: String.t()
-
-  # Cadence config: {interval_ms, stall_threshold_ms, max_escalations}
-  @cadence %{
-    "planning" => {15 * 60_000, 30 * 60_000, 2},
-    "coding" => {10 * 60_000, 25 * 60_000, 2},
-    "ci_check" => {5 * 60_000, 15 * 60_000, 3},
-    "review" => {20 * 60_000, 60 * 60_000, 1},
-    "deploying" => {5 * 60_000, 15 * 60_000, 3},
-    "deploy_failure" => {5 * 60_000, 10 * 60_000, 3},
-    "manual_approval" => {nil, nil, nil}
-  }
-
-  # Default for unknown stage types — treat like coding
-  @default_cadence {10 * 60_000, 25 * 60_000, 2}
 
   @skills_reference """
   ## Skill discovery — do this BEFORE you start executing
@@ -171,27 +146,6 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # `maybe_strip_git_workflow/2` looks for. One literal so the producer, the
   # stripper and the re-inserter cannot drift apart.
   @git_workflow_heading "## Git Workflow (CRITICAL)"
-
-  @doc "Heartbeat interval in milliseconds for the given stage type."
-  @spec interval_ms(stage_type()) :: non_neg_integer() | nil
-  def interval_ms(stage_type) do
-    {interval, _stall, _esc} = Map.get(@cadence, stage_type, @default_cadence)
-    interval
-  end
-
-  @doc "Stall threshold in milliseconds for the given stage type."
-  @spec stall_threshold_ms(stage_type()) :: non_neg_integer() | nil
-  def stall_threshold_ms(stage_type) do
-    {_interval, stall, _esc} = Map.get(@cadence, stage_type, @default_cadence)
-    stall
-  end
-
-  @doc "Maximum missed heartbeats before escalation."
-  @spec max_escalations(stage_type()) :: non_neg_integer() | nil
-  def max_escalations(stage_type) do
-    {_interval, _stall, esc} = Map.get(@cadence, stage_type, @default_cadence)
-    esc
-  end
 
   @doc "Returns true if the stage type is a human gate that should skip heartbeats."
   @spec manual_approval?(stage_type()) :: boolean()

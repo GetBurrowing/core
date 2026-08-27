@@ -222,20 +222,4 @@ defmodule Platform.Tasks.DeployRollbackTest do
       assert updated_stage.status == "failed"
     end
   end
-
-  describe "HeartbeatScheduler deploy_failure cadence" do
-    alias Platform.Orchestration.HeartbeatScheduler
-
-    test "deploy_failure has shorter intervals than regular deploying" do
-      deploy_failure_interval = HeartbeatScheduler.interval_ms("deploy_failure")
-      deploy_failure_stall = HeartbeatScheduler.stall_threshold_ms("deploy_failure")
-
-      assert deploy_failure_interval == 5 * 60_000
-      assert deploy_failure_stall == 10 * 60_000
-    end
-
-    test "deploy_failure has 3 max escalations" do
-      assert HeartbeatScheduler.max_escalations("deploy_failure") == 3
-    end
-  end
 end

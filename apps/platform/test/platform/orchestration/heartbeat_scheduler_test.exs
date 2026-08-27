@@ -4,52 +4,6 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
   alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Orchestration.PromptTemplates
 
-  describe "interval_ms/1" do
-    test "returns correct intervals per stage type" do
-      assert HeartbeatScheduler.interval_ms("planning") == 15 * 60_000
-      assert HeartbeatScheduler.interval_ms("coding") == 10 * 60_000
-      assert HeartbeatScheduler.interval_ms("ci_check") == 5 * 60_000
-      assert HeartbeatScheduler.interval_ms("review") == 20 * 60_000
-      assert HeartbeatScheduler.interval_ms("deploying") == 5 * 60_000
-    end
-
-    test "returns nil for manual_approval" do
-      assert HeartbeatScheduler.interval_ms("manual_approval") == nil
-    end
-
-    test "returns default for unknown stage types" do
-      assert HeartbeatScheduler.interval_ms("unknown") == 10 * 60_000
-    end
-  end
-
-  describe "stall_threshold_ms/1" do
-    test "returns correct thresholds per stage type" do
-      assert HeartbeatScheduler.stall_threshold_ms("planning") == 30 * 60_000
-      assert HeartbeatScheduler.stall_threshold_ms("coding") == 25 * 60_000
-      assert HeartbeatScheduler.stall_threshold_ms("ci_check") == 15 * 60_000
-      assert HeartbeatScheduler.stall_threshold_ms("review") == 60 * 60_000
-      assert HeartbeatScheduler.stall_threshold_ms("deploying") == 15 * 60_000
-    end
-
-    test "returns nil for manual_approval" do
-      assert HeartbeatScheduler.stall_threshold_ms("manual_approval") == nil
-    end
-  end
-
-  describe "max_escalations/1" do
-    test "returns correct escalation counts" do
-      assert HeartbeatScheduler.max_escalations("planning") == 2
-      assert HeartbeatScheduler.max_escalations("coding") == 2
-      assert HeartbeatScheduler.max_escalations("ci_check") == 3
-      assert HeartbeatScheduler.max_escalations("review") == 1
-      assert HeartbeatScheduler.max_escalations("deploying") == 3
-    end
-
-    test "returns nil for manual_approval" do
-      assert HeartbeatScheduler.max_escalations("manual_approval") == nil
-    end
-  end
-
   describe "manual_approval?/1" do
     test "returns true for manual_approval" do
       assert HeartbeatScheduler.manual_approval?("manual_approval") == true
