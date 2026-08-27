@@ -252,11 +252,19 @@ defmodule PlatformWeb.MeetingLive do
   # FunctionClauseError.
   @intent_producer_role "meeting_producer"
 
-  # The eight per-meeting intent-queue events. Every one carries the FULL
+  # The nine per-meeting intent-queue events. Every one carries the FULL
   # row map, so a subscriber can render without a second lookup.
+  #
+  # `:intent_delivered` (task 019ff292 stage 2) is the only one that is
+  # not a status change: the row stays `:dispatched` and what moved is
+  # `delivered_at`, the instant the responder's ack window is anchored
+  # to. It still has to be listed here — the catch-all below would
+  # swallow it, and the strip would keep counting from a transmission
+  # the responder never saw.
   @intent_events [
     :intent_classified,
     :intent_dispatched,
+    :intent_delivered,
     :intent_acked,
     :intent_completed,
     :intent_cancelled,
@@ -278,7 +286,7 @@ defmodule PlatformWeb.MeetingLive do
   @doc "The role key gating the intents-collapse bar."
   def intent_producer_role, do: @intent_producer_role
 
-  @doc "The eight per-meeting intent-queue event names the LV handles."
+  @doc "The nine per-meeting intent-queue event names the LV handles."
   def intent_events, do: @intent_events
 
   # Stage modes per ADR 0042's "Stage modes" table. Canvas is the default
@@ -3403,7 +3411,7 @@ defmodule PlatformWeb.MeetingLive do
   # declared after it, silently, and a silently-swallowed queue event is
   # exactly the invisibility this task exists to remove.
   #
-  # All eight events carry the full row map, so the strip updates from
+  # All nine events carry the full row map, so the strip updates from
   # the broadcast without a second trip to the queue server. The row is
   # upserted by id and the list re-sorted on the server's monotonic
   # `seq`, so an out-of-order delivery cannot reorder the bar.

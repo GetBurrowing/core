@@ -12,6 +12,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
   alias Platform.Federation.DeadLetters
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
+  alias Platform.Meetings.IntentQueue
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
@@ -638,6 +639,77 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # Verify message was posted
       messages = Chat.list_messages(ctx.space.id, limit: 10)
       assert Enum.any?(messages, fn m -> m.content == "Hello from external runtime!" end)
+    end
+  end
+
+  # The wire half of task 019ff292 stage 2. The queue-side anchoring is
+  # covered in `Platform.Meetings.IntentQueue.AckWindowMarginTest`; what
+  # is only reachable here is that a runtime saying "I have surfaced
+  # this to my agent" actually lands on the row. Delete the
+  # `handle_in("intent_delivered", ...)` clause and this fails on
+  # `delivered_at` still being nil — the catch-all `handle_in/3` would
+  # otherwise swallow the event and look exactly like success.
+  describe "intent_delivered receipt" do
+    test "a runtime's receipt anchors the responder's window on the queue row", ctx do
+      meeting_id = Platform.Types.UUIDv7.generate()
+
+      # Long windows: this test is about the receipt landing, not about
+      # anything expiring underneath it.
+      {:ok, _pid} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 60_000)
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      {:ok, row} =
+        IntentQueue.enqueue(meeting_id, %{
+          classified_intent: "open_question",
+          target_role: "engineering",
+          chunk_excerpt: "who is picking up the billing bug?",
+          dedupe_key: "dk-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, _} = IntentQueue.claim_next(meeting_id)
+      {:ok, dispatched} = IntentQueue.transition(meeting_id, row.id, :dispatched)
+      assert is_nil(dispatched.delivered_at)
+
+      :ok = Platform.Meetings.PubSub.subscribe_intents(meeting_id)
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "intent_delivered", %{"intent_id" => row.id})
+
+      intent_id = row.id
+      assert_receive {:intent_delivered, %{id: ^intent_id} = delivered}, 2_000
+      assert %DateTime{} = delivered.delivered_at
+
+      # First contact is not acceptance. The row is still waiting on an
+      # `intent_ack` to say what the responder is doing about it.
+      assert delivered.status == :dispatched
+      assert IntentQueue.cursor(meeting_id) == intent_id
+    end
+
+    test "a receipt for an intent id nobody owns is ignored, not a crash", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "intent_delivered", %{"intent_id" => Platform.Types.UUIDv7.generate()})
+
+      # The channel has to survive it: an intent whose meeting ended
+      # between dispatch and receipt is routine, not exceptional.
+      ref = push(socket, "pong", %{})
+      assert is_reference(ref)
+      assert Process.alive?(socket.channel_pid)
     end
   end
 

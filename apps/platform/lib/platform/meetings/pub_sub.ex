@@ -63,6 +63,7 @@ defmodule Platform.Meetings.PubSub do
   | `meeting:intent_enqueued`                 | `{:intent_enqueued, payload}`            | `%{meeting_id: id, room_id: id \\| nil}`                                    |
   | `meeting:{meeting_id}:intents`            | `{:intent_classified, row}`              | intent-queue row map (see `IntentQueue.Server`)                             |
   | `meeting:{meeting_id}:intents`            | `{:intent_dispatched, row}`              | intent-queue row map                                                        |
+  | `meeting:{meeting_id}:intents`            | `{:intent_delivered, row}`               | intent-queue row map (still `:dispatched`; `delivered_at` now set)          |
   | `meeting:{meeting_id}:intents`            | `{:intent_acked, row}`                   | intent-queue row map                                                        |
   | `meeting:{meeting_id}:intents`            | `{:intent_completed, row}`               | intent-queue row map                                                        |
   | `meeting:{meeting_id}:intents`            | `{:intent_cancelled, row}`               | intent-queue row map (`:cancelled` OR `:cancelled_late`)                    |
@@ -603,6 +604,21 @@ defmodule Platform.Meetings.PubSub do
   @spec broadcast_intent_dispatched(binary(), map()) :: :ok
   def broadcast_intent_dispatched(meeting_id, intent),
     do: broadcast_intent_event(meeting_id, :intent_dispatched, intent)
+
+  @doc """
+  Broadcast an intent row whose responder has just made FIRST CONTACT
+  (task 019ff292 stage 2).
+
+  The only intent event that is NOT a status change: the row is still
+  `:dispatched`. What changed is `delivered_at`, and with it which
+  clock the row is running under — from the outer, transmission-anchored
+  delivery bound to the responder's own ack window, anchored at this
+  instant. A UI that renders "waiting on <agent>" can start counting
+  from here instead of from a transmission the responder never saw.
+  """
+  @spec broadcast_intent_delivered(binary(), map()) :: :ok
+  def broadcast_intent_delivered(meeting_id, intent),
+    do: broadcast_intent_event(meeting_id, :intent_delivered, intent)
 
   @doc "Broadcast an intent row that just moved to `:acked`."
   @spec broadcast_intent_acked(binary(), map()) :: :ok

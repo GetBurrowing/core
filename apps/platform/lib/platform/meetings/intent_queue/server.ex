@@ -42,6 +42,7 @@ defmodule Platform.Meetings.IntentQueue.Server do
         subagent_id: binary() | nil,        # stamped at ack (stage 3)
         enqueued_at: DateTime.t(),
         dispatched_at: DateTime.t() | nil,
+        delivered_at: DateTime.t() | nil,   # first contact (stage 019ff292/2)
         acked_at: DateTime.t() | nil,
         completed_at: DateTime.t() | nil,
         cancelled_at: DateTime.t() | nil,
@@ -151,17 +152,85 @@ defmodule Platform.Meetings.IntentQueue.Server do
   rejects it and calls `record_rejected_ack/2` instead, which touches
   a counter in GenServer state and leaves the ETS row byte-identical.
 
+  ## Two bounds, not one (task 019ff292 stage 2)
+
+  The window a dispatched row runs under has TWO phases, because
+  "nobody ever received this" and "the responder received it and went
+  quiet" are different failures that deserve different clocks.
+
+    * **`:awaiting_delivery`** — armed at `:dispatched`, anchored at
+      TRANSMISSION, running for `delivery_timeout_ms`. Its only job is
+      to stop a dispatch that reached nobody from holding the serial
+      cursor forever. Nothing here waits on a responder; a responder
+      that never existed cannot be waited on.
+    * **`:awaiting_ack`** — armed at FIRST CONTACT, running for
+      `ack_timeout_ms`. This is the responder's actual window, and it
+      starts when the responder can actually act.
+
+  First contact is whichever of these lands first:
+
+    * `mark_delivered/2` — the receipt a runtime sends when it surfaces
+      the intent to the agent's loop (`"intent_delivered"` on
+      `runtime:<runtime_id>`, the same direction as
+      `"meeting_join_ack"`), or
+    * the first successful `ack/5`, which is itself proof the responder
+      read the dispatch.
+
+  ### Why the responder's clock could not simply be moved
+
+  Before this task the ack window was armed at `:dispatched` and
+  nowhere else. `IntentDispatcher.send_dispatch/7` marks the row
+  `:dispatched` — arming the timer — and only THEN calls
+  `IntentRuntimeAdapter.send_attention/3`, which bottoms out in a
+  PubSub broadcast returning `:ok` unconditionally. There was no
+  delivery receipt and no processing receipt anywhere on that path, so
+  the queue never learned when, or whether, the dispatch arrived, and
+  every millisecond between the broadcast and the responder being able
+  to act came out of the responder's window. Measured at a 400ms
+  window: `dispatch -> deadline` was invariant at 400ms while the
+  margin the responder actually got fell 1:1 with transport — 399ms at
+  0ms transport, 300ms at 100ms, 200ms at 200ms.
+
+  You therefore cannot move the anchor; there is nothing at the new
+  anchor's position to read. `mark_delivered/2` is that missing signal,
+  and `:awaiting_delivery` is what keeps introducing it safe: an intent
+  broadcast into the void never reports first contact and would, under
+  a delivery-anchored clock alone, hold the cursor for the rest of the
+  meeting and starve every intent behind it. That is a worse bug than
+  the one being fixed, so the transmission-anchored bound stays.
+
+  ### Degradation
+
+  A runtime that never sends the receipt is no worse off than before
+  in kind, only in latency: it falls through to `:awaiting_delivery`
+  and lands `:timed_out` after `delivery_timeout_ms`, and a `:working`
+  ack arriving inside that bound still earns it a full fresh window.
+  The fix is only half-shippable from this repo — the server can read
+  a receipt that no client sends yet.
+
   ## Ack timeout, and why `:timed_out` ≠ `:no_ack_spawn_failed`
 
   `queue_ack_timeout_ms` (default 90s, per-meeting override in opts,
   global default under `Application.get_env(:platform,
-  Platform.Meetings.IntentQueue, [])`) arms when a row is marked
-  `:dispatched` and re-arms on every `:working` ack. On expiry:
+  Platform.Meetings.IntentQueue, [])`) is the responder's window;
+  `queue_delivery_timeout_ms` (per-meeting override
+  `:delivery_timeout_ms`, defaulting to
+  `#{2} × ack_timeout_ms`) is the outer bound. The outer default is a
+  MULTIPLE rather than a copy on purpose: if the two were equal the
+  outer bound would subsume the inner one and a dispatch that reaches
+  its responder after the responder's window would have closed — the
+  exact field shape this task is built on — would still be refused.
+
+  On expiry, either phase:
 
     * the row was never successfully acked AND we observed at least one
       schema-rejected `intent_ack` for it → `:no_ack_spawn_failed`. The
       runtime tried and could not produce a subagent id; that is a
       broken target, and it is red.
+    * the outer bound expired with no first contact at all →
+      `:timed_out`, carrying `dispatch_failure_reason: :never_delivered`
+      so an operator can tell "the dispatch reached nobody" from "the
+      responder saw it and went quiet".
     * otherwise → `:timed_out`. We waited and got nothing back. Amber,
       not red: retry or wait longer, nothing is provably broken.
 
@@ -238,6 +307,19 @@ defmodule Platform.Meetings.IntentQueue.Server do
   # a wedged target doesn't hold a meeting's queue for the whole
   # meeting.
   @default_ack_timeout_ms 90_000
+
+  # The outer, transmission-anchored bound is expressed as a MULTIPLE of
+  # the responder's window rather than as its own absolute default, so
+  # that driving `ack_timeout_ms` down (as every test does) moves both
+  # bounds together and the relationship between them survives.
+  #
+  # It must be > 1. At 1 the outer bound expires at exactly the moment
+  # the responder's window would have, so a dispatch that reaches its
+  # responder late is dead before it lands and re-anchoring buys
+  # nothing — which is the defect, restored. 2 is the smallest multiple
+  # that leaves room for a first contact arriving after the responder's
+  # window would have closed.
+  @default_delivery_multiplier 2
 
   # Ack statuses the `intent_ack` MCP tool may carry.
   @ack_statuses [:working, :completed, :rejected, :cancel_honored]
@@ -328,6 +410,14 @@ defmodule Platform.Meetings.IntentQueue.Server do
   def default_ack_timeout_ms, do: @default_ack_timeout_ms
 
   @doc """
+  Multiple of the ack window used as the outer, transmission-anchored
+  delivery bound when nothing overrides it. See the moduledoc for why
+  it must be greater than one.
+  """
+  @spec default_delivery_multiplier() :: pos_integer()
+  def default_delivery_multiplier, do: @default_delivery_multiplier
+
+  @doc """
   Resolve an `intent_id` to the meeting whose queue owns it, without
   the caller having to know the meeting up front.
 
@@ -388,6 +478,7 @@ defmodule Platform.Meetings.IntentQueue.Server do
   @impl GenServer
   def init(opts) do
     meeting_id = Keyword.fetch!(opts, :meeting_id)
+    ack_timeout_ms = resolve_ack_timeout_ms(opts)
 
     # UNNAMED + :protected. The tid never leaves this process, so the
     # table is unreachable — and therefore collected — the instant the
@@ -412,7 +503,11 @@ defmodule Platform.Meetings.IntentQueue.Server do
        # intent_id currently held by a runtime, or nil when the meeting
        # is free to dispatch the next queued row.
        cursor: nil,
-       # {intent_id, timer_ref} for the armed ack window, or nil.
+       # {intent_id, timer_ref, phase} for the armed window, or nil.
+       # `phase` is `:awaiting_delivery` (outer bound, anchored at
+       # transmission) or `:awaiting_ack` (the responder's window,
+       # anchored at first contact). One slot, because at most one row
+       # per meeting is in flight and it is in exactly one phase.
        ack_timer: nil,
        # {intent_id, timer_ref} guarding a claimed-but-not-yet-
        # transitioned row against a caller that died mid-dispatch.
@@ -420,7 +515,8 @@ defmodule Platform.Meetings.IntentQueue.Server do
        # intent_id -> count of schema-rejected `intent_ack` attempts.
        # Drives the `:no_ack_spawn_failed` / `:timed_out` split.
        rejected_acks: %{},
-       ack_timeout_ms: resolve_ack_timeout_ms(opts)
+       ack_timeout_ms: ack_timeout_ms,
+       delivery_timeout_ms: resolve_delivery_timeout_ms(opts, ack_timeout_ms)
      }}
   end
 
@@ -431,6 +527,19 @@ defmodule Platform.Meetings.IntentQueue.Server do
       :platform
       |> Application.get_env(Platform.Meetings.IntentQueue, [])
       |> Keyword.get(:queue_ack_timeout_ms, @default_ack_timeout_ms)
+  end
+
+  # Same precedence, but the fall-through is derived from the ack
+  # window rather than absolute: a test that drives `ack_timeout_ms`
+  # down to 400ms must not be left with a 180s outer bound, and an
+  # operator who lengthens the ack window should not silently invert
+  # the two bounds.
+  defp resolve_delivery_timeout_ms(opts, ack_timeout_ms) do
+    Keyword.get(opts, :delivery_timeout_ms) ||
+      :platform
+      |> Application.get_env(Platform.Meetings.IntentQueue, [])
+      |> Keyword.get(:queue_delivery_timeout_ms) ||
+      ack_timeout_ms * @default_delivery_multiplier
   end
 
   # ── Public API ─────────────────────────────────────────────────────────────
@@ -607,6 +716,47 @@ defmodule Platform.Meetings.IntentQueue.Server do
     GenServer.call(via(meeting_id), :ack_timeout_ms)
   end
 
+  @doc """
+  The outer, transmission-anchored delivery bound this meeting's queue
+  is running with, in ms.
+  """
+  @spec delivery_timeout_ms(binary()) :: pos_integer()
+  def delivery_timeout_ms(meeting_id) when is_binary(meeting_id) do
+    GenServer.call(via(meeting_id), :delivery_timeout_ms)
+  end
+
+  @doc """
+  Record FIRST CONTACT for a dispatched intent: the responder has the
+  dispatch in front of it and can act (task 019ff292 stage 2).
+
+  This is the signal that did not exist before — see the moduledoc.
+  Landing it swaps the row off the outer, transmission-anchored bound
+  and onto the responder's own `ack_timeout_ms` window, anchored HERE.
+  It does not change the row's status: the responder has read the
+  dispatch, not accepted it, and inventing a tenth status for "seen"
+  would put a state on the wire that no ack can move out of.
+
+  Returns:
+
+    * `{:ok, row}` — first contact recorded, or already recorded. The
+      call is IDEMPOTENT and a repeat does NOT re-arm: a chatty runtime
+      resending the receipt must not be able to hold the serial cursor
+      open indefinitely. Only a genuine `:working` ack buys a fresh
+      window, which is the pre-existing contract.
+    * `{:error, {:not_deliverable, status}}` — the row is `:queued`
+      (never sent) or terminal (the window already resolved it). A
+      receipt arriving after the outer bound gave up is too late by
+      construction; the cursor has moved on and reviving the row would
+      put two intents in front of one agent.
+    * `{:error, :not_found}`.
+  """
+  @spec mark_delivered(binary(), binary()) ::
+          {:ok, row()} | {:error, :not_found} | {:error, {:not_deliverable, status()}}
+  def mark_delivered(meeting_id, intent_id)
+      when is_binary(meeting_id) and is_binary(intent_id) do
+    GenServer.call(via(meeting_id), {:mark_delivered, intent_id})
+  end
+
   # ── Handlers ───────────────────────────────────────────────────────────────
 
   @impl GenServer
@@ -743,6 +893,23 @@ defmodule Platform.Meetings.IntentQueue.Server do
 
   def handle_call(:ack_timeout_ms, _from, state), do: {:reply, state.ack_timeout_ms, state}
 
+  def handle_call(:delivery_timeout_ms, _from, state),
+    do: {:reply, state.delivery_timeout_ms, state}
+
+  # First contact (task 019ff292 stage 2). See `mark_delivered/2`.
+  def handle_call({:mark_delivered, intent_id}, _from, state) do
+    case lookup(state, intent_id) do
+      :error ->
+        {:reply, {:error, :not_found}, state}
+
+      {:ok, %{status: status} = row} when status in @in_flight_statuses ->
+        do_mark_delivered(row, ack_phase(state, intent_id), state)
+
+      {:ok, %{status: status}} ->
+        {:reply, {:error, {:not_deliverable, status}}, state}
+    end
+  end
+
   @impl GenServer
   def handle_info({:meeting_finished, payload}, state) when is_map(payload) do
     if finished_for_us?(payload, state) do
@@ -760,7 +927,7 @@ defmodule Platform.Meetings.IntentQueue.Server do
 
   # Ack window expired. Which failure this is depends on whether the
   # runtime ever tried to ack — see the moduledoc.
-  def handle_info({:ack_timeout, intent_id}, state) do
+  def handle_info({:ack_timeout, intent_id, phase}, state) do
     state = %{state | ack_timer: nil}
 
     case lookup(state, intent_id) do
@@ -768,15 +935,28 @@ defmodule Platform.Meetings.IntentQueue.Server do
         rejected_attempts = Map.get(state.rejected_acks, intent_id, 0)
 
         {destination, attrs} =
-          if status == :dispatched and rejected_attempts > 0 do
-            {:no_ack_spawn_failed, %{dispatch_failure_reason: :subagent_spawn_rejected}}
-          else
-            {:timed_out, %{}}
+          cond do
+            status == :dispatched and rejected_attempts > 0 ->
+              {:no_ack_spawn_failed, %{dispatch_failure_reason: :subagent_spawn_rejected}}
+
+            # The outer bound expired with no first contact of any kind.
+            # This is the never-delivered case the outer bound exists
+            # for: without it the row would hold the serial cursor for
+            # the rest of the meeting and starve everything behind it.
+            # Still `:timed_out` — amber, we genuinely do not know that
+            # anything is broken — but carrying WHY, so an operator can
+            # tell "reached nobody" from "reached someone who went
+            # quiet".
+            phase == :awaiting_delivery ->
+              {:timed_out, %{dispatch_failure_reason: :never_delivered}}
+
+            true ->
+              {:timed_out, %{}}
           end
 
         Logger.info(
           "[IntentQueue.Server] ack window expired — meeting_id=#{state.meeting_id} " <>
-            "intent_id=#{intent_id} from=#{status} to=#{destination} " <>
+            "intent_id=#{intent_id} phase=#{phase} from=#{status} to=#{destination} " <>
             "rejected_ack_attempts=#{rejected_attempts}"
         )
 
@@ -834,6 +1014,33 @@ defmodule Platform.Meetings.IntentQueue.Server do
     end
   end
 
+  # First contact (task 019ff292 stage 2).
+  #
+  # Only a row still sitting on the OUTER bound can be moved by this;
+  # anything else has already had first contact (a `:working` ack, or
+  # an earlier receipt) and re-arming would hand the responder a second
+  # full window for free. That is the idempotence guard, and it is why
+  # the decision reads the armed timer's PHASE rather than the row's
+  # `delivered_at`: the phase is the thing that would actually be
+  # re-armed.
+  defp do_mark_delivered(row, :awaiting_delivery, state) do
+    delivered = Map.put(row, :delivered_at, DateTime.utc_now())
+    :ets.insert(state.table, {delivered.id, delivered})
+
+    Logger.debug(
+      "[IntentQueue.Server] first contact — anchoring the responder's window here " <>
+        "meeting_id=#{state.meeting_id} intent_id=#{delivered.id} " <>
+        "ack_timeout_ms=#{state.ack_timeout_ms}"
+    )
+
+    state = arm_ack_timer(state, delivered.id, :awaiting_ack)
+    MeetingsPubSub.broadcast_intent_delivered(state.meeting_id, delivered)
+
+    {:reply, {:ok, delivered}, state}
+  end
+
+  defp do_mark_delivered(row, _phase, state), do: {:reply, {:ok, row}, state}
+
   defp do_transition(intent_id, status, attrs, state) do
     case lookup(state, intent_id) do
       :error ->
@@ -886,12 +1093,19 @@ defmodule Platform.Meetings.IntentQueue.Server do
   # A `:working` ack re-arms rather than clears the window: proof of
   # life buys a fresh window rather than letting the original expire
   # under a target that is demonstrably working.
+  #
+  # The phase is what changed in task 019ff292 stage 2. `:dispatched`
+  # arms only the OUTER bound — at that instant we have transmitted and
+  # know nothing about whether anyone received it, so there is no
+  # responder whose window could have started. `:acked` arms the
+  # responder's window, because a successful ack is itself first
+  # contact: the responder demonstrably read the dispatch.
   defp apply_cursor_effects(state, row, status) when status in @in_flight_statuses do
     if is_nil(state.cursor) or state.cursor == row.id do
       state
       |> Map.put(:cursor, row.id)
       |> cancel_claim_watchdog()
-      |> arm_ack_timer(row.id)
+      |> arm_ack_timer(row.id, phase_for_status(status))
     else
       state
     end
@@ -908,6 +1122,9 @@ defmodule Platform.Meetings.IntentQueue.Server do
   end
 
   defp apply_cursor_effects(state, _row, _status), do: state
+
+  defp phase_for_status(:dispatched), do: :awaiting_delivery
+  defp phase_for_status(_status), do: :awaiting_ack
 
   # Free the meeting for its next intent, drop this row's per-intent
   # bookkeeping, and poke the dispatcher. The poke is a broadcast
@@ -934,18 +1151,31 @@ defmodule Platform.Meetings.IntentQueue.Server do
     })
   end
 
-  defp arm_ack_timer(state, intent_id) do
+  # `phase` decides both the duration and what the eventual expiry
+  # MEANS. `:awaiting_delivery` runs the outer, transmission-anchored
+  # bound; `:awaiting_ack` runs the responder's own window from
+  # whenever first contact happened to be.
+  defp arm_ack_timer(state, intent_id, phase) do
     state = cancel_ack_timer(state)
-    ref = Process.send_after(self(), {:ack_timeout, intent_id}, state.ack_timeout_ms)
-    %{state | ack_timer: {intent_id, ref}}
+
+    ref =
+      Process.send_after(self(), {:ack_timeout, intent_id, phase}, phase_timeout_ms(state, phase))
+
+    %{state | ack_timer: {intent_id, ref, phase}}
   end
+
+  defp phase_timeout_ms(state, :awaiting_delivery), do: state.delivery_timeout_ms
+  defp phase_timeout_ms(state, :awaiting_ack), do: state.ack_timeout_ms
 
   defp cancel_ack_timer(%{ack_timer: nil} = state), do: state
 
-  defp cancel_ack_timer(%{ack_timer: {_id, ref}} = state) do
+  defp cancel_ack_timer(%{ack_timer: {_id, ref, _phase}} = state) do
     Process.cancel_timer(ref)
     %{state | ack_timer: nil}
   end
+
+  defp ack_phase(%{ack_timer: {intent_id, _ref, phase}}, intent_id), do: phase
+  defp ack_phase(_state, _intent_id), do: nil
 
   defp arm_claim_watchdog(state, intent_id) do
     state = cancel_claim_watchdog(state)
@@ -1244,6 +1474,7 @@ defmodule Platform.Meetings.IntentQueue.Server do
         subagent_id: nil,
         enqueued_at: DateTime.utc_now(),
         dispatched_at: nil,
+        delivered_at: nil,
         acked_at: nil,
         completed_at: nil,
         cancelled_at: nil,

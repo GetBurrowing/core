@@ -1295,9 +1295,21 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
       timed_out = await_status(meeting_id, first.id, :timed_out, 3_000)
       assert timed_out.timed_out_at
+
       # Amber, not red: nothing is provably broken, we just heard
-      # nothing back.
-      assert timed_out.dispatch_failure_reason == nil
+      # nothing back. That is a claim about the STATUS, and the status
+      # is unchanged — `:timed_out`, not `:no_ack_spawn_failed`.
+      assert timed_out.status == :timed_out
+
+      # The reason was `nil` until task 019ff292 stage 2. Nothing here
+      # went red; the row now says WHICH of the two bounds gave up on
+      # it. `:never_delivered` means the outer, transmission-anchored
+      # bound expired with no first contact of any kind — no
+      # `"intent_delivered"` receipt and no ack — which is a different
+      # thing for an operator to chase (is anything listening on that
+      # runtime topic?) than a responder that made contact and then
+      # went quiet, which still reports `nil`.
+      assert timed_out.dispatch_failure_reason == :never_delivered
 
       await_status(meeting_id, second.id, :dispatched)
     end

@@ -15,6 +15,7 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Federation.RuntimePresence
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
+  alias Platform.Meetings.IntentQueue
 
   @valid_client_products ~w(openclaw claude_channel)
 
@@ -204,6 +205,42 @@ defmodule PlatformWeb.RuntimeChannel do
       %{system_time: System.system_time()},
       %{agent_id: agent_id, room_name: room_name, status: status}
     )
+
+    {:noreply, socket}
+  end
+
+  # The delivery receipt for a meeting intent (task 019ff292 stage 2).
+  #
+  # Send this at the moment the intent is SURFACED TO THE AGENT'S LOOP,
+  # not when the bytes land on the socket. The distinction is the whole
+  # point: an agent mid-turn on unrelated work cannot act on a dispatch
+  # that arrived ninety seconds ago, and before this receipt existed
+  # every one of those milliseconds came out of the responder's own ack
+  # window. Receipting on socket arrival would restore that defect while
+  # looking like a fix.
+  #
+  # Deliberately does NOT change the row's status: the responder has
+  # read the dispatch, not accepted it. `intent_ack` is still the thing
+  # that says what the responder is doing about it.
+  #
+  # Fire-and-forget in the same shape as `meeting_join_ack` — a receipt
+  # the queue cannot land (the row already timed out, the meeting ended)
+  # is logged, not pushed back. There is nothing the runtime could do
+  # with the error that it will not learn from `intent_ack` anyway.
+  @impl true
+  def handle_in("intent_delivered", %{"intent_id" => intent_id}, socket)
+      when is_binary(intent_id) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+
+    case IntentQueue.locate(intent_id) do
+      {:ok, meeting_id} ->
+        log_intent_delivered(intent_id, IntentQueue.mark_delivered(meeting_id, intent_id))
+
+      {:error, :not_found} ->
+        Logger.debug(
+          "[RuntimeChannel] intent_delivered for an unknown intent — intent_id=#{intent_id}"
+        )
+    end
 
     {:noreply, socket}
   end
@@ -479,6 +516,20 @@ defmodule PlatformWeb.RuntimeChannel do
 
   def handle_in(_event, _payload, socket) do
     {:noreply, socket}
+  end
+
+  defp log_intent_delivered(intent_id, {:ok, %{delivered_at: delivered_at}}) do
+    Logger.info(
+      "[RuntimeChannel] intent_delivered: intent_id=#{intent_id} " <>
+        "delivered_at=#{inspect(delivered_at)}"
+    )
+  end
+
+  defp log_intent_delivered(intent_id, {:error, reason}) do
+    Logger.info(
+      "[RuntimeChannel] intent_delivered could not be landed — intent_id=#{intent_id} " <>
+        "reason=#{inspect(reason)}"
+    )
   end
 
   @impl true

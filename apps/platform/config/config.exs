@@ -149,6 +149,22 @@ config :platform, Platform.Meetings.IntentDispatcher, tick_interval_ms: :timer.s
 # and lets the meeting's next intent through. Overridable per meeting
 # via the queue server's `:ack_timeout_ms` opt, which is how tests drive
 # it down to hundreds of ms.
+#
+# Task 019ff292 stage 2 split that into TWO bounds. `queue_ack_timeout_ms`
+# is now specifically the RESPONDER's window, and it is anchored at first
+# contact — the `"intent_delivered"` receipt a runtime sends when it
+# surfaces the intent to the agent's loop, or the first successful
+# `intent_ack`. It is deliberately NOT widened: an answer that arrives
+# after the meeting has moved on is not an answer, so a wider window
+# would hide the latency rather than remove it.
+#
+# `queue_delivery_timeout_ms` is the outer bound, still anchored at
+# transmission, and it is what stops an intent that reached nobody from
+# holding the meeting's serial cursor forever. Left unset it derives as
+# `Server.default_delivery_multiplier() * queue_ack_timeout_ms`, so
+# lowering the ack window (as tests do) lowers both. Setting it equal to
+# the ack window would collapse the two bounds back into one and undo
+# the fix — see the queue server's moduledoc.
 config :platform, Platform.Meetings.IntentQueue, queue_ack_timeout_ms: :timer.seconds(90)
 
 # Security Sweeper (task 019f3e8e-4406 stage 2, ADR-0043): default

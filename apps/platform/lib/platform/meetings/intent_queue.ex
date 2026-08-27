@@ -261,6 +261,28 @@ defmodule Platform.Meetings.IntentQueue do
   end
 
   @doc """
+  Record FIRST CONTACT for a dispatched intent — the responder now has
+  it in front of them and can act (task 019ff292 stage 2).
+
+  This is what anchors the responder's ack window to when the dispatch
+  reached them rather than to when it was transmitted. Until it lands,
+  the row runs on the outer, transmission-anchored delivery bound,
+  which exists so that an intent broadcast into the void cannot hold
+  the meeting's serial cursor forever.
+
+  Idempotent, and a repeat does NOT buy a second window. See
+  `Platform.Meetings.IntentQueue.Server.mark_delivered/2`.
+  """
+  @spec mark_delivered(binary(), binary()) ::
+          {:ok, row()} | {:error, :not_found} | {:error, {:not_deliverable, status()}}
+  def mark_delivered(meeting_id, intent_id)
+      when is_binary(meeting_id) and is_binary(intent_id) do
+    with_queue(meeting_id, {:error, :not_found}, fn ->
+      Server.mark_delivered(meeting_id, intent_id)
+    end)
+  end
+
+  @doc """
   Record a schema-rejected `intent_ack` attempt. Never mutates the ETS
   row — it only decides whether an eventual timeout is reported as
   `:no_ack_spawn_failed` rather than `:timed_out`.

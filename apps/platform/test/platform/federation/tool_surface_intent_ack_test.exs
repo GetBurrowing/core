@@ -308,15 +308,30 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 2
     end
 
+    # Both of these used to `Process.sleep(ack_timeout_ms + 300)`. Task
+    # 019ff292 stage 2 split the window in two, and a row nobody has
+    # receipted is resolved by the OUTER, transmission-anchored bound
+    # (`delivery_timeout_ms`), not by the responder's `ack_timeout_ms` —
+    # so a fixed sleep sized off the ack window now wakes up while the
+    # row is still legitimately `:dispatched`. Waiting on the queue's
+    # own broadcast instead is both correct and immune to the next
+    # change of this kind.
+    #
+    # What they assert is unchanged: WHICH failure a silent dispatch
+    # resolves to. That split is driven by the rejected-ack counter and
+    # is orthogonal to which bound expired.
     test "a counted intent that then times out is :no_ack_spawn_failed" do
       meeting_id = Platform.Types.UUIDv7.generate()
       {:ok, _pid} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 400)
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
       row = dispatch!(meeting_id)
       {:error, _} = ack(row.id, %{"subagent_id" => "   ", "status" => "working"})
 
-      Process.sleep(700)
+      intent_id = row.id
+      assert_receive {:intent_no_ack_spawn_failed, %{id: ^intent_id}}, 3_000
 
       assert row!(meeting_id, row.id).status == :no_ack_spawn_failed
     end
@@ -326,9 +341,12 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       {:ok, _pid} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 400)
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
       row = dispatch!(meeting_id)
 
-      Process.sleep(700)
+      intent_id = row.id
+      assert_receive {:intent_timed_out, %{id: ^intent_id}}, 3_000
 
       assert row!(meeting_id, row.id).status == :timed_out
     end
