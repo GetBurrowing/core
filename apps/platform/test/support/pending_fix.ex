@@ -37,16 +37,23 @@ defmodule Platform.PendingFix do
   `Platform.TestQuarantineTest` asserts.
   """
 
-  # EMPTY BY DESIGN. The registry's only entry — task `01a006e7`'s
-  # bounce-leaves-no-open-stage test — was retired by stage 4 of that task,
-  # which wired `bounce_to_in_progress/4` to
-  # `PlanEngine.open_remediation_stage/2`. Per the contract above, the tag and
-  # this entry were deleted in the same commit as the fix; the test now runs
-  # in the default suite.
+  # RETIRED ENTRIES — each was deleted in the same commit as its fix, per the
+  # contract above. Kept as a note rather than a list so nothing here can be
+  # mistaken for a still-open defect:
   #
-  # An empty list is the honest steady state: it means the suite is hiding no
-  # known-open defects. `excluded_tags/0` returns `[]` and `test_helper.exs`
-  # excludes nothing on this account.
+  #   * task `01a006e7` — the bounce-leaves-no-open-stage test. Retired by
+  #     stage 4 of that task.
+  #   * task `01a01b00` — the unmet-gate set. Stage 2 retired four of its five
+  #     cases (`failed` / `running` `e2e_behavior` classification); stage 3
+  #     retired the last one, "an all-passed stage on an in_review task must
+  #     NOT resolve a review slug", by teaching
+  #     `DispatchPhase.review_status_without_unmet_gate?/2` to refuse the
+  #     stale-status fallthrough into a reviewer slug.
+  #
+  # The registry is EMPTY, and that is its healthy state. `excluded_tags/0`
+  # then returns `[]`, so `test/test_helper.exs` excludes nothing on this
+  # account and every test in the suite runs by default.
+
   @entries []
 
   @doc "Every known-open-defect entry."

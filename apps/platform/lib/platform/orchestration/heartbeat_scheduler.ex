@@ -54,6 +54,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   alias Platform.Tasks.BranchReconciler
   alias Platform.Tasks.ReviewRequest
   alias Platform.Tasks.Stage
+  alias Platform.Tasks.Validation
 
   require Logger
 
@@ -861,10 +862,20 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   @doc """
-  Comma-separated list of pending validation UUIDs on `stage`. Empty string
-  when the stage has no pending validations (or is nil). Used by
+  Comma-separated list of UNMET validation UUIDs on `stage` — every validation
+  whose status is in `Platform.Tasks.Validation.unmet_statuses/0`, i.e. anything
+  but `passed`. Empty string when the stage owes nothing (or is nil). Used by
   `nudge_prompt/2` — the nudge template does not enumerate per-validation
   instructions, it just lists IDs.
+
+  A `failed` or `running` gate IS listed, deliberately (task 01a01b00). The
+  nudge's one job is to tell a stalled agent what it still owes before calling
+  `stage_complete`, and a failed gate blocks completion — `PlanEngine`'s
+  `stage_verdict/1` answers `:has_failures` for exactly that stage. Omitting it
+  made the nudge render the "(none — call stage_complete if work is done)"
+  branch for a stage that could not complete, which is the same misinformation
+  the dispatch classifier was fixed for. The name is kept for callers and for
+  the `pending_validation_ids` template variable; the meaning is "unmet".
   """
   @spec pending_validation_ids(map() | nil) :: String.t()
   def pending_validation_ids(nil), do: ""
@@ -1410,8 +1421,17 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Map.get(task, key) || Map.get(task, Atom.to_string(key))
   end
 
-  # Pending validations live on the stage struct/map under :validations. Filter
-  # for status == "pending" — passed/failed don't need a re-dispatch prompt.
+  # Unmet validations live on the stage struct/map under :validations. "Still
+  # owed" is `Validation.unmet_statuses/0` — pending, running, or failed — and
+  # deliberately NOT the literal "pending" this once filtered on. Only `passed`
+  # means the gate is met; a gate at `running`, or one that came back `failed`
+  # on an earlier review round, is work the stage still owes and must keep
+  # producing a re-dispatch prompt.
+  #
+  # The list is NOT re-spelled here. `DispatchPhase.pending_validations/1`
+  # calls the same `Platform.Tasks.Validation.unmet_statuses/0`, because two
+  # independently-drifting classifiers is the defect this pair produced
+  # (task 01a01b00) and `DispatchPhase`'s moduledoc exists to retire.
   defp pending_validations_for_stage(nil), do: []
 
   defp pending_validations_for_stage(stage) when is_map(stage) do
@@ -1419,7 +1439,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     Enum.filter(validations, fn v ->
       status = Map.get(v, :status) || Map.get(v, "status") || "pending"
-      status == "pending"
+      status in Validation.unmet_statuses()
     end)
   end
 

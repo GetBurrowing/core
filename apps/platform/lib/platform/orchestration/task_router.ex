@@ -1439,12 +1439,17 @@ defmodule Platform.Orchestration.TaskRouter do
     plan = Tasks.current_plan(state.task_id)
     stage = current_running_stage(plan)
 
-    if unresolved_stage_dispatch?(task, plan, stage) do
-      suppress_unresolved_stage_dispatch(state, task, plan)
-    else
-      # A dispatch that RESOLVED means a stage is open again: the escalation
-      # counter is about a CONSECUTIVE run of suppressions, so clear it here.
-      dispatch_resolved(%{state | unresolved_suppression: nil}, task, plan, stage)
+    cond do
+      unresolved_stage_dispatch?(task, plan, stage) ->
+        suppress_unresolved_stage_dispatch(state, task, plan)
+
+      no_unmet_gate_dispatch?(task, plan, stage) ->
+        suppress_no_unmet_gate_dispatch(state, task, plan, stage)
+
+      true ->
+        # A dispatch that RESOLVED means a stage is open again: the escalation
+        # counter is about a CONSECUTIVE run of suppressions, so clear it here.
+        dispatch_resolved(%{state | unresolved_suppression: nil}, task, plan, stage)
     end
   end
 
@@ -1514,6 +1519,125 @@ defmodule Platform.Orchestration.TaskRouter do
     end
 
     {:noreply, note_unresolved_suppression(state, task, plan)}
+  end
+
+  # ── No-unmet-gate guard (task 01a01b00 stage 3) ────────────────────────
+  #
+  # THE SHAPE: a stage DID resolve — so `unresolved_stage_dispatch?/3` above
+  # declines — but it owes no unmet validation, while `task.status` still
+  # reads a review phase. The last-resort `task.status` mapping in
+  # `DispatchPhase` then summoned a reviewer to judge a gate that does not
+  # exist. Observed on stage 01a0180b of task 01a01796, four times: the
+  # reviewer was handed the UI-judgment body for a stage carrying no
+  # `manual_approval` validation at all.
+  #
+  # `DispatchPhase.review_status_without_unmet_gate?/2` (stage 3, same task)
+  # already stops `resolve/3` ANSWERING a review slug for that shape. This
+  # clause is the other half: with nothing owed anywhere in the plan there is
+  # no subject for a prompt of any kind, so withhold rather than send the
+  # generic body and let the next tick re-derive once the engine advances.
+  #
+  # ## The conjuncts, and the one this stage tried and REMOVED
+  #
+  # Mirrors `unresolved_stage_dispatch?/3` deliberately, for the same reason:
+  # the failure mode of a dispatch guard is SILENT STRANGULATION, so the guard
+  # must be the smallest one that covers the incident.
+  #
+  #   1. `review_status_without_unmet_gate?/2` — the status/stage
+  #      disagreement, judged in ONE place (the resolver) so the router and
+  #      the resolver cannot drift into disagreeing about it. It carries its
+  #      own carve-out for an UNGATED stage; read its docstring before
+  #      touching it, because that carve-out is what keeps this guard off a
+  #      stage only `stage_complete` can ever advance.
+  #   2. no PENDING stage — the strangulation guard, and the one
+  #      `HeartbeatScheduler.select_review_template/3`'s moduledoc warns about
+  #      by name: `select_review_template([], _, _)` deliberately returns
+  #      `dispatch.in_review` to cover the transient window where every
+  #      validation is evaluated but the stage has not yet auto-advanced.
+  #      A pending next stage IS that window, and the dispatch is the only
+  #      thing that will get an agent to call `stage_start`. Withholding it
+  #      parks the task forever with no signal an operator would look for.
+  #
+  # A THIRD conjunct — "no OTHER running stage owes a gate" — was written,
+  # probed and DELETED, and this note exists so it is not re-added on the same
+  # reasoning. It was meant to cover `current_running_stage/1` returning the
+  # FIRST running stage while a second one still owed work. Deleting it fails
+  # NOTHING in `test/platform/orchestration/` (1039 tests, 0 failures), and
+  # that is not a coverage gap:
+  #
+  #   * `PlanEngine` resolves the running stage the same way
+  #     (`Enum.find(stages, &(&1.status == "running"))`, plan_engine.ex:1355),
+  #     so a plan with two running stages is not a shape the engine produces,
+  #     and if one existed the engine would be as confused as the router.
+  #   * `do_dispatch/2` passes the SAME `stage` to this predicate and to
+  #     `dispatch_resolved/4`, so conjunct 1 is already judging exactly the
+  #     stage the withheld dispatch would have named.
+  #   * The fail-open on an unloaded `:validations` preload, which was the
+  #     other reason for it, is already handled inside
+  #     `review_status_without_unmet_gate?/2`: an unloaded association reads
+  #     as ZERO gates, and zero gates answers `false` there.
+  #
+  # An unkillable conjunct duplicating a killable one is dead code, not
+  # defence in depth.
+  #
+  # ## Why the status half stays scoped to REVIEW
+  #
+  # Measured, not assumed. Dropping ONLY the `status_phase(task) in
+  # @review_phases` half of conjunct 1 — keeping "every gate met" intact —
+  # reds two tests: `task_router_no_unmet_gate_suppression_test.exs` "an
+  # in_progress task with an all-met running stage and no pending stage still
+  # dispatches", and `dispatch_phase_test.exs` "a stage whose validations all
+  # passed falls back to task.status". Replacing conjunct 1 wholesale with
+  # "a stage resolved" reds nine, including the sibling
+  # `task_router_dispatch_suppression_test.exs` control "a task whose current
+  # plan is approved with a RUNNING stage still dispatches" — a task at
+  # `deploying` whose only stage is `running` with ZERO validations.
+  #
+  # It is the right scope on the merits too: a redundant
+  # `dispatch.in_progress` nudges an agent that is already working, whereas a
+  # redundant `dispatch.in_review` MANUFACTURES a review round out of a stale
+  # status field.
+  #
+  # Best-effort like every sibling predicate: a lookup that raises yields
+  # `false`. Failing open costs one redundant prompt; failing closed costs a
+  # stalled task.
+  defp no_unmet_gate_dispatch?(task, plan, stage) do
+    DispatchPhase.review_status_without_unmet_gate?(task, stage) and
+      is_nil(first_pending_stage(plan))
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  defp suppress_no_unmet_gate_dispatch(state, task, plan, stage) do
+    stage_count = if plan, do: length(plan.stages || []), else: 0
+    position = if stage, do: stage.position, else: "-"
+
+    Logger.info(
+      "[TaskRouter] suppressed review dispatch for task=#{state.task_id}: " <>
+        "stage #{position} owes no unmet gate and no stage is pending, but the task " <>
+        "still reads #{task.status}"
+    )
+
+    emit_dispatch_suppressed_telemetry(state.task_id, :no_unmet_gate)
+
+    if state.execution_space_id do
+      ExecutionSpace.post_log(
+        state.execution_space_id,
+        "Dispatch withheld: #{task.title} | Stage: #{position}/#{stage_count} | " <>
+          "every gate on the running stage is met — no review is owed"
+      )
+    end
+
+    # `unresolved_suppression` is deliberately left untouched. That counter
+    # tracks a CONSECUTIVE run of `:unresolved_stage` suppressions and
+    # escalates to a blocker at two; this is a different condition with a
+    # different key, and neither clearing it (which would pretend a dispatch
+    # resolved) nor incrementing it (which would raise the wrong blocker) is
+    # true. Liveness is cleared for the same reason the sibling clauses clear
+    # it: no dispatch went out, so there is no ack to wait for.
+    {:noreply, clear_liveness(%{state | task_status: task.status})}
   end
 
   # ── Unresolved-stage escalation (task 01a006e7 stage 2) ────────────────

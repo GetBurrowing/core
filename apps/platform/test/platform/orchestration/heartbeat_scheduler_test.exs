@@ -1190,21 +1190,34 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
   end
 
   describe "pending_validation_ids/1" do
-    test "returns comma-separated pending UUIDs and skips non-pending validations" do
+    test "returns comma-separated UNMET UUIDs and skips only passed validations" do
+      # Changed deliberately by task 01a01b00 stage 2 — was "v1, v3".
+      #
+      # `pending_validation_ids/1` classifies on
+      # `Platform.Tasks.Validation.unmet_statuses/0` (pending | running |
+      # failed), not on the literal "pending". The nudge exists to tell a
+      # stalled agent what it still owes before `stage_complete`, and a
+      # `failed` gate blocks completion — `PlanEngine.stage_verdict/1` answers
+      # `:has_failures` for this stage, so listing `v4` is the honest answer
+      # and omitting it rendered "(none — call stage_complete if work is
+      # done)" for a stage that could not complete.
+      #
+      # `passed` is the ONLY status omitted, and the fixture keeps `v2` at
+      # `passed` so this stays a discrimination rather than "list everything".
       stage = %{
         id: "s1",
         validations: [
           %{id: "v1", status: "pending"},
           %{id: "v2", status: "passed"},
-          %{id: "v3", status: "pending"},
+          %{id: "v3", status: "running"},
           %{id: "v4", status: "failed"}
         ]
       }
 
-      assert HeartbeatScheduler.pending_validation_ids(stage) == "v1, v3"
+      assert HeartbeatScheduler.pending_validation_ids(stage) == "v1, v3, v4"
     end
 
-    test "returns empty string on nil stage or no pending" do
+    test "returns empty string on nil stage or when every gate has passed" do
       assert HeartbeatScheduler.pending_validation_ids(nil) == ""
 
       empty = %{id: "s1", validations: []}

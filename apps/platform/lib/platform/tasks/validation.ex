@@ -7,6 +7,7 @@ defmodule Platform.Tasks.Validation do
 
   @kinds ~w(ci_check ci_passed pr_merged lint_pass type_check test_pass code_review manual_approval e2e_behavior)
   @statuses ~w(pending running passed failed)
+  @unmet_statuses ~w(pending running failed)
   @e2e_payload_required_keys ~w(setup actions expected)
 
   schema "validations" do
@@ -23,6 +24,9 @@ defmodule Platform.Tasks.Validation do
 
   def kinds, do: @kinds
   def statuses, do: @statuses
+
+  @doc "The statuses under which a gate is still owed — as distinct from which statuses exist."
+  def unmet_statuses, do: @unmet_statuses
 
   def changeset(validation, attrs) do
     validation

@@ -50,8 +50,14 @@ defmodule Platform.Orchestration.DispatchPhase do
          * else any implementation kind → `dispatch.in_progress` (a stage
            mixing `manual_approval` with `test_pass` still needs the work done
            before the gate can be reviewed)
-         * else no pending validations at all → fall through to the
-           `task.status` mapping, then `dispatch.fallback`
+         * else the stage CARRIES gates and every one is met, AND
+           `task.status` maps to a review phase → `dispatch.fallback`, NOT the
+           reviewer body. There is nothing left for a reviewer to judge, and
+           the status saying otherwise is the documented staleness, not
+           evidence. A stage with NO gates at all is deliberately excluded —
+           see `review_status_without_unmet_gate?/2` (task `01a01b00`).
+         * else nothing unmet at all → fall through to the `task.status`
+           mapping, then `dispatch.fallback`
     3. No stage and status is not planning → `dispatch.fallback`.
 
   ### Deploy stages are not classifiable by kind alone
@@ -186,6 +192,13 @@ defmodule Platform.Orchestration.DispatchPhase do
   # describes, not a degraded-but-useful prompt.
   @stage_scoped_phases [:in_progress, :in_review, :review_e2e, :deploying]
 
+  # Phases that summon a REVIEWER. Only `:in_review` is reachable from
+  # `status_phase/1` today — there is no `"review_e2e"` task status — but the
+  # list is named rather than inlined so a future review-shaped status has to
+  # be classified here as well as in the mapping, instead of quietly acquiring
+  # the stale-status fallthrough this module now refuses (task 01a01b00).
+  @review_phases [:in_review, :review_e2e]
+
   # Precedence order applied to the SET of phases implied by the pending kinds:
   # deploying, then implementation, then behavioural. :in_review is handled
   # separately because it only wins when it is the ONLY phase present.
@@ -216,6 +229,95 @@ defmodule Platform.Orchestration.DispatchPhase do
   """
   @spec stage_scoped_phases() :: [phase()]
   def stage_scoped_phases, do: @stage_scoped_phases
+
+  @doc """
+  The validations a stage still OWES — those whose status is in
+  `Platform.Tasks.Validation.unmet_statuses/0`.
+
+  Public because `TaskRouter` needs the same reading of "still owed" when it
+  decides whether to withhold a dispatch, and a second filter spelled in the
+  router is exactly the two-classifier drift that produced task `01a01b00`.
+  Reads both key shapes: dispatch inputs are plain maps in tests and Ecto
+  structs in prod.
+  """
+  @spec unmet_validations(map() | nil) :: [map()]
+  def unmet_validations(stage), do: stage |> validations_of() |> unmet_of()
+
+  defp validations_of(stage) do
+    case field(stage, :validations) do
+      list when is_list(list) -> list
+      _ -> []
+    end
+  end
+
+  defp unmet_of(validations) do
+    Enum.filter(validations, fn v ->
+      (field(v, :status) || "pending") in Validation.unmet_statuses()
+    end)
+  end
+
+  @doc """
+  True when `task.status` maps to a review phase but every gate the RESOLVED
+  `stage` carries has already been MET.
+
+  ## Why this is a named predicate and not an inline condition
+
+  Two callers need the identical judgement and must not drift apart:
+
+    * `phase_for/2` — so `resolve/3` stops answering a REVIEWER slug for a
+      stage with no gate left to review. `status_phase/1` is this module's
+      documented LAST resort and is stale for a full dispatch cycle; when the
+      stage says "nothing owed" and the status says "in review", the stage is
+      the fresher of the two and wins.
+    * `TaskRouter` — so the dispatch can be withheld outright rather than
+      degraded to a generic body. The router ANDs this with a plan-wide
+      conjunct it alone can evaluate — no stage is `pending` (see
+      `no_unmet_gate_dispatch?/3` there). This function deliberately answers
+      only about the ONE resolved stage, because that is all it can see and
+      all `resolve/3` needs.
+
+  ## A stage with NO validations at all is NOT this shape — read before widening
+
+  "Every gate met" REQUIRES at least one gate. An UNGATED stage answers `false`
+  here, and the distinction is not pedantry — it is the whole safety margin
+  between this predicate and silent strangulation.
+
+  `PlanEngine` auto-advances a stage from ONE place: the `cond` inside
+  `evaluate_validation/2`, which fires `maybe_advance_resolved_stage/1` once
+  `all_validations_resolved?/1` holds. That code path is reached only by
+  DISPOSITIONING A VALIDATION. So:
+
+    * All gates met — the last `evaluate_validation/2` call has already fired
+      the advance. A stage still sitting at `running` is in a transient window
+      that closes without anyone's help, so declining to send it a reviewer
+      costs nothing.
+    * NO gates at all — nothing will ever call `evaluate_validation/2` for it,
+      so the engine will never advance it. The only thing that can move it is
+      an agent calling `stage_complete`, and the only thing that will make an
+      agent do that is the dispatch. Refusing to name that dispatch honestly —
+      or, in the router, withholding it — parks the task forever.
+
+  Zero-validation stages are not a curiosity: `task_router_dispatch_suppression_test.exs`'s
+  "a task whose current plan is approved with a RUNNING stage still dispatches"
+  fixture is exactly one, and so is the `simple_plan_with_stage/0` fixture in
+  `heartbeat_scheduler_test.exs`. Both went red against a first draft of this
+  predicate that omitted the `!= []` half; that is how this paragraph got
+  written.
+
+  Returns `false` when no stage resolved: with no stage there is nothing to
+  contradict the status, and that shape belongs to
+  `TaskRouter.unresolved_stage_dispatch?/3` instead.
+  """
+  @spec review_status_without_unmet_gate?(map() | nil, map() | nil) :: boolean()
+  def review_status_without_unmet_gate?(task, stage)
+
+  def review_status_without_unmet_gate?(_task, nil), do: false
+
+  def review_status_without_unmet_gate?(task, stage) do
+    gates = validations_of(stage)
+
+    status_phase(task) in @review_phases and gates != [] and unmet_of(gates) == []
+  end
 
   @doc """
   Resolve the dispatch shape for `task` / `plan` / `stage`.
@@ -300,10 +402,41 @@ defmodule Platform.Orchestration.DispatchPhase do
       # longer see a stage that also has pending implementation validations:
       # phase_for_pending/1 already answered :in_progress for those, so this
       # arm cannot resurrect the old e2e-first precedence.
-      kind_phase == :review_e2e -> :review_e2e
-      deploy_stage?(stage) -> :deploying
-      not is_nil(kind_phase) -> kind_phase
-      true -> status_phase(task) || :fallback
+      kind_phase == :review_e2e ->
+        :review_e2e
+
+      deploy_stage?(stage) ->
+        :deploying
+
+      not is_nil(kind_phase) ->
+        kind_phase
+
+      # Task 01a01b00 stage 3. A stage resolved, CARRIES gates, and every one
+      # of them is met, yet `task.status` still reads `in_review` — the
+      # last-resort mapping would hand a reviewer the UI-judgment body for a
+      # gate that no longer needs judging.
+      #
+      # The window is real rather than theoretical: `PlanEngine` advances a
+      # stage only from inside `evaluate_validation/2`, so between the write
+      # that passes the LAST gate and the advance that follows it, a stage sits
+      # at `running` with everything met while `task.status` still lags a full
+      # dispatch cycle behind. Answer `:fallback` instead of a review slug.
+      #
+      # `:fallback` and not `:in_progress`: the stage owes no implementation
+      # work either, so claiming otherwise would be the same lie pointed the
+      # other way. `:fallback` is already the shape a nameable-but-not-running
+      # subject gets (see `TaskRouter.unresolved_stage_dispatch?/3` on why a
+      # pending stage keeps its generic body), and it leaves `ack_mode` at
+      # `:stage` because a stage genuinely did resolve.
+      #
+      # This clause only makes the dispatch HONEST. Withholding it entirely is
+      # the router's call, because only the router can see whether the rest of
+      # the plan has work left — see `no_unmet_gate_dispatch?/3` there.
+      review_status_without_unmet_gate?(task, stage) ->
+        :fallback
+
+      true ->
+        status_phase(task) || :fallback
     end
   end
 
@@ -387,20 +520,23 @@ defmodule Platform.Orchestration.DispatchPhase do
 
   defp slug_for(phase), do: "dispatch." <> Atom.to_string(phase)
 
-  # Pending validations live on the stage under :validations. Mirrors
+  # Unmet validations live on the stage under :validations. Mirrors
   # HeartbeatScheduler.pending_validations_for_stage/1 — dispatch inputs are
   # plain maps in tests and Ecto structs in prod, so read both key shapes.
-  defp pending_validations(stage) do
-    validations = field(stage, :validations) || []
-
-    case validations do
-      list when is_list(list) ->
-        Enum.filter(list, fn v -> (field(v, :status) || "pending") == "pending" end)
-
-      _ ->
-        []
-    end
-  end
+  #
+  # "Still owed" is `Validation.unmet_statuses/0`, NOT the literal "pending".
+  # A gate at `running`, or one that came back `failed` on an earlier review
+  # round, is work the stage still owes; classifying only on "pending" made
+  # such a stage look gateless, so `phase_for/2` fell through to
+  # `status_phase(task)` and rendered the UI-judgment body for a stage with no
+  # manual_approval gate (task 01a01b00). The list is NOT re-spelled here:
+  # `Platform.Tasks` owns the validation vocabulary and this context already
+  # depends on it in that direction.
+  #
+  # Now `unmet_validations/1` (public, above) — stage 3 of the same task gave
+  # `TaskRouter` the same reading. Kept as a one-line internal alias so the
+  # call sites below keep reading as the classifier step they are.
+  defp pending_validations(stage), do: unmet_validations(stage)
 
   defp kind_of(validation), do: field(validation, :kind)
 
