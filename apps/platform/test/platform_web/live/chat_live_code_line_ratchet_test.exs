@@ -299,7 +299,27 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # leading-`#` lines only. Expected, not a miss. The proof this move was pure
   # is the per-overlay OPEN-state render diff, not this pin — no line count can
   # see an overlay that never opened.
-  @chat_live_code_line_count 2193
+  # RE-MEASURED on `task/01a03c76-1e6f-72a6-a060-cfbfc063f643`, rebased onto
+  # `origin/main` after task 01a0312e's extraction landed (#810). The
+  # jump-to-latest work adds three code lines to `chat_live.ex`, all assigns:
+  # two seed `:jump_away_from_bottom` and `:jump_new_message_count` in
+  # `mount/3`, one resets the count in `assign_active_space/2` so it does not
+  # follow the reader into the next conversation. No logic, no new function,
+  # no branch — the two `handle_event/3` clauses that drive these assigns live
+  # in `live/chat/messages_hooks.ex`, which this pin deliberately does not
+  # cover.
+  #
+  # The pin is RE-DERIVED from the merged tree, not summed from the two sides:
+  #
+  #     2,193  the stage-7 pin on `origin/main` after the extraction
+  #     +    3  the jump-to-latest assigns
+  #     =2,196  <- the pin, confirmed by running `code_line_count/1` on the
+  #               merged tree rather than by adding the pre-rebase delta
+  #               (2,349) to main's movement.
+  #
+  # The chip's own markup is a `<%!-- --%>`-commented `<button>` in
+  # `chat_live.html.heex`, which this pin does not measure at all.
+  @chat_live_code_line_count 2196
 
   @doc """
   Count the CODE lines of a source file.

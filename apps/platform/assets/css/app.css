@@ -1578,6 +1578,154 @@ body, .font-fabrikam {
   .chat-message-pulse { animation: none; }
 }
 
+/* ── Jump-to-latest chip (task 01a03c76 stage 3) ──────────────────
+   The way back to the tip of a conversation for a reader who scrolled up
+   into history. It is an in-flow flex sibling in the composer column, NOT a
+   floating action button: Suite's FAB offset (safe-area + 1.5rem +
+   --bottom-nav-height, action_patterns.ex:232) lands in the same band as
+   `.compose-pill-send`, so a FAB would put two cyan circles in one phone
+   corner, one meaning send and one meaning jump. Living in the flow means
+   the chip can PUSH the composer but never cover it, which is what makes
+   the 390px acceptance criterion true by construction rather than something
+   to tune offsets for.
+
+   Semantic token slots only, never raw hex or raw oklch() literals. The
+   `.compose-pill-bar` / `.compose-pill-send` rules immediately below ARE
+   written with raw literals and so do not track the theme. That is known
+   debt; it is deliberately not copied here.
+
+   Deliberately absent, because they are what one reaches for on this brief:
+   --color-info (this is an action, not a readout — a control wearing info
+   blue reads as status and does not get pressed, the exact failure this
+   control exists to fix), --color-error (red is Inbox; new messages are not
+   an error), --color-interactive (a second cyan inside one 150px object),
+   --glow-btn and any drop shadow (`.compose-pill-send` already owns the
+   glow in that corner of the screen).
+
+   There is no hidden/disabled state and no exit animation. The chip is
+   rendered under `:if` and LEAVES THE DOM when there is nowhere to jump —
+   an exit animation would need the node to outlive its own removal, which
+   is precisely the transparent-but-present failure the acceptance criteria
+   forbid. This matches `.channel-undo-toast`, where instant exit was
+   already ruled. */
+
+/* Touch tap target first, with !important, mirroring the
+   `.compose-pill-send` precedent below: source order must not let the
+   compact desktop height in the base rule clobber the 44px touch minimum. */
+@media (hover: none) {
+  .chat-jump-chip {
+    height: 44px !important;
+    min-height: 44px !important;
+  }
+}
+
+.chat-jump-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 32px;
+  /* Paired with the 20px left gutter on the element, this keeps a matching
+     20px of clear air on the right at any width. */
+  max-width: calc(100% - 40px);
+  padding: 0 10px 0 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--color-base-300);
+  color: var(--color-base-content);
+  font-size: 14px;
+  line-height: 1.45;
+  font-weight: 500;
+  cursor: pointer;
+  /* It rises from below because what it points at is below: the direction
+     encodes the spatial relationship instead of decorating the entrance.
+     No prefers-reduced-motion rule, deliberately — the universal reduce
+     block near the top of this file already forces animation-duration and
+     transition-duration to 0.01ms on every element, this one included, so a
+     local rule would be dead code. */
+  animation: chat-jump-chip-in var(--duration-base) var(--ease-standard);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+/* Light theme: one rung down the base ramp for the surface, plus the
+   hairline that dark does not need. */
+[data-theme="light"] .chat-jump-chip {
+  background: var(--color-base-200);
+  border-color: var(--color-base-300);
+}
+
+/* Hover steps the surface one rung. Colour only: no movement, no shadow. */
+.chat-jump-chip:hover {
+  background: color-mix(in oklch, var(--color-base-300) 88%, var(--color-base-content));
+}
+
+[data-theme="light"] .chat-jump-chip:hover {
+  background: var(--color-base-300);
+}
+
+/* 0.97 and not `.compose-pill-send`'s 0.95: the same 5% on a 150px-wide
+   object reads as a lurch rather than a tap. */
+.chat-jump-chip:active {
+  transform: scale(0.97);
+}
+
+@keyframes chat-jump-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The count badge. Cyan is a FILL carrying a black numeral and never becomes
+   text — the standing palette rule that all three existing Chat counts obey.
+
+   The badge is identified by its numeral, not by the boundary of its fill,
+   which is why the L82 cyan is legal here despite failing the 3:1 non-text
+   floor as a bare shape: the count carries the information, the colour does
+   not. It also sits on the RIGHT of the label so that its arrival grows the
+   chip into empty space and the words never shift.
+
+   `icon-rail-badge-in` is reused rather than duplicated: the count language
+   is already established on three surfaces, and a fourth keyframe would
+   drift from them. It fires on insert only, so 0 -> 1 animates and later
+   increments do not (LiveView patches the text node, not the element). */
+.chat-jump-chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 16px;
+  background: var(--color-primary);
+  color: var(--color-primary-content);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  /* Tabular figures so one, two and three digits step in fixed widths and
+     the badge cannot jitter as the count climbs. `99+` is the widest string
+     this badge can hold, and min-width 20px + 6px padding fits it. */
+  font-variant-numeric: tabular-nums;
+  /* The reuse the comment above promises, actually declared (stage 3 wrote
+     the rationale but never the property). Same keyframe, same duration and
+     same easing as the rail badge, so the fourth count on the product does
+     not enter differently from the other three. Insert-time only: LiveView
+     patches the text node on 1 -> 2 -> 3, so this runs once, on 0 -> 1, with
+     no server-side logic deciding that.
+
+     No prefers-reduced-motion rule, deliberately — the universal reduce
+     block near the top of this file already pins animation-duration to
+     0.01ms on every element. */
+  animation: icon-rail-badge-in var(--duration-base) var(--ease-standard);
+}
+
 /* ── Fabrikam Design System — Pill-shaped Chat Input Bar ─────────────── */
 .compose-input-area {
   padding: 12px 20px 16px;

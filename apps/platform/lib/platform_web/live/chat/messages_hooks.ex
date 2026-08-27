@@ -843,6 +843,24 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_event("close_longpress_menu", _params, socket),
     do: {:halt, assign(socket, :longpress_menu_for, nil)}
 
+  # Jump-to-latest (task 01a03c76 stage 1).
+  #
+  # The 150px NEAR_BOTTOM_PX threshold lives in the ScrollToBottom JS hook and
+  # is NOT duplicated here — the client compares and sends the boolean, so
+  # there is exactly one definition of "near the bottom".
+  defp handle_event("jump_to_latest_distance", %{"away" => away}, socket),
+    do: {:halt, assign(socket, :jump_away_from_bottom, away == true)}
+
+  # Pressing the control clears the count server-side and asks the client to
+  # scroll. The count is cleared here rather than waiting for the client's
+  # follow-up distance report so the pill disappears on the same round trip.
+  defp handle_event("jump_to_latest", _params, socket) do
+    {:halt,
+     socket
+     |> assign(:jump_new_message_count, 0)
+     |> Phoenix.LiveView.push_event("chat:scroll-to-latest", %{})}
+  end
+
   defp handle_event("react", %{"message-id" => msg_id, "emoji" => emoji}, socket),
     do: {:halt, socket |> react_to_message(msg_id, emoji) |> close_picker()}
 
@@ -1047,6 +1065,19 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       if is_nil(msg.thread_id) do
         enriched = enrich_with_reactions(msg, socket)
+
+        # Jump-to-latest count (task 01a03c76 stage 1). Only counts what the
+        # reader would actually miss: a top-level message (this branch —
+        # thread replies never reach it), from someone else, arriving while
+        # they are scrolled away from the tip. Sending a message of your own
+        # snaps you to the bottom, so counting it would show a pill for a
+        # message already on screen.
+        socket =
+          if socket.assigns[:jump_away_from_bottom] == true and not is_own_message do
+            update(socket, :jump_new_message_count, &((&1 || 0) + 1))
+          else
+            socket
+          end
 
         {:halt,
          socket
@@ -1994,4 +2025,46 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp message_in_active_space?(_socket, _message_id), do: false
+  # ── Jump-to-latest chip labelling (task 01a03c76 stage 4) ──────────
+  #
+  # THE CAP IS ONE LITERAL IN ONE PLACE. The design canvas specifies `99+`;
+  # Chat's icon-rail badge caps at `9+`. That disagreement is an OPEN
+  # question with @Marlowe at the time of writing, so this ships the canvas's
+  # 99 and confines the answer to `@jump_count_cap` below. Flipping the
+  # ruling is editing this single integer — no second constant exists
+  # anywhere, the template does not compare against a number, and the tests
+  # read the threshold back through `jump_count_cap/0` rather than pinning
+  # the string "99+".
+  @jump_count_cap 99
+
+  @doc """
+  The largest count rendered as itself; anything above shows as `"<cap>+"`.
+
+  Exposed so tests can assert the boundary behaviour against the threshold
+  itself instead of hardcoding today's number in every assertion.
+  """
+  def jump_count_cap, do: @jump_count_cap
+
+  @doc """
+  The badge text for `count` new messages, saturating at `jump_count_cap/0`.
+  """
+  def jump_count_label(count) when count > @jump_count_cap, do: "#{@jump_count_cap}+"
+  def jump_count_label(count), do: Integer.to_string(count)
+
+  @doc """
+  The chip's accessible name: the action, then the count as a sentence.
+
+  The badge itself is `aria-hidden`, following the rail badge — the number
+  reaches assistive tech only through this string, in words, singular at 1.
+  The count is spoken in FULL here even when the badge is capped: "100 new
+  messages" is what a screen reader user needs, and "99+ new messages" is
+  not a sentence.
+
+  There is deliberately no `aria-live` on the chip. It is a way back, not an
+  announcement; re-announcing on every increment is the alarm tone the
+  design explicitly rejected.
+  """
+  def jump_aria_label(0), do: "Jump to latest message."
+  def jump_aria_label(1), do: "Jump to latest message. 1 new message."
+  def jump_aria_label(count), do: "Jump to latest message. #{count} new messages."
 end

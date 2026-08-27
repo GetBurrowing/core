@@ -999,7 +999,20 @@ defmodule Platform.Tasks.PlanEngineTest do
           assert length(updated_plan.stages) == 1
         end)
 
-      refute log =~ "not in @deployable_statuses",
+      # Scoped to THIS task's id, not the bare phrase. This module is
+      # `async: true` and `capture_log/1` captures the GLOBAL log for the
+      # duration of the window, so sibling async tests that legitimately
+      # refuse a deploy emit "... is not in @deployable_statuses" straight
+      # into this capture. The unscoped refutation was therefore
+      # interleaving-sensitive by construction: it passed or failed on which
+      # siblings happened to run alongside it, not on the behaviour under
+      # test. Surfaced by task 01a03c76 stage 1, whose added chat tests
+      # shifted the async mix enough to make it red at seed 0.
+      #
+      # The scoping does NOT weaken the guard: under the regression it
+      # exists to catch, the warning names THIS task, so the refutation
+      # still fires. It only stops OTHER tasks' warnings from counting.
+      refute log =~ "for task #{task.id} - status",
              "the stack arm must be reached BEFORE the status check — a member " <>
                "that completes for the status reason means the cond was reordered"
 

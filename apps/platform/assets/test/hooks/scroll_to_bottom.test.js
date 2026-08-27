@@ -76,11 +76,32 @@ function fakeList({
       return this._scrollTop;
     },
     set scrollTop(v) {
+      // Only a write that CHANGES the value is recorded. Assigning scrollTop
+      // its current value is a no-op in a real scroller, and the reflow hold
+      // (`holdAnchorThroughReflow`) does exactly that every frame when the
+      // layout has not moved — recording those would turn "the reader was
+      // not yanked" assertions into noise about a pin that moved nothing.
+      if (v === this._scrollTop) return;
       this._scrollTop = v;
       this.scrollTopWrites.push(v);
     },
     closest() {
       return null;
+    },
+    // The jump-to-latest distance signal listens for `scroll` on the
+    // scroller. Recorded rather than dispatched so a test can assert the
+    // registration options (passive) as well as drive the handler.
+    listeners: [],
+    addEventListener(type, fn, opts) {
+      this.listeners.push({ type, fn, opts });
+    },
+    removeEventListener(type, fn) {
+      this.listeners = this.listeners.filter(
+        (l) => !(l.type === type && l.fn === fn),
+      );
+    },
+    emit(type) {
+      this.listeners.filter((l) => l.type === type).forEach((l) => l.fn());
     },
     querySelectorAll(sel) {
       if (sel === "[data-participant-id]") {
@@ -105,7 +126,13 @@ function fakeList({
 function buildHook(el) {
   const hook = Object.create(ScrollToBottom);
   hook.el = el;
-  hook.handleEvent = vi.fn();
+  // Records `(name, cb)` so a test can invoke a server-pushed event the way
+  // LiveView would.
+  hook.serverEvents = {};
+  hook.handleEvent = vi.fn((name, cb) => {
+    hook.serverEvents[name] = cb;
+  });
+  hook.pushEvent = vi.fn();
   return hook;
 }
 
@@ -126,7 +153,7 @@ function runEnds(el) {
 // ── Tests ──────────────────────────────────────────────────────────────
 
 describe("ScrollToBottom — deep-link anchor holds the arrival position", () => {
-  let priorMO, priorRO, priorRAF;
+  let priorMO, priorRO, priorRAF, pendingFrames;
 
   beforeEach(() => {
     priorMO = globalThis.MutationObserver;
@@ -150,11 +177,28 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
 
     // Polyfill requestAnimationFrame / cancelAnimationFrame
     priorRAF = globalThis.requestAnimationFrame;
-    globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
-    globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+    // Track every pending frame so `afterEach` can cancel the survivors.
+    // `holdAnchorThroughReflow` self-reschedules for 400ms; left running, it
+    // fires after the polyfill is torn down and throws into the runner as an
+    // unhandled error attributed to whichever test happens to be in flight.
+    pendingFrames = new Set();
+    globalThis.requestAnimationFrame = (cb) => {
+      const id = setTimeout(() => {
+        pendingFrames.delete(id);
+        cb();
+      }, 0);
+      pendingFrames.add(id);
+      return id;
+    };
+    globalThis.cancelAnimationFrame = (id) => {
+      pendingFrames.delete(id);
+      clearTimeout(id);
+    };
   });
 
   afterEach(() => {
+    pendingFrames.forEach((id) => clearTimeout(id));
+    pendingFrames.clear();
     globalThis.MutationObserver = priorMO;
     if (priorRO !== undefined) globalThis.ResizeObserver = priorRO;
     else delete globalThis.ResizeObserver;
@@ -411,7 +455,7 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
  * positive control on the same unchanged id.
  */
 describe("ScrollToBottom — conversation change re-arms the initial snap", () => {
-  let priorMO, priorRO, priorRAF;
+  let priorMO, priorRO, priorRAF, pendingFrames;
   // Every ResizeObserver the hook constructs, in order, with the elements it
   // observed. Counting constructions is how a re-arm is distinguished from a
   // flag flip: the observer disconnects itself as soon as the initial phase
@@ -444,11 +488,28 @@ describe("ScrollToBottom — conversation change re-arms the initial snap", () =
     };
 
     priorRAF = globalThis.requestAnimationFrame;
-    globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
-    globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+    // Track every pending frame so `afterEach` can cancel the survivors.
+    // `holdAnchorThroughReflow` self-reschedules for 400ms; left running, it
+    // fires after the polyfill is torn down and throws into the runner as an
+    // unhandled error attributed to whichever test happens to be in flight.
+    pendingFrames = new Set();
+    globalThis.requestAnimationFrame = (cb) => {
+      const id = setTimeout(() => {
+        pendingFrames.delete(id);
+        cb();
+      }, 0);
+      pendingFrames.add(id);
+      return id;
+    };
+    globalThis.cancelAnimationFrame = (id) => {
+      pendingFrames.delete(id);
+      clearTimeout(id);
+    };
   });
 
   afterEach(() => {
+    pendingFrames.forEach((id) => clearTimeout(id));
+    pendingFrames.clear();
     globalThis.MutationObserver = priorMO;
     if (priorRO !== undefined) globalThis.ResizeObserver = priorRO;
     else delete globalThis.ResizeObserver;
@@ -555,5 +616,241 @@ describe("ScrollToBottom — conversation change re-arms the initial snap", () =
 
     expect(hook._spaceId).toBe("space-larkspur");
     expect(el.scrollTopWrites).toEqual([4000]);
+  });
+});
+
+describe("ScrollToBottom — jump-to-latest distance signal", () => {
+  let priorMO, priorRO, priorRAF, pendingFrames;
+
+  beforeEach(() => {
+    priorMO = globalThis.MutationObserver;
+    globalThis.MutationObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+    priorRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+    priorRAF = globalThis.requestAnimationFrame;
+    // Track every pending frame so `afterEach` can cancel the survivors.
+    // `holdAnchorThroughReflow` self-reschedules for 400ms; left running, it
+    // fires after the polyfill is torn down and throws into the runner as an
+    // unhandled error attributed to whichever test happens to be in flight.
+    pendingFrames = new Set();
+    globalThis.requestAnimationFrame = (cb) => {
+      const id = setTimeout(() => {
+        pendingFrames.delete(id);
+        cb();
+      }, 0);
+      pendingFrames.add(id);
+      return id;
+    };
+    globalThis.cancelAnimationFrame = (id) => {
+      pendingFrames.delete(id);
+      clearTimeout(id);
+    };
+  });
+
+  afterEach(() => {
+    pendingFrames.forEach((id) => clearTimeout(id));
+    pendingFrames.clear();
+    globalThis.MutationObserver = priorMO;
+    if (priorRO !== undefined) globalThis.ResizeObserver = priorRO;
+    else delete globalThis.ResizeObserver;
+    if (priorRAF !== undefined) globalThis.requestAnimationFrame = priorRAF;
+    else delete globalThis.requestAnimationFrame;
+  });
+
+  // Mount, then discard the mount-time report so each test measures only the
+  // transitions it causes. `_lastAway` is left at the value the mount
+  // established (false — the initial snap parks the reader at the bottom),
+  // which is the real starting state, not a synthetic one.
+  function mountedAtBottom(opts = {}) {
+    const el = fakeList({ rows: [fakeRow("m-1"), fakeRow("m-2")], ...opts });
+    const hook = buildHook(el);
+    hook.mounted();
+    expect(hook._lastAway).toBe(false);
+    hook.pushEvent.mockClear();
+    el.scrollTopWrites = [];
+    return { el, hook };
+  }
+
+  // scrollHeight 4000, clientHeight 600 → bottom is scrollTop 3400.
+  const scrollTo = (el, top) => {
+    el._scrollTop = top;
+    el.scrollTopWrites = [];
+  };
+
+  it("pushes nothing while the reader stays within the near-bottom band", () => {
+    const { el, hook } = mountedAtBottom();
+
+    // 3300 → 100px from the bottom, and 3251 → 149px: both under the
+    // NEAR_BOTTOM_PX threshold the auto-scroll predicate uses.
+    scrollTo(el, 3300);
+    hook._reportDistance();
+    scrollTo(el, 3251);
+    hook._reportDistance();
+
+    expect(hook.pushEvent).not.toHaveBeenCalled();
+    expect(hook._lastAway).toBe(false);
+  });
+
+  it("pushes away:true exactly once on crossing above the threshold", () => {
+    const { el, hook } = mountedAtBottom();
+
+    scrollTo(el, 3200); // 200px away
+    hook._reportDistance();
+
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
+      away: true,
+    });
+  });
+
+  it("does not push again while the reader stays away", () => {
+    const { el, hook } = mountedAtBottom();
+
+    scrollTo(el, 3200);
+    hook._reportDistance();
+    hook.pushEvent.mockClear();
+
+    // Three more evaluations at three DIFFERENT away distances. The call
+    // COUNT is the assertion: a hook that pushed per scroll event would end
+    // each of these with a correct-looking last call, so only the count can
+    // tell the edge-triggered design from the per-event one.
+    scrollTo(el, 3000);
+    hook._reportDistance();
+    scrollTo(el, 1000);
+    hook._reportDistance();
+    scrollTo(el, 0);
+    hook._reportDistance();
+
+    expect(hook.pushEvent).toHaveBeenCalledTimes(0);
+    expect(hook._lastAway).toBe(true);
+  });
+
+  it("pushes away:false exactly once on returning under the threshold", () => {
+    const { el, hook } = mountedAtBottom();
+
+    scrollTo(el, 3200);
+    hook._reportDistance();
+    hook.pushEvent.mockClear();
+
+    scrollTo(el, 3350); // 50px away
+    hook._reportDistance();
+
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
+      away: false,
+    });
+
+    // Still edge-triggered on this side too.
+    hook.pushEvent.mockClear();
+    scrollTo(el, 3400);
+    hook._reportDistance();
+    expect(hook.pushEvent).toHaveBeenCalledTimes(0);
+  });
+
+  it("holds the reading anchor through the chip's own reflow, on both edges", () => {
+    const { el, hook } = mountedAtBottom();
+    // A SECOND caller of the hook's existing reflow hold — the chip's height
+    // change shrinks the scroller on appear and grows it back on disappear,
+    // and the browser would re-clamp scrollTop under the reader's eyes.
+    const hold = vi.spyOn(hook, "holdAnchorThroughReflow");
+
+    scrollTo(el, 3200);
+    hook._reportDistance(); // chip appears
+    expect(hold).toHaveBeenCalledTimes(1);
+
+    scrollTo(el, 3350);
+    hook._reportDistance(); // chip leaves
+    expect(hold).toHaveBeenCalledTimes(2);
+
+    // And NOT on a non-edge evaluation.
+    scrollTo(el, 3390);
+    hook._reportDistance();
+    expect(hold).toHaveBeenCalledTimes(2);
+    hold.mockRestore();
+  });
+
+  it("scrolls to the bottom and reports away:false on chat:scroll-to-latest", () => {
+    const { el, hook } = mountedAtBottom();
+
+    scrollTo(el, 1000);
+    hook._reportDistance();
+    hook.pushEvent.mockClear();
+    el.scrollTopWrites = [];
+
+    hook.serverEvents["chat:scroll-to-latest"]();
+
+    expect(el.scrollTopWrites[0]).toBe(el.scrollHeight);
+    // The server learns the reader is back in the SAME interaction, rather
+    // than waiting for a scroll event a programmatic write may not produce.
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
+      away: false,
+    });
+    if (hook._holdFrame) cancelAnimationFrame(hook._holdFrame);
+  });
+
+  it("registers a passive, frame-coalesced scroll listener and removes it on destroy", async () => {
+    const { el, hook } = mountedAtBottom();
+
+    const listener = el.listeners.find((l) => l.type === "scroll");
+    expect(listener).toBeDefined();
+    expect(listener.opts).toEqual({ passive: true });
+
+    // End the arrival phase before scrolling away. Task 019fd1e2 (#809)
+    // changed arrival to end on SETTLE rather than on overflow, so a freshly
+    // mounted hook still has `_initialScroll === true` and a mount frame
+    // pending. That frame runs `_safeUpdate()` first and re-snaps scrollTop
+    // to the bottom, which would make the reader look near-bottom and this
+    // test measure the arrival snap instead of the listener it names. The
+    // sibling tests dodge this by calling `_reportDistance()` directly; this
+    // one cannot, because the listener wiring is its whole subject.
+    hook._endInitialPhase("test: measuring the scroll listener, not arrival");
+
+    scrollTo(el, 3200);
+    // Three events inside one frame must produce ONE evaluation, not three.
+    el.emit("scroll");
+    el.emit("scroll");
+    el.emit("scroll");
+    expect(hook.pushEvent).toHaveBeenCalledTimes(0); // still queued
+    await new Promise((r) => setTimeout(r, 5));
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    if (hook._holdFrame) cancelAnimationFrame(hook._holdFrame);
+
+    hook.destroyed();
+    expect(el.listeners.some((l) => l.type === "scroll")).toBe(false);
+  });
+
+  it("re-reports after a conversation switch even when the boolean is unchanged", () => {
+    const { el, hook } = mountedAtBottom({ spaceId: "space-larkspur" });
+
+    scrollTo(el, 3200);
+    hook._reportDistance();
+    hook.pushEvent.mockClear();
+
+    // The switch goes through the SAME `data-space-id` branch that
+    // `_beginConversation` already owns — there is no second detector.
+    el.dataset.spaceId = "space-marigold";
+    hook.updated();
+
+    expect(hook._spaceId).toBe("space-marigold");
+    // `updated()` re-snaps (fresh initial phase), so the post-switch reader
+    // is at the bottom: away flips to false and is pushed because the reset
+    // cleared the previous conversation's boolean.
+    expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
+      away: false,
+    });
+    if (hook._holdFrame) cancelAnimationFrame(hook._holdFrame);
   });
 });

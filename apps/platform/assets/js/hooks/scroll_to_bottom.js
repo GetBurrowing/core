@@ -41,6 +41,13 @@
 //    `[overflow-anchor:none]` (chat_live.html.heex) so native anchoring
 //    doesn't fight this hook or InfiniteScroll's manual prepend anchoring.
 
+// 5. Jump-to-latest distance is EDGE-triggered (task 01a03c76). The server
+//    owns the chip's visibility, so it needs to know whether the reader is
+//    "away" from the bottom — but a round trip per scroll event is the wrong
+//    shape. `_reportDistance()` pushes only when the boolean flips, and
+//    reuses NEAR_BOTTOM_PX so the chip's visibility predicate and the
+//    auto-scroll predicate cannot disagree.
+
 const NEAR_BOTTOM_PX = 150;
 // The initial-arrival phase ends when layout has been quiet for this long.
 // Fonts, images, tables and code-block scrollers all settle within a few
@@ -91,6 +98,28 @@ const ScrollToBottom = {
       });
     }
 
+    // The chip's own click round-trips through the server, which pushes this
+    // back down. Re-reporting immediately means the server learns `away:
+    // false` in the SAME interaction, so the chip leaves without waiting for
+    // a scroll event that a programmatic scrollTop write may never produce.
+    this.handleEvent("chat:scroll-to-latest", () => {
+      this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+      this._reportDistance();
+    });
+
+    // Passive: this listener never calls preventDefault, and a non-passive
+    // scroll listener blocks the compositor. rAF-coalesced so a flung
+    // scroller evaluates the predicate at most once per frame.
+    this._scrollFrame = null;
+    this._onScroll = () => {
+      if (this._scrollFrame) return;
+      this._scrollFrame = requestAnimationFrame(() => {
+        this._scrollFrame = null;
+        this._reportDistance();
+      });
+    };
+    this.scrollEl.addEventListener("scroll", this._onScroll, { passive: true });
+
     // MutationObserver fires when stream inserts new message rows
     this._observer = new MutationObserver(() => {
       this._safeUpdate();
@@ -110,6 +139,7 @@ const ScrollToBottom = {
     // least one layout pass before we read scrollHeight.
     requestAnimationFrame(() => {
       this._safeUpdate();
+      this._reportDistance();
     });
 
     // One-shot fallback for iOS Safari standalone mode: it sometimes
@@ -143,6 +173,12 @@ const ScrollToBottom = {
       () => this._endInitialPhase("ceiling"),
       SETTLE_MAX_MS,
     );
+
+    // Forget what the server was last told. A `patch=` switch re-renders the
+    // list in place and the server's per-conversation state starts fresh, so
+    // the first evaluation after a switch must always push rather than being
+    // suppressed by the previous conversation's boolean.
+    this._lastAway = null;
     this._connectResizeObserver();
   },
   // iOS PWA cold-launch fix (task 019ff6c9): ResizeObserver detects when the
@@ -211,6 +247,10 @@ const ScrollToBottom = {
     if (this._observer) {
       this._observer.observe(this.el, { childList: true, subtree: false });
     }
+    // An arriving message grows the scroller, which moves the reader further
+    // from the bottom without any scroll event firing. Re-evaluate here or
+    // the chip never appears for a stationary reader.
+    this._reportDistance();
   },
   updated() {
     // A `patch=` navigation to another channel/DM re-renders `#message-list`
@@ -233,12 +273,38 @@ const ScrollToBottom = {
     }
     this._clearSettleTimers();
     if (this._observer) this._observer.disconnect();
+    if (this._onScroll) {
+      this.scrollEl.removeEventListener("scroll", this._onScroll);
+      this._onScroll = null;
+    }
+    if (this._scrollFrame) {
+      cancelAnimationFrame(this._scrollFrame);
+      this._scrollFrame = null;
+    }
     if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
     this._disconnectResizeObserver();
     if (this._iosFallbackTimer) {
       clearTimeout(this._iosFallbackTimer);
       this._iosFallbackTimer = null;
     }
+  },
+  // Edge-triggered report of whether the reader is away from the bottom.
+  // Deliberately NOT a per-scroll-event push: the server only cares about the
+  // transition, and `_lastAway` makes a stationary-but-away reader silent.
+  // The threshold is NEAR_BOTTOM_PX itself, not a second constant, so the
+  // chip cannot be visible at a distance where auto-scroll still fires.
+  _reportDistance() {
+    const away = this.distanceFromBottom() > NEAR_BOTTOM_PX;
+    if (away === this._lastAway) return;
+    const hadPrevious = this._lastAway !== null;
+    this._lastAway = away;
+    this.pushEvent("jump_to_latest_distance", { away });
+    // Both edges: the chip appearing AND disappearing changes the scroller's
+    // height, and the browser would re-clamp scrollTop under the reader's
+    // eyes. This is the existing reflow hold, given a second caller — not new
+    // machinery. Skipped on the very first report, where nothing was rendered
+    // before and there is no height change to absorb.
+    if (hadPrevious) this.holdAnchorThroughReflow();
   },
   distanceFromBottom() {
     return (

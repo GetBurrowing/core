@@ -284,6 +284,53 @@
         participants_map={@participants_map}
       />
 
+      <%!-- Jump-to-latest chip (task 01a03c76 stage 3).
+
+           An in-flow flex sibling BETWEEN the scroller and the composer,
+           sharing the typing indicator's 20px gutter — not a floating
+           action button. Suite's FAB offset lands in the same band as
+           `.compose-pill-send`, so a FAB here would put two cyan circles in
+           one phone corner, one meaning send and one meaning jump. Sitting
+           in the flow means this can push the composer but never cover it,
+           which makes the 390px criterion true by construction.
+
+           It stays in `chat_live.html.heex` rather than moving into
+           `Partials.Composer` (task 01a0312e's extraction): the property
+           above is about being a SIBLING of the scroller and the composer,
+           so pushing it inside either one is the one move that could
+           silently break it.
+
+           The `:if` is the whole visibility story: at the bottom of the
+           conversation this node LEAVES THE DOM. Not transparent, not
+           zero-width, no aria-hidden shell and no exit animation — an exit
+           animation needs the node to outlive its own removal, which is the
+           unreachable-but-present state the acceptance criteria forbid.
+
+           The count badge sits to the RIGHT of the label so its arrival
+           grows the chip into empty space and the label never shifts. It is
+           aria-hidden because the accessible name below already says the
+           number in a sentence.
+
+           Both strings come from `MessagesHooks` (stage 4). The cap lives
+           there as a single module attribute, so the unresolved 99+ / 9+
+           question resolves in one integer rather than in this template. --%>
+      <button
+        :if={@jump_away_from_bottom}
+        type="button"
+        phx-click="jump_to_latest"
+        aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
+        class="chat-jump-chip focus-visible-ring flex-shrink-0 self-start ml-5 mb-1"
+      >
+        <span class="min-w-0 truncate">Jump to latest</span>
+        <span
+          :if={@jump_new_message_count > 0}
+          aria-hidden="true"
+          class="chat-jump-chip-count shrink-0 whitespace-nowrap"
+        >
+          {MessagesHooks.jump_count_label(@jump_new_message_count)}
+        </span>
+      </button>
+
       <.typing_indicator
         agent_typing_pids={@agent_typing_pids}
         streaming_replies={@streaming_replies}

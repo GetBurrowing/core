@@ -625,6 +625,13 @@ defmodule PlatformWeb.ChatLive do
       # hook may already have reported.
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:lightbox_url, nil)
+      # Jump-to-latest state (task 01a03c76 stage 1). `:jump_away_from_bottom`
+      # is reported by the ScrollToBottom hook — the 150px NEAR_BOTTOM_PX
+      # threshold stays in JS so it is not duplicated server-side; the hook
+      # sends a boolean. `:jump_new_message_count` counts top-level messages
+      # from OTHER participants that arrived while away from the tip.
+      |> assign(:jump_away_from_bottom, false)
+      |> assign(:jump_new_message_count, 0)
       |> allow_upload(:attachments,
         accept: :any,
         max_entries: @max_upload_entries,
@@ -4663,6 +4670,10 @@ defmodule PlatformWeb.ChatLive do
     socket
     |> assign(:active_space, space)
     |> assign(:active_space_scope, space_scope_atom(space))
+    # A new conversation starts at its own tip: the count is about the space
+    # you are leaving, so carrying it across would show a stale pill in the
+    # space you just opened (task 01a03c76 stage 1).
+    |> assign(:jump_new_message_count, 0)
   end
 
   # The URL nav target for a space link. Behaviour is unchanged; the RULE now
