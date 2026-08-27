@@ -931,7 +931,20 @@ defmodule PlatformWeb.ChatLive do
     # `chat_participants` row with no authorization check of its own, and is
     # what converts a read bypass into permanent membership), the roster read
     # and the whole assign pipeline. Do not move it below any of them.
-    if is_nil(space) or external_space_denied?(socket, space) do
+    #
+    # INTERNAL ADMISSION GATE (task 01a01d0e) joins the same condition, for the
+    # same reason. The external gate above is scoped to external sessions BY
+    # CONSTRUCTION, so before this an INTERNAL session passed admission for
+    # every space row that resolved — and `Chat.get_space/1` is called here
+    # with no `:scope`, so every row in the table resolves by id. The result
+    # was that `/chat/<uuid>` handed any authenticated internal user a
+    # permanent, self-authorizing participant row in another pair's DM.
+    # Deliberately a SEPARATE predicate rather than a widening of
+    # `external_space_denied?/2`: the two ask different questions of different
+    # populations, and collapsing them would put the external allowlist in the
+    # internal path.
+    if is_nil(space) or external_space_denied?(socket, space) or
+         implicit_join_denied?(socket, space) do
       # The URL saved by the RouteResume hook (`route_resume:chat` in
       # localStorage) points at a space this user can no longer resolve
       # (deleted, unauthorized). Signal the client to clear the entry so the
@@ -3888,6 +3901,79 @@ defmodule PlatformWeb.ChatLive do
     external_session?(socket) and
       not Platform.Chat.ExternalScope.authorized_space?(%{id: socket.assigns.user_id}, space)
   end
+
+  # Space kinds an INTERNAL user may open — and therefore implicitly join —
+  # without a `chat_participants` row already existing (task 01a01d0e).
+  #
+  # This list is NOT a judgement call, and it is deliberately wider than the
+  # filing ticket proposed. Every entry below is behaviour some other test in
+  # this suite already pins, and each one was added here because removing it
+  # turned that test red:
+  #
+  #   * `channel` — `Chat.list_spaces(kind: "channel", scope: nil)` applies NO
+  #     membership filter, so the rail already renders every workspace channel
+  #     to every internal user, and the click that follows must be able to join
+  #     them. Task 01a0181f established that this is deliberate rather than its
+  #     own leak.
+  #   * `system` — the per-agent system-event spaces (created under the
+  #     `system-<agent-slug>` name by the agents layer; deliberately not named
+  #     here, because `system_event_scheduler_t6_e2e_test.exs` guards that no
+  #     `_web/live/` file mentions those modules even in prose).
+  #     `handle_params/3` has a dedicated `system_prefix_fallback/1` branch for
+  #     reaching them by slug, so they are navigable on purpose and carry
+  #     operational log output rather than anyone's private correspondence.
+  #   * `execution` — the ticket named these as part of the exposure. The
+  #     codebase disagrees, explicitly and in tests: PR #548 stage 3 propagates
+  #     a task pin to every @-mentioned participant, and
+  #     `ChatLiveTest`'s "mentioned bystander opens pinned exec space via rail
+  #     row" and "resolves cross-org exec-space slug for @-mentioned bystander"
+  #     both open an exec space for a user who has a PIN row and no participant
+  #     row — the second across orgs, on purpose. Reachability of an exec space
+  #     by a mentioned bystander is a shipped feature, so it is not this
+  #     ticket's leak to close. If it should be narrowed, that is a separate
+  #     decision about the pin-propagation rule, not a scope check bolted on
+  #     here.
+  #
+  # That leaves `dm`, `group`, `meeting` and `guest_meeting` requiring
+  # membership that already exists — and each has an explicit join seam that
+  # creates it: `Chat.find_or_create_dm/4` for a DM the user actually starts,
+  # and `Meetings.Membership.ensure_chat_space_participant/3` off the meeting
+  # join lifecycle. Closing the implicit path removes a bypass around those
+  # seams; it does not remove the only way in.
+  @implicitly_joinable_kinds ~w(channel system execution)
+
+  # EXTERNAL sessions are adjudicated by `external_space_denied?/2` and its
+  # per-org DM allowlist, which admits a DM the external user has no
+  # participant row in yet (`ExternalScope.authorized_space?/2` — admission is
+  # deliberately WIDER than the read scope). Running the internal membership
+  # rule on top of it would veto that allowlist and re-break the surface task
+  # 01a011ed built, so this gate declines to answer for them.
+  defp implicit_join_denied?(socket, space) do
+    not external_session?(socket) and internal_join_denied?(socket, space)
+  end
+
+  defp internal_join_denied?(_socket, %{kind: kind})
+       when kind in @implicitly_joinable_kinds,
+       do: false
+
+  defp internal_join_denied?(socket, %{id: space_id}) do
+    not space_member?(space_id, socket.assigns[:user_id])
+  end
+
+  # Membership as `ensure_participant/2` itself defines it: ANY participant row
+  # for this user, `left_at` included. A user who left a DM keeps their row and
+  # so keeps their way back in — `maybe_reopen_dm/2` in the success branch is
+  # built on exactly that, and tightening it here would silently change the
+  # re-entry behaviour of a conversation the user was legitimately part of.
+  # That is a different question from this ticket's.
+  defp space_member?(space_id, user_id) when is_binary(space_id) and is_binary(user_id) do
+    space_id
+    |> Chat.list_participants()
+    |> Enum.any?(fn p -> p.participant_type == "user" and p.participant_id == user_id end)
+  end
+
+  # No user id (anonymous / pre-membership mount) is not a member of anything.
+  defp space_member?(_space_id, _user_id), do: false
 
   # Is this an EXTERNAL session? Two sources, because the two surfaces derive
   # externality differently and the difference is load-bearing.

@@ -336,9 +336,26 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # in `live/chat/messages_hooks.ex`, which this pin deliberately does not
   # cover, so composing five visibility bands costs `chat_live.ex` nothing.
   #
-  # RE-DERIVED by running `code_line_count/1` on this tree (2,199), not by
+  # RE-MEASURED for task 01a01d0e (the internal admission gate). Seventeen more
+  # code lines, all of them the gate and its two helpers:
+  #
+  #     +2  `handle_params/3`'s deny condition gains
+  #         `implicit_join_denied?(socket, space)`, wrapped over two lines by
+  #         the formatter.
+  #     +4  `implicit_join_denied?/2` — one clause that defers to the external
+  #         gate for external sessions rather than stacking on top of it.
+  #     +5  `internal_join_denied?/2` — the kind allowlist head plus the
+  #         membership clause.
+  #     +5  `space_member?/2` — the participant lookup and its nil-user head.
+  #     +1  the `@implicitly_joinable_kinds` attribute.
+  #
+  # No branch was added to the success path: the gate joins the SAME condition
+  # the external gate already occupies, so a denial stays one branch with one
+  # outcome and the refusal remains indistinguishable from "did not resolve".
+  #
+  # RE-DERIVED by running `code_line_count/1` on this tree (2,216), not by
   # adding a remembered delta to a remembered pin.
-  @chat_live_code_line_count 2199
+  @chat_live_code_line_count 2216
 
   @doc """
   Count the CODE lines of a source file.

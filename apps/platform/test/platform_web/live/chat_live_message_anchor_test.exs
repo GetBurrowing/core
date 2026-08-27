@@ -52,7 +52,14 @@ defmodule PlatformWeb.ChatLiveMessageAnchorTest do
     space = create_channel("anchor-#{n}")
     author = add_participant(space, "author")
 
-    {:ok, conn: init_test_session(conn, current_user_id: user.id), space: space, author: author}
+    # `user` is exported so a test can seat the session's own reader as a
+    # participant. The DM case needs it (task 01a01d0e); purely additive for
+    # every other test in this file.
+    {:ok,
+     conn: init_test_session(conn, current_user_id: user.id),
+     space: space,
+     author: author,
+     user: user}
   end
 
   defp create_channel(slug) do
@@ -419,9 +426,23 @@ defmodule PlatformWeb.ChatLiveMessageAnchorTest do
   # at the wrong position: the wrong conversation.
 
   describe "deep link addressing" do
-    test "a DM mention url lands IN the DM, anchored on the message", %{conn: conn} do
+    test "a DM mention url lands IN the DM, anchored on the message", %{conn: conn, user: user} do
       {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true, name: nil})
       assert is_nil(dm.slug), "the shape create_dm_space/3 produces"
+
+      # The reader has to actually BE in the DM. Until task 01a01d0e this
+      # fixture did not seat them and the mount joined them on arrival, so the
+      # test passed on the strength of the auto-join bug rather than on the
+      # anchoring it exists to check. A DM mention link is by construction sent
+      # to a participant, so seating them is the realistic fixture; the subject
+      # of the test (the anchored window) is untouched.
+      {:ok, _} =
+        Chat.add_participant(dm.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: user.name,
+          joined_at: DateTime.utc_now()
+        })
 
       peer = add_participant(dm, "peer")
       msgs = seed_messages(dm, peer, @message_limit + 20, "dm")
