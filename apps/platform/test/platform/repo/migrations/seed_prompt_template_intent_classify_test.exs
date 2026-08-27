@@ -100,6 +100,59 @@ defmodule Platform.Repo.Migrations.SeedPromptTemplateIntentClassifyTest do
              "stage-2 template must explicitly instruct the model NOT to classify prior context"
     end
 
+    test "stage-1 (01a03f57) refresh: off_topic is the stated default and evidence_quote is required" do
+      # `20260826120000_force_update_intent_classify_prompt_off_topic_default`
+      # rewrites the row. These assertions read the LIVE ROW, not source —
+      # editing `do_default_templates/0` is a runtime no-op, so a failure
+      # here means the migration did not reach the DB.
+      assert %{content: content} = PromptTemplates.get_template_by_slug(@slug)
+
+      assert content =~ "evidence_quote",
+             "template must require the evidence_quote output field"
+
+      assert content =~ "THE DEFAULT ANSWER IS `off_topic`",
+             "template must state off_topic as the default answer"
+
+      assert content =~ "MOST MEETING SPEECH IS `off_topic`",
+             "template must state that most meeting speech is off_topic"
+
+      assert content =~ "is an AGENT being asked to do something?",
+             "template must re-frame the judgement as whether an AGENT is being asked"
+
+      assert content =~ "Nah, I'm gonna get Harper in here.",
+             "template must carry the human-request negative exemplars"
+
+      # Existing contract must survive the rewrite: all four original
+      # output-contract fields, every render marker, and the enum anchors.
+      for field <- ["intent", "target_role", "confidence", "dedupe_key"] do
+        assert content =~ field,
+               "rewritten template dropped output contract field #{inspect(field)}"
+      end
+
+      for marker <- [
+            "{{correction_exemplars}}",
+            "{{context_lines}}",
+            "{{speaker}}",
+            "{{meeting_transcript_chunk}}"
+          ] do
+        assert content =~ marker,
+               "rewritten template dropped render marker #{inspect(marker)}"
+      end
+
+      for intent <- [
+            "visual_adjust",
+            "interaction_design",
+            "action_items",
+            "brief_worthy",
+            "decision_recorded",
+            "open_question",
+            "off_topic"
+          ] do
+        assert content =~ intent,
+               "rewritten template dropped intent enum anchor #{inspect(intent)}"
+      end
+    end
+
     test "seeded slug matches IntentClassify.template_slug/0" do
       # Drift guard (mirrors seed_designer_prompt_templates_test.exs:53-63):
       # if the handler renames its template slug without a matching

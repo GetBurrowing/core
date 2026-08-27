@@ -232,14 +232,15 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
 
   # Build the classifier's happy-path response — the raw string content
   # the provider returns is parsed by the classifier as JSON.
-  defp classifier_response(intent, target_role, confidence) do
+  defp classifier_response(intent, target_role, confidence, messages) do
     {:ok,
      %{
        content:
          Jason.encode!(%{
            "intent" => intent,
            "target_role" => target_role,
-           "confidence" => confidence
+           "confidence" => confidence,
+           "evidence_quote" => echo_quote(messages)
          })
      }}
   end
@@ -307,8 +308,8 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
          %{classifier_pid: classifier_pid} do
       attach_telemetry!([[:platform, :meetings, :intent_dispatched]])
 
-      plant_stub_fun(classifier_pid, fn _c, _m, _o ->
-        classifier_response("design_task", "designer", 0.92)
+      plant_stub_fun(classifier_pid, fn _c, messages, _o ->
+        classifier_response("design_task", "designer", 0.92, messages)
       end)
 
       {target_agent, runtime} =
@@ -392,8 +393,8 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
          %{classifier_pid: classifier_pid} do
       attach_telemetry!([[:platform, :meetings, :intent_dispatched]])
 
-      plant_stub_fun(classifier_pid, fn _c, _m, _o ->
-        classifier_response("record_decision", "historian", 0.85)
+      plant_stub_fun(classifier_pid, fn _c, messages, _o ->
+        classifier_response("record_decision", "historian", 0.85, messages)
       end)
 
       {target_agent, _runtime} =
@@ -485,8 +486,8 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
       # role assignment — and that is precisely the case where a
       # GLOBAL serial cursor would have wedged. Head-of-line blocking
       # is per-meeting by design; across meetings it would be a bug.
-      plant_stub_fun(classifier_pid, fn _c, _m, _o ->
-        classifier_response("schedule_followup", "meeting_scribe", 0.8)
+      plant_stub_fun(classifier_pid, fn _c, messages, _o ->
+        classifier_response("schedule_followup", "meeting_scribe", 0.8, messages)
       end)
 
       {_target_agent, _runtime} =
@@ -551,8 +552,8 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
   describe "the dispatch names a space the target can write" do
     test "the target cannot create a canvas in the meeting space before dispatch and can after",
          %{classifier_pid: classifier_pid} do
-      plant_stub_fun(classifier_pid, fn _c, _m, _o ->
-        classifier_response("draft_brief", "designer", 0.9)
+      plant_stub_fun(classifier_pid, fn _c, messages, _o ->
+        classifier_response("draft_brief", "designer", 0.9, messages)
       end)
 
       {target_agent, runtime} =
@@ -648,5 +649,16 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
       agent_id: agent_id,
       agent_participant_id: participant_id
     })
+  end
+
+  # Task 01a03f57 stage 2: the classifier demotes a non-off_topic
+  # classification to off_topic unless `evidence_quote` is a verbatim
+  # span of the chunk. Stubs echo the chunk back as their citation —
+  # the user message the classifier sends IS the chunk text.
+  defp echo_quote(messages) do
+    Enum.find_value(messages, "", fn message ->
+      role = Map.get(message, :role) || Map.get(message, "role")
+      if role == "user", do: Map.get(message, :content) || Map.get(message, "content")
+    end)
   end
 end

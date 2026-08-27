@@ -131,8 +131,13 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
     ]
   end
 
-  defp answer(intent),
-    do: ~s({"intent":"#{intent}","target_role":"null","confidence":0.8})
+  # A non-`off_topic` answer must carry a verbatim `evidence_quote` from the
+  # chunk or the classifier's evidence gate (task 01a03f57) DEMOTES it to
+  # `off_topic`. The default quote below is a substring of the positive
+  # fixture row; `off_topic` answers cite nothing, as the prompt requires.
+  defp answer(intent, quote \\ "make the button teal"),
+    do:
+      ~s({"intent":"#{intent}","target_role":"null","confidence":0.8,"evidence_quote":"#{if intent == "off_topic", do: "", else: quote}"})
 
   # ── cassette round-trip ───────────────────────────────────────────────
 
@@ -394,15 +399,21 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
     test "an engineered error case counts NON-ZERO errors and does not inflate off_topic", %{
       root: root
     } do
-      # Both rows answer with a JSON-null target_role — well-formed JSON the
-      # prompt's own enum instructs, which `parse_content/2` rejects. This is
-      # the exact shape that made 83 of 102 correct declines read as parse
-      # failures in one instrument.
+      # Both rows answer with a NUMERIC target_role — well-formed JSON in a
+      # shape the prompt's closed enum does not allow, so the classifier
+      # still reports it as a parse error.
+      #
+      # This case used to use a JSON-NULL target_role. That is no longer an
+      # error: null is the answer the prompt's own enum instructs for
+      # `off_topic`, and rejecting it is the defect task 01a03f57 fixed —
+      # the shape that made 83 of 102 correct declines read as parse
+      # failures in one instrument. Using it as an error generator here
+      # would re-assert the bug.
       Process.put(:stub_answers, %{
         "Designer, make the button teal." =>
-          ~s({"intent":"visual_adjust","target_role":null,"confidence":0.9}),
+          ~s({"intent":"visual_adjust","target_role":42,"confidence":0.9}),
         "Nah, I'm gonna get Harper in here." =>
-          ~s({"intent":"off_topic","target_role":null,"confidence":0.9})
+          ~s({"intent":"off_topic","target_role":42,"confidence":0.9})
       })
 
       assert {:ok, result} =
@@ -468,9 +479,9 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       # separates them, and it has to reach the report a human reads.
       valid_json = %{
         "Designer, make the button teal." =>
-          ~s({"intent":"visual_adjust","target_role":null,"confidence":0.9}),
+          ~s({"intent":"visual_adjust","target_role":42,"confidence":0.9}),
         "Nah, I'm gonna get Harper in here." =>
-          ~s({"intent":"off_topic","target_role":null,"confidence":0.9})
+          ~s({"intent":"off_topic","target_role":42,"confidence":0.9})
       }
 
       prose = %{

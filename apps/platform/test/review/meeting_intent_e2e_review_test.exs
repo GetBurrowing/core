@@ -151,14 +151,15 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
 
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "schedule_followup",
                "target_role" => "scheduler",
-               "confidence" => 0.87
+               "confidence" => 0.87,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -219,14 +220,15 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
 
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "schedule_followup",
                "target_role" => "scheduler",
-               "confidence" => 0.87
+               "confidence" => 0.87,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -342,14 +344,15 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
 
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "schedule_followup",
                "target_role" => "scheduler",
-               "confidence" => 0.87
+               "confidence" => 0.87,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -442,14 +445,15 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
       assert Process.alive?(pid)
 
       # Second stub: healthy.
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "schedule_followup",
                "target_role" => "scheduler",
-               "confidence" => 0.87
+               "confidence" => 0.87,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -546,5 +550,16 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
         Process.sleep(10)
         do_wait_for(fun, deadline)
     end
+  end
+
+  # Task 01a03f57 stage 2: the classifier demotes a non-off_topic
+  # classification to off_topic unless `evidence_quote` is a verbatim
+  # span of the chunk. Stubs echo the chunk back as their citation —
+  # the user message the classifier sends IS the chunk text.
+  defp echo_quote(messages) do
+    Enum.find_value(messages, "", fn message ->
+      role = Map.get(message, :role) || Map.get(message, "role")
+      if role == "user", do: Map.get(message, :content) || Map.get(message, "content")
+    end)
   end
 end

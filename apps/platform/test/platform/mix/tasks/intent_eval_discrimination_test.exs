@@ -27,28 +27,34 @@ defmodule Platform.Mix.Tasks.IntentEvalDiscriminationTest do
   responses). Tightening these numbers to look rigorous would buy nothing
   and would turn this into the flaky test somebody deletes.
 
-  ## Two findings recorded here rather than tuned away
+  ## Two findings recorded here, and what the `target_role: null` fix did to
+  ## them
 
-  1. **The spec's "parse_error exceeds half the set" assertion is VACUOUS on
-     this branch, so it is not the assertion made.** `off_topic_default`
-     itself lands 96 of 174 rows in `parse_error` already, and
-     `broken_always_off_topic` lands 174 of 174. A parse_error count
-     therefore separates nothing. The cause is a known defect fixed on
-     `task/01a03f57`, not here: the model emits JSON `null` for
-     `target_role` exactly as its prompt's enum instructs, and
-     `parse_content/2`'s `is_binary` guard rejects it. So the assertions
-     below compare `broken_malformed_schema` against `off_topic_default`'s
-     background rate ON THE SAME SLICE, and against the shape of the
-     recorded response, rather than against zero.
+  Both findings below were recorded when this file was written against a
+  tree that still rejected the JSON `null` the classifier's own prompt enum
+  instructs for `target_role`. Task `01a03f57` fixed that, and the numbers
+  moved exactly where the finding predicted they would — so the findings are
+  kept here with their outcome rather than deleted, because the movement IS
+  the evidence that the harness measures the thing it claims to.
 
-  2. **`broken_always_off_topic` does NOT show the shape the plan predicted**
-     — it was expected to be near-perfect on the 102 negatives, and it
-     scores 0. Same root cause: its perfectly-valid `"target_role": null`
-     JSON is rejected before its correct decline can be counted. That is
-     recorded as an observation about the branch, not corrected by editing
-     the control. The discrimination the control exists to prove — that a
-     reject-everything gate collapses on the control slice — holds either
-     way, and is what is asserted.
+  1. **The spec's "parse_error exceeds half the set" assertion was VACUOUS
+     before the fix, and it is still not the assertion made.** It used to be
+     vacuous because EVERYTHING errored: `off_topic_default` landed 96 of
+     174 rows in `parse_error` and `broken_always_off_topic` 174 of 174, so
+     the count separated nothing. After the fix both land 0 of 174 — the
+     count is no longer vacuous, but it is now carrying the whole
+     separation, so the assertions below still ALSO compare the recorded
+     response SHAPE. A single number that happens to separate two configs
+     today is not a reason to stop checking the thing underneath it.
+
+  2. **`broken_always_off_topic` now shows the shape the plan predicted.**
+     It was expected to be near-perfect on the 102 negatives and scored 0,
+     because its perfectly-valid `"target_role": null` JSON was rejected
+     before its correct decline could be counted. That was recorded as an
+     observation about the tree rather than corrected by editing the
+     control — and the fix turned it into 102 of 102. The discrimination the
+     control exists to prove (a reject-everything gate collapses on the
+     control slice) held under both, and is what is asserted.
 
   `binary_actionable` is deliberately NOT used as a comparison point: stage 4
   recorded that its prompt is a labelled reconstruction (the original was
@@ -169,10 +175,11 @@ defmodule Platform.Mix.Tasks.IntentEvalDiscriminationTest do
       malformed = slice(runs[@malformed], "control_60")
       background = slice(runs[@good], "control_60")
 
-      # Observed 2026-08-27: malformed 60/60 parse_error on this slice;
-      # off_topic_default's background rate on the same slice is 1/60.
-      # Whole-set: malformed 174/174, off_topic_default 96/174 — which is
-      # why the whole-set comparison is not the one made.
+      # Observed 2026-08-27, after the `target_role: null` fix: malformed
+      # 60/60 parse_error on this slice; off_topic_default's background
+      # rate on the same slice is 0/60. Whole-set: malformed 174/174,
+      # off_topic_default 0/174 (it was 96/174 before the fix, which is
+      # why the whole-set comparison is not the one this test makes).
       assert background["errors"] < 10,
              "off_topic_default control-slice error count #{background["errors"]} — if the " <>
                "background rate is high here too, the assertion below is vacuous"
@@ -198,19 +205,33 @@ defmodule Platform.Mix.Tasks.IntentEvalDiscriminationTest do
       assert malformed["per_class"]["off_topic"]["true_positives"] == 0
     end
 
-    # The assertion that separates the two broken arms that the parse_error
-    # COUNT cannot separate, and the one that names finding (1) in the
-    # moduledoc. `broken_always_off_topic` emits 174 syntactically perfect
-    # JSON objects and is still called a parse_error; `broken_malformed_schema`
-    # emits 174 things that are not JSON at all. Same outcome class today,
-    # very different failures.
-    test "the two arms differ in the recorded response SHAPE even though the outcome class is identical",
+    # The two broken arms fail in completely different ways:
+    # `broken_always_off_topic` emits 174 syntactically perfect JSON
+    # objects that decline every row, and `broken_malformed_schema` emits
+    # 174 things that are not JSON at all.
+    #
+    # Before the `target_role: null` fix, the outcome CLASS could not tell
+    # them apart — both scored 174 parse_errors — and only the recorded
+    # response shape could. The fix separated them on outcome class as
+    # well. Both separations are asserted: the shape check is what caught
+    # the conflation in the first place, and dropping it now that a
+    # headline number happens to work would remove the only assertion that
+    # survived the period when that number was lying.
+    test "the two arms differ in both outcome class and recorded response SHAPE",
          %{runs: runs} do
-      assert runs[@always]["summary"]["error_classes"]["parse_error"] ==
-               runs[@malformed]["summary"]["error_classes"]["parse_error"],
-             "if these have diverged, the branch's target_role:null defect was fixed — " <>
-               "re-read this test's moduledoc before adjusting anything"
+      always_errors = runs[@always]["summary"]["error_classes"]["parse_error"]
+      malformed_errors = runs[@malformed]["summary"]["error_classes"]["parse_error"]
 
+      # Observed 2026-08-27, after the fix: always 0, malformed 174.
+      assert malformed_errors == 174
+
+      assert always_errors == 0,
+             "broken_always_off_topic scored #{always_errors} parse_errors — its answers are " <>
+               "valid JSON declines, so anything above zero means the target_role:null defect " <>
+               "task 01a03f57 fixed has regressed"
+
+      # Valid-JSON-but-wrong versus not-JSON-at-all, independent of how
+      # either is scored.
       assert json_object_count(@always) == 174
       assert json_object_count(@malformed) == 0
     end

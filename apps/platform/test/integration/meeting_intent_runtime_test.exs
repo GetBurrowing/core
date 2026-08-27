@@ -185,14 +185,15 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
          %{classifier_pid: classifier_pid} do
       attach_intent_classified_recorder!(:classified)
 
-      plant_stub_fun(classifier_pid, fn _creds, _messages, _opts ->
+      plant_stub_fun(classifier_pid, fn _creds, messages, _opts ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "schedule_followup",
                "target_role" => "scheduler",
-               "confidence" => 0.87
+               "confidence" => 0.87,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -250,14 +251,15 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
          %{classifier_pid: classifier_pid} do
       attach_intent_classified_recorder!(:orphan)
 
-      plant_stub_fun(classifier_pid, fn _creds, _messages, _opts ->
+      plant_stub_fun(classifier_pid, fn _creds, messages, _opts ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "schedule_followup",
                "target_role" => "scheduler",
-               "confidence" => 0.5
+               "confidence" => 0.5,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -357,5 +359,16 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
         Process.sleep(10)
         do_wait_for(fun, deadline)
     end
+  end
+
+  # Task 01a03f57 stage 2: the classifier demotes a non-off_topic
+  # classification to off_topic unless `evidence_quote` is a verbatim
+  # span of the chunk. Stubs echo the chunk back as their citation —
+  # the user message the classifier sends IS the chunk text.
+  defp echo_quote(messages) do
+    Enum.find_value(messages, "", fn message ->
+      role = Map.get(message, :role) || Map.get(message, "role")
+      if role == "user", do: Map.get(message, :content) || Map.get(message, "content")
+    end)
   end
 end

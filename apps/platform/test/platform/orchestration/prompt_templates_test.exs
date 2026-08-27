@@ -3969,6 +3969,14 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
 
     test "the migration is idempotent — re-running leaves the body byte-identical" do
+      # `before_content` is sampled AFTER one application, not from the
+      # live row. A later force-update migration (e.g. task 01a03f57's
+      # `20260826120000` off_topic-default rewrite) legitimately owns the
+      # live row, so comparing THIS migration's output against whatever
+      # migrated last would test migration ordering, not idempotence.
+      # The invariant here is only: applying this migration twice lands
+      # the same bytes as applying it once.
+      assert :ok = run_corrections_migration!()
       before_content = intent_classify_content()
 
       assert :ok = run_corrections_migration!()

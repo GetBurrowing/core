@@ -194,6 +194,12 @@ defmodule Platform.Meetings.IntentClassifier do
 
   @responsibility_key "meetings.intent_classify"
   @prompt_slug "meetings.intent_classify.v1"
+
+  # The one spelling of "this intent reaches nobody" that the queue
+  # carries. `target_role` is hashed into the dedupe key and stored on
+  # the row, so it must be a binary; a second spelling would split the
+  # dedupe key for identical utterances.
+  @no_target_role "null"
   @default_context_window_size 3
 
   # Quiet window a chunk is held for before it classifies. Sized to sit
@@ -232,10 +238,28 @@ defmodule Platform.Meetings.IntentClassifier do
   # as in the DB template so the fallback and the real prompt keep the
   # same variable set; a marker present in one and absent from the other
   # is how a rollout gap turns into a silently untuned classifier.
+  # Task 01a03f57 stage 1 re-frames both this fallback and the DB row:
+  # `off_topic` is the STATED DEFAULT, and any non-`off_topic` answer must
+  # carry a verbatim `evidence_quote` from the current utterance. A
+  # fallback that contradicts the row is how an earlier revision of this
+  # work got written from the wrong source — keep the two in agreement.
   @fallback_intent_prompt """
   You are a meeting intent classifier. Given a transcript chunk, classify the intent and identify the target role.
+
+  THE DEFAULT ANSWER IS `off_topic`. MOST MEETING SPEECH IS `off_topic` — that is the expected and correct outcome, not a failure to find something.
+
+  The one question you are answering: is an AGENT being asked to do something? Do NOT ask "is this actionable?". Meetings are full of genuine requests aimed at PEOPLE, and those are `off_topic` for this classifier. Detection and addressing are ONE question.
+
+  All of these are `off_topic`:
+    - "Nah, I'm gonna get Harper in here."
+    - "Try, can you try that link just to see what happened?"
+    - "But I would just say, like, send it to us."
+    - "Promote to prod. Yeah, I know, me too. Okay, so let's go."
+
   Respond ONLY with a JSON object matching this schema:
-  {"intent": "<string>", "target_role": "<string>", "confidence": <float 0-1>}
+  {"intent": "<string>", "target_role": "<string>", "confidence": <float 0-1>, "evidence_quote": "<verbatim substring or empty string>"}
+
+  For any non-`off_topic` answer, `evidence_quote` MUST be a verbatim substring of the CURRENT transcript chunk containing the ask. For `off_topic`, it MUST be the empty string `""`. If you cannot copy such a substring, the answer is `off_topic`.
 
   Room: {{room_id}}
 
@@ -885,12 +909,13 @@ defmodule Platform.Meetings.IntentClassifier do
       returned an unrecognised shape.
     * `:parse_error`      — the completion was not decodable into the
       classifier's answer shape.
-    * `{:demoted, reason}` — a positive classification that failed the
-      evidence gate. Only reachable once the `off_topic` evidence work
-      (task 01a03f57) is merged; on this branch the gate does not exist
-      yet and this clause is unreachable by construction.
+  A positive classification that fails the evidence gate (task 01a03f57)
+  is NOT an error shape: it is DEMOTED to a well-formed `off_topic`
+  decision and returned as `{:ok, _}`, so it still reaches the queue and
+  the corrections corpus. Only the three reasons above end the run
+  without a decision.
   """
-  @type decide_error :: :empty_output | :model_error | :parse_error | {:demoted, atom()}
+  @type decide_error :: :empty_output | :model_error | :parse_error
 
   @doc """
   Run ONE chunk through provider-call → parse → evidence for a single
@@ -918,10 +943,10 @@ defmodule Platform.Meetings.IntentClassifier do
         room_id: room_id
       }) do
     with {:ok, content} <- call_provider(provider_module, agent, prompt, chunk_text, room_id),
-         # SINGLE call site for `parse_content` — task 01a03f57 widens it
-         # to /3 (threading `chunk_text` for the evidence gate), and when
-         # that lands only this one line changes.
-         {:ok, parsed} <- parse_content(content, room_id) do
+         # SINGLE call site for `parse_content`. Task 01a03f57 widened it
+         # to /3, threading `chunk_text` through so the evidence gate can
+         # check the model's citation against the chunk it classified.
+         {:ok, parsed} <- parse_content(content, room_id, chunk_text) do
       {:ok, Map.put_new(parsed, :evidence_quote, nil)}
     end
   end
@@ -1230,7 +1255,7 @@ defmodule Platform.Meetings.IntentClassifier do
           case provider_content(result) do
             {:ok, content} ->
               # A SUCCESSFUL call that carried no usable text. Caught
-              # HERE and never allowed to reach `parse_content/2`,
+              # HERE and never allowed to reach `parse_content/3`,
               # where `Jason.decode("")` would report it as a
               # `parse_error` and bury the real cause. Whitespace-only
               # counts as empty: a lone "\n" is no more classifiable
@@ -1327,11 +1352,37 @@ defmodule Platform.Meetings.IntentClassifier do
 
   # ── Response parsing ──────────────────────────────────────────────────────
 
-  defp parse_content(content, room_id) do
+  # A prompt instruction the runtime does not check is a suggestion.
+  # Stage 1 told the model to cite the span it classified on; this is
+  # where that citation is ENFORCED. An uncited (or fabricated-cite)
+  # positive is DEMOTED to off_topic, never dropped: a dropped chunk
+  # emits nothing and is indistinguishable from a model error, while a
+  # demoted one still lands in the queue where `IntentRouting` routes
+  # it to nobody and the corrections corpus keeps a row to learn from.
+  defp parse_content(content, room_id, chunk_text) do
     case Jason.decode(content) do
-      {:ok, %{"intent" => intent, "target_role" => target_role, "confidence" => confidence}}
-      when is_binary(intent) and is_binary(target_role) and is_number(confidence) ->
-        {:ok, %{intent: intent, target_role: target_role, confidence: confidence * 1.0}}
+      {:ok, %{"intent" => intent, "confidence" => confidence} = decoded}
+      when is_binary(intent) and is_number(confidence) ->
+        case normalise_target_role(decoded) do
+          {:ok, target_role} ->
+            confidence = confidence * 1.0
+            quote_text = Map.get(decoded, "evidence_quote", "")
+
+            case evidence_verdict(intent, quote_text, chunk_text) do
+              :ok ->
+                {:ok, %{intent: intent, target_role: target_role, confidence: confidence}}
+
+              {:demote, reason} ->
+                emit_evidence_missing(room_id, intent, reason)
+
+                {:ok,
+                 %{intent: "off_topic", target_role: @no_target_role, confidence: confidence}}
+            end
+
+          :invalid ->
+            emit_parse_error(room_id, content, {:missing_or_invalid_keys, decoded})
+            {:error, :parse_error}
+        end
 
       {:ok, decoded} ->
         emit_parse_error(room_id, content, {:missing_or_invalid_keys, decoded})
@@ -1341,6 +1392,71 @@ defmodule Platform.Meetings.IntentClassifier do
         emit_parse_error(room_id, content, reason)
         {:error, :parse_error}
     end
+  end
+
+  # The prompt's `target_role` enum is CLOSED and its last member is the
+  # JSON literal `null` — the answer the model is instructed to give for
+  # `off_topic`, which stage 1 made the stated default. An earlier guard
+  # read `is_binary(target_role)`, so that instructed answer fell through
+  # to the malformed-payload branch: a CORRECT decline enqueued nothing
+  # and emitted `:parse_error`. That is precisely the conflated-failure-
+  # name trap the module doc warns about — the counter operators read as
+  # "the model is emitting garbage" was in fact counting the model
+  # getting it right. Worse, it was asymmetric: the stage-2 demotion path
+  # writes the STRING "null", which passed the guard, so demoted declines
+  # were visible while genuine ones were not.
+  #
+  # `null` normalises to the same `@no_target_role` string the demotion
+  # path already writes, so the queue has ONE spelling of "nobody" and
+  # `IntentRouting` lands it `:no_target_role` exactly as its own comment
+  # documents. The key must still be PRESENT and, when present, must be a
+  # string or `null`: any other shape (number, list, object, absent) is a
+  # structurally-invalid payload and still emits `:parse_error`.
+  defp normalise_target_role(decoded) do
+    case Map.fetch(decoded, "target_role") do
+      {:ok, role} when is_binary(role) -> {:ok, role}
+      {:ok, nil} -> {:ok, @no_target_role}
+      _ -> :invalid
+    end
+  end
+
+  # off_topic needs no citation — there is nothing to cite.
+  defp evidence_verdict("off_topic", _quote_text, _chunk_text), do: :ok
+
+  defp evidence_verdict(_intent, quote_text, chunk_text) when is_binary(quote_text) do
+    trimmed = String.trim(quote_text)
+
+    cond do
+      trimmed == "" -> {:demote, :blank}
+      substring?(chunk_text, trimmed) -> :ok
+      true -> {:demote, :not_in_chunk}
+    end
+  end
+
+  defp evidence_verdict(_intent, _quote_text, _chunk_text), do: {:demote, :blank}
+
+  defp substring?(chunk_text, needle) when is_binary(chunk_text) do
+    String.contains?(String.downcase(chunk_text), String.downcase(needle))
+  end
+
+  defp substring?(_chunk_text, _needle), do: false
+
+  # DISTINCT from :parse_error / :model_error / :truncated_output on
+  # purpose — the module doc is explicit that conflating failure names
+  # is how the token-budget bug hid for weeks. Logged at :info because
+  # an uncited positive is now an expected, common outcome, not an
+  # incident.
+  defp emit_evidence_missing(room_id, intent, reason) do
+    Logger.info(
+      "[IntentClassifier] uncited positive demoted to off_topic room=#{inspect(room_id)} " <>
+        "intent=#{inspect(intent)} reason=#{inspect(reason)}"
+    )
+
+    :telemetry.execute(
+      [:platform, :meetings, :intent_classifier, :evidence_missing],
+      %{count: 1},
+      %{room_id: room_id, intent: intent, reason: reason}
+    )
   end
 
   defp emit_parse_error(room_id, raw, reason) do

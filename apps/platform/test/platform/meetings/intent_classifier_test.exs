@@ -99,6 +99,18 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
   end
 
+  # Task 01a03f57 stage 2: the classifier now DEMOTES any non-off_topic
+  # classification whose `evidence_quote` is not a verbatim span of the
+  # chunk. Fixed happy-path stubs would all demote, so they echo the
+  # chunk back as their citation — the user message the classifier
+  # sends IS the chunk text (`call_provider/5`).
+  defp echo_quote(messages) do
+    Enum.find_value(messages, "", fn message ->
+      role = Map.get(message, :role) || Map.get(message, "role")
+      if role == "user", do: Map.get(message, :content) || Map.get(message, "content")
+    end)
+  end
+
   defp create_agent!(overrides \\ %{}) do
     attrs =
       Map.merge(
@@ -279,14 +291,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
       _ = attach_terminal_recorder!(:classified)
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "schedule_follow_up",
                "target_role" => "scribe",
-               "confidence" => 0.87
+               "confidence" => 0.87,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -341,7 +354,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
       test_pid = self()
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _creds, _messages, opts ->
+      plant_stub_fun(pid, fn _creds, messages, opts ->
         send(test_pid, {:captured_opts, opts})
 
         {:ok,
@@ -350,7 +363,8 @@ defmodule Platform.Meetings.IntentClassifierTest do
              Jason.encode!(%{
                "intent" => "schedule_follow_up",
                "target_role" => "scribe",
-               "confidence" => 0.9
+               "confidence" => 0.9,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -402,14 +416,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
     } do
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "visual_adjust",
                "target_role" => "designer",
-               "confidence" => 0.91
+               "confidence" => 0.91,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -452,14 +467,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "visual_adjust",
                "target_role" => "designer",
-               "confidence" => 0.5
+               "confidence" => 0.5,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -480,14 +496,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
     test "a chunk with no meeting_id is classified but has no queue to land in" do
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "visual_adjust",
                "target_role" => "designer",
-               "confidence" => 0.5
+               "confidence" => 0.5,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -512,14 +529,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
     test "the excerpt is capped at 280 characters", %{meeting_id: meeting_id} do
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "visual_adjust",
                "target_role" => "designer",
-               "confidence" => 0.5
+               "confidence" => 0.5,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -554,14 +572,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
       _ = attach_terminal_recorder!(:classified)
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "assign_owner",
                "target_role" => "scribe",
-               "confidence" => 0.9
+               "confidence" => 0.9,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -741,14 +760,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
       _ = attach_terminal_recorder!(:classified)
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "assign_owner",
                "target_role" => "scribe",
-               "confidence" => 0.9
+               "confidence" => 0.9,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -994,14 +1014,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
       _ = attach_terminal_recorder!(:classified)
       {pid, _name} = start_classifier!(debounce_ms: 400)
 
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "assign_owner",
                "target_role" => "scribe",
-               "confidence" => 0.9
+               "confidence" => 0.9,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -1047,14 +1068,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
       _ = attach_terminal_recorder!(:classified)
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "capture_action",
                "target_role" => "scribe",
-               "confidence" => 0.6
+               "confidence" => 0.6,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -1109,14 +1131,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
       # Second stub: now the provider returns cleanly. The classifier
       # should process this new chunk without any state corruption from
       # the earlier failure.
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "recovered",
                "target_role" => "scribe",
-               "confidence" => 0.5
+               "confidence" => 0.5,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -1182,6 +1205,90 @@ defmodule Platform.Meetings.IntentClassifierTest do
       end)
 
       assert queued_for_room("room-parse-missing-keys") == []
+    end
+  end
+
+  # The prompt's `target_role` enum is closed and its last member is the
+  # JSON literal `null` — the answer the model is TOLD to give for
+  # `off_topic`. Before this fix the parse guard demanded a binary, so
+  # the instructed answer fell through to the malformed-payload branch:
+  # a correct decline enqueued nothing and incremented `parse_error`,
+  # making the model look broken precisely when it was right. 83 of the
+  # 102 recorded negatives take this path.
+  describe "classify_and_enqueue — JSON null target_role" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-null-role"})
+      assign_intent_role!(agent)
+      drop_queue_for_room("room-null-role")
+      drop_queue_for_room("room-null-role-malformed")
+      %{agent: agent}
+    end
+
+    test "off_topic with JSON null target_role enqueues and emits NO parse_error" do
+      _ = attach_recorder!(:parse_error, :parse_error)
+      terminal = attach_terminal_recorder!(:classified)
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "off_topic",
+               "target_role" => nil,
+               "confidence" => 0.9
+             })
+         }}
+      end)
+
+      _ = broadcast_chunk("room-null-role")
+
+      # The decline is VISIBLE: it lands in the queue where the
+      # corrections corpus can learn from it, spelled with the same
+      # "nobody" token the stage-2 demotion path writes.
+      assert_receive {:classified, %{count: 1},
+                      %{room_id: "room-null-role", intent: "off_topic", target_role: "null"}},
+                     500
+
+      refute_receive {:parse_error, _, _}, 200
+
+      assert [row] = queued_for_room("room-null-role")
+      assert row.classified_intent == "off_topic"
+      assert row.target_role == "null"
+
+      :telemetry.detach(terminal)
+    end
+
+    # ANTI-VACUITY CONTROL. Without this, a "fix" that accepted any
+    # shape at all — or that deleted the parse_error branch outright —
+    # would pass the test above. A structurally-invalid `target_role`
+    # (here a number, which no member of the closed enum can be) must
+    # STILL be refused and still counted as a parse error.
+    test "a non-string, non-null target_role still emits parse_error and enqueues nothing" do
+      _ = attach_recorder!(:parse_error, :parse_error)
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "action_items",
+               "target_role" => 42,
+               "confidence" => 0.9,
+               "evidence_quote" => "we need to schedule a follow-up on the billing bug"
+             })
+         }}
+      end)
+
+      capture_log([level: :warning], fn ->
+        _ = broadcast_chunk("room-null-role-malformed")
+
+        assert_receive {:parse_error, %{count: 1}, %{room_id: "room-null-role-malformed"}}, 500
+      end)
+
+      assert queued_for_room("room-null-role-malformed") == []
+      assert Process.alive?(pid)
     end
   end
 
@@ -1541,7 +1648,8 @@ defmodule Platform.Meetings.IntentClassifierTest do
            Jason.encode!(%{
              "intent" => "brief_worthy",
              "target_role" => "meeting_scribe",
-             "confidence" => 0.8
+             "confidence" => 0.8,
+             "evidence_quote" => echo_quote(messages)
            })
        }}
     end
@@ -1694,14 +1802,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       # Fixed happy-path stub — same intent+role for every chunk, so
       # the dedupe key depends solely on `chunk_text`.
-      plant_stub_fun(pid, fn _c, _m, _o ->
+      plant_stub_fun(pid, fn _c, messages, _o ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "brief_worthy",
                "target_role" => "meeting_scribe",
-               "confidence" => 0.75
+               "confidence" => 0.75,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -2104,7 +2213,8 @@ defmodule Platform.Meetings.IntentClassifierTest do
              Jason.encode!(%{
                "intent" => "schedule_follow_up",
                "target_role" => "scribe",
-               "confidence" => 0.9
+               "confidence" => 0.9,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -2247,14 +2357,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
       _ = attach_terminal_recorder!(:classified)
       {pid, _name} = start_classifier!()
 
-      plant_stub_fun(pid, fn _creds, _messages, _opts ->
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
         {:ok,
          %{
            content:
              Jason.encode!(%{
                "intent" => "schedule_follow_up",
                "target_role" => "scribe",
-               "confidence" => 0.8
+               "confidence" => 0.8,
+               "evidence_quote" => echo_quote(messages)
              })
          }}
       end)
@@ -2462,14 +2573,211 @@ defmodule Platform.Meetings.IntentClassifierTest do
       end)
     end
 
-    # The fifth shape from the stage brief — `{:error, {:demoted, :not_substring}}`
-    # for an UNCITED positive — is deliberately NOT asserted here. The
-    # evidence gate it depends on (`evidence_verdict/3`, task 01a03f57)
-    # is not on this branch: `origin/main` was at c03a819b with
-    # `parse_content/2` and no gate at all when this stage ran. Asserting
-    # it now would mean asserting a shape nothing can produce.
-    # `decide/1`'s @type already names `{:demoted, _}`, and the parse
-    # step has exactly ONE call site, so wiring the gate in is a one-line
-    # change plus this test.
+    # The evidence gate (task 01a03f57) is wired into `decide/1` itself,
+    # not bolted onto a parallel route: these two tests exercise it
+    # THROUGH `decide/1` so a future refactor that leaves the gate on a
+    # path production no longer takes shows up here as a failure.
+    #
+    # An uncited positive is not an error shape — it is a DEMOTION, so it
+    # comes back as a well-formed `{:ok, off_topic}` decision.
+    test "an uncited positive is demoted to off_topic rather than returned as an error" do
+      stub!(fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "pull_numbers",
+               "target_role" => "scribe",
+               "confidence" => 0.9,
+               "evidence_quote" => ""
+             })
+         }}
+      end)
+
+      assert {:ok, decision} = IntentClassifier.decide(decide_args())
+      assert decision.intent == "off_topic"
+      assert decision.target_role == "null"
+    end
+
+    # The JSON `null` the prompt's own closed enum instructs the model to
+    # emit for `off_topic` must survive `decide/1` as a decision, not fall
+    # through to `:parse_error`.
+    test "a JSON null target_role decides off_topic instead of erroring" do
+      stub!(fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "off_topic",
+               "target_role" => nil,
+               "confidence" => 0.04
+             })
+         }}
+      end)
+
+      assert {:ok, decision} =
+               IntentClassifier.decide(decide_args(%{chunk_text: "anyway, nice weather"}))
+
+      assert decision.intent == "off_topic"
+      assert decision.target_role == "null"
+    end
+
+    # A `target_role` of some OTHER shape (or absent entirely) is still a
+    # structurally-invalid payload — and it must surface as the tagged
+    # `{:error, :parse_error}` `decide/1` promises, not the bare `:error`
+    # the pre-extraction parser returned, which a `with` would leak
+    # straight through to the caller's `case`.
+    test "a non-binary, non-null target_role still returns {:error, :parse_error}" do
+      stub!(fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "off_topic",
+               "target_role" => 42,
+               "confidence" => 0.1
+             })
+         }}
+      end)
+
+      capture_log([level: :warning], fn ->
+        assert IntentClassifier.decide(decide_args()) == {:error, :parse_error}
+      end)
+    end
+  end
+
+  # Task 01a03f57 stage 2: stage 1 told the model to CITE the span it
+  # classified on. A prompt instruction the runtime does not check is a
+  # suggestion — these tests pin the server-side enforcement. An
+  # uncited or fabricated-cite positive DEMOTES to off_topic (it still
+  # lands in the queue, where routing sends it nowhere and the
+  # corrections corpus keeps a row); it is never dropped.
+  describe "classify_and_enqueue — evidence_quote enforcement" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-evidence"})
+      assign_intent_role!(agent)
+      :ok
+    end
+
+    defp evidence_chunk(room_id, meeting_id) do
+      broadcast_chunk(room_id,
+        meeting_id: meeting_id,
+        segment: %{
+          id: "seg-evidence-#{System.unique_integer([:positive])}",
+          text: "the nav bar contrast is too low on mobile",
+          speaker_name: "alice"
+        }
+      )
+    end
+
+    defp evidence_stub(pid, body) do
+      plant_stub_fun(pid, fn _c, _m, _o -> {:ok, %{content: Jason.encode!(body)}} end)
+    end
+
+    test "a verbatim quote from the chunk enqueues the intent unchanged" do
+      _ = attach_recorder!(:evidence_missing, :evidence_missing)
+      _ = attach_terminal_recorder!(:classified)
+      meeting_id = "meeting-evidence-ok-#{System.unique_integer([:positive])}"
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      {pid, _name} = start_classifier!()
+
+      evidence_stub(pid, %{
+        "intent" => "visual_adjust",
+        "target_role" => "designer",
+        "confidence" => 0.91,
+        "evidence_quote" => "contrast is too low"
+      })
+
+      _ = evidence_chunk("room-evidence-ok", meeting_id)
+
+      assert_receive {:classified, %{count: 1}, %{intent: "visual_adjust"}}, 1_000
+      refute_receive {:evidence_missing, _, _}, 200
+
+      assert [entry] = IntentQueue.list(meeting_id)
+      assert entry.classified_intent == "visual_adjust"
+      assert entry.target_role == "designer"
+    end
+
+    test "a missing quote demotes to off_topic and emits :evidence_missing with :blank" do
+      _ = attach_recorder!(:evidence_missing, :evidence_missing)
+      _ = attach_terminal_recorder!(:classified)
+      meeting_id = "meeting-evidence-blank-#{System.unique_integer([:positive])}"
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      {pid, _name} = start_classifier!()
+
+      evidence_stub(pid, %{
+        "intent" => "visual_adjust",
+        "target_role" => "designer",
+        "confidence" => 0.91
+      })
+
+      _ = evidence_chunk("room-evidence-blank", meeting_id)
+
+      assert_receive {:evidence_missing, %{count: 1},
+                      %{intent: "visual_adjust", reason: :blank, room_id: "room-evidence-blank"}},
+                     1_000
+
+      assert_receive {:classified, %{count: 1}, %{intent: "off_topic", target_role: "null"}},
+                     1_000
+
+      assert [entry] = IntentQueue.list(meeting_id)
+      assert entry.classified_intent == "off_topic"
+      assert entry.target_role == "null"
+    end
+
+    test "a fabricated quote demotes to off_topic with :not_in_chunk" do
+      _ = attach_recorder!(:evidence_missing, :evidence_missing)
+      _ = attach_terminal_recorder!(:classified)
+      meeting_id = "meeting-evidence-fab-#{System.unique_integer([:positive])}"
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      {pid, _name} = start_classifier!()
+
+      evidence_stub(pid, %{
+        "intent" => "visual_adjust",
+        "target_role" => "designer",
+        "confidence" => 0.91,
+        "evidence_quote" => "ship the redesign by friday"
+      })
+
+      _ = evidence_chunk("room-evidence-fab", meeting_id)
+
+      assert_receive {:evidence_missing, %{count: 1},
+                      %{intent: "visual_adjust", reason: :not_in_chunk}},
+                     1_000
+
+      assert_receive {:classified, %{count: 1}, %{intent: "off_topic"}}, 1_000
+      assert [entry] = IntentQueue.list(meeting_id)
+      assert entry.classified_intent == "off_topic"
+    end
+
+    # Anti-vacuity guard: without this, a rule that demoted EVERYTHING
+    # would still pass the two demotion tests above.
+    test "an off_topic answer with an empty quote is untouched and emits no :evidence_missing" do
+      _ = attach_recorder!(:evidence_missing, :evidence_missing)
+      _ = attach_terminal_recorder!(:classified)
+      meeting_id = "meeting-evidence-off-#{System.unique_integer([:positive])}"
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      {pid, _name} = start_classifier!()
+
+      evidence_stub(pid, %{
+        "intent" => "off_topic",
+        "target_role" => "null",
+        "confidence" => 0.42,
+        "evidence_quote" => ""
+      })
+
+      _ = evidence_chunk("room-evidence-off", meeting_id)
+
+      assert_receive {:classified, %{count: 1}, %{intent: "off_topic", confidence: 0.42}}, 1_000
+      refute_receive {:evidence_missing, _, _}, 200
+
+      assert [entry] = IntentQueue.list(meeting_id)
+      assert entry.classified_intent == "off_topic"
+      assert entry.confidence == 0.42
+    end
   end
 end
