@@ -84,6 +84,66 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
+      # The JS suites had NO CI gate at all until this.
+      #
+      # WHY THIS IS A STEP IN THIS JOB AND NOT A SEPARATE PARALLEL JOB.
+      # The three commands take ~0.9 s combined, so nothing about runtime
+      # argues either way; setup dominates entirely. The deciding fact is that
+      # test/no_excalidraw_in_app_bundle_test.mjs esbuild-builds js/app.js, and
+      # js/app.js imports "phoenix", "phoenix_html" and "phoenix_live_view",
+      # whose JavaScript ships inside apps/platform/deps — i.e. it needs
+      # `mix deps.get` to have run. A standalone node-only job could therefore
+      # gate vitest and the localStorage script but NOT the bundle guard, which
+      # is the one check here that protects a user-visible number (the 800 KB
+      # app.js ceiling). Running the suites in the job that has already fetched
+      # and cached deps gates all three for the cost of installing Node.
+      #
+      # It is placed immediately after deps.get and before the compile/test
+      # steps so a JS break surfaces in about a minute rather than after the
+      # full Elixir suite — the same fail-fast shape as the migration-timestamp
+      # and surface-budget checks at the top of this job.
+      #
+      # TRIGGERS: this workflow has no `paths:` filter, deliberately. These
+      # steps run on every push to main/feat/**/stack/** and every PR into
+      # them, including PRs that touch only .github/, only lib/, or only a
+      # colocated hook outside assets/. Scoping them to apps/platform/assets/**
+      # would have missed exactly the case that motivated this task: PR #809
+      # changed a contract and broke a sibling test file, and nobody found out.
+      - name: Set up Node
+        # 24 is not invented here: it is the version this workflow already
+        # forces its JavaScript actions onto (see FORCE_JAVASCRIPT_ACTIONS_TO_NODE24
+        # at the top of this file). The repo pins Node nowhere else — no
+        # .nvmrc, no `engines` in assets/package.json.
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/platform/assets/package-lock.json
+
+      - name: Install JS dependencies
+        working-directory: apps/platform/assets
+        run: npm ci
+
+      # These are the three commands assets/package.json's `test` script
+      # chains, run separately so the annotation names which one broke.
+      # `npm test` itself is not invoked because a single `&&` chain reports
+      # only the first failure and gives no per-suite signal.
+      - name: Run JS asset test suites
+        working-directory: apps/platform/assets
+        run: |
+          if ! npx vitest run; then
+            echo "::error::vitest failed (apps/platform/assets/test/**/*.test.js). Fix the test or the hook; do not skip it."
+            exit 1
+          fi
+          if ! node --test "test/**/*_test.mjs"; then
+            echo "::error::node --test failed (apps/platform/assets/test/**/*_test.mjs). This set includes the js/app.js bundle guards, which esbuild-build the real app bundle against apps/platform/deps."
+            exit 1
+          fi
+          if ! node scripts/check_no_direct_localstorage.mjs; then
+            echo "::error::check_no_direct_localstorage.mjs failed: js/ contains a direct localStorage access. Route it through the client-state wrapper."
+            exit 1
+          fi
+
       # Task 01a01041 stage 6 — the ratchet that keeps the warning cleanup from
       # rotting. It lands in the same PR as the cleanup on purpose: added before
       # it, this step would red every PR including the ones fixing the warnings.

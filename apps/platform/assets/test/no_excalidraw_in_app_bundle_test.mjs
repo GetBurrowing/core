@@ -30,6 +30,20 @@ const ASSETS = resolve(HERE, "..");
 // the profile does or it is measuring a bundle nobody ships.
 const MAX_BYTES = 800 * 1024;
 
+// The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
+// that half was missing here until this commit. js/app.js has exactly three
+// bare imports — "phoenix_html", "phoenix", "phoenix_live_view" — and all three
+// are Elixir deps whose JS lives in apps/platform/deps, NOT in
+// assets/node_modules. Without this the build threw `Could not resolve
+// "phoenix"` and BOTH assertions below failed for a reason that had nothing to
+// do with the bundle. esbuild's JS API does not read the NODE_PATH environment
+// variable (only its CLI does), so the paths are passed explicitly.
+//
+// Consequence: this file needs `mix deps.get` to have run. That is why CI runs
+// the JS suites inside the job that already fetched deps — see
+// .github/workflows/ci.yml, "Run JS asset test suites".
+const DEPS = resolve(ASSETS, "..", "deps");
+
 async function buildAppBundle() {
   const result = await build({
     absWorkingDir: ASSETS,
@@ -41,6 +55,7 @@ async function buildAppBundle() {
     outdir: "out",
     external: ["/fonts/*", "/images/*"],
     alias: { "@": "." },
+    nodePaths: [DEPS],
   });
 
   const js = result.outputFiles.find((f) => f.path.endsWith(".js"));
