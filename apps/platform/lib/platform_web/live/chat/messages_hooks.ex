@@ -843,13 +843,21 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_event("close_longpress_menu", _params, socket),
     do: {:halt, assign(socket, :longpress_menu_for, nil)}
 
-  # Jump-to-latest (task 01a03c76 stage 1).
+  # Jump-to-latest (task 01a03c76 stage 1; second boolean added by task
+  # 01a0419a stage 4).
   #
-  # The 150px NEAR_BOTTOM_PX threshold lives in the ScrollToBottom JS hook and
-  # is NOT duplicated here — the client compares and sends the boolean, so
-  # there is exactly one definition of "near the bottom".
-  defp handle_event("jump_to_latest_distance", %{"away" => away}, socket),
-    do: {:halt, assign(socket, :jump_away_from_bottom, away == true)}
+  # Both pixel thresholds — NEAR_BOTTOM_PX and DEEP_HISTORY_PX — live in the
+  # ScrollToBottom JS hook and are NOT duplicated here. The client compares and
+  # sends two booleans, so there is exactly one definition of "near the bottom"
+  # and exactly one of "deep in history". `deep` is defaulted rather than
+  # matched so an older client mid-deploy degrades to the shallow bands instead
+  # of crashing the LiveView.
+  defp handle_event("jump_to_latest_distance", %{"away" => away} = params, socket) do
+    {:halt,
+     socket
+     |> assign(:jump_away_from_bottom, away == true)
+     |> assign(:jump_deep_in_history, params["deep"] == true)}
+  end
 
   # Pressing the control clears the count server-side and asks the client to
   # scroll. The count is cleared here rather than waiting for the client's
@@ -2067,4 +2075,40 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   def jump_aria_label(0), do: "Jump to latest message."
   def jump_aria_label(1), do: "Jump to latest message. 1 new message."
   def jump_aria_label(count), do: "Jump to latest message. #{count} new messages."
+
+  @doc """
+  Whether the jump-to-latest control is in the DOM at all (task 01a0419a
+  stage 4).
+
+  THE FIVE BANDS. Position is reported by the ScrollToBottom hook as two
+  booleans; `count` is this module's own tally of top-level messages from other
+  participants that arrived while the reader was away from the tip.
+
+      position     nothing new        a message arrived
+      ─────────────────────────────────────────────────
+      at bottom    nothing            nothing (it scrolls to you)
+      shallow      NOTHING            pill WITH badge
+      deep         pill, no badge     pill WITH badge
+
+  The middle-left cell is the whole point. Before this, visibility was the
+  distance predicate alone, so scrolling up to re-read three messages raised a
+  pill nobody asked for — Rowan's complaint in his own words. It is also the
+  cell most easily left untested: at-bottom and deep both pass comfortably
+  while it is broken in either direction.
+
+  PROVENANCE: the two-threshold rule was proposed, WITHDRAWN by Saru in canvas
+  revision 3, then REINSTATED BY ROWAN DIRECTLY — the deep case is not the same
+  as reading a few messages up. Collapsing `deep?` back into `away?` here
+  restores behaviour that was explicitly rejected.
+
+  Note the top row needs no clause: `count` only ever increments while
+  `away?` is true, so a bottom-parked reader is `{false, false, 0}`.
+
+  The ORDERING invariant that makes "shallow" a non-empty band lives with the
+  constants in `assets/js/hooks/scroll_to_bottom.js`, which throws at module
+  load if the deep threshold is not strictly greater than the near one.
+  """
+  @spec jump_chip_visible?(boolean() | nil, boolean() | nil, integer() | nil) :: boolean()
+  def jump_chip_visible?(deep?, away?, count),
+    do: deep? == true or (away? == true and (count || 0) > 0)
 end

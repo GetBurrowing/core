@@ -284,27 +284,61 @@
         participants_map={@participants_map}
       />
 
-      <%!-- Jump-to-latest chip (task 01a03c76 stage 3).
+      <%!-- Jump-to-latest control (task 01a03c76 stage 3; made an overlay by
+           task 01a0419a stage 2).
 
-           An in-flow flex sibling BETWEEN the scroller and the composer,
-           sharing the typing indicator's 20px gutter — not a floating
-           action button. Suite's FAB offset lands in the same band as
-           `.compose-pill-send`, so a FAB here would put two cyan circles in
-           one phone corner, one meaning send and one meaning jump. Sitting
-           in the flow means this can push the composer but never cover it,
-           which makes the 390px criterion true by construction.
+           On MOBILE this is a floating overlay: the two wrappers below are
+           `display: contents` at desktop widths and only become boxes under
+           `@media (max-width: 1023.98px)`, where `.chat-jump-anchor` is a
+           zero-height positioned box and `.chat-jump-anchor-row` is an
+           absolutely-positioned full-width centring row sitting 8px above
+           the composer (above the typing indicator when one is showing,
+           because the anchor sits ahead of it in the flow). Zero height
+           means ZERO LAYOUT SHIFT: the composer does not move when the
+           control appears, and the message pane keeps its full height,
+           which is worth one extra visible message.
+
+           There is no bar, strip or full-width background behind it. The
+           centring row is transparent and `pointer-events: none`, so the
+           only thing that takes a tap is the control itself; the message
+           text either side of it stays clickable.
+
+           DESKTOP is deliberately untouched and keeps the shipped in-flow
+           chip. The wrappers collapse to `display: contents` there, so the
+           button remains a flex sibling of the scroller and the composer
+           with its own `self-start ml-5` gutter, exactly as before.
+
+           Because it now floats, REACHABILITY IS EMPIRICAL, NOT STRUCTURAL.
+           The old in-flow row made "nothing clipped or unreachable at 390px"
+           true by construction; an overlay gives that guarantee up as the
+           accepted cost of zero layout shift. Nothing in this template
+           proves it any more — it is asserted by the stage-5 measurements,
+           which hit-test the composer input, the send control and every
+           bottom-nav tab with the control present.
 
            It stays in `chat_live.html.heex` rather than moving into
-           `Partials.Composer` (task 01a0312e's extraction): the property
-           above is about being a SIBLING of the scroller and the composer,
-           so pushing it inside either one is the one move that could
-           silently break it.
+           `Partials.Composer` (task 01a0312e's extraction): the desktop
+           path still depends on being a SIBLING of the scroller and the
+           composer, so pushing it inside either one is the one move that
+           could silently break it.
 
-           The `:if` is the whole visibility story: at the bottom of the
-           conversation this node LEAVES THE DOM. Not transparent, not
+           The `:if` is the whole visibility story: when the reader does not
+           need a way back, this node LEAVES THE DOM. Not transparent, not
            zero-width, no aria-hidden shell and no exit animation — an exit
            animation needs the node to outlive its own removal, which is the
            unreachable-but-present state the acceptance criteria forbid.
+
+           WHAT THE `:if` NOW ASKS (task 01a0419a stage 4). It is no longer
+           the distance predicate alone. `MessagesHooks.jump_chip_visible?/3`
+           composes the reader's position with the unread count into five
+           bands, and the rule lives THERE, in one testable function, not
+           spelled out in this attribute — a boolean expression inline here
+           is a rule nothing can call and nothing can mutate.
+
+           The band that matters: scrolled up a little with NOTHING new, the
+           control is absent. Scrolling up to re-read three messages used to
+           raise a pill nobody asked for. Deep in history it appears
+           unprompted, because there the way back is worth offering.
 
            The count badge sits to the RIGHT of the label so its arrival
            grows the chip into empty space and the label never shifts. It is
@@ -314,22 +348,43 @@
            Both strings come from `MessagesHooks` (stage 4). The cap lives
            there as a single module attribute, so the unresolved 99+ / 9+
            question resolves in one integer rather than in this template. --%>
-      <button
-        :if={@jump_away_from_bottom}
-        type="button"
-        phx-click="jump_to_latest"
-        aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
-        class="chat-jump-chip focus-visible-ring flex-shrink-0 self-start ml-5 mb-1"
+      <div
+        :if={
+          MessagesHooks.jump_chip_visible?(
+            @jump_deep_in_history,
+            @jump_away_from_bottom,
+            @jump_new_message_count
+          )
+        }
+        class="chat-jump-anchor"
       >
-        <span class="min-w-0 truncate">Jump to latest</span>
-        <span
-          :if={@jump_new_message_count > 0}
-          aria-hidden="true"
-          class="chat-jump-chip-count shrink-0 whitespace-nowrap"
-        >
-          {MessagesHooks.jump_count_label(@jump_new_message_count)}
-        </span>
-      </button>
+        <div class="chat-jump-anchor-row">
+          <button
+            type="button"
+            phx-click="jump_to_latest"
+            aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
+            class="chat-jump-chip focus-visible-ring flex-shrink-0 self-start ml-5 mb-1"
+          >
+            <%!-- The button is the 44px HIT AREA and paints nothing; this span
+                 is the 28px painted pill. They are two elements on purpose, so
+                 both boxes have a bounding rect and the e2e measurement can
+                 assert 28-painted-inside-44-tappable without reading a
+                 pseudo-element. Collapsing them back into one is the defect
+                 this split exists to prevent: it looks finished either way,
+                 and the only symptom is people missing the button. --%>
+            <span class="chat-jump-chip-pill">
+              <span class="min-w-0 truncate">Jump to latest</span>
+              <span
+                :if={@jump_new_message_count > 0}
+                aria-hidden="true"
+                class="chat-jump-chip-count shrink-0 whitespace-nowrap"
+              >
+                {MessagesHooks.jump_count_label(@jump_new_message_count)}
+              </span>
+            </span>
+          </button>
+        </div>
+      </div>
 
       <.typing_indicator
         agent_typing_pids={@agent_typing_pids}

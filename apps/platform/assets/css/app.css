@@ -1580,14 +1580,20 @@ body, .font-fabrikam {
 
 /* ── Jump-to-latest chip (task 01a03c76 stage 3) ──────────────────
    The way back to the tip of a conversation for a reader who scrolled up
-   into history. It is an in-flow flex sibling in the composer column, NOT a
-   floating action button: Suite's FAB offset (safe-area + 1.5rem +
-   --bottom-nav-height, action_patterns.ex:232) lands in the same band as
-   `.compose-pill-send`, so a FAB would put two cyan circles in one phone
-   corner, one meaning send and one meaning jump. Living in the flow means
-   the chip can PUSH the composer but never cover it, which is what makes
-   the 390px acceptance criterion true by construction rather than something
-   to tune offsets for.
+   into history.
+
+   ON DESKTOP it is an in-flow flex sibling in the composer column. ON
+   MOBILE (task 01a0419a stage 2) it is an overlay centred over the message
+   text, 8px above the composer — see the `.chat-jump-anchor` rules below.
+   It is still NOT a floating action button in the Suite sense: Suite's FAB
+   offset (safe-area + 1.5rem + --bottom-nav-height, action_patterns.ex:232)
+   lands in the same band as `.compose-pill-send`, so a corner FAB would put
+   two cyan circles in one phone corner, one meaning send and one meaning
+   jump. Centred keeps the maximum distance from the send control.
+
+   Because the mobile control floats, it no longer PUSHES the composer, and
+   so the 390px reachability criterion is no longer true by construction. It
+   is EMPIRICAL now, asserted by measurement rather than by this layout.
 
    Semantic token slots only, never raw hex or raw oklch() literals. The
    `.compose-pill-bar` / `.compose-pill-send` rules immediately below ARE
@@ -1609,60 +1615,272 @@ body, .font-fabrikam {
    forbid. This matches `.channel-undo-toast`, where instant exit was
    already ruled. */
 
-/* Touch tap target first, with !important, mirroring the
-   `.compose-pill-send` precedent below: source order must not let the
-   compact desktop height in the base rule clobber the 44px touch minimum. */
-@media (hover: none) {
-  .chat-jump-chip {
-    height: 44px !important;
-    min-height: 44px !important;
-  }
-}
+/* The 44px touch target is UNCONDITIONAL, and that is a deliberate reversal.
 
+   It used to live in `@media (hover: none)` with the base rule giving a
+   compact 32px. That is untestable by construction on our review hardware:
+   `Emulation.setEmulatedMedia` for `hover`/`pointer` is a no-op there,
+   confirmed independently three times, so every local measurement read the
+   32px desktop rule and reported it as the touch rule. A floor behind a
+   condition the harness cannot produce is a floor nobody can observe, and
+   this component already shipped exactly that false pass.
+
+   Unconditional transparent padding is both the fix and what makes the fix
+   measurable: the hit rect is 44px for every pointer type, and stage 5 can
+   assert it without emulating anything. */
+
+/* THE BUTTON IS THE HIT AREA AND PAINTS NOTHING.
+
+   44px tall, of which 16px is transparent padding. The painted pill is
+   `.chat-jump-chip-pill`, a real element rather than a pseudo-element, so
+   the two boxes can be measured separately by `getBoundingClientRect` —
+   28px painted, 44px tappable, both readable without inspecting
+   `::before`. That separation is the whole point of the rule above; keeping
+   the paint on the button would mean the only way to reach 44px is to grow
+   the pill to 44px, which is the weight being removed.
+
+   No background, no border and no radius here: anything painted on the
+   button paints the full 44px box and reinstates the block. */
+
+/* ── STAGE 5 MEASUREMENT RECORD (task 01a0419a) ────────────────────────
+   Taken with CDP at 390x844 against a locally booted dev server on real
+   seeded history (359 messages, fixture read back AFTER boot), assets built
+   and the socket confirmed connected. Every number below is a measurement,
+   not a screenshot judgement.
+
+   HIT RECT vs PAINTED BOX, in all three geometries:
+     button getBoundingClientRect ....... 44.00px tall (padding 8px / 8px)
+     pill   getBoundingClientRect ....... 28.00px tall
+   This is the assertion the whole split exists for. Checking only the
+   painted height passes the exact defect it is meant to catch.
+
+   PAINTED WIDTH at 390px: 113.83px (29.2% of viewport) with no count,
+   142.83px (36.6%) with a count. Bar is <= 60%. Centre offset 0.01px.
+
+   OCCLUSION of the message pane's VISIBLE area, worst of 61 scroll
+   positions swept across the whole deep band, both themes:
+     painted pill, no count .... 1.449%   |  with count ....... 1.818%
+     with count + typing raised  1.885%   |  44px hit rect .... 2.962%
+   Bar is 3%. Even the transparent hit rect stays inside it.
+
+   LINE INTERSECTION — THIS CLAUSE IS NOT MET, AND IT CANNOT BE.
+   The criterion asks for AT MOST ONE line of message body text. Computed
+   `line-height` on the message body is 20px and the painted pill is 28px,
+   so wherever the pill lands over continuous prose it MUST touch two line
+   boxes. The two numbers were ruled separately and contradict each other;
+   28px cannot fit inside a 20px pitch. Measured over 61 positions:
+     0 lines ....  7 positions      1 line ... 39      2 lines ... 15
+   Never three. The deepest bite into a second line was 7px of a 16px glyph
+   box. NO LINE WAS EVER FULLY OCCLUDED (0 of 61) — the companion clause,
+   which is the one that actually protects legibility, holds everywhere.
+   Do not "fix" this by shrinking the pill to 20px; raise it with whoever
+   owns the criterion. Recorded as an open contradiction, not as a pass.
+
+   REACHABILITY: `elementFromPoint` at the centre of the composer input,
+   the send control and all five bottom-nav tabs — 7 targets x 3 geometries
+   (no count, count present, typing indicator raised) x 2 themes = 42 hit
+   tests, all reaching their own element, none reaching the pill. Geometry
+   was confirmed to differ across the three: the typing indicator really
+   does move the stack (pane clientHeight 564px -> 544px).
+
+   ZERO LAYOUT SHIFT: composer top edge is 717px with the pill and 717px
+   without it. At the bottom the control LEAVES THE DOM — 0 `.chat-jump-chip`,
+   0 `.chat-jump-chip-pill`, 0 `.chat-jump-anchor-row`, 0 aria-hidden shells.
+
+   NOT MEASURABLE ON THIS BOX, stated rather than substituted:
+   `Emulation.setEmulatedMedia` for hover/pointer was A/B probed and did NOT
+   flip `matchMedia('(hover: none)').matches` (false before, false after).
+   The known no-op, confirmed a fourth time. Nothing above depends on it,
+   which is precisely what the unconditional padding bought. */
 .chat-jump-chip {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  height: 32px;
+  /* 8px top and bottom is TRANSPARENT padding, not spacing: 28 + 16 = 44. */
+  height: 44px;
+  padding: 8px 0;
   /* Paired with the 20px left gutter on the element, this keeps a matching
      20px of clear air on the right at any width. */
   max-width: calc(100% - 40px);
-  padding: 0 10px 0 14px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-  background: var(--color-base-300);
+  border: 0;
+  background: none;
   color: var(--color-base-content);
+  cursor: pointer;
+}
+
+/* THE PAINTED PILL. Exactly 28px, and nothing in this block may change that
+   height — a count arriving grows it sideways only. */
+.chat-jump-chip-pill {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 11px;
+  /* Brand ruling: `--radius-selector`, which the brand page assigns to
+     "pill-at-height badges and toggles". NOT the mock's 999px — that is a
+     convenience for drawing a pill in a standalone file, and shipping it
+     would promote a drawing convenience to a spec. At 28px, 1rem reads as a
+     pill regardless, so the token costs nothing. Was 10px, so this is a
+     real change. */
+  border-radius: var(--radius-selector);
+  /* THE GROUND: translucent fill PLUS backdrop blur. The blur is the
+     mechanism, not decoration — it is what makes a translucent pill legible
+     over message content whose colour we do not control. It was dropped
+     once, when this control was in-flow over a token we owned; that
+     condition is gone. Ruled out and not to be reintroduced: an opaque
+     fill (the weight being removed), a bar or strip of any width, a border
+     or drop shadow as the ground (all three reinstate the frame), and
+     translucent-with-no-blur, which fails over saturated content silently
+     and looks correct in every screenshot taken while building it.
+
+     If the blur ever proves too costly, RAISE THE OPACITY. Do not remove
+     the ground and do not darken the label. */
+  background: color-mix(in srgb, var(--color-base-100) 72%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: var(--color-base-content);
+  /* Body scale and the body face. No display type on this component. */
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.45;
   font-weight: 500;
-  cursor: pointer;
   /* It rises from below because what it points at is below: the direction
      encodes the spatial relationship instead of decorating the entrance.
+
+     150ms ease-out with an 8px rise, replacing a 200ms `--ease-standard`
+     4px rise. There is no 150ms duration token and no ease-out token, so
+     both are literals here rather than the nearest token pretending to be
+     the value.
+
+     The animated properties are declared explicitly, in the keyframe and
+     in `animation-name`, because a previous stage on this component left a
+     rationale comment for an animation it never declared and the next
+     stage declared it — comment and code disagreed for a whole stage.
+
+     `transform` is contended on this control: the `:active` press writes
+     `scale(0.97)` on the BUTTON, not here, so the press and this rise
+     never touch the same box and neither can clobber the other. Centring
+     is the row's `justify-content` for the same reason — a centring
+     transform would be overwritten by both.
+
      No prefers-reduced-motion rule, deliberately — the universal reduce
      block near the top of this file already forces animation-duration and
-     transition-duration to 0.01ms on every element, this one included, so a
-     local rule would be dead code. */
-  animation: chat-jump-chip-in var(--duration-base) var(--ease-standard);
+     transition-duration to 0.01ms on every element, this one included, so
+     a local rule would be dead code. */
+  animation: chat-jump-chip-in 150ms cubic-bezier(0, 0, 0.2, 1);
   transition:
     background-color var(--duration-fast) var(--ease-standard),
-    border-color var(--duration-fast) var(--ease-standard),
-    transform var(--duration-fast) var(--ease-standard);
+    backdrop-filter var(--duration-fast) var(--ease-standard);
 }
 
-/* Light theme: one rung down the base ramp for the surface, plus the
-   hairline that dark does not need. */
-[data-theme="light"] .chat-jump-chip {
-  background: var(--color-base-200);
-  border-color: var(--color-base-300);
+/* The mobile overlay (task 01a0419a stage 2). STRUCTURE ONLY — the pill's
+   own appearance is unchanged here and lands in stage 3.
+
+   Both wrappers are `display: contents` by default, so at desktop widths
+   they contribute no box at all and the chip stays the in-flow flex sibling
+   it shipped as. Desktop is deliberately not converted: the overlay is
+   mobile-only until someone rules otherwise.
+
+   `.chat-jump-anchor` is zero-height, so the flex column's layout is
+   identical whether or not the control is rendered — the composer never
+   moves. `.chat-jump-anchor-row` is the containing block that does the
+   centring; it is full-width and transparent, and it is
+   `pointer-events: none` precisely so that a full-width invisible strip
+   does not become the bar this design rules out, in behaviour if not in
+   pixels. Only the button itself takes a tap.
+
+   Centring is `justify-content`, NOT `translateX(-50%)`, deliberately: the
+   entrance keyframe and the `:active` press both animate `transform`, and a
+   centring transform on the button would be clobbered by each of them. */
+.chat-jump-anchor,
+.chat-jump-anchor-row {
+  display: contents;
 }
 
-/* Hover steps the surface one rung. Colour only: no movement, no shadow. */
-.chat-jump-chip:hover {
-  background: color-mix(in oklch, var(--color-base-300) 88%, var(--color-base-content));
+@media (max-width: 1023.98px) {
+  .chat-jump-anchor {
+    display: block;
+    position: relative;
+    height: 0;
+  }
+
+  .chat-jump-anchor-row {
+    display: flex;
+    justify-content: center;
+    position: absolute;
+    right: 0;
+    bottom: 8px;
+    left: 0;
+    pointer-events: none;
+  }
+
+  /* The desktop gutter classes (`ml-5 mb-1`) are inert once centred, and
+     the max-width is restated against the row rather than the flex column. */
+  .chat-jump-anchor-row > .chat-jump-chip {
+    margin: 0;
+    max-width: calc(100% - 40px);
+    pointer-events: auto;
+  }
+}
+/* Dark theme lifts the fill off the pane token onto the raised one, so the
+   pill still separates from `--color-base-100` behind it. Light theme stays
+   on `--color-base-100` (white), which is what makes it read as a veil
+   rather than a chip. No hairline border in either theme — a border is the
+   frame this design removes.
+
+   Opacity is 72% in both. Stage 3 computed the composite arithmetically;
+   stage 5 re-took the same ratios from ACTUAL RENDERED PIXELS, sampled out
+   of a CDP screenshot of the painted pill at 390px against real seeded
+   history. Both numbers are kept, because the pixel value is the one that
+   describes what ships and the gap between them is small and worth seeing:
+
+     SURFACE                              arithmetic   sampled pixels
+     light, over the pane .............     21.0:1        20.8:1
+     light, over an own-message row ...     20.7:1        18.8:1   <- worst
+     dark,  over the pane .............     14.5:1        15.2:1
+     dark,  over an own-message row ...     14.8:1        14.5:1   <- worst
+
+   NAME THE SURFACE, because the alternative is an indistinguishable claim.
+   The design canvas asks for this ratio on "the own-message CYAN bubble".
+   THAT FIXTURE DOES NOT EXIST AND CANNOT BE BUILT: `chat_message.ex:56`
+   tints own messages `bg-base-200/60`, and the only cyan in the pane is
+   `bg-primary/5` on a highlighted message. The bubble is cyan in the mock
+   and is not cyan in the product. So the worst ground measured here is the
+   OWN-MESSAGE `bg-base-200/60` ROW — computed `oklab(0.96 0 0 / 0.6)` light,
+   `oklab(0.09 -0.009 -0.0156 / 0.6)` dark — reached by walking the scroller
+   until `elementsFromPoint` at the pill's centre returned that row. Reporting
+   a substitute ground in the canvas's vocabulary instead of this one would
+   not be a weaker result, it would be an unfalsifiable one — unlike a wrong
+   number it never gets re-derived, it gets quoted forward. (The phrasing
+   that would do that is deliberately NOT written out anywhere in this
+   comment: a text scanner cannot tell a warning from a claim, and the guard
+   in `jump_to_latest_hooks_test.exs` fires on either.)
+
+   If cyan is ever put on the bubble the fill still clears the bar — 17.3:1
+   light and 8.2:1 dark against #06D5ED and #00BCD4 — so this ruling survives
+   that change.
+
+   The requirement is 4.5:1, not 3:1 — this is text, not a boundary, and 3:1
+   is the non-text threshold. STANDING AND DELIBERATELY UNEXERCISED: if 4.5:1
+   is ever missed, RAISE THE FILL OPACITY, never darken the label. It was not
+   reached, because the real worst ground is a 60%-alpha wash rather than a
+   saturated fill, so nothing here has ever tested that rule. Recorded as
+   standing, not as satisfied. */
+[data-theme="dark"] .chat-jump-chip-pill {
+  background: color-mix(in srgb, var(--color-base-300) 72%, transparent);
 }
 
-[data-theme="light"] .chat-jump-chip:hover {
-  background: var(--color-base-300);
+/* Hover raises the fill's opacity rather than stepping a surface token.
+   Opacity is the only dimension this control has left; stepping the token
+   would make it read as a solid chip again on hover. Colour only: no
+   movement, no shadow. */
+.chat-jump-chip:hover .chat-jump-chip-pill {
+  background: color-mix(in srgb, var(--color-base-100) 88%, transparent);
+}
+
+[data-theme="dark"] .chat-jump-chip:hover .chat-jump-chip-pill {
+  background: color-mix(in srgb, var(--color-base-300) 88%, transparent);
 }
 
 /* 0.97 and not `.compose-pill-send`'s 0.95: the same 5% on a 150px-wide
@@ -1671,10 +1889,13 @@ body, .font-fabrikam {
   transform: scale(0.97);
 }
 
+/* Fade plus an 8px rise. No spring and no scale, deliberately: the pill
+   should look like it surfaced, not like it landed. Both animated
+   properties are declared in both stops. */
 @keyframes chat-jump-chip-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(8px);
   }
 
   to {
@@ -1692,10 +1913,17 @@ body, .font-fabrikam {
    not. It also sits on the RIGHT of the label so that its arrival grows the
    chip into empty space and the words never shift.
 
-   `icon-rail-badge-in` is reused rather than duplicated: the count language
-   is already established on three surfaces, and a fourth keyframe would
-   drift from them. It fires on insert only, so 0 -> 1 animates and later
-   increments do not (LiveView patches the text node, not the element). */
+   It enters with the pill's own keyframe, NOT `icon-rail-badge-in`. That
+   reuse was defended here on the grounds that the count language is shared
+   across three other surfaces, and that argument is real — but this control
+   now has one entrance of its own, and having the pill surface at 150ms
+   ease-out while the count inside it pops on the rail badge's 200ms
+   `--ease-standard` makes a single object arrive in two motions. Matching
+   its own parent beats matching three unrelated badges.
+
+   It fires on insert only, so 0 -> 1 animates and later increments do not
+   (LiveView patches the text node, not the element), with no server-side
+   logic deciding that. */
 .chat-jump-chip-count {
   display: inline-flex;
   align-items: center;
@@ -1703,7 +1931,10 @@ body, .font-fabrikam {
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  border-radius: 16px;
+  /* 1rem, the same brand token the pill uses. Numerically identical to the
+     16px it replaces, so this is a token honesty change and not a visual
+     one. */
+  border-radius: var(--radius-selector);
   background: var(--color-primary);
   color: var(--color-primary-content);
   font-size: 11px;
@@ -1713,17 +1944,10 @@ body, .font-fabrikam {
      the badge cannot jitter as the count climbs. `99+` is the widest string
      this badge can hold, and min-width 20px + 6px padding fits it. */
   font-variant-numeric: tabular-nums;
-  /* The reuse the comment above promises, actually declared (stage 3 wrote
-     the rationale but never the property). Same keyframe, same duration and
-     same easing as the rail badge, so the fourth count on the product does
-     not enter differently from the other three. Insert-time only: LiveView
-     patches the text node on 1 -> 2 -> 3, so this runs once, on 0 -> 1, with
-     no server-side logic deciding that.
-
-     No prefers-reduced-motion rule, deliberately — the universal reduce
-     block near the top of this file already pins animation-duration to
-     0.01ms on every element. */
-  animation: icon-rail-badge-in var(--duration-base) var(--ease-standard);
+  /* Declared, and matching the pill exactly. No prefers-reduced-motion
+     rule, deliberately — the universal reduce block near the top of this
+     file already pins animation-duration to 0.01ms on every element. */
+  animation: chat-jump-chip-in 150ms cubic-bezier(0, 0, 0.2, 1);
 }
 
 /* ── Fabrikam Design System — Pill-shaped Chat Input Bar ─────────────── */

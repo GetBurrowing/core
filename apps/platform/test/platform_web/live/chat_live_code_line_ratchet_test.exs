@@ -319,7 +319,26 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   #
   # The chip's own markup is a `<%!-- --%>`-commented `<button>` in
   # `chat_live.html.heex`, which this pin does not measure at all.
-  @chat_live_code_line_count 2196
+  # RE-MEASURED for task 01a0419a stage 4 (visibility bands). Three more code
+  # lines, all assigns, no logic and no branch:
+  #
+  #     +1  `mount/3` seeds `:jump_deep_in_history`, the second position
+  #         boolean the ScrollToBottom hook now reports.
+  #     +2  `assign_active_space/2` resets BOTH position booleans on a
+  #         conversation switch. It previously reset only the count, which
+  #         was sufficient while visibility was `@jump_away_from_bottom` and
+  #         the hook re-reported within ~110ms. It is not sufficient now:
+  #         `:jump_deep_in_history` raises the control ON ITS OWN, so a stale
+  #         `true` would offer a reader a way back to a tip they are already
+  #         at.
+  #
+  # The rule those assigns feed — `MessagesHooks.jump_chip_visible?/3` — lives
+  # in `live/chat/messages_hooks.ex`, which this pin deliberately does not
+  # cover, so composing five visibility bands costs `chat_live.ex` nothing.
+  #
+  # RE-DERIVED by running `code_line_count/1` on this tree (2,199), not by
+  # adding a remembered delta to a remembered pin.
+  @chat_live_code_line_count 2199
 
   @doc """
   Count the CODE lines of a source file.

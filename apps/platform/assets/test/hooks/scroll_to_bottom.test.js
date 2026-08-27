@@ -701,6 +701,7 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
 
     expect(hook.pushEvent).not.toHaveBeenCalled();
     expect(hook._lastAway).toBe(false);
+    expect(hook._lastDeep).toBe(false);
   });
 
   it("pushes away:true exactly once on crossing above the threshold", () => {
@@ -710,8 +711,12 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
     hook._reportDistance();
 
     expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    // Two booleans since task 01a0419a stage 4. 200px is past NEAR_BOTTOM_PX
+    // and far short of DEEP_HISTORY_PX, so this is the SHALLOW band: the
+    // server raises no pill from this report alone.
     expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
       away: true,
+      deep: false,
     });
   });
 
@@ -726,15 +731,34 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
     // COUNT is the assertion: a hook that pushed per scroll event would end
     // each of these with a correct-looking last call, so only the count can
     // tell the edge-triggered design from the per-event one.
+    //
+    // All three sit INSIDE THE SHALLOW BAND (400, 800 and 1400px — past
+    // NEAR_BOTTOM_PX, short of DEEP_HISTORY_PX at 1800). They used to run out
+    // to 2400 and 3400px, which since task 01a0419a stage 4 crosses into the
+    // deep band and is a real transition the hook MUST push. Silence is only
+    // correct while neither boolean moves; keeping the old distances here
+    // would have asserted that a genuine band change goes unreported.
     scrollTo(el, 3000);
     hook._reportDistance();
-    scrollTo(el, 1000);
+    scrollTo(el, 2600);
     hook._reportDistance();
-    scrollTo(el, 0);
+    scrollTo(el, 2000);
     hook._reportDistance();
 
     expect(hook.pushEvent).toHaveBeenCalledTimes(0);
     expect(hook._lastAway).toBe(true);
+    expect(hook._lastDeep).toBe(false);
+
+    // POSITIVE CONTROL for the silence above: the very next evaluation, one
+    // that DOES change a band, pushes immediately. Without this the zero
+    // could equally mean the hook stopped reporting altogether.
+    scrollTo(el, 1000); // 2400px — deep
+    hook._reportDistance();
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
+      away: true,
+      deep: true,
+    });
   });
 
   it("pushes away:false exactly once on returning under the threshold", () => {
@@ -750,6 +774,7 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
     expect(hook.pushEvent).toHaveBeenCalledTimes(1);
     expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
       away: false,
+      deep: false,
     });
 
     // Still edge-triggered on this side too.
@@ -797,6 +822,7 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
     expect(hook.pushEvent).toHaveBeenCalledTimes(1);
     expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
       away: false,
+      deep: false,
     });
     if (hook._holdFrame) cancelAnimationFrame(hook._holdFrame);
   });
@@ -850,6 +876,7 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
     // cleared the previous conversation's boolean.
     expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
       away: false,
+      deep: false,
     });
     if (hook._holdFrame) cancelAnimationFrame(hook._holdFrame);
   });

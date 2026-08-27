@@ -625,12 +625,17 @@ defmodule PlatformWeb.ChatLive do
       # hook may already have reported.
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:lightbox_url, nil)
-      # Jump-to-latest state (task 01a03c76 stage 1). `:jump_away_from_bottom`
-      # is reported by the ScrollToBottom hook — the 150px NEAR_BOTTOM_PX
-      # threshold stays in JS so it is not duplicated server-side; the hook
-      # sends a boolean. `:jump_new_message_count` counts top-level messages
-      # from OTHER participants that arrived while away from the tip.
+      # Jump-to-latest state (task 01a03c76 stage 1; `:jump_deep_in_history`
+      # added by task 01a0419a stage 4). Both booleans are reported by the
+      # ScrollToBottom hook — the NEAR_BOTTOM_PX (150) and DEEP_HISTORY_PX
+      # (1800) thresholds stay in JS so no pixel count is duplicated
+      # server-side. `:jump_new_message_count` counts top-level messages from
+      # OTHER participants that arrived while away from the tip. The three
+      # compose into the control's visibility in ONE place —
+      # `MessagesHooks.jump_chip_visible?/3` — so the template never spells
+      # the rule out itself.
       |> assign(:jump_away_from_bottom, false)
+      |> assign(:jump_deep_in_history, false)
       |> assign(:jump_new_message_count, 0)
       |> allow_upload(:attachments,
         accept: :any,
@@ -4670,9 +4675,20 @@ defmodule PlatformWeb.ChatLive do
     socket
     |> assign(:active_space, space)
     |> assign(:active_space_scope, space_scope_atom(space))
-    # A new conversation starts at its own tip: the count is about the space
+    # A new conversation starts at its own tip: this state is about the space
     # you are leaving, so carrying it across would show a stale pill in the
     # space you just opened (task 01a03c76 stage 1).
+    #
+    # BOTH position booleans are reset too (task 01a0419a stage 4). Zeroing
+    # the count alone used to be enough because visibility was
+    # `@jump_away_from_bottom` and the hook re-reports within ~110ms of the
+    # patch, so at worst a countless pill flickered. Now `:jump_deep_in_history`
+    # makes the control visible ON ITS OWN, so a reader deep in space A who
+    # switches to space B would see a pill for B's tip — a control offering to
+    # take them somewhere they already are — until the hook caught up. Reset
+    # here rather than trusting the round trip.
+    |> assign(:jump_away_from_bottom, false)
+    |> assign(:jump_deep_in_history, false)
     |> assign(:jump_new_message_count, 0)
   end
 
