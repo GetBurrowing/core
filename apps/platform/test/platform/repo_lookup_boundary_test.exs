@@ -117,6 +117,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "stack_id is either selected by the task's own `distinct: s.id` query or handed in as `--stack-id`; a Mix task raising lands in the operator's terminal, not on a request path"},
     {"mix/tasks/platform/stacks_reprocess_rollup_pr.ex", :get, "Stack", 1, :safe_internal,
      "`resolve_stack/2` reads `--stack-id` out of the task's own OptionParser opts; same operator-terminal blast radius"},
+    {"mix/tasks/platform.intent_eval.prelabel.ex", :get_by, "Agent", 1, :safe_internal,
+     "keyed `slug:`, a plain string column — no UUID type on either side, so `Ecto.Query.CastError` is not reachable; the value is `--agent` out of the task's own OptionParser opts and an unknown slug already returns nil into an explicit `Mix.raise`"},
     # ── Accounts ───────────────────────────────────────────────────────
     {"platform/accounts.ex", :get, "User", 1, :safe_internal,
      "guarded by `Platform.UUID.valid?/1` in stage 2 of task 019fa129; `Accounts.get_user/1` is total and returns nil for `\"system\"`, `\"system:auto\"` and agent slugs"},

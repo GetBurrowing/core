@@ -828,48 +828,101 @@ defmodule Platform.Meetings.IntentClassifier do
         correction_exemplars(payload, state)
       )
 
-    case call_provider(state.provider_module, agent, prompt, chunk_text, room_id) do
-      {:ok, content} ->
-        case parse_content(content, room_id) do
-          {:ok, %{intent: intent, target_role: target_role, confidence: confidence}} ->
-            dedupe_key = build_dedupe_key(intent, target_role, chunk_text)
-            chunk_id = Map.get(segment, :id) || Map.get(payload, :transcript_id)
-            meeting_id = Map.get(payload, :meeting_id)
+    decision =
+      decide(%{
+        provider_module: state.provider_module,
+        agent: agent,
+        prompt: prompt,
+        chunk_text: chunk_text,
+        room_id: room_id
+      })
 
-            enqueue_result =
-              enqueue_meeting_intent(%{
-                meeting_id: meeting_id,
-                room_id: room_id,
-                dedupe_key: dedupe_key,
-                intent: intent,
-                target_role: target_role,
-                confidence: confidence,
-                chunk_id: chunk_id,
-                chunk_text: chunk_text
-              })
+    case decision do
+      {:ok, %{intent: intent, target_role: target_role, confidence: confidence}} ->
+        dedupe_key = build_dedupe_key(intent, target_role, chunk_text)
+        chunk_id = Map.get(segment, :id) || Map.get(payload, :transcript_id)
+        meeting_id = Map.get(payload, :meeting_id)
 
-            :telemetry.execute(
-              [:platform, :meetings, :intent_classified],
-              %{count: 1},
-              %{
-                meeting_id: Map.get(payload, :meeting_id),
-                room_id: room_id,
-                intent: intent,
-                target_role: target_role,
-                confidence: confidence,
-                dedupe_key: dedupe_key,
-                dedupe_key_hit_or_new: enqueue_result
-              }
-            )
+        enqueue_result =
+          enqueue_meeting_intent(%{
+            meeting_id: meeting_id,
+            room_id: room_id,
+            dedupe_key: dedupe_key,
+            intent: intent,
+            target_role: target_role,
+            confidence: confidence,
+            chunk_id: chunk_id,
+            chunk_text: chunk_text
+          })
 
-            :ok
+        :telemetry.execute(
+          [:platform, :meetings, :intent_classified],
+          %{count: 1},
+          %{
+            meeting_id: Map.get(payload, :meeting_id),
+            room_id: room_id,
+            intent: intent,
+            target_role: target_role,
+            confidence: confidence,
+            dedupe_key: dedupe_key,
+            dedupe_key_hit_or_new: enqueue_result
+          }
+        )
 
-          :error ->
-            :ok
-        end
-
-      :error ->
         :ok
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  @typedoc """
+  Why a chunk produced no dispatchable intent.
+
+    * `:empty_output`     — the provider answered with nothing usable
+      (reasoning-model token budget exhausted).
+    * `:model_error`      — the provider call failed, raised, exited, or
+      returned an unrecognised shape.
+    * `:parse_error`      — the completion was not decodable into the
+      classifier's answer shape.
+    * `{:demoted, reason}` — a positive classification that failed the
+      evidence gate. Only reachable once the `off_topic` evidence work
+      (task 01a03f57) is merged; on this branch the gate does not exist
+      yet and this clause is unreachable by construction.
+  """
+  @type decide_error :: :empty_output | :model_error | :parse_error | {:demoted, atom()}
+
+  @doc """
+  Run ONE chunk through provider-call → parse → evidence for a single
+  prompt, and RETURN the outcome.
+
+  This is the single classification code path. `classify_and_enqueue/4`
+  calls it for its provider + parse step and adds only the dedupe /
+  enqueue / telemetry work on top, so an offline harness that calls
+  `decide/1` is exercising production behaviour rather than a
+  reimplementation of it — a parallel harness-side copy is exactly how a
+  JSON-null parse defect once split one population of declines across
+  two different verdicts.
+
+  Every failure path still logs and emits the same telemetry it always
+  did; the ONLY difference from the in-pipeline behaviour is that the
+  reason is returned instead of being collapsed to `:ok`, so a caller
+  can count `:parse_error` separately from a genuine decline.
+  """
+  @spec decide(map()) :: {:ok, map()} | {:error, decide_error()}
+  def decide(%{
+        provider_module: provider_module,
+        agent: agent,
+        prompt: prompt,
+        chunk_text: chunk_text,
+        room_id: room_id
+      }) do
+    with {:ok, content} <- call_provider(provider_module, agent, prompt, chunk_text, room_id),
+         # SINGLE call site for `parse_content` — task 01a03f57 widens it
+         # to /3 (threading `chunk_text` for the evidence gate), and when
+         # that lands only this one line changes.
+         {:ok, parsed} <- parse_content(content, room_id) do
+      {:ok, Map.put_new(parsed, :evidence_quote, nil)}
     end
   end
 
@@ -1184,28 +1237,28 @@ defmodule Platform.Meetings.IntentClassifier do
               # than "".
               if String.trim(content) == "" do
                 emit_truncated_output(room_id, provider_finish_reason(result))
-                :error
+                {:error, :empty_output}
               else
                 {:ok, content}
               end
 
             :error ->
               emit_model_error(room_id, {:unexpected_shape, result})
-              :error
+              {:error, :model_error}
           end
 
         {:error, reason} ->
           emit_model_error(room_id, reason)
-          :error
+          {:error, :model_error}
       end
     rescue
       exception ->
         emit_model_error(room_id, {:raised, Exception.message(exception)})
-        :error
+        {:error, :model_error}
     catch
       kind, reason ->
         emit_model_error(room_id, {:caught, kind, reason})
-        :error
+        {:error, :model_error}
     end
   end
 
@@ -1282,11 +1335,11 @@ defmodule Platform.Meetings.IntentClassifier do
 
       {:ok, decoded} ->
         emit_parse_error(room_id, content, {:missing_or_invalid_keys, decoded})
-        :error
+        {:error, :parse_error}
 
       {:error, reason} ->
         emit_parse_error(room_id, content, reason)
-        :error
+        {:error, :parse_error}
     end
   end
 

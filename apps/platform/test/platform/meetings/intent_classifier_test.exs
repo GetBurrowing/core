@@ -2368,4 +2368,108 @@ defmodule Platform.Meetings.IntentClassifierTest do
       }
     )
   end
+
+  # ── decide/1 ───────────────────────────────────────────────────────────────
+  #
+  # `decide/1` is the SINGLE classification code path — `classify_and_enqueue/4`
+  # calls it too. These tests exercise it directly (no GenServer), which is
+  # legal because `StubProvider` reads the stub fun out of the CALLING
+  # process's dictionary; called inline, that is the test process.
+
+  describe "decide/1" do
+    setup do
+      Process.delete(:intent_classifier_stub_fun)
+      on_exit(fn -> Process.delete(:intent_classifier_stub_fun) end)
+      :ok
+    end
+
+    defp decide_args(overrides \\ %{}) do
+      Map.merge(
+        %{
+          provider_module: StubProvider,
+          agent: %{model: "stub-model"},
+          prompt: "system prompt",
+          chunk_text: "can someone pull the Q3 numbers",
+          room_id: "room-decide"
+        },
+        overrides
+      )
+    end
+
+    defp stub!(fun), do: Process.put(:intent_classifier_stub_fun, fun)
+
+    test "returns the parsed decision on a well-formed positive answer" do
+      stub!(fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "pull_numbers",
+               "target_role" => "scribe",
+               "confidence" => 0.82,
+               "evidence_quote" => "pull the Q3 numbers"
+             })
+         }}
+      end)
+
+      assert {:ok, decision} = IntentClassifier.decide(decide_args())
+      assert decision.intent == "pull_numbers"
+      assert decision.target_role == "scribe"
+      assert decision.confidence == 0.82
+    end
+
+    test "returns the decision for an off-topic / no-action answer" do
+      stub!(fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "off_topic",
+               "target_role" => "none",
+               "confidence" => 0.05
+             })
+         }}
+      end)
+
+      assert {:ok, decision} =
+               IntentClassifier.decide(decide_args(%{chunk_text: "anyway, nice weather"}))
+
+      assert decision.intent == "off_topic"
+      assert decision.target_role == "none"
+    end
+
+    test "empty content returns {:error, :empty_output}, not a parse error" do
+      stub!(fn _c, _m, _o -> {:ok, %{content: "   \n  "}} end)
+
+      capture_log([level: :warning], fn ->
+        assert IntentClassifier.decide(decide_args()) == {:error, :empty_output}
+      end)
+    end
+
+    test "undecodable content returns {:error, :parse_error}" do
+      stub!(fn _c, _m, _o -> {:ok, %{content: "definitely not json {{{"}} end)
+
+      capture_log([level: :warning], fn ->
+        assert IntentClassifier.decide(decide_args()) == {:error, :parse_error}
+      end)
+    end
+
+    test "a failing provider call returns {:error, :model_error}" do
+      stub!(fn _c, _m, _o -> {:error, {:http_error, 500, %{"error" => "boom"}}} end)
+
+      capture_log([level: :warning], fn ->
+        assert IntentClassifier.decide(decide_args()) == {:error, :model_error}
+      end)
+    end
+
+    # The fifth shape from the stage brief — `{:error, {:demoted, :not_substring}}`
+    # for an UNCITED positive — is deliberately NOT asserted here. The
+    # evidence gate it depends on (`evidence_verdict/3`, task 01a03f57)
+    # is not on this branch: `origin/main` was at c03a819b with
+    # `parse_content/2` and no gate at all when this stage ran. Asserting
+    # it now would mean asserting a shape nothing can produce.
+    # `decide/1`'s @type already names `{:demoted, _}`, and the parse
+    # step has exactly ONE call site, so wiring the gate in is a one-line
+    # change plus this test.
+  end
 end

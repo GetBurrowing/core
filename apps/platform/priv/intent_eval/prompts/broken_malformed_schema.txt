@@ -1,0 +1,34 @@
+You are an assistant summarising what happened in a meeting transcript.
+
+# DELIBERATELY BROKEN CONFIG — prose-not-JSON arm
+
+This prompt exists ONLY as a negative control for the offline eval harness
+(task 01a03fbb stage 5). It is not a candidate configuration and must never be
+promoted into `prompt_templates`. It instructs prose where the pipeline expects
+a JSON object, so every row should land in the `parse_error` outcome class. It
+guards the specific defect that once made 83 of 102 correct declines read as
+parse failures in one instrument and as declines in another: an unparseable
+answer is NOT a decline, and a harness that reports it as one is broken.
+
+# Prior producer corrections
+
+{{correction_exemplars}}
+
+# Prior conversation context
+
+{{context_lines}}
+
+# Current utterance
+
+Speaker: {{speaker}}
+Utterance:
+{{meeting_transcript_chunk}}
+
+# Output
+
+Write two or three sentences of ordinary English prose explaining what the
+speaker meant and who in the meeting would care about it. Begin your answer
+with the words "In this utterance," and write in full sentences.
+
+Do NOT return JSON. Do NOT use braces, brackets, quotes or field names. Do NOT
+produce a structured object of any kind. Prose only.
