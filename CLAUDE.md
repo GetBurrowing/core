@@ -65,8 +65,19 @@ Vault > Repo/Telemetry > PubSub/Registries > Agent runtime supervisor > Context 
 
 ### Two-Repo Model
 
-- **Core** (this repo, public) — product code, deployment contracts, generic templates
-- **Core Ops** (private) — host-specific secrets, real deployment targets, runbooks
+- **Core** (this repo) — product code, deployment contracts, generic templates
+- **Core Ops** — host-specific secrets, real deployment targets, runbooks
+
+Both repos are currently **private**. Core was public until 2026-08-27.
+
+Treat that as reversible. The split above exists so Core *can* go public again, so keep
+secrets, real hostnames, and runtime or session identifiers out of Core regardless —
+what relaxed when it went private is urgency, not the boundary. An identifier that
+lands in Core today is a scrub someone owes later.
+
+Note ADR 0001 (and 0003, 0004, 0030, 0043) still describe the public arrangement.
+Those are decision records and are deliberately not rewritten; they have not been
+superseded yet.
 
 ## Tech Stack
 
@@ -120,7 +131,7 @@ Elixir 1.15+/OTP 28, Phoenix 1.8/LiveView 1.1, PostgreSQL 16, Tailwind CSS 4/Dai
 
 - Pre-commit hook auto-formats Elixir files — enable with `./scripts/setup-git-hooks.sh`
 - CI runs format check + full test suite on every push/PR to `main`
-- Docker images published to `ghcr.io/startup-suite/core`
+- Docker images published to a private Docker Hub registry — see `.github/workflows/ci.yml` for the exact target (this moved off ghcr in `029df69e`)
 
 ## Key Docs
 
