@@ -1,27 +1,45 @@
 defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
   @moduledoc """
-  Regression coverage for the stage-2 data migration
-  `20260715165309_backfill_exec_space_org_id` (task 019f62a1 v4).
+  Behavioural coverage for the data migration
+  `20260715165309_backfill_exec_space_org_id` (task `019f62a1` v4, cast guard
+  added under task `01a044c6`).
 
-  The migration's `up/0` runs raw SQL that walks
-  `chat_spaces (kind='execution', org_id IS NULL) → tasks → projects`
-  and copies `projects.org_id` onto the chat_spaces row. Under the
-  sandbox test env migrations are already at `:up` when ExUnit boots,
-  so we can't roll back and re-run. Instead we:
+  ## A BACKFILL IS INVISIBLE TO CI, WHICH IS WHY THIS FILE EXISTS
 
-    1. Byte-lock the SQL shape by reading the migration source and
-       asserting the load-bearing WHERE clauses are present. This
-       catches accidental relaxations of the guard rails (e.g. the
-       `org_id IS NULL` filter dropping, which would let the migration
-       stomp on already-stamped rows).
+  The suite runs against a freshly created, freshly migrated, EMPTY database.
+  A backfill that matches zero rows there does exactly what a correct one
+  does: nothing. `mix ecto.migrate` is green either way, and so is every other
+  test in the suite. Every green CI can produce is compatible with this
+  migration being `def up, do: :ok`.
 
-    2. Compile-load the module so a syntax error surfaces here rather
-       than as a full-suite compile break at deploy time.
+  So the only evidence worth anything is a seeded table, the migration run,
+  and assertions read back OFF THE COLUMN.
 
-    3. Exercise the exact SQL against a live schema — seed a chat_spaces
-       row with `org_id = NULL` + a task + project + org, run the same
-       UPDATE, and assert the org_id is populated on the target row and
-       left alone on rows without a resolvable task chain.
+  ## This file runs the SHIPPED `up/0`, not a copy of its SQL
+
+  The previous version of this file pasted the migration's UPDATE into a
+  module attribute and ran the copy. That proves the SQL is correct; it cannot
+  prove the shipped migration still contains that SQL, so gutting `up/0` left
+  it green. Calling `up/0` is possible because the migration issues
+  `Ecto.Adapters.SQL.query!/3` directly rather than `execute/1`, so it needs no
+  migration runner — the same arrangement
+  `backfill_meeting_space_org_id_test.exs` relies on next door.
+
+  ## The malformed-metadata case is the point of the cast guard
+
+  `chat_spaces.metadata` is unstructured `jsonb`. Nothing at the database
+  level constrains what sits at `task_id`, so `(metadata->>'task_id')::uuid`
+  is a text→uuid cast over a value that can be any string. On a non-UUID
+  string Postgres raises `22P02 invalid_text_representation`, which does not
+  skip the row — it takes the whole migration down. That is a replay hazard,
+  not a live bug: no code path in this repo writes a malformed `task_id`
+  today (see `ExecutionSpace.find_or_create/1`), but a restored backup, a
+  hand-edited row or a future writer at that key would abort the migration on
+  the next database it runs against.
+
+  Seeding malformed rows is therefore the only way this file can observe the
+  guard at all — with well-formed data only, the guarded and unguarded
+  statements are indistinguishable.
   """
 
   use Platform.DataCase, async: false
@@ -34,10 +52,10 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
 
   @moduletag :regression
 
-  # Migration files live under `priv/repo/migrations/` and are not on the
-  # compile path — walk five `dirname`s to climb from
-  # `test/platform/repo/migrations/<this>.exs` up to the
-  # `apps/platform/` app root, then descend into `priv/repo/migrations/`.
+  @migration_module Platform.Repo.Migrations.BackfillExecSpaceOrgId
+
+  # `priv/repo/migrations/` is not on the compile path. Climb from
+  # `test/platform/repo/migrations/<this>.exs` to the `apps/platform/` root.
   @migration_path Path.join([
                     __ENV__.file
                     |> Path.dirname()
@@ -48,285 +66,339 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
                     "priv/repo/migrations/20260715165309_backfill_exec_space_org_id.exs"
                   ])
 
-  # Reproduces the migration's UPDATE verbatim. Extracted so the runtime
-  # test can prove semantics against a live schema without needing to
-  # roll back + re-run the actual migration inside the sandbox.
-  @backfill_sql """
-  WITH candidates AS (
-    SELECT DISTINCT ON (p.org_id, s.slug)
-           s.id AS space_id,
-           p.org_id AS target_org_id
-    FROM   chat_spaces s
-    JOIN   tasks t ON (s.metadata->>'task_id')::uuid = t.id
-    JOIN   projects p ON p.id = t.project_id
-    WHERE  s.kind = 'execution'
-      AND  s.org_id IS NULL
-      AND  p.org_id IS NOT NULL
-      AND  NOT EXISTS (
-        SELECT 1
-        FROM   chat_spaces s2
-        WHERE  s2.org_id = p.org_id
-          AND  s2.slug   = s.slug
-          AND  s2.id    != s.id
-      )
-    ORDER BY p.org_id, s.slug, s.inserted_at ASC
-  )
-  UPDATE chat_spaces s
-  SET    org_id     = c.target_org_id,
-         updated_at = NOW()
-  FROM   candidates c
-  WHERE  s.id = c.space_id
-  """
-
-  describe "SQL shape guard rails" do
-    test "the UPDATE keeps its load-bearing WHERE clauses" do
-      source = File.read!(@migration_path)
-
-      # Guard rail 1: only touches exec-space rows.
-      assert source =~ "s.kind = 'execution'",
-             "backfill must scope to kind = 'execution' — dropping this filter risks stamping the wrong kind of space"
-
-      # Guard rail 2: only touches NULL-org rows (idempotency +
-      # no-clobber for post-fix rows).
-      assert source =~ "s.org_id IS NULL",
-             "backfill must scope to org_id IS NULL rows — dropping this filter would stomp already-stamped rows"
-
-      # Guard rail 3: only backfills when the source org_id is present.
-      assert source =~ "p.org_id IS NOT NULL",
-             "backfill must skip rows whose project has no org — otherwise the SET clause would write NULL, a no-op that still bumps updated_at unnecessarily"
-
-      # Guard rail 4: joins through the metadata task_id, not a random
-      # column. UUID cast prevents accidental text matches.
-      assert source =~ "s.metadata->>'task_id')::uuid = t.id",
-             "backfill must join chat_spaces → tasks via (metadata->>'task_id')::uuid — dropping the cast lets Postgres compare text to uuid and error"
-
-      # Guard rail 5: joins tasks → projects, since org lives on projects.
-      assert source =~ "projects p ON p.id = t.project_id",
-             "backfill must join tasks → projects — org_id lives on projects, not tasks"
-
-      # Guard rail 6: NOT EXISTS clause guards against pre-existing
-      # `(org_id, slug)` collisions (post-fix rows already stamped
-      # elsewhere).
-      assert source =~ "NOT EXISTS",
-             "backfill must include NOT EXISTS guard against unique-org-slug collisions from pre-existing stamped rows"
-
-      # Guard rail 7: DISTINCT ON per (target_org_id, slug) prevents
-      # in-statement pair-collisions when the pre-existing race in
-      # `find_or_create/1` left multiple NULL-org rows for the same
-      # task with identical slugs. Without DISTINCT ON, the whole
-      # migration blows up on `chat_spaces_unique_org_slug` when the
-      # UPDATE tries to stamp both siblings in one shot.
-      assert source =~ "DISTINCT ON (p.org_id, s.slug)",
-             "backfill must select DISTINCT ON (target_org_id, slug) so race-produced duplicate NULL-org rows for the same task don't collide inside the same UPDATE"
+  setup_all do
+    # `mix ecto.migrate` runs in this same VM and loads PENDING migration files
+    # only, so on an already-migrated database the module is absent and on a
+    # fresh one it is already there. Requiring it twice would raise.
+    unless Code.ensure_loaded?(@migration_module) do
+      Code.require_file(@migration_path)
     end
 
-    test "the migration module loads and both up/0 and down/0 are defined" do
-      Code.require_file(@migration_path)
+    :ok
+  end
 
-      assert Code.ensure_loaded?(Platform.Repo.Migrations.BackfillExecSpaceOrgId)
+  # ── Fixtures ────────────────────────────────────────────────────────────────
 
-      assert function_exported?(
-               Platform.Repo.Migrations.BackfillExecSpaceOrgId,
-               :up,
-               0
-             )
+  defp project_in(org_id) do
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "Backfill Exec Org Project #{System.unique_integer([:positive])}",
+        org_id: org_id
+      })
 
-      assert function_exported?(
-               Platform.Repo.Migrations.BackfillExecSpaceOrgId,
-               :down,
-               0
-             )
+    assert project.org_id == org_id
+    project
+  end
+
+  defp task_in(project) do
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Backfill exec target #{System.unique_integer([:positive])}"
+      })
+
+    task
+  end
+
+  # An exec space in the PRE-BACKFILL shape: `org_id = NULL`, task recorded in
+  # jsonb. Inserted through a bare changeset rather than
+  # `ExecutionSpace.find_or_create/1` for two reasons: that helper stamps the
+  # org itself since the companion code fix, and it cannot be made to write a
+  # malformed `task_id` at all (`resolve_task_org_id/1` casts the value into an
+  # Ecto query and raises first) — which is exactly why the malformed row has
+  # to be seeded by hand here.
+  defp exec_space!(task_id_value, opts \\ []) do
+    n = System.unique_integer([:positive])
+
+    metadata =
+      case task_id_value do
+        :no_key -> %{}
+        value -> %{"task_id" => value}
+      end
+
+    Repo.insert!(
+      Ecto.Changeset.change(%Space{}, %{
+        name: "task-exec-bf#{n}",
+        slug: Keyword.get(opts, :slug, "task-exec-bf#{n}"),
+        kind: Keyword.get(opts, :kind, "execution"),
+        org_id: Keyword.get(opts, :org_id),
+        metadata: metadata
+      })
+    )
+  end
+
+  defp persisted_org_id(space_id) do
+    Repo.one!(from(s in Space, where: s.id == ^space_id, select: s.org_id))
+  end
+
+  # ── The seeded run ──────────────────────────────────────────────────────────
+
+  describe "up/0 against a seeded table" do
+    test "stamps the resolvable rows with the RIGHT org and leaves the rest NULL" do
+      org_a = fabrikam_org_id()
+      org_b = tenant_org_id("sxi")
+
+      # ANTI-VACUITY. With one org in the fixture, "resolved the task's project
+      # org" and "wrote a hardcoded constant" are the same observation.
+      refute org_a == org_b,
+             "fixture is vacuous: both orgs are the same row, so this test " <>
+               "cannot tell resolution from a hardcoded value"
+
+      task_a = task_in(project_in(org_a))
+      task_b = task_in(project_in(org_b))
+
+      # ── Rows that MUST be populated ────────────────────────────────────────
+      space_a = exec_space!(task_a.id)
+      space_b = exec_space!(task_b.id)
+
+      # ── Rows that MUST stay NULL ───────────────────────────────────────────
+
+      # (1) A well-formed uuid naming a task that does not exist. `tasks` has
+      #     no FK from jsonb to keep it honest, and deleting a task leaves the
+      #     exec space behind.
+      orphan = exec_space!(Platform.Types.UUIDv7.generate())
+
+      # (2)–(4) MALFORMED `task_id` values. Without the regex guard in front of
+      #     the `::uuid` cast these do not merely stay NULL — the statement
+      #     raises `22P02` and the entire migration aborts, taking the two
+      #     resolvable rows above down with it.
+      garbage = exec_space!("not-a-uuid")
+      empty = exec_space!("")
+      truncated = exec_space!(String.slice(task_a.id, 0, 8))
+
+      # (5) No `task_id` key at all. `->>` yields NULL, the regex yields NULL,
+      #     the row is filtered out — the pre-guard statement also skipped it,
+      #     because a NULL cast is a NULL, not an error.
+      keyless = exec_space!(:no_key)
+
+      # (6) A NON-execution space carrying a malformed `task_id`. HONEST
+      #     CAVEAT: this row on its own did NOT abort the pre-guard statement.
+      #     The plan observed here pushes `kind = 'execution'` down into the
+      #     scan on `chat_spaces` and evaluates the cast at the join node
+      #     above it, so the row never reaches the cast. That is a planner
+      #     choice, not a guarantee — the pre-guard cast lived in a JOIN
+      #     condition with nothing scoping it. Kept as a control: after the
+      #     guard the cast is confined to a CTE that filters on kind AND on
+      #     the regex, so the row is out of reach by construction.
+      foreign_kind = exec_space!("also-not-a-uuid", kind: "meeting")
+
+      # ── The no-clobber row: already stamped, with the OTHER org ────────────
+      # Its task resolves to org_b. If the `org_id IS NULL` filter is ever
+      # dropped this flips to org_b, and the migration has begun rewriting rows
+      # it was never allowed to touch.
+      prestamped = exec_space!(task_in(project_in(org_b)).id, org_id: org_a)
+
+      should_populate = [space_a.id, space_b.id]
+
+      should_stay_nil = [
+        orphan.id,
+        garbage.id,
+        empty.id,
+        truncated.id,
+        keyless.id,
+        foreign_kind.id
+      ]
+
+      # ── PRECONDITION: everything that should move is NULL right now ────────
+      for id <- should_populate ++ should_stay_nil do
+        assert is_nil(persisted_org_id(id)),
+               "seed is broken: #{id} already carries an org before the migration " <>
+                 "ran, so nothing observed afterwards is attributable to the migration"
+      end
+
+      assert persisted_org_id(prestamped.id) == org_a
+
+      # ── RUN THE SHIPPED MIGRATION ──────────────────────────────────────────
+      #
+      # `up/0` hands back the UPDATE's row count. Other rows may be in the
+      # table (seed migrations run before the sandbox opens), so this is a
+      # lower bound; the per-row assertions below pin the values.
+      assert updated = @migration_module.up()
+
+      assert is_integer(updated),
+             "up/0 must return its row count so this test can assert on the " <>
+               "shipped function rather than on a re-implementation of its SQL"
+
+      assert updated >= 2,
+             "the statement updated #{updated} rows; it was handed two resolvable " <>
+               "exec spaces and must have moved both"
+
+      # ── Half one: populated, and populated CORRECTLY ───────────────────────
+      assert persisted_org_id(space_a.id) == org_a
+      assert persisted_org_id(space_b.id) == org_b
+
+      # The pair above is the real assertion: one migration cannot satisfy both
+      # with a constant. Spelled out so a future reader cannot delete `space_b`
+      # as a duplicate of `space_a`.
+      refute persisted_org_id(space_a.id) == persisted_org_id(space_b.id),
+             "both exec spaces resolved to the same org — the join fell back to a " <>
+               "constant instead of reading each task's own project"
+
+      # ── Half two, the control: still NULL ──────────────────────────────────
+      for id <- should_stay_nil do
+        assert is_nil(persisted_org_id(id)),
+               "row #{id} has no resolvable task → project → org chain and must " <>
+                 "still be NULL; a value here means the migration stamped a row by " <>
+                 "falling back rather than by resolving"
+      end
+
+      # ── No-clobber ─────────────────────────────────────────────────────────
+      assert persisted_org_id(prestamped.id) == org_a,
+             "an already-stamped row was rewritten — the `org_id IS NULL` filter is gone"
+
+      populated = Enum.count(should_populate, &(not is_nil(persisted_org_id(&1))))
+      left_nil = Enum.count(should_stay_nil, &is_nil(persisted_org_id(&1)))
+
+      assert populated == 2,
+             "a run in which not every resolvable row moved is a broken migration, " <>
+               "and a run in which ZERO rows moved is a no-op wearing a green tick"
+
+      assert left_nil == 6,
+             "a run in which EVERY row was populated is a failure: it means the join " <>
+               "fell back rather than resolved"
+    end
+
+    test "a malformed task_id alone does not abort the run" do
+      # The narrowest statement of the exposure, kept separate from the seeded
+      # run above so that deleting one malformed row from that test cannot
+      # quietly retire the guard. Remove the regex filter from the migration
+      # and this raises `Postgrex.Error ... 22P02 invalid_text_representation:
+      # invalid input syntax for type uuid: "definitely-not-a-uuid"` before it
+      # can assert anything.
+      org = tenant_org_id("paragon")
+      task = task_in(project_in(org))
+
+      resolvable = exec_space!(task.id)
+      malformed = exec_space!("definitely-not-a-uuid")
+
+      assert updated = @migration_module.up()
+      assert updated >= 1
+
+      assert persisted_org_id(resolvable.id) == org,
+             "the resolvable row beside a malformed one was not stamped — a bad " <>
+               "value must skip its own row, not sink the run"
+
+      assert is_nil(persisted_org_id(malformed.id))
+    end
+
+    test "is idempotent — the second run matches zero rows" do
+      org = tenant_org_id("soylent")
+      task = task_in(project_in(org))
+      space = exec_space!(task.id)
+
+      assert first = @migration_module.up()
+      assert first >= 1
+      assert persisted_org_id(space.id) == org
+
+      # `updated_at = NOW()` is useless as the witness here: NOW() is
+      # transaction start time, so a row rewritten inside this same sandbox
+      # transaction gets a byte-identical stamp. The row COUNT is the only
+      # honest observation.
+      assert 0 == @migration_module.up()
+      assert persisted_org_id(space.id) == org
+    end
+
+    test "down/0 is a deliberate no-op and does not clear what up/0 wrote" do
+      org = tenant_org_id("wayne_tech")
+      task = task_in(project_in(org))
+      space = exec_space!(task.id)
+
+      assert _ = @migration_module.up()
+      assert persisted_org_id(space.id) == org
+
+      assert :ok = @migration_module.down()
+      assert persisted_org_id(space.id) == org
     end
   end
 
-  describe "runtime semantics against live schema" do
-    test "populates org_id for exec spaces whose task chain resolves; leaves others alone" do
-      fabrikam_id = fabrikam_org_id()
+  # ── The one property no behavioural test can observe ────────────────────────
 
-      # Row 1: exec space with org_id=NULL that HAS a resolvable
-      # task+project+org chain. Should get stamped.
-      {:ok, project} =
-        Tasks.create_project(%{name: "Backfill Target Project", org_id: fabrikam_id})
+  describe "the guard CTE stays un-inlinable" do
+    test "the linked CTE is MATERIALIZED" do
+      # Everything else in this file is asserted by running the migration. This
+      # cannot be: `MATERIALIZED` is an optimisation barrier, and dropping it
+      # produces a statement that is still correct under every plan the
+      # planner happens to pick for a seeded test table. Its job is to stop the
+      # planner inlining the CTE and lifting `(metadata->>'task_id')::uuid`
+      # back above the regex that filters it — the exact shape that raised
+      # `22P02` before this guard existed.
+      #
+      # Read off `backfill_sql/0`, the value `up/0` actually executes, not off
+      # the file on disk.
+      sql = Platform.Repo.Migrations.BackfillExecSpaceOrgId.backfill_sql()
 
-      {:ok, task} =
-        Tasks.create_task(%{project_id: project.id, title: "Backfill target"})
+      assert sql =~ "WITH linked AS MATERIALIZED",
+             "the cast-guarding CTE is no longer MATERIALIZED — the planner may " <>
+               "inline it and evaluate the ::uuid cast on rows the regex was " <>
+               "meant to exclude"
 
-      {:ok, target_space} =
-        Repo.insert(
-          Ecto.Changeset.change(%Space{}, %{
-            name: "task-exec-target",
-            slug: "task-exec-target-#{System.unique_integer([:positive])}",
-            kind: "execution",
-            org_id: nil,
-            metadata: %{"task_id" => task.id}
-          })
-        )
-
-      # Row 2: exec space with org_id=NULL but metadata.task_id points at
-      # a task that DOES NOT EXIST. No resolvable org — must stay NULL.
-      orphan_task_id = Ecto.UUID.generate()
-
-      {:ok, orphan_space} =
-        Repo.insert(
-          Ecto.Changeset.change(%Space{}, %{
-            name: "task-exec-orphan",
-            slug: "task-exec-orphan-#{System.unique_integer([:positive])}",
-            kind: "execution",
-            org_id: nil,
-            metadata: %{"task_id" => orphan_task_id}
-          })
-        )
-
-      # Row 3: exec space that ALREADY carries a (different) org_id. The
-      # idempotency guard (`s.org_id IS NULL`) must skip it — the SXI
-      # value must survive.
-      sxi_id = tenant_org_id("sxi")
-
-      {:ok, project2} =
-        Tasks.create_project(%{name: "Already Stamped Project", org_id: fabrikam_id})
-
-      {:ok, task2} =
-        Tasks.create_task(%{project_id: project2.id, title: "Already stamped"})
-
-      {:ok, prestamped_space} =
-        Repo.insert(
-          Ecto.Changeset.change(%Space{}, %{
-            name: "task-exec-prestamped",
-            slug: "task-exec-prestamped-#{System.unique_integer([:positive])}",
-            kind: "execution",
-            org_id: sxi_id,
-            metadata: %{"task_id" => task2.id}
-          })
-        )
-
-      # Run the exact SQL the migration ships.
-      Ecto.Adapters.SQL.query!(Repo, @backfill_sql, [])
-
-      # Row 1: stamped with the project's org.
-      assert %Space{org_id: got} = Repo.get!(Space, target_space.id)
-      assert got == fabrikam_id
-
-      # Row 2: still NULL — no resolvable task chain, nothing to stamp.
-      assert %Space{org_id: nil} = Repo.get!(Space, orphan_space.id)
-
-      # Row 3: untouched — WHERE clause skipped it. SXI survives.
-      assert %Space{org_id: got_prestamped} = Repo.get!(Space, prestamped_space.id)
-      assert got_prestamped == sxi_id
+      assert sql =~ "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'",
+             "the UUID-shape filter in front of the ::uuid cast is gone"
     end
+  end
 
-    test "is idempotent — re-running against a stamped row is a no-op" do
-      fabrikam_id = fabrikam_org_id()
+  # ── Kind scope ──────────────────────────────────────────────────────────────
 
-      {:ok, project} =
-        Tasks.create_project(%{name: "Idempotent Project", org_id: fabrikam_id})
+  describe "the kind filter is load-bearing" do
+    test "a non-execution space with the same metadata shape is not touched" do
+      org = fabrikam_org_id()
+      task = task_in(project_in(org))
 
-      {:ok, task} =
-        Tasks.create_task(%{project_id: project.id, title: "Idempotent"})
+      meeting_space = exec_space!(task.id, kind: "meeting")
 
-      {:ok, space} =
-        Repo.insert(
-          Ecto.Changeset.change(%Space{}, %{
-            name: "task-exec-idem",
-            slug: "task-exec-idem-#{System.unique_integer([:positive])}",
-            kind: "execution",
-            org_id: nil,
-            metadata: %{"task_id" => task.id}
-          })
-        )
+      assert _ = @migration_module.up()
 
-      Ecto.Adapters.SQL.query!(Repo, @backfill_sql, [])
-      assert %Space{org_id: got1} = Repo.get!(Space, space.id)
-      assert got1 == fabrikam_id
-
-      # Second run — the s.org_id IS NULL filter now excludes the row.
-      Ecto.Adapters.SQL.query!(Repo, @backfill_sql, [])
-      assert %Space{org_id: got2} = Repo.get!(Space, space.id)
-      assert got2 == fabrikam_id
+      assert is_nil(persisted_org_id(meeting_space.id)),
+             "a kind='meeting' row was stamped — the `s.kind = 'execution'` filter " <>
+               "is gone and the migration's scope is now whatever the join reaches"
     end
+  end
 
-    test "skips race-produced duplicate exec spaces to avoid unique-org-slug collision" do
+  # ── Collision safety ────────────────────────────────────────────────────────
+
+  describe "chat_spaces_unique_org_slug is not tripped" do
+    test "race-produced duplicate exec spaces: one is stamped, one stays NULL" do
       # Two exec-space rows for the SAME task with IDENTICAL slugs and
-      # org_id=NULL — the exact shape the pre-existing race in
-      # `find_or_create/1` can leave behind. Without the NOT EXISTS
-      # guard, stamping both with the same org_id would trip
-      # `chat_spaces_unique_org_slug` and blow up the migration.
-      fabrikam_id = fabrikam_org_id()
-
-      {:ok, project} =
-        Tasks.create_project(%{name: "Race Dup Project", org_id: fabrikam_id})
-
-      {:ok, task} =
-        Tasks.create_task(%{project_id: project.id, title: "Race dup"})
-
+      # `org_id = NULL` — the shape the pre-existing race in
+      # `ExecutionSpace.find_or_create/1` can leave behind. Stamping both in one
+      # statement would trip `chat_spaces_unique_org_slug`, the partial UNIQUE
+      # on `(org_id, slug) WHERE org_id IS NOT NULL`. `DISTINCT ON` is what
+      # keeps the migration alive here; the `NOT EXISTS` guard evaluates against
+      # the pre-UPDATE snapshot and cannot see a collision this same statement
+      # is about to create.
+      org = fabrikam_org_id()
+      task = task_in(project_in(org))
       shared_slug = "task-exec-racedup-#{System.unique_integer([:positive])}"
 
-      {:ok, space_a} =
-        Repo.insert(
-          Ecto.Changeset.change(%Space{}, %{
-            name: "task-exec-racedup-a",
-            slug: shared_slug,
-            kind: "execution",
-            org_id: nil,
-            metadata: %{"task_id" => task.id}
-          })
-        )
+      [a, b] = for _ <- 1..2, do: exec_space!(task.id, slug: shared_slug)
 
-      {:ok, space_b} =
-        Repo.insert(
-          Ecto.Changeset.change(%Space{}, %{
-            name: "task-exec-racedup-b",
-            slug: shared_slug,
-            kind: "execution",
-            org_id: nil,
-            metadata: %{"task_id" => task.id}
-          })
-        )
+      # Must not raise.
+      assert updated = @migration_module.up()
+      assert updated >= 1
 
-      # The migration MUST run without raising the unique-constraint
-      # error — the NOT EXISTS clause is what makes this safe.
-      Ecto.Adapters.SQL.query!(Repo, @backfill_sql, [])
+      reloaded = [Repo.get!(Space, a.id), Repo.get!(Space, b.id)]
 
-      reloaded_a = Repo.get!(Space, space_a.id)
-      reloaded_b = Repo.get!(Space, space_b.id)
-
-      # Exactly ONE of the two got stamped (the first the SET clause
-      # touches — after that, NOT EXISTS filters the other out). The
-      # OTHER is left with org_id=NULL. Which is which is not
-      # deterministic across Postgres versions and is not part of the
-      # contract; the contract is (a) migration doesn't fail, and (b)
-      # no violation of `chat_spaces_unique_org_slug`.
-      stamped_count = Enum.count([reloaded_a, reloaded_b], &(&1.org_id == fabrikam_id))
-      null_count = Enum.count([reloaded_a, reloaded_b], &is_nil(&1.org_id))
-
-      assert stamped_count == 1
-      assert null_count == 1
+      # Which of the two wins is `inserted_at ASC` and is not part of the
+      # contract worth pinning; that exactly one wins is.
+      assert Enum.count(reloaded, &(&1.org_id == org)) == 1
+      assert Enum.count(reloaded, &is_nil(&1.org_id)) == 1
     end
 
-    test "does NOT touch non-execution spaces even when org_id is NULL" do
-      fabrikam_id = fabrikam_org_id()
+    test "an exec space whose (org, slug) pair is already held is skipped" do
+      # The `NOT EXISTS` guard's own case: a different row already owns the
+      # target pair, so stamping this one would collide.
+      org = fabrikam_org_id()
+      task = task_in(project_in(org))
+      shared_slug = "task-exec-taken-#{System.unique_integer([:positive])}"
 
-      {:ok, project} =
-        Tasks.create_project(%{name: "Non-Exec Guard Project", org_id: fabrikam_id})
+      _incumbent = exec_space!(:no_key, slug: shared_slug, org_id: org, kind: "channel")
+      contender = exec_space!(task.id, slug: shared_slug)
 
-      {:ok, task} =
-        Tasks.create_task(%{project_id: project.id, title: "Non-exec guard"})
+      assert _ = @migration_module.up()
 
-      # A meeting-kind space with the same metadata shape must NOT be
-      # touched — the kind='execution' filter is load-bearing.
-      {:ok, meeting_space} =
-        Repo.insert(
-          Ecto.Changeset.change(%Space{}, %{
-            name: "meeting-not-target",
-            slug: "meeting-not-target-#{System.unique_integer([:positive])}",
-            kind: "meeting",
-            org_id: nil,
-            metadata: %{"task_id" => task.id}
-          })
-        )
-
-      Ecto.Adapters.SQL.query!(Repo, @backfill_sql, [])
-
-      assert %Space{org_id: nil} = Repo.get!(Space, meeting_space.id)
+      assert is_nil(persisted_org_id(contender.id)),
+             "the NOT EXISTS guard is gone — stamping this row collides with the " <>
+               "incumbent on chat_spaces_unique_org_slug and aborts the migration"
     end
   end
 end

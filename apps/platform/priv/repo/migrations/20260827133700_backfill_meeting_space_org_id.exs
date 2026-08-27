@@ -116,8 +116,8 @@ defmodule Platform.Repo.Migrations.BackfillMeetingSpaceOrgId do
   UUID-shaped. Within one query level `WHERE` is applied before the target
   list is evaluated, so the cast only ever sees rows that pass the regex, and
   the CTE is `MATERIALIZED` so the planner cannot inline it and reorder the
-  two. (The exec backfill at `20260715165309` casts unfiltered and carries
-  this exposure; it is not being changed here.)
+  two. (The exec backfill at `20260715165309` cast unfiltered when this was
+  written; task `01a044c6` has since given it the same guard.)
 
   ## Idempotency
 
@@ -129,8 +129,8 @@ defmodule Platform.Repo.Migrations.BackfillMeetingSpaceOrgId do
 
   `{meeting_rows, guest_meeting_rows}`, not `:ok`. `Ecto.Migration.Runner`
   discards the return value of `up/0`, so this costs the migrator nothing
-  (the exec backfill at `20260715165309` already returns a `Postgrex.Result`
-  for the same reason: nobody reads it). It is here for the companion test.
+  (the exec backfill at `20260715165309` returns its own row count for the
+  same reason: nobody reads it). It is here for the companion test.
   A backfill is INVISIBLE to CI — the suite runs against a freshly migrated
   EMPTY database, where a migration that matches zero rows is
   indistinguishable from one that works — so the test needs a number it can
