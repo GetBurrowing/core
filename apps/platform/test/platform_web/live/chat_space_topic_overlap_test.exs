@@ -20,6 +20,24 @@ defmodule PlatformWeb.ChatSpaceTopicOverlapTest do
   subscribe set but never the Chat rail, `meeting` most notably, take exactly
   one.
 
+  ## CORRECTION (task 01a02c4e): `meeting` takes a THIRD holder, not one
+
+  The sentence above is true OF THE PAIR THIS FILE WAS SCOPED TO — `ShellLive`
+  + `ChatLive`. For a `meeting` space `ChatLive` is indeed not the second
+  subscriber. But `PlatformWeb.MeetingLive` is a THIRD subscriber this file
+  never counted, and it runs in the SAME pid as `ShellLive` (an `on_mount` hook
+  on both `:meet_member`, `router.ex:446`, and `:authenticated`, `:599`).
+  `meeting_live.ex:740` takes a RAW `ChatPubSub.subscribe/1` — not a
+  `SpaceTopics.hold/3` — and nothing releases it, so a viewer who is a
+  participant of the meeting's chat space and has the room open holds
+  `chat:space:<id>` TWICE on one pid.
+
+  Nothing below is contradicted. This file's assertions are about the
+  ShellLive/ChatLive overlap and remain correct on their own terms; the
+  `meeting`-takes-one claim was invisible-by-construction to that pair, not
+  wrong about what it measured. The measurement that does cover MeetingLive is
+  `meeting_live_space_topic_holders_test.exs` (task 01a02c4e stage 1).
+
   ## CORRECTION (task 01a01f4c): zero-org viewers now suffer it too
 
   This file was written when ShellLive resolved its subscribe set from the

@@ -223,7 +223,6 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Chat.Attachments.ToolHandlers, as: AttachmentHandlers
   alias Platform.Chat.Canvas
   alias Platform.Chat.CanvasDocument
-  alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
   alias Platform.Meetings.Archive
   alias Platform.Meetings.IntentCorrection
@@ -240,6 +239,7 @@ defmodule PlatformWeb.MeetingLive do
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.Components.Meetings.IntentsCollapse
   alias PlatformWeb.MeetingLive.CalendarWindow
+  alias PlatformWeb.SpaceTopics
 
   # The role that may see and drive the intents-collapse bar. Passed to
   # `Platform.Roles.agent_id_for_role/1` as a STRING — that function is
@@ -416,6 +416,14 @@ defmodule PlatformWeb.MeetingLive do
 
     {:ok,
      socket
+     # Seed the `chat:space:<id>` holder map from THIS view's own mount (task
+     # 01a02c4e stage 3). On the `:meet_member` and `:authenticated` routes
+     # `ShellLive`'s `on_mount` hook has already seeded it and this is a no-op
+     # — `ensure_holders/1` is idempotent and never discards live holders. On
+     # any route without that hook, MeetingLive has to seed it itself.
+     # `hold/3` seeds internally too, but the explicit call keeps the assign
+     # present for a render that reads it before any hold is taken.
+     |> SpaceTopics.ensure_holders()
      |> assign(:user_id, user_id)
      |> assign(:chrome_mode, chrome_mode)
      |> assign(:shell?, chrome_mode == :shell)
@@ -735,33 +743,76 @@ defmodule PlatformWeb.MeetingLive do
          |> push_navigate(to: ~p"/meetings")}
 
       {:ok, meeting} ->
-        if connected?(socket) do
-          if meeting.chat_space_id do
-            ChatPubSub.subscribe(meeting.chat_space_id)
-            # Live meeting presence: `broadcast_presence_change` publishes
-            # `{:meeting_presence_update, …}` on this per-space topic for
-            # every LiveKit join/leave, so the rail/count stay live without
-            # depending on a room row existing at mount time. The granular
-            # `{:participant_joined,_}`/`{:participant_left,_}` events fire on
-            # the room topic (subscribed below when a room is active).
-            MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+        # RELEASE BEFORE HOLD (task 01a02c4e stage 3). `/meetings` and
+        # `/meetings/:slug` are declared in ONE live_session on purpose
+        # (`router.ex:461`), so meeting -> meeting is a live patch and this
+        # clause re-enters on the SAME pid. Without a release the previous
+        # meeting's `chat:space:<id>` hold is never dropped and one pid
+        # accumulates a hold per meeting visited.
+        #
+        # `release_all/2`, NOT `release/3`: the previous meeting's space id is
+        # not reliably in scope here (`:meeting` may be nil, or already
+        # overwritten), and a targeted release that misses the right id is a
+        # silent leak that still reads as "we release". `:meeting` is this
+        # module's own owner tag, so releasing all of it cannot touch the
+        # shell's `:presence` / `:roster` holds or ChatLive's `:chat_active`.
+        socket = SpaceTopics.release_all(socket, :meeting)
 
-            case Meetings.get_active_room(meeting.chat_space_id) do
-              %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)
-              _ -> :ok
-            end
+        socket =
+          if connected?(socket) do
+            socket =
+              if meeting.chat_space_id do
+                # `SpaceTopics.hold/3` RETURNS A SOCKET, so this block threads
+                # it rather than running for effect. A raw
+                # `ChatPubSub.subscribe/1` here (what this line used to be)
+                # was a second registration on a pid the shell already holds
+                # `chat:space:<id>` on: `Phoenix.PubSub` starts its registry
+                # `keys: :duplicate`, `subscribe/3` is `Registry.register/3`
+                # and `unsubscribe/2` is `Registry.unregister/2` — so a raw
+                # subscribe duplicates delivery, and anybody's later
+                # unsubscribe destroys BOTH registrations.
+                socket = SpaceTopics.hold(socket, meeting.chat_space_id, :meeting)
+
+                # Live meeting presence: `broadcast_presence_change` publishes
+                # `{:meeting_presence_update, …}` on this per-space topic for
+                # every LiveKit join/leave, so the rail/count stay live without
+                # depending on a room row existing at mount time. The granular
+                # `{:participant_joined,_}`/`{:participant_left,_}` events fire on
+                # the room topic (subscribed below when a room is active).
+                #
+                # NOT a `chat:space:<id>` topic — `meeting_presence:<id>` is
+                # keyed by the same space id but is a different topic with a
+                # single subscriber in this process, so it stays a raw
+                # subscribe. Same for the room topic below.
+                MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+
+                # Through `subscribe_room_once/2` so this site and the
+                # `{:meeting_presence_update, _}` clause share one record of
+                # which room topic this pid holds. When they did not, the
+                # first presence delta after mount added a SECOND
+                # registration on the same topic (task `01a02c4e` stage 4).
+                case Meetings.get_active_room(meeting.chat_space_id) do
+                  %{id: room_id} -> subscribe_room_once(socket, room_id)
+                  _ -> socket
+                end
+              else
+                socket
+              end
+
+            Phoenix.PubSub.subscribe(Platform.PubSub, meeting_topic(meeting.id))
+
+            # Intents-collapse bar (task 019f70b8 stage 7). Subscribed
+            # unconditionally rather than behind the role gate: the gate can
+            # flip mid-meeting, and a subscription taken only at gate-open
+            # would miss every transition between the appointment and the
+            # next event. The handlers no-op when the bar is hidden.
+            MeetingsPubSub.subscribe_intents(meeting.id)
+            Roles.subscribe_assignments()
+
+            socket
+          else
+            socket
           end
-
-          Phoenix.PubSub.subscribe(Platform.PubSub, meeting_topic(meeting.id))
-
-          # Intents-collapse bar (task 019f70b8 stage 7). Subscribed
-          # unconditionally rather than behind the role gate: the gate can
-          # flip mid-meeting, and a subscription taken only at gate-open
-          # would miss every transition between the appointment and the
-          # next event. The handlers no-op when the bar is hidden.
-          MeetingsPubSub.subscribe_intents(meeting.id)
-          Roles.subscribe_assignments()
-        end
 
         participants =
           if meeting.chat_space_id,
@@ -854,6 +905,15 @@ defmodule PlatformWeb.MeetingLive do
     # `:current_user_record` is assigned by `ShellLive.on_mount/4`, which
     # runs before `handle_params/3` for every route in the authenticated
     # live_session — no session re-read or extra lookup needed here.
+    # The other half of the release pair (task 01a02c4e stage 3). Patching from
+    # a room back to the index stays on ONE pid — both routes are declared in
+    # the same live_session (`router.ex:461`) — so without this the room's
+    # `chat:space:<id>` hold survives on a viewer who is no longer in any
+    # meeting. `release_all/2` because the departed meeting's space id is not
+    # in scope on this clause at all; only `:meeting`'s own holds are dropped,
+    # so a space the shell's presence branch also holds stays subscribed.
+    socket = SpaceTopics.release_all(socket, :meeting)
+
     projects = Tasks.list_projects_for_user(socket.assigns[:current_user_record])
     project_ids = Enum.map(projects, & &1.id)
 
@@ -3062,7 +3122,33 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, refresh_participants(socket)}
   end
 
-  def handle_info({:participant_left, _participant}, socket) do
+  # AUDIT FINDING, task 01a02c4e stage 3 — this clause is new behaviour, not a
+  # refactor. `Chat.remove_participant/1` broadcasts `{:participant_left,
+  # deleted}` on `chat:space:<id>` (`chat.ex:1556`). Before this stage
+  # MeetingLive took a RAW `ChatPubSub.subscribe/1`, so when the viewer was
+  # revoked mid-meeting the shell's own release (`shell_live.ex`'s
+  # `{:participant_left, viewer}` branch) called `Registry.unregister/2` and
+  # destroyed MeetingLive's registration ALONG WITH its own. Delivery stopped
+  # by accident, via the over-broad unregister.
+  #
+  # Per-owner release removes that accident: the shell releases only
+  # `:presence`, so `:meeting` would keep the topic pinned open and a revoked
+  # viewer sitting in the room would go on receiving `{:new_message, _}`. This
+  # is the same shape task 01a01a1b stage 3 hit on ChatLive, and the same fix:
+  # the owner has to do its own half. Correct ownership without it is a leak.
+  #
+  # Narrowed to the VIEWER's own row on THIS meeting's chat space. The clause
+  # also fires for other people leaving, and for the meetings ROOM topic's
+  # like-named event (`meetings.ex:2889`), neither of which may drop the hold —
+  # hence the space-id equality rather than a bare participant-id test.
+  def handle_info({:participant_left, participant}, socket) do
+    socket =
+      if viewer_lost_meeting_space?(socket, participant) do
+        SpaceTopics.release(socket, participant.space_id, :meeting)
+      else
+        socket
+      end
+
     {:noreply, refresh_participants(socket)}
   end
 
@@ -3076,17 +3162,30 @@ defmodule PlatformWeb.MeetingLive do
   # without a manual refresh. We also (re)subscribe to the now-active room
   # topic so the granular `{:participant_joined,_}`/`{:participant_left,_}`
   # events flow if the room was activated after mount.
+  #
+  # THAT RE-SUBSCRIBE USED TO ACCUMULATE (found while closing task
+  # `01a02c4e`'s Route B leak, fixed here because it is the same defect).
+  # This clause fires on EVERY LiveKit join/leave, and it called
+  # `MeetingsPubSub.subscribe_room/1` unconditionally. `Phoenix.PubSub`
+  # starts its registry with `keys: :duplicate` and `subscribe/3` is a bare
+  # `Registry.register/3`, so a repeat subscribe ADDS a registration rather
+  # than being a no-op: an n-person meeting left this pid with n+1
+  # registrations on the room topic and delivered every room event n+1 times.
+  # A guest reached 2 before any human did anything, because
+  # `maybe_upsert_guest_presence/4` broadcasts a presence change during the
+  # guest's own entry. `subscribe_room_once/2` makes it idempotent.
   def handle_info({:meeting_presence_update, _payload}, socket) do
-    case socket.assigns[:meeting] do
-      %{chat_space_id: space_id} when is_binary(space_id) ->
-        case Meetings.get_active_room(space_id) do
-          %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)
-          _ -> :ok
-        end
+    socket =
+      case socket.assigns[:meeting] do
+        %{chat_space_id: space_id} when is_binary(space_id) ->
+          case Meetings.get_active_room(space_id) do
+            %{id: room_id} -> subscribe_room_once(socket, room_id)
+            _ -> socket
+          end
 
-      _ ->
-        :ok
-    end
+        _ ->
+          socket
+      end
 
     {:noreply, refresh_participants(socket)}
   end
@@ -3487,28 +3586,28 @@ defmodule PlatformWeb.MeetingLive do
        when is_binary(display_name) do
     case Meetings.mint_guest_join_bundle(meeting, display_name) do
       {:ok, bundle} ->
-        if connected?(socket) and is_binary(meeting.chat_space_id) do
-          MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+        # RELEASE BEFORE RE-SUBSCRIBING (task 01a02c4e stage 4). This helper
+        # has TWO entry points and one of them can run while the guest is
+        # already `:in_meeting`: `"submit_name"` re-enters here, so without
+        # this line the three subscribes below would land ON TOP of the
+        # subscriptions taken by the previous entry.
+        #
+        # That is not a harmless repeat. `Phoenix.PubSub` starts its registry
+        # with `keys: :duplicate`; `Phoenix.PubSub.subscribe/3` is a bare
+        # `Registry.register/3`, so a second subscribe ADDS a second
+        # registration for the same pid and every broadcast on the topic is
+        # then delivered TWICE to this LiveView. (`Phoenix.PubSub.unsubscribe/2`
+        # is `Registry.unregister/2`, which removes ALL of the pid's
+        # registrations for the topic — the asymmetry that makes
+        # subscribe-without-release a real duplicate rather than a no-op.)
+        socket = MeetingHooks.release_guest_topics(socket)
 
-          # Per-meeting intent mute (task 019fbaac stage 4). This one line
-          # is what makes the guest badge live-update, and it is needed
-          # HERE precisely because it cannot be inherited: the guest mount
-          # clause seeds `:state`, which makes `handle_params/3` no-op, so
-          # the guest surface never reaches the `:show` body where the
-          # authenticated surface subscribes to `meeting_topic/1`. Same
-          # topic string, same `{:intent_mute_changed, …}` clause — the
-          # guest LiveView is the SAME module, so no second handler.
-          #
-          # Ordered BEFORE `seed_guest_shell_tree_assigns/2` reads the
-          # current value below: subscribe-then-read leaves no window in
-          # which a toggle lands between the read and the subscription.
-          MeetingsPubSub.subscribe_meeting(meeting.id)
-
-          case Meetings.get_active_room(meeting.chat_space_id) do
-            %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)
-            _ -> :ok
+        socket =
+          if connected?(socket) and is_binary(meeting.chat_space_id) do
+            enter_guest_topics(socket, meeting)
+          else
+            socket
           end
-        end
 
         # 019f498d re-dispatch: land the guest in the shared live-presence
         # table so the auth-side MeetingLive session (subscribed to the
@@ -3540,6 +3639,73 @@ defmodule PlatformWeb.MeetingLive do
         |> assign(:page_title, "Invite link is not valid")
         |> assign(:meeting, nil)
         |> seed_guest_index_fallback_assigns()
+    end
+  end
+
+  # The guest surface's THREE meetings-family subscriptions, taken together
+  # and RECORDED (task 01a02c4e stage 4).
+  #
+  # Every topic subscribed here is written into `:guest_topic_subs` so
+  # `MeetingHooks.release_guest_topics/1` can release exactly what was
+  # taken. The record exists rather than re-deriving on release for one
+  # concrete reason: the room id comes from `Meetings.get_active_room/1`, a
+  # DB read whose answer can CHANGE between entry and leave (a room ends,
+  # another starts). Re-deriving would then unsubscribe a topic this pid
+  # never held and leak the one it does.
+  #
+  # `subscribe_room_once/2` is the single writer of `:subscribed_room_id`,
+  # so the room third of the release below reads the room this pid ACTUALLY
+  # holds rather than whatever `get_active_room/1` answers at leave time — a
+  # DB read whose answer can change between entry and leave (a room ends,
+  # another starts), which would otherwise unsubscribe a topic never held and
+  # leak the one that is.
+  defp enter_guest_topics(socket, meeting) do
+    MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+
+    # Per-meeting intent mute (task 019fbaac stage 4). This one line
+    # is what makes the guest badge live-update, and it is needed
+    # HERE precisely because it cannot be inherited: the guest mount
+    # clause seeds `:state`, which makes `handle_params/3` no-op, so
+    # the guest surface never reaches the `:show` body where the
+    # authenticated surface subscribes to `meeting_topic/1`. Same
+    # topic string, same `{:intent_mute_changed, …}` clause — the
+    # guest LiveView is the SAME module, so no second handler.
+    #
+    # Ordered BEFORE `seed_guest_shell_tree_assigns/2` reads the
+    # current value below: subscribe-then-read leaves no window in
+    # which a toggle lands between the read and the subscription.
+    MeetingsPubSub.subscribe_meeting(meeting.id)
+
+    socket =
+      case Meetings.get_active_room(meeting.chat_space_id) do
+        %{id: room_id} -> subscribe_room_once(socket, room_id)
+        _ -> socket
+      end
+
+    assign(socket, :guest_topic_subs, %{
+      space_id: meeting.chat_space_id,
+      meeting_id: meeting.id
+    })
+  end
+
+  # Idempotent room-topic subscription, and the ONLY writer of
+  # `:subscribed_room_id`. Subscribing twice to one topic from one process is
+  # a real duplicate (`keys: :duplicate` + `Registry.register/3`), and
+  # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2`, which removes
+  # ALL of a pid's registrations for the topic — so the two are asymmetric
+  # and "just subscribe again" is never safe.
+  #
+  # Switching rooms releases the previous topic first: without that the pid
+  # would keep receiving events from a room it left.
+  defp subscribe_room_once(socket, room_id) when is_binary(room_id) do
+    case socket.assigns[:subscribed_room_id] do
+      ^room_id ->
+        socket
+
+      previous ->
+        if is_binary(previous), do: MeetingsPubSub.unsubscribe_room(previous)
+        MeetingsPubSub.subscribe_room(room_id)
+        assign(socket, :subscribed_room_id, room_id)
     end
   end
 
@@ -3583,6 +3749,29 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp refresh_participants(socket), do: socket
+
+  # True only when the deleted row is THIS viewer's participant row on THIS
+  # meeting's chat space. Pattern-matched on `%Chat.Participant{}` rather than
+  # a loose map so the meetings ROOM topic's `{:participant_left,
+  # %Meetings.LiveParticipant{}}` — a different struct with no `:space_id`,
+  # broadcast on `meeting_room:<id>` — falls through to `false` instead of
+  # raising or, worse, matching on a field that happens to be named alike.
+  defp viewer_lost_meeting_space?(socket, %Chat.Participant{
+         participant_type: "user",
+         participant_id: participant_id,
+         space_id: space_id
+       }) do
+    meeting_space_id =
+      case socket.assigns[:meeting] do
+        %{chat_space_id: id} -> id
+        _ -> nil
+      end
+
+    is_binary(meeting_space_id) and participant_id == socket.assigns[:user_id] and
+      space_id == meeting_space_id
+  end
+
+  defp viewer_lost_meeting_space?(_socket, _participant), do: false
 
   @doc """
   Build the participant view-model for the rail + gallery from LIVE meeting

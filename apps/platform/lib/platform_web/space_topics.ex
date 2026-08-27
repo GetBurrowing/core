@@ -75,15 +75,27 @@ defmodule PlatformWeb.SpaceTopics do
 
   @assign :chat_space_holders
 
-  @owners [:roster, :presence, :chat_rail, :chat_active, :tasks_exec]
+  @owners [:roster, :presence, :chat_rail, :chat_active, :tasks_exec, :meeting]
 
   @typedoc """
   Closed set of surfaces permitted to hold a `chat:space:<id>` subscription on a
   shell pid. Closed on purpose: an unknown atom is a typo, and a typo that
   created a phantom holder would pin a subscription open forever with no surface
   able to release it. Prefer hard failure over quiet degradation.
+
+  Every member must be spelled in THREE places -- `@owners` (what the `when
+  owner in @owners` guards enforce), this union, and this prose. A tag added to
+  `@owners` alone compiles and passes, and the type simply becomes a lie.
+
+  `:meeting` is `PlatformWeb.MeetingLive`, which mounts inside the same shell
+  pid as `ShellLive` and so shares its registrations. It gets its OWN tag rather
+  than reusing `:presence` or `:chat_rail`: two surfaces sharing one tag means
+  MeetingLive's release also drops the other surface's hold, which is precisely
+  the collision the holder map exists to remove. Holders must be
+  distinguishable or the map buys nothing.
   """
-  @type owner :: :roster | :presence | :chat_rail | :chat_active | :tasks_exec
+  @type owner ::
+          :roster | :presence | :chat_rail | :chat_active | :tasks_exec | :meeting
 
   @typedoc "Space id => the set of owners currently holding its subscription."
   @type holders :: %{optional(binary()) => MapSet.t(owner())}

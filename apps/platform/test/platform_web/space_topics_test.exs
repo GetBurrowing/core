@@ -17,7 +17,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
 
   alias PlatformWeb.SpaceTopics
 
-  # Invented ids. `core` is a public repo -- no real space ids here.
+  # Invented ids as hygiene -- no real space ids in test fixtures.
   setup do
     on_exit(fn -> :ok end)
 
@@ -272,6 +272,127 @@ defmodule PlatformWeb.SpaceTopicsTest do
   end
 
   test "owners/0 is the closed set the guards enforce" do
-    assert SpaceTopics.owners() == [:roster, :presence, :chat_rail, :chat_active, :tasks_exec]
+    assert SpaceTopics.owners() == [
+             :roster,
+             :presence,
+             :chat_rail,
+             :chat_active,
+             :tasks_exec,
+             :meeting
+           ]
+  end
+
+  describe ":meeting owner" do
+    test "owners/0 includes :meeting" do
+      assert :meeting in SpaceTopics.owners()
+    end
+
+    test "a :meeting hold on a space already held by :presence takes no second registration",
+         %{alpha: alpha, beta: beta} do
+      s = socket()
+      s = SpaceTopics.hold(s, alpha, :presence)
+      assert registrations(alpha) == 1
+
+      # MeetingLive mounts inside the same shell pid as ShellLive. A raw
+      # `Chat.PubSub.subscribe/1` here would take a SECOND registration and
+      # every broadcast would arrive twice.
+      s = SpaceTopics.hold(s, alpha, :meeting)
+
+      assert registrations(alpha) == 1
+      # Positive control: the mechanism can reach 1 on another id, so the count
+      # above is not pinned by something global.
+      s = SpaceTopics.hold(s, beta, :meeting)
+      assert registrations(beta) == 1
+
+      _ = s
+    end
+
+    test "releasing :meeting while :presence still holds leaves the registration DELIVERING",
+         %{alpha: alpha, beta: beta} do
+      s = socket()
+      s = SpaceTopics.hold(s, alpha, :presence)
+      s = SpaceTopics.hold(s, alpha, :meeting)
+      s = SpaceTopics.hold(s, beta, :roster)
+
+      s = SpaceTopics.release(s, alpha, :meeting)
+
+      assert registrations(alpha) == 1
+      assert registrations(beta) == 1
+      assert SpaceTopics.held_by?(s, alpha, :presence)
+      refute SpaceTopics.held_by?(s, alpha, :meeting)
+
+      # A count of 1 is NOT delivery. A release that corrupted the surviving
+      # registration would still read as 1 and this test would pass while the
+      # feature is broken, so assert the message actually arrives.
+      :ok = Platform.Chat.PubSub.broadcast(alpha, {:space_topics_probe, alpha})
+      assert_receive {:space_topics_probe, ^alpha}, 500
+
+      # ...and exactly once: no duplicate registration survived either.
+      refute_receive {:space_topics_probe, ^alpha}, 50
+
+      # Positive control for the assert_receive: the same probe on a topic this
+      # pid does NOT hold does not arrive.
+      s = SpaceTopics.release(s, alpha, :presence)
+      assert registrations(alpha) == 0
+      :ok = Platform.Chat.PubSub.broadcast(alpha, {:space_topics_probe, alpha})
+      refute_receive {:space_topics_probe, ^alpha}, 100
+      # ...while beta, still held, does deliver.
+      :ok = Platform.Chat.PubSub.broadcast(beta, {:space_topics_probe, beta})
+      assert_receive {:space_topics_probe, ^beta}, 500
+
+      _ = s
+    end
+
+    test "a :meeting release by a socket that never held it does not unsubscribe",
+         %{alpha: alpha, beta: beta} do
+      s = socket()
+      s = SpaceTopics.hold(s, alpha, :presence)
+      s = SpaceTopics.hold(s, beta, :roster)
+
+      # :meeting never held alpha. An unguarded decrement would compute an
+      # empty remainder and unsubscribe, silently killing :presence delivery.
+      s = SpaceTopics.release(s, alpha, :meeting)
+
+      assert registrations(alpha) == 1
+      assert registrations(beta) == 1
+      assert SpaceTopics.held_by?(s, alpha, :presence)
+
+      :ok = Platform.Chat.PubSub.broadcast(alpha, {:space_topics_probe, alpha})
+      assert_receive {:space_topics_probe, ^alpha}, 500
+
+      _ = s
+    end
+
+    test "an unknown owner atom still raises with :meeting in the set", %{alpha: alpha} do
+      s = socket()
+
+      # The closed set is ENFORCED, not merely documented -- adding a sixth tag
+      # must not have opened it up.
+      assert_raise FunctionClauseError, fn -> SpaceTopics.hold(s, alpha, :meetings) end
+      assert_raise FunctionClauseError, fn -> SpaceTopics.hold(s, alpha, :meting) end
+
+      # Positive control in the same body: the correct spelling works, so the
+      # raises above are about the atom and not the arguments.
+      s = SpaceTopics.hold(s, alpha, :meeting)
+      assert registrations(alpha) == 1
+      assert SpaceTopics.held_by?(s, alpha, :meeting)
+    end
+
+    test "release_all/2 drops :meeting without touching a co-held space",
+         %{alpha: alpha, beta: beta} do
+      s = socket()
+      s = SpaceTopics.hold(s, alpha, :meeting)
+      s = SpaceTopics.hold(s, beta, :meeting)
+      s = SpaceTopics.hold(s, beta, :presence)
+
+      s = SpaceTopics.release_all(s, :meeting)
+
+      assert registrations(alpha) == 0
+      assert registrations(beta) == 1
+      refute SpaceTopics.held_by?(s, beta, :meeting)
+      assert SpaceTopics.held_by?(s, beta, :presence)
+
+      _ = s
+    end
   end
 end

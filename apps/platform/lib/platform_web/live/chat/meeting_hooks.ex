@@ -177,6 +177,62 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   @doc """
+  Release the three meetings-family topics the guest surface subscribed on
+  entry (task `01a02c4e` stage 4), and clear the record.
+
+  ## Which defect this closes, and which it does NOT
+
+  Stage 1 MEASURED the `:guest_meeting` route and found it holds **zero**
+  `chat:space:<id>` registrations — `ChatPubSub` is called exactly once in
+  `meeting_live.ex`, from the `handle_params/3` `:show` body the guest never
+  reaches (the guest mount clause seeds `:state` and the `:state`-guarded
+  no-op returns first). So no `chat:space` hold was invented here to match
+  the originating ticket's prose. Route B's real leak is the MEETINGS family
+  taken by `MeetingLive.enter_guest_topics/2`:
+  `MeetingsPubSub.subscribe_presence/1`, `subscribe_meeting/1` and
+  `subscribe_room/1` — all three of which already ship a matching
+  `unsubscribe_*`, so this needs no new PubSub API.
+
+  ## Why release matters even though process death would clean up
+
+  Two reasons, and only the second is about leaving:
+
+    * **Re-entry.** `"submit_name"` re-enters `enter_meeting_as_guest/3`, so
+      a guest who submits a name while already `:in_meeting` would subscribe
+      a SECOND time on a live subscription. `Phoenix.PubSub` runs its
+      registry `keys: :duplicate` and `subscribe/3` is a bare
+      `Registry.register/3`, so that is a genuine duplicate registration and
+      a doubled delivery — not an idempotent no-op.
+    * **Explicit leave.** The guest's Leave button and the JS
+      `RoomEvent.Disconnected` echo both land in `handle_guest_event/3`
+      below, and the LiveView keeps running afterwards. Without this the
+      process stays subscribed to a meeting it has left.
+
+  Idempotent: `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2`,
+  which is `:ok` on a topic the pid never held. Safe on a socket that never
+  entered (no `:guest_topic_subs`), which is why the fallthrough clause is a
+  plain passthrough.
+  """
+  @spec release_guest_topics(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def release_guest_topics(socket) do
+    case socket.assigns[:guest_topic_subs] do
+      %{space_id: space_id, meeting_id: meeting_id} ->
+        room_id = socket.assigns[:subscribed_room_id]
+
+        if is_binary(space_id), do: MeetingsPubSub.unsubscribe_presence(space_id)
+        if is_binary(meeting_id), do: MeetingsPubSub.unsubscribe_meeting(meeting_id)
+        if is_binary(room_id), do: MeetingsPubSub.unsubscribe_room(room_id)
+
+        socket
+        |> assign(:guest_topic_subs, nil)
+        |> assign(:subscribed_room_id, nil)
+
+      _ ->
+        socket
+    end
+  end
+
+  @doc """
   Reconnect-aware meeting restore. Call from the host LiveView once the
   active space is established (`ChatLive.handle_params/3`), passing the
   active space struct.
@@ -410,17 +466,27 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # to stamp (`stamp_local_left/1` requires `:user_id` binary), no
   # `MeetingState.broadcast_left/1` (also `is_binary`-guarded). Just reset
   # local media state and tell the JS hook to disconnect.
+  #
+  # Also drops the three meetings-family subscriptions taken on entry (task
+  # `01a02c4e` stage 4) — the LiveView survives the leave, so without this
+  # it keeps receiving presence/room/meeting broadcasts for a meeting it is
+  # no longer in. See `release_guest_topics/1`.
   defp handle_guest_event("meeting_leave", _params, socket) do
     {:halt,
      socket
+     |> release_guest_topics()
      |> reset_meeting_state()
      |> push_event("leave-meeting", %{})}
   end
 
   # Fired from meeting_client.js on RoomEvent.Disconnected. Symmetric to the
   # authenticated `meeting_left` path minus the user_id-dependent writes.
+  # Releases the entry subscriptions too: this is the path a guest takes when
+  # the connection drops rather than the button being clicked, and it is
+  # reached WITHOUT `"meeting_leave"` having run. `release_guest_topics/1` is
+  # idempotent, so the button path running both is fine.
   defp handle_guest_event("meeting_left", _params, socket) do
-    {:halt, reset_meeting_state(socket)}
+    {:halt, socket |> release_guest_topics() |> reset_meeting_state()}
   end
 
   defp handle_guest_event(_event, _params, socket), do: {:cont, socket}
