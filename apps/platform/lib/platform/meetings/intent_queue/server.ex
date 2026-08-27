@@ -169,12 +169,36 @@ defmodule Platform.Meetings.IntentQueue.Server do
   `%{intent_id => count}` — deliberately not a durable table. It is
   evidence about one meeting's dispatch attempts and has no meaning
   after that meeting ends.
+
+  ## Durable mirror (task 01a03fb8 stage 3)
+
+  Every row write in this process is mirrored into
+  `Platform.Meetings.Candidates` so that BOTH accepted and rejected
+  outcomes land in Postgres — the ETS table dies with the meeting, and
+  a corpus that only ever sees negatives cannot be tuned against. The
+  mirror hangs off `do_enqueue/3`, `do_transition/4` and `do_ack/5`
+  rather than off the five external call sites, because the table is
+  `:protected`: every write funnels through here by construction, so a
+  sixth call site added later is mirrored for free.
+
+  **The mirror can never take the queue down.** Each call goes through
+  `mirror/1`, which rescues `Exception`, catches `:exit`, logs at
+  warning level and returns `:ok`. A meeting whose Postgres is briefly
+  unavailable keeps classifying and dispatching intents: a durable
+  record is worth less than the live meeting.
+
+  `outcome_kind` is POPULATED (`attrs[:outcome_kind]` on `enqueue/2`,
+  defaulting to `:task`) but is not automatically classified — teaching
+  the classifier to tell a task from an artifact is a prompt change
+  belonging to a separate task. The passthrough exists so the artifact
+  path has a way in without a follow-up migration.
   """
 
   use GenServer
 
   require Logger
 
+  alias Platform.Meetings.Candidates
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
 
   @registry Platform.Meetings.Registry
@@ -418,6 +442,10 @@ defmodule Platform.Meetings.IntentQueue.Server do
   `attrs[:dedupe_key]` matches a row already in the table — in which
   case the EXISTING row comes back untouched and nothing is broadcast.
   Rows enqueued without a `:dedupe_key` never collapse.
+
+  `attrs[:outcome_kind]` (`:task` by default) is not stored on the ETS
+  row — the row shape is unchanged — but is threaded into the durable
+  candidate mirror so the artifact path has a way in.
   """
   @spec enqueue(binary(), map()) :: {:ok, row()} | {:duplicate, row()}
   def enqueue(meeting_id, attrs) when is_binary(meeting_id) and is_map(attrs) do
@@ -820,7 +848,8 @@ defmodule Platform.Meetings.IntentQueue.Server do
         if status == :dispatched and is_binary(state.cursor) and state.cursor != intent_id do
           {:reply, {:error, {:cursor_busy, state.cursor}}, state}
         else
-          {reply, _updated, state} = apply_transition(row, status, attrs, state)
+          {reply, updated, state} = apply_transition(row, status, attrs, state)
+          mirror_transition(state, updated, status)
           {:reply, reply, state}
         end
     end
@@ -956,6 +985,8 @@ defmodule Platform.Meetings.IntentQueue.Server do
 
             {reply, updated, state} = apply_transition(row, destination, attrs, state)
 
+            mirror_ack(state, updated, ack_status)
+
             if ack_status == :rejected do
               emit_rejected_hook(state, row, updated, note)
             end
@@ -985,6 +1016,170 @@ defmodule Platform.Meetings.IntentQueue.Server do
   defp ack_destination(:completed, :cancel_honored), do: {:ok, :cancelled_late}
 
   defp ack_destination(current, _ack_status), do: {:error, {:invalid_ack_state, current}}
+
+  # ── Durable mirror (task 01a03fb8 stage 3) ─────────────────────────────────
+  #
+  # See the moduledoc. Three hook points, one non-fatal wrapper. The
+  # rescue posture mirrors `IntentCorrections.exemplars_for_meeting/2`:
+  # a recording act must degrade, never propagate.
+
+  defp mirror_enqueue(state, row, outcome_kind) do
+    mirror(%{
+      meeting_id: state.meeting_id,
+      intent_id: row.id,
+      fun: fn ->
+        Candidates.create(%{
+          intent_id: row.id,
+          meeting_id: state.meeting_id,
+          room_id: uuid_or_nil(row.room_id),
+          transcript_chunk_id: uuid_or_nil(row.transcript_chunk_id),
+          evidence_quote: row.chunk_excerpt,
+          classified_intent: stringify(row.classified_intent),
+          classifier_confidence: row.confidence,
+          classifier_model: row.model_used,
+          target_role: stringify(row.target_role),
+          assigned_agent_id: uuid_or_nil(row.target_agent_id),
+          assigned_agent_slug: row.target_agent_slug,
+          state: :heard,
+          queue_status: "queued",
+          outcome_kind: outcome_kind || :task,
+          heard_at: row.enqueued_at
+        })
+      end
+    })
+  end
+
+  defp mirror_transition(state, row, status) do
+    mirror(%{
+      meeting_id: state.meeting_id,
+      intent_id: row.id,
+      fun: fn -> with_candidate(row.id, &apply_queue_status(&1, status)) end
+    })
+  end
+
+  # The ack mirror reads the ACK status, not the destination status:
+  # `:completed` and `:rejected` both land the row on `:completed`, and
+  # collapsing them here is exactly how a corpus of 100% negatives (or
+  # 100% positives) gets built.
+  defp mirror_ack(state, row, ack_status) do
+    mirror(%{
+      meeting_id: state.meeting_id,
+      intent_id: row.id,
+      fun: fn -> with_candidate(row.id, &apply_ack_status(&1, ack_status)) end
+    })
+  end
+
+  defp with_candidate(intent_id, fun) do
+    case Candidates.get_by_intent_id(intent_id) do
+      nil -> :ok
+      candidate -> fun.(candidate)
+    end
+  end
+
+  defp apply_queue_status(candidate, status) do
+    queue_attrs = %{queue_status: to_string(status)}
+
+    candidate
+    |> maybe_advance(Candidates.queue_status_to_state(status), queue_attrs)
+    |> maybe_record_disposition(Candidates.queue_status_to_disposition(status), queue_attrs)
+    |> maybe_close(status in @terminal_statuses, Candidates.queue_status_to_closed_reason(status))
+
+    :ok
+  end
+
+  defp apply_ack_status(candidate, :working) do
+    maybe_advance(candidate, :acting, %{queue_status: "acked"})
+    :ok
+  end
+
+  defp apply_ack_status(candidate, :completed),
+    do: close_ack(candidate, :accepted, "completed", :done)
+
+  defp apply_ack_status(candidate, :rejected),
+    do: close_ack(candidate, :rejected, "completed", :dismissed)
+
+  defp apply_ack_status(candidate, :cancel_honored),
+    do: close_ack(candidate, :rejected, "cancelled", :retracted)
+
+  defp apply_ack_status(_candidate, _ack_status), do: :ok
+
+  defp close_ack(candidate, disposition, queue_status, closed_reason) do
+    candidate
+    |> maybe_record_disposition(disposition, %{queue_status: queue_status})
+    |> maybe_close(true, closed_reason)
+
+    :ok
+  end
+
+  # `:closed` is never reached through `advance/3` here — closing is
+  # `close/2`'s single write path, applied by `maybe_close/3`.
+  defp maybe_advance(candidate, nil, _attrs), do: candidate
+  defp maybe_advance(candidate, :closed, _attrs), do: candidate
+
+  defp maybe_advance(candidate, state, attrs) do
+    case Candidates.advance(candidate, state, attrs) do
+      {:ok, updated} -> updated
+      # A non-forward transition (a re-drive, or an ack landing on a
+      # state the candidate already reached) is not an error to the
+      # mirror — the durable row already says what we were about to.
+      _ -> candidate
+    end
+  end
+
+  defp maybe_record_disposition(candidate, nil, _attrs), do: candidate
+
+  defp maybe_record_disposition(candidate, disposition, attrs) do
+    case Candidates.record_disposition(candidate, disposition, attrs) do
+      {:ok, updated} -> updated
+      _ -> candidate
+    end
+  end
+
+  defp maybe_close(candidate, false, _reason), do: candidate
+  defp maybe_close(candidate, true, nil), do: candidate
+
+  defp maybe_close(candidate, true, reason) do
+    case Candidates.close(candidate, reason) do
+      {:ok, updated} -> updated
+      _ -> candidate
+    end
+  end
+
+  # The queue accepts whatever a transcript payload carried; the
+  # candidate's uuid columns do not. A non-uuid identifier degrades to
+  # nil rather than costing the whole row — losing the room reference
+  # is cheaper than losing the outcome.
+  defp uuid_or_nil(value) do
+    if Platform.UUID.valid?(value), do: value
+  end
+
+  defp stringify(nil), do: nil
+  defp stringify(value) when is_binary(value), do: value
+  defp stringify(value) when is_atom(value), do: Atom.to_string(value)
+  defp stringify(value), do: to_string(value)
+
+  # THE non-fatal boundary. Rescues exceptions AND catches exits (a
+  # checked-out sandbox connection going away arrives as an exit, not a
+  # raise), so no Postgres failure mode can reach the caller.
+  defp mirror(%{meeting_id: meeting_id, intent_id: intent_id, fun: fun}) do
+    fun.()
+    :ok
+  rescue
+    error ->
+      log_mirror_failure(meeting_id, intent_id, Exception.message(error))
+  catch
+    :exit, reason ->
+      log_mirror_failure(meeting_id, intent_id, inspect(reason))
+  end
+
+  defp log_mirror_failure(meeting_id, intent_id, detail) do
+    Logger.warning(
+      "[IntentQueue] candidate mirror failed meeting_id=#{meeting_id} " <>
+        "intent_id=#{intent_id} error=#{detail}"
+    )
+
+    :ok
+  end
 
   # ── Stage-6 correction hooks ───────────────────────────────────────────────
   #
@@ -1072,6 +1267,8 @@ defmodule Platform.Meetings.IntentQueue.Server do
     state =
       %{state | dedupe_index: dedupe_index, seq: seq}
       |> maybe_learn_room(row)
+
+    mirror_enqueue(state, row, Map.get(attrs, :outcome_kind))
 
     emit_enqueue_telemetry(state, :inserted, row)
     MeetingsPubSub.broadcast_intent_classified(state.meeting_id, row)
