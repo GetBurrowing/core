@@ -308,6 +308,12 @@ function mountHook(scrollEl) {
   const ctx = Object.create(ScrollToBottom);
   ctx.el = el;
   ctx.handleEvent = () => {};
+  // `mounted()` reports the reader's position to the server on the way
+  // through (`_reportDistance`, task 01a03c76 — landed after this guard was
+  // written). Without a stub the real mounted() throws before it ever gets to
+  // the listener wiring this test exists to check, which is how this test
+  // went red on main.
+  ctx.pushEvent = () => {};
   ScrollToBottom.mounted.call(ctx);
 
   Object.assign(globalThis, prev);

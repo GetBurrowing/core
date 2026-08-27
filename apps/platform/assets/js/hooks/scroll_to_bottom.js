@@ -15,11 +15,14 @@
 // discarding the user's reading position:
 //
 // 1. Snaps are gated. The initial-load phase hard-snaps to bottom and ends
-//    the first time the container actually overflows; from then on a snap
-//    only fires when the user is already within NEAR_BOTTOM_PX of the
-//    bottom. (Previously the initial phase persisted until the user
-//    scrolled >300px up, which made every later update an unconditional
-//    yank-to-bottom for anyone who hadn't.)
+//    on ARRIVAL — 250ms of quiet layout, a 3s ceiling, or a real
+//    wheel/touchmove/keydown gesture, whichever lands first (task
+//    01a03f3a); from then on a snap only fires when the user is already
+//    within NEAR_BOTTOM_PX of the bottom. (Previously the initial phase
+//    persisted until the user scrolled >300px up, which made every later
+//    update an unconditional yank-to-bottom for anyone who hadn't. The
+//    exit was then moved to the first OVERFLOW, which is a bad proxy for
+//    arrival — see the long note in `scrollToBottom` for why.)
 //
 // 3. Deep-link arrival is held (task 019fabe8 stage 3). When
 //    `handle_params/3` accepts a `?message=<id>` link it renders

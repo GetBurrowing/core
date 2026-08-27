@@ -7,9 +7,16 @@ import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js";
  *
  * Background: `scrollToBottom()` hard-snaps `scrollTop = scrollHeight`
  * on mount and again on EVERY MutationObserver fire while
- * `_initialScroll` is true, and that phase only ends once the container
- * actually overflows. Stream batches land async after mount, so an
- * anchored window (stages 1 + 2) gets yanked to the bottom repeatedly —
+ * `_initialScroll` is true. That phase ends on ARRIVAL — 250ms of quiet
+ * layout, a 3s ceiling, or a real wheel/touchmove/keydown gesture —
+ * whichever comes first (task 01a03f3a). It used to end the first time
+ * the container merely OVERFLOWED; these fixtures overflow on the mount
+ * frame (4000 > 600), so under the old rule the phase was spent before
+ * the first assertion ran, and several tests below silently depended on
+ * that. See `mountedAndScrolledUp` and the BASELINE test.
+ *
+ * Stream batches land async after mount, so an anchored window
+ * (stages 1 + 2) gets yanked to the bottom repeatedly —
  * including after `chat:scroll-to-message` has already centred the
  * target. Server-side anchoring cannot win that race; the hook has to
  * be told not to snap. `#message-list` carries
@@ -206,7 +213,7 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
     else delete globalThis.requestAnimationFrame;
   });
 
-  it("BASELINE: with no anchor attribute, mount hard-snaps to the bottom", () => {
+  it("BASELINE: with no anchor attribute, mount hard-snaps to the bottom", async () => {
     const el = fakeList({ rows: [fakeRow("m-1"), fakeRow("m-2")] });
     const hook = buildHook(el);
 
@@ -216,8 +223,27 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
     // against. If this ever stops snapping, the "anchor suppressed the
     // snap" assertions below become vacuous.
     expect(el.scrollTopWrites).toEqual([4000]);
-    expect(hook._initialScroll).toBe(false);
     expect(anchoredRows(el)).toEqual([]);
+
+    // The arrival phase is still OPEN on the mount frame, and that is the
+    // contract task 01a03f3a landed. It used to end the moment the container
+    // merely overflowed, which this fixture does immediately (4000 > 600) —
+    // and ending it there also tore down the late-layout ResizeObserver on
+    // that same frame, stranding a reader above the newest message once
+    // fonts/images/tables grew the list by more than NEAR_BOTTOM_PX.
+    // Restoring the overflow exit flips this back to false.
+    expect(hook._initialScroll).toBe(true);
+
+    // …and it must still END, or the fix reinstates the unconditional
+    // yank-to-bottom that task 019f51d1 removed — the direction the deleted
+    // `toBe(false)` assertion used to cover. Waited out in real time past
+    // SETTLE_QUIET_MS (250ms) rather than reaching into the hook's timers,
+    // the same idiom as the sibling guard in
+    // test/scroll_to_bottom_arrival_test.mjs.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(hook._initialScroll).toBe(false);
+    // The settle exit is not a second snap: nothing moved while it waited.
+    expect(el.scrollTopWrites).toEqual([4000]);
   });
 
   it("honours the anchor instead of the initial snap", () => {
@@ -520,12 +546,22 @@ describe("ScrollToBottom — conversation change re-arms the initial snap", () =
   // Mount in one conversation, then park the reader well above the bottom
   // and clear the mount's own writes so each test measures ONLY what the
   // subsequent `updated()` did.
+  //
+  // The mount snap does NOT end the arrival phase any more (task 01a03f3a);
+  // it ends on quiet layout, a 3s ceiling, or a real reader gesture. This
+  // fixture's reader is one who SCROLLED UP, and scrolling up is that
+  // gesture — so end the phase the way this reader actually would, through
+  // the wheel listener `mounted()` really registered, rather than by poking
+  // `_initialScroll` directly. Driving the shipped wiring is what keeps the
+  // "does NOT snap" test below non-vacuous: unwire the gesture exit and the
+  // phase stays open, every `updated()` hard-snaps, and it goes red.
+  //
+  // Everything after this point is the near-bottom gate's business.
   function mountedAndScrolledUp(opts = {}) {
     const el = fakeList({ rows: [fakeRow("m-1"), fakeRow("m-2")], ...opts });
     const hook = buildHook(el);
     hook.mounted();
-    // The mount snap ended the initial phase; anything later is the
-    // near-bottom gate's business.
+    el.emit("wheel");
     expect(hook._initialScroll).toBe(false);
     el._scrollTop = 500;
     el.scrollTopWrites = [];
