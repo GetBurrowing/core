@@ -840,7 +840,19 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/meetings/sender_seed.ex" => 1,
     "platform/memory_feedback.ex" => 1,
     "platform/orchestration/context_assembler.ex" => 1,
-    "platform/orchestration/execution_space.ex" => 3,
+    # 3 → 4 for task 01a03ed3's `latest_engagement/1`, the durable read of the
+    # last engagement the TaskRouter posted into an execution space. Triaged by
+    # hand: the `where:` clause DOES pin an id (`m.space_id == ^space_id`), so
+    # a malformed value would raise `Ecto.Query.CastError` the same way a bare
+    # `Repo.get/2` would. It is NOT boundary-reachable and carries no
+    # `Platform.UUID.valid?/1` guard, for the same reason its sibling
+    # `list_messages_with_participants/2` in this module does not: the only
+    # caller shape is a `space_id` already read off a `chat_spaces` row, via
+    # `find_by_task_id/1` or the router's own `state.execution_space_id`.
+    # Nothing hands this function a raw path segment or tool argument. If a
+    # caller ever does, it needs the guard — and this count is the tripwire
+    # that will make somebody look.
+    "platform/orchestration/execution_space.ex" => 4,
     "platform/orchestration/runtime_supervision.ex" => 4,
     "platform/org/context.ex" => 4,
     "platform/org/preamble_builder.ex" => 3,

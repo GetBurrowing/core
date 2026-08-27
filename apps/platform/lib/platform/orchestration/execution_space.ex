@@ -298,6 +298,48 @@ defmodule Platform.Orchestration.ExecutionSpace do
     end)
   end
 
+  @doc """
+  Return the newest engagement the TaskRouter posted into `space_id`, or `nil`.
+
+  "Engagement" here is narrower than "not log-only": the row must carry BOTH
+  `metadata["kind"] == "engagement"` and `metadata["source"] == "task_router"`.
+  Both halves are load-bearing for the caller this exists for, a guard that
+  reads the last dispatch back off the space. `post_log/2` writes
+  `"kind" => "log"` under the same `"source"`, and a human or another agent
+  can post a plain message into an execution space with no `kind` at all;
+  either one matching would let a short status line stand in for the dispatch
+  prompt the guard is trying to compare against.
+
+  Ordering is `inserted_at` DESC then `id` DESC. The tiebreak is not
+  decoration: `inserted_at` is `:utc_datetime_usec` and two posts inside the
+  same microsecond would otherwise return in whatever order Postgres felt
+  like. Message ids are UUIDv7 (`Platform.Chat.Message`), so their byte order
+  is time order and the second key resolves the tie the same way the first
+  one would have.
+
+  Returns a map with `:id`, `:content`, `:content_type`, `:log_only`,
+  `:metadata` and `:inserted_at`.
+  """
+  @spec latest_engagement(binary()) :: map() | nil
+  def latest_engagement(space_id) do
+    from(m in Message,
+      where: m.space_id == ^space_id and is_nil(m.deleted_at),
+      where: fragment("?->>'kind' = ?", m.metadata, "engagement"),
+      where: fragment("?->>'source' = ?", m.metadata, "task_router"),
+      order_by: [desc: m.inserted_at, desc: m.id],
+      limit: 1,
+      select: %{
+        id: m.id,
+        content: m.content,
+        content_type: m.content_type,
+        log_only: m.log_only,
+        metadata: m.metadata,
+        inserted_at: m.inserted_at
+      }
+    )
+    |> Repo.one()
+  end
+
   defp system_participant_id(space_id) do
     # Deterministic UUID-like ID for system participant per space
     :crypto.hash(:sha256, "task_router_system:#{space_id}")
