@@ -59,13 +59,58 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     * `default_prompt_template` — `"architecture.review_plan.v1"`
     * `cost_profile` — `low_freq_capable`
 
-  ## `similar_tasks/2` opt-in
+  ## No `similar_tasks` slot (removed — task `01a044b3-6868`)
 
-  Task `019f3dbb` (vectorize-tasks) is landing a
-  `Platform.Tasks.similar_tasks/2` helper that could enrich the
-  duplicate-abstraction check. This handler probes for it via
-  `Code.ensure_loaded?/1` and uses it if present; if not the sibling
-  walk alone is enough for v1 and no error is raised.
+  This handler used to gather a fourth, undeclared `:similar_tasks`
+  slot behind a `function_exported?(Tasks, :similar_tasks, 2)` probe,
+  in anticipation of a helper task `019f3dbb` (vectorize-tasks) was
+  expected to land. The helper never landed, so the probe was
+  permanently false and the slot was permanently `[]` — but the
+  handler's shape said the gate considered similar tasks, and a reader
+  auditing the gate's duplicate detection would have concluded that it
+  did.
+
+  It was dead twice over, and the second one is why re-landing the
+  probe is not the fix. `context_to_assigns/1` builds the assigns from
+  the four names `architecture.review_plan.v1` declares as `variables`
+  — `plan_summary`, `sibling_tasks`, `open_prs`, `adr_index` — and
+  `similar_tasks` was not among them. Even with the helper in place the
+  value had no path to the model: it would have been gathered, dropped
+  at the assigns boundary, and still never seen.
+
+  There is also nothing to re-point the probe AT. Nothing named
+  `similar_tasks` is public anywhere in `:platform`. The two things
+  that exist are neither reachable by `function_exported?/3` nor
+  shaped for this caller:
+
+    * `Platform.Federation.ToolSurface.similar_tasks_for/1` — the
+      advisory field on `task_create`. It is `defp`, so the probe could
+      never have seen it under any name, and it takes a `%Task{}`.
+    * `Platform.Tasks.similar_open_titles/3` — public, but a
+      `(project_id, title, opts)` Jaro-on-titles dedup gate owned by
+      `Meetings.Triage`, not a plan-level duplicate check.
+
+  And the create-path signal is not one this gate should consume as it
+  stands. `ToolSurface.hit_similarity_score/1` is
+  `1.0 / min(semantic_rank, lexical_rank)` — the reciprocal of a hit's
+  ORDINAL POSITION, not a measure of similarity — so rank 1 scores
+  exactly 1.0 and rank 2 exactly 0.5 whatever the content, and the
+  `>= 0.5` cutoff filters on rank rather than on similarity. Any two
+  unrelated queries in the same project therefore return the same top
+  two rows at the same two scores. Feeding that to the architect would
+  be worse than the empty slot: confident, false duplicate claims
+  instead of silence.
+
+  Duplicate detection is not lost meanwhile — `duplicated_logic`
+  verdicts come from the `:sibling_tasks` slot, which works. If this
+  gate should get its own similar-task block, it needs a real
+  similarity source plus a template change (a new `variables` entry, a
+  renderer, a force-update migration), built deliberately rather than
+  restored as a probe.
+
+  The invariant that keeps it gone is behavioural, not a grep: the
+  gathered map's keys must equal `context_provided`, asserted in
+  `test/platform/responsibilities/architecture_context_bridge_test.exs`.
 
   ## Native-vs-external dispatch
 
@@ -86,7 +131,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
 
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
-  alias Platform.Repo
   alias Platform.Responsibilities.ADRIndexRenderer
   alias Platform.Responsibilities.ContextProviders
   alias Platform.Responsibilities.Responsibility
@@ -593,12 +637,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     ArgumentError -> nil
   end
 
-  defp load_plan(plan_id) when is_binary(plan_id) do
-    Repo.get(Plan, plan_id)
-  rescue
-    _ -> nil
-  end
-
   defp extract_task_id(trigger_meta) when is_map(trigger_meta) do
     Map.get(trigger_meta, :task_id) || Map.get(trigger_meta, "task_id") ||
       case Map.get(trigger_meta, :plan) || Map.get(trigger_meta, "plan") do
@@ -622,8 +660,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
          %{
            plan_payload: payload,
            sibling_tasks: fetch_sibling_tasks_slot(payload),
-           adr_index: fetch_adr_index_slot(),
-           similar_tasks: similar_tasks_hint(payload)
+           adr_index: fetch_adr_index_slot()
          }}
 
       {:error, reason} ->
@@ -647,8 +684,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
         note: "no plan payload supplied (#{inspect(reason)})"
       },
       sibling_tasks: @empty_siblings,
-      adr_index: @unavailable_adr_index,
-      similar_tasks: []
+      adr_index: @unavailable_adr_index
     }
   end
 
@@ -689,29 +725,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
         @empty_siblings
     end
   end
-
-  # Probe for the (still-unlanded) `Tasks.similar_tasks/2`. It takes a
-  # `%Plan{}`, so the plan is re-read from the payload's id — a query
-  # that only ever runs once the helper actually exists.
-  defp similar_tasks_hint(%{plan_id: plan_id}) when is_binary(plan_id) do
-    if Code.ensure_loaded?(Tasks) and function_exported?(Tasks, :similar_tasks, 2) do
-      case load_plan(plan_id) do
-        %Plan{} = plan ->
-          try do
-            apply(Tasks, :similar_tasks, [plan, []])
-          rescue
-            _ -> []
-          end
-
-        _ ->
-          []
-      end
-    else
-      []
-    end
-  end
-
-  defp similar_tasks_hint(_payload), do: []
 
   # The ADR walk is no longer materialised here either — it is the
   # `:adr_index` slot on `ContextProviders`, which owns the directory

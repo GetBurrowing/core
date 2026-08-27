@@ -418,8 +418,6 @@ defmodule Platform.RepoLookupBoundaryTest do
      :flagged_sibling_owned, "sibling-owned handler — RECORD, DO NOT EDIT"},
     {"platform/responsibilities/handlers/architecture_audit_diff.ex", :get, "TaskSchema", 1,
      :flagged_sibling_owned, "sibling-owned handler — RECORD, DO NOT EDIT"},
-    {"platform/responsibilities/handlers/architecture_review_plan.ex", :get, "Plan", 1,
-     :flagged_sibling_owned, "sibling-owned handler — RECORD, DO NOT EDIT"},
     {"platform/responsibilities/router.ex", :get, "Message", 1, :flagged_sibling_owned,
      "`load_message_with_space_kind/1` takes `message_id` off a responsibility trigger payload; sibling-owned — RECORD, DO NOT EDIT"},
     {"platform/responsibilities/router.ex", :get, "Platform.Chat.Space", 1,

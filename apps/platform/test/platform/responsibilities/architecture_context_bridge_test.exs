@@ -597,6 +597,69 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
       assert gathered.sibling_tasks == expected_siblings
       assert gathered.adr_index == expected_adrs
     end
+
+    # ── the gathered map carries no slot the handler does not declare ──
+    #
+    # The counterpart to test 2. Test 2 walks declaration → resolver and
+    # catches a slot that is promised but cannot be produced. This walks
+    # the other way — gathered map → declaration — and catches a slot
+    # that is produced but was never promised, which is the shape that
+    # reads as working while doing nothing.
+    #
+    # An undeclared key in the gathered map is dead by construction:
+    # `context_to_assigns/1` builds the assigns from the four names the
+    # `architecture.review_plan.v1` template declares as `variables`, so
+    # a key outside that set has no path to the model. Nothing errors,
+    # nothing logs, and every existing test stays green — the slot is
+    # simply never read. Set equality is deliberate: it fires both on a
+    # new undeclared key and on a declared slot the handler stopped
+    # gathering.
+    test "gathers exactly the slots it declares — no undeclared, unrendered key" do
+      [spec] = ArchitectureReviewPlan.register()
+      declared = MapSet.new(spec.context_provided)
+
+      {:ok, project} = Tasks.create_project(%{name: "Arch Slot Inventory Project"})
+      task = insert_task!(project.id, %{title: "Slot inventory anchor", status: "planning"})
+      plan = plan_with_status!(task.id, "pending_review")
+
+      {:ok, gathered} =
+        ArchitectureReviewPlan.gather_context(responsibility(), %{
+          plan_id: plan.id,
+          task_id: task.id,
+          plan: plan
+        })
+
+      assert MapSet.new(gathered, fn {slot, _value} -> Atom.to_string(slot) end) == declared,
+             """
+             The gathered context and `context_provided` disagree.
+
+             gathered:  #{gathered |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort() |> inspect()}
+             declared:  #{declared |> MapSet.to_list() |> Enum.sort() |> inspect()}
+
+             A key present only in the gathered map is never read by
+             `context_to_assigns/1` and never reaches the model. A name
+             present only in `context_provided` is promised and not
+             produced.
+             """
+    end
+
+    # The refusal path builds its own map (`empty_context/1`) rather than
+    # falling out of `do_gather_context/1`, so it can drift from the
+    # success path independently. It is also the arm a reader is most
+    # likely to copy a slot into, because it looks like a shape
+    # declaration rather than like a gather.
+    test "the refusal path's context carries the same slots as the success path" do
+      gathered = ArchitectureReviewPlan.gather_context(%{})
+
+      [spec] = ArchitectureReviewPlan.register()
+
+      assert MapSet.new(gathered, fn {slot, _value} -> Atom.to_string(slot) end) ==
+               MapSet.new(spec.context_provided)
+
+      # Positive control: this really is the refusal arm, not a
+      # successful gather that happens to be empty.
+      assert %{missing?: true} = gathered.plan_payload
+    end
   end
 
   # ── helpers ──────────────────────────────────────────────────────────────
