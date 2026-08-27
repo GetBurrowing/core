@@ -336,13 +336,32 @@ defmodule Platform.Meetings do
           meeting_id = Platform.Types.UUIDv7.generate()
           chat_space_slug = "meeting-#{meeting_id}"
 
+          # Scope the backing chat space to the project's org, through the same
+          # two helpers `create_guest_chat_space/2` uses at `:1232`/`:1245` —
+          # not a second derivation of meeting -> project -> org. The meeting
+          # row does not exist yet, so `resolve_meeting_org_id/1` is handed the
+          # struct it is about to be built from; it reads only `project_id`,
+          # and `require_present/2` above has already established that this one
+          # is a non-empty binary, so the nil clause is unreachable from here.
+          #
+          # `maybe_put_org_id/2` DROPS the key when the org does not resolve
+          # rather than writing an explicit nil. That is deliberate and must
+          # stay: a project with no org still gets its meeting a space. A
+          # nil-org space is degraded; a meeting that cannot be created is
+          # broken. `ExternalUserScope.system_prefix_fallback/1` keeps carrying
+          # those rows, as it does for the `dm-` / `group-` kinds that are
+          # cross-org by design and stay nil forever.
+          space_attrs =
+            %{
+              name: name,
+              slug: chat_space_slug,
+              kind: "meeting",
+              metadata: %{"project_id" => project_id}
+            }
+            |> maybe_put_org_id(resolve_meeting_org_id(%Meeting{project_id: project_id}))
+
           space =
-            case Chat.create_space(%{
-                   name: name,
-                   slug: chat_space_slug,
-                   kind: "meeting",
-                   metadata: %{"project_id" => project_id}
-                 }) do
+            case Chat.create_space(space_attrs) do
               {:ok, space} -> space
               {:error, changeset} -> Repo.rollback(changeset)
             end

@@ -715,23 +715,83 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
   # The fix does not widen the gate: `authorized_space?/2` still decides, and
   # it still requires a real `chat_participants` row or the DM allowlist. What
   # changed is that resolution now FINDS the row so the authorizer gets to run.
+  #
+  # ── UPDATE, task 019fcfdd stage 2 ──────────────────────────────────────
+  #
+  # The root fix landed: `Meetings.create_meeting/1` now stamps the project's
+  # `org_id` onto the space it mints, so `meeting!()` no longer produces the
+  # org-less row this block was built on. The setup's original guard —
+  # `assert is_nil(space.org_id)` — fired on all four tests, which is exactly
+  # what it was left there to do.
+  #
+  # The fallback is NOT obsolete and is deliberately not being deleted. It
+  # still carries every meeting space created before the fix (until the stage 3
+  # backfill lands), and permanently carries the `dm-` / `group-` /
+  # `task-exec-` prefixes, which are cross-org by design and stay NULL forever.
+  # So this block keeps testing the fallback, and the setup now makes the row
+  # org-less EXPLICITLY rather than relying on `create_meeting/1` to do it by
+  # omission. The row under test represents a pre-backfill historical meeting
+  # space — the population the fallback exists for.
+  #
+  # `an INVITED member reaches a meeting space that CARRIES an org` below is
+  # the new-path counterpart, so both resolution routes are pinned.
   describe "external users — the chat space bound to a meeting" do
     setup do
       meeting = meeting!()
-      space = Chat.get_space(meeting.chat_space_id)
+
+      # Strip the org the constructor now writes, so this row is the
+      # pre-backfill shape the reserved-prefix fallback is responsible for.
+      # Done through a bare changeset rather than `Chat.create_space/1` so it
+      # cannot drift if the constructor's attrs change again.
+      space =
+        meeting.chat_space_id
+        |> Chat.get_space()
+        |> Ecto.Changeset.change(%{org_id: nil})
+        |> Repo.update!()
 
       # ANTI-VACUITY, both halves. If either of these stops holding, this block
       # is exercising some other resolution path and proves nothing about the
       # bug: the org-scoped lookup has to MISS (org_id is NULL) and the
       # bare-UUID fallback has to MISS (the slug is not a UUID).
       assert is_nil(space.org_id),
-             "meeting spaces are minted org-less; a non-nil org_id here means " <>
-               "the root fix landed and this test now proves nothing"
+             "the row under test must be org-less or the org-scoped lookup " <>
+               "answers at step 1 and the fallback this block exists for is " <>
+               "never reached"
 
       refute Platform.UUID.valid?(space.slug)
       assert String.starts_with?(space.slug, "meeting-")
 
       %{meeting: meeting, meeting_space: space}
+    end
+
+    # The counterpart to the block above: since task 019fcfdd stage 2 a NEW
+    # meeting's space carries its project's org, so resolution answers at the
+    # org-scoped step and never reaches `system_prefix_fallback/1`. Admission
+    # must be unchanged. This passed before that change too — via the fallback
+    # rather than via the scoped lookup — so it is a regression control, not a
+    # newly-fixed behaviour.
+    test "an INVITED member reaches a meeting space that CARRIES an org", ctx do
+      meeting = meeting!()
+      space = Chat.get_space(meeting.chat_space_id)
+
+      # The premise: this row took the OTHER route into resolution.
+      refute is_nil(space.org_id),
+             "create_meeting/1 has stopped stamping the org — this test is now " <>
+               "a duplicate of the org-less case above"
+
+      invite!(meeting, ctx.ext_user)
+      join!(space, ctx.ext_user.id)
+
+      conn =
+        run_on_host(
+          "/chat/" <> space.slug,
+          "chat.example.com",
+          ctx.ext_user,
+          ctx.ext_membership
+        )
+
+      refute conn.halted,
+             "an invited member was denied a meeting chat that now carries an org"
     end
 
     test "an INVITED member reaches their own meeting's chat space", ctx do

@@ -49,6 +49,10 @@ defmodule Platform.PendingFix do
   #     NOT resolve a review slug", by teaching
   #     `DispatchPhase.review_status_without_unmet_gate?/2` to refuse the
   #     stale-status fallthrough into a reviewer slug.
+  #   * task `019fcfdd` — the meeting chat space that carried no `org_id`.
+  #     Registered by stage 1 and retired by stage 2, which wired the existing
+  #     `Meetings.resolve_meeting_org_id/1` + `maybe_put_org_id/2` into
+  #     `Meetings.create_meeting/1`.
   #
   # The registry is EMPTY, and that is its healthy state. `excluded_tags/0`
   # then returns `[]`, so `test/test_helper.exs` excludes nothing on this
