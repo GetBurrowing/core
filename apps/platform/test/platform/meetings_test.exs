@@ -2221,11 +2221,43 @@ defmodule Platform.MeetingsTest do
       assert Meetings.transcriber_presence_seconds(nil) == 0
     end
 
-    test "there is no transcriber: identity prefix — parse_identity returns :unknown" do
-      # Pins the corrected premise: parse_identity/1 accepts only
-      # user:/agent:/guest:, so a transcriber lands as a nil-FK row and must
-      # be matched by name/metadata, not by identity kind.
+    test "a transcriber: identity resolves to no FK — parse_identity returns :unknown" do
+      # Why the marker match runs over display_name/metadata rather than the
+      # parsed identity kind: parse_identity/1 accepts only the identities
+      # Suite itself mints (user:/agent:/guest:), so a transcriber lands as a
+      # nil-FK row whatever prefix it joins with. This says nothing about
+      # which prefix the external worker actually uses.
       assert Meetings.parse_identity("transcriber:" <> Ecto.UUID.generate()) == :unknown
+    end
+
+    test "an identity-prefix marker alone is enough to detect a transcriber" do
+      # The `transcriber:` entry in @transcriber_identity_markers is not
+      # decorative. A row whose display_name matches no marker is detected by
+      # that entry alone, via metadata["identity"]. Mutation: delete
+      # `"transcriber:"` from the marker list and this test fails.
+      {space, room} = presence_room!()
+      room_name = room.livekit_room_name
+      transcript = presence_transcript!(space.id, room_name)
+
+      join!(room, "Transcription", 600, metadata: %{"identity" => "transcriber:#{room_name}"})
+
+      assert Meetings.transcriber_presence_seconds(transcript) >= 600
+      assert Meetings.transcriber_present_for_threshold?(transcript)
+    end
+
+    test "a display name carrying no marker is not a transcriber on its own" do
+      # The counterpart to the test above, and the reason the identity marker
+      # carries the check: "Transcription" contains neither marker, so an
+      # identityless row with that display_name measures zero. Mutation: add
+      # a `"transcription"` marker to the list and this test fails.
+      {space, room} = presence_room!()
+      room_name = room.livekit_room_name
+      transcript = presence_transcript!(space.id, room_name)
+
+      join!(room, "Transcription", 3600)
+
+      assert Meetings.transcriber_presence_seconds(transcript) == 0
+      refute Meetings.transcriber_present_for_threshold?(transcript)
     end
   end
 

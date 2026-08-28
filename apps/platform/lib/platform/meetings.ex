@@ -3182,17 +3182,32 @@ defmodule Platform.Meetings do
 
   # ── Transcriber presence ─────────────────────────────────────────────────
 
-  # Lowercase substrings matched against BOTH `display_name` and
-  # `metadata["identity"]` of a `meeting_participants` row.
+  # Substrings matched against BOTH `display_name` and
+  # `metadata["identity"]` of a `meeting_participants` row. The match is
+  # case-insensitive by downcasing the haystacks only (see
+  # `transcriber_marker?/1`), so every entry here must be lowercase.
   #
-  # There is no `transcriber:` identity prefix in this codebase today —
-  # `parse_identity/1` accepts exactly `user:`, `agent:` and `guest:` and
-  # returns `:unknown` for anything else, so a LiveKit-dispatched
-  # transcriber lands as a nil-FK row carrying the webhook `name` and the
-  # raw identity in `metadata`. The agent name below is the same literal
-  # the token/room-creation path dispatches. The `transcriber:` entry is
-  # forward-compat for a future identity scheme, not a description of
-  # today's behaviour.
+  # Both of those fields arrive on the LiveKit `participant_joined`
+  # webhook and are minted by the external transcriber worker, which does
+  # not live in this repo (ADR 0036). Nothing here produces either literal
+  # on a participant row, so neither entry can be confirmed or refuted
+  # from this codebase — do NOT prune one for looking speculative.
+  # Narrowing this list silently restores the failure the check exists to
+  # catch (an empty transcript reported as a cheerful success), and the
+  # suite seeds its own rows, so tests staying green is not evidence.
+  #
+  # `parse_identity/1` returns `:unknown` for a `transcriber:` identity.
+  # That is WHY such a participant lands as a nil-FK row and has to be
+  # matched by these strings at all; it is not evidence that no worker
+  # joins with that prefix. `parse_identity/1` only governs the
+  # identities Suite itself mints (`user:` / `agent:` / `guest:`).
+  #
+  # `"meeting-transcriber"` is the literal the token/room-creation path
+  # dispatches as `agentName` — a dispatch-rule name, which is not
+  # necessarily the identity or display name the worker then joins with.
+  #
+  # Overridable at runtime (`transcriber_identity_markers/0`), so a row
+  # shape observed in the field can be added without a deploy.
   @transcriber_identity_markers ["meeting-transcriber", "transcriber:"]
 
   # A transcriber emits its first segment within seconds of the first
