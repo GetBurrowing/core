@@ -19,6 +19,7 @@ defmodule PlatformWeb.MCPController do
   use PlatformWeb, :controller
 
   alias Platform.Chat
+  alias Platform.Federation.ResultBound
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
 
@@ -137,11 +138,27 @@ defmodule PlatformWeb.MCPController do
 
   # ── MCP schema translation ──────────────────────────────────────────
 
+  # `_meta` carries `anthropic/maxResultSizeChars` (task 01a049de).
+  #
+  # READ THE DIRECTION OF THIS FIELD BEFORE CHANGING IT. It is an escape hatch
+  # that RAISES a client's result ceiling, not a cap that lowers it: Claude
+  # Code truncates an MCP result at `MAX_MCP_OUTPUT_TOKENS` (default 25_000
+  # tokens) and persists the remainder to disk, and a tool declaring this field
+  # gets that number instead, up to 500_000 characters. The ticket for this
+  # work called declaring the 500K ceiling "the direct lever"; declaring 500K
+  # would have RAISED our ceiling roughly five-fold and made the problem worse.
+  #
+  # So we declare `ResultBound.max_result_bytes/0` — a number BELOW the client
+  # default — which states the server's own guarantee and lowers the ceiling
+  # for any client that honours the field. The real enforcement is
+  # `ResultBound.fit/2` on the way out, because this field is advisory, is
+  # Claude-Code-specific, and does nothing at all for the other transport.
   defp to_mcp_tool(tool) do
     %{
       name: tool.name,
       description: tool.description,
-      inputSchema: to_input_schema(tool.parameters)
+      inputSchema: to_input_schema(tool.parameters),
+      _meta: %{"anthropic/maxResultSizeChars" => ResultBound.max_result_bytes()}
     }
   end
 
@@ -181,8 +198,29 @@ defmodule PlatformWeb.MCPController do
 
   defp property_schema(_), do: %{type: "string"}
 
+  # The transport backstop (task 01a049de). Every tool passes through here, so
+  # this is the one place that can promise "no MCP result floods a context
+  # window" without auditing ~98 handlers. The per-tool bounds on `task_list`,
+  # `stage_list` and `review_item_list` shape a GOOD answer; this catches the
+  # ones nobody has shaped yet.
+  #
+  # When it has to drop records, the notice goes in a SECOND content block
+  # rather than into the JSON. That keeps the first block's shape byte-identical
+  # to what the tool declared it returns — a bare array stays a bare array, and
+  # no caller has to learn a new envelope to survive a truncation it may never
+  # hit. `ResultBound.fit/2` shrinks the term and re-encodes, so block one
+  # always parses.
   defp success_content(data) do
-    %{content: [%{type: "text", text: Jason.encode!(data)}], isError: false}
+    case ResultBound.fit(data) do
+      {:ok, json} ->
+        %{content: [%{type: "text", text: json}], isError: false}
+
+      {:truncated, json, note} ->
+        %{
+          content: [%{type: "text", text: json}, %{type: "text", text: note}],
+          isError: false
+        }
+    end
   end
 
   # Symmetric with `success_content/1` directly above, and the symmetry is the

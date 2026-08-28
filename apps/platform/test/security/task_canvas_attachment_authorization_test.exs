@@ -1347,7 +1347,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     #
     # This test does not argue either way. It makes the fact go red when it
     # stops being a fact.
-    test "tools/list forwards only name, description and inputSchema" do
+    test "tools/list forwards only name, description, inputSchema and _meta" do
       token = runtime_token!(agent!(), ["task"])
 
       %{"result" => %{"tools" => tools}} = rpc!(token, "tools/list", %{})
@@ -1356,7 +1356,22 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
         wire = Enum.find(tools, &(&1["name"] == name))
         assert wire, "#{name} missing from tools/list"
 
-        assert Map.keys(wire) |> Enum.sort() == ["description", "inputSchema", "name"]
+        # `_meta` joined this list in task 01a049de; it carries
+        # `anthropic/maxResultSizeChars` and nothing else. The whitelist is
+        # still exact — a new key has to be added here deliberately.
+        assert Map.keys(wire) |> Enum.sort() == ["_meta", "description", "inputSchema", "name"]
+        assert Map.keys(wire["_meta"]) == ["anthropic/maxResultSizeChars"]
+
+        # The whitelist above is a proxy for the property this guard actually
+        # exists to defend, so state the property outright as well: none of the
+        # internal documentation keys reach a hosted runtime, whatever the
+        # projection's key set happens to be. Key equality alone would have to
+        # be re-reasoned about every time a legitimate key is added — this
+        # assertion does not.
+        for internal <- ~w(limitations returns when_to_use bundle parameters) do
+          refute Map.has_key?(wire, internal),
+                 "#{name} leaked #{internal} to a hosted runtime"
+        end
 
         definition = Enum.find(ToolSurface.tool_definitions(), &(&1.name == name))
 

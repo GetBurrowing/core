@@ -118,6 +118,114 @@ defmodule PlatformWeb.MCPControllerTest do
 
       assert tools == []
     end
+
+    # Task 01a049de. `_meta["anthropic/maxResultSizeChars"]` is the field a
+    # client reads to size a tool's result budget.
+    test "every tool declares a result-size ceiling below the client default", %{conn: conn} do
+      {_runtime, token} = create_runtime()
+      conn = mcp_post(conn, token, rpc("tools/list"))
+      %{"result" => %{"tools" => tools}} = json_response(conn, 200)
+
+      assert tools != []
+
+      for tool <- tools do
+        declared = get_in(tool, ["_meta", "anthropic/maxResultSizeChars"])
+
+        assert is_integer(declared),
+               "#{tool["name"]} declares no anthropic/maxResultSizeChars"
+
+        # The direction of this assertion is the point, and it is the opposite
+        # of what the ticket asked for. The field RAISES a client's ceiling
+        # (Claude Code truncates at MAX_MCP_OUTPUT_TOKENS, default 25_000
+        # tokens, and honours this value instead when a tool sets it). The
+        # protocol allows up to 500_000; declaring 500_000 would have raised
+        # our ceiling roughly five-fold rather than capping anything. Asserting
+        # a strict upper bound is what stops a future edit from "fixing" this
+        # by turning it up to the maximum.
+        assert declared <= 100_000,
+               "#{tool["name"]} declares #{declared}, which RAISES rather than caps the ceiling"
+      end
+    end
+  end
+
+  describe "result size backstop (task 01a049de)" do
+    test "a normal small result is a single content block and is not annotated", %{conn: conn} do
+      {_runtime, token} = create_runtime()
+      {:ok, project} = Tasks.create_project(%{name: "Backstop Small #{unique()}"})
+      {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "Solo", description: "x"})
+
+      conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "task_list",
+            "arguments" => %{"project_id" => project.id}
+          })
+        )
+
+      %{"result" => %{"content" => content, "isError" => false}} = json_response(conn, 200)
+
+      # POSITIVE CONTROL at the transport. Exactly one block, carrying the
+      # whole answer. A backstop that fired on everything would add a second
+      # block here, and a change that emptied the payload would fail the
+      # decode below.
+      assert [%{"type" => "text", "text" => json}] = content
+      assert [row] = Jason.decode!(json)
+      assert row["title"] == "Solo"
+      assert row["description"] == "x"
+      assert row["description_truncated"] == false
+    end
+
+    test "an oversized result stays valid JSON and carries a truncation notice", %{conn: conn} do
+      {_runtime, token} = create_runtime()
+      {:ok, project} = Tasks.create_project(%{name: "Backstop Big #{unique()}"})
+
+      # `detail: "full"` deliberately defeats the per-field snippet so the
+      # transport backstop is the only thing left standing. Without this the
+      # test would prove the snippet works, not the backstop.
+      blob = String.duplicate("q", 20_000)
+
+      for i <- 1..40 do
+        {:ok, _} =
+          Tasks.create_task(%{project_id: project.id, title: "Big #{i}", description: blob})
+      end
+
+      conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "task_list",
+            "arguments" => %{
+              "project_id" => project.id,
+              "detail" => "full",
+              "limit" => 40
+            }
+          })
+        )
+
+      %{"result" => %{"content" => content, "isError" => false}} = json_response(conn, 200)
+
+      assert [%{"type" => "text", "text" => json}, %{"type" => "text", "text" => note}] = content
+
+      # The assertion the ticket singles out: a cap that cuts mid-structure is
+      # worse than no cap. This must parse.
+      decoded = Jason.decode!(json)
+      assert is_list(decoded)
+      assert byte_size(json) <= 100_000
+
+      # And what survived is whole records, not a mangled tail.
+      assert length(decoded) > 0
+      assert length(decoded) < 40
+      assert Enum.all?(decoded, &is_binary(&1["id"]))
+      assert Enum.all?(decoded, &(String.length(&1["description"]) == 20_000))
+
+      assert note =~ "truncated"
+      assert note =~ "offset"
+    end
+
+    defp unique, do: System.unique_integer([:positive])
   end
 
   describe "tools/call" do

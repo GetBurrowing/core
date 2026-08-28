@@ -68,6 +68,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Tenancy.Org
   alias Platform.Repo
 
+  alias Platform.Federation.ResultBound
   alias Platform.Federation.TaskAttrs
 
   import Ecto.Query, only: [from: 2]
@@ -962,10 +963,29 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: true,
             description: "UUID of the task whose review items you want."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description:
+              "Maximum items to return. Defaults to #{ResultBound.default_limit()}, capped at #{ResultBound.max_limit()}."
+          },
+          offset: %{
+            type: "integer",
+            required: false,
+            description: "How many items to skip before the page. Defaults to 0."
+          },
+          detail: %{
+            type: "string",
+            required: false,
+            description:
+              "\"summary\" (default) truncates `content` and `feedback` to #{ResultBound.snippet_chars()} characters each; \"full\" returns them whole."
           }
         },
         returns:
-          "A map with task_id, count, and `items` — each item carries id, label, status, feedback, reviewed_by, reviewed_at, canvas_id, content, plus review_request_id, request_status and validation_id so you can tell a live ruling from one whose evidence was replaced.",
+          "A map with task_id, count, and `items` — each item carries id, label, status, feedback, reviewed_by, reviewed_at, canvas_id, content, plus review_request_id, request_status and validation_id so you can tell a live ruling from one whose evidence was replaced. " <>
+            "`count` is the TOTAL number of items on the task, not the number returned; `returned_count`, `offset` and `next_offset` (null on the last page) describe the page you got. " <>
+            "In the default summary detail `content` and `feedback` are previews, each with `_truncated` and `_length` siblings.",
         limitations:
           "Reads only. Scoped to the org that owns the task — a tenant-pinned agent reading a sibling org's task is denied before any label or feedback is serialized. A malformed or unknown task_id returns an empty list, not an error.",
         when_to_use:
@@ -1746,11 +1766,35 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description: "Filter by status (backlog, in_progress, in_review, done, etc.)"
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description:
+              "Maximum tasks to return. Defaults to #{ResultBound.default_limit()}, capped at #{ResultBound.max_limit()}."
+          },
+          offset: %{
+            type: "integer",
+            required: false,
+            description: "How many tasks to skip before the page. Defaults to 0."
+          },
+          detail: %{
+            type: "string",
+            required: false,
+            description:
+              "\"summary\" (default) truncates each description to #{ResultBound.snippet_chars()} characters; \"full\" returns descriptions whole. Use task_get for one task's full description rather than asking for full detail across a list."
           }
         },
         returns:
-          "Array of task objects. Each entry includes sponsor (nil or %{id, name, email}) per ADR 0042.",
-        limitations: "Returns all matching tasks; no pagination yet",
+          "Array of task objects. Each entry includes sponsor (nil or %{id, name, email}) per ADR 0042. " <>
+            "In the default summary detail, `description` is a truncated preview and every entry additionally " <>
+            "carries `description_truncated` (boolean) and `description_length` (the original size in bytes).",
+        limitations:
+          "Paginated: returns at most `limit` tasks (default #{ResultBound.default_limit()}) from `offset`, " <>
+            "and `description` is a preview unless `detail: \"full\"` is passed. There is no total count and no " <>
+            "cursor — page until you get fewer rows than you asked for. Before task 01a049de this tool returned " <>
+            "every matching task with every full description, which measured 3_366_819 bytes on an 807-task " <>
+            "project and could not be called safely.",
         when_to_use:
           "When you need to see what tasks exist, check the backlog, or find tasks in a specific state"
       },
@@ -2739,9 +2783,31 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "A task ID, resolved to that task's current (approved or completed, highest version) plan. Optional only in the sense that `plan_id` can stand in for it — one of the two is always required."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description:
+              "Maximum stages to return. Defaults to #{ResultBound.default_limit()}, capped at #{ResultBound.max_limit()}."
+          },
+          offset: %{
+            type: "integer",
+            required: false,
+            description: "How many stages to skip before the page. Defaults to 0."
+          },
+          detail: %{
+            type: "string",
+            required: false,
+            description:
+              "\"summary\" (default) truncates each stage `description` to #{ResultBound.snippet_chars()} characters and replaces each validation's `evidence` and `evaluation_payload` with an empty map plus `_omitted`/`_length` markers; \"full\" returns everything whole."
           }
         },
-        returns: "Array of stage objects with validations, each carrying its `plan_id`",
+        returns:
+          "Array of stage objects with validations, each carrying its `plan_id`. " <>
+            "In the default summary detail, stage `description` is a preview (with `description_truncated` / `description_length`) " <>
+            "and each validation's `evidence` and `evaluation_payload` are EMPTY MAPS carrying `evidence_omitted` / `evidence_length` " <>
+            "(and the same pair for `evaluation_payload`). They are emptied rather than partially serialized on purpose: a half map " <>
+            "would let a caller read a confidently wrong value out of a key that survived the cut. Pass `detail: \"full\"` to read them.",
         # This prose is TESTED, not asserted by hand: `tool_surface_test.exs`
         # drives every refusal below through `ToolArguments.dispatch/3` and
         # asserts the observed `code` set is exactly the set named here, via
@@ -3059,12 +3125,23 @@ defmodule Platform.Federation.ToolSurface do
     with {:ok, task_id} <- require_string(args, "task_id", "review_item_list"),
          :ok <- authorize_review_access(context, task_id) do
       items = Platform.Tasks.ReviewRequests.list_items_for_task(task_id)
+      {limit, offset} = ResultBound.page(args)
+      page = items |> Enum.drop(offset) |> Enum.take(limit)
 
+      # Task 01a049de. `count` KEEPS meaning "how many items exist on this
+      # task" — it is the field the precedence rule in this tool's description
+      # is read against, and quietly redefining it as "how many I returned"
+      # would corrupt every caller that already branches on it. The new keys
+      # are additive: `returned_count`, `offset`, and `next_offset` (nil when
+      # this is the last page).
       {:ok,
        %{
          task_id: task_id,
          count: length(items),
-         items: Enum.map(items, &serialize_review_item_row/1)
+         returned_count: length(page),
+         offset: offset,
+         next_offset: if(offset + length(page) < length(items), do: offset + length(page)),
+         items: Enum.map(page, &serialize_review_item_row(&1, full_detail?(args)))
        }}
     end
   end
@@ -4107,9 +4184,32 @@ defmodule Platform.Federation.ToolSurface do
       ]
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
-    tasks = Tasks.list_tasks(opts)
+    # Task 01a049de — `task_list` on the 807-task project measured 3_366_819
+    # bytes, 83% of it `description`. Two bounds, both additive:
+    #
+    #   * `detail` defaults to "summary", which SNIPPETS description rather
+    #     than dropping it. A caller that reads `description` still gets a
+    #     string plus `description_truncated` / `description_length`; the full
+    #     text is one `task_get` away. Dropping the key would have made an
+    #     existing caller silently read nil, which is the failure mode the
+    #     ticket explicitly warns against.
+    #   * `limit`/`offset` default to #{ResultBound.default_limit()}/0.
+    #
+    # Paging is applied in memory, AFTER `Tasks.list_tasks/1`. That is
+    # deliberate and it is not the fix for the database read — it is the fix
+    # for the RESPONSE, which is what spends the caller's context. Pushing
+    # LIMIT/OFFSET into the shared context function would change behaviour for
+    # its non-MCP consumers, which this ticket has no mandate to touch.
+    {limit, offset} = ResultBound.page(args)
 
-    {:ok, Enum.map(tasks, &serialize_task/1)}
+    rows =
+      opts
+      |> Tasks.list_tasks()
+      |> Enum.drop(offset)
+      |> Enum.take(limit)
+      |> Enum.map(&serialize_task_row(&1, full_detail?(args)))
+
+    {:ok, rows}
   end
 
   # `task_update` — canonical shape defined by
@@ -5561,11 +5661,22 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("stage_list", args, _context) do
     with {:ok, plan_id} <- resolve_stage_list_plan(args) do
-      stages =
-        Tasks.list_stages(plan_id)
-        |> Repo.preload(:validations)
+      {limit, offset} = ResultBound.page(args)
 
-      {:ok, Enum.map(stages, &serialize_stage_with_validations/1)}
+      # Task 01a049de. Measured live: 4 stages = 47_048 bytes, of which stage
+      # `description` plus validation `evidence`/`evaluation_payload` is 89.9%.
+      # A plan's stage count is small, so `limit` matters far less here than
+      # the per-field snippet does — `evidence` is the field that grows without
+      # bound, because runners write logs into it.
+      stages =
+        plan_id
+        |> Tasks.list_stages()
+        |> Repo.preload(:validations)
+        |> Enum.drop(offset)
+        |> Enum.take(limit)
+        |> Enum.map(&serialize_stage_with_validations(&1, full_detail?(args)))
+
+      {:ok, stages}
     end
   end
 
@@ -10586,16 +10697,75 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
-  defp serialize_stage_with_validations(stage) do
+  defp serialize_stage_with_validations(stage, full? \\ true) do
     validations =
       case stage.validations do
         %Ecto.Association.NotLoaded{} -> []
-        validations -> Enum.map(validations, &serialize_validation/1)
+        validations -> Enum.map(validations, &serialize_validation_row(&1, full?))
       end
 
     stage
     |> serialize_stage()
+    |> maybe_snippet(full?, [:description])
     |> Map.put(:validations, validations)
+  end
+
+  # Task 01a049de. `evidence` and `evaluation_payload` are free-form maps, not
+  # strings, so they cannot be sliced by grapheme. They are replaced wholesale
+  # in summary mode by a size marker, because a HALF map is a lie — a caller
+  # reading `evidence["tests_run"]` from a partial map would get a confidently
+  # wrong answer, where a caller reading an absent key with
+  # `evidence_omitted: true` next to it knows to go and fetch the stage.
+  defp serialize_validation_row(validation, true), do: serialize_validation(validation)
+
+  defp serialize_validation_row(validation, false) do
+    row = serialize_validation(validation)
+
+    Enum.reduce([:evidence, :evaluation_payload], row, fn key, acc ->
+      case Map.get(acc, key) do
+        blob when is_map(blob) and map_size(blob) > 0 ->
+          acc
+          |> Map.put(key, %{})
+          |> Map.put(:"#{key}_omitted", true)
+          |> Map.put(:"#{key}_length", byte_size(Jason.encode!(blob)))
+
+        _ ->
+          Map.put(acc, :"#{key}_omitted", false)
+      end
+    end)
+  end
+
+  defp serialize_task_row(task, true), do: serialize_task(task)
+
+  defp serialize_task_row(task, false),
+    do: task |> serialize_task() |> maybe_snippet(false, [:description])
+
+  defp serialize_review_item_row(row, full?) do
+    row
+    |> serialize_review_item()
+    |> Map.merge(%{
+      review_request_id: row.review_request_id,
+      request_status: row.request_status,
+      validation_id: row.validation_id
+    })
+    |> maybe_snippet(full?, [:content, :feedback])
+  end
+
+  defp maybe_snippet(record, true, _fields), do: record
+
+  defp maybe_snippet(record, false, fields),
+    do: Enum.reduce(fields, record, &ResultBound.snippet(&2, &1))
+
+  # `detail` selects how much of each record's prose comes back. "summary" (the
+  # default) snippets; "full" restores the pre-01a049de per-record shape for a
+  # caller that genuinely needs it and has narrowed the call enough to afford
+  # it. Anything unrecognised means summary — an opt-in to a bigger payload
+  # should require spelling it correctly.
+  defp full_detail?(args) when is_map(args) do
+    case Map.get(args, "detail") do
+      "full" -> true
+      _ -> false
+    end
   end
 
   defp serialize_validation(validation) do
@@ -10661,15 +10831,6 @@ defmodule Platform.Federation.ToolSurface do
   # dot-accesses atom keys, which the select map carries — and the parent-request
   # columns the join adds are merged on top so a reader can tell a live ruling
   # from one whose evidence was superseded.
-  defp serialize_review_item_row(row) do
-    row
-    |> serialize_review_item()
-    |> Map.merge(%{
-      review_request_id: row.review_request_id,
-      request_status: row.request_status,
-      validation_id: row.validation_id
-    })
-  end
 
   # MCP serializer for a `Platform.MemoryFeedback.Entry` row. The
   # `edited_content` field is nil for delete rows and populated for
