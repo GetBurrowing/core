@@ -18,7 +18,7 @@ The chat subsystem has two membership tables that both try to answer "is this ag
 
 Two dismissal paths exist. Neither fully evicts:
 
-- **UI "dismiss agent"** (`shell_live.ex:173`) → `Chat.remove_space_agent/2` → hard-deletes from `chat_space_agents`. Leaves `chat_participants` row untouched.
+- **UI "dismiss agent"** (`shell_live.ex:173`) → `Chat.remove_space_agent/3` → hard-deletes from `chat_space_agents`. Leaves `chat_participants` row untouched.
 - **MCP `space_leave`** (`tool_surface.ex:1292`) → `Chat.remove_participant/1` → sets `left_at` on `chat_participants`. Leaves `chat_space_agents` untouched.
 
 And every soft-deleted row is resurrected on the next LiveView mount by `Chat.ensure_agent_participant/3` (`chat.ex:604-613`) — which clears `left_at`, resets `joined_at`, and rewrites `attention_mode`. Eleven callers trip this path, the hottest being `PresenceHooks.ensure_native_agent_presence/1` (`presence_hooks.ex:379-397`), which fires on every chat enter. The user-visible effect: a dismissed agent reappears the instant anyone reloads the space.
@@ -94,7 +94,7 @@ Keep soft-delete as an audit trail; read author from the message row.
 **Deletions** (full function/module removal):
 
 - `Chat.ensure_agent_participant/3` and all three clauses
-- `Chat.add_space_agent/3`, `Chat.remove_space_agent/2`, `Chat.ensure_space_agent/3`, `Chat.list_space_agents/1`, `Chat.set_principal_agent/2`
+- `Chat.add_space_agent/3`, `Chat.remove_space_agent/3`, `Chat.ensure_space_agent/3`, `Chat.list_space_agents/1`, `Chat.set_principal_agent/2`
 - `Platform.Chat.SpaceAgent` module
 - `PresenceHooks.ensure_native_agent_presence/1`
 - `include_left` option on `Chat.list_participants/2`

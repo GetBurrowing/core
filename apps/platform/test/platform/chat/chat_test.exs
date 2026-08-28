@@ -658,21 +658,18 @@ defmodule Platform.ChatTest do
     end
   end
 
-  describe "pin_message/1 and unpin_message/2" do
+  describe "pin_message/2 and unpin_message/3" do
     test "pins a message in a space" do
       space = create_space()
       p = create_participant(space.id)
       msg = create_message(space.id, p.id)
 
       {:ok, pin} =
-        Chat.pin_message(%{
-          space_id: space.id,
-          message_id: msg.id,
-          pinned_by: p.id
-        })
+        Chat.pin_message({:user, p.participant_id}, %{space_id: space.id, message_id: msg.id})
 
       assert pin.space_id == space.id
       assert pin.message_id == msg.id
+      assert pin.pinned_by == p.id
     end
 
     test "unpins a message" do
@@ -680,9 +677,10 @@ defmodule Platform.ChatTest do
       p = create_participant(space.id)
       msg = create_message(space.id, p.id)
 
-      {:ok, _} = Chat.pin_message(%{space_id: space.id, message_id: msg.id, pinned_by: p.id})
+      {:ok, _} =
+        Chat.pin_message({:user, p.participant_id}, %{space_id: space.id, message_id: msg.id})
 
-      assert {:ok, _} = Chat.unpin_message(space.id, msg.id)
+      assert {:ok, _} = Chat.unpin_message({:user, p.participant_id}, space.id, msg.id)
       assert Chat.list_pins(space.id) == []
     end
 
@@ -691,7 +689,8 @@ defmodule Platform.ChatTest do
       p = create_participant(space.id)
       msg = create_message(space.id, p.id)
 
-      assert {:error, :not_found} = Chat.unpin_message(space.id, msg.id)
+      assert {:error, :not_found} =
+               Chat.unpin_message({:user, p.participant_id}, space.id, msg.id)
     end
 
     test "list_pins returns all pinned messages for a space" do
@@ -700,8 +699,11 @@ defmodule Platform.ChatTest do
       msg1 = create_message(space.id, p.id)
       msg2 = create_message(space.id, p.id)
 
-      {:ok, _} = Chat.pin_message(%{space_id: space.id, message_id: msg1.id, pinned_by: p.id})
-      {:ok, _} = Chat.pin_message(%{space_id: space.id, message_id: msg2.id, pinned_by: p.id})
+      {:ok, _} =
+        Chat.pin_message({:user, p.participant_id}, %{space_id: space.id, message_id: msg1.id})
+
+      {:ok, _} =
+        Chat.pin_message({:user, p.participant_id}, %{space_id: space.id, message_id: msg2.id})
 
       pins = Chat.list_pins(space.id)
       assert length(pins) == 2
@@ -1226,9 +1228,12 @@ defmodule Platform.ChatTest do
       assert Chat.get_agent_participant(@slug_16, Ecto.UUID.generate()) == nil
     end
 
-    test "unpin_message/2 reports :not_found for a malformed message id" do
+    test "unpin_message/3 reports :not_found for a malformed message id" do
       space = create_space()
-      assert {:error, :not_found} = Chat.unpin_message(space.id, @slug_16)
+      p = create_participant(space.id)
+
+      assert {:error, :not_found} =
+               Chat.unpin_message({:user, p.participant_id}, space.id, @slug_16)
     end
 
     test "add_agent_participant/3 resolves an agent by SLUG, not just by uuid" do

@@ -691,8 +691,20 @@ defmodule PlatformWeb.ShellLive do
           {:halt, assign(socket, :roster_open, false)}
 
         "dismiss_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
-          # ADR 0027: dismissed role removed — just remove the agent from roster
-          Platform.Chat.remove_space_agent(space_id, agent_id)
+          # ADR 0027: dismissed role removed — just remove the agent from roster.
+          #
+          # `space_id` is client-supplied and this hook runs on SIX
+          # live_sessions, so the membership check lives in
+          # `Chat.remove_space_agent/3` rather than here. ShellLive assigns
+          # `:current_user_id` (NOT `:user_id`), it is nil on anonymous shells,
+          # and bracket access is what keeps that a `{:user, nil}` actor —
+          # which `SpaceAccess` DENIES rather than raising on.
+          Platform.Chat.remove_space_agent(
+            {:user, socket.assigns[:current_user_id]},
+            space_id,
+            agent_id
+          )
+
           {:halt, refresh_roster(socket, space_id)}
 
         _event, _params, socket ->

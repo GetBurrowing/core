@@ -71,15 +71,25 @@ defmodule PlatformWeb.ChatLive.PinHooks do
   end
 
   defp handle_event("pin_toggle", %{"message-id" => msg_id, "space-id" => space_id}, socket) do
+    # `space_id` is whatever the client sent. The authorization that makes that
+    # safe lives in `Chat.pin_message/2` and `Chat.unpin_message/3`, NOT here,
+    # so every future caller of those functions inherits it. Adding the check
+    # in this hook instead would protect exactly one caller.
+    #
+    # `current_participant` is retained as an AFFORDANCE check — it answers
+    # "is this session actually in a conversation" for the button that renders
+    # here — and is no longer the authorization. It is membership of the space
+    # being VIEWED, which is a different question from the one the write asks.
+    actor = {:user, socket.assigns.user_id}
+
     with participant when not is_nil(participant) <- socket.assigns.current_participant do
       if MapSet.member?(socket.assigns.pinned_message_ids, msg_id) do
-        Chat.unpin_message(space_id, msg_id)
+        Chat.unpin_message(actor, space_id, msg_id)
       else
-        Chat.pin_message(%{
-          space_id: space_id,
-          message_id: msg_id,
-          pinned_by: participant.id
-        })
+        # `:pinned_by` is deliberately absent: `pin_message/2` derives it from
+        # the participant it resolved in the TARGET space, so a pin can never
+        # be attributed to a participant of the space the session is viewing.
+        Chat.pin_message(actor, %{space_id: space_id, message_id: msg_id})
       end
     end
 

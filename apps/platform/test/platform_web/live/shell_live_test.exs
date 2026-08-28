@@ -2215,9 +2215,10 @@ defmodule PlatformWeb.ShellLiveTest do
 
       assert mine.member.name in roster_agent_names(view)
 
-      # Mutate the roster out-of-band. `Chat.remove_space_agent/2` fans out on
-      # the global topic the shell subscribed to at mount.
-      Chat.remove_space_agent(mine.space.id, mine.member.id)
+      # Mutate the roster out-of-band. `Chat.remove_space_agent/3` fans out on
+      # the global topic the shell subscribed to at mount. `user` was joined to
+      # this space by `seed_org_space/3`, so it is an authorized dismisser.
+      :ok = Chat.remove_space_agent({:user, user.id}, mine.space.id, mine.member.id)
       _ = render(view)
 
       %AsyncResult{result: after_composite} =

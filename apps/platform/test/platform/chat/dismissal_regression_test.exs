@@ -54,10 +54,13 @@ defmodule Platform.Chat.DismissalRegressionTest do
   describe "1. dismissal is durable" do
     test "hard-delete via remove_participant leaves no row and no resurrection path" do
       space = create_space()
+      dismisser = create_user_participant(space.id)
       agent = create_agent(%{name: "Higgins"})
       {:ok, participant} = Chat.add_agent_participant(space.id, agent)
 
-      assert :ok = Chat.remove_space_agent(space.id, agent.id)
+      assert :ok =
+               Chat.remove_space_agent({:user, dismisser.participant_id}, space.id, agent.id)
+
       refute Repo.get(Participant, participant.id)
 
       # Reading the participant back through every public lookup helper
@@ -92,7 +95,7 @@ defmodule Platform.Chat.DismissalRegressionTest do
       # Put the agent on the roster so the reinvite eligibility check passes.
       {:ok, _} = Chat.add_space_agent(space.id, agent.id)
 
-      :ok = Chat.remove_space_agent(space.id, agent.id)
+      :ok = Chat.remove_space_agent({:user, author.participant_id}, space.id, agent.id)
       assert Chat.get_agent_participant(space.id, agent.id) == nil
 
       {:ok, _msg} =
@@ -116,7 +119,7 @@ defmodule Platform.Chat.DismissalRegressionTest do
 
       {:ok, _p} = Chat.add_agent_participant(space.id, agent)
       {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      :ok = Chat.remove_space_agent(space.id, agent.id)
+      :ok = Chat.remove_space_agent({:user, author.participant_id}, space.id, agent.id)
 
       {:ok, _msg} =
         Chat.post_message(%{
@@ -150,7 +153,7 @@ defmodule Platform.Chat.DismissalRegressionTest do
       assert agent_message.author_participant_type == "agent"
 
       # Dismiss.
-      :ok = Chat.remove_space_agent(space.id, agent.id)
+      :ok = Chat.remove_space_agent({:user, user.participant_id}, space.id, agent.id)
 
       # The participant is gone, but the message row survives. FK set null
       # on delete keeps referential integrity; snapshot columns keep the

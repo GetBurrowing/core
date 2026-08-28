@@ -33,7 +33,7 @@ defmodule Platform.Chat do
 
       # Reactions / Pins / Canvases / Attachments
       Platform.Chat.add_reaction(%{message_id: msg.id, participant_id: p.id, emoji: "👍"})
-      Platform.Chat.pin_message(%{space_id: space.id, message_id: msg.id, pinned_by: p.id})
+      Platform.Chat.pin_message({:user, user.id}, %{space_id: space.id, message_id: msg.id})
       Platform.Chat.create_canvas_with_message(space.id, p.id, %{title: "Sprint board"})
       Platform.Chat.list_reactions_for_messages([msg1.id, msg2.id])
   """
@@ -61,6 +61,7 @@ defmodule Platform.Chat do
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.MessageVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Chat.SpaceAccess
   alias Platform.Repo
   alias Platform.Tenancy
 
@@ -2974,14 +2975,67 @@ defmodule Platform.Chat do
   @doc """
   Pin a message in a space.
 
-  Required attrs: `:space_id`, `:message_id` (integer), `:pinned_by`.
+  Actor-first (task 01a01ce0, stage 1), matching `update_canvas/3` and
+  `patch_canvas/3`. `actor` is a `t:Platform.Chat.SpaceAccess.actor/0` —
+  `{:user, id}`, `{:agent, id}` or a `%Platform.Accounts.User{}` — and must
+  hold a `chat_participants` row in the target space. There is deliberately no
+  defaulting arity: a default moves the breakage to runtime and invites
+  someone to default it to a bypass.
+
+  Required attrs: `:space_id` and `:message_id`. Both are `:binary_id` columns
+  — the pre-actor `@doc` here called `:message_id` an integer, which it has
+  not been since the messages table moved to a uuid key.
+
+  `:pinned_by` is DERIVED from the participant `authorize_writer/2` resolved
+  IN THE TARGET SPACE, and any caller-supplied `:pinned_by` (or pre-computed
+  `pinned_by_*` snapshot) is discarded. `chat_pins.pinned_by` FKs
+  `chat_participants(id)` with no same-space constraint, and
+  `put_author_snapshot/3` denormalizes a display name onto the row, so without
+  this a pin in space B can name a participant of space A and render that
+  person to space B's members.
   """
-  @spec pin_message(map()) ::
-          {:ok, Pin.t()} | {:error, :space_archived | Ecto.Changeset.t()}
-  def pin_message(attrs) do
-    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
-      do_pin_message(attrs)
+  @spec pin_message(SpaceAccess.actor(), map()) ::
+          {:ok, Pin.t()} | {:error, :forbidden | :space_archived | Ecto.Changeset.t()}
+  def pin_message(actor, attrs) do
+    space_id = attrs[:space_id] || attrs["space_id"]
+
+    # ORDER, and the reconciliation with the canvas writes below — do not
+    # re-invert this. `update_canvas/3` and `patch_canvas/3` run
+    # `ensure_space_writable/1` FIRST, with a comment saying a member writing
+    # to an archived space should hear about the archive rather than about
+    # permissions. Authorize-first preserves that outcome exactly, because a
+    # member is never `:forbidden` and so still gets `:space_archived`. It
+    # additionally denies a NON-member the ability to distinguish an archived
+    # space from one that does not exist, which writable-first would leak:
+    # `space_writable?/1` returns `true` for unknown ids BY DESIGN, so the two
+    # cases answer differently to someone with no claim on either.
+    with {:ok, participant} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_space_writable(space_id) do
+      attrs
+      |> put_pinned_by(participant.id)
+      |> do_pin_message()
     end
+  end
+
+  # `Ecto.Changeset.cast/3` raises on a map carrying MIXED atom and string
+  # keys, so the derived attribution is written back in whatever key style the
+  # caller used. The snapshot keys go too: leaving a caller-supplied
+  # `pinned_by_display_name` in place would let `already_snapshotted?/2`
+  # short-circuit `put_author_snapshot/3` and render a name of the caller's
+  # choosing next to the pin.
+  @pin_attribution_keys [:pinned_by, :pinned_by_display_name, :pinned_by_participant_type]
+
+  defp put_pinned_by(attrs, participant_id) when is_map(attrs) do
+    string_keyed? = Enum.any?(Map.keys(attrs), &is_binary/1)
+
+    attrs =
+      Enum.reduce(@pin_attribution_keys, attrs, fn key, acc ->
+        acc |> Map.delete(key) |> Map.delete(Atom.to_string(key))
+      end)
+
+    if string_keyed?,
+      do: Map.put(attrs, "pinned_by", participant_id),
+      else: Map.put(attrs, :pinned_by, participant_id)
   end
 
   defp do_pin_message(attrs) do
@@ -3009,18 +3063,28 @@ defmodule Platform.Chat do
     result
   end
 
-  @doc "Unpin a message from a space. Returns `{:error, :not_found}` if not pinned."
-  @spec unpin_message(binary(), integer()) ::
-          {:ok, Pin.t()} | {:error, :not_found | any()}
-  def unpin_message(space_id, message_id) do
-    with :ok <- ensure_space_writable(space_id) do
+  @doc """
+  Unpin a message from a space. Returns `{:error, :not_found}` if not pinned.
+
+  Actor-first (task 01a01ce0, stage 1). See `pin_message/2` for the actor
+  contract and for why `authorize_writer/2` runs before the archived check.
+
+  `message_id` is a `:binary_id`, not the integer the pre-actor `@spec`
+  claimed.
+  """
+  @spec unpin_message(SpaceAccess.actor(), binary(), binary()) ::
+          {:ok, Pin.t()} | {:error, :forbidden | :space_archived | :not_found | any()}
+  def unpin_message(actor, space_id, message_id) do
+    with {:ok, _participant} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_space_writable(space_id) do
       do_unpin_message(space_id, message_id)
     end
   end
 
   defp do_unpin_message(space_id, message_id) when is_binary(message_id) do
-    # `message_id` is a `phx-value-` param (live/chat/pin_hooks.ex:76) and both
-    # pin columns are :binary_id. Malformed and absent are the same outcome.
+    # `message_id` is a `phx-value-` param off
+    # `PlatformWeb.ChatLive.PinHooks`'s `"pin_toggle"` clause, and both pin
+    # columns are :binary_id. Malformed and absent are the same outcome.
     if Platform.UUID.valid?(message_id) do
       do_unpin_message!(space_id, message_id)
     else
@@ -4210,9 +4274,30 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Remove an agent from a space entirely (hard delete, ADR 0038)."
-  @spec remove_space_agent(binary(), binary()) :: :ok | {:error, :not_found}
-  def remove_space_agent(space_id, agent_id) do
+  @doc """
+  Remove an agent from a space entirely (hard delete, ADR 0038).
+
+  Actor-first (task 01a01ce0, stage 1). `actor` must hold a
+  `chat_participants` row in `space_id`; the sole caller,
+  `PlatformWeb.ShellLive`'s `"dismiss_agent"` clause, previously passed a
+  client-supplied `space_id` with no membership check of any kind.
+
+  The archived check is new here too, and deliberate: `ensure_space_writable/1`
+  is the guard every other public write path already carries, and an archived
+  channel is a read-only snapshot for human and agent alike (task 019e95ea).
+  Execution spaces stay exempt, so orchestration teardown is unaffected. See
+  `pin_message/2` for why authorization runs first.
+  """
+  @spec remove_space_agent(SpaceAccess.actor(), binary(), binary()) ::
+          :ok | {:error, :forbidden | :space_archived | :not_found}
+  def remove_space_agent(actor, space_id, agent_id) do
+    with {:ok, _participant} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_space_writable(space_id) do
+      do_remove_space_agent(space_id, agent_id)
+    end
+  end
+
+  defp do_remove_space_agent(space_id, agent_id) do
     case get_agent_participant(space_id, agent_id) do
       nil ->
         {:error, :not_found}

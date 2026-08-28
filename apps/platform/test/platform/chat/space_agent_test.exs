@@ -171,19 +171,46 @@ defmodule Platform.Chat.SpaceAgentTest do
     end
   end
 
-  describe "remove_space_agent/2" do
+  # The dismisser must be a participant of the space it is dismissing from —
+  # that is the whole point of `remove_space_agent/3`'s actor argument
+  # (task 01a01ce0).
+  defp dismisser!(space_id) do
+    {:ok, p} =
+      Chat.add_participant(space_id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        joined_at: DateTime.utc_now()
+      })
+
+    {:user, p.participant_id}
+  end
+
+  describe "remove_space_agent/3" do
     test "removes agent from roster (hard-delete, ADR 0038)" do
       space = create_space()
       agent = create_agent()
 
       {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      assert :ok = Chat.remove_space_agent(space.id, agent.id)
+      assert :ok = Chat.remove_space_agent(dismisser!(space.id), space.id, agent.id)
       assert Chat.get_space_agent(space.id, agent.id) == nil
     end
 
     test "returns error when agent not in roster" do
       space = create_space()
-      assert {:error, :not_found} = Chat.remove_space_agent(space.id, Ecto.UUID.generate())
+
+      assert {:error, :not_found} =
+               Chat.remove_space_agent(dismisser!(space.id), space.id, Ecto.UUID.generate())
+    end
+
+    test "a non-participant of the space is refused and the agent stays" do
+      space = create_space()
+      agent = create_agent()
+      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
+
+      assert {:error, :forbidden} =
+               Chat.remove_space_agent({:user, Ecto.UUID.generate()}, space.id, agent.id)
+
+      assert Chat.get_space_agent(space.id, agent.id)
     end
   end
 

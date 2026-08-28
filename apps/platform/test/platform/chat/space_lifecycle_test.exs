@@ -384,17 +384,18 @@ defmodule Platform.Chat.SpaceLifecycleTest do
                Chat.remove_reaction(message.id, participant.id, "👍")
     end
 
-    test "pin_message/1 and unpin_message/2" do
+    test "pin_message/2 and unpin_message/3" do
       {space, participant, message} = archived_with_content!()
 
-      assert {:error, :space_archived} =
-               Chat.pin_message(%{
-                 space_id: space.id,
-                 message_id: message.id,
-                 pinned_by: participant.id
-               })
+      # The actor here IS a member of the archived space, which is what keeps
+      # `:space_archived` the answer under authorize-first: a member is never
+      # `:forbidden`, so authorization passes and the archive check speaks.
+      actor = {:user, participant.participant_id}
 
-      assert {:error, :space_archived} = Chat.unpin_message(space.id, message.id)
+      assert {:error, :space_archived} =
+               Chat.pin_message(actor, %{space_id: space.id, message_id: message.id})
+
+      assert {:error, :space_archived} = Chat.unpin_message(actor, space.id, message.id)
     end
 
     test "create_canvas/1 and create_canvas_with_message/3" do

@@ -234,6 +234,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "update_section/2 checks Platform.UUID.valid?/1 on the phx-value- section_id, folding a malformed id into the existing {:error, :not_found}"},
     {"platform/chat/sidebar.ex", :get_by, "Section", 1, :safe_internal,
      "ensure_default_section/1 re-reads by `org.id` destructured off a `%Tenancy.Org{}` the function head pattern-matches — the struct is either freshly inserted by `Lifecycle.create_org/2` inside the same Ecto.Multi or loaded from `orgs`, so the id is always a well-formed :binary_id and never a boundary string"},
+    {"platform/chat/space_access.ex", :get_by, "Participant", 1, :safe_internal,
+     "authorize_writer/2's single participant lookup guards BOTH ids with Platform.UUID.valid?/1 before the get_by. Both are :binary_id columns and both arrive from a boundary: the space_id is a client-supplied phx-value- param off pin_toggle / dismiss_agent (it is the forged input this module exists to refuse), and the participant_id is a socket assign that is nil on anonymous shells. Guarding folds either malformed value into the module's existing {:error, :forbidden} instead of raising Ecto.Query.CastError out of an authorization check — which is precisely why Chat.participant?/2, an unguarded Repo.exists?, was not reused"},
     # ── Design (sibling-owned, ADR-0046) ───────────────────────────────
     {"platform/design/brand.ex", :platform_uuid_guard, "-", 1, :flagged_sibling_owned,
      "`fetch_project/1`'s predicate, collapsed from a bare Ecto.UUID.cast/1 onto Platform.UUID.cast/1 at the ADR-0046 merge. The site was already total — it passes the cast's OUTPUT to `Tasks.get_project/1` and additionally rescues — so this is the canonical-predicate fix, not a raise fix. Sibling-owned — RECORD, DO NOT EDIT"},
@@ -599,6 +601,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "resolve_actor/2's guard on a task assignee_id that is routinely \"system\" or an agent slug"},
     {"platform/chat/sidebar.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "update_section/2's guard on the phx-value- section_id off the sidebar rename/recolor events"},
+    {"platform/chat/space_access.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "task 01a01ce0 stage 1 — lookup_participant/3 guards the space_id AND the participant_id before the get_by recorded above. Two calls, one per :binary_id column, because either one being malformed raises. The space_id is the forged phx-value- param this whole module exists to refuse, so a guard that raises instead of denying would convert an authorization refusal into a 500 on a request path"},
     {"platform/external_agents.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_external_agent/1 and get_external_agent!/1 — the id:-keyed get_by pair that `git grep \"Repo.get(\"` cannot see"},
     {"platform/files.ex", :platform_uuid_guard, "-", 3, :safe_internal,
