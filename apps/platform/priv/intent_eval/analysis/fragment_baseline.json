@@ -1,0 +1,57 @@
+{
+  "config_name": "off_topic_default",
+  "config_sha256": "356eedd7c5a6297a1644982082157485a4d114f2fdc5b48f1a22644d5eb7c16e",
+  "counts": {
+    "correct_declines": 94,
+    "false_positives": 8,
+    "false_positives_complete": 7,
+    "false_positives_fragment": 1,
+    "fragments_in_slice": 33,
+    "negatives_total": 102
+  },
+  "false_positive_ids": {
+    "complete": [
+      "00e4db69d5e49c9e",
+      "32a74c3580792173",
+      "a92b2f3567511ddc",
+      "b19046ea5d48b8b5",
+      "dc3ba77dec0546a8",
+      "f193d3da06f970df",
+      "f243245d6f795199"
+    ],
+    "fragment": [
+      "bf56911bc764b131"
+    ]
+  },
+  "fragment_definition": {
+    "F1": "text does not end in . ? ! or \u2026",
+    "F2": "text begins with a lowercase letter",
+    "rule": "fragment if F1 or F2",
+    "signals": "lexical only - no model call, no silence duration, no speaker change (neither is recorded in this corpus)"
+  },
+  "harness_git_sha": "62f355b024cfe3052da5f443b7847e0618260e82",
+  "mode": "replay",
+  "negatives_slice_sha256": "2529c5ebb0cc131991ece29799230c9f6e5e2dbc801566c9af97e471d08ce850",
+  "note": "row ids only; no transcript text by design",
+  "prompt_rendered_sha256": "1fc55bf8e8c4156c5c4f911d68c0ce524e5853937b1935f056a7a53fb4407297",
+  "stage": 1,
+  "task": "01a03fb9-46b4-7fef-8654-628a2874b5f0",
+  "ticket_four_fragments": {
+    "58b53b40fc36831d": {
+      "fired": false,
+      "predicted": "off_topic"
+    },
+    "bcc5860ec525df7f": {
+      "fired": false,
+      "predicted": "off_topic"
+    },
+    "d02d9f249ded0667": {
+      "fired": false,
+      "predicted": "off_topic"
+    },
+    "d656960862fdfbf5": {
+      "fired": false,
+      "predicted": "off_topic"
+    }
+  }
+}
