@@ -28,11 +28,22 @@ defmodule Platform.Meetings.IntentEval.Harness do
 
   Every row goes through `Platform.Meetings.IntentClassifier.decide/1` — the
   same provider-call → parse → outcome path production walks.
-  `parse_error`, `empty_output`, `model_error` and `demoted` are FIRST-CLASS
-  outcome classes reported alongside the intent labels. They are never
-  folded into `off_topic` and never dropped: a row that errored is not a row
-  that declined, and conflating the two is what made 83 of 102 correct
-  declines read as parse failures in one instrument.
+  `parse_error`, `empty_output` and `model_error` are FIRST-CLASS outcome
+  classes reported alongside the intent labels. They are never folded into
+  `off_topic` and never dropped: a row that errored is not a row that
+  declined, and conflating the two is what made 83 of 102 correct declines
+  read as parse failures in one instrument.
+
+  `demoted` is counted too, but it is NOT an error class. A positive that
+  fails the classifier's evidence gate is a successful classification that
+  was downgraded to `off_topic`; the pipeline really did decide `off_topic`,
+  so the row keeps that prediction and no error class. `demoted` is a
+  separate axis over the `{:ok, _}` outcomes, read from `decide/1`'s
+  `:demoted_from`. It lived in the error taxonomy until task `01a04379`,
+  where the `{:error, {:demoted, _}}` clause that fed it turned out to be
+  structurally unmatchable — `decide/1` returns only atom error reasons —
+  so the column read zero on every run ever published while the
+  `binary_actionable` cassette demoted 93 of its 174 rows.
 
   ## Record and replay
 
@@ -50,7 +61,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
   alias Platform.Meetings.IntentEval.CassetteProvider
   alias Platform.Orchestration.PromptTemplates
 
-  @error_classes ~w(parse_error empty_output model_error demoted)
+  @error_classes ~w(parse_error empty_output model_error)
 
   @doc "The outcome classes that are errors, not intents."
   def error_classes, do: @error_classes
@@ -447,13 +458,13 @@ defmodule Platform.Meetings.IntentEval.Harness do
     {predicted, error_class} =
       case outcome do
         {:ok, %{intent: intent}} -> {intent, nil}
-        {:error, {:demoted, _reason}} -> {"demoted", "demoted"}
         {:error, class} when is_atom(class) -> {to_string(class), to_string(class)}
       end
 
     Map.merge(row, %{
       "predicted" => predicted,
       "error_class" => error_class,
+      "demoted_from" => demoted_from(outcome),
       "target_role" => target_role(outcome),
       "confidence" => confidence(outcome),
       "response_parseable" => json_object?(content),
@@ -470,6 +481,13 @@ defmodule Platform.Meetings.IntentEval.Harness do
   end
 
   defp json_object?(_), do: false
+
+  # Non-nil ONLY for a row the evidence gate downgraded. It is read from
+  # the `{:ok, _}` outcome, not from an error shape: demotion is not an
+  # error, and the `{:error, {:demoted, _}}` clause that used to sit in
+  # `classify/2` could never match `decide/1`'s atom-only error reasons.
+  defp demoted_from({:ok, %{demoted_from: intent}}) when is_binary(intent), do: intent
+  defp demoted_from(_), do: nil
 
   defp target_role({:ok, %{target_role: role}}), do: role
   defp target_role(_), do: nil
@@ -502,6 +520,11 @@ defmodule Platform.Meetings.IntentEval.Harness do
       "labels" => labels,
       "error_classes" => error_counts(scored),
       "errors_total" => Enum.count(scored, & &1["error_class"]),
+      # An OUTCOME count, deliberately outside `error_classes`: a demoted
+      # row predicted `off_topic` and carries no error class, so it is
+      # already counted under `off_topic` and must not be added to
+      # `errors_total`. The two taxonomies do not share a bucket.
+      "demoted" => demoted_count(scored),
       "parseable_bodies" => Enum.count(scored, & &1["response_parseable"]),
       "per_class" => Map.new(labels, &{&1, class_metrics(scored, &1)}),
       "confusion" => confusion(scored),
@@ -509,6 +532,8 @@ defmodule Platform.Meetings.IntentEval.Harness do
       "latency_ms" => latency_percentiles(scored)
     }
   end
+
+  defp demoted_count(scored), do: Enum.count(scored, & &1["demoted_from"])
 
   defp error_counts(scored) do
     Map.new(@error_classes, fn class ->
@@ -564,6 +589,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
          "correct" => Enum.count(rows, &(predicted_intent(&1) == &1["label"])),
          "fired" => Enum.count(rows, &fired?/1),
          "off_topic" => Enum.count(rows, &(predicted_intent(&1) == "off_topic")),
+         "demoted" => demoted_count(rows),
          "errors" => Enum.count(rows, & &1["error_class"]),
          "error_classes" => error_counts(rows)
        }}
@@ -679,6 +705,10 @@ defmodule Platform.Meetings.IntentEval.Harness do
       "",
       "OUTCOME CLASSES (errors are NOT declines and are counted separately)",
       "  errors total  : #{summary["errors_total"]}",
+      # NOT an error, so it is printed above the error list rather than in
+      # it: a demoted row is a successful `off_topic` decision and is
+      # already counted as one. See the moduledoc on task 01a04379.
+      "  demoted       : #{summary["demoted"]} uncited positives downgraded to off_topic (counted as off_topic, not as errors)",
       # Separates \"the model declines everything in valid JSON\" from \"the
       # model never emits JSON at all\" — identical parse_error counts.
       "  JSON bodies   : #{summary["parseable_bodies"]} of #{summary["total"]} responses parsed as a JSON object",
@@ -695,7 +725,8 @@ defmodule Platform.Meetings.IntentEval.Harness do
       "PER SLICE",
       Enum.map(summary["per_slice"], fn {slice, stats} ->
         "  #{String.pad_trailing(slice, 22)} rows=#{stats["rows"]} correct=#{stats["correct"]} " <>
-          "fired=#{stats["fired"]} off_topic=#{stats["off_topic"]} errors=#{stats["errors"]}"
+          "fired=#{stats["fired"]} off_topic=#{stats["off_topic"]} " <>
+          "demoted=#{stats["demoted"]} errors=#{stats["errors"]}"
       end),
       "",
       "CONFUSION (gold -> predicted, error classes included as their own columns)",

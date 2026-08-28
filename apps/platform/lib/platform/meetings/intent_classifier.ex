@@ -913,7 +913,9 @@ defmodule Platform.Meetings.IntentClassifier do
   is NOT an error shape: it is DEMOTED to a well-formed `off_topic`
   decision and returned as `{:ok, _}`, so it still reaches the queue and
   the corrections corpus. Only the three reasons above end the run
-  without a decision.
+  without a decision. A demoted decision is marked by a non-nil
+  `:demoted_from` on the `{:ok, _}` map, naming the intent that was
+  downgraded; there is no `{:error, {:demoted, _}}` shape and never was.
   """
   @type decide_error :: :empty_output | :model_error | :parse_error
 
@@ -947,7 +949,10 @@ defmodule Platform.Meetings.IntentClassifier do
          # to /3, threading `chunk_text` through so the evidence gate can
          # check the model's citation against the chunk it classified.
          {:ok, parsed} <- parse_content(content, room_id, chunk_text) do
-      {:ok, Map.put_new(parsed, :evidence_quote, nil)}
+      {:ok,
+       parsed
+       |> Map.put_new(:evidence_quote, nil)
+       |> Map.put_new(:demoted_from, nil)}
     end
   end
 
@@ -1375,8 +1380,19 @@ defmodule Platform.Meetings.IntentClassifier do
               {:demote, reason} ->
                 emit_evidence_missing(room_id, intent, reason)
 
+                # `demoted_from` carries the intent that WAS downgraded.
+                # Without it the returned map is byte-identical to a genuine
+                # decline, so a caller counting demotions has nothing to
+                # count — which is exactly how the eval harness reported a
+                # permanent zero while 93 demotions fired on one cassette
+                # (task 01a04379). Non-nil iff this decision was demoted.
                 {:ok,
-                 %{intent: "off_topic", target_role: @no_target_role, confidence: confidence}}
+                 %{
+                   intent: "off_topic",
+                   target_role: @no_target_role,
+                   confidence: confidence,
+                   demoted_from: intent
+                 }}
             end
 
           :invalid ->

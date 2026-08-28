@@ -457,11 +457,13 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
 
       assert summary["errors_total"] == 0
 
+      # `demoted` is deliberately ABSENT here: it is an outcome, not an
+      # error class, and it must not share a bucket with the error
+      # taxonomy (task 01a04379).
       assert summary["error_classes"] == %{
                "parse_error" => 0,
                "empty_output" => 0,
-               "model_error" => 0,
-               "demoted" => 0
+               "model_error" => 0
              }
 
       assert summary["per_slice"]["fixture"]["off_topic"] == 1
@@ -547,6 +549,113 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
 
   # ── the committed reference points ────────────────────────────────────
 
+  # ── demotion is an outcome, not an error class ────────────────────────
+
+  describe "the demoted counter" do
+    # Both halves are required and neither is sufficient. The first alone
+    # is passed by a counter that increments unconditionally; the second
+    # alone is passed by a counter wired to a constant zero — which is
+    # precisely what shipped, because the `{:error, {:demoted, _}}` clause
+    # that fed it could never match `decide/1`'s atom-only error reasons.
+    # Exact values, not `> 0`: a count nobody has watched move is untested.
+    setup %{root: root} do
+      write_slice!(root, rows())
+      prompt = write_prompt!(root, "p.txt", "classify: {{meeting_transcript_chunk}}")
+      write_config!(root, "c", %{"inline_file" => prompt})
+      :ok
+    end
+
+    defp demote_run(root) do
+      assert {:ok, result} =
+               Harness.run("c",
+                 root: root,
+                 mode: :record,
+                 live_module: StubProvider,
+                 repo_root: root,
+                 write: false
+               )
+
+      result
+    end
+
+    test "a positive citing text absent from its chunk is counted: demoted == 1", %{root: root} do
+      # r1 answers `visual_adjust` while citing a span that does NOT appear
+      # in its chunk, so `evidence_verdict/3` demotes it. r2 answers
+      # `off_topic`, which needs no citation and is never demoted.
+      Process.put(:stub_answers, %{
+        "Designer, make the button teal." => answer("visual_adjust", "paint the sidebar mauve"),
+        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+      })
+
+      summary = demote_run(root)["summary"]
+
+      assert summary["demoted"] == 1
+      assert summary["per_slice"]["fixture"]["demoted"] == 1
+
+      # The demoted row is a SUCCESSFUL off_topic decision — that is what
+      # the pipeline actually returned — so it is counted as off_topic and
+      # is not an error. Sharing a bucket with the error taxonomy for a
+      # value that is structurally not an error is the defect.
+      assert summary["errors_total"] == 0
+      refute Map.has_key?(summary["error_classes"], "demoted")
+      assert summary["per_slice"]["fixture"]["off_topic"] == 2
+      assert summary["per_slice"]["fixture"]["fired"] == 0
+      assert summary["confusion"]["visual_adjust"] == %{"off_topic" => 1}
+
+      # Per-row, so a run file says WHICH row was downgraded and from what.
+      assert Enum.map(demote_run(root)["rows"], & &1["demoted_from"]) == ["visual_adjust", nil]
+    end
+
+    test "the control: the same positive citing its chunk verbatim leaves demoted == 0", %{
+      root: root
+    } do
+      # Identical to the case above except the citation is a real substring
+      # of r1's chunk. Without this half, a counter that increments on
+      # every row — or on every off_topic — passes the case above.
+      Process.put(:stub_answers, %{
+        "Designer, make the button teal." => answer("visual_adjust", "make the button teal"),
+        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+      })
+
+      summary = demote_run(root)["summary"]
+
+      assert summary["demoted"] == 0
+      assert summary["per_slice"]["fixture"]["demoted"] == 0
+      assert summary["per_slice"]["fixture"]["fired"] == 1
+      assert summary["per_slice"]["fixture"]["off_topic"] == 1
+    end
+
+    test "a genuine off_topic decline is not a demotion", %{root: root} do
+      # The nastiest confusion this counter can fall into: a demoted row
+      # and a genuine decline both PREDICT off_topic. If `demoted` were
+      # read off the prediction rather than off `decide/1`'s
+      # `:demoted_from`, this all-declines run would report 2.
+      Process.put(:stub_answers, %{
+        "Designer, make the button teal." => answer("off_topic"),
+        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+      })
+
+      summary = demote_run(root)["summary"]
+
+      assert summary["per_slice"]["fixture"]["off_topic"] == 2
+      assert summary["demoted"] == 0
+    end
+
+    test "the operator report prints the demotion outside the error list", %{root: root} do
+      Process.put(:stub_answers, %{
+        "Designer, make the button teal." => answer("visual_adjust", "paint the sidebar mauve"),
+        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+      })
+
+      report = Harness.report(demote_run(root))
+
+      assert report =~ ~r/demoted\s+: 1 uncited positives/
+      # It must not reappear as an error class row, which is where a
+      # permanently-zero column sat for the life of the harness.
+      refute report =~ ~r/^\s+demoted\s+: \d+$/m
+    end
+  end
+
   describe "committed reference runs" do
     test "both reference cassettes replay with no network and no misses" do
       root = Platform.Meetings.IntentEval.root()
@@ -585,6 +694,26 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       # scoring that moves them is a test failure, not a silent re-baseline.
       assert per_slice["negatives_102"]["fired"] == 8
       assert per_slice["control_60"]["fired"] == 59
+    end
+
+    test "the binary_actionable cassette demotes 93 of its 174 rows" do
+      # The measurement that settled task 01a04379: demotion was not rare,
+      # it was the single largest outcome on this arm, and the report said
+      # zero every time. Pinned so the counter cannot silently return to
+      # zero on committed data.
+      root = Platform.Meetings.IntentEval.root()
+
+      {:ok, result} =
+        Harness.run("binary_actionable",
+          root: root,
+          mode: :replay,
+          live_module: ForbiddenProvider,
+          repo_root: Path.expand("../../../..", __DIR__),
+          write: false
+        )
+
+      assert result["summary"]["demoted"] == 93
+      assert result["summary"]["errors_total"] == 0
     end
   end
 end
