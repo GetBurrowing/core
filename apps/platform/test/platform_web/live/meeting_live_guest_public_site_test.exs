@@ -54,7 +54,13 @@ defmodule PlatformWeb.MeetingLiveGuestPublicSiteTest do
 
   @expired_copy "This invite has expired"
   @invalid_copy "Invite link is not valid"
-  @unavailable_copy "Meetings are temporarily unavailable"
+  # `render_unavailable_card/1` below reaches this card through
+  # `:livekit_not_configured`, which task 01a04353 classified as a
+  # PERMANENT fault — so the heading it renders is the no-retry variant,
+  # not the "temporarily" one the card carried before. This constant only
+  # has to identify the card; the wording itself is owned by
+  # `meeting_live_guest_infra_error_test.exs`.
+  @unavailable_copy "We can&#39;t connect you to this meeting"
 
   setup do
     # Start every test from the UNSET state regardless of what the host

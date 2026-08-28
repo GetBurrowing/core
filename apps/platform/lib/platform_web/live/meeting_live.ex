@@ -172,6 +172,12 @@ defmodule PlatformWeb.MeetingLive do
       OPERATIONAL failure state — our media plane could not admit a guest
       whose invite verified fine — and is deliberately distinct from
       `:invalid`, which is a claim about the guest's link.
+    * `:unavailable_kind` — `:permanent` or `:unknown` (task 01a04353).
+      Assigned ONLY alongside `:state == :unavailable`, by
+      `guest_mint_failure/3`, which is that state's single writer. Decides
+      whether the card offers a retry: `:permanent` does not, because
+      neither fault it covers today (an unconfigured media plane, a
+      meeting with no chat space) can resolve while the guest waits.
 
   ## PubSub (`:show`)
 
@@ -3699,6 +3705,32 @@ defmodule PlatformWeb.MeetingLive do
   # today (`:livekit_not_configured`, `:missing_display_name` — confirmed
   # against the implementation, not just the `@spec`), so the catch-all is
   # currently unreachable and exists to keep the NEXT atom safe.
+  #
+  # ── Permanence (task 01a04353) ──────────────────────────────────────────
+  #
+  # `{:fault, …}` carries a SECOND axis the guest copy needs: whether
+  # waiting can plausibly help. The `:unavailable` card used to say "please
+  # try again in a few minutes" for every fault, which is a promise neither
+  # KNOWN fault can keep:
+  #
+  #   * `:livekit_not_configured` is a synchronous read of
+  #     `Application.get_env(:platform, :livekit)`, falling back to the
+  #     `LIVEKIT_*` env vars (`Meetings.livekit_config/0`). No network hop,
+  #     no retryable I/O — nothing in the request path can turn it green.
+  #     Only an operator configuring the node can.
+  #   * a nil `chat_space_id` is a data defect. `Meetings.create_meeting/1`
+  #     writes the space and the meeting row in ONE `Repo.transaction`, so
+  #     there is no async backfill for a guest to outwait; the row is
+  #     wrong, and stays wrong until someone repairs it.
+  #
+  # Both are therefore `:permanent`, and the card says so and points at the
+  # only lever that exists — the person who sent the invite, who can reach
+  # whoever runs the deployment.
+  #
+  # The catch-all is `:unknown`, NOT `:permanent`. We have no idea what a
+  # future atom means, and a transient upstream failure is exactly the
+  # shape it is most likely to take, so it keeps the retry wording. Guessing
+  # "permanent" there would just trade one lie for the opposite one.
   defp guest_mint_failure(socket, meeting, reason) do
     case classify_guest_mint_failure(meeting, reason) do
       {:recoverable_name, message} ->
@@ -3713,14 +3745,24 @@ defmodule PlatformWeb.MeetingLive do
         |> assign(:name_error, message)
         |> seed_guest_shell_tree_assigns(meeting)
 
-      {:fault, log_detail} ->
+      {:fault, permanence, log_detail} ->
         # GUEST SURFACE: the log may name the fault and the meeting, never
         # the guest. `meeting.id` is an internal UUID and never rendered.
+        #
+        # `reason=` carries the RAW atom (task 01a04353). The prose is what
+        # a human reading the log wants; the atom is what a grep wants, and
+        # the atom is the token that appears in the `@spec`, in
+        # `meetings.ex` and in every ticket about this failure. An operator
+        # searching `livekit_not_configured` used to get nothing back from
+        # the one log line that exists to tell them. Both, not either.
         Logger.warning(
           "Guest meeting ingress refused by a LiveKit mint failure: " <>
             log_detail <>
             ". The invite itself verified; the guest was shown the " <>
-            "temporarily-unavailable card. meeting_id=" <> to_string(meeting.id)
+            "meeting-unavailable card (" <>
+            to_string(permanence) <>
+            "). reason=" <>
+            to_string(reason) <> " meeting_id=" <> to_string(meeting.id)
         )
 
         # `:meeting` is KEPT here, where the old clause nil'd it (task
@@ -3733,14 +3775,33 @@ defmodule PlatformWeb.MeetingLive do
         # the shell-tree seeder is not built to survive.
         socket
         |> assign(:state, :unavailable)
-        |> assign(:page_title, "Meetings are temporarily unavailable")
+        |> assign(:unavailable_kind, permanence)
+        |> assign(:page_title, unavailable_page_title(permanence))
         |> assign(:meeting, meeting)
         |> seed_guest_index_fallback_assigns()
     end
   end
 
-  defp classify_guest_mint_failure(_meeting, :livekit_not_configured) do
-    {:fault, "the LiveKit media server is not configured on this node"}
+  # The title is part of the claim, so it splits with the body copy. A
+  # permanently-down media plane is not "temporarily" anything, and the
+  # browser tab is the one bit of the card a guest keeps looking at.
+  defp unavailable_page_title(:permanent), do: "We can't connect you to this meeting"
+  defp unavailable_page_title(:unknown), do: "Meetings are temporarily unavailable"
+
+  # Public (`@doc false`) purely so the permanence decision is testable in
+  # both directions (task 01a04353). The `:unknown` clause is the one that
+  # keeps the retry wording honest, and it is NOT reachable through
+  # `mint_guest_join_bundle/2`'s closed error set — so without this seam the
+  # only branch a test could reach is the permanent one, and "the retry copy
+  # still exists for a fault that might actually be transient" would be an
+  # untested claim. Not part of any stable API; call it from tests only.
+  @doc false
+  @spec classify_guest_mint_failure(Meeting.t(), atom()) ::
+          {:recoverable_name, String.t()} | {:fault, :permanent | :unknown, String.t()}
+  def classify_guest_mint_failure(meeting, reason)
+
+  def classify_guest_mint_failure(_meeting, :livekit_not_configured) do
+    {:fault, :permanent, "the LiveKit media server is not configured on this node"}
   end
 
   # `:missing_display_name` has TWO causes and only one of them is about a
@@ -3756,19 +3817,19 @@ defmodule PlatformWeb.MeetingLive do
   # retry would fail identically: a loop with no exit. The mislabel lives
   # in `meetings.ex` and cannot be fixed from here, so we discriminate on
   # the shape the atom is hiding instead.
-  defp classify_guest_mint_failure(%Meeting{chat_space_id: nil}, :missing_display_name) do
-    {:fault,
+  def classify_guest_mint_failure(%Meeting{chat_space_id: nil}, :missing_display_name) do
+    {:fault, :permanent,
      "the meeting has no backing chat space, so no room name can be derived " <>
        "(the mint reports this as a missing display name)"}
   end
 
-  defp classify_guest_mint_failure(_meeting, :missing_display_name) do
+  def classify_guest_mint_failure(_meeting, :missing_display_name) do
     {:recoverable_name,
      "We couldn't read the name on your invite. Please enter the name others in the meeting will see."}
   end
 
-  defp classify_guest_mint_failure(_meeting, reason) do
-    {:fault, "an unrecognised mint failure, " <> inspect(reason)}
+  def classify_guest_mint_failure(_meeting, reason) do
+    {:fault, :unknown, "an unrecognised mint failure, " <> inspect(reason)}
   end
 
   # The guest surface's THREE meetings-family subscriptions, taken together

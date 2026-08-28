@@ -33,6 +33,29 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
 
   `async: false`: these mutate `Application.put_env(:platform, :livekit, …)`,
   which is global.
+
+  ## Task 01a04353 — the card's promise now matches the fault
+
+  The `:unavailable` card used to be one string ending "Please try again in
+  a few minutes". Every fault that reaches it is reached through
+  `MeetingLive.classify_guest_mint_failure/2`, and BOTH faults it can
+  classify today are permanent: `:livekit_not_configured` is a synchronous
+  config read, and a nil `chat_space_id` is a data defect written (or not)
+  inside `create_meeting/1`'s single transaction. Neither self-heals while
+  a guest waits, so obeying the retry instruction produced the identical
+  card forever.
+
+  The card now splits on `@unavailable_kind`, and this file pins BOTH
+  directions, because a one-directional test would pass equally well if the
+  fix had simply replaced the retry sentence everywhere:
+
+    * `:permanent` → no timeframe, no retry sentence, points at the invite
+      sender. Asserted end-to-end through a real guest mount.
+    * `:unknown` (the catch-all, for a mint atom we do not yet know) →
+      KEEPS the retry sentence. Asserted at the classifier, which is the
+      only reachable seam — `mint_guest_join_bundle/2`'s error set is
+      closed — and at the render, so both the decision and the copy it
+      selects are covered.
   """
   use PlatformWeb.ConnCase, async: false
 
@@ -41,13 +64,28 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
 
   alias Platform.Meetings
   alias Platform.Meetings.GuestInvite
+  alias Platform.Meetings.Meeting
   alias Platform.Repo
   alias Platform.Tasks
+  alias PlatformWeb.MeetingLive
 
   @invalid_invite_copy "Invite link is not valid"
   @unavailable_copy "Meetings are temporarily unavailable"
   @unavailable_body "Your invite link is fine"
   @name_recovery_copy "We couldn&#39;t read the name on your invite."
+
+  # The permanent variant's title and its load-bearing clause — the one that
+  # replaced the promise the state could not keep.
+  @permanent_title "We can&#39;t connect you to this meeting"
+  @permanent_title_raw "We can't connect you to this meeting"
+  @permanent_body "it is not something that will clear on its own"
+
+  # The retry sentence. Asserted ABSENT on the permanent card and PRESENT on
+  # the unknown one; that pairing is the whole point of the change.
+  @retry_promise "Please try again in a few minutes"
+
+  # Stable selector, owned by `meeting_live.html.heex` (not by this file).
+  @card_selector "#guest-unavailable-card"
 
   defp put_livekit_env(value) do
     original = Application.get_env(:platform, :livekit, [])
@@ -130,9 +168,25 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
 
       # THIS case's own outcome. Not merely "not :invalid".
       assert assigns.state == :unavailable
-      assert assigns.page_title == @unavailable_copy
-      assert html =~ @unavailable_copy
+      assert assigns.unavailable_kind == :permanent
+      assert assigns.page_title == @permanent_title_raw
+      assert html =~ @permanent_title
       assert html =~ @unavailable_body
+
+      # PERMANENCE (task 01a04353). An unconfigured media plane cannot come
+      # good while the guest waits, so the card must not tell them to wait,
+      # and must not call itself "temporarily" anything. Both the promise
+      # and the old title are asserted GONE — dropping either assertion
+      # would let the lie back in through the other.
+      assert has_element?(view, @card_selector <> "[data-unavailable-kind=permanent]")
+      assert html =~ @permanent_body
+      refute html =~ @retry_promise
+      refute html =~ @unavailable_copy
+
+      # ...but the sentence that was 019f9cb7's entire fix is untouched.
+      # `@unavailable_body` above is that sentence's opening; this pins that
+      # the guest is still not being blamed for their link.
+      refute html =~ @invalid_invite_copy
 
       # The guest is told our media plane is down, never that their link
       # is bad. That was the defect.
@@ -150,6 +204,21 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
       assert log =~ "[warning]"
       assert log =~ "LiveKit media server is not configured"
       assert log =~ meeting.id
+
+      # ...and greppable by the ATOM, not only by the prose (task
+      # 01a04353). That is the search term an operator actually has: it is
+      # what the `@spec` says, what `meetings.ex` returns and what every
+      # ticket about this failure calls it. Asserted as the atom STRING
+      # rather than "a warning was emitted", because the pre-01a04353
+      # implementation already emitted a warning and would have passed the
+      # looser assertion unchanged.
+      assert log =~ "livekit_not_configured"
+      assert log =~ "reason=livekit_not_configured"
+
+      # The prose is NOT replaced by the atom — a human reading the log
+      # still gets the sentence saying the invite verified and what the
+      # guest was shown. Both, which is why both are asserted.
+      assert log =~ "The invite itself verified"
 
       # GUEST SURFACE. The diagnosis goes to the log; the page carries no
       # error atom, no service name and no internal identifier.
@@ -194,10 +263,20 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
       assigns = assigns_of(view)
 
       assert assigns.state == :unavailable
-      assert submitted =~ @unavailable_copy
+      assert assigns.unavailable_kind == :permanent
+      assert submitted =~ @permanent_title
+      assert submitted =~ @unavailable_body
       refute submitted =~ @invalid_invite_copy
+
+      # The two entry points must agree about permanence too, not just
+      # about which card. A retry promise reintroduced on only one of them
+      # is exactly the drift stage 2 collapsed.
+      refute submitted =~ @retry_promise
+      refute submitted =~ @unavailable_copy
+
       assert log =~ "[warning]"
       assert log =~ "LiveKit media server is not configured"
+      assert log =~ "reason=livekit_not_configured"
       refute log =~ "Jane Doe"
     end
   end
@@ -241,6 +320,7 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
       refute assigns.state == :unavailable
       refute html =~ @invalid_invite_copy
       refute html =~ @unavailable_copy
+      refute html =~ @permanent_title
 
       # ANTI-VACUITY for the recovery itself. The form the guest lands on
       # actually works — configure nothing further, just submit a real
@@ -277,9 +357,138 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
       # actually-bad link must NOT be excused as our fault.
       refute assigns.state == :unavailable
       refute html =~ @unavailable_copy
+      refute html =~ @permanent_title
 
       # And a link we cannot verify must not name the meeting it points at.
       refute html =~ meeting.name
     end
+  end
+
+  describe "outcome 4 — permanence, in BOTH directions (task 01a04353)" do
+    # The card's wording is chosen by `classify_guest_mint_failure/2`, so
+    # that is where the decision is pinned. It is `@doc false` public for
+    # exactly this: the `:unknown` clause cannot be reached through
+    # `mint_guest_join_bundle/2`, whose error set is closed, so a
+    # mount-only test could only ever exercise the permanent half — and a
+    # fix that made EVERY fault permanent would pass it.
+
+    test "an unconfigured media server is classified :permanent" do
+      meeting = create_meeting()
+
+      assert {:fault, :permanent, detail} =
+               MeetingLive.classify_guest_mint_failure(meeting, :livekit_not_configured)
+
+      assert detail =~ "not configured"
+    end
+
+    test "a meeting with no chat space is classified :permanent" do
+      # The other fault that reaches the card. `create_meeting/1` writes the
+      # space and the meeting in ONE transaction, so this shape is a data
+      # defect rather than a window a guest can wait out — which is why it
+      # is permanent and not merely slow.
+      assert {:fault, :permanent, detail} =
+               MeetingLive.classify_guest_mint_failure(
+                 %Meeting{chat_space_id: nil},
+                 :missing_display_name
+               )
+
+      assert detail =~ "no backing chat space"
+    end
+
+    test "an unrecognised mint failure is classified :unknown, NOT :permanent" do
+      # THE OTHER DIRECTION. A future atom might well be a transient
+      # upstream failure, so it keeps the retry wording. Asserting
+      # `:unknown` rather than `!= :permanent` means a later edit that
+      # invents a third permanence cannot slip through here silently.
+      meeting = create_meeting()
+
+      assert {:fault, :unknown, detail} =
+               MeetingLive.classify_guest_mint_failure(meeting, :some_future_livekit_failure)
+
+      assert detail =~ "unrecognised mint failure"
+    end
+
+    test "a recoverable name is not a fault at all" do
+      # Control: the classifier still has a non-fault outcome, so the two
+      # `:fault` assertions above are discriminating rather than describing
+      # the only tuple the function can return.
+      meeting = create_meeting()
+
+      assert {:recoverable_name, _message} =
+               MeetingLive.classify_guest_mint_failure(meeting, :missing_display_name)
+    end
+
+    test ":permanent drops the retry sentence and :unknown keeps it" do
+      # Both cards, rendered from the same template, differing only in
+      # `@unavailable_kind`. Rendered directly because the `:unknown` kind
+      # has no reachable mount path (see the describe comment); the
+      # end-to-end permanent case is covered by outcome 2 above.
+      meeting = create_meeting()
+
+      permanent = render_unavailable_card(meeting, :permanent)
+      unknown = render_unavailable_card(meeting, :unknown)
+
+      # The retry promise exists on exactly one of the two. Asserted as a
+      # pair: either assertion alone would pass a change that made every
+      # card say the same thing.
+      refute permanent =~ @retry_promise
+      assert unknown =~ @retry_promise
+
+      # ...and so does the "temporarily" framing in the heading.
+      refute permanent =~ @unavailable_copy
+      assert unknown =~ @unavailable_copy
+      # `@permanent_title_raw`, not the escaped form: `live/2` returns HTML
+      # that has been through a parse/serialize round-trip (which turns the
+      # apostrophe into `&#39;`), whereas `rendered_to_string/1` hands back
+      # the template's own bytes. Same sentence, two encodings.
+      assert permanent =~ @permanent_title_raw
+      refute unknown =~ @permanent_title_raw
+
+      # The opening sentence — the whole of 019f9cb7's fix — survives on
+      # BOTH. The guest is never told their link is the problem.
+      assert permanent =~ @unavailable_body
+      assert unknown =~ @unavailable_body
+
+      # The stable selector carries the kind, and it is the template that
+      # owns it: both variants render the same node id.
+      assert card_kind(permanent) == ["permanent"]
+      assert card_kind(unknown) == ["unknown"]
+
+      # LEAK SCAN, re-run against the NEW copy. The permanent card explains
+      # less, not more: no service name, no error atom, no internal id.
+      for html <- [permanent, unknown] do
+        refute html =~ "livekit"
+        refute html =~ "LiveKit"
+        refute html =~ "livekit_not_configured"
+        refute html =~ "missing_display_name"
+        refute html =~ meeting.id
+      end
+    end
+  end
+
+  # Renders MeetingLive's template at the `:unavailable` branch. The
+  # top-level cond short-circuits there, so these are every assign the
+  # branch reads.
+  defp render_unavailable_card(meeting, kind) do
+    rendered_to_string(
+      MeetingLive.render(%{
+        chrome_mode: :none,
+        state: :unavailable,
+        unavailable_kind: kind,
+        meeting: meeting,
+        public_site_url: nil,
+        public_site_host: nil
+      })
+    )
+  end
+
+  # `query/2`, not `filter/2`: filter matches only the fragment's ROOT
+  # nodes, and the card sits two divs deep, so filter returns `[]` here —
+  # an empty list that looks exactly like "the attribute is missing".
+  defp card_kind(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(@card_selector)
+    |> LazyHTML.attribute("data-unavailable-kind")
   end
 end
