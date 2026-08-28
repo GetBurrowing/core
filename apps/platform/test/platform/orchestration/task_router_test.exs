@@ -2654,6 +2654,277 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert Registry.lookup(Platform.Orchestration.Registry, task.id) == [],
              "approval must not have started a router for a user-assigned task"
     end
+
+    # Task 01a03ec2. What this pins is the SHAPE OF THE NOTICE, not the fact
+    # that a notice happens.
+    #
+    # The report this came from said the suppression notice is emitted wrapped
+    # in the whole dispatch payload. It is not, and was not on this checkout:
+    # `do_log_heartbeat_suppressed/3` concatenates exactly the reason string
+    # and `diagnostic_snapshot/3` (six fields), and the payload is a DIFFERENT
+    # message on a DIFFERENT path: `ExecutionSpace.post_engagement/3`, reached
+    # only after a dispatch succeeds. The production messages the report cited
+    # are 213 bytes each, in a space that also holds 30,059-byte dispatch
+    # prompts; the payload was attributed to the wrong message. So nothing is
+    # removed here. What was missing is the thing that stops a later change
+    # from interpolating `task.description` into that line.
+    #
+    # ONE task, ONE rendering path, two halves, in this order deliberately:
+    #
+    #   1. Positive control. Dispatch for real and assert the sentinel DOES
+    #      reach the execution space. This is load-bearing, not decoration: an
+    #      absence assertion on its own is satisfied by a tree that renders no
+    #      task description anywhere, so a change that broke payload rendering
+    #      outright would pass step 2 while shipping empty dispatches to every
+    #      executor on the platform.
+    #   2. Absence, on the notice.
+    #
+    # The sentinel is read back OFF THE ROW rather than trusted from the
+    # literal typed below, so "absent from the notice" cannot be satisfied by a
+    # description that never persisted. The literal itself appears nowhere else
+    # in the repo, so a stray substring match cannot supply it either.
+    test "the plan-gate suppression notice carries the reason and no ticket body", %{
+      assignee: assignee
+    } do
+      # A fresh task, not the describe fixture: step 2 needs `create_plan/1` to
+      # mint v1, and `plan_awaiting_review?/1` keys off `Tasks.latest_plan/1`
+      # (highest version regardless of status). Flipping the fixture plan in
+      # place instead would leave step 1 dispatching against an `approved` v1.
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Suppression Notice Project #{unique()}",
+          repo_url: "https://github.com/test/suppression-notice"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Suppression notice payload fixture",
+          description: """
+          Rendering probe for the plan-gate suppression notice.
+          Sentinel: ORNITHOPTER-SENTINEL-7
+          """,
+          deploy_target: "production"
+        })
+
+      sentinel =
+        case Regex.run(~r/ORNITHOPTER-[A-Z]+-\d+/, Tasks.get_task_detail(task.id).description) do
+          [match] ->
+            match
+
+          other ->
+            flunk("the fixture description did not persist its sentinel: #{inspect(other)}")
+        end
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+
+      # Close the ADR-0046 pre-plan design step before the router boots.
+      # `design_edge_window?/1` matches EXACTLY this shape (planning, no
+      # design outcome, no plan row), so an untouched fixture spawns the
+      # designer edge and `design_hold?/2` parks the router at
+      # `:waiting_design` with an empty execution space. The positive control
+      # then fails for a reason that has nothing to do with what is under
+      # test. `:unfilled` records `"not_applicable"`, which is what a task
+      # with no design responsibility gets in production.
+      {:ok, _task} = Tasks.record_planning_step(task, :design, {:ok, :unfilled})
+
+      # ── 1. POSITIVE CONTROL: the payload path DOES render the ticket body ──
+      # Planning with no plan row resolves `dispatch.planning`, whose body
+      # interpolates `task.description`. If this stops being true, the refute
+      # below stops meaning anything.
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      :ok = sync_router(task.id)
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      assert Enum.any?(space_message_contents(space.id), &String.contains?(&1, sentinel)),
+             "the planning dispatch did not carry the task description into the execution " <>
+               "space, so the absence assertion below would pass against a tree that renders " <>
+               "no ticket body at all. Message sizes: " <>
+               inspect(Enum.map(space_message_contents(space.id), &String.length/1))
+
+      # ── 2. ABSENCE: the notice is a bare status line ──
+      :ok = TaskRouter.stop(task.id)
+
+      {:ok, _plan} =
+        Tasks.create_plan(%{task_id: task.id, status: "pending_review", version: 1})
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      :ok = sync_router(task.id)
+
+      notices = plan_gate_logs(space.id)
+
+      assert length(notices) == 1,
+             "expected exactly one plan-gate suppression notice, got: #{inspect(notices)}"
+
+      [notice] = notices
+
+      refute String.contains?(notice, sentinel),
+             "the suppression notice carried the ticket body: #{notice}"
+
+      # 3. Emitting nothing must not be a passing state: the reason has to
+      #    survive whatever a later change does to the payload question.
+      assert String.contains?(notice, "Dispatch suppressed: plan is awaiting human review")
+
+      # 3b. Task 01a03ec2 stage 2. The line names its own subject. This is the
+      #     defect that produced the ticket: the notice was read outside its
+      #     execution space, where nothing in it said which task it was about,
+      #     and it got filed against the wrong message. Asserted with the id
+      #     interpolated rather than on the bare prefix `task=`, which the
+      #     word "task_status=" would satisfy on its own.
+      assert String.contains?(notice, "task=#{task.id}")
+
+      # 4. Byte budget. Measured 2026-08-27: 332 characters on this fixture,
+      #    257 in production. Stage 2 of this task added `task=<uuid>` to the
+      #    shared snapshot, which moved both numbers up by the same 44 (the
+      #    field, the id, and one separator); before that they were 288 and
+      #    213. The 75-character gap between the two is one field:
+      #    `deploy_target` renders `unresolved(...)` with the lookup error
+      #    inline in test, where production renders a resolved target. That is
+      #    left alone rather than tuned away, because the budget is a CEILING
+      #    against a payload (30,059 characters on the dispatch prompts
+      #    sitting in the same space), not a pin on the current rendering, and
+      #    a bound that has to be re-tuned every time a diagnostic field is
+      #    added would be edited without being thought about. The literal
+      #    check above catches `task.description` by name; this catches a
+      #    payload creeping back in under some other one.
+      assert String.length(notice) < 1_000,
+             "suppression notice is #{String.length(notice)} characters: #{notice}"
+
+      # The describe fixture's `on_exit` only stops the router for ITS task.
+      # This test owns a second one, and letting the sandbox owner die
+      # underneath it makes `terminate/2`'s space post race the checkin.
+      :ok = TaskRouter.stop(task.id)
+    end
+
+    defp space_message_contents(space_id) do
+      space_id
+      |> ExecutionSpace.list_messages_with_participants()
+      |> Enum.map(& &1.content)
+    end
+  end
+
+  # Task 01a03ec2 stage 2. `diagnostic_snapshot/3` is a SHARED formatter. The
+  # four suppression reasons in `do_log_heartbeat_suppressed/3` reach it
+  # through a single call, and three other lines call it directly, so an edit
+  # there travels further than the diff looks. The direction that would NOT
+  # show up in the suppression tests above is silencing one of the lines that
+  # is supposed to repeat.
+  #
+  # `Runtime failure detected` and `Heartbeat suppressed: runtime reported
+  # blocker` are EVENT REPORTS, not standing states. The second failure is a
+  # different fact from the first, so one line per event is the contract and a
+  # per-episode elision would be a defect here even though it is correct on
+  # the plan-gate and stage-gate paths a few hundred lines up. Those two
+  # neighbouring lines ARE edge-triggered, which is exactly why this needs
+  # pinning: the elision is sitting right there to be generalised onto the
+  # formatter by someone tidying up.
+  #
+  # Two failures rather than one, deliberately. A single-event assertion is
+  # satisfied by an implementation that posts once and then goes quiet
+  # forever, which is the regression this exists to catch.
+  describe "diagnostic_snapshot is a shared formatter (task 01a03ec2)" do
+    test "two runtime failures post two lines, each naming the task", %{
+      task: task,
+      assignee: assignee
+    } do
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      :ok = sync_router(task.id)
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      # A barrier per event, not one at the end. What is under test is a
+      # PER-EVENT property, so each line has to be attributable to the event
+      # that preceded it; batching the barrier would let a single post satisfy
+      # both sends.
+      send(pid, {:runtime_event, runtime_failure_event(task, assignee, "execution.failed")})
+      :ok = sync_router(task.id)
+
+      send(pid, {:runtime_event, runtime_failure_event(task, assignee, "execution.abandoned")})
+      :ok = sync_router(task.id)
+
+      lines =
+        space.id
+        |> ExecutionSpace.list_messages_with_participants()
+        |> Enum.map(& &1.content)
+        |> Enum.filter(&String.contains?(&1, "Runtime failure detected"))
+
+      assert length(lines) == 2,
+             "expected one line per runtime failure, got #{length(lines)}: #{inspect(lines)}"
+
+      # Asserted with the id interpolated, not on the bare prefix `task=`:
+      # the snapshot also renders `task_status=`, and a prefix-only check
+      # would be satisfied by a line that names no task at all.
+      assert Enum.all?(lines, &String.contains?(&1, "task=#{task.id}")),
+             "a runtime-failure line did not name its task: #{inspect(lines)}"
+
+      # The two lines report DIFFERENT events. Without this, two copies of one
+      # event's line would pass the count above.
+      assert Enum.any?(lines, &String.contains?(&1, "event=execution.failed"))
+      assert Enum.any?(lines, &String.contains?(&1, "event=execution.abandoned"))
+    end
+
+    test "a runtime blocker line names its task too", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      running_stage =
+        stage
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      :ok = sync_router(task.id)
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      blocked_event = %{
+        id: nil,
+        task_id: task.id,
+        stage_id: running_stage.id,
+        event_type: "execution.blocked",
+        payload: %{"stage_id" => running_stage.id, "description" => "waiting on a subagent"},
+        occurred_at: DateTime.utc_now(),
+        runtime_id: assignee.id,
+        phase: "execution",
+        lease: %{status: "blocked"}
+      }
+
+      send(pid, {:runtime_event, blocked_event})
+      :ok = sync_router(task.id)
+
+      blocker_lines =
+        space.id
+        |> ExecutionSpace.list_messages_with_participants()
+        |> Enum.map(& &1.content)
+        |> Enum.filter(&String.contains?(&1, "Heartbeat suppressed: runtime reported blocker"))
+
+      assert length(blocker_lines) == 1,
+             "expected the blocker line to still emit, got: #{inspect(blocker_lines)}"
+
+      assert String.contains?(hd(blocker_lines), "task=#{task.id}")
+    end
+
+    defp runtime_failure_event(task, assignee, event_type) do
+      %{
+        id: nil,
+        task_id: task.id,
+        stage_id: nil,
+        event_type: event_type,
+        payload: %{"error" => "runner exited before the stage settled"},
+        occurred_at: DateTime.utc_now(),
+        runtime_id: assignee.id,
+        phase: "execution",
+        lease: %{status: "failed"}
+      }
+    end
   end
 
   describe "stage-level suppression is edge-triggered (task 019f9b34)" do

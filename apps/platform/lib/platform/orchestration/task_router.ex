@@ -3254,6 +3254,17 @@ defmodule Platform.Orchestration.TaskRouter do
     lease = RuntimeSupervision.latest_lease_for_task(state.task_id, phase)
 
     [
+      # Task 01a03ec2 stage 2. FIRST, and the only unconditional entry. Every
+      # other field can render "unknown" or be dropped by the `Enum.reject/2`
+      # below, so a snapshot can legitimately consist of nothing but
+      # placeholders; the task id is what keeps such a line worth anything to
+      # whoever reads it. It is also precisely what this ticket lacked: a
+      # suppression notice was quoted out of its execution space and filed
+      # against the wrong message, because nothing in the line named its
+      # subject. `state.task_id` rather than `task.id` deliberately, so the
+      # line still identifies itself on the paths that pass a task struct
+      # loaded from somewhere else.
+      "task=#{state.task_id}",
       "task_status=#{task.status}",
       stage_diagnostic(stage),
       deploy_diagnostic(task, stage),
