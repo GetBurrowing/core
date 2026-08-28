@@ -1,0 +1,69 @@
+{
+  "ready": {
+    "rows": 50,
+    "liveSocketConnected": true,
+    "theme": "dark",
+    "innerWidth": 1440
+  },
+  "history": {
+    "sh": 6970,
+    "ch": 730,
+    "rows": 100
+  },
+  "occlusion_no_count": {
+    "label": "no-count",
+    "positions": 23,
+    "worstPaintedPct": 0.4401220034246575,
+    "worstHitPct": 0.6916202910958904,
+    "totalLinesFullyOccluded_messageText": 0,
+    "totalLinesFullyOccluded_includingChrome": 0,
+    "fullyOccludedDetail": [],
+    "linesTouchedDistribution": {
+      "0": 16,
+      "1": 5,
+      "2": 2
+    },
+    "lineHeights": [
+      11,
+      12,
+      16
+    ],
+    "pillBox": {
+      "w": 113.828125,
+      "h": 28
+    },
+    "hitBox": {
+      "w": 113.828125,
+      "h": 44
+    },
+    "paneArea": 724160
+  },
+  "occlusion_with_count": {
+    "label": "with-count",
+    "positions": 23,
+    "worstPaintedPct": 0.5522519194653116,
+    "worstHitPct": 0.8678244448740611,
+    "totalLinesFullyOccluded_messageText": 0,
+    "totalLinesFullyOccluded_includingChrome": 0,
+    "fullyOccludedDetail": [],
+    "linesTouchedDistribution": {
+      "0": 17,
+      "1": 4,
+      "2": 2
+    },
+    "lineHeights": [
+      11,
+      12,
+      16
+    ],
+    "pillBox": {
+      "w": 142.828125,
+      "h": 28
+    },
+    "hitBox": {
+      "w": 142.828125,
+      "h": 44
+    },
+    "paneArea": 724160
+  }
+}

@@ -810,6 +810,83 @@ defmodule PlatformWeb.ChatLive.JumpToLatestHooksTest do
                "count assertion above is about nesting and not about the count"
     end
 
+    # The gutter classes that positioned the OLD in-flow chip. Stage 1 removed
+    # them from the button; this is the guard that they do not drift back.
+    #
+    # SCOPED TO THE PARSED BUTTON NODE, not asserted over the page HTML. Two
+    # reasons, and the second is the one that bites:
+    #
+    # 1. A substring refute over a whole rendered page is position-dependent —
+    #    it answers "does this string appear anywhere", which is a different
+    #    question from "does this element carry this class". Any other element
+    #    on the chat page picking up `mb-1` would fail this test with a message
+    #    pointing at the jump chip.
+    #
+    # 2. MEASURED on the rendered page, not assumed, and the two classes fail
+    #    an unscoped refute in OPPOSITE directions:
+    #
+    #      ml-5       absent from the rendered page entirely
+    #      mb-1       absent from the rendered page entirely
+    #      self-start PRESENT — on some other element, not this button
+    #
+    #    So `refute html =~ "ml-5"` would pass VACUOUSLY: the string is missing
+    #    for reasons that have nothing to do with the chip, and it would go on
+    #    passing if the class reappeared on a different element. And
+    #    `refute html =~ "self-start"` would FAIL IMMEDIATELY, blaming the jump
+    #    chip for a class another element legitimately carries. One unscoped
+    #    refute is silently empty, the other is a false accusation. Neither
+    #    tells you anything about the button, which is why the assertion is
+    #    scoped to the parsed node and paired with positive assertions that
+    #    prove the class list was actually read.
+    #
+    #    (The `ml-5`/`mb-1` mentions in `chat_live.html.heex` are inside an
+    #    `<%!-- --%>` HEEX comment and are stripped from the output.)
+    test "the button no longer carries the in-flow gutter classes", %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      space = ensure_space("jump-chip-gutter-#{System.unique_integer([:positive])}")
+      _ = post_message(space, user, "seed")
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+      render_hook(view, "jump_to_latest_distance", %{"away" => true, "deep" => true})
+
+      doc = view |> render() |> LazyHTML.from_document()
+      buttons = LazyHTML.query(doc, "button.chat-jump-chip")
+
+      # ANTI-VACUITY, first: a refute over an EMPTY node list passes trivially,
+      # and "the chip did not render" is exactly how this test would go green
+      # while proving nothing.
+      assert Enum.count(buttons) == 1,
+             "the chip must be rendered for the class assertions to mean anything"
+
+      classes =
+        buttons
+        |> LazyHTML.attribute("class")
+        |> List.first()
+        |> String.split(~r/\s+/, trim: true)
+
+      # POSITIVE: the classes that must be there. These prove the class list was
+      # actually read off the button rather than defaulting to empty.
+      assert "chat-jump-chip" in classes
+      assert "focus-visible-ring" in classes
+
+      # REFUTE: the in-flow gutter classes are gone.
+      for gone <- ~w(ml-5 mb-1 self-start) do
+        refute gone in classes,
+               "`#{gone}` positioned the old in-flow chip. The promoted " <>
+                 "`margin: 0` on `.chat-jump-anchor-row > .chat-jump-chip` " <>
+                 "overrides it at every width, so leaving it on the button " <>
+                 "describes a layout that no longer exists — and a class whose " <>
+                 "stated reason is false is indistinguishable from a live one. " <>
+                 "Class list was: #{Enum.join(classes, " ")}"
+      end
+
+      # The wrapper the overlay depends on is present and unconditional.
+      assert Enum.count(LazyHTML.query(doc, "div.chat-jump-anchor-row")) == 1,
+             "the absolutely-positioned centring row is what makes the chip an " <>
+               "overlay; without it the button is back in the flex flow and the " <>
+               "gutter classes above would be load-bearing again"
+    end
+
     # A LiveView render test cannot see CSS, and every ruling on this stage is
     # a CSS ruling. These read the stylesheet directly. They are coarse on
     # purpose: they pin the decisions that are invisible on screen, and leave

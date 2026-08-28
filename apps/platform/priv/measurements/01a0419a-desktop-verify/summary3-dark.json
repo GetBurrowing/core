@@ -1,0 +1,95 @@
+{
+  "ready": {
+    "live": true,
+    "theme": "dark",
+    "w": 1440
+  },
+  "history": {
+    "sh": 6910,
+    "ch": 730,
+    "rows": 100
+  },
+  "targets_enumerated": {
+    "count": 4,
+    "targets": [
+      {
+        "tag": "TEXTAREA",
+        "cls": "min-w-0 flex-1 text-sm resize-none",
+        "label": "",
+        "inScroller": false,
+        "cx": 947,
+        "cy": 857
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "compose-pill-send",
+        "label": "Send message",
+        "inScroller": false,
+        "cx": 1393,
+        "cy": 857
+      },
+      {
+        "name": "composer-input",
+        "tag": "TEXTAREA",
+        "cls": "min-w-0 flex-1 text-sm resize-none",
+        "cx": 947,
+        "cy": 857
+      },
+      {
+        "name": "send-control",
+        "tag": "BUTTON",
+        "cls": "compose-pill-send",
+        "cx": 1393,
+        "cy": 857
+      }
+    ]
+  },
+  "reachability": {
+    "geometries": [
+      {
+        "label": "A: no count",
+        "paneClientHeight": 730,
+        "pillPresent": true,
+        "countPresent": false,
+        "typingBounceNodes": 0,
+        "targets": 4,
+        "blockedByPill": [],
+        "offViewport": 0
+      },
+      {
+        "label": "B: count present",
+        "paneClientHeight": 730,
+        "pillPresent": true,
+        "countPresent": true,
+        "typingBounceNodes": 0,
+        "targets": 4,
+        "blockedByPill": [],
+        "offViewport": 0
+      },
+      {
+        "label": "C: typing indicator raised",
+        "paneClientHeight": 710,
+        "pillPresent": true,
+        "countPresent": true,
+        "typingBounceNodes": 3,
+        "targets": 4,
+        "blockedByPill": [],
+        "offViewport": 0
+      }
+    ],
+    "paneClientHeights": [
+      730,
+      730,
+      710
+    ],
+    "GEOMETRY_C_IS_REAL": true,
+    "totalHitTests": 12,
+    "totalBlockedByPill": 0,
+    "excluded": {
+      "invisible": 70,
+      "offViewport": 320,
+      "tiny": 29,
+      "isThePill": 1
+    }
+  }
+}

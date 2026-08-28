@@ -1,0 +1,66 @@
+{
+  "highlight_target_message": "01a045d1-48bc-73d9-8c87-83c36629132e",
+  "highlight_fixture": {
+    "found": true,
+    "cls": "group relative rounded-2xl msg-agent bg-primary/5 ring-1 ring-primary/20 message-row--run-end",
+    "isHighlighted": true,
+    "background": "rgb(28, 37, 49)",
+    "boxShadow": "rgba(255, 255, 255, 0.04) 0px 0px 0px 1px inset"
+  },
+  "alignment": {
+    "ok": true,
+    "overlap": 28,
+    "delta": 3,
+    "distance": 3936,
+    "rowTop": 759.5,
+    "rowBottom": 822.5,
+    "pillTop": 774,
+    "pillBottom": 802
+  },
+  "boxes": {
+    "pill": {
+      "x": 887,
+      "y": 774,
+      "w": 114,
+      "h": 28
+    },
+    "label": {
+      "x": 898,
+      "y": 778,
+      "w": 92,
+      "h": 20
+    },
+    "labelText": "Jump to latest",
+    "labelColor": "oklch(0.95 0 0)"
+  },
+  "contrast": {
+    "theme": "dark",
+    "surface_named": "the painted pill composited over a HIGHLIGHTED message row (bg-primary/5 + ring-primary/20, chat_message.ex:54) — the real worst ground; there is no saturated cyan own-message bubble in this product",
+    "label_text": "Jump to latest",
+    "declared_label_color": "oklch(0.95 0 0)",
+    "sampled_background_rgb": [
+      15,
+      27,
+      38
+    ],
+    "sampled_text_rgb": [
+      238,
+      238,
+      238
+    ],
+    "background_luminance": 0.01025364600452664,
+    "sampled_text_rgb_conservative_p10": [
+      233,
+      233,
+      233
+    ],
+    "contrast_ratio_glyph_core": 15.01971528920001,
+    "contrast_ratio_conservative_p10": 14.35343136166612,
+    "requirement": 4.5,
+    "passes_glyph_core": true,
+    "passes_conservative": true,
+    "method": "screenshot pixels. background = modal RGB inside the painted pill (the composite AFTER backdrop-blur). text = extreme-luminance pixel in the label box (glyph core), plus a 10th-percentile variant that includes antialiased edges.",
+    "pill_pixels_sampled": 3192,
+    "label_pixels_sampled": 1840
+  }
+}

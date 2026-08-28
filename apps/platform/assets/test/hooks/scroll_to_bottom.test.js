@@ -820,26 +820,133 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
     expect(hook.pushEvent).toHaveBeenCalledTimes(0);
   });
 
-  it("holds the reading anchor through the chip's own reflow, on both edges", () => {
+  it("does NOT hold the reading anchor on a distance edge, but still holds it for the sidebar", () => {
     const { el, hook } = mountedAtBottom();
-    // A SECOND caller of the hook's existing reflow hold — the chip's height
-    // change shrinks the scroller on appear and grows it back on disappear,
-    // and the browser would re-clamp scrollTop under the reader's eyes.
+    // INVERTED from the v2 assertion that used to stand here, which asserted
+    // this call FIRED on both edges. Its stated reason was the desktop in-flow
+    // chip changing the scroller's clientHeight; task 01a0419a stage 1 deleted
+    // that path, and stage 2 measured the pin freezing a MOVING reader for
+    // 400ms after every edge.
     const hold = vi.spyOn(hook, "holdAnchorThroughReflow");
 
+    // Distance 200 → past the `away` band's entry at NEAR_BOTTOM_PX + 24.
     scrollTo(el, 3200);
-    hook._reportDistance(); // chip appears
+    hook._reportDistance();
+    // Distance 50 → back past the exit at NEAR_BOTTOM_PX - 24.
+    scrollTo(el, 3350);
+    hook._reportDistance();
+
+    expect(hold).toHaveBeenCalledTimes(0);
+
+    // ANTI-VACUITY, in the same block and not a separate test: zero calls is
+    // also what a typo in the spy target produces. These prove both edges
+    // really fired, so the refute above is about the hold and not about the
+    // gesture never happening.
+    expect(hook.pushEvent).toHaveBeenCalledTimes(2);
+    expect(hook.pushEvent).toHaveBeenNthCalledWith(
+      1,
+      "jump_to_latest_distance",
+      {
+        away: true,
+        deep: false,
+      },
+    );
+    expect(hook.pushEvent).toHaveBeenNthCalledWith(
+      2,
+      "jump_to_latest_distance",
+      {
+        away: false,
+        deep: false,
+      },
+    );
+
+    // POSITIVE CONTROL — the method is still LIVE, on its original caller.
+    // Dropping the `_reportDistance` call site leaves exactly one caller, not
+    // zero, and a later reader deleting `holdAnchorThroughReflow()` as dead
+    // code breaks the rail-collapse anchoring from task 019f51d1 silently.
+    // This is the assertion that catches that.
+    hook.serverEvents["sidebar_collapsed_changed"]();
     expect(hold).toHaveBeenCalledTimes(1);
 
-    scrollTo(el, 3350);
-    hook._reportDistance(); // chip leaves
-    expect(hold).toHaveBeenCalledTimes(2);
-
-    // And NOT on a non-edge evaluation.
-    scrollTo(el, 3390);
-    hook._reportDistance();
-    expect(hold).toHaveBeenCalledTimes(2);
     hold.mockRestore();
+    if (hook._holdFrame) cancelAnimationFrame(hook._holdFrame);
+  });
+
+  // Geometry for the band cases: scrollHeight 4000, clientHeight 600, so
+  // distance = 3400 - scrollTop. With THRESHOLD_HYSTERESIS_PX = 24 the `away`
+  // band enters at distance 174 and leaves at 126; `deep` enters at 1824 and
+  // leaves at 1776. The NOMINAL crossing points are still 150 and 1800.
+  it("pushes exactly one event while the reader oscillates inside the near-bottom band, and still flips on a committed exit", () => {
+    const { el, hook } = mountedAtBottom();
+
+    // Commit past the entry edge: distance 200 > 174.
+    scrollTo(el, 3200);
+    hook._reportDistance();
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
+      away: true,
+      deep: false,
+    });
+
+    // Now wobble across the NOMINAL 150 repeatedly, staying inside the band.
+    // Un-banded, every one of these six is an edge and a server round trip.
+    for (const distance of [160, 140, 155, 130, 149, 151]) {
+      scrollTo(el, 3400 - distance);
+      hook._reportDistance();
+    }
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    expect(hook._lastAway).toBe(true);
+
+    // POSITIVE CONTROL, same test: a reader who actually commits past the
+    // exit value DOES flip back. Without this the case above is satisfied by
+    // a hook that has simply stopped reporting anything at all.
+    scrollTo(el, 3400 - 100); // distance 100 < 126
+    hook._reportDistance();
+    expect(hook.pushEvent).toHaveBeenCalledTimes(2);
+    expect(hook.pushEvent).toHaveBeenNthCalledWith(
+      2,
+      "jump_to_latest_distance",
+      {
+        away: false,
+        deep: false,
+      },
+    );
+  });
+
+  it("pushes exactly one event while the reader oscillates inside the deep-history band, and still flips on a committed exit", () => {
+    const { el, hook } = mountedAtBottom();
+
+    // Commit past the entry edge: distance 2000 > 1824.
+    scrollTo(el, 3400 - 2000);
+    hook._reportDistance();
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    expect(hook.pushEvent).toHaveBeenCalledWith("jump_to_latest_distance", {
+      away: true,
+      deep: true,
+    });
+
+    // Wobble across the NOMINAL 1800, inside the band. `away` is far from its
+    // own band here, so this isolates `deep`.
+    for (const distance of [1810, 1790, 1801, 1780, 1799, 1820]) {
+      scrollTo(el, 3400 - distance);
+      hook._reportDistance();
+    }
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1);
+    expect(hook._lastDeep).toBe(true);
+
+    // POSITIVE CONTROL: committed exit past 1776 still flips `deep` back,
+    // leaving `away` true — the middle band the two thresholds exist for.
+    scrollTo(el, 3400 - 1700);
+    hook._reportDistance();
+    expect(hook.pushEvent).toHaveBeenCalledTimes(2);
+    expect(hook.pushEvent).toHaveBeenNthCalledWith(
+      2,
+      "jump_to_latest_distance",
+      {
+        away: true,
+        deep: false,
+      },
+    );
   });
 
   it("scrolls to the bottom and reports away:false on chat:scroll-to-latest", () => {

@@ -1,0 +1,29 @@
+{
+  "served_url": "http://localhost:4021/assets/css/app.css",
+  "bytes": 473628,
+  "total_rules": 2992,
+  "chat_jump_rules": 10,
+  "chat_jump_rules_inside_any_media": 0,
+  "chat_jump_rules_inside_hover_or_pointer_media": 0,
+  "chat_jump_rules_inside_width_media": 0,
+  "CONTROL_total_rules_inside_hover_or_pointer_media": 66,
+  "CONTROL_sample_hover_pointer_selectors": [
+    "&:hover  <<in>>  @layer utilities / @media (hover: hover)",
+    "--btn-bg: var(--btn-color, var(--color-base-200));\n        @supports (color: color-mix(in lab, red, red))  <<in>>  @layer utilities / @media (hover: hover)",
+    "&:hover  <<in>>  @layer utilities / @media (hover: hover)",
+    "pointer-events: none;\n          background-color: var(--color-neutral);\n          @supports (color: color-mix(in lab, red, red))  <<in>>  @layer utilities / @media (hover: hover)",
+    "--btn-border: #0000;\n          --btn-fg: var(--color-base-content);\n          @supports (color: color-mix(in lab, red, red))  <<in>>  @layer utilities / @media (hover: hover)"
+  ],
+  "chat_jump_selectors": [
+    ".chat-jump-chip",
+    ".chat-jump-chip-pill",
+    ".chat-jump-anchor",
+    ".chat-jump-anchor-row",
+    ".chat-jump-anchor-row > .chat-jump-chip",
+    "[data-theme=\"dark\"] .chat-jump-chip-pill",
+    ".chat-jump-chip:hover .chat-jump-chip-pill, .chat-jump-chip:focus-visible .chat-jump-chip-pill",
+    "[data-theme=\"dark\"] .chat-jump-chip:hover .chat-jump-chip-pill, [data-theme=\"dark\"] .chat-jump-chip:focus-visible .chat-jump-chip-pill",
+    ".chat-jump-chip:active",
+    ".chat-jump-chip-count"
+  ]
+}

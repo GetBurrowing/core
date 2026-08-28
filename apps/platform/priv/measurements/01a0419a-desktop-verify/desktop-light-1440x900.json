@@ -1,0 +1,187 @@
+{
+  "ready": {
+    "url": "http://localhost:4021/chat/01a04589-8bcc-7e56-bc8f-bdb40dfaa230",
+    "scroller": true,
+    "rows": 50,
+    "scrollHeight": 2215,
+    "clientHeight": 730,
+    "liveSocketConnected": true,
+    "theme": "light",
+    "stylesheetApplied": true,
+    "innerWidth": 1440
+  },
+  "history_loaded": {
+    "sh": 3779,
+    "ch": 730,
+    "rows": 87
+  },
+  "breakpoint_gate": {
+    "present": true,
+    "innerWidth": 1440,
+    "anchor": {
+      "display": "block",
+      "position": "relative",
+      "height": "0px"
+    },
+    "row": {
+      "display": "flex",
+      "position": "absolute",
+      "pointerEvents": "none"
+    }
+  },
+  "breakpoint_gate_ok": true,
+  "centring_expanded": {
+    "label": "sidebar-expanded",
+    "pillCentreX": 943.9921875,
+    "paneCentreX": 944,
+    "viewportCentreX": 720,
+    "offsetFromPane": -0.0078125,
+    "offsetFromViewport": 223.9921875,
+    "paneRect": {
+      "x": 448,
+      "width": 992,
+      "height": 730
+    },
+    "pillRect": {
+      "x": 887.078125,
+      "y": 774,
+      "width": 113.828125,
+      "height": 28
+    },
+    "buttonRect": {
+      "x": 887.078125,
+      "y": 766,
+      "width": 113.828125,
+      "height": 44
+    }
+  },
+  "sidebar_toggle": {
+    "found": true
+  },
+  "centring_collapsed": {
+    "label": "sidebar-collapsed",
+    "pillCentreX": 859.9921875,
+    "paneCentreX": 860,
+    "viewportCentreX": 720,
+    "offsetFromPane": -0.0078125,
+    "offsetFromViewport": 139.9921875,
+    "paneRect": {
+      "x": 280,
+      "width": 1160,
+      "height": 730
+    },
+    "pillRect": {
+      "x": 803.078125,
+      "y": 774,
+      "width": 113.828125,
+      "height": 28
+    },
+    "buttonRect": {
+      "x": 803.078125,
+      "y": 766,
+      "width": 113.828125,
+      "height": 44
+    }
+  },
+  "hover_box": {
+    "rest": {
+      "tag": "rest",
+      "pill": {
+        "x": 887.078125,
+        "y": 774,
+        "w": 113.828125,
+        "h": 28,
+        "top": 774,
+        "left": 887.078125,
+        "right": 1000.90625,
+        "bottom": 802
+      },
+      "button": {
+        "x": 887.078125,
+        "y": 766,
+        "w": 113.828125,
+        "h": 44,
+        "top": 766,
+        "left": 887.078125,
+        "right": 1000.90625,
+        "bottom": 810
+      }
+    },
+    "hovered": {
+      "tag": "hover",
+      "pill": {
+        "x": 887.078125,
+        "y": 774,
+        "w": 113.828125,
+        "h": 28,
+        "top": 774,
+        "left": 887.078125,
+        "right": 1000.90625,
+        "bottom": 802
+      },
+      "button": {
+        "x": 887.078125,
+        "y": 766,
+        "w": 113.828125,
+        "h": 44,
+        "top": 766,
+        "left": 887.078125,
+        "right": 1000.90625,
+        "bottom": 810
+      }
+    },
+    "focused": {
+      "tag": "focus-visible",
+      "pill": {
+        "x": 887.078125,
+        "y": 774,
+        "w": 113.828125,
+        "h": 28,
+        "top": 774,
+        "left": 887.078125,
+        "right": 1000.90625,
+        "bottom": 802
+      },
+      "button": {
+        "x": 887.078125,
+        "y": 766,
+        "w": 113.828125,
+        "h": 44,
+        "top": 766,
+        "left": 887.078125,
+        "right": 1000.90625,
+        "bottom": 810
+      }
+    },
+    "hover_identical": true,
+    "focus_identical": true
+  },
+  "layout_shift": {
+    "withPill": {
+      "found": true,
+      "top": 818,
+      "bottom": 900,
+      "height": 82,
+      "formTop": 830,
+      "textareaTop": 842.5,
+      "className": "flex-shrink-0 compose-input-area safe-area-bottom"
+    },
+    "noPill": {
+      "found": true,
+      "top": 818,
+      "bottom": 900,
+      "height": 82,
+      "formTop": 830,
+      "textareaTop": 842.5,
+      "className": "flex-shrink-0 compose-input-area safe-area-bottom"
+    },
+    "delta_top": 0,
+    "delta_formTop": 0,
+    "delta_textareaTop": 0,
+    "atBottomCounts": {
+      "chip": 0,
+      "pill": 0,
+      "row": 0
+    }
+  }
+}

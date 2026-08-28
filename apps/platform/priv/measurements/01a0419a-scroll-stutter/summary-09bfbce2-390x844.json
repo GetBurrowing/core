@@ -1,0 +1,130 @@
+{
+  "file": "base-390.json",
+  "viewport": {
+    "W": 390,
+    "H": 844
+  },
+  "frames": 321,
+  "span": [
+    "3",
+    "5386"
+  ],
+  "distRange": [
+    0,
+    8938
+  ],
+  "geomChangeFrames": 6,
+  "flips": [
+    {
+      "t": 137,
+      "away": true,
+      "deep": false,
+      "dist": 180,
+      "which": "away"
+    },
+    {
+      "t": 1669.2,
+      "away": true,
+      "deep": true,
+      "dist": 1830,
+      "which": "deep"
+    }
+  ],
+  "windows": [
+    {
+      "label": "FLIP away->true/false @137ms",
+      "t0": 137,
+      "t1": 537,
+      "frames": 25,
+      "cleanFrames": 25,
+      "geomChangedFrames": 0,
+      "reversals": 11,
+      "reversalPct": 44,
+      "reversalMagMax": 30,
+      "reversalMagMean": 30,
+      "reversalMagSum": 330,
+      "grossTravel": 720,
+      "netTravel": -60,
+      "progressRatio": 0.083,
+      "stallFrames": 1,
+      "stallPct": 4,
+      "netScrollTop": -30
+    },
+    {
+      "label": "FLIP deep->true/true @1669ms",
+      "t0": 1669.2,
+      "t1": 2069.2,
+      "frames": 23,
+      "cleanFrames": 23,
+      "geomChangedFrames": 0,
+      "reversals": 11,
+      "reversalPct": 47.8,
+      "reversalMagMax": 30,
+      "reversalMagMean": 30,
+      "reversalMagSum": 330,
+      "grossTravel": 690,
+      "netTravel": -30,
+      "progressRatio": 0.043,
+      "stallFrames": 0,
+      "stallPct": 0,
+      "netScrollTop": 0
+    },
+    {
+      "label": "CONTROL @603ms",
+      "t0": 602.8,
+      "t1": 1002.8,
+      "frames": 24,
+      "cleanFrames": 24,
+      "geomChangedFrames": 0,
+      "reversals": 0,
+      "reversalPct": 0,
+      "reversalMagMax": 0,
+      "reversalMagMean": 0,
+      "reversalMagSum": 0,
+      "grossTravel": 600,
+      "netTravel": -600,
+      "progressRatio": 1,
+      "stallFrames": 4,
+      "stallPct": 16.7,
+      "netScrollTop": -570
+    },
+    {
+      "label": "CONTROL @1053ms",
+      "t0": 1052.8,
+      "t1": 1452.8,
+      "frames": 24,
+      "cleanFrames": 24,
+      "geomChangedFrames": 0,
+      "reversals": 0,
+      "reversalPct": 0,
+      "reversalMagMax": 0,
+      "reversalMagMean": 0,
+      "reversalMagSum": 0,
+      "grossTravel": 570,
+      "netTravel": -570,
+      "progressRatio": 1,
+      "stallFrames": 5,
+      "stallPct": 20.8,
+      "netScrollTop": -570
+    },
+    {
+      "label": "CONTROL @2153ms",
+      "t0": 2152.8,
+      "t1": 2552.8,
+      "frames": 23,
+      "cleanFrames": 23,
+      "geomChangedFrames": 0,
+      "reversals": 0,
+      "reversalPct": 0,
+      "reversalMagMax": 0,
+      "reversalMagMean": 0,
+      "reversalMagSum": 0,
+      "grossTravel": 540,
+      "netTravel": -540,
+      "progressRatio": 1,
+      "stallFrames": 5,
+      "stallPct": 21.7,
+      "netScrollTop": -510
+    }
+  ]
+}

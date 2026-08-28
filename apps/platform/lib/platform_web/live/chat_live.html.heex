@@ -284,12 +284,14 @@
         participants_map={@participants_map}
       />
 
-      <%!-- Jump-to-latest control (task 01a03c76 stage 3; made an overlay by
-           task 01a0419a stage 2).
+      <%!-- Jump-to-latest control (task 01a03c76 stage 3; made a mobile
+           overlay by task 01a0419a stage 2; made an overlay at EVERY WIDTH
+           by task 01a0419a v3 stage 1, per design canvas revision 37).
 
-           On MOBILE this is a floating overlay: the two wrappers below are
-           `display: contents` at desktop widths and only become boxes under
-           `@media (max-width: 1023.98px)`, where `.chat-jump-anchor` is a
+           This is a floating overlay at all viewport widths. The two
+           wrappers below are unconditional boxes — there is no breakpoint
+           and no `display: contents` state any more, and there is no
+           in-flow chip at any width. `.chat-jump-anchor` is a
            zero-height positioned box and `.chat-jump-anchor-row` is an
            absolutely-positioned full-width centring row sitting 8px above
            the composer (above the typing indicator when one is showing,
@@ -303,10 +305,14 @@
            only thing that takes a tap is the control itself; the message
            text either side of it stays clickable.
 
-           DESKTOP is deliberately untouched and keeps the shipped in-flow
-           chip. The wrappers collapse to `display: contents` there, so the
-           button remains a flex sibling of the scroller and the composer
-           with its own `self-start ml-5` gutter, exactly as before.
+           DESKTOP now gets the same overlay. The `self-start ml-5 mb-1`
+           gutter classes that positioned the old in-flow chip are GONE from
+           the button: the promoted `margin: 0` overrides them at every
+           width, so leaving them would describe a layout this file no
+           longer has. Centring is PANE-RELATIVE, not viewport-relative —
+           `.chat-jump-anchor` is an in-flow block inside the chat column,
+           so it is the row's containing block and `left: 0; right: 0` track
+           the message pane in both sidebar states.
 
            Because it now floats, REACHABILITY IS EMPIRICAL, NOT STRUCTURAL.
            The old in-flow row made "nothing clipped or unreachable at 390px"
@@ -314,7 +320,7 @@
            accepted cost of zero layout shift. Nothing in this template
            proves it any more — it is asserted by the stage-5 measurements,
            which hit-test the composer input, the send control and every
-           bottom-nav tab with the control present.
+           bottom-nav tab with the control present, at 390px and at 1440x900.
 
            It stays in `chat_live.html.heex` rather than moving into
            `Partials.Composer` (task 01a0312e's extraction): the desktop
@@ -363,7 +369,7 @@
             type="button"
             phx-click="jump_to_latest"
             aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
-            class="chat-jump-chip focus-visible-ring flex-shrink-0 self-start ml-5 mb-1"
+            class="chat-jump-chip focus-visible-ring flex-shrink-0"
           >
             <%!-- The button is the 44px HIT AREA and paints nothing; this span
                  is the 28px painted pill. They are two elements on purpose, so

@@ -1582,18 +1582,22 @@ body, .font-fabrikam {
    The way back to the tip of a conversation for a reader who scrolled up
    into history.
 
-   ON DESKTOP it is an in-flow flex sibling in the composer column. ON
-   MOBILE (task 01a0419a stage 2) it is an overlay centred over the message
-   text, 8px above the composer — see the `.chat-jump-anchor` rules below.
+   AT EVERY WIDTH it is an overlay centred over the message text, 8px above
+   the composer — see the `.chat-jump-anchor` rules below. It shipped as a
+   mobile-only overlay (task 01a0419a stage 2) with desktop keeping an
+   in-flow flex sibling; task 01a0419a v3 promoted it to all widths on
+   Rowan's 2026-08-27 instruction, per canvas revision 37. There is no
+   in-flow chip at any width now.
    It is still NOT a floating action button in the Suite sense: Suite's FAB
    offset (safe-area + 1.5rem + --bottom-nav-height, action_patterns.ex:232)
    lands in the same band as `.compose-pill-send`, so a corner FAB would put
    two cyan circles in one phone corner, one meaning send and one meaning
    jump. Centred keeps the maximum distance from the send control.
 
-   Because the mobile control floats, it no longer PUSHES the composer, and
-   so the 390px reachability criterion is no longer true by construction. It
-   is EMPIRICAL now, asserted by measurement rather than by this layout.
+   Because the control floats, it no longer PUSHES the composer, and so the
+   reachability criterion is no longer true by construction at ANY width. It
+   is EMPIRICAL now, asserted by measurement rather than by this layout —
+   which is why it is measured at 1440x900 as well as at 390px.
 
    Semantic token slots only, never raw hex or raw oklch() literals. The
    `.compose-pill-bar` / `.compose-pill-send` rules immediately below ARE
@@ -1691,15 +1695,121 @@ body, .font-fabrikam {
    `Emulation.setEmulatedMedia` for hover/pointer was A/B probed and did NOT
    flip `matchMedia('(hover: none)').matches` (false before, false after).
    The known no-op, confirmed a fourth time. Nothing above depends on it,
-   which is precisely what the unconditional padding bought. */
+   which is precisely what the unconditional padding bought.
+
+   ── v3 ADDENDUM: DESKTOP, 1440x900 (task 01a0419a v3 stage 5) ────────────
+   The record above is 390x844 and STILL DESCRIBES WHAT SHIPS THERE. It is
+   kept, not replaced. Stage 1 made the overlay unconditional, so the
+   empirical criteria were retaken at a desktop viewport. Same method: CDP
+   against a locally booted dev server, assets built, fixture read back AFTER
+   boot, socket confirmed connected, both themes.
+
+   BREAKPOINT GATE. Every number below is void unless the promoted layout
+   actually applied, so it was asserted rather than assumed: innerWidth 1440,
+   `.chat-jump-anchor` computed `display: block` + `position: relative`, and
+   `.chat-jump-anchor-row` computed `display: flex` + `position: absolute` +
+   `pointer-events: none`. The OLD desktop layout was `display: contents` on
+   BOTH wrappers, so those four values are what distinguish the two.
+
+   (a) PANE CENTRING, and this is the number that discriminates:
+                          offset from PANE centre   offset from VIEWPORT centre
+     sidebar expanded  ........ -0.008 px  ................ +223.992 px
+     sidebar collapsed ........ -0.008 px  ................ +139.992 px
+   Pane width 992px expanded, 1160px collapsed. The pill is pane-centred to
+   within 1/100 px in BOTH states while the viewport offset moves 84px
+   between them. A viewport-centred pill, or any hardcoded gutter, passes one
+   state and fails the other; only the pane-relative number can tell.
+
+   (b) OCCLUSION of the message pane's visible area (992 x 730 = 724,160 px2),
+   worst of 23 scroll positions swept across the deep band, x 2 themes:
+     painted pill, no count ..... 0.440%   |  44px hit rect ..... 0.692%
+     painted pill, with count ... 0.552%   |  44px hit rect ..... 0.868%
+   Pill 113.83 x 28 (no count), 142.83 x 28 (count); hit rect same width x 44.
+   THE 3% CEILING IS NOT WHAT THIS ESTABLISHES. A comfortable number here was
+   the expected outcome — canvas r37 ruling 3 says occlusion stops being the
+   binding constraint on a wide pane, and 0.44% against 1.9% on mobile is the
+   pane getting bigger, not the design getting better. The ceiling is retained
+   because it still catches the pill growing or the scrim dropping. It is not
+   evidence that the design is right.
+
+   (c) NO LINE FULLY OCCLUDED — the clause that carries the intent, and it is
+   MET: 0 lines of message text fully occluded across 92 positions (2 sweeps
+   x 2 themes). Lines touched per position: 0 in 58, 1 in 20, 2 in 12,
+   3 in 1, never more. "Intersects at most one line" is NOT reinstated: it was
+   withdrawn as unsatisfiable in principle, since a 28px band over a 20px line
+   grid touches two boxes at most offsets.
+   ONE HONEST EXCEPTION, chrome and not message text: in one light-theme
+   position the 42 x 12 "Today" DATE SEPARATOR label was fully covered by the
+   centred pill. Both are centred, so a short separator can hide behind a wide
+   pill. `.js-date-separator` is not message body text and the criterion is
+   not about it, but it is recorded here rather than filtered out silently.
+
+   (d) REACHABILITY, hit-tested with `elementFromPoint` at centre points.
+   TARGETS ENUMERATED FROM THE RENDERED DOM, not assumed: the desktop chat
+   surface has NO bottom-nav, and the visible interactive targets in the
+   bottom-right region are exactly TWO — the composer textarea and
+   `.compose-pill-send`. (The DOM also carries ~380 per-message hover-toolbar
+   buttons in that quadrant; they are `opacity: 0` at rest and were excluded
+   as not-visible, with the exclusion counted rather than assumed.)
+     2 targets x 3 geometries x 2 themes = 12 hit tests, 0 intercepted by the
+     pill or its full-width `pointer-events: none` centring row.
+   GEOMETRY C WAS PROVEN REAL, which is the half that silently fails: pane
+   clientHeight 730 / 730 / 710 for (no count) / (count) / (typing raised),
+   with 3 bounce nodes present in C. A prior mobile run's geometry C never
+   raised the indicator and read as a pass. The typing broadcast here went
+   through `Platform.Chat.PubSub` — the module is aliased AS `ChatPubSub` at
+   its call sites and `Platform.Chat.ChatPubSub` does not exist.
+
+   (e) HOVER DOES NOT MOVE THE BOX. Forced with CDP `CSS.forcePseudoState`,
+   NOT `Emulation.setEmulatedMedia`. Pill and button `getBoundingClientRect`
+   identical to the pixel at rest, under `:hover`, and under `:focus-visible`
+   (x: 887.078125, w: 113.828125, pill h: 28, button h: 44 — every field
+   equal). Painted 28 / tappable 44 holds at desktop.
+
+   (f) CONTRAST, PIXEL-SAMPLED from CDP screenshots, NOT computed from tokens.
+   SURFACE: the painted pill composited over a HIGHLIGHTED message row
+   (`bg-primary/5` + `ring-primary/20`, chat_message.ex:54) — verified in the
+   DOM as `oklch(0.8 0.12 207 / 0.06)` with the inset ring, with the row
+   aligned under the pill (28px of 28px overlap) while still 3,935px deep so
+   the pill was in its own state. This is the REAL worst ground; there is no
+   saturated cyan own-message bubble in this product.
+     light .. bg rgb(252,254,254), text rgb(0,0,0) ..... 20.75:1 glyph core,
+              14.95:1 at the conservative 10th percentile
+     dark ... bg rgb(15,27,38), text rgb(238,238,238) .. 15.02:1 glyph core,
+              14.35:1 at the conservative 10th percentile
+   Requirement 4.5:1. Both sampling methods clear it in both themes; the
+   percentile variant is reported because it includes antialiased edges and
+   therefore understates, so the pass does not rest on picking the best pixel.
+
+   (g) ZERO LAYOUT SHIFT at desktop: `.compose-input-area` top edge 818px with
+   the pill and 818px without; `#compose-form` 830px both; the textarea
+   842.5px both. At the bottom the control leaves the DOM entirely (0 chip,
+   0 pill, 0 anchor row).
+
+   HOVER/POINTER MEDIA — SETTLED BY ENUMERATION, NOT BY PROBING. The served
+   stylesheet (`/assets/css/app.css`, 473,628 bytes, 2,992 rules) contains 10
+   `.chat-jump*` rules. Inside any `@media`: 0. Inside a hover/pointer media
+   query: 0. Inside a width media query: 0. CONTROL, so the count is not a
+   broken regex: the same scan finds 66 rules elsewhere in that stylesheet
+   that ARE inside hover/pointer queries. `Emulation.setEmulatedMedia` was
+   deliberately NOT A/B probed — it is a confirmed no-op on this box and a
+   failed probe would only prove the instrument cannot tell. Zero gated rules
+   makes the question moot, which is what the unconditional padding bought.
+
+   DEEP_HISTORY_PX WAS NOT RE-TUNED and no second constant was added. The
+   recorded cross-check said 1800px is ~2.5 screens on a ~730px desktop pane;
+   the pane measured 730px exactly here, so 1800px is 2.47 screens. Observed
+   behaviour did not contradict the record, so there was nothing to raise. */
 .chat-jump-chip {
   display: inline-flex;
   align-items: center;
   /* 8px top and bottom is TRANSPARENT padding, not spacing: 28 + 16 = 44. */
   height: 44px;
   padding: 8px 0;
-  /* Paired with the 20px left gutter on the element, this keeps a matching
-     20px of clear air on the right at any width. */
+  /* 20px of clear air either side at any width. This was originally paired
+     with a 20px left gutter class on the element; that class is gone (the
+     control is centred at every width now) and the symmetric budget is what
+     the value expresses. */
   max-width: calc(100% - 40px);
   border: 0;
   background: none;
@@ -1777,10 +1887,35 @@ body, .font-fabrikam {
 /* The mobile overlay (task 01a0419a stage 2). STRUCTURE ONLY — the pill's
    own appearance is unchanged here and lands in stage 3.
 
-   Both wrappers are `display: contents` by default, so at desktop widths
-   they contribute no box at all and the chip stays the in-flow flex sibling
-   it shipped as. Desktop is deliberately not converted: the overlay is
-   mobile-only until someone rules otherwise.
+   The overlay applies AT EVERY WIDTH as of task 01a0419a v3, on Rowan's
+   2026-08-27 instruction ("works great on mobile, can we please make
+   desktop consistent with mobile?"). That is the exact revisit condition
+   the design canvas named when it originally scoped the overlay to mobile,
+   so this supersedes the earlier "desktop is deliberately not converted"
+   ruling rather than contradicting it. Canvas revision 37 governs the three
+   desktop rulings: pane-centring, the hover/focus affordance, and the
+   unconditional hit area.
+
+   THE DESKTOP-BREAKPOINT `@media` WRAPPER IS GONE, and so is the
+   `display: contents` base pair it needed. (The old breakpoint's pixel value
+   is deliberately not written here: a text scan cannot tell a comment from a
+   rule, and `jump_anchor_stylesheet.test.js` asserts that value appears
+   nowhere in this file.) The rules below are promoted to
+   top level with IDENTICAL declarations — mobile rendering is unchanged in
+   effect. Promotion rather than a `min-width` twin: a twin leaves two copies
+   of one geometry that can drift, and a single unconditional block makes the
+   invariant checkable by a text scan instead of by rendering at two widths.
+
+   PANE-CENTRED, NOT VIEWPORT-CENTRED (canvas r37 desktop ruling 1). On
+   mobile the two coincide; on desktop the pane sits beside a sidebar, and a
+   viewport-centred pill sits visibly off-centre over the conversation while
+   looking perfectly correct in a full-width screenshot. The centring is
+   pane-relative BY CONSTRUCTION and not by an offset: `.chat-jump-anchor` is
+   `position: relative` and is an in-flow block inside the chat column, so it
+   is the row's containing block and its width IS the message pane's content
+   width. `left: 0; right: 0` therefore track the pane at both sidebar states.
+   NEVER replace this with a viewport-relative offset — such an offset would
+   be correct at one sidebar state and wrong at the other.
 
    `.chat-jump-anchor` is zero-height, so the flex column's layout is
    identical whether or not the control is rendered — the composer never
@@ -1793,35 +1928,30 @@ body, .font-fabrikam {
    Centring is `justify-content`, NOT `translateX(-50%)`, deliberately: the
    entrance keyframe and the `:active` press both animate `transform`, and a
    centring transform on the button would be clobbered by each of them. */
-.chat-jump-anchor,
-.chat-jump-anchor-row {
-  display: contents;
+.chat-jump-anchor {
+  display: block;
+  position: relative;
+  height: 0;
 }
 
-@media (max-width: 1023.98px) {
-  .chat-jump-anchor {
-    display: block;
-    position: relative;
-    height: 0;
-  }
+.chat-jump-anchor-row {
+  display: flex;
+  justify-content: center;
+  position: absolute;
+  right: 0;
+  bottom: 8px;
+  left: 0;
+  pointer-events: none;
+}
 
-  .chat-jump-anchor-row {
-    display: flex;
-    justify-content: center;
-    position: absolute;
-    right: 0;
-    bottom: 8px;
-    left: 0;
-    pointer-events: none;
-  }
-
-  /* The desktop gutter classes (`ml-5 mb-1`) are inert once centred, and
-     the max-width is restated against the row rather than the flex column. */
-  .chat-jump-anchor-row > .chat-jump-chip {
-    margin: 0;
-    max-width: calc(100% - 40px);
-    pointer-events: auto;
-  }
+/* `margin: 0` at every width: the old desktop gutter classes (`self-start
+   ml-5 mb-1`) described an in-flow chip that no longer exists at any width,
+   and they were dropped from the template in the same change. The max-width
+   is restated against the row rather than the flex column. */
+.chat-jump-anchor-row > .chat-jump-chip {
+  margin: 0;
+  max-width: calc(100% - 40px);
+  pointer-events: auto;
 }
 /* Dark theme lifts the fill off the pane token onto the raised one, so the
    pill still separates from `--color-base-100` behind it. Light theme stays
@@ -1871,15 +2001,35 @@ body, .font-fabrikam {
   background: color-mix(in srgb, var(--color-base-300) 72%, transparent);
 }
 
-/* Hover raises the fill's opacity rather than stepping a surface token.
-   Opacity is the only dimension this control has left; stepping the token
-   would make it read as a solid chip again on hover. Colour only: no
-   movement, no shadow. */
-.chat-jump-chip:hover .chat-jump-chip-pill {
+/* Hover and keyboard focus raise the fill's opacity rather than stepping a
+   surface token. Opacity is the only dimension this control has left;
+   stepping the token would make it read as a solid chip again. Colour only:
+   no movement, no shadow.
+
+   TWO HARD CONSTRAINTS, both canvas r37 desktop ruling 4, and both are the
+   reason this block looks deliberately boring:
+
+   1. NO STATE HERE MAY CHANGE THE PILL'S BOX — not height, width, padding
+      or border. Every criterion on this component is a bounding rect, and a
+      geometry-changing hover makes all of them conditional on where the
+      cursor happens to be.
+   2. PLAIN CSS `:hover`, NEVER Tailwind's `hover:` variant. The variant is
+      media-gated and behaves differently on touch, and this component's
+      entire defect history is media-gated rules — a hit-area floor once
+      shipped a false pass from behind `@media (hover: none)`. `:hover` on a
+      touch device is a harmless no-op; a media query is not.
+
+   `:focus-visible` is paired with `:hover` so a keyboard user gets the same
+   affordance. It is `:focus-visible` and not `:focus` so a pointer click
+   does not leave the pill lit after the press. The focus RING is separate
+   and comes from `.focus-visible-ring` on the button. */
+.chat-jump-chip:hover .chat-jump-chip-pill,
+.chat-jump-chip:focus-visible .chat-jump-chip-pill {
   background: color-mix(in srgb, var(--color-base-100) 88%, transparent);
 }
 
-[data-theme="dark"] .chat-jump-chip:hover .chat-jump-chip-pill {
+[data-theme="dark"] .chat-jump-chip:hover .chat-jump-chip-pill,
+[data-theme="dark"] .chat-jump-chip:focus-visible .chat-jump-chip-pill {
   background: color-mix(in srgb, var(--color-base-300) 88%, transparent);
 }
 

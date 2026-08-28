@@ -104,6 +104,43 @@ const NEAR_BOTTOM_PX = 150;
 // constant serves both widths.
 const DEEP_HISTORY_PX = 1800;
 
+// ── The hysteresis margin ───────────────────────────────────────────────────
+//
+// READ THIS BEFORE COUNTING THRESHOLDS. There are still exactly TWO
+// thresholds, `NEAR_BOTTOM_PX` and `DEEP_HISTORY_PX`, and both keep the values
+// and the provenance recorded above. `THRESHOLD_HYSTERESIS_PX` is NOT a third
+// threshold and it is NOT a re-tune of either: it is ONE margin applied
+// SYMMETRICALLY to BOTH of them, turning each single value into a BAND whose
+// NOMINAL CROSSING POINT is still the constant above it. A reader arriving
+// here and "simplifying" three numbers down to two would be deleting the
+// mechanism, not a redundancy.
+//
+// WHY A BAND. Both reported booleans were derived from a single comparison, so
+// a reader hovering at a boundary re-flipped one on every wheel tick and
+// `_reportDistance()` pushed a server event each time — each of which is a
+// LiveView render. Task 01a0419a stage 2 measured the resulting stutter and
+// stage 3 removed its worst amplifier (the reflow-hold pin, see
+// `_reportDistance`), but the churn is an INDEPENDENT defect and survives that
+// removal: an oscillating boolean still round-trips to the server. This is the
+// fix for that half, and it is justified on its own merits rather than as part
+// of the stutter fix.
+//
+// THE RULE. To ENTER a state the reader must pass `nominal + margin`; to LEAVE
+// it they must fall back past `nominal - margin`. In between, the previous
+// answer stands. So a reader oscillating anywhere inside the band produces
+// exactly ONE event, and a reader who genuinely commits past the far edge
+// still flips.
+//
+// WHY 24. It has to exceed the incidental wobble at a boundary — sub-pixel
+// scroll rounding, momentum settle, and the few-pixel rubber-band overshoot at
+// the end of a flick — while staying far below any distance a person would
+// call a scroll. 24px is under a third of the 83px median message row measured
+// for `DEEP_HISTORY_PX` above, so no band edge can move past the message that
+// defined it. It is deliberately NOT tuned per threshold: two margins would be
+// two more numbers to keep in order, and nothing observed suggests the two
+// boundaries wobble differently.
+const THRESHOLD_HYSTERESIS_PX = 24;
+
 // The middle band — past NEAR_BOTTOM_PX, short of DEEP_HISTORY_PX — is the
 // whole visibility half of this change: there the pill appears ONLY when
 // something actually arrived. If a later edit lands DEEP_HISTORY_PX at or
@@ -125,6 +162,45 @@ if (DEEP_HISTORY_PX <= NEAR_BOTTOM_PX) {
       `greater than NEAR_BOTTOM_PX (${NEAR_BOTTOM_PX}); at or below it the ` +
       `middle visibility band collapses and the jump pill reappears on every ` +
       `scroll-up.`,
+  );
+}
+
+// The SAME silent-collapse hazard, one level up: the margin widens both bands
+// inward, so a large enough margin closes the gap between them even though the
+// two constants themselves are still correctly ordered. At that point `away`
+// and `deep` enter and leave together, the middle band — the entire visibility
+// rule — is gone, and NOTHING reports it: no error, no failing assertion, just
+// the pill behaving as if there were one threshold again. A negative margin is
+// the same class of bug from the other direction: it would INVERT each band,
+// making the exit point higher than the entry point, so a single boolean would
+// chatter instead of latching.
+//
+// Both are bound at module load for the same reason the pair-ordering above
+// is: a test can be deleted, and CI runs no JavaScript at all.
+//
+// The surviving middle band runs from `NEAR_BOTTOM_PX + margin` (where `away`
+// latches on) to `DEEP_HISTORY_PX - margin` (where `deep` latches on), so that
+// is the interval this asserts is non-empty.
+if (THRESHOLD_HYSTERESIS_PX < 0) {
+  throw new Error(
+    `scroll_to_bottom: THRESHOLD_HYSTERESIS_PX (${THRESHOLD_HYSTERESIS_PX}) ` +
+      `must not be negative; a negative margin inverts both bands, putting ` +
+      `each exit point above its entry point so the boolean chatters instead ` +
+      `of latching.`,
+  );
+}
+if (
+  DEEP_HISTORY_PX - THRESHOLD_HYSTERESIS_PX <=
+  NEAR_BOTTOM_PX + THRESHOLD_HYSTERESIS_PX
+) {
+  throw new Error(
+    `scroll_to_bottom: THRESHOLD_HYSTERESIS_PX (${THRESHOLD_HYSTERESIS_PX}) ` +
+      `is too large for the gap between NEAR_BOTTOM_PX (${NEAR_BOTTOM_PX}) ` +
+      `and DEEP_HISTORY_PX (${DEEP_HISTORY_PX}): the middle visibility band ` +
+      `would run from ${NEAR_BOTTOM_PX + THRESHOLD_HYSTERESIS_PX}px to ` +
+      `${DEEP_HISTORY_PX - THRESHOLD_HYSTERESIS_PX}px, i.e. be empty. The ` +
+      `margin must stay under half their difference ` +
+      `(${(DEEP_HISTORY_PX - NEAR_BOTTOM_PX) / 2}px).`,
   );
 }
 // The initial-arrival phase ends when layout has been quiet for this long.
@@ -430,37 +506,62 @@ const ScrollToBottom = {
   // `preDistance` is the pre-patch capture on the DOM-patch path, and
   // null/undefined everywhere else (scroll events, the chip's own click),
   // where the live measurement already is the reader's position.
+  // Resolve one boolean against its NOMINAL threshold with the shared
+  // hysteresis margin applied symmetrically, latching on the previous answer.
+  //
+  // `previous` is `null` only on the very first report of a conversation,
+  // where there is no state to latch onto and no jitter to suppress yet; there
+  // the nominal value is used bare, so the first answer is the same one the
+  // un-banded code would have given. Every later call needs a margin's worth
+  // of committed movement to change its mind.
+  _latch(distance, nominal, previous) {
+    if (previous === null || previous === undefined) return distance > nominal;
+    return previous
+      ? distance > nominal - THRESHOLD_HYSTERESIS_PX
+      : distance > nominal + THRESHOLD_HYSTERESIS_PX;
+  },
   _reportDistance(preDistance) {
     const distance = preDistance ?? this.distanceFromBottom();
-    const away = distance > NEAR_BOTTOM_PX;
-    const deep = distance > DEEP_HISTORY_PX;
+    // Banded, not bare comparisons — see `THRESHOLD_HYSTERESIS_PX`. The
+    // nominal crossing points are still NEAR_BOTTOM_PX and DEEP_HISTORY_PX.
+    const away = this._latch(distance, NEAR_BOTTOM_PX, this._lastAway);
+    const deep = this._latch(distance, DEEP_HISTORY_PX, this._lastDeep);
     // Edge-triggered on the PAIR. Either flipping is a real transition: a
     // reader crossing out of the deep band changes what the server renders
     // even though `away` never moved.
     if (away === this._lastAway && deep === this._lastDeep) return;
-    const hadPrevious = this._lastAway !== null;
     this._lastAway = away;
     this._lastDeep = deep;
     this.pushEvent("jump_to_latest_distance", { away, deep });
-    // KEEP-OR-DROP DECISION on `holdAnchorThroughReflow()` (task 01a0419a
-    // stage 4, and the reason is narrower than it was): KEPT, for DESKTOP.
+    // KEEP-OR-DROP on `holdAnchorThroughReflow()`, REVISITED under task
+    // 01a0419a v3. This SUPERSEDES the v2 stage 4 ruling that stood here.
     //
-    // Stage 2 lifted the control out of the flow, so on mobile the wrappers
-    // are a zero-height overlay and the pill appearing changes no geometry at
-    // all — there this call absorbs nothing. But the overlay is gated behind
-    // `@media (max-width: 1023.98px)`; at desktop widths the wrappers are
-    // `display: contents` and the button is still a flex SIBLING of the
-    // scroller, so it appearing and disappearing still shrinks and grows the
-    // scroller's clientHeight and the browser still re-clamps scrollTop under
-    // the reader's eyes. The reason has narrowed from "both platforms" to
-    // "desktop only"; it has not evaporated, so the call stays. It is a no-op
-    // on mobile (the pin re-writes the distance it just read), which is the
-    // cheap half of the trade. Drop it only together with the desktop in-flow
-    // path.
+    // v2 stage 4 kept this call for ONE stated reason: at desktop widths the
+    // jump-to-latest button was still an in-flow flex SIBLING of the scroller,
+    // so it appearing changed the scroller's `clientHeight` and the browser
+    // re-clamped `scrollTop`. Stage 1 of this task deleted that path — the
+    // control is now a zero-height overlay at EVERY width. The justification
+    // is not narrowed, it is false, so the call is DROPPED.
     //
-    // Skipped on the very first report, where nothing was rendered before and
-    // there is no height change to absorb.
-    if (hadPrevious) this.holdAnchorThroughReflow();
+    // It was also measured to be actively harmful, which the old comment got
+    // backwards when it called the pin "a no-op on mobile". The pin captures
+    // `distanceFromBottom()` once and writes it back every frame for 400ms:
+    // that is a no-op for ABSORBING A REFLOW, and it is exactly what FREEZES a
+    // reader who is moving. Task 01a0419a stage 2 measured 400ms windows after
+    // an edge at -30px/-12px (1440x900) and -60px/-30px (390x844) against
+    // equal-length mid-band control windows of -540px to -690px. The 390px
+    // `away` window — where there is no reflow to absorb at all — was the
+    // WORST in the table. Harness and captures:
+    // `priv/measurements/01a0419a-scroll-stutter/`.
+    //
+    // THE METHOD IS RETAINED AND IS STILL LIVE. Its remaining caller is the
+    // `handleEvent("sidebar_collapsed_changed", ...)` registration in
+    // `mounted()` — the original task 019f51d1 reason, a 168px rail width
+    // animation that rewraps text and makes the browser re-anchor scrollTop.
+    // That caller is untouched by this task. Do not delete
+    // `holdAnchorThroughReflow()` as dead code: dropping this call site leaves
+    // exactly one caller, not zero, and `scroll_to_bottom.test.js` asserts it
+    // still fires on the sidebar event for precisely that reason.
   },
   distanceFromBottom() {
     return (
