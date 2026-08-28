@@ -24,6 +24,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
   alias Platform.Agents.Agent
   alias Platform.Meetings
+  alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -199,7 +200,26 @@ defmodule Platform.Meetings.IntentClassifierTest do
   # Deterministic room -> meeting mapping so a test can enqueue by room
   # and read back by meeting without threading an id through every
   # helper.
-  defp meeting_id_for(room_id), do: "meeting-" <> room_id
+  #
+  # It MUST be a real UUID. `meeting_candidates.meeting_id` is a
+  # `:binary_id`, so the durable candidate mirror in
+  # `Platform.Meetings.IntentQueue.Server` raises `Ecto.ChangeError` at
+  # dump time on anything else — and its deliberately non-fatal
+  # `mirror/1` wrapper swallows that raise into a log line. With the
+  # old `"meeting-" <> room_id` shape every enqueue in this file
+  # mirrored nothing and the suite stayed green anyway (task 01a049f9).
+  # Hashed rather than generated so the mapping stays deterministic.
+  defp meeting_id_for(room_id) do
+    <<a::binary-8, b::binary-4, c::binary-3, d::binary-3, e::binary-12, _::binary>> =
+      Base.encode16(:crypto.hash(:sha256, "meeting:" <> room_id), case: :lower)
+
+    "#{a}-#{b}-7#{c}-8#{d}-#{e}"
+  end
+
+  # A fresh meeting id for tests that do not key off a room. Same
+  # constraint as `meeting_id_for/1`: it has to be a real UUID or the
+  # mirror silently does nothing.
+  defp unique_meeting_id, do: Ecto.UUID.generate()
 
   # Rows for the meeting this room's chunks land in.
   defp queued_for_room(room_id), do: IntentQueue.list(meeting_id_for(room_id))
@@ -304,7 +324,8 @@ defmodule Platform.Meetings.IntentClassifierTest do
          }}
       end)
 
-      _ = broadcast_chunk("room-happy", meeting_id: "meeting-happy")
+      happy_meeting_id = unique_meeting_id()
+      _ = broadcast_chunk("room-happy", meeting_id: happy_meeting_id)
 
       assert_receive {:classified, %{count: 1},
                       %{
@@ -313,20 +334,20 @@ defmodule Platform.Meetings.IntentClassifierTest do
                         target_role: "scribe",
                         confidence: 0.87,
                         dedupe_key_hit_or_new: :inserted,
-                        meeting_id: "meeting-happy"
+                        meeting_id: ^happy_meeting_id
                       }},
                      500
 
       # And the row landed in the MEETING's queue — the chunk named
-      # `meeting-happy` explicitly, so that is where it lives.
-      entries = IntentQueue.list("meeting-happy")
-      on_exit(fn -> IntentQueue.stop("meeting-happy") end)
+      # that meeting explicitly, so that is where it lives.
+      entries = IntentQueue.list(happy_meeting_id)
+      on_exit(fn -> IntentQueue.stop(happy_meeting_id) end)
       assert length(entries) == 1
       [entry] = entries
       assert entry.classified_intent == "schedule_follow_up"
       assert entry.target_role == "scribe"
       assert entry.confidence == 0.87
-      assert entry.meeting_id == "meeting-happy"
+      assert entry.meeting_id == happy_meeting_id
       assert entry.status == :queued
 
       # Silence the "unused" compiler warning for the injected agent.
@@ -404,7 +425,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
       # No on_exit unassign — the DataCase sandbox rolls the row back,
       # and an on_exit DB call runs after the sandbox owner has exited.
 
-      meeting_id = "meeting-permeeting-#{System.unique_integer([:positive])}"
+      meeting_id = unique_meeting_id()
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
       %{agent: agent, target: target, meeting_id: meeting_id}
@@ -557,6 +578,105 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       assert_receive {:intent_classified, row}, 1_000
       assert String.length(row.chunk_excerpt) == 280
+    end
+  end
+
+  # ── Durable candidate mirror (task 01a049f9) ──────────────────────────────
+  #
+  # `IntentQueue.Server` mirrors every queue write into
+  # `meeting_candidates`, behind a wrapper that rescues, catches `:exit`
+  # AND discards an `{:error, changeset}` return. Three independent ways
+  # for the mirror to do nothing without failing a test, which is how
+  # this file ran 76 green tests over a mirror that inserted zero rows.
+  #
+  # So the assertion here is POSITIVE and on the row itself: absence of
+  # an error is not presence of a row. Every id the mirror carries
+  # through is a real UUID, because `uuid_or_nil/1` degrades anything
+  # else to nil — asserting on a `"room-x"` literal would pass against a
+  # mirror that had thrown the value away.
+  describe "durable candidate mirror" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-mirror"})
+      assign_intent_role!(agent)
+
+      target = create_agent!(%{slug: "intent-target-mirror"})
+      :ok = Roles.unassign_role("designer")
+      {:ok, _} = Roles.assign_role("designer", target.id)
+
+      meeting_id = unique_meeting_id()
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      %{agent: agent, target: target, meeting_id: meeting_id}
+    end
+
+    test "a classifier-driven enqueue writes a durable candidate row", %{
+      target: target,
+      meeting_id: meeting_id
+    } do
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.91,
+               "evidence_quote" => echo_quote(messages)
+             })
+         }}
+      end)
+
+      room_id = Ecto.UUID.generate()
+      chunk_id = Ecto.UUID.generate()
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
+      _ =
+        broadcast_chunk(room_id,
+          meeting_id: meeting_id,
+          segment: %{
+            id: chunk_id,
+            text: "the nav bar contrast is too low on mobile",
+            speaker_name: "alice"
+          }
+        )
+
+      assert_receive {:intent_classified, row}, 1_000
+
+      # The mirror is a cast off the same GenServer call that produced
+      # the queue row, so by the time the broadcast lands the insert has
+      # already returned. No polling.
+      candidate = Candidates.get_by_intent_id(row.id)
+
+      assert candidate,
+             "no meeting_candidates row for intent #{row.id} — the durable mirror " <>
+               "did not run (see task 01a049f9: it fails silently)"
+
+      assert candidate.meeting_id == meeting_id
+      assert candidate.room_id == room_id
+      assert candidate.transcript_chunk_id == chunk_id
+      assert candidate.evidence_quote == "the nav bar contrast is too low on mobile"
+      assert candidate.classified_intent == "visual_adjust"
+      assert candidate.classifier_confidence == 0.91
+      assert candidate.target_role == "designer"
+      assert candidate.assigned_agent_id == target.id
+      assert candidate.assigned_agent_slug == "intent-target-mirror"
+
+      # The lifecycle axis on first sight, and the verbatim queue-status
+      # echo the measurement query reads.
+      assert candidate.state == :heard
+      assert candidate.queue_status == "queued"
+      assert candidate.outcome_kind == :task
+      assert candidate.heard_at
+
+      # Not closed and not yet dispositioned: an enqueue is not an outcome.
+      assert is_nil(candidate.closed_reason)
+      assert is_nil(candidate.disposition)
+
+      # One row per intent — the unique index on `intent_id` is the
+      # mirror's idempotence key.
+      assert [^candidate] = Candidates.list_for_meeting(meeting_id)
     end
   end
 
@@ -2677,7 +2797,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     test "a verbatim quote from the chunk enqueues the intent unchanged" do
       _ = attach_recorder!(:evidence_missing, :evidence_missing)
       _ = attach_terminal_recorder!(:classified)
-      meeting_id = "meeting-evidence-ok-#{System.unique_integer([:positive])}"
+      meeting_id = unique_meeting_id()
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
       {pid, _name} = start_classifier!()
@@ -2702,7 +2822,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     test "a missing quote demotes to off_topic and emits :evidence_missing with :blank" do
       _ = attach_recorder!(:evidence_missing, :evidence_missing)
       _ = attach_terminal_recorder!(:classified)
-      meeting_id = "meeting-evidence-blank-#{System.unique_integer([:positive])}"
+      meeting_id = unique_meeting_id()
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
       {pid, _name} = start_classifier!()
@@ -2730,7 +2850,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     test "a fabricated quote demotes to off_topic with :not_in_chunk" do
       _ = attach_recorder!(:evidence_missing, :evidence_missing)
       _ = attach_terminal_recorder!(:classified)
-      meeting_id = "meeting-evidence-fab-#{System.unique_integer([:positive])}"
+      meeting_id = unique_meeting_id()
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
       {pid, _name} = start_classifier!()
@@ -2758,7 +2878,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     test "an off_topic answer with an empty quote is untouched and emits no :evidence_missing" do
       _ = attach_recorder!(:evidence_missing, :evidence_missing)
       _ = attach_terminal_recorder!(:classified)
-      meeting_id = "meeting-evidence-off-#{System.unique_integer([:positive])}"
+      meeting_id = unique_meeting_id()
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
       {pid, _name} = start_classifier!()

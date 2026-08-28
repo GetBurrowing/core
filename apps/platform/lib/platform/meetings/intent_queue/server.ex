@@ -1391,9 +1391,23 @@ defmodule Platform.Meetings.IntentQueue.Server do
   # THE non-fatal boundary. Rescues exceptions AND catches exits (a
   # checked-out sandbox connection going away arrives as an exit, not a
   # raise), so no Postgres failure mode can reach the caller.
+  #
+  # It also inspects the RETURN value. `Candidates.create/1` answers
+  # `{:error, changeset}` rather than raising — a required `meeting_id`
+  # that arrived nil, or the `intent_id` unique constraint tripping on a
+  # re-enqueue after a queue restart — and the original `fun.(); :ok`
+  # discarded that without even a log. That was a SECOND way for the
+  # mirror to do nothing quietly, alongside the rescue below, and it was
+  # the quieter of the two (task 01a049f9). Only `mirror_enqueue/3` can
+  # return it; the transition and ack hooks both answer `:ok`.
   defp mirror(%{meeting_id: meeting_id, intent_id: intent_id, fun: fun}) do
-    fun.()
-    :ok
+    case fun.() do
+      {:error, %Ecto.Changeset{} = changeset} ->
+        log_mirror_failure(meeting_id, intent_id, inspect(changeset.errors))
+
+      _ok ->
+        :ok
+    end
   rescue
     error ->
       log_mirror_failure(meeting_id, intent_id, Exception.message(error))
@@ -1402,6 +1416,14 @@ defmodule Platform.Meetings.IntentQueue.Server do
       log_mirror_failure(meeting_id, intent_id, inspect(reason))
   end
 
+  # Deliberately still a warning, not a raise, in EVERY env including
+  # test. Making it fatal under `test` was measured on task 01a049f9 and
+  # takes 85 further tests down across `intent_queue/server_test.exs`,
+  # `ack_window_margin_test.exs`, `server_persistence_test.exs` and
+  # `meeting_live_test.exs` — 96 more non-UUID meeting ids and 73
+  # sandbox-ownership exits from queue processes never allowed on the
+  # test connection. Those are real gaps and each deserves its own
+  # change; flipping this line would bury all of them in one red run.
   defp log_mirror_failure(meeting_id, intent_id, detail) do
     Logger.warning(
       "[IntentQueue] candidate mirror failed meeting_id=#{meeting_id} " <>
