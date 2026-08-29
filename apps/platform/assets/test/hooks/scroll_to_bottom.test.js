@@ -489,6 +489,16 @@ describe("ScrollToBottom — conversation change re-arms the initial snap", () =
   // finds null whether or not it was ever re-armed.
   let observers;
 
+  // The hook constructs TWO kinds of ResizeObserver, and only one of them is
+  // re-armed per conversation (task 01a04aec): the ARRIVAL observer, torn down
+  // by `_endInitialPhase`, and a PERMANENT viewport observer built once in
+  // `mounted()` and kept for the life of the hook. This narrows the count back
+  // to the arrival ones, so these assertions keep meaning exactly what they
+  // meant — "a re-arm happened" — rather than being loosened to accommodate a
+  // second constructor call.
+  const arrivalObservers = (hook) =>
+    observers.filter((o) => o !== hook._viewportObserver);
+
   beforeEach(() => {
     observers = [];
     priorMO = globalThis.MutationObserver;
@@ -585,8 +595,8 @@ describe("ScrollToBottom — conversation change re-arms the initial snap", () =
     // late-layout re-snap protection dead for every later conversation. One
     // observer came from `mounted()`; the second is the re-arm, and it is
     // watching the same scroller.
-    expect(observers.length).toBe(2);
-    expect(observers[1].observed).toEqual([el]);
+    expect(arrivalObservers(hook).length).toBe(2);
+    expect(arrivalObservers(hook)[1].observed).toEqual([el]);
   });
 
   it("does NOT snap a scrolled-up reader when the space id is unchanged", () => {
@@ -599,8 +609,8 @@ describe("ScrollToBottom — conversation change re-arms the initial snap", () =
 
     expect(el.scrollTopWrites).toEqual([]);
     expect(hook._initialScroll).toBe(false);
-    // No reset happened at all — only `mounted()`'s observer exists.
-    expect(observers.length).toBe(1);
+    // No reset happened at all — only `mounted()`'s arrival observer exists.
+    expect(arrivalObservers(hook).length).toBe(1);
   });
 
   it("POSITIVE CONTROL: still snaps a near-bottom reader on an unchanged space id", () => {

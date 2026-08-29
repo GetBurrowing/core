@@ -230,6 +230,13 @@ const ScrollToBottom = {
       this.el.closest("main") ||
       this.el;
     this._holdFrame = null;
+    // Seed the viewport dimensions BEFORE arming the observer below. A
+    // ResizeObserver delivers one callback for the CURRENT size the moment it
+    // starts observing; with nothing seeded that first delivery would read as
+    // a change from nothing and snap a reader who has not moved.
+    this._lastClientHeight = this.scrollEl.clientHeight;
+    this._lastClientWidth = this.scrollEl.clientWidth;
+    this._connectViewportObserver();
     // Seeds `_spaceId`, `_initialScroll` and `_anchoredFor`, and arms the
     // ResizeObserver. `updated()` calls the SAME method when the rendered
     // conversation changes, so there is exactly one definition of what
@@ -382,6 +389,99 @@ const ScrollToBottom = {
     });
     this._resizeObserver.observe(this.scrollEl);
   },
+  // ── The reader is pinned to the BOTTOM, not to a scrollTop (task 01a04aec)
+  //
+  // `#chat-message-scroller` is `flex-1 min-h-0` inside a flex COLUMN, so its
+  // viewport height is whatever its in-flow siblings leave it:
+  //
+  //   above it   the search / pins / canvases drawers and the archived banner
+  //              (`chat_live.html.heex`)
+  //   below it   the streaming-reply bubbles, the typing indicator and the
+  //              composer, whose textarea grows from 33px to a 200px cap as
+  //              you type (`compose_input.js` `_autoResize`)
+  //
+  // Any of those changing height changes the scroller's `clientHeight` while
+  // `scrollTop` stays exactly where the browser left it. `distanceFromBottom()`
+  // is `scrollHeight - scrollTop - clientHeight`, so the reader's distance
+  // from the live edge moves by the FULL delta without the reader touching
+  // anything. Open the canvases drawer and a reader parked at the bottom is
+  // several hundred pixels above it; type a message that wraps the composer
+  // past 150px and the composer ALONE carries them over NEAR_BOTTOM_PX — after
+  // which `scrollToBottom()` correctly declines to follow, because by its own
+  // rule this reader is no longer at the bottom. That is the reported
+  // symptom, in both the shapes it was reported in: the pane stops keeping up
+  // with the conversation, and the jump-to-latest chip appears for a reader
+  // who never scrolled.
+  //
+  // NOTHING ELSE IN THIS HOOK CAN SEE IT, which is why four previous passes
+  // over this file left it standing:
+  //
+  //   * `beforeUpdate` / `updated` fire only when LiveView patches
+  //     `#message-list`. Every sibling named above is OUTSIDE that element, so
+  //     a drawer opening or a streaming bubble growing is a patch somewhere
+  //     else entirely and this hook is never called.
+  //   * the arrival `ResizeObserver` does watch this same box, but it is torn
+  //     down the moment the arrival phase ends (`_endInitialPhase`) — 250ms of
+  //     quiet layout after the conversation lands, long before any of this.
+  //   * `holdAnchorThroughReflow` is armed only by `sidebar_collapsed_changed`,
+  //     a WIDTH change, and holds a distance rather than the bottom.
+  //
+  // So this is a SECOND, PERMANENT observer answering a different question:
+  // not "has the content finished arriving" but "did the viewport itself
+  // change size, and was the reader following the bottom when it did".
+  _connectViewportObserver() {
+    if (typeof ResizeObserver === "undefined") return;
+    this._disconnectViewportObserver();
+    this._viewportObserver = new ResizeObserver(() => this._onViewportResize());
+    this._viewportObserver.observe(this.scrollEl);
+  },
+  _disconnectViewportObserver() {
+    if (this._viewportObserver) {
+      this._viewportObserver.disconnect();
+      this._viewportObserver = null;
+    }
+  },
+  _onViewportResize() {
+    const width = this.scrollEl.clientWidth;
+    const height = this.scrollEl.clientHeight;
+    const prevWidth = this._lastClientWidth;
+    const prevHeight = this._lastClientHeight;
+    this._lastClientWidth = width;
+    this._lastClientHeight = height;
+
+    // The arrival phase already holds the reader at the live edge on every
+    // resize and ends by its own rules. Two owners of `scrollTop` inside that
+    // window is how earlier passes over this file undid each other.
+    if (this._initialScroll) return;
+
+    // A WIDTH change rewraps every message, so `scrollHeight` moved in the
+    // same frame and the substitution below — which reads the NEW scrollHeight
+    // against the OLD height — is not comparable. The width case is the rail
+    // transition and it already has an owner: `holdAnchorThroughReflow`, armed
+    // from `sidebar_collapsed_changed`.
+    if (width !== prevWidth) return;
+    if (height === prevHeight) return;
+
+    // Where the reader WAS, in the instant before the box changed size. A
+    // scroller merely getting shorter does not move `scrollTop`, so the old
+    // height is the only term that has to be substituted back.
+    const preDistance =
+      this.scrollEl.scrollHeight - this.scrollEl.scrollTop - prevHeight;
+
+    // THE ACCEPTED COST, stated here rather than left to be discovered. A
+    // reader who had deliberately scrolled up to read history keeps the pixel
+    // they were looking at and is NOT pulled to the bottom, even though the
+    // resize has just changed their distance from it. Restoring THEIR distance
+    // instead would drag the text out from under them on every composer
+    // keystroke, which is the opposite defect and the more intrusive one. The
+    // boundary is NEAR_BOTTOM_PX, the same constant the follow rule uses, so
+    // "followed through a resize" and "followed a new message" cannot name
+    // different readers.
+    if (preDistance > NEAR_BOTTOM_PX) return;
+
+    this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+    this._reportDistance();
+  },
   // Restart the quiet-period countdown. Called on every snap and every
   // observed resize during the arrival phase, so the phase ends only once
   // layout has genuinely stopped moving.
@@ -475,6 +575,7 @@ const ScrollToBottom = {
     }
     if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
     this._disconnectResizeObserver();
+    this._disconnectViewportObserver();
     if (this._iosFallbackTimer) {
       clearTimeout(this._iosFallbackTimer);
       this._iosFallbackTimer = null;
