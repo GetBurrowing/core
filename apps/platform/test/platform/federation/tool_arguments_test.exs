@@ -98,7 +98,14 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `require_string(args, "name", "space_create")` and declares no alias. A
   # tolerated absence would create a nameless channel, and the slug is derived
   # from the name, so there would be nothing left to identify the space by.
-  @surveyed_required_count 135
+  # 137 with `dm_create`'s `user_id` and `message` (task 01a04ad4). Both
+  # HONEST. The handler opens with two `require_string/3` calls, declares no
+  # alias for either key, and defaults neither. A tolerated absent `user_id`
+  # would be a DM addressed to nobody; a tolerated absent `message` would open
+  # a silent, empty conversation in a person's rail — a notification with
+  # nothing in it, which is the exact noise failure the tool's own description
+  # argues against.
+  @surveyed_required_count 137
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

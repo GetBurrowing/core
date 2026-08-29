@@ -716,7 +716,20 @@ defmodule Platform.RepoLookupBoundaryTest do
     # never surface another org's channel. That narrowing is the whole point of
     # the function existing instead of reusing the unscoped oldest-row branch
     # of `get_space_by_slug/2`; do not relax it.
-    "platform/chat.ex" => 17,
+    # 18 as of task 01a04ad4: `existing_agent_dm/2`, the DM lookup behind
+    # `find_or_create_agent_dm/2`. Triaged by hand as this map asks. Its
+    # `where:` clause pins TWO ids that originate at a boundary — an MCP
+    # `dm_create` call names both the agent and the user — but neither reaches
+    # the query as caller input. `find_or_create_agent_dm/2` resolves the agent
+    # through `resolve_agent/1` and the user through
+    # `Platform.Accounts.get_user/1`, BOTH of which guard with
+    # `Platform.UUID.valid?/1` and return nil rather than raising, and the
+    # query is then handed `agent.id` and `user.id` read off the loaded rows.
+    # A malformed id therefore never reaches Ecto: it is refused one frame
+    # earlier as `:agent_not_found` / `:user_not_found`. Keep the resolve-then-
+    # query order; passing the raw arguments straight through would make this
+    # `:must_cast`.
+    "platform/chat.ex" => 18,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,
     # Task 019e2c4b stage 1 — `CanvasAccess.org_readable_space?/2`. Triaged by

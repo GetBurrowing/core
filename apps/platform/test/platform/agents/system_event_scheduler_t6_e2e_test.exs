@@ -655,7 +655,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # false-alarm previously required SSH plus a hand-written SQL query, which
     # a federated agent does not have
     # (+runtime_event_list, +execution_lease_list → 97)
-    @t6_baseline_tool_count 98
+    # bumped by task 01a04ad4 — `dm_create`, added to the existing `space`
+    # bundle beside `space_create`. An agent had no way to reach a human
+    # directly at all: no DM tool, no mention path into a DM, and `dm` is not
+    # implicitly joinable. Not a T6 concern — it adds no schedule, no trigger
+    # and no historian surface (+dm_create -> 99)
+    @t6_baseline_tool_count 99
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

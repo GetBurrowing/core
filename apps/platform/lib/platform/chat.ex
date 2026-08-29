@@ -949,6 +949,153 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Find, or create, the 1:1 DM between an AGENT and a human USER, with the
+  agent as the initiating party (task 01a04ad4).
+
+  `find_or_create_dm/4` above is the human-initiated seam: its first argument
+  is a `users.id`, it stamps that id into `chat_spaces.created_by`, and it
+  inserts the initiator as a `participant_type: "user"` row. None of that can
+  express an agent as the initiator, so this is a second seam rather than an
+  extra clause on the first.
+
+  ## The invariant this seam carries, and the one it does not touch
+
+  The agent names a **person**, never a space. There is no `space_id`
+  parameter here and deliberately so: a function that took one would be a
+  function that could be pointed at somebody else's conversation, and the
+  whole safety argument for this feature is that it cannot be.
+
+  What comes out is therefore always a space in which the calling agent is
+  already a party — either one it opened itself, or the one the human opened
+  with it. `existing_agent_dm/2` pins BOTH halves of the roster (`agent_id`
+  AND `user_id`) precisely so that "Harper's DM with Rowan" cannot satisfy the
+  lookup on the strength of Harper alone.
+
+  This does NOT touch, and must not be read as touching:
+
+    * `chat.ex`'s "DMs are private-to-participants by contract — no observer
+      agents" — no observer is added anywhere below, and the Historian
+      exclusion in `maybe_add_historian/1` is unchanged.
+    * "DMs are exempt: mentioning an agent in a DM must NOT auto-add them" —
+      `reinvite_and_pin_mentioned/1` is unchanged; an agent still cannot be
+      pulled into a DM it is not on by anyone typing its name.
+    * `PlatformWeb.ChatLive`'s `@implicitly_joinable_kinds` (task 01a01d0e /
+      PR #835) — unchanged. `dm` still requires a pre-existing participant
+      row to open by URL.
+
+  An agent opening a DM WITH a human creates a NEW space whose only two
+  members are the agent and that human. It exposes nobody's existing
+  conversation, which is why it is safe and why the three rules above stay
+  exactly as they were.
+
+  ## Idempotency is the anti-spam property
+
+  The lookup runs first and matches a DM created from EITHER direction — the
+  participant rows a human-initiated agent DM writes are indistinguishable
+  from the ones written here. So an agent that calls this in a loop gets the
+  SAME thread back every time; it cannot mint the recipient a new
+  conversation per message. That is a property of the query, not a throttle.
+
+  ## Who may be DM'd
+
+  One rule is enforced here, at the seam, because it must hold for every
+  future caller: **the target must not be an external user.**
+  `external_dm_permitted?/3` already refuses external→agent DMs outright
+  ("the external chat surface is scoped to allowlisted humans; agent DMs are
+  out of scope for external users"). Allowing agent→external would reinstate
+  exactly that conversation from the other end, so the same
+  `Tenancy.external_user?/1` predicate refuses it here.
+
+  ORG scoping — may a tenant-pinned agent reach a person in another tenant —
+  is answered one layer up in `Platform.Federation.ToolSurface`, by the same
+  private `agent_home_org/1` that `space_create` already uses for exactly
+  this question. See `dm_create` there.
+
+  `chat_spaces.created_by` is left NULL on purpose: the column is
+  `references(:users, ...)` (`20260319120000_add_dm_group_fields.exs`), so an
+  agent id in it is a foreign-key violation, not a record. The agent is
+  recorded in `metadata["created_by_agent_id"]` instead, which is a plain map
+  field and can hold what is true.
+  """
+  @spec find_or_create_agent_dm(binary(), binary()) ::
+          {:ok, Space.t()}
+          | {:error, :agent_not_found | :user_not_found | :dm_not_allowed | term()}
+  def find_or_create_agent_dm(agent_id, user_id)
+      when is_binary(agent_id) and is_binary(user_id) do
+    agent = resolve_agent(agent_id)
+    user = Platform.Accounts.get_user(user_id)
+
+    cond do
+      is_nil(agent) ->
+        {:error, :agent_not_found}
+
+      is_nil(user) ->
+        {:error, :user_not_found}
+
+      Tenancy.external_user?(user) ->
+        {:error, :dm_not_allowed}
+
+      true ->
+        case existing_agent_dm(agent.id, user.id) do
+          %Space{} = space -> {:ok, space}
+          nil -> create_agent_dm_space(agent, user)
+        end
+    end
+  end
+
+  def find_or_create_agent_dm(_agent_id, _user_id), do: {:error, :user_not_found}
+
+  # BOTH roster halves are pinned. Dropping the agent clause would make this
+  # "any DM the target user is in", which is the human-to-human conversation
+  # this feature exists not to reach.
+  defp existing_agent_dm(agent_id, user_id) do
+    from(s in Space,
+      join: pa in Participant,
+      on: pa.space_id == s.id,
+      join: pu in Participant,
+      on: pu.space_id == s.id,
+      where:
+        s.kind == "dm" and s.is_direct == true and is_nil(s.archived_at) and
+          pa.participant_type == "agent" and pa.participant_id == ^agent_id and
+          pu.participant_type == "user" and pu.participant_id == ^user_id,
+      limit: 1,
+      select: s
+    )
+    |> Repo.one()
+  end
+
+  # Mirrors `create_dm_space/3` with the two roles swapped: the AGENT is the
+  # initiator and the USER is the target. `created_by` is absent — see the
+  # `find_or_create_agent_dm/2` doc for why an agent id cannot go in it.
+  defp create_agent_dm_space(%Agent{} = agent, user) do
+    Multi.new()
+    |> Multi.insert(
+      :space,
+      Space.changeset(%Space{}, %{
+        kind: "dm",
+        is_direct: true,
+        metadata: %{"created_by_agent_id" => agent.id}
+      })
+    )
+    |> Multi.run(:initiator, fn _repo, %{space: space} ->
+      add_agent_participant(space.id, agent)
+    end)
+    |> Multi.run(:target, fn _repo, %{space: space} ->
+      add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: user_display_name(user.id),
+        joined_at: DateTime.utc_now()
+      })
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{space: space}} -> {:ok, space}
+      {:error, _step, reason, _} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Create a group conversation with multiple participants.
 
   `participant_specs` is a list of `%{type: "user"|"agent", id: uuid}`.

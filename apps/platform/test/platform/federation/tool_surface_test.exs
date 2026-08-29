@@ -82,7 +82,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 98 tools with required components" do
+    test "returns all 99 tools with required components" do
       tools = ToolSurface.tool_definitions()
       # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
       # `task` bundle. 89 as of ADR-0046 member 5 stage 4, which added
@@ -112,7 +112,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # tool at all, so agents fell back to a raw `Chat.create_channel/1` RPC
       # that wrote NULL participant display names and silently broke mention
       # routing for the agents in those channels.
-      assert length(tools) == 98
+      # 99 as of task 01a04ad4, which added `dm_create` to the `space` bundle
+      # — an agent had no way to reach a human directly at all: no DM tool, no
+      # mention path into a DM (`chat.ex`'s DM exemption), and no implicit
+      # join (`@implicitly_joinable_kinds` excludes `dm`). Being ADDED to a DM
+      # by a human was the only way in.
+      assert length(tools) == 99
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -120,6 +125,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "canvas.versions" in tool_names
       assert "canvas.restore" in tool_names
       assert "space_create" in tool_names
+      assert "dm_create" in tool_names
       assert "space_list" in tool_names
       assert "space_list_agents" in tool_names
       assert "space_leave" in tool_names

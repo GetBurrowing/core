@@ -1122,6 +1122,31 @@ defmodule Platform.Federation.ToolSurface do
           "Only removes agent participants (not humans). Target must currently be a participant in the space. If the target is the principal agent of an execution space with a live task, the space's task will orphan until re-assigned — use deliberately.",
         when_to_use:
           "When you were invited to a space you shouldn't be in (e.g. a private DM you're stuck listening to), or when asked to remove another agent who shouldn't be present."
+      },
+      %{
+        name: "dm_create",
+        description:
+          "Open a direct message with a HUMAN and say the thing, in one call. Creates the 1:1 DM between you and that person if it does not exist yet, then posts `message` into it. Re-calling it reuses the same thread rather than opening a second one. USE THIS SPARINGLY AND ON PURPOSE: a DM is a tap on the shoulder. It is for a decision only that person can make, a genuine blocker you cannot get around, or something time-sensitive that will rot if it waits. It is NOT for status, progress updates, \"just so you know\", or anything a channel post would serve — a DM channel that fills with those gets muted, and then the one message that genuinely needed them arrives somewhere nobody is reading. Ask yourself whether you ACTUALLY NEED something from this person; if the honest answer is no, post in a channel instead.",
+        parameters: %{
+          user_id: %{
+            type: "string",
+            required: true,
+            description:
+              "UUID of the human to DM. Resolve a name or email to a UUID with `principal_search` (type: \"user\") first."
+          },
+          message: %{
+            type: "string",
+            required: true,
+            description:
+              "The message to post. Lead with what you need from them and why it cannot wait."
+          }
+        },
+        returns:
+          "`{space_id, message_id, user_id, agent_participant_id}` — `space_id` is the DM, usable with `space_get_messages` to read their reply.",
+        limitations:
+          "Humans only — pass a user UUID, not an agent UUID. You are always one of the two parties: this cannot open a DM between two other people, cannot add you to an existing DM, and cannot reach a DM you are not already in. External (guest) users are refused. A tenant-pinned agent may only DM people who hold a membership in its own org; a root agent may DM anyone internal.",
+        when_to_use:
+          "When you are blocked on a decision only this person can make, or you are holding something time-sensitive that will be worthless by the time a channel post is read. Not for reporting that you finished something."
       }
     ]
   end
@@ -3465,6 +3490,45 @@ defmodule Platform.Federation.ToolSurface do
     else
       {:error, reason} ->
         {:error, %{error: "canvas_update: #{inspect(reason)}", recoverable: true}}
+    end
+  end
+
+  # ── Agent-initiated DM (task 01a04ad4) ──────────────────────────────────
+  #
+  # THE SHAPE OF THE SAFETY ARGUMENT, because it is easy to misread this as a
+  # relaxation of the DM privacy contract and it is not one.
+  #
+  # This tool takes a PERSON, never a space. There is no `space_id` argument,
+  # so there is no input by which it could be aimed at a conversation between
+  # two other people. What it produces is always a space whose entire roster
+  # is the calling agent plus the addressee — `Chat.find_or_create_agent_dm/2`
+  # pins both halves of that roster in its lookup and writes both of them on
+  # its insert.
+  #
+  # Three rules are LEFT ALONE and this tool depends on all three staying
+  # that way:
+  #
+  #   * `chat.ex`'s "DMs are private-to-participants by contract — no observer
+  #     agents" — nothing here adds an observer.
+  #   * `chat.ex`'s "DMs are exempt: mentioning an agent in a DM must NOT
+  #     auto-add them" — untouched, so an agent still cannot be talked into a
+  #     DM it is not on.
+  #   * `PlatformWeb.ChatLive`'s `@implicitly_joinable_kinds` (PR #835) —
+  #     untouched, so `dm` still requires a pre-existing participant row to
+  #     open by URL.
+  #
+  # The POST leg goes through `Chat.SpaceAccess.authorize_writer/2`, the
+  # repo's space-write choke point, rather than looking the participant row up
+  # directly. That is deliberate: it means the message can only ever land in a
+  # space the agent already holds a `chat_participants` row in, by the same
+  # predicate that guards `Chat.pin_message/2`. If the create leg ever handed
+  # back a space the agent is not in, this leg refuses rather than writing.
+  def execute("dm_create", args, context) do
+    with {:ok, user_id} <- require_string(args, "user_id", "dm_create"),
+         {:ok, message} <- require_string(args, "message", "dm_create"),
+         {:ok, agent} <- dm_create_agent(context),
+         :ok <- authorize_dm_target(agent, user_id) do
+      deliver_agent_dm(agent, user_id, message)
     end
   end
 
@@ -11025,6 +11089,126 @@ defmodule Platform.Federation.ToolSurface do
   # Derive a slug from the channel name when the caller omits one. Agents
   # routinely pass only a name, and inventing a slug for them is far better
   # than a required-argument round trip.
+  defp dm_create_agent(context) do
+    case load_agent(context) do
+      %Agent{} = agent ->
+        {:ok, agent}
+
+      _ ->
+        {:error,
+         %{
+           error: "dm_create: no calling agent in context",
+           recoverable: false,
+           suggestion:
+             "dm_create is only callable by an agent runtime — the DM's other party is the caller itself."
+         }}
+    end
+  end
+
+  # Org scoping, reusing `agent_home_org/1` — literally the predicate
+  # `space_create_org/2` already uses to decide which org an agent may act in.
+  # A root-scoped agent (no `metadata["org_id"]`, or pinned to the root org)
+  # may reach anyone internal; a tenant-pinned agent may reach only people
+  # holding a membership in its own org. Nothing new is invented here.
+  #
+  # The EXTERNAL-user refusal is NOT here — it lives at the seam in
+  # `Chat.find_or_create_agent_dm/2`, so it holds for every future caller and
+  # not just for this tool.
+  defp authorize_dm_target(agent, user_id) do
+    case agent_home_org(agent) do
+      :root ->
+        :ok
+
+      {:tenant, org_id} ->
+        member? =
+          case Platform.Accounts.get_user(user_id) do
+            nil ->
+              false
+
+            user ->
+              user
+              |> Tenancy.list_user_memberships()
+              |> Enum.any?(&(&1.org_id == org_id))
+          end
+
+        if member? do
+          :ok
+        else
+          {:error,
+           %{
+             error: "dm_create: #{user_id} is not reachable from your org",
+             recoverable: false,
+             suggestion:
+               "A tenant-pinned agent may only DM people who hold a membership in its own org. Post in a shared channel instead, or ask a person in your org to relay."
+           }}
+        end
+    end
+  end
+
+  defp deliver_agent_dm(%Agent{} = agent, user_id, message) do
+    with {:ok, space} <- Chat.find_or_create_agent_dm(agent.id, user_id),
+         {:ok, %Participant{} = participant} <-
+           Chat.SpaceAccess.authorize_writer(space.id, {:agent, agent.id}),
+         {:ok, msg} <-
+           Chat.post_message(%{
+             space_id: space.id,
+             participant_id: participant.id,
+             content_type: "text",
+             content: message
+           }) do
+      {:ok,
+       %{
+         space_id: space.id,
+         message_id: msg.id,
+         user_id: user_id,
+         agent_participant_id: participant.id
+       }}
+    else
+      {:error, :user_not_found} ->
+        {:error,
+         %{
+           error: "dm_create: no such user (#{user_id})",
+           recoverable: true,
+           suggestion:
+             "Resolve the person with `principal_search` (type: \"user\") and pass the `id` from the row it returns."
+         }}
+
+      {:error, :agent_not_found} ->
+        {:error,
+         %{
+           error: "dm_create: the calling agent no longer resolves",
+           recoverable: false,
+           suggestion: "The agent row may have been archived or deleted."
+         }}
+
+      {:error, :dm_not_allowed} ->
+        {:error,
+         %{
+           error: "dm_create: DMs to external users are not permitted",
+           recoverable: false,
+           suggestion:
+             "The external chat surface is scoped to allowlisted humans and agent DMs are out of scope for it, in both directions. Reach this person through the space they already share with you."
+         }}
+
+      {:error, :forbidden} ->
+        {:error,
+         %{
+           error: "dm_create: the calling agent is not a participant in the resolved DM",
+           recoverable: false,
+           suggestion:
+             "This should be unreachable — dm_create only ever resolves a DM the caller is a party to. Report it."
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "dm_create failed: #{inspect_errors_safe(reason)}",
+           recoverable: true,
+           suggestion: "Retry; if the message body is empty or oversized, shorten it."
+         }}
+    end
+  end
+
   defp space_create_slug(args, name) do
     raw =
       case Map.get(args, "slug") do
