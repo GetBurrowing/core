@@ -870,7 +870,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # caller ever appears, it needs the guard — and this count is the tripwire.
     "platform/orchestration.ex" => 1,
     "platform/orchestration/execution_space.ex" => 4,
-    "platform/orchestration/runtime_supervision.ex" => 4,
+    # 4 → 5 for task 01a04a8c's `needs_human_hold/3`. Its `where:` pins a
+    # `task_id`, a `runtime_id` and a `stage_id`, and all three reach it from
+    # `TaskRouter` state — `state.task_id`, `state.assignee.id` resolved by
+    # `PhaseRuntime`, and a `stage_id` read off a `%Stage{}` already loaded
+    # from the plan. No boundary caller exists, and the router's call site
+    # rescues anyway. A boundary caller would need `Platform.UUID.valid?/1`.
+    "platform/orchestration/runtime_supervision.ex" => 5,
     "platform/org/context.ex" => 4,
     "platform/org/preamble_builder.ex" => 3,
     "platform/org/tenants_summary.ex" => 2,

@@ -5,6 +5,8 @@ defmodule Platform.Orchestration.ExecutionLease do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
+  @type t :: %__MODULE__{}
+
   @statuses ~w(active blocked finished failed expired abandoned)
   @phases ~w(planning execution review)
 

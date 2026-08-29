@@ -16,6 +16,17 @@ defmodule Platform.Orchestration.RuntimeSupervision do
   alias Platform.Tasks
 
   @active_statuses ~w(active blocked)
+
+  # The `runtime_id` the TaskRouter stamps on events it files on its own
+  # behalf (`record_unresolved_stage_blocker/4`,
+  # `record_review_unrunnable_blocker/4`). Named here rather than repeated as
+  # a literal so `needs_human_hold/3` and the router cannot drift apart.
+  @self_filed_runtime_id "task_router"
+
+  @doc "The `runtime_id` the TaskRouter uses for events it files itself."
+  @spec self_filed_runtime_id() :: String.t()
+  def self_filed_runtime_id, do: @self_filed_runtime_id
+
   @event_statuses %{
     "assignment.accepted" => nil,
     "assignment.rejected" => "abandoned",
@@ -388,7 +399,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       started_at: attrs.occurred_at,
       last_heartbeat_at: heartbeat_at(status, attrs),
       last_progress_at: progress_at(attrs.event_type, attrs.occurred_at),
-      expires_at: expires_at(attrs.phase, attrs.occurred_at, status),
+      expires_at: expires_at(attrs, status),
       block_reason: block_reason(status, attrs),
       metadata: attrs.payload || %{},
       # ADR 0040 — owner identity captured at lease creation. Subsequent
@@ -410,7 +421,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       last_heartbeat_at: heartbeat_at(status, attrs) || lease.last_heartbeat_at,
       last_progress_at:
         progress_at(attrs.event_type, attrs.occurred_at) || lease.last_progress_at,
-      expires_at: expires_at(attrs.phase, attrs.occurred_at, status),
+      expires_at: expires_at(attrs, status),
       block_reason: block_reason(status, attrs),
       metadata: Map.merge(lease.metadata || %{}, attrs.payload || %{})
     })
@@ -433,18 +444,135 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
   defp block_reason(_status, _attrs), do: nil
 
-  defp expires_at(phase, occurred_at, status) when status in ["active", "blocked"] do
-    ttl_ms =
-      case phase do
-        "planning" -> 20 * 60_000
-        "review" -> 30 * 60_000
-        _ -> 15 * 60_000
-      end
+  # Task 01a04a8c. THE ONE PLACE where "waiting for a person" stops being
+  # measured on the same clock as "the executor might be dead".
+  #
+  # A lease TTL is a LIVENESS statement: it says how long we are willing to
+  # believe a silent runtime is still working before something re-dispatches
+  # the stage to a fresh executor. For `active` — and for a plain
+  # `report_blocker(needs_human: false)`, which means "I am stuck but I may
+  # recover" — that reading is correct and the phase TTLs below are unchanged.
+  #
+  # For `report_blocker(needs_human: true)` it is the wrong quantity
+  # altogether. That blocker says the next move belongs to a PERSON, and a
+  # person is not going to answer inside fifteen minutes; they may be asleep.
+  # Before this clause existed the blocked lease lapsed on the liveness clock
+  # and `TaskRouterWatcher.active_lease_present?/2` then stopped filtering the
+  # stage out of `redispatch_for_runtime/1`, so the next runtime reconnect
+  # re-sent the whole dispatch payload as though the refusal had never been
+  # filed. Observed live on 2026-08-28: three blockers, ~6 hours, one loop.
+  #
+  # The hold is BOUNDED, not infinite. A `needs_human` lease that never
+  # expired would recreate the defect the safety net exists to prevent — a
+  # task in a running state with nobody working it and nothing saying so
+  # (task 01a04333). `@needs_human_ttl_ms` is a horizon measured in hours,
+  # long enough to cover an overnight wait and short enough that a forgotten
+  # hold self-heals inside a day. `Platform.Orchestration.TaskRouter` posts an
+  # escalating reminder for the whole time it is held, so the wait is loud
+  # rather than merely long.
+  @needs_human_ttl_ms 12 * 60 * 60_000
 
-    DateTime.add(occurred_at, ttl_ms, :millisecond)
+  @doc """
+  TTL applied to a `blocked` lease whose blocker set `needs_human: true`.
+
+  Overridable via `config :platform, :needs_human_lease_ttl_ms` so an
+  operator can shorten or lengthen the hold horizon without a deploy.
+  """
+  @spec needs_human_ttl_ms() :: pos_integer()
+  def needs_human_ttl_ms do
+    Application.get_env(:platform, :needs_human_lease_ttl_ms, @needs_human_ttl_ms)
   end
 
-  defp expires_at(_phase, occurred_at, _status), do: occurred_at
+  defp expires_at(attrs, "blocked") do
+    if needs_human_payload?(attrs.payload) and not is_nil(attrs.stage_id) do
+      DateTime.add(attrs.occurred_at, needs_human_ttl_ms(), :millisecond)
+    else
+      DateTime.add(attrs.occurred_at, liveness_ttl_ms(attrs.phase), :millisecond)
+    end
+  end
+
+  defp expires_at(attrs, "active") do
+    DateTime.add(attrs.occurred_at, liveness_ttl_ms(attrs.phase), :millisecond)
+  end
+
+  defp expires_at(attrs, _status), do: attrs.occurred_at
+
+  defp liveness_ttl_ms("planning"), do: 20 * 60_000
+  defp liveness_ttl_ms("review"), do: 30 * 60_000
+  defp liveness_ttl_ms(_phase), do: 15 * 60_000
+
+  @doc """
+  Is this lease an OPEN "a person owes the next move" hold?
+
+  True only for a `blocked` lease that names a stage and whose recorded
+  blocker payload set `needs_human: true`. `needs_human` has been written
+  into `metadata` by `report_blocker` since the tool existed; until task
+  01a04a8c nothing ever read it back, so the flag was recorded and ignored.
+
+  Reads `metadata` rather than re-querying the runtime_event stream: the
+  lease is the row every liveness decision already consults, and `metadata`
+  is the merged payload of the events that produced it.
+  """
+  @spec needs_human_hold?(ExecutionLease.t() | nil) :: boolean()
+  def needs_human_hold?(%ExecutionLease{status: "blocked", stage_id: stage_id} = lease)
+      when not is_nil(stage_id) do
+    needs_human_payload?(lease.metadata)
+  end
+
+  def needs_human_hold?(_lease), do: false
+
+  @doc """
+  The open `needs_human` hold on `(task_id, stage_id, runtime_id)`, or `nil`.
+
+  Scoped to a runtime on purpose. The question a dispatcher is asking is
+  "did the executor I am about to prompt already tell me it cannot proceed
+  without a person?" — a blocker filed by some OTHER runtime (including the
+  router's own `#{inspect(@self_filed_runtime_id)}` self-blockers) answers a
+  different question and must not gate this dispatch.
+  """
+  @spec needs_human_hold(String.t(), String.t() | nil, String.t()) :: ExecutionLease.t() | nil
+  def needs_human_hold(task_id, stage_id, runtime_id)
+      when is_binary(task_id) and is_binary(runtime_id) do
+    if is_nil(stage_id) do
+      nil
+    else
+      expire_stale_leases(Repo,
+        task_id: task_id,
+        runtime_id: runtime_id,
+        stage_id: stage_id
+      )
+
+      ExecutionLease
+      |> where([l], l.task_id == ^task_id and l.runtime_id == ^runtime_id)
+      |> where([l], l.status == "blocked")
+      |> where([l], l.expires_at > ^DateTime.utc_now())
+      |> filter_by_stage(stage_id)
+      |> order_by([l], desc: l.inserted_at)
+      |> limit(1)
+      |> Repo.one()
+      |> case do
+        %ExecutionLease{} = lease -> if needs_human_hold?(lease), do: lease, else: nil
+        nil -> nil
+      end
+    end
+  end
+
+  def needs_human_hold(_task_id, _stage_id, _runtime_id), do: nil
+
+  # `needs_human` crosses the MCP boundary as JSON and is stored in a JSONB
+  # column, so it can arrive as a boolean or as the string a loosely-typed
+  # client sent. Anything else — absent, nil, false, "false", 0 — is NOT a
+  # human hold: this predicate must fail CLOSED, because a false positive
+  # here withholds dispatch from a stage that nobody is waiting on.
+  defp needs_human_payload?(payload) when is_map(payload) do
+    case Map.get(payload, "needs_human", Map.get(payload, :needs_human)) do
+      true -> true
+      "true" -> true
+      _ -> false
+    end
+  end
+
+  defp needs_human_payload?(_payload), do: false
 
   defp expire_stale_leases(repo, filters) do
     now = DateTime.utc_now()
