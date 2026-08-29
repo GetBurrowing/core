@@ -102,7 +102,19 @@ defmodule Platform.Meetings.IntentQueue.AckWindowMarginTest do
   @burst_size 5
 
   setup do
-    meeting_id = "meeting-margin-#{System.unique_integer([:positive])}"
+    # A real UUID, not `"meeting-margin-N"`. `IntentQueue.Server`
+    # mirrors every queue write into `meeting_candidates`, whose
+    # `meeting_id` is a `:binary_id`: a non-UUID raises
+    # `Ecto.ChangeError` at dump time and the non-fatal `mirror/1`
+    # wrapper swallows it into a log line, so all seven cases here ran
+    # green over 14 raised-and-discarded inserts (task 01a04a36).
+    #
+    # This module is `ExUnit.Case`, so the queue process still has no
+    # sandbox connection and the mirror still writes nothing — the
+    # remaining failures are ownership exits, tracked separately. What
+    # this buys is one cause instead of two. The durable mirror itself
+    # is asserted in `server_persistence_test.exs`.
+    meeting_id = Ecto.UUID.generate()
     {:ok, _} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: @window_ms)
     on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
@@ -119,7 +131,7 @@ defmodule Platform.Meetings.IntentQueue.AckWindowMarginTest do
         classified_intent: "open_question",
         target_role: "engineering",
         confidence: 0.95,
-        transcript_chunk_id: "chunk-#{System.unique_integer([:positive])}",
+        transcript_chunk_id: Ecto.UUID.generate(),
         chunk_excerpt: "who is handling the billing bug?",
         dedupe_key: "dk-#{System.unique_integer([:positive])}"
       })

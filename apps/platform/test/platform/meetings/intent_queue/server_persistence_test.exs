@@ -23,6 +23,7 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.IntentQueue.Server
   alias Platform.Meetings.IntentQueue.Supervisor, as: QueueSupervisor
 
   setup do
@@ -138,6 +139,81 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
       assert candidate.state == :closed
       assert candidate.closed_reason == :dismissed
       assert [_only_one] = candidates_for(meeting_id)
+    end
+  end
+
+  # ── Every terminal queue status reaches the durable row (task 01a04a36) ───
+  #
+  # `server_test.exs` next door walks all nine queue statuses through
+  # `transition/3` and asserts on the ETS row, which reads like coverage
+  # of this mapping. It is not. Its meeting ids were not UUIDs, so every
+  # mirror insert raised `Ecto.ChangeError` at dump time and the
+  # non-fatal `mirror/1` wrapper logged it away: 74 swallowed raises and
+  # zero `meeting_candidates` rows under 49 green tests. Nor could it
+  # have covered this even with valid ids — it is `ExUnit.Case`, so the
+  # queue owner has no sandbox connection to write through.
+  #
+  # So the mapping is asserted HERE, in the one module that allows the
+  # queue owner onto the test's connection. Before this block only
+  # `:completed` (through the ack hook) and `:timed_out` were exercised
+  # end to end. `:cancelled`, `:cancelled_late`, `:dispatch_failed` and
+  # `:no_ack_spawn_failed` — the four carrying the "rejected" half of the
+  # measurement axis this table exists to record — had nothing between
+  # `Candidates.queue_status_to_*/1`'s lookup tables, unit-tested in
+  # `candidates_test.exs`, and a durable row.
+  describe "terminal transition mirror" do
+    @terminal_expectations %{
+      completed: {:accepted, :done},
+      cancelled: {:rejected, :retracted},
+      cancelled_late: {:rejected, :retracted},
+      timed_out: {:timed_out, :dismissed},
+      dispatch_failed: {:rejected, :dismissed},
+      no_ack_spawn_failed: {:rejected, :dismissed}
+    }
+
+    # Exhaustive by construction. A seventh terminal status added to the
+    # queue without an expectation below turns this red rather than
+    # arriving uncovered — which is the failure mode this whole task is
+    # about.
+    test "the expectation table names every terminal status and no other" do
+      assert Enum.sort(Map.keys(@terminal_expectations)) ==
+               Enum.sort(Server.terminal_statuses())
+    end
+
+    for {status, {disposition, closed_reason}} <- @terminal_expectations do
+      test "a #{status} transition closes the row #{disposition}/#{closed_reason}", %{
+        meeting_id: meeting_id
+      } do
+        status = unquote(status)
+        disposition = unquote(disposition)
+        closed_reason = unquote(closed_reason)
+
+        start_queue!(meeting_id)
+        {:ok, row} = IntentQueue.enqueue(meeting_id, attrs())
+        {:ok, _} = IntentQueue.transition(meeting_id, row.id, :dispatched)
+        {:ok, _} = IntentQueue.transition(meeting_id, row.id, status)
+
+        candidates = candidates_for(meeting_id)
+
+        assert [candidate] = candidates,
+               "expected exactly one meeting_candidates row for meeting #{meeting_id} after a " <>
+                 "#{status} transition, got #{inspect(candidates)}. A mirror that never ran " <>
+                 "answers [] and fails no other assertion (task 01a04a36)."
+
+        assert candidate.intent_id == row.id
+
+        # The verbatim queue status, the lifecycle axis and the
+        # measurement axis are three separate columns and all three have
+        # to land. `state == :closed` alone would be satisfied by every
+        # one of these six statuses, which is exactly the collapse that
+        # produced the all-negative corpus.
+        assert candidate.queue_status == to_string(status)
+        assert candidate.state == :closed
+        assert candidate.disposition == disposition
+        assert candidate.closed_reason == closed_reason
+        assert candidate.closed_at
+        assert candidate.disposition_at
+      end
     end
   end
 

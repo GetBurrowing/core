@@ -27,8 +27,8 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
 
   setup do
-    meeting_id = unique("meeting")
-    room_id = unique("room")
+    meeting_id = unique_meeting_id()
+    room_id = unique_room_id()
 
     on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
@@ -37,13 +37,37 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
 
   defp unique(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
 
+  # Meeting, room and chunk ids MUST be real UUIDs, even though this
+  # file never opens a database connection.
+  #
+  # `IntentQueue.Server` mirrors every queue write into
+  # `meeting_candidates`, whose `meeting_id` / `room_id` /
+  # `transcript_chunk_id` are `:binary_id` columns. A `"meeting-4291"`
+  # never reaches Postgres at all — Ecto raises `Ecto.ChangeError` at
+  # DUMP time — and the deliberately non-fatal `mirror/1` wrapper turns
+  # that raise into a `Logger.warning`. Every case in this file stayed
+  # green over 74 such swallowed raises (task 01a04a36).
+  #
+  # Making them valid does NOT make the mirror write here: this module
+  # is `ExUnit.Case`, so the queue process has no sandbox connection
+  # and the same inserts now fail as ownership exits instead. The point
+  # of the change is that ONE cause remains rather than two, so the
+  # separately-tracked sandbox-ownership work has a legible blast
+  # radius. Durable-mirror behaviour is asserted in
+  # `server_persistence_test.exs`, which has the connection to assert it
+  # with.
+  defp unique_meeting_id, do: Ecto.UUID.generate()
+  defp unique_room_id, do: Ecto.UUID.generate()
+
   defp sample_attrs(overrides) do
+    chunk_id = Ecto.UUID.generate()
+
     Map.merge(
       %{
         classified_intent: "create_task",
         target_role: "engineering",
         confidence: 0.87,
-        transcript_chunk_id: "chunk-1",
+        transcript_chunk_id: chunk_id,
         chunk_excerpt: "we should file a task for the billing bug",
         dedupe_key: unique("dk")
       },
@@ -69,7 +93,13 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     } do
       refute IntentQueue.running?(meeting_id)
 
-      {:ok, row} = IntentQueue.enqueue(meeting_id, sample_attrs(%{room_id: room_id}))
+      chunk_id = Ecto.UUID.generate()
+
+      {:ok, row} =
+        IntentQueue.enqueue(
+          meeting_id,
+          sample_attrs(%{room_id: room_id, transcript_chunk_id: chunk_id})
+        )
 
       assert IntentQueue.running?(meeting_id)
 
@@ -79,7 +109,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
       assert row.classified_intent == "create_task"
       assert row.target_role == "engineering"
       assert row.confidence == 0.87
-      assert row.transcript_chunk_id == "chunk-1"
+      assert row.transcript_chunk_id == chunk_id
       assert row.chunk_excerpt == "we should file a task for the billing bug"
       assert is_binary(row.id)
       assert %DateTime{} = row.enqueued_at
@@ -154,14 +184,14 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     end
 
     test "returns [] for a meeting with no queue owner" do
-      assert IntentQueue.list(unique("meeting-never-started")) == []
+      assert IntentQueue.list(unique_meeting_id()) == []
     end
   end
 
   describe "per-meeting isolation" do
     test "two meetings keep independent rows and independent tables" do
-      m1 = unique("meeting")
-      m2 = unique("meeting")
+      m1 = unique_meeting_id()
+      m2 = unique_meeting_id()
       on_exit(fn -> Enum.each([m1, m2], &IntentQueue.stop/1) end)
 
       a = enqueue!(m1, %{classified_intent: "first_meeting"})
@@ -177,8 +207,8 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     end
 
     test "the same dedupe_key in two meetings does NOT collapse" do
-      m1 = unique("meeting")
-      m2 = unique("meeting")
+      m1 = unique_meeting_id()
+      m2 = unique_meeting_id()
       on_exit(fn -> Enum.each([m1, m2], &IntentQueue.stop/1) end)
 
       {:ok, _} = IntentQueue.enqueue(m1, sample_attrs(%{dedupe_key: "shared"}))
@@ -189,8 +219,8 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     end
 
     test "stopping one meeting's queue leaves the other's intact" do
-      m1 = unique("meeting")
-      m2 = unique("meeting")
+      m1 = unique_meeting_id()
+      m2 = unique_meeting_id()
       on_exit(fn -> Enum.each([m1, m2], &IntentQueue.stop/1) end)
 
       _ = enqueue!(m1)
@@ -400,7 +430,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
       pid = Server.whereis(meeting_id)
       ref = Process.monitor(pid)
 
-      other_room = unique("room-other")
+      other_room = unique_room_id()
 
       :ok =
         MeetingsPubSub.broadcast_meeting_finished(other_room, %{
@@ -451,7 +481,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
 
   describe "facade guards" do
     test "reads against a meeting with no queue degrade instead of raising" do
-      absent = unique("meeting-absent")
+      absent = unique_meeting_id()
 
       assert IntentQueue.list(absent) == []
       assert {:error, :not_found} = IntentQueue.get(absent, "whatever")
@@ -566,7 +596,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     end
 
     test "a claim that is never committed releases the cursor" do
-      meeting_id = unique("meeting-watchdog")
+      meeting_id = unique_meeting_id()
       {:ok, _} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 300)
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
@@ -672,7 +702,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
 
   describe "ack timeout" do
     test "an unanswered dispatch times out amber" do
-      meeting_id = unique("meeting-timeout")
+      meeting_id = unique_meeting_id()
       {:ok, _} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 300)
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
@@ -690,7 +720,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     end
 
     test "rejected ack attempts make the same timeout red" do
-      meeting_id = unique("meeting-spawn-failed")
+      meeting_id = unique_meeting_id()
       {:ok, _} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 300)
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
@@ -708,7 +738,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     end
 
     test "record_rejected_ack/2 never mutates the row" do
-      meeting_id = unique("meeting-rejected-noop")
+      meeting_id = unique_meeting_id()
       {:ok, _} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 60_000)
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
@@ -724,7 +754,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     end
 
     test "a completed row's rejected-ack bookkeeping is dropped with the cursor" do
-      meeting_id = unique("meeting-rejected-cleared")
+      meeting_id = unique_meeting_id()
       {:ok, _} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: 60_000)
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 
@@ -742,7 +772,7 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
     end
 
     test "the ack window comes from application env when no opt is given" do
-      meeting_id = unique("meeting-config")
+      meeting_id = unique_meeting_id()
       {:ok, _} = IntentQueue.ensure_started(meeting_id)
       on_exit(fn -> IntentQueue.stop(meeting_id) end)
 

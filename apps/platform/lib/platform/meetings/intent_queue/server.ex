@@ -1483,13 +1483,33 @@ defmodule Platform.Meetings.IntentQueue.Server do
   end
 
   # Deliberately still a warning, not a raise, in EVERY env including
-  # test. Making it fatal under `test` was measured on task 01a049f9 and
-  # takes 85 further tests down across `intent_queue/server_test.exs`,
-  # `ack_window_margin_test.exs`, `server_persistence_test.exs` and
-  # `meeting_live_test.exs` — 96 more non-UUID meeting ids and 73
-  # sandbox-ownership exits from queue processes never allowed on the
-  # test connection. Those are real gaps and each deserves its own
-  # change; flipping this line would bury all of them in one red run.
+  # test.
+  #
+  # Task 01a049f9 estimated the cost of flipping it as "85 tests, split
+  # between 96 non-UUID meeting ids and 73 sandbox-ownership exits". Task
+  # 01a04a36 re-measured that by actually making this function raise, and
+  # the split was wrong in a way worth recording: the two causes were NOT
+  # spread across all four suites. `meeting_live_test.exs` had zero
+  # non-UUID meeting ids — its queue ids come from real `Meeting` rows —
+  # and `server_persistence_test.exs` had zero, since it generates UUIDs
+  # and allows the queue owner onto the connection. All 88 dump-time
+  # `Ecto.ChangeError`s came from `server_test.exs` (74) and
+  # `ack_window_margin_test.exs` (14), and 01a04a36 removed them.
+  #
+  # Fatal, on this commit, over the same four suites:
+  #
+  #     server_test.exs               49 tests, 41 failures
+  #     ack_window_margin_test.exs     7 tests,  7 failures
+  #     meeting_live_test.exs        380 tests, 41 failures
+  #     server_persistence_test.exs   16 tests,  1 failure
+  #
+  # 90 in total, and every one is now the same cause: `cannot find
+  # ownership process`, from a queue owner never allowed onto the test's
+  # sandbox connection. (The `server_persistence_test.exs` one is its
+  # deliberate "Repo unavailable" case, which asserts on the warning this
+  # function emits and so is fatal-by-design.) Flipping this line is
+  # therefore exactly one remaining problem — sandbox ownership — rather
+  # than two tangled ones, and that is tracked separately.
   defp log_mirror_failure(meeting_id, intent_id, detail) do
     Logger.warning(
       "[IntentQueue] candidate mirror failed meeting_id=#{meeting_id} " <>
