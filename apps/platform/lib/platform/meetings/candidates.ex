@@ -182,13 +182,60 @@ defmodule Platform.Meetings.Candidates do
   @spec create_or_attach(map()) ::
           {:ok, MeetingCandidate.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
   def create_or_attach(attrs) when is_map(attrs) do
+    meeting_id = fetch_meeting_id(attrs)
+    chunk_id = first_chunk_id(attrs)
+
+    case recorded_chunk(meeting_id, chunk_id) do
+      nil ->
+        resolve_or_create(attrs, meeting_id)
+
+      %MeetingCandidate{transcript_chunk_id: owner} = row when owner == chunk_id ->
+        reconcile(row, attrs)
+
+      %MeetingCandidate{} = host ->
+        note_intent(host, chunk_id, Map.get(attrs, :intent_id))
+    end
+  end
+
+  # The chunk already threaded onto `host` — at ARRIVAL, where there was
+  # no intent id yet because the classifier had not been called. This is
+  # the first moment one exists, so it is written back into the
+  # threading event it belongs to.
+  #
+  # It is the ONLY place the attached utterance's intent is recoverable
+  # from: the attached intent gets no candidate row of its own, so
+  # `get_by_intent_id/1` will never find it. Dropping this write does
+  # not fail any row count — it silently erases the link between a
+  # queue row and the card it landed on.
+  defp note_intent(host, chunk_id, intent_id) when is_binary(intent_id) do
+    {events, wrote?} =
+      Enum.map_reduce(host.threading_events, false, fn
+        %{"transcript_chunk_id" => ^chunk_id, "intent_id" => nil} = event, _ ->
+          {Map.put(event, "intent_id", intent_id), true}
+
+        event, wrote? ->
+          {event, wrote?}
+      end)
+
+    if wrote? do
+      host
+      |> MeetingCandidate.changeset(%{threading_events: events})
+      |> Repo.update()
+    else
+      {:ok, host}
+    end
+  end
+
+  defp note_intent(host, _chunk_id, _intent_id), do: {:ok, host}
+
+  defp resolve_or_create(attrs, meeting_id) do
     utterance = %{
       speaker: Map.get(attrs, :speaker),
       text: Map.get(attrs, :evidence_quote),
       at: Map.get(attrs, :last_utterance_at)
     }
 
-    open = open_for_meeting(fetch_meeting_id(attrs))
+    open = open_for_meeting(meeting_id)
 
     case ThreadResolver.resolve(utterance, open) do
       {:thread, candidate, reason} ->
@@ -202,6 +249,183 @@ defmodule Platform.Meetings.Candidates do
       :new ->
         create(attrs)
     end
+  end
+
+  @doc """
+  Record a chunk the moment it is HEARD, before the classifier answers.
+
+  This is the pre-classification half of `create_or_attach/1` (task
+  01a04a7f). It writes the row Harper asked for — a card that appears
+  as soon as something is said, with no title yet — and returns:
+
+    * `{:ok, skeleton}` — a new unclassified row was written, or the one
+      already written for this chunk was found. The caller OWNS this row
+      and is responsible for closing it if classification never lands.
+    * `{:attached, host}` — this utterance continues an open candidate,
+      so no row of its own was written. The caller owns nothing.
+    * `{:error, reason}` — nothing was written.
+
+  ## Why the threading decision moved HERE
+
+  It used to live in `create_or_attach/1`, at classifier-return time.
+  It cannot stay there once a skeleton exists: `create_or_attach/1`
+  now reconciles onto the row for its own chunk, so the resolver would
+  never be consulted again and threading would silently stop happening.
+
+  Moving it is safe because the resolver reads exactly three things —
+  speaker, text and time — and all three are known at arrival. The
+  decision is therefore made on identical inputs, just ~1.5-3s earlier
+  (the debounce plus the model call). The one thing that does change is
+  `at`, which is now the arrival clock rather than the enqueue clock;
+  against a 60s window that is a strict improvement, because it is the
+  time the human actually spoke.
+
+  ## Idempotence
+
+  Keyed on `transcript_chunk_id`. A chunk already recorded — whether as
+  a row of its own or as an entry in some other row's
+  `transcript_chunk_ids` — never produces a second row. Without this
+  key a retried chunk becomes two cards for one sentence.
+  """
+  @spec record_heard(map()) ::
+          {:ok, MeetingCandidate.t()}
+          | {:attached, MeetingCandidate.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, :no_meeting_id | :no_chunk_id | :not_found}
+  def record_heard(attrs) when is_map(attrs) do
+    meeting_id = fetch_meeting_id(attrs)
+    chunk_id = first_chunk_id(attrs)
+
+    cond do
+      not is_binary(meeting_id) or not Platform.UUID.valid?(meeting_id) ->
+        {:error, :no_meeting_id}
+
+      not is_binary(chunk_id) or not Platform.UUID.valid?(chunk_id) ->
+        {:error, :no_chunk_id}
+
+      true ->
+        do_record_heard(attrs, meeting_id, chunk_id)
+    end
+  end
+
+  defp do_record_heard(attrs, meeting_id, chunk_id) do
+    case recorded_chunk(meeting_id, chunk_id) do
+      nil -> thread_or_open(attrs, meeting_id, chunk_id)
+      %MeetingCandidate{transcript_chunk_id: owner} = row when owner == chunk_id -> {:ok, row}
+      %MeetingCandidate{} = host -> {:attached, host}
+    end
+  end
+
+  defp thread_or_open(attrs, meeting_id, chunk_id) do
+    at = Map.get(attrs, :heard_at) || Map.get(attrs, :last_utterance_at) || DateTime.utc_now()
+    speaker = speaker_or_nil(Map.get(attrs, :speaker))
+    text = Map.get(attrs, :evidence_quote)
+
+    case ThreadResolver.resolve(
+           %{speaker: speaker, text: text, at: at},
+           open_for_meeting(meeting_id)
+         ) do
+      {:thread, candidate, reason} ->
+        case attach_utterance(candidate, %{
+               transcript_chunk_id: chunk_id,
+               intent_id: Map.get(attrs, :intent_id),
+               at: at,
+               reason: reason
+             }) do
+          {:ok, host} -> {:attached, host}
+          other -> other
+        end
+
+      :new ->
+        create(%{
+          meeting_id: meeting_id,
+          # Guarded exactly like `mirror_enqueue/3` guards it: a LiveKit
+          # room name is not always a UUID, and letting a non-UUID reach
+          # a `:binary_id` cast would fail the whole changeset and turn
+          # "no early card for this room" into a silent, room-wide
+          # outage of this feature.
+          room_id: uuid_or_nil(Map.get(attrs, :room_id)),
+          transcript_chunk_id: chunk_id,
+          transcript_chunk_ids: [chunk_id],
+          evidence_quote: text,
+          speaker: speaker,
+          state: :heard,
+          outcome_kind: Map.get(attrs, :outcome_kind) || :task,
+          heard_at: at,
+          last_utterance_at: at
+        })
+    end
+  end
+
+  # The classified fields land on the skeleton; everything the skeleton
+  # accreted while the model was thinking stays put.
+  #
+  # `transcript_chunk_ids`, `threading_events` and `last_utterance_at`
+  # are dropped from the incoming attrs because `mirror_enqueue` builds
+  # them as if it were CREATING the row — a single-element chunk list, an
+  # empty event log, `last_utterance_at` equal to the enqueue time. Any
+  # utterance that attached to the skeleton in the intervening seconds
+  # is recorded in exactly those three columns, so letting the create
+  # shape overwrite them would erase the attachment. `heard_at` is
+  # dropped for the same reason in the other direction: first sight was
+  # arrival, not enqueue.
+  @reconcile_drop ~w(transcript_chunk_ids threading_events last_utterance_at heard_at)a
+
+  # Only a SKELETON is reconcilable. A row that already carries a
+  # classification, or one that has already closed, is returned
+  # untouched: the card belongs to the classification that opened it,
+  # and a second intent arriving for the same chunk (a replayed
+  # transcript segment) must not be able to relabel somebody else's
+  # card or reopen a closed one.
+  defp reconcile(%MeetingCandidate{state: :closed} = closed, _attrs), do: {:ok, closed}
+
+  defp reconcile(%MeetingCandidate{classified_intent: intent} = row, _attrs)
+       when not is_nil(intent),
+       do: {:ok, row}
+
+  defp reconcile(%MeetingCandidate{} = skeleton, attrs) do
+    skeleton
+    |> MeetingCandidate.changeset(Map.drop(atomize(attrs), @reconcile_drop))
+    |> Repo.update()
+  end
+
+  # The candidate that already owns this chunk, preferring the row the
+  # chunk CREATED over a row it merely attached to. Both are lookups
+  # that must exist: the singular column answers "is there a skeleton
+  # for me", the array answers "did I already thread onto somebody".
+  defp recorded_chunk(meeting_id, chunk_id)
+       when is_binary(meeting_id) and is_binary(chunk_id) do
+    if Platform.UUID.valid?(meeting_id) and Platform.UUID.valid?(chunk_id) do
+      rows =
+        MeetingCandidate
+        |> where([c], c.meeting_id == ^meeting_id)
+        |> where(
+          [c],
+          c.transcript_chunk_id == ^chunk_id or
+            fragment("? = ANY(?)", type(^chunk_id, :binary_id), c.transcript_chunk_ids)
+        )
+        |> Repo.all()
+
+      Enum.find(rows, &(&1.transcript_chunk_id == chunk_id)) || List.first(rows)
+    end
+  end
+
+  defp recorded_chunk(_meeting_id, _chunk_id), do: nil
+
+  # Same normalisation `Platform.Meetings.IntentQueue.Server` applies on
+  # the classified path: `""` is unattributed, and unattributed must be
+  # nil so two strangers cannot match each other on an empty string.
+  defp speaker_or_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp speaker_or_nil(_), do: nil
+
+  defp uuid_or_nil(value) do
+    if Platform.UUID.valid?(value), do: value
   end
 
   @doc """

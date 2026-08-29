@@ -186,8 +186,10 @@ defmodule Platform.Meetings.IntentClassifier do
   require Logger
 
   alias Platform.Meetings
+  alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Roles
@@ -841,6 +843,17 @@ defmodule Platform.Meetings.IntentClassifier do
     room_id = Map.get(payload, :room_id)
     segment = Map.get(payload, :segment) || %{}
     chunk_text = segment_text(segment)
+    meeting_id = Map.get(payload, :meeting_id)
+    chunk_id = Map.get(segment, :id) || Map.get(payload, :transcript_id)
+    speaker = segment_speaker(segment, payload)
+
+    # Task 01a04a7f — the card exists BEFORE the model is asked. Every
+    # branch below is then accountable for it: `:inserted` hands it to
+    # `mirror_enqueue` to reconcile, and every other branch closes it.
+    # `nil` means this chunk got no row of its own (it threaded onto an
+    # open candidate, or it had no meeting/chunk id to be keyed by), and
+    # closing something we did not open is not ours to do.
+    skeleton = record_heard(meeting_id, room_id, chunk_id, chunk_text, speaker)
 
     prompt =
       resolve_prompt(
@@ -864,8 +877,6 @@ defmodule Platform.Meetings.IntentClassifier do
     case decision do
       {:ok, %{intent: intent, target_role: target_role, confidence: confidence}} ->
         dedupe_key = build_dedupe_key(intent, target_role, chunk_text)
-        chunk_id = Map.get(segment, :id) || Map.get(payload, :transcript_id)
-        meeting_id = Map.get(payload, :meeting_id)
 
         enqueue_result =
           enqueue_meeting_intent(%{
@@ -881,8 +892,10 @@ defmodule Platform.Meetings.IntentClassifier do
             # lines up — one derivation, so the attribution the model
             # was shown is the attribution the row records. Task
             # 01a03fb9 stage 1.
-            speaker: segment_speaker(segment, payload)
+            speaker: speaker
           })
+
+        settle_skeleton(skeleton, enqueue_result)
 
         :telemetry.execute(
           [:platform, :meetings, :intent_classified],
@@ -900,9 +913,93 @@ defmodule Platform.Meetings.IntentClassifier do
 
         :ok
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        # The whole ghost surface, in one branch. A chunk whose model
+        # call errored NEVER reaches the queue, so nothing downstream
+        # will ever close the card it opened. `:timed_out` is the
+        # disposition rather than `:rejected` because nobody rejected
+        # anything — the classifier simply did not answer, and a
+        # measurement query asking "how many did humans turn down" must
+        # not count these.
+        close_skeleton(skeleton, :dismissed, :timed_out, "classifier #{reason}")
         :ok
     end
+  end
+
+  # `:inserted` is the ONLY outcome that leaves the skeleton open, and
+  # it is the only one with a reconciler: `IntentQueue.Server`'s
+  # `mirror_enqueue/3` finds the row by `transcript_chunk_id` and fills
+  # in the classified fields. Every other outcome wrote no queue row, so
+  # nothing downstream can ever move this card again.
+  defp settle_skeleton(_skeleton, :inserted), do: :ok
+
+  defp settle_skeleton(skeleton, :duplicate) do
+    # Not an error and not a rejection: this utterance's intent folded
+    # into one already queued, so its card folds into that card's.
+    close_skeleton(skeleton, :duplicate, nil, "deduped onto an intent already queued")
+  end
+
+  defp settle_skeleton(skeleton, outcome) do
+    close_skeleton(skeleton, :dismissed, :timed_out, "not queued: #{outcome}")
+  end
+
+  defp close_skeleton(nil, _reason, _disposition, _note), do: :ok
+
+  defp close_skeleton(%MeetingCandidate{} = skeleton, reason, disposition, note) do
+    if disposition, do: Candidates.record_disposition(skeleton, disposition)
+    Candidates.close(skeleton, {reason, note})
+    :ok
+  rescue
+    error -> log_candidate_failure("close", skeleton.meeting_id, Exception.message(error))
+  catch
+    :exit, reason -> log_candidate_failure("close", skeleton.meeting_id, inspect(reason))
+  end
+
+  # The pre-classification write. Wrapped exactly like
+  # `IntentQueue.Server`'s `mirror/1`: recording a card is a recording
+  # act and must degrade to a log line, never take down the classifier's
+  # transcript subscription.
+  defp record_heard(meeting_id, room_id, chunk_id, chunk_text, speaker) do
+    case Candidates.record_heard(%{
+           meeting_id: meeting_id,
+           room_id: room_id,
+           transcript_chunk_id: chunk_id,
+           evidence_quote: excerpt(chunk_text),
+           speaker: speaker,
+           heard_at: DateTime.utc_now()
+         }) do
+      {:ok, %MeetingCandidate{} = skeleton} ->
+        skeleton
+
+      # Threaded onto somebody else's open card. No row of ours, so
+      # nothing of ours to reconcile or close.
+      {:attached, _host} ->
+        nil
+
+      {:error, reason} ->
+        unless reason in [:no_meeting_id, :no_chunk_id] do
+          log_candidate_failure("record_heard", meeting_id, inspect(reason))
+        end
+
+        nil
+    end
+  rescue
+    error ->
+      log_candidate_failure("record_heard", meeting_id, Exception.message(error))
+      nil
+  catch
+    :exit, reason ->
+      log_candidate_failure("record_heard", meeting_id, inspect(reason))
+      nil
+  end
+
+  defp log_candidate_failure(op, meeting_id, detail) do
+    Logger.warning(
+      "[IntentClassifier] candidate #{op} failed meeting_id=#{inspect(meeting_id)} " <>
+        "error=#{detail}"
+    )
+
+    :ok
   end
 
   @typedoc """

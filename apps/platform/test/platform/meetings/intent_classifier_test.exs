@@ -966,8 +966,15 @@ defmodule Platform.Meetings.IntentClassifierTest do
       # utterances are at least a debounce apart, so this is a real
       # ordering assertion and not two reads of the same instant.
       assert DateTime.compare(candidate.last_utterance_at, candidate.heard_at) == :gt
-      assert candidate.heard_at == first.enqueued_at
-      assert candidate.last_utterance_at == second.enqueued_at
+
+      # Both clocks are ARRIVAL clocks since task 01a04a7f — the card is
+      # opened when the chunk is heard, not when the classifier answers
+      # — so each is strictly EARLIER than the enqueue it corresponds
+      # to. Asserted against the matching enqueue rather than dropped,
+      # so the pairing (first->heard_at, second->last_utterance_at) is
+      # still what is being checked.
+      assert DateTime.compare(candidate.heard_at, first.enqueued_at) == :lt
+      assert DateTime.compare(candidate.last_utterance_at, second.enqueued_at) == :lt
 
       # Attaching is not lifecycle progress.
       assert candidate.state == :heard
