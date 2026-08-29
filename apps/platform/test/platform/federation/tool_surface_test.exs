@@ -729,7 +729,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "Task A"})
       {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "Task B"})
 
-      {:ok, results} =
+      {:ok, %{tasks: results}} =
         ToolSurface.execute("task_list", %{"project_id" => project.id}, %{})
 
       assert length(results) == 2
@@ -749,7 +749,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           Tasks.create_task(%{project_id: project.id, title: "Done #{n}", status: "done"})
       end
 
-      {:ok, results} =
+      {:ok, %{tasks: results}} =
         ToolSurface.execute(
           "task_list",
           %{"project_id" => project.id, "status" => "planning"},
@@ -783,7 +783,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           status: "done"
         })
 
-      {:ok, results} =
+      {:ok, %{tasks: results}} =
         ToolSurface.execute(
           "task_list",
           %{"epic_id" => epic.id, "status" => "done"},
@@ -800,7 +800,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:ok, deleted} = Tasks.create_task(%{project_id: project.id, title: "Deleted"})
       {:ok, _} = Tasks.soft_delete_task(deleted)
 
-      {:ok, results} = ToolSurface.execute("task_list", %{}, %{})
+      {:ok, %{tasks: results}} = ToolSurface.execute("task_list", %{}, %{})
 
       refute Enum.any?(results, &(&1.id == deleted.id))
       assert Enum.any?(results, &(&1.project_id == project.id))
@@ -1120,7 +1120,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:ok, cancelled2} =
         Tasks.create_task(%{project_id: project.id, title: "Folded 2", status: "cancelled"})
 
-      {:ok, results} =
+      {:ok, %{tasks: results}} =
         ToolSurface.execute(
           "task_list",
           %{"project_id" => project.id, "status" => "cancelled"},
@@ -1181,7 +1181,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           status: "planning"
         })
 
-      {:ok, results} =
+      {:ok, %{tasks: results}} =
         ToolSurface.execute(
           "task_list",
           %{
@@ -1296,7 +1296,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:ok, _unsponsored} =
         Tasks.create_task(%{project_id: project.id, title: "No sponsor"})
 
-      {:ok, results} =
+      {:ok, %{tasks: results}} =
         ToolSurface.execute("task_list", %{"project_id" => project.id}, %{})
 
       # Every row exposes the sponsor key (present-and-nil is part of
@@ -2153,7 +2153,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       {:ok, _off} = Tasks.create_task(%{project_id: project.id, title: "Auto off"})
 
-      {:ok, results} =
+      {:ok, %{tasks: results}} =
         ToolSurface.execute("task_list", %{"project_id" => project.id}, %{})
 
       assert length(results) == 2

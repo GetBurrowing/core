@@ -136,9 +136,9 @@ defmodule Platform.Federation.ResultBound do
   Shrinking is structural, never textual:
 
     * a bare list drops elements from the TAIL;
-    * a map carrying a list under `:items` or `"items"` drops from that list's
-      tail and keeps every sibling key (so `count` still reports the true
-      total);
+    * a map carrying a list under `:items` or `"items"` — or under its only
+      list-valued key — drops from that list's tail and keeps every sibling
+      key (so a `count` or `total` sibling still reports the true total);
     * anything else that is already too large is returned whole with a note,
       because there is no safe generic way to shrink an opaque map and a
       truthful oversized answer beats a corrupted one.
@@ -173,18 +173,67 @@ defmodule Platform.Federation.ResultBound do
         kept = drop_to_fit(items, &Jason.encode!(Map.put(data, key, &1)), max_bytes)
         dropped = length(items) - length(kept)
 
-        finish(Map.put(data, key, kept), dropped, length(items), max_bytes, original_json)
+        shrunk =
+          data
+          |> Map.put(key, kept)
+          |> mark_has_more(dropped)
+
+        finish(shrunk, dropped, length(items), max_bytes, original_json)
     end
   end
 
   defp shrink(_data, max_bytes, original_json),
     do: {:truncated, original_json, oversize_note(byte_size(original_json), max_bytes)}
 
+  # If the envelope carries a `has_more` flag and the backstop just dropped
+  # records, the flag must be TRUE — records the caller asked for are not in
+  # this payload, whoever removed them.
+  #
+  # Without this the backstop can turn a truthful flag into a lie, and only on
+  # the last page: `task_list` computes `has_more` from a database count, so
+  # the final page of a corpus correctly reports `false`; if that page is then
+  # too large and gets shrunk here, `false` becomes a claim that the dropped
+  # records do not exist. That is the exact failure this whole ticket is
+  # about — a silently short list — reintroduced one layer lower.
+  #
+  # Only ever raises the flag, never lowers it, and only when something was
+  # actually dropped.
+  defp mark_has_more(data, 0), do: data
+
+  defp mark_has_more(data, _dropped) do
+    cond do
+      Map.has_key?(data, :has_more) -> Map.put(data, :has_more, true)
+      Map.has_key?(data, "has_more") -> Map.put(data, "has_more", true)
+      true -> data
+    end
+  end
+
+  # Which key holds the records this map is a list OF.
+  #
+  # `:items` / `"items"` first, by name. Failing that, the SOLE list-valued
+  # key: a map with exactly one list in it is unambiguously a list result
+  # wearing an envelope, and shrinking that list is the only shrink available.
+  # Task 01a04a7a's `task_list` envelope is `%{tasks:, total:, limit:,
+  # offset:, has_more:}` — before this fallback the backstop could not shrink
+  # it at all and would have returned an over-cap payload whole, which is the
+  # exact failure `fit/2` exists to prevent, and a REGRESSION against the bare
+  # array the envelope replaced.
+  #
+  # Two or more list-valued keys returns nil rather than guessing. A wrong
+  # guess silently deletes records from whichever list the author cared about
+  # least, and a truthful oversized answer beats a quietly wrong one.
   defp items_key(data) do
     cond do
       is_list(Map.get(data, :items)) -> :items
       is_list(Map.get(data, "items")) -> "items"
-      true -> nil
+      true -> sole_list_key(data)
+    end
+  end
+
+  defp sole_list_key(data) do
+    case Enum.filter(data, fn {_k, v} -> is_list(v) end) do
+      [{key, _value}] -> key
+      _ -> nil
     end
   end
 

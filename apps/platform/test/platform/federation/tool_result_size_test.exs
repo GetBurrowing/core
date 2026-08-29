@@ -76,13 +76,19 @@ defmodule Platform.Federation.ToolResultSizeTest do
     end
 
     test "the default call is bounded, parses, and keeps identity fields", %{project: p} do
-      {:ok, rows} = ToolSurface.execute("task_list", %{"project_id" => p.id}, %{})
+      {:ok, envelope} = ToolSurface.execute("task_list", %{"project_id" => p.id}, %{})
+      rows = envelope.tasks
 
-      assert bytes(rows) <= @max_result_bytes
+      assert bytes(envelope) <= @max_result_bytes
       assert rows |> Jason.encode!() |> Jason.decode!() |> length() == length(rows)
 
       # Bounded by `limit`, not by emptiness.
       assert length(rows) == @default_limit
+
+      # And the bound is now VISIBLE (task 01a04a7a): 50 of 300, said out loud
+      # rather than left for the caller to infer from a length.
+      assert envelope.total == 300
+      assert envelope.has_more == true
 
       # Identity survives. This is what makes the result useful at all, and it
       # is what a "just return []" implementation would fail.
@@ -95,7 +101,7 @@ defmodule Platform.Federation.ToolResultSizeTest do
     end
 
     test "description is PREVIEWED, never silently dropped", %{project: p} do
-      {:ok, [row | _]} = ToolSurface.execute("task_list", %{"project_id" => p.id}, %{})
+      {:ok, %{tasks: [row | _]}} = ToolSurface.execute("task_list", %{"project_id" => p.id}, %{})
 
       # The ticket is explicit that an existing caller reading a field must not
       # get nothing. It gets a shorter string plus the means to know that.
@@ -106,10 +112,10 @@ defmodule Platform.Federation.ToolResultSizeTest do
     end
 
     test "limit and offset page through the corpus without overlap", %{project: p} do
-      {:ok, first} =
+      {:ok, %{tasks: first} = first_env} =
         ToolSurface.execute("task_list", %{"project_id" => p.id, "limit" => 10}, %{})
 
-      {:ok, second} =
+      {:ok, %{tasks: second}} =
         ToolSurface.execute(
           "task_list",
           %{"project_id" => p.id, "limit" => 10, "offset" => 10},
@@ -119,10 +125,15 @@ defmodule Platform.Federation.ToolResultSizeTest do
       assert length(first) == 10
       assert length(second) == 10
       assert MapSet.disjoint?(MapSet.new(first, & &1.id), MapSet.new(second, & &1.id))
+
+      assert first_env.total == 300
+      assert first_env.limit == 10
+      assert first_env.offset == 0
+      assert first_env.has_more == true
     end
 
     test "detail=full restores whole descriptions for a caller that asks", %{project: p} do
-      {:ok, [row | _]} =
+      {:ok, %{tasks: [row | _]}} =
         ToolSurface.execute(
           "task_list",
           %{"project_id" => p.id, "limit" => 2, "detail" => "full"},
@@ -137,7 +148,8 @@ defmodule Platform.Federation.ToolResultSizeTest do
       small = project()
       {:ok, _} = Tasks.create_task(%{project_id: small.id, title: "Only", description: "tiny"})
 
-      {:ok, rows} = ToolSurface.execute("task_list", %{"project_id" => small.id}, %{})
+      {:ok, envelope} = ToolSurface.execute("task_list", %{"project_id" => small.id}, %{})
+      rows = envelope.tasks
 
       assert length(rows) == 1
       row = hd(rows)
@@ -146,6 +158,13 @@ defmodule Platform.Federation.ToolResultSizeTest do
       assert row.description == "tiny"
       assert row.description_truncated == false
       assert row.description_length == 4
+
+      # POSITIVE CONTROL for the flag itself (task 01a04a7a). An untruncated
+      # result says so. A `has_more` hardcoded to `true` — the shape of vacuous
+      # fix this ticket names — fails here, and `total` matching the returned
+      # length is the second half of the same control.
+      assert envelope.total == 1
+      assert envelope.has_more == false
     end
   end
 

@@ -171,10 +171,16 @@ defmodule PlatformWeb.MCPControllerTest do
       # block here, and a change that emptied the payload would fail the
       # decode below.
       assert [%{"type" => "text", "text" => json}] = content
-      assert [row] = Jason.decode!(json)
+      envelope = Jason.decode!(json)
+      assert [row] = envelope["tasks"]
       assert row["title"] == "Solo"
       assert row["description"] == "x"
       assert row["description_truncated"] == false
+
+      # The envelope survives the transport intact (task 01a04a7a). One task,
+      # one returned, nothing beyond it.
+      assert envelope["total"] == 1
+      assert envelope["has_more"] == false
     end
 
     test "an oversized result stays valid JSON and carries a truncation notice", %{conn: conn} do
@@ -212,14 +218,33 @@ defmodule PlatformWeb.MCPControllerTest do
       # The assertion the ticket singles out: a cap that cuts mid-structure is
       # worse than no cap. This must parse.
       decoded = Jason.decode!(json)
-      assert is_list(decoded)
+      assert is_map(decoded)
       assert byte_size(json) <= 100_000
 
       # And what survived is whole records, not a mangled tail.
-      assert length(decoded) > 0
-      assert length(decoded) < 40
-      assert Enum.all?(decoded, &is_binary(&1["id"]))
-      assert Enum.all?(decoded, &(String.length(&1["description"]) == 20_000))
+      kept = decoded["tasks"]
+      assert is_list(kept)
+      assert length(kept) > 0
+      assert length(kept) < 40
+      assert Enum.all?(kept, &is_binary(&1["id"]))
+      assert Enum.all?(kept, &(String.length(&1["description"]) == 20_000))
+
+      # Task 01a04a7a: the backstop must still be able to SHRINK the envelope.
+      # `ResultBound.items_key/1` finds `:tasks` through its sole-list-valued-key
+      # fallback; without that fallback this payload would have been returned
+      # whole and `byte_size(json) <= 100_000` above would fail — the envelope
+      # would have been a regression against the bare array it replaced.
+      #
+      # The sibling keys survive the shrink and keep telling the truth about
+      # the corpus rather than about the shrunken page.
+      assert decoded["total"] == 40
+      assert decoded["offset"] == 0
+
+      # The handler computed `has_more: false` — 40 of 40, genuinely the last
+      # page. The backstop then dropped records, so `false` would have been a
+      # lie: this ticket's exact failure, reintroduced one layer down.
+      # `ResultBound.mark_has_more/2` raises it.
+      assert decoded["has_more"] == true
 
       assert note =~ "truncated"
       assert note =~ "offset"

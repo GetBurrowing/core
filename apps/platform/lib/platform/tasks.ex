@@ -1363,6 +1363,84 @@ defmodule Platform.Tasks do
   """
   @spec list_tasks(keyword()) :: [Task.t()]
   def list_tasks(opts) when is_list(opts) do
+    opts
+    |> list_tasks_query()
+    # Preload :sponsor so the MCP `task_list` envelope carries the
+    # human-shepherd shape without an N+1 (ADR 0042). Matches the
+    # get_task_record/1 preload so both call paths see the same fields.
+    |> preload(:sponsor)
+    |> Repo.all()
+  end
+
+  @doc """
+  One page of `list_tasks/1`, applied in SQL rather than in memory.
+
+  Same filters, same order, same preload as `list_tasks/1` — the two share
+  `list_tasks_query/1` precisely so a filter cannot be added to one and
+  forgotten on the other. The difference is only WHERE the window is taken:
+  `LIMIT`/`OFFSET` in Postgres instead of `Enum.drop |> Enum.take` over every
+  matching row. On the 807-task project that is the difference between loading
+  807 rows plus their sponsor preloads to answer with 50, and loading 50.
+
+  ## Options
+
+    * `:limit` — page size. Required in practice; defaults to
+      `ResultBound.default_limit/0`-equivalent behaviour at the caller, not
+      here, because this function has no opinion about MCP.
+    * `:offset` — rows to skip. Defaults to 0.
+
+  ## Why the order is total
+
+  `ORDER BY inserted_at DESC` alone is NOT a total order. Postgres is free to
+  return rows with equal sort keys in any order it likes, and it may choose
+  differently between two executions of the same query (a different plan, a
+  parallel scan, a changed row layout). Paging over a non-total order silently
+  skips some rows and repeats others — a failure that produces a plausible
+  answer and no error, which is strictly worse than the truncation it was
+  meant to fix. `inserted_at` is `utc_datetime_usec` so ties are rare, and
+  "rare" is exactly how a bug like this survives a test suite.
+
+  `desc: t.id` is the tiebreaker. Task ids are UUIDv7, so id order agrees with
+  insertion order and the tiebreaker never fights the primary key of the sort;
+  it only decides cases the primary key left open. Adding it cannot change any
+  ordering a caller could previously have relied on, because the cases it
+  decides are exactly the ones that had no defined answer before.
+  """
+  @spec list_tasks_page(keyword(), keyword()) :: [Task.t()]
+  def list_tasks_page(opts, page_opts) when is_list(opts) and is_list(page_opts) do
+    limit = Keyword.fetch!(page_opts, :limit)
+    offset = Keyword.get(page_opts, :offset, 0)
+
+    opts
+    |> list_tasks_query()
+    |> limit(^limit)
+    |> offset(^offset)
+    |> preload(:sponsor)
+    |> Repo.all()
+  end
+
+  @doc """
+  How many tasks `list_tasks/1` would return for `opts`, without loading them.
+
+  This is what makes `has_more` a fact rather than a guess. Computing it as
+  `length(page) == limit` is wrong at the boundary where the last page is
+  exactly full: the caller is told there is more, pages again, and gets an
+  empty list — the flag was never a signal, only a restatement of the page
+  size. A `SELECT count(*)` over the same filters answers the question that
+  was actually asked.
+  """
+  @spec count_tasks(keyword()) :: non_neg_integer()
+  def count_tasks(opts) when is_list(opts) do
+    opts
+    |> list_tasks_query()
+    |> exclude(:order_by)
+    |> Repo.aggregate(:count, :id)
+  end
+
+  # Shared filter + order builder for `list_tasks/1`, `list_tasks_page/2` and
+  # `count_tasks/1`. Kept private and shared so a `total` can never be counted
+  # over a different set than the page it describes.
+  defp list_tasks_query(opts) do
     project_id = Keyword.get(opts, :project_id)
     epic_id = Keyword.get(opts, :epic_id)
     status = Keyword.get(opts, :status)
@@ -1372,12 +1450,7 @@ defmodule Platform.Tasks do
     |> maybe_filter_project(project_id)
     |> maybe_filter_epic(epic_id)
     |> maybe_filter_status(status)
-    |> order_by([t], desc: t.inserted_at)
-    # Preload :sponsor so the MCP `task_list` envelope carries the
-    # human-shepherd shape without an N+1 (ADR 0042). Matches the
-    # get_task_record/1 preload so both call paths see the same fields.
-    |> preload(:sponsor)
-    |> Repo.all()
+    |> order_by([t], desc: t.inserted_at, desc: t.id)
   end
 
   @doc """

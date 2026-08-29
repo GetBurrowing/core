@@ -88,8 +88,9 @@ defmodule Platform.Federation.ToolResultSizeMeasureTest do
       report("task_list project_id=<#{@task_count} tasks>", result)
 
       IO.puts(
-        "[MEASURE]   records=#{length(result)} " <>
-          "description_bytes=#{result |> Enum.map(&byte_size(&1.description || "")) |> Enum.sum()}"
+        "[MEASURE]   records=#{length(result.tasks)} total=#{result.total} " <>
+          "has_more=#{result.has_more} " <>
+          "description_bytes=#{result.tasks |> Enum.map(&byte_size(&1.description || "")) |> Enum.sum()}"
       )
     end
   end

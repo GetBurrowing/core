@@ -1811,15 +1811,24 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Array of task objects. Each entry includes sponsor (nil or %{id, name, email}) per ADR 0042. " <>
-            "In the default summary detail, `description` is a truncated preview and every entry additionally " <>
-            "carries `description_truncated` (boolean) and `description_length` (the original size in bytes).",
+          "%{tasks: [...], total, limit, offset, has_more} — an ENVELOPE, not a bare array. `total` is the " <>
+            "number of tasks matching the filters, counted in the database, independent of `limit`; `has_more` " <>
+            "is true exactly when tasks matching the filters remain beyond this page. Read `has_more` rather " <>
+            "than comparing `tasks` against `limit`. Each entry in `tasks` includes sponsor (nil or " <>
+            "%{id, name, email}) per ADR 0042. In the default summary detail, `description` is a truncated " <>
+            "preview and every entry additionally carries `description_truncated` (boolean) and " <>
+            "`description_length` (the original size in bytes).",
         limitations:
-          "Paginated: returns at most `limit` tasks (default #{ResultBound.default_limit()}) from `offset`, " <>
-            "and `description` is a preview unless `detail: \"full\"` is passed. There is no total count and no " <>
-            "cursor — page until you get fewer rows than you asked for. Before task 01a049de this tool returned " <>
-            "every matching task with every full description, which measured 3_366_819 bytes on an 807-task " <>
-            "project and could not be called safely.",
+          "Paginated: returns at most `limit` tasks (default #{ResultBound.default_limit()}, max " <>
+            "#{ResultBound.max_limit()}) from `offset`, and `description` is a preview unless " <>
+            "`detail: \"full\"` is passed. To read a whole backlog, page with `offset` until `has_more` is " <>
+            "false; do NOT stop because a page came back short of `limit`. `total` and the page are two " <>
+            "statements, so a concurrent write can leave `has_more` stale by one call. Rows are ordered " <>
+            "`inserted_at` descending, tie-broken by `id`, which is a total order — paging cannot skip or " <>
+            "repeat a task. Before task 01a049de this tool returned every matching task with every full " <>
+            "description, which measured 3_366_819 bytes on an 807-task project and could not be called " <>
+            "safely; before task 01a04a7a it returned a bare array with no way to tell 50 tasks from 50 of " <>
+            "807.",
         when_to_use:
           "When you need to see what tasks exist, check the backlog, or find tasks in a specific state"
       },
@@ -4264,21 +4273,51 @@ defmodule Platform.Federation.ToolSurface do
     #     ticket explicitly warns against.
     #   * `limit`/`offset` default to #{ResultBound.default_limit()}/0.
     #
-    # Paging is applied in memory, AFTER `Tasks.list_tasks/1`. That is
-    # deliberate and it is not the fix for the database read — it is the fix
-    # for the RESPONSE, which is what spends the caller's context. Pushing
-    # LIMIT/OFFSET into the shared context function would change behaviour for
-    # its non-MCP consumers, which this ticket has no mandate to touch.
+    # Task 01a04a7a made the truncation VISIBLE. #840 left a caller able to
+    # page but unable to tell whether it needed to: the result was a bare JSON
+    # array, and "50 rows" and "50 of 807 rows" were the same eight hundred
+    # bytes. The orchestrator's measured cost was having to answer "how big is
+    # the backlog?" with "at least 50, upper bound unknown".
+    #
+    # A JSON array is structurally incapable of carrying that signal, so the
+    # result is now an envelope: `%{tasks:, total:, limit:, offset:,
+    # has_more:}`. `total` is a real `SELECT count(*)` over the same filters
+    # (`Tasks.count_tasks/1`), NOT an inference from the page length — see
+    # `has_more` below.
+    #
+    # Paging moved from `Enum.drop |> Enum.take` into SQL
+    # (`Tasks.list_tasks_page/2`). The two share a private query builder with
+    # `Tasks.list_tasks/1`, so the count and the page can never be taken over
+    # different sets, and the order is now total (`inserted_at`, then `id`) so
+    # two pages cannot skip or repeat a row.
     {limit, offset} = ResultBound.page(args)
+
+    total = Tasks.count_tasks(opts)
 
     rows =
       opts
-      |> Tasks.list_tasks()
-      |> Enum.drop(offset)
-      |> Enum.take(limit)
+      |> Tasks.list_tasks_page(limit: limit, offset: offset)
       |> Enum.map(&serialize_task_row(&1, full_detail?(args)))
 
-    {:ok, rows}
+    # `offset + length(rows) < total`, never `length(rows) == limit`. The
+    # cheap form is wrong at exactly the boundary that matters: a corpus of
+    # exactly 50 with a limit of 50 reports "there is more", the caller pages
+    # again, and gets nothing. A flag that fires on a full page is not
+    # reporting truncation, it is restating the page size.
+    #
+    # `total` and the page are two statements, so a concurrent insert between
+    # them can make `has_more` stale by one call. That is a race a caller
+    # re-paging resolves on its own; a transaction here would buy consistency
+    # nobody asked for at the cost of a read lock on the hottest list in the
+    # product.
+    {:ok,
+     %{
+       tasks: rows,
+       total: total,
+       limit: limit,
+       offset: offset,
+       has_more: offset + length(rows) < total
+     }}
   end
 
   # `task_update` — canonical shape defined by
