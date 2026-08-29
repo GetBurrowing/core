@@ -221,6 +221,7 @@ defmodule Platform.Meetings.IntentClassifier do
   alias Platform.Meetings
   alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentCorrections
+  alias Platform.Meetings.IntentFrames
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -1541,6 +1542,13 @@ defmodule Platform.Meetings.IntentClassifier do
   # emits nothing and is indistinguishable from a model error, while a
   # demoted one still lands in the queue where `IntentRouting` routes
   # it to nobody and the corrections corpus keeps a row to learn from.
+  #
+  # Task 01a04b6b adds a SECOND question on the same citation: an honest
+  # verbatim quote can still be a misreading, because the model lifts a
+  # task-shaped predicate out of a frame that cancels it. See
+  # `Platform.Meetings.IntentFrames`. Same demotion, distinct
+  # `:frame_*` reasons, so the telemetry stream tells "never cited"
+  # apart from "cited a mention".
   defp parse_content(content, room_id, chunk_text) do
     case Jason.decode(content) do
       {:ok, %{"intent" => intent, "confidence" => confidence} = decoded}
@@ -1616,13 +1624,35 @@ defmodule Platform.Meetings.IntentClassifier do
   # off_topic needs no citation — there is nothing to cite.
   defp evidence_verdict("off_topic", _quote_text, _chunk_text), do: :ok
 
+  # Two questions, asked in this order, and they are NOT the same
+  # question:
+  #
+  #   1. Did the model cite anything, and is the citation real?
+  #      (`:blank` / `:not_in_chunk` — task 01a03f57.)
+  #   2. Does the chunk FRAME that citation in a way that cancels it?
+  #      (`:frame_*` — task 01a04b6b.)
+  #
+  # Ordering is load bearing: the frame gate reads offsets INSIDE the
+  # chunk, so it is only meaningful once the quote is known to be a
+  # verbatim span of it. All 8 measured false positives on the
+  # `off_topic_default` cassette supply valid verbatim quotes and so
+  # sail through question 1 — the gate fired 0 of 174 — which is why
+  # question 2 had to exist at all.
   defp evidence_verdict(_intent, quote_text, chunk_text) when is_binary(quote_text) do
     trimmed = String.trim(quote_text)
 
     cond do
-      trimmed == "" -> {:demote, :blank}
-      substring?(chunk_text, trimmed) -> :ok
-      true -> {:demote, :not_in_chunk}
+      trimmed == "" ->
+        {:demote, :blank}
+
+      not substring?(chunk_text, trimmed) ->
+        {:demote, :not_in_chunk}
+
+      true ->
+        case IntentFrames.cancelling_frame(chunk_text, trimmed) do
+          {:cancelled, class} -> {:demote, class}
+          :ok -> :ok
+        end
     end
   end
 

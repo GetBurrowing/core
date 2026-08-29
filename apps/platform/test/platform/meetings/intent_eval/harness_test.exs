@@ -689,11 +689,84 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
 
       per_slice = result["summary"]["per_slice"]
 
-      # The two published figures for this arm: 8 of 102 negatives firing,
-      # 59 of 60 control holding (i.e. firing). Pinned here so a change to
-      # scoring that moves them is a test failure, not a silent re-baseline.
-      assert per_slice["negatives_102"]["fired"] == 8
+      # The published figures for this arm. Pinned here so a change to
+      # scoring that moves them is a test failure, not a silent
+      # re-baseline.
+      #
+      # BEFORE the frame gate (task 01a04b6b, measured 2026-08-29 at
+      # 03ac772d): negatives 8, control 59, probe 11, demoted 0 — the
+      # citation gate fired on 0 of 174 rows because all 8 false
+      # positives supply valid verbatim quotes.
+      #
+      # AFTER: negatives 3, control 59, probe 11, demoted 5. The five
+      # removals are use/mention failures, listed in the test below.
+      #
+      # The two unchanged numbers are the load-bearing half of this
+      # assertion, not padding: a gate that demoted everything would take
+      # negatives to 0 and look like a triumph. `control_60` and
+      # `unaddressed_probe_12` are what makes 3 a fix rather than a
+      # collapse, and they are asserted as EQUALITIES for that reason.
+      assert per_slice["negatives_102"]["fired"] == 3
       assert per_slice["control_60"]["fired"] == 59
+      assert per_slice["unaddressed_probe_12"]["fired"] == 11
+
+      assert per_slice["negatives_102"]["demoted"] == 5
+      assert per_slice["control_60"]["demoted"] == 0
+      assert per_slice["unaddressed_probe_12"]["demoted"] == 0
+    end
+
+    # The frame gate's reach, row by row, read off the committed cassette
+    # rather than restated from a report. Mutation M1 — delete the
+    # `IntentFrames.cancelling_frame/2` call from
+    # `IntentClassifier.evidence_verdict/3` — empties `suppressed` and
+    # turns this red, which is the mutation task 01a04b6b's own
+    # verification section demands.
+    test "the frame gate removes exactly the five use/mention false positives" do
+      root = Platform.Meetings.IntentEval.root()
+
+      {:ok, result} =
+        Harness.run("off_topic_default",
+          root: root,
+          mode: :replay,
+          live_module: ForbiddenProvider,
+          repo_root: Path.expand("../../../..", __DIR__),
+          write: false
+        )
+
+      negatives = Enum.filter(result["rows"], &(&1["slice"] == "negatives_102"))
+
+      suppressed =
+        negatives
+        |> Enum.filter(& &1["demoted_from"])
+        |> Enum.map(& &1["text"])
+        |> Enum.sort()
+
+      assert suppressed == [
+               "I do see the action items, briefly, visual address, blah, blah, blah, blah.",
+               "I wonder if this is really briefworthy.",
+               "No, actually, never mind. As an action item, Chris needs to start developing the podcast.",
+               "We can ask him to bring it in here.",
+               "Yeah, but the interaction design part is probably wrong."
+             ]
+
+      # The three it does NOT reach, stated rather than left as a
+      # residual. A fragment (the content gate's job, bypassed by the
+      # harness because `decide/1` is called directly), a chunk whose
+      # cancelling material follows the quote and so falls outside
+      # forward scope, and a hortative the gate deliberately declines to
+      # claim. If a future widening catches one of these, that is a
+      # design change and it argues for itself here first.
+      still_firing =
+        negatives
+        |> Enum.filter(&Harness.fired?/1)
+        |> Enum.map(& &1["text"])
+        |> Enum.sort()
+
+      assert still_firing == [
+               "Let's put together some kind of plan here.",
+               "Promote to prod. Yeah, I know, me too. Okay, so let's go.",
+               "and assign them."
+             ]
     end
 
     test "the binary_actionable cassette demotes 93 of its 174 rows" do

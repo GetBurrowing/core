@@ -3170,6 +3170,61 @@ defmodule Platform.Meetings.IntentClassifierTest do
       assert decision.target_role == "null"
     end
 
+    # Task 01a04b6b. The frame gate is the SECOND question asked of the
+    # same citation, and it has to be asked on this path: all 8 measured
+    # false positives on the `off_topic_default` cassette supply valid
+    # verbatim quotes, so the `:blank` / `:not_in_chunk` gate above lets
+    # every one of them through. Mutation M1 — delete the
+    # `IntentFrames.cancelling_frame/2` call from `evidence_verdict/3` —
+    # turns this test red and returns the cassette's false-positive count
+    # to 8.
+    test "a verbatim quote lifted out of a cancelling frame is demoted to off_topic" do
+      chunk = "No, actually, never mind. As an action item, Chris needs to start the podcast."
+
+      stub!(fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "action_items",
+               "target_role" => "meeting_scribe",
+               "confidence" => 0.95,
+               "evidence_quote" => "As an action item, Chris needs to start the podcast."
+             })
+         }}
+      end)
+
+      assert {:ok, decision} = IntentClassifier.decide(decide_args(%{chunk_text: chunk}))
+      assert decision.intent == "off_topic"
+      assert decision.target_role == "null"
+      assert decision.demoted_from == "action_items"
+    end
+
+    # Anti-vacuity partner to the test above, on the SAME path: strip the
+    # frame and the identical answer must survive untouched. Without this
+    # a gate that demoted every positive would pass the test above.
+    test "the same quote with no cancelling frame is returned unchanged" do
+      chunk = "As an action item, Chris needs to start the podcast."
+
+      stub!(fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "action_items",
+               "target_role" => "meeting_scribe",
+               "confidence" => 0.95,
+               "evidence_quote" => "As an action item, Chris needs to start the podcast."
+             })
+         }}
+      end)
+
+      assert {:ok, decision} = IntentClassifier.decide(decide_args(%{chunk_text: chunk}))
+      assert decision.intent == "action_items"
+      assert decision.target_role == "meeting_scribe"
+      assert decision.demoted_from == nil
+    end
+
     # The JSON `null` the prompt's own closed enum instructs the model to
     # emit for `off_topic` must survive `decide/1` as a decision, not fall
     # through to `:parse_error`.
@@ -3320,6 +3375,52 @@ defmodule Platform.Meetings.IntentClassifierTest do
                      1_000
 
       assert_receive {:classified, %{count: 1}, %{intent: "off_topic"}}, 1_000
+      assert [entry] = IntentQueue.list(meeting_id)
+      assert entry.classified_intent == "off_topic"
+    end
+
+    # Task 01a04b6b. The frame gate demotes through the SAME telemetry
+    # event as the citation gate, but under its own `:frame_*` reason —
+    # so an operator reading the stream can tell "the model never cited"
+    # from "the model cited a mention", which are different defects with
+    # different fixes. Folding them into one reason is the exact mistake
+    # this module's docs are built around.
+    test "a quote lifted out of a retraction demotes with reason :frame_retraction" do
+      _ = attach_recorder!(:evidence_missing, :evidence_missing)
+      _ = attach_terminal_recorder!(:classified)
+      meeting_id = unique_meeting_id()
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      {pid, _name} = start_classifier!()
+
+      evidence_stub(pid, %{
+        "intent" => "action_items",
+        "target_role" => "meeting_scribe",
+        "confidence" => 0.95,
+        "evidence_quote" => "as an action item, Chris owns the podcast"
+      })
+
+      _ =
+        broadcast_chunk("room-evidence-frame",
+          meeting_id: meeting_id,
+          segment: %{
+            id: "seg-evidence-frame-#{System.unique_integer([:positive])}",
+            text: "No, actually, never mind — as an action item, Chris owns the podcast.",
+            speaker_name: "alice"
+          }
+        )
+
+      assert_receive {:evidence_missing, %{count: 1},
+                      %{
+                        intent: "action_items",
+                        reason: :frame_retraction,
+                        room_id: "room-evidence-frame"
+                      }},
+                     1_000
+
+      assert_receive {:classified, %{count: 1}, %{intent: "off_topic", target_role: "null"}},
+                     1_000
+
       assert [entry] = IntentQueue.list(meeting_id)
       assert entry.classified_intent == "off_topic"
     end

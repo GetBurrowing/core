@@ -152,6 +152,14 @@ defmodule Platform.Mix.Tasks.IntentEvalDiscriminationTest do
       good = slice(runs[@good], "negatives_102")
 
       # Observed 2026-08-27: never = 102/102 fired, good = 8/102.
+      # Re-measured 2026-08-29 after the frame gate (task 01a04b6b):
+      # never = 93/102, good = 3/102. The broken config is FORCED to
+      # answer with a non-`off_topic` intent on every row, so the 9 it
+      # lost are rows where the frame gate demoted a forced fire — the
+      # gate working, not the discrimination weakening. Worth saying out
+      # loud that the headroom on this threshold is now 3, not 12: a
+      # further widening of the gate would break this test, and that is
+      # the right place for it to break.
       assert never["fired"] > 90,
              "broken_never_off_topic fired on #{never["fired"]} of #{never["rows"]} negatives — " <>
                "a config forbidden from declining must false-fire, or the negative slice is " <>
