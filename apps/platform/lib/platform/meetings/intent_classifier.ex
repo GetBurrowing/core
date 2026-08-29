@@ -32,6 +32,12 @@ defmodule Platform.Meetings.IntentClassifier do
       monologue cannot postpone classification indefinitely;
     * **`:meeting_finished` / process termination** — see below.
 
+  "Same speaker" means the same `participant_identity` when the segment
+  carries one, and only falls back to the display name when it does
+  not — see `payload_hold_key/1`. Display names collide; identities do
+  not, and a merge across a collision would carry one participant's
+  words into another's turn.
+
   The hold is keyed on ARRIVAL time (`System.monotonic_time/1`), NOT
   on `start_time` / `end_time`: both are currently hardcoded `0`
   upstream (`MeetingAgentController.normalize_segment/1`,
@@ -53,17 +59,29 @@ defmodule Platform.Meetings.IntentClassifier do
 
   Every DELIVERED chunk (post-merge) walks the guards in order:
 
-    1. **No assignee** — `Platform.Roles.assignee_for("meetings.intent_classify")`
+    1. **Agent speaker** — the segment's `participant_identity` names a
+       Suite agent (`Platform.Meetings.agent_identity?/1`). Emits the
+       `:skipped` event with `%{reason: :agent_speaker}`. Audio an agent
+       speaks into a meeting is audio the VAD chunks and the STT
+       transcribes, so an agent saying *"I'm adding this to a task and
+       will follow up"* would otherwise arrive here as an ordinary final
+       segment and classify as a fresh intent — the agent talking to
+       itself through the pipeline, occupying the ack-gated serial
+       cursor a real request needs. The chunk still reaches the
+       transcript and the summary: this excludes agent speech from
+       CLASSIFICATION, not from history, and those are different
+       pipelines.
+    2. **No assignee** — `Platform.Roles.assignee_for("meetings.intent_classify")`
        returns `nil`. Log at `:info` the FIRST time we see a room
        without an assignee (subsequent chunks for that room stay
        silent — the `state.seen_rooms` MapSet is the spam-suppressor).
        Emit telemetry with `%{reason: :no_assignee}`. Assignment IS
        the enable signal — no env-var double-gate.
-    2. **Meeting muted** — `Platform.Meetings.intent_muted?/1` on the
+    3. **Meeting muted** — `Platform.Meetings.intent_muted?/1` on the
        payload's `meeting_id` (task 019fbaac stage 2). Emits the SAME
        `:skipped` event as guard 1 with `%{reason: :muted}`. No prompt
        render, no provider call, no queue write.
-    3. **No content** — `content_bearing?/1` (a pure function, see its
+    4. **No content** — `content_bearing?/1` (a pure function, see its
        own docs) rejects backchannels, bare fragments and single
        address terms BEFORE a model call is spent. Emits
        `%{reason: :no_content}` — a distinct atom, deliberately not
@@ -71,8 +89,23 @@ defmodule Platform.Meetings.IntentClassifier do
        listening", "a human said hold" and "nothing was said" are
        different facts about a meeting and the telemetry stream is how
        they get told apart.
-    4. **Assignee found, meeting live, chunk has content** — hand off
-       to `classify_and_enqueue/4`.
+    5. **Human speaker, assignee found, meeting live, chunk has
+       content** — hand off to `classify_and_enqueue/4`.
+
+  ## Why the agent-speaker guard sits FIRST
+
+  It is the only guard that is a property of the CHUNK rather than of
+  the room's configuration, and it is total and free — a prefix test on
+  a string already in the payload, versus the indexed reads guards 2
+  and 3 pay for. An agent-authored chunk must never be classified
+  whatever the assignee or mute state is, so no other answer can
+  usefully preempt it: reporting `:no_assignee` for agent speech would
+  name a condition an operator could "fix" into a defect.
+
+  The guard reads `participant_identity` and ONLY that. It deliberately
+  does not consult the display name (`speaker_name`) that the debounce
+  and the prompt context lines use — an agent's display name is chosen
+  for humans to read and looks exactly like a person's.
 
   ## Why mute sits ABOVE the content gate
 
@@ -433,7 +466,7 @@ defmodule Platform.Meetings.IntentClassifier do
   # ── Debounce / same-speaker merge ─────────────────────────────────────────
 
   defp hold_chunk(state, room_id, payload) do
-    speaker = payload_speaker(payload)
+    speaker = payload_hold_key(payload)
 
     case Map.get(state.pending, room_id) do
       nil ->
@@ -540,6 +573,27 @@ defmodule Platform.Meetings.IntentClassifier do
   defp deliver_chunk(payload, room_id, state) do
     state = push_chunk_into_buffer(state, room_id, payload)
 
+    # Guard 1 — agent speaker. Checked BEFORE the assignee lookup: it is
+    # a property of the chunk, it is free, and no configuration answer
+    # could usefully preempt it. See the moduledoc's guard-chain section.
+    #
+    # The buffer push above happens FIRST and on purpose. Agent speech
+    # is part of the meeting record and is legitimate prior context for
+    # resolving a pronoun in the NEXT human utterance ("yes, do that") —
+    # dropping it from the window would degrade classification of the
+    # human turns this guard exists to protect. Context is not
+    # classification; only the head of the window is ever classified.
+    case agent_speaker_identity(payload) do
+      nil ->
+        classify_or_skip(payload, room_id, state)
+
+      identity ->
+        note_agent_speaker(room_id, payload, identity)
+        state
+    end
+  end
+
+  defp classify_or_skip(payload, room_id, state) do
     case Roles.assignee_for(@responsibility_key) do
       nil ->
         note_no_assignee(room_id, state)
@@ -547,7 +601,7 @@ defmodule Platform.Meetings.IntentClassifier do
       agent ->
         meeting_id = Map.get(payload, :meeting_id)
 
-        # Guard 2 — per-meeting mute (task 019fbaac stage 2). Checked
+        # Guard 3 — per-meeting mute (task 019fbaac stage 2). Checked
         # AFTER the assignee guard so an unassigned responsibility still
         # reports `:no_assignee` (the actionable reason) rather than
         # being masked by a mute, and BEFORE the content gate so an
@@ -740,6 +794,26 @@ defmodule Platform.Meetings.IntentClassifier do
   end
 
   # ── Guard branches ────────────────────────────────────────────────────────
+
+  # Distinct reason atom on the SAME `:skipped` event as the other
+  # guards. No log line and no `state.seen_rooms` spam-suppressor: an
+  # agent speaking in a meeting is routine and expected once agent
+  # voices ship, not an operator-facing anomaly the way "nobody is
+  # assigned" or "a human muted this" are. The identity rides along
+  # because "which agent is talking into the pipeline" is the only
+  # follow-up question this event ever prompts.
+  defp note_agent_speaker(room_id, payload, identity) do
+    :telemetry.execute(
+      [:platform, :meetings, :intent_classifier, :skipped],
+      %{count: 1},
+      %{
+        reason: :agent_speaker,
+        room_id: room_id,
+        meeting_id: Map.get(payload, :meeting_id),
+        speaker_identity: identity
+      }
+    )
+  end
 
   defp note_no_assignee(room_id, state) do
     {log?, updated_state} =
@@ -1636,5 +1710,53 @@ defmodule Platform.Meetings.IntentClassifier do
   defp payload_speaker(payload) when is_map(payload) do
     segment = Map.get(payload, :segment) || %{}
     segment_speaker(segment, payload)
+  end
+
+  # The segment's `participant_identity` and NOTHING else. Distinct from
+  # `segment_speaker/2`, which prefers the human-readable
+  # `speaker_name` and falls back through several display-ish keys —
+  # that is the right answer for prompt attribution and the wrong one
+  # for a trust decision, because a display name is chosen for humans to
+  # read and an agent's looks exactly like a person's.
+  defp participant_identity(payload) when is_map(payload) do
+    segment = Map.get(payload, :segment) || %{}
+
+    if is_map(segment) do
+      Map.get(segment, :participant_identity) || Map.get(segment, "participant_identity")
+    end
+  end
+
+  defp participant_identity(_), do: nil
+
+  # Returns the identity string when the chunk was authored by a Suite
+  # agent, `nil` otherwise — so the caller branches on presence rather
+  # than on a boolean and gets the identity for telemetry for free.
+  defp agent_speaker_identity(payload) do
+    identity = participant_identity(payload)
+
+    if is_binary(identity) and Meetings.agent_identity?(identity), do: identity
+  end
+
+  # Key the same-speaker debounce merge on the participant IDENTITY when
+  # the segment carries one, falling back to the display-name key for
+  # sparse payloads that don't.
+  #
+  # Two participants CAN share a display name, and a merge across that
+  # collision folds one speaker's words into another's turn. That is a
+  # latent attribution bug in general and a hole in guard 1 in
+  # particular: `merged_payload/1` keeps the FIRST fragment's segment,
+  # so a human turn that absorbed an agent fragment would carry the
+  # agent's words to the classifier under a human identity — the exact
+  # loop guard 1 exists to close. Identity is minted per participant and
+  # cannot collide, so keying on it removes the hole rather than
+  # narrowing it.
+  #
+  # Tagged so an identity string can never compare equal to a display
+  # name that happens to hold the same characters.
+  defp payload_hold_key(payload) do
+    case participant_identity(payload) do
+      identity when is_binary(identity) and identity != "" -> {:identity, identity}
+      _ -> {:name, payload_speaker(payload)}
+    end
   end
 end

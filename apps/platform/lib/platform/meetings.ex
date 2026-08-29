@@ -2936,6 +2936,36 @@ defmodule Platform.Meetings do
   def parse_identity("guest:" <> uuid), do: cast_identity(:guest, uuid)
   def parse_identity(_), do: :unknown
 
+  @doc """
+  True when a LiveKit participant identity names a Suite AGENT.
+
+  A deliberate PREFIX test, and deliberately NOT `parse_identity/1`.
+  Suite mints agent identities in two different shapes and only one of
+  them parses:
+
+    * `generate_agent_token/3` mints `"agent:" <> agent.slug` — this is
+      the identity on the token an agent actually joins a LiveKit room
+      with, so it is the identity that would be stamped on any segment
+      an agent's speech produced;
+    * `MeetingLive` keys its participant tiles `"agent:" <> agent.id`.
+
+  `parse_identity/1` casts the suffix as a UUID and therefore answers
+  `:unknown` for the slug form. A guard written on `parse_identity/1`
+  would pass agent speech straight through for exactly the identity the
+  audio-publish path mints, and would do so silently — which is why
+  this predicate exists as its own named function next to it rather
+  than as a `{:agent, _}` match at the call site.
+
+  Answers `false` for a bare `"agent:"` with no suffix (that names
+  nobody), for `nil`, and for non-Suite prefixes such as
+  `"transcriber:"` or the bare `"meeting-transcriber"` dispatch name —
+  those are out-of-repo workers, not agents, and unlike agents they
+  never publish speech.
+  """
+  @spec agent_identity?(term()) :: boolean()
+  def agent_identity?("agent:" <> suffix) when byte_size(suffix) > 0, do: true
+  def agent_identity?(_), do: false
+
   # Platform.UUID.cast/1, NOT Ecto.UUID.cast/1. This is a FABRICATED-VALUE
   # bug, not a raise: `uuid` is the suffix of a LiveKit webhook `identity`
   # string, and a bare `Ecto.UUID.cast/1` hex-encodes any 16-byte suffix into
