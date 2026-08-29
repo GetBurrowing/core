@@ -46,6 +46,16 @@ defmodule Platform.Agents.Agent do
   Both fields are nullable and stay that way: an agent without an avatar
   falls back to `color` plus initials, which is the default state rather
   than a degraded one.
+
+  ## Voice (01a03f4f)
+
+  `voice_config` is a jsonb map shaped like `model_config`, holding the
+  agent's per-agent voice selection — `provider`, `voice_id`, optional
+  `model`. NO vendor appears in this schema: the provider is a value inside
+  the map, validated by `Platform.Agents.Voice.validate_config/1` against a
+  list that module owns, so adding a second TTS provider is one entry there
+  rather than a migration here. See that module for why the personality
+  markdown is a workspace file rather than a column alongside this one.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -86,6 +96,7 @@ defmodule Platform.Agents.Agent do
     field(:last_successful_fire_at, :utc_datetime_usec)
     field(:avatar_url, :string)
     field(:avatar_storage_key, :string)
+    field(:voice_config, :map, default: %{})
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -121,12 +132,14 @@ defmodule Platform.Agents.Agent do
       :last_probe_latency_ms,
       :last_successful_fire_at,
       :avatar_url,
-      :avatar_storage_key
+      :avatar_storage_key,
+      :voice_config
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @valid_statuses)
     |> validate_inclusion(:kind, @valid_kinds)
     |> validate_external_fields()
+    |> Platform.Agents.Voice.validate_config()
     |> unique_constraint(:slug,
       name: :agents_unique_slug,
       message: "slug already taken in this workspace"

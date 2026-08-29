@@ -19,6 +19,7 @@ defmodule Platform.Meetings do
   alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Agents.Voice
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.SpaceAccess
@@ -4952,6 +4953,22 @@ defmodule Platform.Meetings do
   already owns agent -> runtime -> topic resolution, rather than growing
   a second resolver alongside it.
 
+  ## `persona` and `voice` (01a03f4f)
+
+  `persona` shipped in this payload with no producer and no reader — a key
+  that was always `nil` because nothing ever put `:persona` in `context`.
+  Task 01a04cbc-e904 was opened to ask whether to drop it. It now has a
+  producer: the agent's `VOICE.md` workspace file, via
+  `Platform.Agents.Voice.personality_for/1`. An explicit `context[:persona]`
+  still wins, so a caller that knows better than the stored file can override
+  it; absent that, the agent's own spoken-register markdown is sent.
+
+  `voice` is a SEPARATE key rather than more fields inside `persona`. A voice
+  id is a provider selection, not a personality, and collapsing the two would
+  leave a key named `persona` carrying a vendor's voice UUID. It is `nil` for
+  an agent with no voice configured, which a worker reads as "stay muted" —
+  distinct from a `%{}` that could be a half-written selection.
+
   ## No runtime is an error, not a silent success
 
   An agent with no linked `AgentRuntime` has nothing listening for it
@@ -4974,7 +4991,8 @@ defmodule Platform.Meetings do
         agent_name: agent.name || agent.slug,
         space_id: Map.get(context, :space_id),
         meeting_id: Map.get(context, :meeting_id),
-        persona: Map.get(context, :persona),
+        persona: Map.get(context, :persona) || Voice.personality_for(agent),
+        voice: Voice.config_for(agent),
         livekit_url: livekit_url()
       }
 

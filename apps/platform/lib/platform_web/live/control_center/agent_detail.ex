@@ -674,6 +674,62 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
         </div>
 
+        <%!-- Voice (01a03f4f). The provider is a select over
+        `Platform.Agents.Voice.known_providers/0`, NOT a hard-coded vendor
+        list here — adding a provider is one entry in that module and this
+        control follows it. --%>
+        <div class="grid gap-4 md:grid-cols-3">
+          <label class="form-control">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Voice provider
+            </span>
+            <select name="config[voice_provider]" class="select select-bordered w-full">
+              <option value="" selected={(@config_form[:voice_provider].value || "") == ""}>
+                No voice
+              </option>
+              <option
+                :for={provider <- Platform.Agents.Voice.known_providers()}
+                selected={@config_form[:voice_provider].value == provider}
+                value={provider}
+              >
+                {provider}
+              </option>
+            </select>
+          </label>
+
+          <label class="form-control">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Voice ID
+            </span>
+            <input
+              type="text"
+              name="config[voice_id]"
+              value={@config_form[:voice_id].value || ""}
+              class="input input-bordered w-full"
+              placeholder="the provider's voice identifier"
+            />
+          </label>
+
+          <label class="form-control">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Voice model
+            </span>
+            <input
+              type="text"
+              name="config[voice_model]"
+              value={@config_form[:voice_model].value || ""}
+              class="input input-bordered w-full"
+              placeholder="optional"
+            />
+          </label>
+        </div>
+
+        <p class="text-xs text-base-content/50">
+          Spoken personality lives in this agent's
+          <code class="rounded bg-base-200 px-1">{Platform.Agents.Voice.personality_file_key()}</code>
+          workspace file below, not here.
+        </p>
+
         <%!-- Color family picker --%>
         <div>
           <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">

@@ -282,6 +282,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
 
   def build_config_form(%Agent{} = agent, overrides) do
     model_config = normalize_map(agent.model_config || %{})
+    voice_config = normalize_map(agent.voice_config || %{})
 
     base = %{
       "name" => agent.name,
@@ -291,7 +292,10 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       "thinking_default" => agent.thinking_default || "",
       "max_concurrent" => agent.max_concurrent || 1,
       "sandbox_mode" => agent.sandbox_mode || "off",
-      "color" => agent.color || ""
+      "color" => agent.color || "",
+      "voice_provider" => Map.get(voice_config, "provider", ""),
+      "voice_id" => Map.get(voice_config, "voice_id", ""),
+      "voice_model" => Map.get(voice_config, "model", "")
     }
 
     to_form(Map.merge(base, normalize_map(overrides)), as: :config)
@@ -431,8 +435,31 @@ defmodule PlatformWeb.ControlCenter.AgentData do
         parse_positive_integer(Map.get(params, "max_concurrent")) || agent.max_concurrent || 1,
       sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), agent.sandbox_mode || "off"),
       color: blank_to_nil(Map.get(params, "color")),
-      model_config: updated_model_config
+      model_config: updated_model_config,
+      voice_config: voice_config_from_params(params)
     }
+  end
+
+  # Voice selection round-trips through the SAME form that already edits
+  # model routing, so a per-agent voice is settable today rather than being
+  # a field only a migration or an iex session can reach.
+  #
+  # Clearing the voice id clears the whole selection: a provider with no
+  # voice is exactly the half-set state `Platform.Agents.Voice.validate_config/1`
+  # rejects, and silently persisting one so the changeset can refuse it would
+  # make an empty text box an unsaveable form.
+  def voice_config_from_params(params) do
+    params = normalize_map(params)
+    provider = blank_to_nil(String.trim(Map.get(params, "voice_provider", "") || ""))
+    voice_id = blank_to_nil(String.trim(Map.get(params, "voice_id", "") || ""))
+    model = blank_to_nil(String.trim(Map.get(params, "voice_model", "") || ""))
+
+    if is_nil(provider) or is_nil(voice_id) do
+      %{}
+    else
+      base = %{"provider" => provider, "voice_id" => voice_id}
+      if model, do: Map.put(base, "model", model), else: base
+    end
   end
 
   def create_agent_attrs_from_params(params) do
