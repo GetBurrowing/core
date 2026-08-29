@@ -408,8 +408,11 @@ Where the server handled it via:
 
       html = render(view)
       document = LazyHTML.from_fragment(html)
-      matches = LazyHTML.filter(document, "your-complex-selector")
+      matches = LazyHTML.query(document, "your-complex-selector")
       IO.inspect(matches, label: "Matches")
+
+- **Use `LazyHTML.query/2`, not `LazyHTML.filter/2`, to find an element.** `query/2` descends the whole tree; `LazyHTML.filter/2` matches only the fragment's **root nodes**, so an element nested even one level down comes back as `[]` — indistinguishable from the element genuinely not being rendered, which turns a selector bug into a phantom "the element is missing" finding
+- `LazyHTML.filter/2` is the right call in one narrow case: you already hold a node list and want to keep the members matching a selector — it filters the nodes you have, it does not search inside them
 
 ### Form handling
 

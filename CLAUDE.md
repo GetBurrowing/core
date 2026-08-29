@@ -124,7 +124,8 @@ Elixir 1.15+/OTP 28, Phoenix 1.8/LiveView 1.1, PostgreSQL 16, Tailwind CSS 4/Dai
 - ExUnit with SQL Sandbox for test isolation
 - LiveView tests use `Phoenix.LiveViewTest` + `LazyHTML` for assertions
 - Test for element presence (`has_element?/2`) rather than raw HTML text
-- Debug selectors with `LazyHTML.from_fragment(html) |> LazyHTML.filter("selector")`
+- Debug selectors with `LazyHTML.from_fragment(html) |> LazyHTML.query("selector")` — `query/2` descends the whole tree; `LazyHTML.filter/2` matches only the fragment's **root nodes**, so a nested element comes back as `[]` and reads as "not there"
+- Reach for `LazyHTML.filter/2` only to narrow a node list you already hold (keep the members that match), never to find an element
 - `mix test --cover` for coverage
 
 ## Git Conventions
