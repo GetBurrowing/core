@@ -51,14 +51,28 @@ defmodule Platform.Meetings.IntentFrames do
       operator_start < quote_start + quote_length
 
   That single rule, and not a per-row exception list, is what decides
-  each case. It is why
+  each case:
+
+      "Promote to prod. No, actually, never mind."
+        -> :ok            (the retraction begins after the quote ends)
+      "No, actually, never mind. Promote to prod."
+        -> {:cancelled, :frame_retraction}
+
+  Both are pinned in `intent_frames_test.exs`, "a retraction AFTER the
+  quote does not scope backwards over it". Note that the second half is
+  what stops the first from passing on a gate that never cancels at all.
+
+  **Do not read forward scope as the reason the measured row**
 
       "Promote to prod. Yeah, I know, me too. Okay, so let's go."
 
-  is **NOT** caught: the peer-agreement material that cancels the ask
-  arrives *after* the quote `"Promote to prod."`, so nothing scopes over
-  it. That row is a known, deliberate miss, not an oversight — see
-  "What this does not reach" below.
+  **survives.** It is not. That row survives *for want of an operator,
+  not for want of scope*: the peer-agreement run "Yeah, I know, me too"
+  is in none of the five lexicons below, at any position, so dropping
+  the scope guard entirely still leaves the row firing. Mutation M2 in
+  the test moduledoc is what established that. Anyone reaching for
+  backward scope to catch this row would be fixing the wrong thing —
+  see "What this does not reach" below.
 
   When a quote occurs more than once in the chunk, the FIRST occurrence
   is used. That is the conservative direction: the earliest occurrence
@@ -113,14 +127,34 @@ defmodule Platform.Meetings.IntentFrames do
       it before any model call; the eval harness calls `decide/1`
       directly and so bypasses that gate.
     * `"Promote to prod. Yeah, I know, me too. Okay, so let's go."` —
-      cancelling material follows the quote, outside forward scope.
+      no operator in any of the five lexicons matches this chunk at any
+      position. Catching it needs a *new class* (peer agreement), not a
+      scope change. That class is refused on the same grounds as the
+      hortative below: `0` rows in `control_60` and `0` in
+      `unaddressed_probe_12` contain peer-agreement material, so the
+      corpus cannot price it — and agreement does not cancel an ask in
+      general ("Designer, make it teal. Yeah, I know, me too.").
     * `"Let's put together some kind of plan here."` — a hortative.
       A `let's` class would catch it and costs nothing *on this corpus*,
       but the shipped prompt's own worked example makes
-      `"let's make that button teal"` a genuine `visual_adjust`.
+      `"let's make that button teal"` a genuine `visual_adjust`
+      (`off_topic_default.txt` line 81, evidence_quote
+      `"make that button teal"` — the same quote shape as this row's,
+      with the `let's` outside the quote in both).
       The corpus cannot see that cost because every control row is
-      constructed to name a role, so no positive hortative is in it.
+      constructed to name a role, so no positive hortative is in it:
+      `control_60` carries the *addressed* rewrite,
+      `"Designer, make that primary button teal instead of the blue."`,
+      and not the prompt's hortative original.
       Deliberately excluded rather than bought with a number.
+
+  Re-measured independently under task `01a04b6b` against the same
+  cassette: `3` / `59` / `11`, unchanged. Both refusals were re-derived
+  and upheld, and the corpus blindness they rest on is now asserted
+  directly — see `intent_frames_test.exs`, "the corpus cannot price the
+  refused classes". That block turns red the moment a recording run puts
+  a positive hortative or peer-agreement row in either positive slice,
+  which is the point at which these two refusals must be revisited.
   """
 
   @typedoc "The frame class that cancelled an ask."

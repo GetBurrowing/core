@@ -45,6 +45,15 @@ defmodule Platform.Meetings.IntentFramesTest do
     * **M6** — restore `get|have` to `frame_delegation`'s verb set.
       Moves no slice number at all; it exists because the corpus has no
       row that would expose it.
+    * **M7** (task `01a04b6b`, follow-up) — point `@hortative` in "the
+      corpus cannot price the refused classes" at `~r/\\bthe\\b/i`. Kills
+      exactly one test, the hortative half (41 control rows match).
+    * **M7b** — the same edit to `@peer_agreement`. Kills exactly the
+      other half. Run separately on purpose: M7 alone leaves the
+      peer-agreement test green, so one mutation would not have shown
+      both guards to be live. Together they are the control proving
+      these tests read the real slice files rather than asserting
+      `[] == []` against an empty read.
   """
 
   use ExUnit.Case, async: true
@@ -363,6 +372,114 @@ defmodule Platform.Meetings.IntentFramesTest do
                IntentFrames.cancelling_frame(
                  "The designer is in this meeting — ask them to darken the sidebar.",
                  "darken the sidebar"
+               )
+    end
+  end
+
+  # Two of the three deliberate misses above are refused for the same
+  # reason, and it is a claim ABOUT THE CORPUS rather than about the
+  # gate: adding a hortative or a peer-agreement class would take
+  # `negatives_102` from 3 to 1 at *apparently* no cost, because neither
+  # positive slice contains a single row of either shape. That is
+  # blindness, not exoneration — a slice that contains no positive
+  # hortative cannot report what a hortative rule costs.
+  #
+  # Left as prose, that reasoning rots the moment the corpus grows. So
+  # it is asserted here instead. These tests go RED when a recording run
+  # puts such a row into `control_60` or `unaddressed_probe_12`, and red
+  # is the correct signal: at that point the cost becomes measurable and
+  # both refusals must be re-argued on the new numbers.
+  #
+  # Named mutations (M7 / M7b, applied and reverted): point `@hortative`
+  # — and then, separately, `@peer_agreement` — at `~r/\bthe\b/i`. Each
+  # turns exactly one of the two tests below red. They are run
+  # separately because M7 alone leaves the peer-agreement test green,
+  # so a single mutation would have left one of the two guards unproven.
+  # Together they show both are reading the real slice files and can
+  # tell a matching pattern from a non-matching one. Without that
+  # control these would be `assert [] == []`, the vacuous shape this
+  # file exists to avoid.
+  describe "the corpus cannot price the refused classes" do
+    alias Platform.Meetings.IntentEval
+
+    @hortative ~r/\blet'?s\b/i
+    @peer_agreement ~r/\b(i know|me too)\b/i
+
+    defp slice_texts(name) do
+      {_header, rows} =
+        IntentEval.root()
+        |> IntentEval.slice_path(name)
+        |> IntentEval.read_jsonl()
+
+      Enum.map(rows, & &1["text"])
+    end
+
+    test "the positive slices contain no hortative at all, so a `let's` class is unpriceable" do
+      control = slice_texts("control_60")
+      probe = slice_texts("unaddressed_probe_12")
+
+      # Guards against a silently-empty read making the assertions
+      # below vacuous: the slices must actually be there and be the
+      # size the manifest claims.
+      assert length(control) == 60
+      assert length(probe) == 12
+
+      assert [] == Enum.filter(control, &Regex.match?(@hortative, &1))
+      assert [] == Enum.filter(probe, &Regex.match?(@hortative, &1))
+
+      # The discriminating half: the pattern is not simply broken. It
+      # finds the negatives it is supposed to find, including the exact
+      # row this class was proposed to catch.
+      negatives = Enum.filter(slice_texts("negatives_102"), &Regex.match?(@hortative, &1))
+      assert length(negatives) == 3
+      assert "Let's put together some kind of plan here." in negatives
+
+      # And the reason the control slice is blind, made concrete: the
+      # prompt's worked positive is the HORTATIVE "let's make that
+      # button teal" (off_topic_default.txt line 81), but what the
+      # corpus carries is its ADDRESSED rewrite. The rule would be
+      # measured against a row whose shape it does not affect.
+      assert "Designer, make that primary button teal instead of the blue." in control
+    end
+
+    test "the positive slices contain no peer agreement, so that class is unpriceable too" do
+      control = slice_texts("control_60")
+      probe = slice_texts("unaddressed_probe_12")
+
+      assert length(control) == 60
+      assert length(probe) == 12
+
+      assert [] == Enum.filter(control, &Regex.match?(@peer_agreement, &1))
+      assert [] == Enum.filter(probe, &Regex.match?(@peer_agreement, &1))
+
+      negatives = Enum.filter(slice_texts("negatives_102"), &Regex.match?(@peer_agreement, &1))
+      assert length(negatives) == 2
+
+      assert "Promote to prod. Yeah, I know, me too. Okay, so let's go." in negatives
+    end
+
+    # The gate must keep its hands off both shapes until that changes.
+    # Paired with the rows above so this is not merely a restatement of
+    # "the gate cancels nothing".
+    test "the gate leaves both refused shapes alone" do
+      assert :ok =
+               IntentFrames.cancelling_frame(
+                 "Let's put together some kind of plan here.",
+                 "put together some kind of plan here"
+               )
+
+      assert :ok =
+               IntentFrames.cancelling_frame(
+                 "Promote to prod. Yeah, I know, me too. Okay, so let's go.",
+                 "Promote to prod."
+               )
+
+      # Discrimination: a row that IS in a lexicon still cancels, so a
+      # gate short-circuited to `:ok` fails here.
+      assert {:cancelled, :frame_retraction} =
+               IntentFrames.cancelling_frame(
+                 "No, actually, never mind. Promote to prod.",
+                 "Promote to prod."
                )
     end
   end
