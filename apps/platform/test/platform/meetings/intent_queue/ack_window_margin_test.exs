@@ -84,7 +84,22 @@ defmodule Platform.Meetings.IntentQueue.AckWindowMarginTest do
   directly is the same queue path with one fewer variable.
   """
 
-  use ExUnit.Case, async: true
+  # `Platform.DataCase`, not `ExUnit.Case`, since task 01a04a36 armed
+  # `:intent_queue_mirror_fatal`. Nothing here reads Postgres directly;
+  # what it needs is a sandbox connection the QUEUE OWNER can reach, so
+  # that the candidate mirror hanging off every `enqueue`/`transition`/
+  # `ack` below actually writes instead of dying on `cannot find
+  # ownership process`. `IntentQueue.Supervisor.ensure_started/2`
+  # propagates this process's `$callers` into the owner, so the setup
+  # below needs no explicit `Sandbox.allow/3`.
+  #
+  # The accepted cost, recorded rather than discovered: seven cases that
+  # were database-free now check out a connection each. `async: true`
+  # survives — `Sandbox.start_owner!(Repo, shared: false)` gives each
+  # case its own — which is the property that mattered, since these are
+  # timing cases and serialising them would inflate the whole suite by
+  # their real durations rather than overlapping them.
+  use Platform.DataCase, async: true
 
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.IntentQueue.Server
@@ -109,11 +124,12 @@ defmodule Platform.Meetings.IntentQueue.AckWindowMarginTest do
     # wrapper swallows it into a log line, so all seven cases here ran
     # green over 14 raised-and-discarded inserts (task 01a04a36).
     #
-    # This module is `ExUnit.Case`, so the queue process still has no
-    # sandbox connection and the mirror still writes nothing — the
-    # remaining failures are ownership exits, tracked separately. What
-    # this buys is one cause instead of two. The durable mirror itself
-    # is asserted in `server_persistence_test.exs`.
+    # Since 01a04a36 the mirror also REACHES Postgres from here: the
+    # module is `DataCase` and the owner inherits this process's
+    # connection, so a mirror that could not write would raise rather
+    # than log. The durable mapping itself is still asserted in
+    # `server_persistence_test.exs`; what these cases contribute is that
+    # a real timing burst drives real inserts.
     meeting_id = Ecto.UUID.generate()
     {:ok, _} = IntentQueue.ensure_started(meeting_id, ack_timeout_ms: @window_ms)
     on_exit(fn -> IntentQueue.stop(meeting_id) end)

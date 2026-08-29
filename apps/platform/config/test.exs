@@ -353,3 +353,20 @@ config :platform, :dep_inference_adapter, Platform.Tasks.Stacks.DepInference.Stu
 # calls about fixture repositories that do not exist. Tests that mean to
 # assert provisioning pin their own stub through the same key.
 config :platform, :branch_provisioner, runner: Platform.Tasks.BranchProvisioner.NoopRunner
+
+# The durable candidate mirror is FATAL in test (task 01a04a36).
+#
+# `Platform.Meetings.IntentQueue.Server` mirrors every queue write into
+# `meeting_candidates` through a wrapper that rescues, catches exits and
+# logs. In production that is correct — the durable record is worth less
+# than the live meeting. In a test run it is the opposite of correct: it
+# converts "this suite wrote nothing" into "this suite passed". Two
+# suites were found in that state (tasks 01a049f9 and 01a04a36-643d),
+# and neither failed a single assertion while doing it.
+#
+# Armed here, the same failure raises `IntentQueue.MirrorError` instead.
+# `intent_queue/mirror_fatality_test.exs` asserts this line is in force
+# and that the one case which legitimately needs it off — the
+# production-posture case in `server_persistence_test.exs` — is the only
+# place that turns it off.
+config :platform, :intent_queue_mirror_fatal, true

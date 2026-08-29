@@ -19,8 +19,21 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
   the redesign is for.
   """
 
-  use ExUnit.Case, async: true
+  # `Platform.DataCase`, not `ExUnit.Case`, since task 01a04a36 armed
+  # `:intent_queue_mirror_fatal`. This file asserts ETS behaviour and
+  # reads no table directly; what it needs is a sandbox connection the
+  # QUEUE OWNER can reach, because every `enqueue`/`transition`/`ack`
+  # below drags a `meeting_candidates` write along with it and a mirror
+  # that cannot write now raises instead of logging.
+  #
+  # The accepted cost, recorded rather than discovered: 49 cases that
+  # were database-free now check out a connection each. `async: true`
+  # survives (`Sandbox.start_owner!(Repo, shared: false)` per case), so
+  # the isolation property the module header claims is unchanged — the
+  # meeting ids stay unique per case, and now so do the rows they write.
+  use Platform.DataCase, async: true
 
+  alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.IntentQueue.Server
   alias Platform.Meetings.IntentQueue.Supervisor, as: QueueSupervisor
@@ -37,25 +50,31 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
 
   defp unique(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
 
-  # Meeting, room and chunk ids MUST be real UUIDs, even though this
-  # file never opens a database connection.
+  # Meeting, room and chunk ids MUST be real UUIDs.
   #
   # `IntentQueue.Server` mirrors every queue write into
   # `meeting_candidates`, whose `meeting_id` / `room_id` /
   # `transcript_chunk_id` are `:binary_id` columns. A `"meeting-4291"`
   # never reaches Postgres at all — Ecto raises `Ecto.ChangeError` at
-  # DUMP time — and the deliberately non-fatal `mirror/1` wrapper turns
-  # that raise into a `Logger.warning`. Every case in this file stayed
-  # green over 74 such swallowed raises (task 01a04a36).
+  # DUMP time — and the then-non-fatal `mirror/1` wrapper turned that
+  # raise into a `Logger.warning`. Every case in this file stayed green
+  # over 74 such swallowed raises (task 01a04a36).
   #
-  # Making them valid does NOT make the mirror write here: this module
-  # is `ExUnit.Case`, so the queue process has no sandbox connection
-  # and the same inserts now fail as ownership exits instead. The point
-  # of the change is that ONE cause remains rather than two, so the
-  # separately-tracked sandbox-ownership work has a legible blast
-  # radius. Durable-mirror behaviour is asserted in
-  # `server_persistence_test.exs`, which has the connection to assert it
-  # with.
+  # Both halves of that failure are now closed. The ids are valid, the
+  # module is `DataCase` so the owner has a connection, and the mirror
+  # is fatal in test — so an insert that does not land fails the case
+  # rather than logging. There are no FKs on `meeting_candidates`
+  # (`20260827094944_create_meeting_candidates.exs`: "Cross-schema
+  # pointers, NOT foreign keys"), so these synthetic ids need no
+  # `meetings` row behind them.
+  #
+  # The durable state MAPPING is still asserted next door in
+  # `server_persistence_test.exs`. What this file adds is that the
+  # mirror runs at all, on every path the ETS cases already walk —
+  # `mirrors a row into meeting_candidates` below is the one case here
+  # that looks at the table, and it exists so that "the mirror never
+  # ran" is distinguishable from "the mirror ran and worked", which
+  # fatality alone cannot tell apart.
   defp unique_meeting_id, do: Ecto.UUID.generate()
   defp unique_room_id, do: Ecto.UUID.generate()
 
@@ -87,6 +106,30 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
   end
 
   describe "enqueue/2" do
+    # The one case in this file that reads `meeting_candidates`.
+    #
+    # Fatality (task 01a04a36) makes a mirror that FAILS loud, but it
+    # cannot make a mirror that was never called loud — an unwired hook
+    # raises nothing and every other case here would stay green. So one
+    # case looks at the table. It is here rather than next door in
+    # `server_persistence_test.exs` because what it pins is a property
+    # of THIS module: that these 49 cases are now driving real inserts
+    # rather than passing over swallowed ones, which is the whole reason
+    # the module moved to `DataCase`.
+    test "mirrors a row into meeting_candidates", %{meeting_id: meeting_id, room_id: room_id} do
+      {:ok, row} = IntentQueue.enqueue(meeting_id, sample_attrs(%{room_id: room_id}))
+
+      assert [candidate] = Candidates.list_for_meeting(meeting_id),
+             "no meeting_candidates row for #{meeting_id}. The queue answered {:ok, row} " <>
+               "either way — that is the shape of the defect this task closes."
+
+      assert candidate.intent_id == row.id
+      assert candidate.meeting_id == meeting_id
+      assert candidate.room_id == room_id
+      assert candidate.evidence_quote == "we should file a task for the billing bug"
+      assert candidate.queue_status == "queued"
+    end
+
     test "starts the meeting's queue on demand and returns a full row", %{
       meeting_id: meeting_id,
       room_id: room_id

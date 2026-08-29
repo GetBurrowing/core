@@ -250,11 +250,21 @@ defmodule Platform.Meetings.IntentQueue.Server do
   `:protected`: every write funnels through here by construction, so a
   sixth call site added later is mirrored for free.
 
-  **The mirror can never take the queue down.** Each call goes through
-  `mirror/1`, which rescues `Exception`, catches `:exit`, logs at
-  warning level and returns `:ok`. A meeting whose Postgres is briefly
-  unavailable keeps classifying and dispatching intents: a durable
-  record is worth less than the live meeting.
+  **The mirror can never take a real meeting down.** Each call goes
+  through `mirror/1`, which rescues `Exception`, catches `:exit`, and
+  hands the failure to `report_mirror_failure/3`. In `:dev` and `:prod`
+  that logs at warning level and returns `:ok`: a meeting whose
+  Postgres is briefly unavailable keeps classifying and dispatching
+  intents, because a durable record is worth less than the live
+  meeting.
+
+  **In `:test` the same failure raises** `IntentQueue.MirrorError`
+  (task 01a04a36). There is no live meeting to protect in a test run,
+  and a swallowed mirror failure there is not degradation — it is a
+  green suite that wrote nothing, which is exactly what was found twice
+  (tasks 01a049f9, 01a04a36-643d). The switch is
+  `:intent_queue_mirror_fatal` in app env, armed in `config/test.exs`;
+  `report_mirror_failure/3` carries the full argument.
 
   `outcome_kind` is POPULATED (`attrs[:outcome_kind]` on `enqueue/2`,
   defaulting to `:task`) but is not automatically classified — teaching
@@ -269,6 +279,7 @@ defmodule Platform.Meetings.IntentQueue.Server do
 
   alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.Candidates
+  alias Platform.Meetings.IntentQueue.MirrorError
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
 
   @registry Platform.Meetings.Registry
@@ -487,6 +498,17 @@ defmodule Platform.Meetings.IntentQueue.Server do
   def init(opts) do
     meeting_id = Keyword.fetch!(opts, :meeting_id)
     ack_timeout_ms = resolve_ack_timeout_ms(opts)
+
+    # Adopt the caller chain `Supervisor.ensure_started/2` captured, so
+    # this owner's Repo work resolves against the connection of whoever
+    # asked for the queue. See that function's `callers/0` for why a
+    # DynamicSupervisor child is entitled to it here and generally is
+    # not. Absent (`[]`) leaves the dictionary untouched, which is the
+    # pre-existing behaviour for anything starting a Server directly.
+    case Keyword.get(opts, :callers, []) do
+      [] -> :ok
+      callers -> Process.put(:"$callers", callers)
+    end
 
     # UNNAMED + :protected. The tid never leaves this process, so the
     # table is unreachable — and therefore collected — the instant the
@@ -1467,56 +1489,96 @@ defmodule Platform.Meetings.IntentQueue.Server do
   # the quieter of the two (task 01a049f9). Only `mirror_enqueue/3` can
   # return it; the transition and ack hooks both answer `:ok`.
   defp mirror(%{meeting_id: meeting_id, intent_id: intent_id, fun: fun}) do
-    case fun.() do
-      {:error, %Ecto.Changeset{} = changeset} ->
-        log_mirror_failure(meeting_id, intent_id, inspect(changeset.errors))
-
-      _ok ->
-        :ok
+    case run_mirror(fun) do
+      :ok -> :ok
+      {:mirror_failed, detail} -> report_mirror_failure(meeting_id, intent_id, detail)
     end
-  rescue
-    error ->
-      log_mirror_failure(meeting_id, intent_id, Exception.message(error))
-  catch
-    :exit, reason ->
-      log_mirror_failure(meeting_id, intent_id, inspect(reason))
   end
 
-  # Deliberately still a warning, not a raise, in EVERY env including
-  # test.
+  # The rescue/catch is deliberately confined to THIS function, which
+  # only evaluates `fun` and classifies its outcome. It does not span
+  # `report_mirror_failure/3`.
   #
-  # Task 01a049f9 estimated the cost of flipping it as "85 tests, split
-  # between 96 non-UUID meeting ids and 73 sandbox-ownership exits". Task
-  # 01a04a36 re-measured that by actually making this function raise, and
-  # the split was wrong in a way worth recording: the two causes were NOT
-  # spread across all four suites. `meeting_live_test.exs` had zero
-  # non-UUID meeting ids — its queue ids come from real `Meeting` rows —
-  # and `server_persistence_test.exs` had zero, since it generates UUIDs
-  # and allows the queue owner onto the connection. All 88 dump-time
-  # `Ecto.ChangeError`s came from `server_test.exs` (74) and
-  # `ack_window_margin_test.exs` (14), and 01a04a36 removed them.
-  #
-  # Fatal, on this commit, over the same four suites:
-  #
-  #     server_test.exs               49 tests, 41 failures
-  #     ack_window_margin_test.exs     7 tests,  7 failures
-  #     meeting_live_test.exs        380 tests, 41 failures
-  #     server_persistence_test.exs   16 tests,  1 failure
-  #
-  # 90 in total, and every one is now the same cause: `cannot find
-  # ownership process`, from a queue owner never allowed onto the test's
-  # sandbox connection. (The `server_persistence_test.exs` one is its
-  # deliberate "Repo unavailable" case, which asserts on the warning this
-  # function emits and so is fatal-by-design.) Flipping this line is
-  # therefore exactly one remaining problem — sandbox ownership — rather
-  # than two tangled ones, and that is tracked separately.
-  defp log_mirror_failure(meeting_id, intent_id, detail) do
-    Logger.warning(
+  # That separation is load-bearing, not stylistic. When fatality is
+  # armed the report RAISES, and if the raise happened inside a body
+  # carrying this `rescue` it would be caught by it — re-entering the
+  # reporter with `Exception.message/1` of our own exception. The run
+  # would still fail, so "does it raise?" cannot see the difference;
+  # what it would lose is the detail, which would come back nested one
+  # level deep inside a second copy of the same sentence and no longer
+  # name the original Postgres error. `server_persistence_test.exs`
+  # pins the message shape for exactly this reason.
+  defp run_mirror(fun) do
+    case fun.() do
+      {:error, %Ecto.Changeset{} = changeset} -> {:mirror_failed, inspect(changeset.errors)}
+      _ok -> :ok
+    end
+  rescue
+    error -> {:mirror_failed, Exception.message(error)}
+  catch
+    :exit, reason -> {:mirror_failed, inspect(reason)}
+  end
+
+  defp report_mirror_failure(meeting_id, intent_id, detail) do
+    message =
       "[IntentQueue] candidate mirror failed meeting_id=#{meeting_id} " <>
         "intent_id=#{intent_id} error=#{detail}"
-    )
 
-    :ok
+    if mirror_fatal?() do
+      raise MirrorError, message
+    else
+      Logger.warning(message)
+      :ok
+    end
+  end
+
+  # A warning in `:dev` and `:prod`; a raise in `:test`.
+  #
+  # ## Why the swallow is right in production and wrong in a test run
+  #
+  # A durable record is worth less than the live meeting, so production
+  # logs and carries on — see the moduledoc. A test run inverts that
+  # entirely: there is no live meeting to protect, and a mirror that
+  # cannot write is the single most valuable thing the run could tell
+  # you. Two suites have now been found green while writing zero
+  # `meeting_candidates` rows (tasks 01a049f9 and 01a04a36-643d), which
+  # is what a non-fatal recording act looks like from the outside: it
+  # is indistinguishable from a working one.
+  #
+  # ## Why app env rather than `Mix.env()`
+  #
+  # `Mix.env()` is a compile-time constant with no runtime reader in a
+  # release, and — more to the point — it cannot be turned off for the
+  # duration of one case. The suite still has to be able to prove the
+  # PRODUCTION posture: that a failing Repo leaves `enqueue/2`,
+  # `transition/3` and `ack/4,5` returning normally. That test exists
+  # (`server_persistence_test.exs`, "the mirror is non-fatal") and is
+  # the only place in the tree permitted to disarm this switch;
+  # `mirror_fatality_test.exs` asserts both halves of that sentence —
+  # that test config arms it, and that nothing else disarms it.
+  #
+  # ## What was measured before arming it
+  #
+  # Task 01a049f9 estimated the cost of flipping this as "85 tests,
+  # split between 96 non-UUID meeting ids and 73 sandbox-ownership
+  # exits". Task 01a04a36 re-measured by making the reporter raise. The
+  # non-UUID ids were real and are gone (PR #849). What remained was a
+  # single cause across FOUR files, measured over the whole suite at
+  # `7f1390df`: 14 308 tests, 100 failures, every one of them `cannot
+  # find ownership process` — `server_test.exs` 41,
+  # `meeting_live_test.exs` 41, `agent_activity_test.exs` 10,
+  # `ack_window_margin_test.exs` 7, `server_persistence_test.exs` 1.
+  # (PR #849 reported 90; it ran four suites and did not include
+  # `agent_activity_test.exs`, whose 10 make up the difference exactly.)
+  #
+  # All 100 had one shape: the queue owner is started by
+  # `IntentQueue.Supervisor.ensure_started/2` under a `DynamicSupervisor`,
+  # which — unlike `Task` — does not propagate `$callers`, so the owner
+  # could not reach the sandbox connection of the test that asked for
+  # it. That is fixed at the start site rather than per test case; see
+  # `Platform.Meetings.IntentQueue.Supervisor`.
+  defp mirror_fatal? do
+    Application.get_env(:platform, :intent_queue_mirror_fatal, false)
   end
 
   # ── Stage-6 correction hooks ───────────────────────────────────────────────

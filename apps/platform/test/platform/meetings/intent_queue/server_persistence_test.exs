@@ -267,7 +267,50 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
     end
   end
 
-  describe "the mirror is non-fatal" do
+  # ── The PRODUCTION posture (task 01a04a36) ───────────────────────────────
+  #
+  # Everything above runs with `:intent_queue_mirror_fatal` armed, which
+  # is what `config/test.exs` does for the whole suite: a mirror that
+  # cannot write raises `IntentQueue.MirrorError` rather than logging.
+  #
+  # This block asserts the opposite posture, the one `:dev` and `:prod`
+  # actually run, and so is the ONE place in the tree that disarms the
+  # switch. It is not an exemption for a module that was inconvenient to
+  # fix — it is the test FOR the branch, and without it the non-fatal
+  # path would have no coverage at all in an env that never takes it.
+  # `mirror_fatality_test.exs` asserts that this is the only file which
+  # touches the key, so the carve-out cannot quietly grow a second
+  # member.
+  describe "the mirror is non-fatal outside test" do
+    setup do
+      previous = Application.get_env(:platform, :intent_queue_mirror_fatal)
+      Application.put_env(:platform, :intent_queue_mirror_fatal, false)
+
+      on_exit(fn ->
+        # Restore rather than hard-set: the key's value is config's to
+        # decide, and a test that pins `true` here would keep passing if
+        # `config/test.exs` ever stopped arming it.
+        case previous do
+          nil -> Application.delete_env(:platform, :intent_queue_mirror_fatal)
+          value -> Application.put_env(:platform, :intent_queue_mirror_fatal, value)
+        end
+      end)
+
+      %{fatal_before_disarm: previous}
+    end
+
+    test "the switch really is disarmed here, and what it overrode was armed", %{
+      fatal_before_disarm: before
+    } do
+      # Two facts in one case, because either alone is satisfiable by a
+      # broken setup. `refute` alone would pass if the key had never
+      # been armed; `assert before` alone would pass if the disarm
+      # silently no-opped. Together they say: this block runs the
+      # production branch, and the rest of the suite does not.
+      refute Application.get_env(:platform, :intent_queue_mirror_fatal)
+      assert before, "config/test.exs is expected to arm :intent_queue_mirror_fatal"
+    end
+
     test "a failing Repo leaves enqueue/transition/ack returning normally", %{
       meeting_id: meeting_id
     } do

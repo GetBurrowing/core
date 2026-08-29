@@ -41,9 +41,14 @@ defmodule Platform.Meetings.IntentQueue.Supervisor do
         {:ok, pid}
 
       nil ->
+        opts =
+          opts
+          |> Keyword.put(:meeting_id, meeting_id)
+          |> Keyword.put(:callers, callers())
+
         spec = %{
           id: {Server, meeting_id},
-          start: {Server, :start_link, [Keyword.put(opts, :meeting_id, meeting_id)]},
+          start: {Server, :start_link, [opts]},
           restart: :temporary
         }
 
@@ -54,6 +59,35 @@ defmodule Platform.Meetings.IntentQueue.Supervisor do
         end
     end
   end
+
+  # The chain of processes on whose behalf this queue is being started,
+  # newest first — the same list `Task` and `Task.Supervisor` put into
+  # their children, and the one `DBConnection.Ownership` walks after
+  # `self()` when resolving a checkout (`db_connection.ex`,
+  # `checkout/3`: `callers = [caller | Process.get(:"$callers") || []]`).
+  #
+  # `DynamicSupervisor.start_child/2` does not propagate it, and cannot:
+  # a supervised child normally outlives whoever asked for it, so
+  # inheriting a caller's identity would be a lie. Here it is not one.
+  # `ensure_started/2` is explicitly a start-on-behalf-of: the first
+  # `enqueue/2` for a meeting creates its queue, the child is
+  # `restart: :temporary`, and the whole subsystem's contract is that
+  # the queue belongs to the meeting the caller is driving.
+  #
+  # Outside `:test` nothing reads this. Inside it, it is the difference
+  # between a mirror insert that reaches the caller's sandbox
+  # connection and one that dies on `cannot find ownership process` —
+  # 100 tests' worth at `7f1390df`, which is why the fix is here, at
+  # the one place every queue owner is created, rather than an
+  # `Ecto.Adapters.SQL.Sandbox.allow/3` repeated at every call site that
+  # might be the one to start a queue. Several of those call sites are
+  # `IntentQueue.enqueue/2` itself, so no test could allow the owner
+  # before it existed.
+  #
+  # It grants nothing on its own: a queue started from a process with
+  # no connection of its own and no connected caller still cannot write,
+  # which `intent_queue/mirror_fatality_test.exs` asserts directly.
+  defp callers, do: [self() | Process.get(:"$callers", [])]
 
   @doc """
   Stop the queue owner for `meeting_id` if one is running. The ETS
