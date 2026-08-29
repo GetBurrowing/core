@@ -843,6 +843,43 @@
               agent_activity={assigns[:agent_activity]}
             />
           </div>
+
+          <%!-- Invite an agent into the call (task 01a04c2f).
+
+             `Meetings.invite_agent/3` shipped with no caller, so agent voice
+             had no way in from the product. This is that way in.
+
+             Options come from `@invitable_agents` — the meeting space's own
+             agent roster minus whoever is already in the call — so the
+             section disappears once every space agent has joined, and never
+             renders at all for a space with no agents. Each button carries
+             only the agent id; the handler resolves it back against this same
+             server-built list. --%>
+          <div
+            :if={assigns[:invitable_agents] not in [nil, []]}
+            class="border-t border-base-300 px-3 py-2"
+            data-role="meeting-agent-invite"
+          >
+            <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Invite an agent
+            </span>
+            <ul class="mt-1.5 flex flex-col gap-1">
+              <li :for={agent <- assigns[:invitable_agents]}>
+                <button
+                  type="button"
+                  phx-click="meeting_invite_agent"
+                  phx-value-agent-id={agent.id}
+                  data-role="meeting-agent-invite-button"
+                  data-agent-id={agent.id}
+                  aria-label={"Invite #{agent.name || agent.slug} to the meeting"}
+                  class="btn btn-ghost btn-xs w-full justify-start gap-2 font-normal text-base-content/70 hover:text-base-content"
+                >
+                  <span class="hero-plus-small size-4 shrink-0" aria-hidden="true"></span>
+                  <span class="truncate">{agent.name || agent.slug}</span>
+                </button>
+              </li>
+            </ul>
+          </div>
         </aside>
 
         <%!-- Collapsed slim rail (task 019e40f2). Only renders on `>=lg`

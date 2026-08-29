@@ -242,6 +242,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.Room
   alias Platform.Meetings.SenderSeed
   alias Platform.Repo
   alias Platform.Roles
@@ -879,6 +880,10 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:meeting, meeting)
           |> assign(:participants, participants)
           |> assign(:agents_by_id, agents_by_id)
+          # The invite-an-agent control's options (task 01a04c2f). Seeded
+          # here and re-derived by `refresh_participants/1`, so an agent that
+          # joins the call leaves the list on the same tick its tile appears.
+          |> assign(:invitable_agents, invitable_agents(meeting.chat_space_id, participants))
           # Per-meeting agent activity (task 01a04a98), seeded from the
           # LIVE intent queue rather than from the tile's old
           # `activity_state={:idle}` literal. A socket that mounts at
@@ -2193,6 +2198,37 @@ defmodule PlatformWeb.MeetingLive do
   # ── Events ───────────────────────────────────────────────────────────────
 
   @impl true
+  # Invite an agent into the LIVE call (task 01a04c2f).
+  #
+  # `Meetings.invite_agent/3` existed with zero callers, so nothing in the
+  # product could put an agent in a meeting; this handler and the rail control
+  # it is wired to are that missing edge.
+  #
+  # Three ids matter here and only one of them comes from the client:
+  #
+  #   * the SPACE is `@meeting.chat_space_id`, a server assign resolved by
+  #     `handle_params/3`'s authorization gate. It is never read from params —
+  #     a client-supplied space id is the exact defect
+  #     `Platform.Chat.SpaceAccess`'s moduledoc was written about.
+  #   * the ROOM is whatever `get_active_room/1` answers for that space. Read,
+  #     not created: `ensure_room/1` + `activate_room/1` would write rows for a
+  #     caller who has not been authorized yet, since the authorization lives
+  #     inside `invite_agent/3` and needs the room to name the space. No active
+  #     room means no live call, and there is nothing to invite an agent into.
+  #   * the AGENT id is the one client value, and it is resolved against
+  #     `@invitable_agents` — the list this socket just rendered — rather than
+  #     against the `agents` table. Same rule `deliver_live_invite/4` applies
+  #     to its `"user"` kind one screen over.
+  #
+  # Authorization is NOT repeated here. `invite_agent/3` composes
+  # `SpaceAccess.authorize_writer/2` itself, and `{:error, :forbidden}` is
+  # given its own clause so a permission denial reads differently from a
+  # changeset failure.
+  def handle_event("meeting_invite_agent", %{"agent-id" => agent_id}, socket)
+      when is_binary(agent_id) do
+    {:noreply, invite_agent_into_call(socket, agent_id)}
+  end
+
   def handle_event("toggle_chat_panel", _params, socket) do
     {:noreply, update(socket, :chat_panel_open, &(!&1))}
   end
@@ -3997,9 +4033,69 @@ defmodule PlatformWeb.MeetingLive do
     socket
     |> assign(:participants, participants)
     |> assign(:agents_by_id, load_agents_by_id(participants))
+    |> assign(:invitable_agents, invitable_agents(space_id, participants))
   end
 
   defp refresh_participants(socket), do: socket
+
+  # ── Agent invitation (task 01a04c2f) ───────────────────────────────────
+  #
+  # The agents this control may offer, sourced from the meeting space's OWN
+  # roster (`Chat.list_space_agents/1`) minus the agents already in the call.
+  #
+  # The roster, not `Chat.list_agents_for_picker/0`: the picker lists every
+  # active agent in the deployment, and an invite writes a participant row in
+  # this space and dispatches a join token to that agent's runtime. Offering
+  # only agents already trusted with the space keeps the handler's id
+  # resolution (below) a lookup in a server-built list rather than a lookup in
+  # the whole `agents` table, which is what makes a forged `agent-id` a miss
+  # instead of a cross-space reach.
+  #
+  # Excluding the in-call agents is not cosmetic: `invite_agent/3` goes
+  # through `participant_joined/2`, a plain insert, so a second invite for an
+  # agent already present would write a duplicate roster row and re-dispatch.
+  defp invitable_agents(space_id, participants) when is_binary(space_id) do
+    in_call =
+      for %{participant_type: "agent", participant_id: id} <- participants,
+          is_binary(id),
+          into: MapSet.new(),
+          do: id
+
+    space_id
+    |> Chat.list_space_agents()
+    |> Enum.flat_map(fn
+      %{agent: %Agent{} = agent} -> [agent]
+      _ -> []
+    end)
+    |> Enum.reject(&MapSet.member?(in_call, &1.id))
+  end
+
+  defp invitable_agents(_space_id, _participants), do: []
+
+  # The `"meeting_invite_agent"` body. Every failure ends in a flash rather
+  # than a raise: unlike the calendar surface's invite, this control lives on
+  # a page that is open for the whole call, so an agent can leave the roster
+  # or the call can end between the render and the click. Those are real
+  # runtime outcomes, not caller bugs.
+  defp invite_agent_into_call(socket, agent_id) do
+    with %Meeting{chat_space_id: space_id} when is_binary(space_id) <-
+           socket.assigns[:meeting],
+         %Agent{} = agent <-
+           Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)),
+         %Room{} = room <- Meetings.get_active_room(space_id),
+         {:ok, _participant} <-
+           Meetings.invite_agent(room, agent, socket.assigns[:current_user_record]) do
+      socket
+      |> refresh_participants()
+      |> put_flash(:info, "#{agent.name} is joining the meeting.")
+    else
+      {:error, :forbidden} ->
+        put_flash(socket, :error, "You do not have permission to invite an agent here.")
+
+      _ ->
+        put_flash(socket, :error, "That agent could not be invited.")
+    end
+  end
 
   # True only when the deleted row is THIS viewer's participant row on THIS
   # meeting's chat space. Pattern-matched on `%Chat.Participant{}` rather than

@@ -21,6 +21,7 @@ defmodule Platform.Meetings do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
+  alias Platform.Chat.SpaceAccess
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript, Whiteboard}
   alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
@@ -4978,13 +4979,35 @@ defmodule Platform.Meetings do
   @doc """
   Invite an agent to join a meeting room.
 
-  Generates a token, records the agent as a participant, and dispatches
-  a `meeting_join` signal to the agent's runtime.
+  Authorizes `inviting_user` as a writer of the room's space, records the
+  agent as a participant, and dispatches a `meeting_join` signal to the
+  agent's runtime.
+
+  ## Authorization
+
+  `Platform.Chat.SpaceAccess.authorize_writer/2` — the repo's single
+  space-write choke point, composed HERE rather than in the LiveView for the
+  reason that module's moduledoc gives: a guard in the handler protects one
+  caller, a guard in the context protects every caller not yet written. This
+  function had no caller at all until task 01a04c2f, so the check and the
+  first call site arrive together and no caller predates it.
+
+  `inviting_user` accepts anything `SpaceAccess` normalises — a
+  `%Platform.Accounts.User{}` (what a LiveView holds), `{:user, id}` or
+  `{:agent, id}`. Anything else, `nil` included, is no principal and DENIES;
+  the parameter was previously ignored outright.
+
+  The pre-flight `generate_agent_token/2` whose result is discarded is
+  deliberate and predates this change: it fails the invite BEFORE a
+  participant row is written when LiveKit is unconfigured, so a meeting
+  cannot acquire a roster entry for an agent that could never be dispatched.
+  `dispatch_meeting_join/3` mints the token actually sent.
   """
-  @spec invite_agent(Room.t(), Agent.t(), any()) ::
+  @spec invite_agent(Room.t(), Agent.t(), SpaceAccess.actor()) ::
           {:ok, Participant.t()} | {:error, term()}
-  def invite_agent(%Room{} = room, %Agent{} = agent, _inviting_user) do
-    with {:ok, _token} <-
+  def invite_agent(%Room{} = room, %Agent{} = agent, inviting_user) do
+    with {:ok, _writer} <- SpaceAccess.authorize_writer(room.space_id, inviting_user),
+         {:ok, _token} <-
            generate_agent_token(agent, room.livekit_room_name),
          {:ok, participant} <-
            participant_joined(room, %{
