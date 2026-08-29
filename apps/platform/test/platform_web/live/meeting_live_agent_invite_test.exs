@@ -14,13 +14,34 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
   A test that asserts the rail button renders proves nothing: the whole defect
   was a control that did not exist reaching a function that was never called.
-  So the load-bearing assertion here is the DISPATCH — a subscriber on
-  `runtime:agent:<agent.id>` receives `meeting_join` carrying a non-empty
-  token and `agent_identity` of `"agent:" <> agent.slug` — and its negative,
-  that an unauthorized viewer pushing the same event produces no such message
-  at all. `refute_receive` is what makes the authorization assertion mean
-  something; a flash assertion alone would still pass if the broadcast fired
-  and the flash were merely cosmetic.
+  So the load-bearing assertion here is the DISPATCH — a runtime receives
+  `meeting_join` carrying a non-empty token and `agent_identity` of
+  `"agent:" <> agent.slug` — and its negative, that an unauthorized viewer
+  pushing the same event produces no such message at all. `refute_receive` is
+  what makes the authorization assertion mean something; a flash assertion
+  alone would still pass if the broadcast fired and the flash were merely
+  cosmetic.
+
+  ## Where this file was itself vacuous (task 01a04f31)
+
+  As merged, the dispatch assertion above read
+
+      PlatformWeb.Endpoint.subscribe("runtime:agent:\#{agent.id}")
+
+  and that is why it stayed green over a dispatch that could reach nobody.
+  An in-VM `Phoenix.PubSub` subscribe bypasses
+  `PlatformWeb.RuntimeChannel.join/3` entirely, so the test process became a
+  subscriber on a topic that no websocket client could ever have joined — it
+  could see that a broadcast happened and could never see that the broadcast
+  was unreachable. A test that subscribes directly can never discover that
+  nothing could have subscribed.
+
+  The dispatch test now stands up a REAL runtime — registered, activated,
+  linked to the roster agent — connects it through
+  `PlatformWeb.RuntimeSocket.connect/3`, joins the channel, and asserts the
+  frame is PUSHED to that client. The dead `runtime:agent:<uuid>` topic is
+  kept, subscribed, and `refute_receive`d, so a regression to it fails here
+  twice. `Platform.Meetings.MeetingJoinDispatchTopicTest` carries the rest.
 
   ## Why the negative viewer is shaped the way it is
 
@@ -42,9 +63,19 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
 
+  # `Phoenix.ChannelTest` in a `ConnCase`: `@endpoint` is all it needs, and
+  # the whole point of this file's dispatch test is that the LiveView click
+  # and the websocket client have to be in the same test. Imported narrowly
+  # so nothing here collides with `Phoenix.ConnTest` / `Phoenix.LiveViewTest`.
+  # `connect/2` is deliberately NOT imported — `Phoenix.ConnTest` exports one
+  # too and the call would be ambiguous. It is called fully qualified below;
+  # the macro reads `@endpoint` from the calling module either way.
+  import Phoenix.ChannelTest, only: [subscribe_and_join: 3, assert_push: 3]
+
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
+  alias Platform.Federation
   alias Platform.Meetings
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.Participant, as: MeetingParticipant
@@ -122,7 +153,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   # from. A bare `%Agent{}` row with no `chat_participants` entry would not be
   # offered by the control at all, and every assertion below would pass or
   # fail for the wrong reason.
-  defp roster_agent!(space) do
+  defp bare_roster_agent!(space) do
     n = System.unique_integer([:positive])
 
     agent =
@@ -135,6 +166,49 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     {:ok, _entry} = Chat.add_space_agent(space.id, agent.id, role: "member")
 
     agent
+  end
+
+  # The same roster agent, plus the AgentRuntime that makes it reachable.
+  #
+  # This is not decoration. Since task 01a04f31 `invite_agent/3` refuses an
+  # agent with no linked runtime (`{:error, :no_runtime}`) rather than writing
+  # a roster row and broadcasting into the void, so the happy path here
+  # REQUIRES a real runtime — and having one is what lets the dispatch test
+  # below connect an actual websocket client instead of subscribing in-VM.
+  #
+  # `raw_token` is captured because activation is the only moment the
+  # plaintext token exists; the row keeps a hash.
+  defp roster_agent!(space) do
+    agent = bare_roster_agent!(space)
+    owner = user!("runtime-owner")
+
+    {:ok, runtime} =
+      Federation.register_runtime(owner.id, %{
+        runtime_id: "invite-rt-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, activated, raw_token} = Federation.activate_runtime(runtime)
+    {:ok, agent} = Federation.link_agent(activated, agent)
+
+    # `link_agent/2` auto-rosters federated agents into every channel space,
+    # so re-affirm membership idempotently rather than asserting on a row
+    # that may already exist.
+    {:ok, _entry} = Chat.ensure_space_agent(space.id, agent.id, role: "member")
+
+    %{agent: agent, runtime: Federation.get_runtime(activated.id), raw_token: raw_token}
+  end
+
+  # A connected, authenticated websocket client for that runtime, joined on
+  # the ONE topic `RuntimeChannel.join/3` accepts for it.
+  defp join_runtime_client!(%{runtime: runtime, raw_token: raw_token}) do
+    {:ok, socket} =
+      Phoenix.ChannelTest.connect(PlatformWeb.RuntimeSocket, %{
+        "runtime_id" => runtime.runtime_id,
+        "token" => raw_token
+      })
+
+    {:ok, _reply, channel} = subscribe_and_join(socket, "runtime:#{runtime.runtime_id}", %{})
+    channel
   end
 
   defp login(conn, user), do: init_test_session(conn, current_user_id: user.id)
@@ -161,8 +235,15 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
 
     space = space!()
+    %{agent: agent} = runtime_agent = roster_agent!(space)
 
-    %{space: space, meeting: meeting!(space), agent: roster_agent!(space)}
+    %{
+      space: space,
+      meeting: meeting!(space),
+      agent: agent,
+      runtime_agent: runtime_agent,
+      runtime: runtime_agent.runtime
+    }
   end
 
   # ── The control ──────────────────────────────────────────────────────────
@@ -210,11 +291,29 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   # ── The dispatch ─────────────────────────────────────────────────────────
 
   describe "inviting an agent from the meeting rail" do
-    test "broadcasts meeting_join on the agent's runtime topic with a token",
-         %{conn: conn, space: space, meeting: meeting, agent: agent} do
+    test "pushes meeting_join to a runtime client that actually joined the channel",
+         %{
+           conn: conn,
+           space: space,
+           meeting: meeting,
+           agent: agent,
+           runtime_agent: runtime_agent
+         } do
       inviter = user!("inviter")
 
-      PlatformWeb.Endpoint.subscribe("runtime:agent:#{agent.id}")
+      # The real client, through `RuntimeSocket.connect/3` and
+      # `RuntimeChannel.join/3`. Everything this test asserts about delivery
+      # is asserted against THIS process's pushes.
+      _channel = join_runtime_client!(runtime_agent)
+
+      # The dead topic, kept and subscribed. Nothing may arrive here.
+      #
+      # `subscribe_and_join/3` also subscribes THIS process to the live
+      # topic, so the refutation below has to name the dead topic explicitly
+      # — a bare `refute_receive %Broadcast{event: "meeting_join"}` matches
+      # the legitimate broadcast and fails on a correct implementation.
+      dead_topic = "runtime:agent:#{agent.id}"
+      PlatformWeb.Endpoint.subscribe(dead_topic)
 
       {:ok, view, _html} = conn |> login(inviter) |> live(~p"/meetings/#{meeting.slug}")
 
@@ -234,11 +333,13 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       room = Meetings.get_active_room(space.id)
       assert room
 
-      assert_receive %Phoenix.Socket.Broadcast{
-                       event: "meeting_join",
-                       payload: payload
-                     },
-                     1_000
+      # `assert_push`, not `assert_receive` on a bare subscription: this only
+      # passes if the frame travelled broadcast -> joined channel process ->
+      # client, which is the leg the merged version of this test skipped.
+      assert_push "meeting_join", payload, 1_000
+
+      # And the topic the code used to publish on is confirmed dead.
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^dead_topic}, 200
 
       # The three fields a voice runtime cannot connect without.
       assert payload.agent_identity == "agent:" <> agent.slug
@@ -274,7 +375,13 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       outsider = user!("outsider")
 
-      PlatformWeb.Endpoint.subscribe("runtime:agent:#{agent.id}")
+      # For a REFUTE, an in-VM subscribe on the live topic is strictly the
+      # more sensitive instrument: it would catch a stray broadcast even with
+      # no client connected. Subscribing to the dead `runtime:agent:<uuid>`
+      # topic instead — what this test used to do — is a refutation that
+      # cannot fail, and proves nothing about authorization.
+      {:ok, live_topic} = Meetings.meeting_join_topic(agent)
+      PlatformWeb.Endpoint.subscribe(live_topic)
 
       # `no_autojoin=true`: auto-join would call
       # `ensure_chat_space_participant/3` and hand this viewer the very
@@ -333,6 +440,68 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
         })
 
       assert {:ok, %MeetingParticipant{}} = Meetings.invite_agent(room, agent, stranger)
+    end
+  end
+
+  # ── An agent nothing is listening for (task 01a04f31) ────────────────────
+
+  describe "an invitable agent with no linked runtime" do
+    test "is refused with a specific flash and leaves no roster row",
+         %{conn: conn, space: space, meeting: meeting} do
+      # On the space roster, so the control offers it — but with no
+      # AgentRuntime, so no topic exists that any client could be listening
+      # on. Before this task the invite "succeeded": a participant row, a
+      # green flash, and a broadcast nobody received.
+      orphan = bare_roster_agent!(space)
+
+      {:ok, view, _html} =
+        conn |> login(user!("orphan-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
+      _ = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting
+
+      html =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{orphan.id}"]))
+        |> render_click()
+
+      assert html =~ "no connected runtime"
+      refute html =~ "is joining the meeting"
+
+      assert agent_participant_rows(space.id, orphan.id) == []
+
+      # The control is still there to try again once a runtime connects —
+      # which it would NOT be if a participant row had been written, since
+      # `invitable_agents/2` excludes agents already in the call.
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(
+               ~s([data-role="meeting-agent-invite-button"][data-agent-id="#{orphan.id}"])
+             )
+             |> Enum.any?()
+    end
+
+    test "the context refuses it directly, for an authorized caller",
+         %{space: space} do
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, room} = Meetings.activate_room(room)
+
+      orphan = bare_roster_agent!(space)
+      inviter = user!("orphan-context")
+
+      {:ok, _member} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: inviter.id,
+          display_name: inviter.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      # Not `:forbidden` — the caller is authorized. The refusal is about the
+      # agent being unreachable, and the two must stay distinguishable
+      # because only one of them is the user's fault.
+      assert {:error, :no_runtime} = Meetings.invite_agent(room, orphan, inviter)
+      assert agent_participant_rows(space.id, orphan.id) == []
     end
   end
 end

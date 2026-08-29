@@ -25,6 +25,7 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript, Whiteboard}
   alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
+  alias Platform.Meetings.IntentRuntimeAdapter
   alias Platform.Meetings.Invite
   alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -4931,13 +4932,41 @@ defmodule Platform.Meetings do
   Generates a LiveKit token for the agent, then broadcasts the signal
   via PubSub. The runtime is expected to use the token to connect
   its voice worker to the room.
+
+  ## The topic is `runtime:<runtime_id>`, never `runtime:agent:<agent.id>`
+
+  Until task 01a04f31 this function broadcast on `"runtime:agent:\#{agent.id}"`.
+  No client can ever join that topic: `PlatformWeb.RuntimeChannel.join/3`
+  matches `"runtime:" <> runtime_id` and requires it to equal
+  `socket.assigns.runtime_id`, which `PlatformWeb.RuntimeSocket.connect/3`
+  assigns from `AgentRuntime.runtime_id` — the external, human-readable
+  STRING (`"rowan-claude-agent-1"`), not an agent UUID. Because
+  `Phoenix.Endpoint.broadcast/3` returns `:ok` whether or not anyone is
+  subscribed, the old code logged "dispatched" and delivered to nobody.
+
+  `Platform.Meetings.IntentRuntimeAdapter`'s moduledoc names this exact
+  hazard — "Using the agent UUID would publish into a topic with no
+  subscribers: a silent, green-tests, zero-delivery failure." This
+  function was the one place in `lib/` that still did it. It now resolves
+  through `IntentRuntimeAdapter.resolve_target/1`, the module that
+  already owns agent -> runtime -> topic resolution, rather than growing
+  a second resolver alongside it.
+
+  ## No runtime is an error, not a silent success
+
+  An agent with no linked `AgentRuntime` has nothing listening for it
+  anywhere, so `{:error, :no_runtime}` is returned and logged at
+  `error`. The previous behaviour — return `:ok` after a broadcast into
+  the void — is precisely the failure mode this change exists to remove,
+  so it is not preserved for compatibility.
   """
   @spec dispatch_meeting_join(Agent.t() | binary(), String.t(), map()) ::
           :ok | {:error, term()}
   def dispatch_meeting_join(agent_or_id, room_name, context \\ %{})
 
   def dispatch_meeting_join(%Agent{} = agent, room_name, context) do
-    with {:ok, token} <- generate_agent_token(agent, room_name) do
+    with {:ok, target} <- resolve_meeting_join_target(agent),
+         {:ok, token} <- generate_agent_token(agent, room_name) do
       payload = %{
         room_name: room_name,
         token: token,
@@ -4949,12 +4978,13 @@ defmodule Platform.Meetings do
         livekit_url: livekit_url()
       }
 
-      topic = "runtime:agent:#{agent.id}"
+      topic = target.topic
 
       case PlatformWeb.Endpoint.broadcast(topic, "meeting_join", payload) do
         :ok ->
           Logger.info(
-            "[Meetings] dispatched meeting_join to agent=#{agent.slug} room=#{room_name}"
+            "[Meetings] dispatched meeting_join to agent=#{agent.slug} " <>
+              "runtime=#{target.runtime_id} room=#{room_name}"
           )
 
           :ok
@@ -4971,6 +5001,38 @@ defmodule Platform.Meetings do
     case resolve_agent(agent_id) do
       %Agent{} = agent -> dispatch_meeting_join(agent, room_name, context)
       nil -> {:error, :agent_not_found}
+    end
+  end
+
+  @doc """
+  The runtime topic a `meeting_join` for this agent would be broadcast on.
+
+  Exposed so a caller — and a test — can name the topic without rebuilding
+  the string, and so `invite_agent/3` can pre-flight the resolution before
+  it writes a roster row. Delegates to
+  `IntentRuntimeAdapter.resolve_target/1`; see this module's
+  `dispatch_meeting_join/3` docs for why it is not a local reimplementation.
+  """
+  @spec meeting_join_topic(Agent.t()) :: {:ok, binary()} | {:error, :no_runtime}
+  def meeting_join_topic(%Agent{} = agent) do
+    with {:ok, target} <- resolve_meeting_join_target(agent), do: {:ok, target.topic}
+  end
+
+  # `resolve_target/1` distinguishes :no_target_agent / :agent_not_found /
+  # :no_runtime; reaching it from an `%Agent{}` struct in hand, only the
+  # last is possible, so the error is normalised to that one fact.
+  defp resolve_meeting_join_target(%Agent{} = agent) do
+    case IntentRuntimeAdapter.resolve_target(agent) do
+      {:ok, target} ->
+        {:ok, target}
+
+      {:error, _reason} ->
+        Logger.error(
+          "[Meetings] meeting_join NOT dispatched: agent=#{agent.slug} id=#{agent.id} " <>
+            "has no linked AgentRuntime, so no runtime can receive a join"
+        )
+
+        {:error, :no_runtime}
     end
   end
 
@@ -5002,11 +5064,30 @@ defmodule Platform.Meetings do
   participant row is written when LiveKit is unconfigured, so a meeting
   cannot acquire a roster entry for an agent that could never be dispatched.
   `dispatch_meeting_join/3` mints the token actually sent.
+
+  ## An agent with no runtime is refused, for that same reason
+
+  `meeting_join_topic/1` is pre-flighted alongside the token, and for the
+  identical argument: an agent with no linked `AgentRuntime` has nothing
+  listening on any topic, so it "could never be dispatched" in exactly the
+  sense the LiveKit pre-flight already guards against. Writing a
+  `meeting_participants` row for it would put a name on the roster that can
+  never speak, and — because the row makes the agent no longer *invitable*
+  — would remove the control that is the only way to try again. So
+  `{:error, :no_runtime}` is returned before any row is written.
+
+  The double resolution (here and again inside `dispatch_meeting_join/3`)
+  is deliberate and follows the precedent
+  `IntentRuntimeAdapter`'s moduledoc sets for the same shape of problem: it
+  is one extra `Repo.get/2` on a human-speed path, and it keeps
+  `dispatch_meeting_join/3` a self-contained function that every other
+  caller can use without knowing to pre-resolve.
   """
   @spec invite_agent(Room.t(), Agent.t(), SpaceAccess.actor()) ::
           {:ok, Participant.t()} | {:error, term()}
   def invite_agent(%Room{} = room, %Agent{} = agent, inviting_user) do
     with {:ok, _writer} <- SpaceAccess.authorize_writer(room.space_id, inviting_user),
+         {:ok, _topic} <- meeting_join_topic(agent),
          {:ok, _token} <-
            generate_agent_token(agent, room.livekit_room_name),
          {:ok, participant} <-

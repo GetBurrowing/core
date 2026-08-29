@@ -4092,6 +4092,18 @@ defmodule PlatformWeb.MeetingLive do
       {:error, :forbidden} ->
         put_flash(socket, :error, "You do not have permission to invite an agent here.")
 
+      # Distinguished from the catch-all because it is the one failure a
+      # human can act on: the agent is real and on the roster, but no
+      # runtime is connected to it, so nothing could receive the join.
+      # Before task 01a04f31 this case returned `{:ok, participant}` and
+      # flashed success.
+      {:error, :no_runtime} ->
+        put_flash(
+          socket,
+          :error,
+          "That agent has no connected runtime, so it cannot join the meeting."
+        )
+
       _ ->
         put_flash(socket, :error, "That agent could not be invited.")
     end
