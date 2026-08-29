@@ -231,6 +231,14 @@ config :platform, :github_webhook_secret, "test-github-webhook-secret"
 # tests.
 config :platform, :start_summarizer_sweeper, false
 
+# CandidateSweeper (task 01a03fba stage 3). Off in test: it is a
+# one-second tick that mints tasks and canvases, so an ambient instance
+# would fire other suites' candidates from outside their DataCase
+# sandbox. Countdown tests either call `CandidateSweeper.sweep/1`
+# directly — the timing assertions need an injectable `now`, not a real
+# 30-second wait — or start their own named instance.
+config :platform, :start_candidate_sweeper, false
+
 # StallRegistry (task 019f2566 stage 6): tests start their own per-case
 # instance so registry state is isolated per test — otherwise a callback
 # registered by one test leaks into a sibling case's sweep tick.

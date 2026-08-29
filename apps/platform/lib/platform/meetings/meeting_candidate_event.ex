@@ -9,7 +9,7 @@ defmodule Platform.Meetings.MeetingCandidateEvent do
   reloads and a rail that stayed connected are reading the same shape
   sorted by the same column.
 
-  ## The six kinds are the six writes
+  ## The kinds are the writes
 
   There is exactly one kind per `Repo` write in
   `Platform.Meetings.Candidates`, and that correspondence is the whole
@@ -57,7 +57,21 @@ defmodule Platform.Meetings.MeetingCandidateEvent do
 
   import Ecto.Changeset
 
-  @kinds [:heard, :threaded, :classified, :advanced, :disposition_recorded, :closed]
+  @kinds [
+    :heard,
+    :threaded,
+    :classified,
+    :advanced,
+    :disposition_recorded,
+    :closed,
+    # Countdown (task 01a03fba). Deliberately only TWO new kinds: arming
+    # is already narrated by `:heard` and an extension by `:threaded`,
+    # because the countdown rides those exact writes. These two are the
+    # writes nothing else on this stream describes — a human pressing
+    # stop, and the sweeper acting with nobody watching.
+    :countdown_stopped,
+    :countdown_fired
+  ]
 
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id

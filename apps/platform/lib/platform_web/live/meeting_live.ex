@@ -216,6 +216,9 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
 
+  import PlatformWeb.Components.Meetings.CandidateCountdown,
+    only: [candidate_countdown_rail: 1]
+
   import PlatformWeb.Components.Meetings.IntentsCollapse,
     only: [intents_collapse: 1, intents_overlays: 1]
 
@@ -235,6 +238,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Chat.CanvasDocument
   alias Platform.Meetings
   alias Platform.Meetings.Archive
+  alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.AgentActivity
@@ -682,6 +686,12 @@ defmodule PlatformWeb.MeetingLive do
     # renders in the top bar, which the `:index` action and the guest
     # surface also reach.
     |> assign(:intent_muted?, false)
+    # The armed-candidate rail (task 01a03fba stage 4). Seeded EMPTY and
+    # ungated: unlike `:intents_visible?` this rail has no role gate, so
+    # the only reason it is empty here is that no meeting is resolved
+    # yet. `handle_params/3` loads the real list.
+    |> assign(:meeting_candidates, [])
+    |> assign(:candidate_error, nil)
   end
 
   @impl true
@@ -845,6 +855,16 @@ defmodule PlatformWeb.MeetingLive do
             # would miss every transition between the appointment and the
             # next event. The handlers no-op when the bar is hidden.
             MeetingsPubSub.subscribe_intents(meeting.id)
+
+            # The candidate lifecycle stream (task 01a03fba). Reused
+            # rather than adding a second mechanism: `01a04a7f` /
+            # `914a980c` already broadcast every candidate write on
+            # `meeting:{id}:candidate_events`, and arming, extending and
+            # stopping a countdown ARE candidate writes — they ride
+            # `:heard`, `:threaded` and the two countdown kinds. A
+            # countdown-specific topic would carry the same rows under a
+            # second name.
+            MeetingsPubSub.subscribe_candidate_events(meeting.id)
             Roles.subscribe_assignments()
 
             socket
@@ -919,6 +939,11 @@ defmodule PlatformWeb.MeetingLive do
           # inherited from the seed: a viewer joining a meeting that was
           # muted before they arrived must see it muted on first paint.
           |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
+          # Armed candidates, resolved from the rows rather than left at
+          # the seed's `[]`: a participant joining a meeting whose cards
+          # were already counting down must be able to stop them on
+          # first paint, not only after the next utterance.
+          |> assign(:meeting_candidates, Candidates.open_for_meeting(meeting.id))
           |> MeetingHooks.attach(List.wrap(meeting.chat_space_id))
 
         # Auto-join on connected mount unless ?no_autojoin=true is set
@@ -3036,6 +3061,40 @@ defmodule PlatformWeb.MeetingLive do
     end)
   end
 
+  # Stop this candidate's countdown (task 01a03fba stage 4).
+  #
+  # Deliberately NOT wrapped in `with_intents_gate/2`. That gate resolves
+  # the `meeting_producer` role, and the requirement here is that stop
+  # works from ANY participant's session — a guest holds
+  # `"meeting:{id}"` and not `"meeting:{id}:intents"`, so gating this
+  # would deny it to exactly the people the requirement is about.
+  #
+  # The participant id goes to the server as the third thing written
+  # (`closed_by_participant_id`); it is read off THIS socket and never
+  # from the click payload, so a crafted `phx-value-` cannot attribute
+  # somebody else's stop.
+  def handle_event("stop_candidate", %{"candidate_id" => candidate_id}, socket)
+      when is_binary(candidate_id) do
+    meeting_id = socket.assigns[:meeting] && socket.assigns.meeting.id
+
+    socket =
+      case Candidates.get(candidate_id) do
+        %{meeting_id: ^meeting_id} = candidate when is_binary(meeting_id) ->
+          apply_candidate_stop(socket, candidate)
+
+        # Not this meeting's candidate, or no such row. Nothing is
+        # written and nothing is said — a click on a card belonging to
+        # another meeting is not a state this UI can produce, and an
+        # error message would only tell a prober that the id exists.
+        _ ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("stop_candidate", _params, socket), do: {:noreply, socket}
+
   # The X opens a reason picker rather than removing immediately. A
   # cancel carries no reason until a human states one, and stage 6's
   # corpus requires a reason on every row — so the reason has to be
@@ -3509,6 +3568,28 @@ defmodule PlatformWeb.MeetingLive do
 
       _ ->
         {:noreply, socket}
+    end
+  end
+
+  # A candidate lifecycle event (task 01a03fba stage 4).
+  #
+  # MUST stay ABOVE the catch-all, for the same reason the mute clause
+  # below does: a swallowed event is a stop button that needs a page
+  # reload before the card disappears, and a countdown ring that keeps
+  # counting after somebody else stopped it.
+  #
+  # The whole open list is re-read rather than patched from the event.
+  # The event says WHAT happened, not what the rail should now contain,
+  # and three of the writes that reach this clause (a stop, a fire, a
+  # retraction) REMOVE a card while a fourth (`:threaded`) moves one
+  # card's `acts_at` — deriving the new list from the payload would mean
+  # reimplementing `open_for_meeting/1`'s predicate in the view, where it
+  # could disagree with the sweeper's.
+  def handle_info({:candidate_event, %{meeting_id: meeting_id}}, socket) do
+    if socket.assigns[:meeting] && socket.assigns.meeting.id == meeting_id do
+      {:noreply, assign(socket, :meeting_candidates, Candidates.open_for_meeting(meeting_id))}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -4355,6 +4436,33 @@ defmodule PlatformWeb.MeetingLive do
 
   # Run `fun` only when the viewer holds the producer role. A hidden bar
   # is a rendering decision; this is the authorization.
+  defp apply_candidate_stop(socket, candidate) do
+    result =
+      Candidates.stop(
+        candidate,
+        participant_id(socket.assigns[:current_participant]),
+        actor_name: socket.assigns[:display_name]
+      )
+
+    case result do
+      {:ok, _stopped} ->
+        socket
+        |> assign(:candidate_error, nil)
+        |> assign(:meeting_candidates, Candidates.open_for_meeting(candidate.meeting_id))
+
+      # The sweeper won the race. Said out loud rather than swallowed:
+      # the deliverable now exists, and a stop button that silently did
+      # nothing would leave the human believing they had prevented it.
+      {:error, :already_fired} ->
+        socket
+        |> assign(:candidate_error, "Too late — this one already went ahead.")
+        |> assign(:meeting_candidates, Candidates.open_for_meeting(candidate.meeting_id))
+
+      {:error, _reason} ->
+        assign(socket, :candidate_error, "Could not stop this one.")
+    end
+  end
+
   defp with_intents_gate(%{assigns: %{intents_visible?: true}} = socket, fun) do
     {:noreply, fun.(socket)}
   end

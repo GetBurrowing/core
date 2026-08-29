@@ -58,6 +58,22 @@ defmodule Platform.Meetings.MeetingCandidate do
       failure this feature is warned about, and it is only diagnosable
       afterwards if the reason was written down next to the result.
 
+  ## Countdown columns (task 01a03fba)
+
+  `acts_at` is WHEN this candidate graduates on its own, and `nil` is
+  the disarmed state — a stopped card and a card opened while the
+  meeting's automation is off are both nil. It is deliberately not
+  `last_utterance_at`: that column is a measurement (when we last heard
+  something), this one is a decision (when we will act), and the stop
+  button would otherwise have to corrupt a measurement to say "never".
+
+  `closed_by_participant_id` names the human who pressed stop. Before it
+  the only attribution slot was `closed_note`, a free string — which
+  records that somebody typed a name, not that a participant acted.
+  Machine closes (the retraction gate, a queue cancellation, the
+  sweeper's own `:done`) leave it nil, so a non-nil value means exactly
+  one thing: a person took responsibility for this card.
+
   ## Cross-field rules
 
   1. A `:closed` candidate must carry a `closed_reason`. A closed card
@@ -111,6 +127,10 @@ defmodule Platform.Meetings.MeetingCandidate do
     field(:closed_note, :string)
     field(:closed_at, :utc_datetime_usec)
 
+    # The participant who pressed stop (task 01a03fba). See the
+    # moduledoc's countdown section.
+    field(:closed_by_participant_id, :binary_id)
+
     field(:classified_intent, :string)
     field(:classifier_confidence, :float)
     field(:classifier_model, :string)
@@ -124,6 +144,9 @@ defmodule Platform.Meetings.MeetingCandidate do
     field(:speaker, :string)
     field(:last_utterance_at, :utc_datetime_usec)
     field(:threading_events, {:array, :map}, default: [])
+
+    # Countdown (task 01a03fba). See the moduledoc section.
+    field(:acts_at, :utc_datetime_usec)
 
     field(:heard_at, :utc_datetime_usec)
     field(:dispatched_at, :utc_datetime_usec)
@@ -154,7 +177,8 @@ defmodule Platform.Meetings.MeetingCandidate do
                   canvas_id closed_reason closed_note closed_at
                   classified_intent classifier_confidence classifier_model
                   disposition disposition_at queue_status speaker
-                  last_utterance_at threading_events heard_at
+                  last_utterance_at threading_events acts_at
+                  closed_by_participant_id heard_at
                   dispatched_at acted_at)a
 
   @required_fields ~w(meeting_id state outcome_kind)a

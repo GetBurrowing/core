@@ -239,7 +239,16 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # fixture rows. `Platform.Files.CatalogEmitterTest` starts its own
     # named instance with `start_supervised!/1`; each instance attaches its
     # own handler in `init/1` and detaches it in `terminate/2`.
-    :start_catalog_emitter
+    :start_catalog_emitter,
+
+    # CandidateSweeper (task 01a03fba stage 3): a one-second tick that
+    # claims due `meeting_candidates` rows and mints a task or a canvas
+    # for each. An ambient instance under DataCase would fire other
+    # suites' candidates from outside their sandbox, so it is off in
+    # test and the countdown suites either call `sweep/1` directly (the
+    # timing assertions need an injectable `now`) or start their own
+    # named instance with `start_supervised!/1`.
+    :start_candidate_sweeper
   ]
 
   # ── Assertion 1: Task-Supervisor rescue audit ─────────────────────

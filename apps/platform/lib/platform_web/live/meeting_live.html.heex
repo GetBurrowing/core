@@ -1553,6 +1553,17 @@
              `meeting_producer` role is unassigned (AC13); an unfilled
              capability is not a denial, and there is nothing to reserve
              layout space for. --%>
+          <%!-- Armed-candidate rail + stop button (task 01a03fba stage 4).
+             ABOVE the intents bar and deliberately OUTSIDE its
+             `meeting_producer` gate: the ticket's requirement is that
+             stop works from any participant's session, and the intents
+             bar vanishes for anyone without that role. Renders nothing
+             when no candidate is counting down. --%>
+          <.candidate_countdown_rail
+            candidates={@meeting_candidates}
+            error={@candidate_error}
+          />
+
           <.intents_collapse
             :if={@intents_visible?}
             intents={@intents}

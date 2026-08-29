@@ -130,6 +130,7 @@ defmodule Platform.Application do
       |> maybe_add_stall_registry()
       |> maybe_add_lifecycle_step_registry()
       |> maybe_add_summarizer_sweeper()
+      |> maybe_add_candidate_sweeper()
       |> maybe_add_security_sweeper()
       |> maybe_add_space_purger()
       |> maybe_add_container_purger()
@@ -451,6 +452,22 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_summarizer_sweeper, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Meetings.SummarizerSweeper)
+    else
+      children
+    end
+  end
+
+  # CandidateSweeper (task 01a03fba stage 3): the server-side countdown.
+  # Every second it claims the `meeting_candidates` rows whose `acts_at`
+  # has passed and graduates them. Must start after Repo (it is entirely
+  # a Repo query) and after Chat/Tasks are reachable, since firing mints
+  # a task or a canvas. Disabled in test env; tests start their own
+  # per-case instance or call `sweep/1` directly, so no ambient sweeper
+  # races the DataCase sandbox.
+  defp maybe_add_candidate_sweeper(children) do
+    if Application.get_env(:platform, :start_candidate_sweeper, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Meetings.CandidateSweeper)
     else
       children
     end

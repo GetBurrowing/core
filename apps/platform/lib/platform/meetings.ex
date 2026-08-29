@@ -964,6 +964,65 @@ defmodule Platform.Meetings do
     end
   end
 
+  # ── Automation mode (task 01a03fba stage 1) ───────────────────────────────
+
+  @automation_modes [:off, :automated]
+
+  @doc """
+  The per-meeting automation modes: `:off` and `:automated`.
+  """
+  @spec automation_modes() :: [atom()]
+  def automation_modes, do: @automation_modes
+
+  @doc """
+  The meeting's automation mode.
+
+  **This is a reader over `intent_muted_at`, deliberately not a second
+  column.** The ticket asks for an off/automated master toggle, and
+  `intent_muted_at` already IS one: it is persisted, PubSub-broadcast,
+  fail-closed, checked by `IntentDispatcher.do_drain/2` before
+  `claim_next/1`, and wired to a toggle in the meeting's intents bar. A
+  second column beside it would be a second master switch on the same
+  rail, and the interesting question would immediately become which one
+  wins when they disagree — a question with no good answer and one that
+  a reader of either column alone cannot even see.
+
+  So there is one switch and two vocabularies over it. `:off` is
+  "muted": no agent dispatch, and no candidate countdown either.
+  `:automated` is the ordinary state.
+
+  Returns `:automated` for an unknown or malformed meeting id, matching
+  `intent_muted?/1`'s posture — this is read on hot paths from a
+  transcript pump and must not raise there. The countdown's fail-closed
+  guarantee is not weakened by that: an unknown meeting has no
+  candidates to fire.
+  """
+  @spec automation_mode(term()) :: :off | :automated
+  def automation_mode(meeting_id) do
+    if intent_muted?(meeting_id), do: :off, else: :automated
+  end
+
+  @doc """
+  Set the meeting's automation mode.
+
+  Delegates to `set_intent_muted/2` — see `automation_mode/1` for why
+  these are one switch and not two — so it inherits every property that
+  toggle already has: the row is re-read before the write, an
+  already-`:off` meeting keeps its original stamp rather than re-clocking
+  it, and both directions broadcast `intent_mute_changed` so a second
+  participant's badge follows.
+
+  Returns `{:ok, meeting}` or `{:error, :not_found}` /
+  `{:error, :invalid_mode}`.
+  """
+  @spec set_automation_mode(Meeting.t() | binary(), :off | :automated) ::
+          {:ok, Meeting.t()} | {:error, term()}
+  def set_automation_mode(meeting_or_id, mode) when mode in @automation_modes do
+    set_intent_muted(meeting_or_id, mode == :off)
+  end
+
+  def set_automation_mode(_meeting_or_id, _mode), do: {:error, :invalid_mode}
+
   # ── Whiteboard (task 019fcfcf stage 1) ────────────────────────────────────
 
   @doc """

@@ -68,7 +68,9 @@ defmodule Platform.Meetings.Candidates do
   require Logger
 
   alias Platform.Meetings.CandidateEvents
+  alias Platform.Meetings.Countdown
   alias Platform.Meetings.IntentCorrections
+  alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.ThreadResolver
   alias Platform.Repo
@@ -141,7 +143,7 @@ defmodule Platform.Meetings.Candidates do
   @spec create(map()) :: {:ok, MeetingCandidate.t()} | {:error, Ecto.Changeset.t()}
   def create(attrs) when is_map(attrs) do
     %MeetingCandidate{}
-    |> MeetingCandidate.changeset(put_derived_org_id(attrs))
+    |> MeetingCandidate.changeset(attrs |> put_derived_org_id() |> put_armed_acts_at())
     |> Repo.insert()
     |> emit(:heard, fn candidate ->
       %{
@@ -577,7 +579,19 @@ defmodule Platform.Meetings.Candidates do
       |> MeetingCandidate.changeset(%{
         transcript_chunk_ids: candidate.transcript_chunk_ids ++ List.wrap(chunk_id),
         threading_events: candidate.threading_events ++ [threading_event(attrs, at, chunk_id)],
-        last_utterance_at: at
+        last_utterance_at: at,
+        # The extension (task 01a03fba). This is the ONLY place a
+        # countdown moves forward, because an attachment is the only
+        # signal in the system that says "this specific card is still
+        # being discussed". It rides the same write as
+        # `last_utterance_at` on purpose: two writes could leave a card
+        # whose last utterance is newer than the deadline it is counting
+        # to, which reads as a stuck timer.
+        #
+        # A DISARMED card is not re-armed here. nil means either a human
+        # pressed stop or the meeting's automation is off, and neither
+        # of those should be undone by somebody carrying on talking.
+        acts_at: extended_acts_at(candidate, at)
       })
       |> Repo.update()
       # The resolver's own reason map, verbatim — the same value that
@@ -884,6 +898,300 @@ defmodule Platform.Meetings.Candidates do
         end)
       end
     end
+  end
+
+  # ── countdown (task 01a03fba) ─────────────────────────────────────────────
+
+  @doc """
+  Stop a candidate's countdown, on the record, naming the human who did
+  it.
+
+  This is the server side of the stop button, and the reason it is not
+  simply `close/2` with a reason is the sweeper: between a naive
+  `SELECT` and a `close/2` the sweeper can claim the same row and mint
+  its deliverable, so a human who pressed stop would watch the task
+  appear anyway. The disarm is therefore a conditional UPDATE that
+  races the claim in `claim_due/2` on the same row, and Postgres row
+  locking picks one winner:
+
+      UPDATE meeting_candidates
+         SET acts_at = NULL, closed_by_participant_id = $2
+       WHERE id = $1 AND state NOT IN ('closed', 'acting')
+
+  Whoever commits first leaves the other's `WHERE` unsatisfiable.
+
+  Returns:
+
+    * `{:ok, candidate}` — this call disarmed it and closed it
+      `:dismissed`. Also returned for an already-`:closed` candidate, so
+      a double-click is idempotent and does not relabel the close that
+      actually happened.
+    * `{:error, :already_fired}` — the sweeper won; the deliverable
+      exists. Deliberately NOT `{:ok, _}`: the caller has to be able to
+      tell the human that the stop was too late. Detected from
+      `disposition == :accepted`, which `graduate/2` writes and nothing
+      on this path does — a graduated candidate and a stopped one are
+      BOTH `:closed`, so state alone cannot tell them apart.
+    * `{:error, :not_found}` — no such candidate.
+
+  `participant_id` may be nil for a machine-initiated stop, but the
+  human path always carries one — that column is what makes "with the
+  human named" a fact about the row rather than a sentence in
+  `closed_note`.
+
+  `close/2` is still the only thing that writes `closed_reason`,
+  `closed_at` and `state: :closed`; this function writes the two
+  countdown columns and then delegates.
+  """
+  @spec stop(MeetingCandidate.t() | binary(), binary() | nil, keyword()) ::
+          {:ok, MeetingCandidate.t()}
+          | {:error, :already_fired | :not_found | Ecto.Changeset.t()}
+  def stop(candidate_or_id, participant_id \\ nil, opts \\ []) do
+    # RE-READ, never the struct handed in — the same call
+    # `Platform.Meetings.set_intent_muted/2` makes and for the same
+    # reason. `fetch/1`'s struct clause returns its argument untouched,
+    # and the struct a stop arrives with came out of a LiveView assign
+    # that was loaded when the participant's page rendered. Trusting its
+    # `state` made an already-closed candidate look open, so the
+    # idempotent branch below was skipped and a second click answered
+    # `{:error, :already_fired}` — telling a human a task had been
+    # created when nothing of the kind had happened.
+    with {:ok, %MeetingCandidate{id: id}} <- fetch(candidate_or_id),
+         {:ok, %MeetingCandidate{} = candidate} <- fetch(id) do
+      cond do
+        # It graduated. `:accepted` is written by `graduate/2` and by
+        # nothing on this path, so it is the exact fact that separates
+        # "somebody already stopped this" from "this already went ahead"
+        # — two outcomes that both leave the row `:closed` and that a
+        # human needs told apart, because only one of them means a task
+        # now exists.
+        candidate.disposition == :accepted ->
+          {:error, :already_fired}
+
+        # Already stopped (or otherwise closed). Idempotent and silent,
+        # matching `close/2`: a second click must not relabel the close
+        # that actually happened.
+        candidate.state == :closed ->
+          {:ok, candidate}
+
+        true ->
+          do_stop(candidate, participant_id, opts)
+      end
+    end
+  end
+
+  defp do_stop(candidate, participant_id, opts) do
+    claimed =
+      MeetingCandidate
+      |> where([c], c.id == ^candidate.id)
+      |> where([c], c.state not in [:closed, :acting])
+      |> select([c], c.id)
+      |> Repo.update_all(
+        set: [
+          acts_at: nil,
+          closed_by_participant_id: uuid_or_nil(participant_id),
+          updated_at: DateTime.utc_now()
+        ]
+      )
+
+    case claimed do
+      {1, _} ->
+        note = Keyword.get(opts, :note) || stop_note(Keyword.get(opts, :actor_name))
+
+        candidate.id
+        |> close({:dismissed, note})
+        |> emit(:countdown_stopped, fn stopped ->
+          %{
+            "closed_by_participant_id" => stopped.closed_by_participant_id,
+            "actor_name" => Keyword.get(opts, :actor_name),
+            "from" => candidate.state
+          }
+        end)
+
+      _ ->
+        # Nothing matched, and this row was not `:closed` when we read
+        # it, so the sweeper took it into `:acting` in between.
+        {:error, :already_fired}
+    end
+  end
+
+  # The note is a courtesy for a reader of `closed_note`;
+  # `closed_by_participant_id` is the fact. A stop with no name still
+  # says a human did it, because nothing else in the system produces
+  # `:dismissed`.
+  defp stop_note(nil), do: "Stopped by a participant"
+  defp stop_note(name) when is_binary(name), do: "Stopped by #{name}"
+  defp stop_note(_), do: "Stopped by a participant"
+
+  @doc """
+  Atomically claim every candidate whose countdown is due, and return
+  the claimed rows.
+
+  This is the sweeper's whole read-and-write, and it is ONE statement on
+  purpose. A `SELECT` followed by a `graduate/2` is not safe here:
+  `graduate/2` has no guard of its own, there is no advisory lock,
+  leader election or `:global` registration anywhere in `lib/`, and
+  every sweeper in this codebase is node-local and boot-flag gated. Two
+  nodes sweeping one meeting would both clear the read and both reach
+  `mint/1` — one candidate, two tasks. The claim is what makes the fire
+  exactly-once, and the idempotence lives in the data exactly as it does
+  for every other sweeper here.
+
+  Claiming sets `acts_at` to nil (so the row cannot be re-claimed even
+  if the state write were later rolled forward) and moves the row to
+  `:acting`, stamping `acted_at` only if it is not already stamped —
+  the same first-entry-wins rule `advance/3` applies.
+
+  `automation_mode` is re-checked HERE as well as at arming time. A
+  meeting muted after its cards were armed must not fire them, and that
+  is the requirement that cannot be traded away, so it is a join in the
+  claim rather than a filter the caller could forget.
+  """
+  @spec claim_due(DateTime.t(), keyword()) :: [MeetingCandidate.t()]
+  def claim_due(now \\ DateTime.utc_now(), opts \\ []) do
+    limit = Keyword.get(opts, :limit, 100)
+
+    due_ids =
+      MeetingCandidate
+      |> join(:inner, [c], m in Meeting, on: m.id == c.meeting_id)
+      |> where([c], not is_nil(c.acts_at))
+      |> where([c], c.acts_at <= ^now)
+      |> where([c], c.state not in [:closed, :acting])
+      # `automation_mode == :off` is `intent_muted_at` being set — one
+      # switch, not two. See `Platform.Meetings.automation_mode/1`.
+      |> where([_c, m], is_nil(m.intent_muted_at))
+      |> order_by([c], asc: c.acts_at)
+      |> limit(^limit)
+      |> select([c], c.id)
+      |> Repo.all()
+
+    claim_ids(due_ids, now)
+  end
+
+  defp claim_ids([], _now), do: []
+
+  defp claim_ids(ids, now) do
+    {_count, claimed} =
+      MeetingCandidate
+      |> where([c], c.id in ^ids)
+      # Re-asserted inside the writing statement. The id list above is a
+      # plain read and anything could have happened to those rows since
+      # — a stop, another node's claim — so the predicate that actually
+      # decides is the one on the UPDATE.
+      |> where([c], not is_nil(c.acts_at))
+      |> where([c], c.acts_at <= ^now)
+      |> where([c], c.state not in [:closed, :acting])
+      |> select([c], c)
+      |> Repo.update_all(
+        set: [acts_at: nil, state: :acting, updated_at: now],
+        inc: []
+      )
+      |> then(fn {count, rows} -> {count, rows || []} end)
+
+    Enum.map(claimed, fn candidate ->
+      stamp_acted_at(candidate, now)
+    end)
+  end
+
+  # `update_all` cannot express "only if null" for one column while
+  # setting others unconditionally, and `acted_at` is a first-entry stamp
+  # that a re-drive must not move. The claim is already exclusive, so
+  # this follow-up write is uncontended.
+  defp stamp_acted_at(%MeetingCandidate{acted_at: nil} = candidate, now) do
+    case candidate |> MeetingCandidate.changeset(%{acted_at: now}) |> Repo.update() do
+      {:ok, updated} -> updated
+      {:error, _} -> candidate
+    end
+  end
+
+  defp stamp_acted_at(candidate, _now), do: candidate
+
+  @doc """
+  Fire one claimed candidate: mint its deliverable and narrate it.
+
+  Separate from `claim_due/2` so the claim stays a single statement and
+  the minting — which reaches `Platform.Tasks.create_task/2` and can
+  fail on an archived project — happens outside it.
+
+  A failed mint leaves the row `:acting` and DISARMED. It is not
+  re-armed: `graduate/2` propagates `{:error, :project_archived}` for a
+  frozen project, and a sweeper that re-armed on failure would retry
+  that same permanent error every second for the life of the meeting.
+  The row stays visible as an `:acting` candidate with no deliverable,
+  which is the truthful reading of what happened.
+  """
+  @spec fire(MeetingCandidate.t()) :: {:ok, MeetingCandidate.t()} | {:error, term()}
+  def fire(%MeetingCandidate{} = candidate) do
+    case graduate(candidate) do
+      {:ok, graduated} ->
+        emit({:ok, graduated}, :countdown_fired, fn fired ->
+          %{
+            "outcome_kind" => fired.outcome_kind,
+            "task_id" => fired.task_id,
+            "canvas_id" => fired.canvas_id
+          }
+        end)
+
+      {:error, reason} = error ->
+        Logger.warning(
+          "meeting candidate countdown fire failed: " <>
+            "candidate=#{candidate.id} reason=#{inspect(reason)}"
+        )
+
+        error
+    end
+  end
+
+  # The arming arithmetic, applied to the attrs a create is about to
+  # write. Three things have to be true before a card counts down, and
+  # each of them is a `nil` here rather than a raise:
+  #
+  #   * there is an utterance time to count from,
+  #   * the row is not being created already closed,
+  #   * the meeting's automation is on.
+  #
+  # The automation check at ARMING time is what stops an "off" meeting
+  # becoming a landmine: without it a muted meeting would accumulate
+  # cards with deadlines in the past and fire all of them the instant
+  # somebody turned automation back on. Cards opened while it is off are
+  # simply never armed, so switching on affects what happens next and
+  # nothing that already happened.
+  defp put_armed_acts_at(attrs) do
+    cond do
+      Map.has_key?(attrs, :acts_at) or Map.has_key?(attrs, "acts_at") ->
+        attrs
+
+      true ->
+        from =
+          Map.get(attrs, :last_utterance_at) || Map.get(attrs, "last_utterance_at") ||
+            Map.get(attrs, :heard_at) || Map.get(attrs, "heard_at")
+
+        state = Map.get(attrs, :state) || Map.get(attrs, "state")
+        meeting_id = fetch_meeting_id(attrs)
+
+        armed =
+          if state in [:closed, "closed"] or not automated?(meeting_id) do
+            nil
+          else
+            Countdown.acts_at(from)
+          end
+
+        if Map.has_key?(attrs, "meeting_id") do
+          Map.put(attrs, "acts_at", armed)
+        else
+          Map.put(attrs, :acts_at, armed)
+        end
+    end
+  end
+
+  # An already-disarmed card stays disarmed — a stop is not undone by
+  # somebody carrying on talking, and neither is an "off" meeting.
+  defp extended_acts_at(%MeetingCandidate{acts_at: nil}, _at), do: nil
+
+  defp extended_acts_at(%MeetingCandidate{}, at), do: Countdown.acts_at(at)
+
+  defp automated?(meeting_id) do
+    Platform.Meetings.automation_mode(meeting_id) == :automated
   end
 
   # ── graduate ──────────────────────────────────────────────────────────────
