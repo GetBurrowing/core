@@ -19,12 +19,32 @@ defmodule Platform.Meetings.Triage do
   in place of `:description`), the stack rollup rewires — do not block on
   D landing first.
 
+  ## Reconcile, do not re-create (task 01a03fda)
+
+  Since `Platform.Meetings.CandidateSweeper` shipped, tasks are also
+  filed DURING the meeting, by `Platform.Meetings.Candidates.graduate/2`,
+  from the same utterances this pass later reads out of the transcript.
+  This module is therefore a **reconciliation pass over what the live
+  path already did**, not a second competing filer.
+
+  The reconciliation is by IDENTITY — an action item that names the
+  `candidate_id` it came from — and never by resemblance. The fuzzy
+  dedup gate below does not absorb the live path's tasks and cannot be
+  made to: `graduate/2` titles its task with the VERBATIM utterance
+  while an action item is a normalised imperative, and on merged code
+  three live cards plus four re-parsed action items produced seven
+  tasks with zero fuzzy skips.
+
+  See the `Identity reconciliation` section further down for what this
+  does NOT yet close — no producer emits `:candidate_id` today.
+
   ## Public surface
 
-    * `file_tasks_from_canvas/2` — file each action_item, skipping any
-      whose title fuzzy-matches an already-open task in the same project.
-      Files an action_row on the canvas so a reviewer can roll the whole
-      batch back with one click (stage 5).
+    * `file_tasks_from_canvas/2` — reconcile each action_item against
+      the meeting's candidate store when it names a `candidate_id`,
+      then file it unless its title fuzzy-matches an already-open task
+      in the same project. Files an action_row on the canvas so a
+      reviewer can roll the whole batch back with one click (stage 5).
     * `junk_batch/2` — soft-delete every task filed from a given canvas.
       Idempotent (second call is a no-op returning `{:ok, 0}`); writes
       an audit row (`event_type: "meetings.triage.batch_junked"`) and
@@ -41,6 +61,7 @@ defmodule Platform.Meetings.Triage do
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.CanvasDocument
+  alias Platform.Meetings.MeetingCandidate
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Task
@@ -63,7 +84,15 @@ defmodule Platform.Meetings.Triage do
 
   @type filing_result :: %{
           filed: [Task.t()],
-          skipped: [%{existing_task_id: binary(), title: binary()}],
+          skipped: [
+            %{
+              :existing_task_id => binary() | nil,
+              :title => binary(),
+              :reason => :similar_title | :already_filed_live | :closed_in_meeting,
+              optional(:candidate_id) => binary(),
+              optional(:closed_reason) => atom()
+            }
+          ],
           errors: [%{title: binary() | nil, reason: term()}],
           capped?: boolean(),
           cap_dropped: non_neg_integer()
@@ -84,6 +113,10 @@ defmodule Platform.Meetings.Triage do
         `:assignee`, …) pass through into the created task.
 
     Optional keys:
+      * `:meeting_id` — the meeting this canvas came out of. Supplying
+        it turns on identity reconciliation against that meeting's
+        `meeting_candidates` rows; omitting it leaves behaviour exactly
+        as it was before task 01a03fda.
       * `:threshold` — float passed through to
         `Platform.Tasks.similar_open_titles/3` to override the default
         dedup threshold.
@@ -95,6 +128,13 @@ defmodule Platform.Meetings.Triage do
 
   Iterates `opts[:action_items]` in order. For each item:
 
+    * If the item names a `:candidate_id` and `:meeting_id` was given,
+      reconcile against that meeting's candidate store FIRST: skip with
+      `reason: :already_filed_live` when that candidate already
+      graduated to a live (non-soft-deleted) task, and with
+      `reason: :closed_in_meeting` when the meeting closed it as
+      retracted / duplicate / vetoed / dismissed. An item with no
+      `:candidate_id` skips this step entirely.
     * If a fuzzy match (`Tasks.similar_open_titles/3`) exists in the
       project's open-task set, emit a `canvas_event` on the source canvas
       of shape `%{type: "triage_task_skipped", existing_task_id: id,
@@ -163,7 +203,8 @@ defmodule Platform.Meetings.Triage do
         backlog_cap: backlog_cap,
         per_canvas_cap: per_canvas_cap,
         meeting_id: meeting_id,
-        transcript_id: Keyword.get(opts, :transcript_id)
+        transcript_id: Keyword.get(opts, :transcript_id),
+        reconciliation: build_reconciliation(meeting_id)
       }
 
       state = %{
@@ -553,6 +594,195 @@ defmodule Platform.Meetings.Triage do
     append_cap_note(ctx.canvas, ctx.per_canvas_cap, dropped)
   end
 
+  # ── Identity reconciliation (task 01a03fda) ─────────────────────────────
+  #
+  # The live card board files tasks DURING the meeting, from the same
+  # utterances this pass will later read out of the transcript. Both
+  # paths would then file the same work — measured, on merged code, as
+  # three live tasks plus four re-filed action items where the fuzzy
+  # gate absorbed none of them, because `Candidates.graduate/2` titles
+  # its task with the VERBATIM utterance while an action item is a
+  # normalised imperative, and those two strings do not score above the
+  # dedup threshold.
+  #
+  # So the join is by IDENTITY, never by resemblance. An action item
+  # that names the `candidate_id` it was derived from is reconciled
+  # against the candidate store; one that does not is left to the
+  # pre-existing path completely unchanged. There is deliberately no
+  # fallback that tries to GUESS the candidate from the title: a
+  # reconciler that guesses is the fuzzy gate again, one layer up, and
+  # it would be wrong in both directions exactly as that gate is.
+  #
+  # ## What this does NOT yet close
+  #
+  # Nothing in `lib/` produces an action item carrying `:candidate_id`.
+  # The scribe-completion canvas the triage-officer parses records
+  # `owner`, `project_hint`, `priority`, `due_hint` and
+  # `source_transcript_id` per checklist item — no candidate id and no
+  # transcript CHUNK id, and `meeting_candidates` has no `dedupe_key`
+  # column to join on either (the classifier's `dedupe_key` is a
+  # SHA-256 of the raw chunk text, held only in the meeting-lifetime
+  # intent queue). Until the producer emits the id, this pass reconciles
+  # nothing and the collision above stands. That is a gap in the
+  # producer, not a reason to match on text here.
+
+  # Built once per batch, and ONLY when the caller named a meeting —
+  # `file_tasks_from_canvas/2` is also called for canvases with no
+  # meeting behind them at all, and those must keep their old
+  # behaviour exactly.
+  defp build_reconciliation(meeting_id) when is_binary(meeting_id) do
+    # `:meeting_id` has always been an OPTIONAL passthrough on this
+    # surface, enriched by the triage-officer runtime and forwarded
+    # straight into telemetry, so it has never had to be a real id —
+    # `triage_test.exs` passes the literal `"mtg-stage4"`. Feeding that
+    # to a `:binary_id` query raises `Ecto.Query.CastError`, which is
+    # the exact defect `Platform.RepoLookupBoundaryTest` exists over. An
+    # unusable id reconciles NOTHING rather than raising: the pass then
+    # behaves as it did before this feature, which is the safe direction
+    # — it may re-file, it cannot crash the batch.
+    if Platform.UUID.valid?(meeting_id) do
+      reconciliation_for(meeting_id)
+    else
+      nil
+    end
+  end
+
+  defp build_reconciliation(_), do: nil
+
+  defp reconciliation_for(meeting_id) do
+    rows =
+      from(c in MeetingCandidate,
+        where: c.meeting_id == ^meeting_id,
+        select: {c.id, c.task_id, c.state, c.closed_reason}
+      )
+      |> Repo.all()
+
+    live_ids = live_task_ids(for {_id, task_id, _s, _r} <- rows, is_binary(task_id), do: task_id)
+
+    filed_live =
+      for {id, task_id, _state, _reason} <- rows,
+          task_id in live_ids,
+          into: %{},
+          do: {id, task_id}
+
+    # `:done` is NOT in this set. `:done` is what `graduate/2` writes on
+    # a card that FILED — it belongs to `filed_live` above, and reading
+    # it as a rejection would suppress the very task the live path
+    # created without telling anyone which one.
+    closed_against =
+      for {id, _task_id, :closed, reason} <- rows,
+          reason in [:retracted, :duplicate, :vetoed, :dismissed],
+          into: %{},
+          do: {id, reason}
+
+    %{filed_live: filed_live, closed_against: closed_against}
+  end
+
+  # A live-filed task that has since been soft-deleted — by
+  # `junk_batch/2`, or by a human clearing a bad meeting — must NOT
+  # suppress the triage filing. The rollback is the bulk undo for a bad
+  # meeting, and a reconciler that kept honouring rolled-back rows would
+  # make it impossible to re-file anything that meeting produced.
+  #
+  # One statement for the whole meeting rather than one per graduated
+  # candidate: this runs once per batch on a path that already reads
+  # every candidate row, and a per-candidate `exists?` would put an N+1
+  # in front of every triage pass.
+  defp live_task_ids([]), do: MapSet.new()
+
+  defp live_task_ids(task_ids) do
+    from(t in Task,
+      where: t.id in ^task_ids,
+      where: is_nil(t.deleted_at),
+      select: t.id
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  defp reconcile(_item, %{reconciliation: nil}), do: nil
+
+  defp reconcile(item, %{reconciliation: reconciliation}) do
+    case fetch_candidate_id(item) do
+      nil ->
+        nil
+
+      candidate_id ->
+        cond do
+          task_id = Map.get(reconciliation.filed_live, candidate_id) ->
+            {:already_filed_live, candidate_id, task_id}
+
+          reason = Map.get(reconciliation.closed_against, candidate_id) ->
+            {:closed_in_meeting, candidate_id, reason}
+
+          true ->
+            nil
+        end
+    end
+  end
+
+  defp fetch_candidate_id(item) when is_map(item) do
+    case Map.get(item, :candidate_id) || Map.get(item, "candidate_id") do
+      id when is_binary(id) -> id
+      _ -> nil
+    end
+  end
+
+  defp fetch_candidate_id(_), do: nil
+
+  defp record_reconciled({:already_filed_live, candidate_id, task_id}, title, ctx, acc) do
+    emit_reconciled_event(ctx, title, :already_filed_live, candidate_id, task_id)
+
+    %{
+      acc
+      | skipped: [
+          %{
+            existing_task_id: task_id,
+            title: title,
+            reason: :already_filed_live,
+            candidate_id: candidate_id
+          }
+          | acc.skipped
+        ]
+    }
+  end
+
+  defp record_reconciled({:closed_in_meeting, candidate_id, closed_reason}, title, ctx, acc) do
+    emit_reconciled_event(ctx, title, :closed_in_meeting, candidate_id, nil)
+
+    # `existing_task_id` is nil and that is the truth: the meeting
+    # decided this one was not work, so there is no task to point at.
+    %{
+      acc
+      | skipped: [
+          %{
+            existing_task_id: nil,
+            title: title,
+            reason: :closed_in_meeting,
+            candidate_id: candidate_id,
+            closed_reason: closed_reason
+          }
+          | acc.skipped
+        ]
+    }
+  end
+
+  defp emit_reconciled_event(ctx, title, reason, candidate_id, task_id) do
+    :telemetry.execute(
+      [:platform, :meetings, :triage_reconciled],
+      %{count: 1},
+      %{
+        canvas_id: ctx.canvas.id,
+        project_id: ctx.project_id,
+        meeting_id: ctx.meeting_id,
+        candidate_id: candidate_id,
+        existing_task_id: task_id,
+        reason: reason,
+        title: title
+      }
+    )
+  end
+
   # ── Per-item filing ─────────────────────────────────────────────────────
 
   defp file_one(item, ctx, acc) do
@@ -562,10 +792,19 @@ defmodule Platform.Meetings.Triage do
       not is_binary(title) or title == "" ->
         %{acc | errors: [%{title: title, reason: :missing_title} | acc.errors]}
 
+      verdict = reconcile(item, ctx) ->
+        record_reconciled(verdict, title, ctx, acc)
+
       match = first_similar(ctx.project_id, title, ctx.threshold_opts) ->
         emit_skip_event(ctx.canvas, title, match)
         append_skip_note(ctx.canvas, title, match)
-        %{acc | skipped: [%{existing_task_id: match.id, title: title} | acc.skipped]}
+
+        %{
+          acc
+          | skipped: [
+              %{existing_task_id: match.id, title: title, reason: :similar_title} | acc.skipped
+            ]
+        }
 
       true ->
         needs_promotion? = acc.triage_count < ctx.backlog_cap

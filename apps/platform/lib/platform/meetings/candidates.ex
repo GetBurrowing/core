@@ -1234,9 +1234,19 @@ defmodule Platform.Meetings.Candidates do
     * `:task_attrs` / `:canvas_attrs` — merged last over the built
       attrs for a caller with better context.
 
-  Deliberately NOT wired into any LiveView, dispatcher tick or PubSub
-  broadcast: this is a context function, and the board that calls it is
-  a separate ticket.
+  ## Provenance
+
+  A minted TASK carries `metadata` naming the meeting and the candidate
+  it came from (`"source" => "meetings.candidate"`). That backlink is
+  the join key the post-meeting reconciliation pass reads — see
+  `Platform.Meetings.Triage` — and it is the direction
+  `meeting_candidates.task_id` does not answer. A caller's
+  `:task_attrs` still wins, since it is merged last.
+
+  Since task 01a03fba this IS reached in production, from
+  `Platform.Meetings.CandidateSweeper` via `fire/1` — the server-side
+  countdown. It is still not called from any LiveView or PubSub
+  handler.
   """
   @spec graduate(MeetingCandidate.t() | binary(), keyword() | map()) ::
           {:ok, MeetingCandidate.t()} | {:error, term()}
@@ -1260,7 +1270,8 @@ defmodule Platform.Meetings.Candidates do
       %{
         project_id: Map.get(opts, :project_id) || meeting_field(meeting, :project_id),
         title: deliverable_title(candidate, opts),
-        description: Map.get(opts, :description) || candidate.evidence_quote
+        description: Map.get(opts, :description) || candidate.evidence_quote,
+        metadata: provenance_metadata(candidate)
       }
       |> Map.merge(Map.get(opts, :task_attrs, %{}))
 
@@ -1283,6 +1294,27 @@ defmodule Platform.Meetings.Candidates do
     with {:ok, canvas} <- Platform.Chat.create_canvas(attrs) do
       {:ok, {:canvas_id, canvas.id}}
     end
+  end
+
+  # The task→candidate backlink (task 01a03fda).
+  #
+  # `meeting_candidates.task_id` already answers "what did THIS candidate
+  # produce". It does not answer the question a reader holding a task
+  # asks — "where did this come from" — and that is the direction the
+  # post-meeting reconciliation pass needs, because it starts from the
+  # meeting and from tasks, not from a candidate it has never seen.
+  #
+  # `"source"` is deliberately `"meetings.candidate"` and NOT
+  # `"meetings.triage"`: `Platform.Meetings.Triage` counts its own
+  # backlog against `metadata->>'source' = <its source>`, so a live-path
+  # task wearing the triage source string would silently consume the
+  # triage backlog cap for work triage never filed.
+  defp provenance_metadata(%MeetingCandidate{} = candidate) do
+    %{
+      "source" => "meetings.candidate",
+      "meeting_id" => candidate.meeting_id,
+      "candidate_id" => candidate.id
+    }
   end
 
   defp record_deliverable(candidate, {column, id}) do

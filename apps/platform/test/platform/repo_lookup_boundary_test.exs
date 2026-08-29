@@ -357,6 +357,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a03fb8 stage 4 — `meeting_for/1` in `graduate/2`. The id is the loaded candidate row's `meeting_id`, a `:binary_id` column Ecto already cast on write, and the clause is guarded `when is_binary(meeting_id)` so a nil never reaches the lookup. A meeting id with no row returns nil and `meeting_field/2` answers nil, which surfaces as a changeset error from the deliverable create rather than a raise"},
     {"platform/meetings/candidates.ex", :get_by, "MeetingCandidate", 1, :safe_internal,
      "`get_by_intent_id/1`, keyed `intent_id:` and reached only through that function's Platform.UUID.valid?/1 branch. The column carries a unique index (the stage-3 mirror's idempotence key), so Ecto.MultipleResultsError is unreachable here too"},
+    {"platform/meetings/triage.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a03fda — `build_reconciliation/1` guards the meeting-candidate reconciliation query. `:meeting_id` has always been an OPTIONAL passthrough on `file_tasks_from_canvas/2`, enriched by the triage-officer runtime and forwarded straight into telemetry, so it has never had to be a real id — `triage_test.exs` passes the literal \"mtg-stage4\". Without the guard that string reaches a `:binary_id` WHERE and raises Ecto.Query.CastError mid-batch. An unusable id reconciles nothing, which is the pre-01a03fda behaviour"},
     # ── Memory ─────────────────────────────────────────────────────────
     {"platform/memory/proposals.ex", :get, "MemoryProposal", 1, :safe_internal,
      "Proposals.get/1 checks Platform.UUID.valid?/1 on the phx-value-id LiveView param before Repo.get"},
