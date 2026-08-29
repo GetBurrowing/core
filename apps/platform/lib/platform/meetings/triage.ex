@@ -45,7 +45,9 @@ defmodule Platform.Meetings.Triage do
       then file it unless its title fuzzy-matches an already-open task
       in the same project. Files an action_row on the canvas so a
       reviewer can roll the whole batch back with one click (stage 5).
-    * `junk_batch/2` — soft-delete every task filed from a given canvas.
+    * `junk_batch/2` — soft-delete every task the meeting filed, by
+      either path: this canvas's triage filings AND the live card
+      path's (task 01a04d9f).
       Idempotent (second call is a no-op returning `{:ok, 0}`); writes
       an audit row (`event_type: "meetings.triage.batch_junked"`) and
       appends a note to the source canvas.
@@ -61,6 +63,7 @@ defmodule Platform.Meetings.Triage do
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.CanvasDocument
+  alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Repo
   alias Platform.Tasks
@@ -272,8 +275,11 @@ defmodule Platform.Meetings.Triage do
   Backs the M5b Stage 4 confirmation modal — the `chat_live.ex` opener
   calls this to know whether to show the count-bearing body or the
   empty-state (`Nothing to roll back`) branch. A pure count via
-  `Repo.aggregate/3` — same filter as `task_ids_for_canvas/1` — so we
-  don't materialize the row set for a UI decision that only needs `N`.
+  `Repo.aggregate/3` over the SAME `junk_scope_query/1` the delete runs,
+  so we don't materialize the row set for a UI decision that only needs
+  `N`. Sharing the query is load-bearing rather than tidy: a preview
+  that undercounts the delete is the exact failure — a bulk delete that
+  takes more than the operator was shown — this is meant to prevent.
 
   Returns `%{canvas_id: id, surviving_task_count: n}` on success. On a
   bad id (canvas not found or invalid), returns
@@ -285,25 +291,19 @@ defmodule Platform.Meetings.Triage do
           | {:error, term()}
   def preview_batch(canvas_or_id) do
     with {:ok, canvas} <- resolve_canvas(canvas_or_id) do
-      count =
-        Repo.aggregate(
-          from(t in Task,
-            where: is_nil(t.deleted_at),
-            where: fragment("(? ->> 'source_canvas_id') = ?", t.metadata, ^canvas.id)
-          ),
-          :count
-        )
+      count = Repo.aggregate(junk_scope_query(canvas), :count)
 
       {:ok, %{canvas_id: canvas.id, surviving_task_count: count}}
     end
   end
 
   @doc """
-  Soft-delete every non-deleted task filed from `canvas_id`.
+  Soft-delete every non-deleted task this meeting filed, by either path.
 
-  Loads all tasks whose `metadata["source_canvas_id"]` matches the
-  given canvas, sets `deleted_at` in a single `Repo.update_all/2`
-  transaction, writes an audit row of type
+  Loads all tasks whose `metadata["source_canvas_id"]` matches the given
+  canvas OR whose `metadata["meeting_id"]` names a meeting whose chat
+  space is this canvas's space, sets `deleted_at` in a single
+  `Repo.update_all/2` transaction, writes an audit row of type
   `"meetings.triage.batch_junked"` carrying the `task_ids` + `actor_id`,
   and appends a note to the source canvas.
 
@@ -324,6 +324,48 @@ defmodule Platform.Meetings.Triage do
       idempotent second call, N on the first)
     * `{:error, :canvas_not_found}` — canvas id doesn't resolve
     * `{:error, term}` — Ecto/transaction failure
+
+  ## Why two selectors and not one (task 01a04d9f)
+
+  `file_tasks_from_canvas/2` stamps `source_canvas_id`;
+  `Platform.Meetings.Candidates.graduate/2` — the live card path, given
+  a production caller by `CandidateSweeper` in task 01a03fba — stamps
+  `meeting_id` and no canvas at all. The two paths share no metadata
+  key, so a single selector reaches exactly half a meeting's tasks.
+  Keying on `meeting_id` ALONE would drop every triage-filed task.
+
+  The meeting is resolved from the canvas via
+  `chat_canvases.space_id == meetings.chat_space_id`, the join
+  `Platform.Meetings.Archive` documents as the only meeting↔task link.
+
+  ## What this takes that the canvas-only form did not
+
+  A bulk delete that takes more than the operator expected is worse than
+  one that takes less, so the widening is stated rather than implied:
+
+    * the meeting's live-path tasks — the point of the change;
+    * live-path tasks minted AFTER the triage batch ran. The canvas form
+      could only ever reach what a `file_tasks_from_canvas/2` invocation
+      had already stamped;
+    * **every triage canvas in the meeting's space now sweeps the whole
+      meeting's live-path tasks.** If a re-parse produced a second
+      summary canvas, junking either one takes all of them (each still
+      takes only its OWN triage filings). This is the widening most
+      likely to surprise;
+    * live-path tasks in a different project, if a triage run was
+      pointed at a `:project_id` other than the meeting's. Neither form
+      has ever filtered by project;
+    * if two meetings are ever pointed at one chat space, both meetings'
+      live-path tasks. `meetings.chat_space_id` carries only a plain
+      index (`20260514120000_create_meetings.exs`), so nothing in the
+      schema forbids it; `create_meeting/1` mints a dedicated space per
+      meeting, and `create_guest_chat_space/2` mints separate ones
+      rather than reusing, so this does not arise on the normal path.
+
+  `preview_batch/1` shares this query precisely so the confirmation
+  modal shows the widened number before the operator commits. A canvas
+  in a plain channel resolves to no meeting and behaves exactly as
+  before.
   """
   @spec junk_batch(binary() | map(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
@@ -334,7 +376,7 @@ defmodule Platform.Meetings.Triage do
       actor_id = Keyword.get(opts, :actor_id)
       actor_type = Keyword.get(opts, :actor_type, "user")
 
-      task_ids = task_ids_for_canvas(canvas.id)
+      task_ids = task_ids_for_canvas(canvas)
 
       case task_ids do
         [] ->
@@ -384,13 +426,79 @@ defmodule Platform.Meetings.Triage do
     :ok
   end
 
-  defp task_ids_for_canvas(canvas_id) do
-    from(t in Task,
-      where: is_nil(t.deleted_at),
-      where: fragment("(? ->> 'source_canvas_id') = ?", t.metadata, ^canvas_id),
-      select: t.id
-    )
+  defp task_ids_for_canvas(canvas) do
+    canvas
+    |> junk_scope_query()
+    |> select([t], t.id)
     |> Repo.all()
+  end
+
+  # Everything one meeting filed, by EITHER path (task 01a04d9f).
+  #
+  # The two filing paths share no metadata key:
+  #
+  #   * `file_tasks_from_canvas/2` stamps `metadata["source_canvas_id"]`
+  #     (see `build_task_attrs/6`) and never a `meeting_id` — `:meeting_id`
+  #     is an opt it forwards into telemetry and into reconciliation, not
+  #     into the task;
+  #   * `Platform.Meetings.Candidates.graduate/2` — the live card path,
+  #     which got its first production caller in `CandidateSweeper` (task
+  #     01a03fba) — has no canvas in scope and stamps
+  #     `metadata["meeting_id"]` + `metadata["candidate_id"]` instead.
+  #
+  # So this is a UNION of two selectors, not a widening of one. Keying on
+  # `meeting_id` alone would silently stop sweeping every triage-filed
+  # task, which is the behaviour the batch-junk button has always had.
+  #
+  # `metadata["source"]` is deliberately NOT a selector here. Task
+  # 01a03fda chose `"meetings.candidate"` over `"meetings.triage"` for the
+  # live path precisely so a live-filed task cannot consume triage's
+  # `needs_promotion` backlog budget; sweeping by provenance rather than
+  # by source string leaves that distinction intact. For the same reason
+  # `existing_per_canvas_count/1` — the FILING cap — is untouched: it
+  # counts what triage may still file, which is a different question from
+  # what a rollback should take back.
+  defp junk_scope_query(canvas) do
+    base = from(t in Task, where: is_nil(t.deleted_at))
+
+    case meeting_ids_for_canvas(canvas) do
+      [] ->
+        where(
+          base,
+          [t],
+          fragment("(? ->> 'source_canvas_id') = ?", t.metadata, ^canvas.id)
+        )
+
+      meeting_ids ->
+        where(
+          base,
+          [t],
+          fragment("(? ->> 'source_canvas_id') = ?", t.metadata, ^canvas.id) or
+            fragment("(? ->> 'meeting_id')", t.metadata) in ^meeting_ids
+        )
+    end
+  end
+
+  # A canvas has no FK to a meeting. The link is the one
+  # `Platform.Meetings.Archive` documents and already joins on —
+  # `chat_canvases.space_id == meetings.chat_space_id` — because
+  # `Platform.Meetings.create_meeting/1` mints a dedicated
+  # `meeting-<id>` space per meeting.
+  #
+  # OVER-SWEEP, stated plainly: there is no unique index on
+  # `meetings.chat_space_id` (see `create_meetings`, which only indexes
+  # it), so if two meetings are ever pointed at one space this returns
+  # both and the rollback takes the live-path tasks of both. A canvas in
+  # a plain channel resolves to `[]` and the sweep stays exactly as it
+  # was.
+  defp meeting_ids_for_canvas(canvas) do
+    case Map.get(canvas, :space_id) do
+      space_id when is_binary(space_id) ->
+        Repo.all(from(m in Meeting, where: m.chat_space_id == ^space_id, select: m.id))
+
+      _ ->
+        []
+    end
   end
 
   defp record_junk_audit(canvas, task_ids, actor_id, actor_type) do
