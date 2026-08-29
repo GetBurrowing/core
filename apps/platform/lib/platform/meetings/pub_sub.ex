@@ -205,6 +205,45 @@ defmodule Platform.Meetings.PubSub do
   def meeting_topic(meeting_id) when is_binary(meeting_id),
     do: "meeting:#{meeting_id}"
 
+  @doc """
+  Returns the per-meeting CANDIDATE ACTIVITY topic (task 01a03fba) — the
+  arc of `meeting_candidates` rows, as opposed to `intents_topic/1`'s
+  intent-queue row statuses.
+
+  ## Why this is not `intents_topic/1`
+
+  These are two entities and only one of them had a stream. The nine
+  `intent_*` events carry an `IntentQueue` ROW MAP and narrate that
+  row's nine statuses. A candidate is a different record in a different
+  store with a different arc (`:heard -> :thinking -> :shaping ->
+  :acting -> :closed`), and since `5b507f92` it is opened at ARRIVAL, by
+  `Platform.Meetings.Candidates.record_heard/1`, before any intent row
+  exists at all.
+
+  That is the gap, stated exactly: the pre-classification card, and
+  every way it can close without ever reaching the queue —
+  `:parse_error`, `:model_error`, `:empty_output`, a dedupe hit, and the
+  retraction `58a19028` added — all happen with NO intent row in
+  existence, so no `intent_*` event can fire for any of them. Keying
+  them onto `intents_topic/1` would mean broadcasting a candidate under
+  a topic whose every existing subscriber pattern-matches on an intent
+  row map (`PlatformWeb.MeetingLive`'s `@intent_events` clause reads
+  `%{id: _, meeting_id: _}` and folds it into `:intents`), so the two
+  shapes would collide on one assign.
+
+  Per-meeting for the same reason `intents_topic/1` is: the card rail is
+  mounted inside a meeting, and a room can outlive the `Meeting` row.
+
+  The message is `{:candidate_event, %MeetingCandidateEvent{}}` — ONE
+  tag, with the kind inside the payload, rather than a tag per kind.
+  Adding a seventh kind must not require every consumer to grow a
+  clause, because a consumer that silently drops an unknown kind is a
+  log with a hole in it.
+  """
+  @spec candidate_events_topic(binary()) :: String.t()
+  def candidate_events_topic(meeting_id) when is_binary(meeting_id),
+    do: "meeting:#{meeting_id}:candidate_events"
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc "Subscribe the calling process to a user's meeting events."
@@ -287,6 +326,22 @@ defmodule Platform.Meetings.PubSub do
   @spec unsubscribe_intents(binary()) :: :ok
   def unsubscribe_intents(meeting_id) when is_binary(meeting_id) do
     Phoenix.PubSub.unsubscribe(@pubsub, intents_topic(meeting_id))
+  end
+
+  @doc """
+  Subscribe to a single meeting's candidate activity stream (task
+  01a03fba). Used by the card rail and by tests that need a lifecycle
+  collector.
+  """
+  @spec subscribe_candidate_events(binary()) :: :ok | {:error, term()}
+  def subscribe_candidate_events(meeting_id) when is_binary(meeting_id) do
+    Phoenix.PubSub.subscribe(@pubsub, candidate_events_topic(meeting_id))
+  end
+
+  @doc "Unsubscribe from a meeting's candidate activity stream."
+  @spec unsubscribe_candidate_events(binary()) :: :ok
+  def unsubscribe_candidate_events(meeting_id) when is_binary(meeting_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, candidate_events_topic(meeting_id))
   end
 
   @doc """
@@ -652,6 +707,24 @@ defmodule Platform.Meetings.PubSub do
   @spec broadcast_intent_no_ack_spawn_failed(binary(), map()) :: :ok
   def broadcast_intent_no_ack_spawn_failed(meeting_id, intent),
     do: broadcast_intent_event(meeting_id, :intent_no_ack_spawn_failed, intent)
+
+  @doc """
+  Broadcast one candidate lifecycle event (task 01a03fba).
+
+  Called from `Platform.Meetings.CandidateEvents.record/3` immediately
+  after the row it carries was inserted, and from nowhere else. The
+  pairing is the point: the live line and the durable line are the same
+  struct with the same `seq`, so a rail that reloads and a rail that
+  stayed connected cannot disagree about what happened or in what order.
+  """
+  @spec broadcast_candidate_event(binary(), struct()) :: :ok
+  def broadcast_candidate_event(meeting_id, event) when is_binary(meeting_id) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      candidate_events_topic(meeting_id),
+      {:candidate_event, event}
+    )
+  end
 
   defp broadcast_intent_event(meeting_id, event, intent)
        when is_binary(meeting_id) and is_atom(event) and is_map(intent) do

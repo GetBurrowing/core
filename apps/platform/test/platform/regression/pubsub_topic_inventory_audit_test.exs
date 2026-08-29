@@ -129,6 +129,7 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # is not a space_id, so a space-membership check is not automatic.
     {"meeting:<id>", :space},
     {"meeting:<id>:intents", :space},
+    {"meeting:<id>:candidate_events", :space},
     {"meeting:finished:<id>", :space},
     {"meeting:transcript_chunk:<id>", :space},
     {"meetings:presence:<id>", :space},

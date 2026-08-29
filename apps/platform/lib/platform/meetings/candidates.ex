@@ -67,6 +67,7 @@ defmodule Platform.Meetings.Candidates do
 
   require Logger
 
+  alias Platform.Meetings.CandidateEvents
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.ThreadResolver
@@ -142,6 +143,14 @@ defmodule Platform.Meetings.Candidates do
     %MeetingCandidate{}
     |> MeetingCandidate.changeset(put_derived_org_id(attrs))
     |> Repo.insert()
+    |> emit(:heard, fn candidate ->
+      %{
+        "state" => candidate.state,
+        "speaker" => candidate.speaker,
+        "outcome_kind" => candidate.outcome_kind,
+        "transcript_chunk_id" => candidate.transcript_chunk_id
+      }
+    end)
   end
 
   # ── threading (task 01a03fb9 stage 4) ─────────────────────────────────────
@@ -477,6 +486,18 @@ defmodule Platform.Meetings.Candidates do
     skeleton
     |> MeetingCandidate.changeset(Map.drop(atomize(attrs), @reconcile_drop))
     |> Repo.update()
+    # Read off the RECONCILED row, not off `attrs`. The changeset is
+    # what decided which of those fields actually landed, so echoing
+    # the input would report a classification the row may not carry.
+    |> emit(:classified, fn reconciled ->
+      %{
+        "classified_intent" => reconciled.classified_intent,
+        "classifier_confidence" => reconciled.classifier_confidence,
+        "target_role" => reconciled.target_role,
+        "assigned_agent_slug" => reconciled.assigned_agent_slug,
+        "outcome_kind" => reconciled.outcome_kind
+      }
+    end)
   end
 
   # The candidate that already owns this chunk, preferring the row the
@@ -559,6 +580,17 @@ defmodule Platform.Meetings.Candidates do
         last_utterance_at: at
       })
       |> Repo.update()
+      # The resolver's own reason map, verbatim — the same value that
+      # goes into `threading_events`, and for the same argument: "the
+      # threading gate ran" records that a decision happened and loses
+      # which rule made it.
+      |> emit(:threaded, fn _updated ->
+        %{
+          "reason" => jsonable(Map.get(attrs, :reason)),
+          "transcript_chunk_id" => chunk_id,
+          "intent_id" => Map.get(attrs, :intent_id)
+        }
+      end)
     end
   end
 
@@ -575,6 +607,30 @@ defmodule Platform.Meetings.Candidates do
       "transcript_chunk_id" => chunk_id
     }
   end
+
+  # ── activity log (task 01a03fba) ──────────────────────────────────────────
+
+  # Emit one line for one write, and ONLY for a write that succeeded.
+  #
+  # This wrapper is the mechanism behind the ticket's central assertion —
+  # "a candidate that closes early shows the gates that ran and no
+  # others". It is not a rule the log obeys; there is structurally no
+  # way to produce a line without a `{:ok, _}` from `Repo`, so a gate
+  # that did not run cannot have one.
+  #
+  # The detail is a FUNCTION rather than a map so it is not computed for
+  # a write that failed, and so each call site can read off the row the
+  # write returned rather than the attrs that went in.
+  #
+  # Returns the result untouched. Logging must never change what a
+  # caller sees, or the log would be able to break the thing it
+  # describes.
+  defp emit({:ok, %MeetingCandidate{} = candidate} = result, kind, detail_fun) do
+    CandidateEvents.record(candidate, kind, jsonable(detail_fun.(candidate)))
+    result
+  end
+
+  defp emit(result, _kind, _detail_fun), do: result
 
   defp jsonable(nil), do: nil
   defp jsonable(true), do: true
@@ -722,6 +778,12 @@ defmodule Platform.Meetings.Candidates do
         |> stamp(candidate, state)
       )
       |> Repo.update()
+      # `from` is closed over from the PRE-update row and cannot be
+      # re-derived afterwards: once the update lands, nothing on the
+      # candidate remembers where it came from.
+      |> emit(:advanced, fn advanced ->
+        %{"from" => candidate.state, "to" => advanced.state}
+      end)
     end
   end
 
@@ -770,6 +832,9 @@ defmodule Platform.Meetings.Candidates do
         |> Map.put_new(:disposition_at, DateTime.utc_now())
       )
       |> Repo.update()
+      |> emit(:disposition_recorded, fn updated ->
+        %{"disposition" => updated.disposition, "state" => updated.state}
+      end)
     end
   end
 
@@ -794,6 +859,11 @@ defmodule Platform.Meetings.Candidates do
 
     with {:ok, candidate} <- fetch(candidate_or_id) do
       if candidate.state == :closed do
+        # Idempotent, and deliberately SILENT. A second cancel arriving
+        # after a veto writes nothing, so it must narrate nothing —
+        # emitting here would put a close on the rail that never
+        # happened, and would let a duplicate cancel appear to relabel
+        # the close that did.
         {:ok, candidate}
       else
         candidate
@@ -804,6 +874,14 @@ defmodule Platform.Meetings.Candidates do
           closed_at: DateTime.utc_now()
         })
         |> Repo.update()
+        |> emit(:closed, fn closed ->
+          %{
+            "reason" => closed.closed_reason,
+            "note" => closed.closed_note,
+            "from" => candidate.state,
+            "disposition" => closed.disposition
+          }
+        end)
       end
     end
   end
