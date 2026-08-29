@@ -13,6 +13,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   alias PlatformWeb.ControlCenter.AgentAvatarUpload
   alias PlatformWeb.ControlCenter.RuntimePanel
+  alias PlatformWeb.ControlCenter.VaultEvents
 
   # ── Header ────────────────────────────────────────────────────────
 
@@ -1134,6 +1135,10 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   attr :agent_credentials, :list, required: true
   attr :platform_credentials, :list, required: true
+  attr :all_platform_credentials, :list, default: []
+  attr :fabrikam_admin?, :boolean, default: false
+  attr :show_credential_form, :boolean, default: false
+  attr :credential_form, :map, default: %{}
 
   def vault_panel(assigns) do
     ~H"""
@@ -1178,6 +1183,181 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               No matching platform credentials for this model chain.
             </div>
           </div>
+        </div>
+
+        <%!-- The write surface. Admin-only, and the gate that matters lives in
+              `VaultEvents.admin_only/2` — this `:if` only decides whether a
+              button is drawn. The list below is deliberately UNFILTERED, unlike
+              "Relevant platform credentials" above, which hides anything whose
+              provider is outside this agent's model chain: an admin who has
+              just added an `elevenlabs` key to an Anthropic agent's page needs
+              to see that it landed, not wonder where it went. --%>
+        <div :if={@fabrikam_admin?} class="border-t border-base-300 pt-4" data-role="vault-manage">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              All platform credentials
+            </p>
+            <button
+              type="button"
+              phx-click="toggle_credential_form"
+              data-role="toggle-credential-form"
+              class="btn btn-xs btn-outline"
+            >
+              {if @show_credential_form, do: "Cancel", else: "Add or replace"}
+            </button>
+          </div>
+
+          <div class="mt-2 space-y-2">
+            <RuntimePanel.credential_row
+              :for={credential <- @all_platform_credentials}
+              credential={credential}
+            />
+            <div
+              :if={@all_platform_credentials == []}
+              class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
+            >
+              No platform credentials yet.
+            </div>
+          </div>
+
+          <form
+            :if={@show_credential_form}
+            phx-submit="create_credential"
+            data-role="credential-form"
+            class="mt-4 space-y-3 rounded-2xl border border-base-300 bg-base-200/40 p-4"
+          >
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label
+                  class="text-xs font-semibold uppercase text-base-content/60"
+                  for="credential-slug"
+                >
+                  Slug
+                </label>
+                <input
+                  id="credential-slug"
+                  name="slug"
+                  value={Map.get(@credential_form, "slug", "")}
+                  required
+                  data-role="credential-slug"
+                  class="input input-sm input-bordered w-full font-mono"
+                />
+                <p class="mt-1 text-xs text-base-content/55">
+                  The key agents resolve. An existing slug is replaced, not duplicated.
+                </p>
+              </div>
+
+              <div>
+                <label
+                  class="text-xs font-semibold uppercase text-base-content/60"
+                  for="credential-name"
+                >
+                  Name
+                </label>
+                <input
+                  id="credential-name"
+                  name="name"
+                  value={Map.get(@credential_form, "name", "")}
+                  data-role="credential-name"
+                  class="input input-sm input-bordered w-full"
+                />
+                <p class="mt-1 text-xs text-base-content/55">Optional. Defaults to the slug.</p>
+              </div>
+
+              <div>
+                <label
+                  class="text-xs font-semibold uppercase text-base-content/60"
+                  for="credential-type"
+                >
+                  Type
+                </label>
+                <select
+                  id="credential-type"
+                  name="credential_type"
+                  data-role="credential-type"
+                  class="select select-sm select-bordered w-full"
+                >
+                  <option
+                    :for={type <- VaultEvents.credential_types()}
+                    value={type}
+                    selected={Map.get(@credential_form, "credential_type", "api_key") == type}
+                  >
+                    {type}
+                  </option>
+                </select>
+              </div>
+
+              <div>
+                <label
+                  class="text-xs font-semibold uppercase text-base-content/60"
+                  for="credential-provider"
+                >
+                  Provider
+                </label>
+                <input
+                  id="credential-provider"
+                  name="provider"
+                  value={Map.get(@credential_form, "provider", "")}
+                  data-role="credential-provider"
+                  class="input input-sm input-bordered w-full"
+                />
+                <p class="mt-1 text-xs text-base-content/55">
+                  Optional. Sets which model chains list this above.
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label
+                class="text-xs font-semibold uppercase text-base-content/60"
+                for="credential-secret"
+              >
+                Secret
+              </label>
+              <%!-- No `value`, ever, and no `phx-change` on this form. The
+                    submitted secret is consumed by the write and never enters
+                    socket assigns, so there is nothing here to echo back — see
+                    `VaultEvents`' moduledoc. There is deliberately no reveal
+                    affordance anywhere in this panel: if someone needs the
+                    value, they replace it. --%>
+              <input
+                id="credential-secret"
+                name="secret"
+                type="password"
+                required
+                autocomplete="off"
+                data-role="credential-secret"
+                class="input input-sm input-bordered w-full font-mono"
+              />
+              <p class="mt-1 text-xs text-base-content/55">
+                Write-only. Stored encrypted and never displayed again.
+              </p>
+            </div>
+
+            <div>
+              <label
+                class="text-xs font-semibold uppercase text-base-content/60"
+                for="credential-expires"
+              >
+                Expires
+              </label>
+              <input
+                id="credential-expires"
+                name="expires_at"
+                type="date"
+                value={Map.get(@credential_form, "expires_at", "")}
+                data-role="credential-expires"
+                class="input input-sm input-bordered w-full"
+              />
+              <p class="mt-1 text-xs text-base-content/55">
+                Optional. Surfaces the credential in Platform.Vault.expiring_soon/1.
+              </p>
+            </div>
+
+            <button type="submit" data-role="credential-submit" class="btn btn-sm btn-primary">
+              Save credential
+            </button>
+          </form>
         </div>
       </div>
     </section>

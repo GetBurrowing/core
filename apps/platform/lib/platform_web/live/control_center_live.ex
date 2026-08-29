@@ -24,6 +24,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.OnboardingEvents
   alias PlatformWeb.ControlCenter.RolesPanel
   alias PlatformWeb.ControlCenter.RuntimeEvents
+  alias PlatformWeb.ControlCenter.VaultEvents
   alias PlatformWeb.ControlCenter.WorkspaceEvents
 
   import PlatformWeb.ControlCenter.Helpers
@@ -57,6 +58,9 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:recent_sessions, [])
      |> assign(:agent_credentials, [])
      |> assign(:platform_credentials, [])
+     |> assign(:all_platform_credentials, [])
+     |> assign(:show_credential_form, false)
+     |> assign(:credential_form, VaultEvents.blank_form())
      |> assign(:config_form, to_form(%{}, as: :config))
      |> assign(
        :create_agent_form,
@@ -388,6 +392,18 @@ defmodule PlatformWeb.ControlCenterLive do
   end
 
   def handle_event("cancel_avatar_upload", _params, socket), do: {:noreply, socket}
+
+  # ── Vault write events. Both re-check `@fabrikam_admin?` inside VaultEvents ──
+  #
+  # Delegated rather than inlined for the same reason every other panel's
+  # events are: the gate, the scope decision and the reason the secret never
+  # enters assigns are one argument, and they belong in one file.
+
+  def handle_event("toggle_credential_form", params, socket),
+    do: VaultEvents.handle("toggle_credential_form", params, socket)
+
+  def handle_event("create_credential", params, socket),
+    do: VaultEvents.handle("create_credential", params, socket)
 
   # ── Agent CRUD events (delegated) ────────────────────────────────
 
@@ -739,6 +755,10 @@ defmodule PlatformWeb.ControlCenterLive do
                 <AgentDetail.vault_panel
                   agent_credentials={@agent_credentials}
                   platform_credentials={@platform_credentials}
+                  all_platform_credentials={@all_platform_credentials}
+                  fabrikam_admin?={@fabrikam_admin?}
+                  show_credential_form={@show_credential_form}
+                  credential_form={@credential_form}
                 />
               </div>
             </div>
@@ -840,6 +860,11 @@ defmodule PlatformWeb.ControlCenterLive do
 
     agent_credentials = Platform.Vault.list(scope: {:agent, agent.id})
     platform_credentials = AgentData.relevant_platform_credentials(agent)
+    # Unfiltered, unlike `platform_credentials` above, which drops anything
+    # whose provider is outside this agent's model chain. The admin write
+    # surface needs to show what actually exists in the vault, or a credential
+    # created for a provider this agent does not use reads as a failed write.
+    all_platform_credentials = Platform.Vault.list(scope: {:platform, nil})
     runtime = AgentData.runtime_snapshot(agent)
 
     socket
@@ -870,6 +895,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:recent_sessions, AgentData.list_recent_sessions(agent.id))
     |> assign(:agent_credentials, agent_credentials)
     |> assign(:platform_credentials, platform_credentials)
+    |> assign(:all_platform_credentials, all_platform_credentials)
     |> assign(
       :config_form,
       AgentData.build_config_form(agent, Keyword.get(opts, :config_params, %{}))
