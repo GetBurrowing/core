@@ -11,8 +11,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
          * display name
          * mic indicator (`hero-microphone` /
            `hero-microphone-slash`)
-         * speaking ring + `bg-primary/10` when the participant id is
-           in `:speaking_participant_ids`
          * host badge (`hero-shield-check`) when
            `participant.id == meeting.host_participant_id`
 
@@ -23,7 +21,18 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
          * display name
          * role chip (`agent.metadata["role"]`, fallback `"agent"`) as
            small text below the name
-         * status dot keyed off the agent's `status` field
+         * status dot keyed off THIS MEETING's agent activity, with the
+           global `agents.status` column only as an offline fallback
+           (task 01a04a98)
+
+  The human rows used to carry a server-side speaking ring driven by a
+  speaking-ids assign that NOTHING ever wrote — it was `MapSet.new()`
+  at both of its assignment sites and no handler ever added an id.
+  Task 01a04a98 deleted the assign, this component's attr, and the
+  ring, rather than leave a declared-but-never-written signal
+  rendering. Active-speaker highlight for HUMAN video tiles remains a
+  client-side LiveKit concern (`meeting_client.js`), which is the
+  decided carve-out.
 
   Hero icons only. Tap targets `min-h-11` to keep mobile usable from
   the drawer (stage 4 ships the toggle behavior).
@@ -37,7 +46,11 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   attr(:participants, :list, required: true)
   attr(:agents_by_id, :map, required: true)
   attr(:meeting, :any, required: true)
-  attr(:speaking_participant_ids, :any, required: true)
+
+  attr(:agent_activity, :any,
+    default: nil,
+    doc: "%Platform.Meetings.AgentActivity{} (or a resolved map) for this meeting"
+  )
 
   def participant_rail(assigns) do
     {humans, agents} = MeetingLive.partition_participants(assigns.participants)
@@ -57,14 +70,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             data-participant-id={p.id}
             data-participant-type="user"
             data-host={to_string(MeetingLive.host?(p, @meeting))}
-            data-speaking={to_string(MeetingLive.speaking?(p, @speaking_participant_ids))}
-            class={[
-              "group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm min-h-11 transition-colors",
-              if(MeetingLive.speaking?(p, @speaking_participant_ids),
-                do: "bg-primary/10 ring-1 ring-primary/40",
-                else: "hover:bg-base-300/40"
-              )
-            ]}
+            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm min-h-11 transition-colors hover:bg-base-300/40"
           >
             <.human_avatar
               name={p.display_name || "Unknown participant"}
@@ -175,7 +181,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             <span
               class={[
                 "size-2 flex-shrink-0 rounded-full",
-                MeetingLive.agent_status_dot_class(p, @agents_by_id)
+                MeetingLive.agent_status_dot_class(p, @agents_by_id, @agent_activity)
               ]}
               aria-hidden="true"
               data-role="agent-status-dot"

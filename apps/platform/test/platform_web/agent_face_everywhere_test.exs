@@ -525,7 +525,6 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
         participants={@participants}
         agents_by_id={%{}}
         meeting={nil}
-        speaking_participant_ids={MapSet.new()}
       />
       """)
     end

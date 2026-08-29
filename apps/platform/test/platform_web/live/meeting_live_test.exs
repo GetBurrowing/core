@@ -10814,4 +10814,239 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 0
     end
   end
+
+  # ── Agent tile activity (task 01a04a98) ───────────────────────────────────
+  #
+  # The defect was NOT a wrong state. `<.agent_tile>`'s only non-test call
+  # site passed `activity_state={:idle}` as a LITERAL, so the tile could
+  # render exactly one value — and `agent_tile_test.exs`, which passes the
+  # attribute in directly, was green throughout. Every assertion below
+  # therefore goes through `live(conn, ~p"/meetings/…")` and drives at
+  # least TWO states, asserting they DIFFER.
+
+  # The `{:agent_typing, …}` payload carries a `chat_participants` row id,
+  # NOT an `agents.id`. `seed_meeting_presence/3` seeds live meeting
+  # presence and knows nothing about chat membership, so the bridge's row
+  # has to be seeded separately — which is also the point: two different
+  # UUIDs, both called a participant id.
+  defp seat_agent_in_chat(space, agent_id, display_name) do
+    {:ok, participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "agent",
+        participant_id: agent_id,
+        display_name: display_name,
+        joined_at: DateTime.utc_now()
+      })
+
+    participant
+  end
+
+  defp agent_typing!(space, chat_participant, typing) do
+    :ok =
+      ChatPubSub.broadcast(
+        space.id,
+        {:agent_typing,
+         %{space_id: space.id, participant_id: chat_participant.id, typing: typing}}
+      )
+  end
+
+  # The bottom strip — the tile's only non-test call site — is hidden in
+  # `:gallery`, which is the default stage mode. Switching modes is a pure
+  # `assign(:current_stage_mode, …)` and touches nothing this describe
+  # block asserts on, so it is setup rather than part of any assertion.
+  defp show_bottom_strip(view) do
+    view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+  end
+
+  defp tile_activity(html, agent_id) do
+    html
+    |> frag()
+    |> LazyHTML.query(~s([data-section="agents"] [data-agent="agent:#{agent_id}"]))
+    |> LazyHTML.attribute("data-activity-state")
+  end
+
+  defp rail_dot_class(html, participant_row_id) do
+    html
+    |> frag()
+    |> LazyHTML.query(
+      ~s([data-component="participant-rail"] ) <>
+        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-status-dot"])
+    )
+    |> LazyHTML.attribute("class")
+  end
+
+  describe "agent tile activity — the rendered state actually moves" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "tile-activity", name: "Tile Activity"})
+      {conn, user} = authenticated_conn(conn)
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "ONE agent, TWO activities, and the tile renders two DIFFERENT values",
+         %{conn: conn, meeting: meeting, space: space} do
+      {_presence, agent_id} = seed_meeting_presence(space, "agent", "Solo Agent")
+      chat_participant = seat_agent_in_chat(space, agent_id, "Solo Agent")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = show_bottom_strip(view)
+
+      # Baseline: nothing is happening, and the tile exists to be moved.
+      assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 1
+      assert tile_activity(html, agent_id) == ["idle"]
+
+      # Activity 1 — an intent dispatched to this agent. Driven through the
+      # REAL queue, so this exercises the real shell-topic mirror.
+      {:ok, row} = enqueue_intent(meeting, %{target_agent_id: agent_id})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+      computing_html = render(view)
+      assert tile_activity(computing_html, agent_id) == ["computing"]
+
+      # Activity 2 — the same agent starts typing.
+      agent_typing!(space, chat_participant, true)
+      typing_html = render(view)
+      assert tile_activity(typing_html, agent_id) == ["typing"]
+
+      # THE ASSERTION: three renders of one tile, three different values.
+      # A hardcoded literal — the defect — satisfies none of these but the
+      # first, and the component test that passes `activity_state` in
+      # directly satisfies all of them while the surface is inert.
+      assert Enum.uniq([
+               tile_activity(html, agent_id),
+               tile_activity(computing_html, agent_id),
+               tile_activity(typing_html, agent_id)
+             ]) == [["idle"], ["computing"], ["typing"]]
+
+      # And it comes back down: typing stops, the intent is still in
+      # flight, so the honest answer is `computing` — not `idle`.
+      agent_typing!(space, chat_participant, false)
+      assert tile_activity(render(view), agent_id) == ["computing"]
+
+      {:ok, _} = force_status(meeting, row, :completed)
+      assert tile_activity(render(view), agent_id) == ["idle"]
+    end
+
+    test "TWO agents in ONE meeting render DIFFERENT activities at the same time",
+         %{conn: conn, meeting: meeting, space: space} do
+      {_p1, computing_id} = seed_meeting_presence(space, "agent", "Computer")
+      {_p2, typing_id} = seed_meeting_presence(space, "agent", "Typist")
+      {_p3, idle_id} = seed_meeting_presence(space, "agent", "Bystander")
+      typing_participant = seat_agent_in_chat(space, typing_id, "Typist")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      _ = show_bottom_strip(view)
+
+      {:ok, row} = enqueue_intent(meeting, %{target_agent_id: computing_id})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+      agent_typing!(space, typing_participant, true)
+
+      html = render(view)
+
+      # This is what a single shared assign cannot do, and what a
+      # one-agent test can never catch: three tiles, three answers.
+      assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 3
+      assert tile_activity(html, computing_id) == ["computing"]
+      assert tile_activity(html, typing_id) == ["typing"]
+      assert tile_activity(html, idle_id) == ["idle"]
+
+      # The dot is per-tile too: exactly two of the three are lit.
+      assert count(html, ~s([data-section="agents"] [data-activity-indicator])) == 2
+    end
+
+    test "an agent that is `active` in the GLOBAL agents.status column but idle in THIS meeting renders idle",
+         %{conn: conn, meeting: meeting, space: space} do
+      {presence, agent_id} = seed_meeting_presence(space, "agent", "Globally Busy")
+
+      # POSITIVE CONTROL. `seed_meeting_presence/3` hardcodes
+      # `status: "active"`, so this agent IS globally active — the exact
+      # condition under which the old status dot rendered `bg-success` for
+      # every seated agent in every meeting at once.
+      assert Repo.get(Platform.Agents.Agent, agent_id).status == "active"
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = show_bottom_strip(view)
+
+      assert tile_activity(html, agent_id) == ["idle"]
+      assert count(html, ~s([data-section="agents"] [data-activity-indicator])) == 0
+
+      [idle_dot] = rail_dot_class(html, presence.id)
+      refute idle_dot =~ "bg-success"
+
+      # ANTI-VACUITY. The dot is reachable and this meeting can turn it
+      # green — it just takes activity IN THIS MEETING to do it, which is
+      # the whole distinction. Without this the refute above is equally
+      # satisfied by a dot that is never green.
+      {:ok, row} = enqueue_intent(meeting, %{target_agent_id: agent_id})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+      busy_html = render(view)
+
+      [busy_dot] = rail_dot_class(busy_html, presence.id)
+      assert busy_dot =~ "bg-success"
+      refute idle_dot == busy_dot
+      assert tile_activity(busy_html, agent_id) == ["computing"]
+    end
+
+    test "a socket that mounts AFTER the dispatch hydrates the in-flight state",
+         %{conn: conn, meeting: meeting, space: space} do
+      {_presence, agent_id} = seed_meeting_presence(space, "agent", "Already Working")
+
+      # The signal happens BEFORE anybody is watching. This is the board
+      # ticket's "avatar stuck on thinking" in reverse: a mount that does
+      # not hydrate shows a working agent as idle forever.
+      {:ok, row} = enqueue_intent(meeting, %{target_agent_id: agent_id})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = show_bottom_strip(view)
+
+      assert tile_activity(html, agent_id) == ["computing"]
+
+      # ANTI-VACUITY: hydration read the queue, it did not default to
+      # `computing`. A second, later socket over a COMPLETED row mounts idle.
+      {:ok, _} = force_status(meeting, row, :completed)
+      assert tile_activity(render(view), agent_id) == ["idle"]
+
+      {:ok, view2, _} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert tile_activity(show_bottom_strip(view2), agent_id) == ["idle"]
+    end
+
+    test "a HUMAN typing in the meeting chat lights no agent tile",
+         %{conn: conn, meeting: meeting, space: space} do
+      {_presence, agent_id} = seed_meeting_presence(space, "agent", "Innocent Agent")
+      {human_participant, _message} = seed_message(space, "A Person", "hello")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      _ = show_bottom_strip(view)
+
+      agent_typing!(space, human_participant, true)
+      assert tile_activity(render(view), agent_id) == ["idle"]
+
+      # ANTI-VACUITY: the same broadcast shape from the AGENT's chat
+      # participant does land, so the refutation is about the bridge and
+      # not about a handler that ignores the event entirely.
+      agent_participant = seat_agent_in_chat(space, agent_id, "Innocent Agent")
+      agent_typing!(space, agent_participant, true)
+      assert tile_activity(render(view), agent_id) == ["typing"]
+    end
+
+    test "activity from ANOTHER meeting never reaches this one",
+         %{conn: conn, meeting: meeting, space: space} do
+      {_presence, agent_id} = seed_meeting_presence(space, "agent", "Shared Agent")
+      {other_meeting, _other_space} = create_meeting(%{slug: "tile-activity-other"})
+      on_exit(fn -> IntentQueue.stop(other_meeting.id) end)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      _ = show_bottom_strip(view)
+
+      {:ok, other_row} = enqueue_intent(other_meeting, %{target_agent_id: agent_id})
+      {:ok, _} = force_status(other_meeting, other_row, :dispatched)
+
+      assert tile_activity(render(view), agent_id) == ["idle"]
+
+      # ANTI-VACUITY: the same agent, the same transition, this meeting.
+      {:ok, row} = enqueue_intent(meeting, %{target_agent_id: agent_id})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+      assert tile_activity(render(view), agent_id) == ["computing"]
+    end
+  end
 end

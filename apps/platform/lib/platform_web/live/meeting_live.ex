@@ -237,6 +237,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Meetings.Archive
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
+  alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
@@ -556,7 +557,13 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
     |> assign(:participants, participants)
     |> assign(:agents_by_id, %{})
-    |> assign(:speaking_participant_ids, MapSet.new())
+    # Per-meeting agent activity (task 01a04a98). Hydrated on the GUEST
+    # surface too: the guest holds `meeting:<id>` (see
+    # `enter_guest_topics/2`), which is the topic the activity mirror
+    # publishes on, so a guest's tiles are live from first paint. It is
+    # `@agents_by_id` — the GLOBAL `agents.status` map — that is
+    # deliberately empty here, and activity is now what the tile reads.
+    |> assign(:agent_activity, AgentActivity.hydrate(meeting.id))
     |> assign_meeting_canvases(meeting.chat_space_id)
     |> assign(:canvas_tile_changed?, false)
     |> assign(:current_stage_mode, :gallery)
@@ -872,7 +879,13 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:meeting, meeting)
           |> assign(:participants, participants)
           |> assign(:agents_by_id, agents_by_id)
-          |> assign(:speaking_participant_ids, MapSet.new())
+          # Per-meeting agent activity (task 01a04a98), seeded from the
+          # LIVE intent queue rather than from the tile's old
+          # `activity_state={:idle}` literal. A socket that mounts at
+          # minute 20 has to see the intents that are in flight AT minute
+          # 20 — mounting without hydration is exactly the "avatar stuck
+          # on thinking" failure this replaces, run in reverse.
+          |> assign(:agent_activity, AgentActivity.hydrate(meeting.id))
           |> assign_meeting_canvases(meeting.chat_space_id)
           |> assign(:canvas_tile_changed?, false)
           |> assign(:current_stage_mode, :gallery)
@@ -3523,6 +3536,54 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # ── Per-meeting agent activity (task 01a04a98) ───────────────────────────
+  #
+  # MUST stay ABOVE the catch-all. `{:agent_typing, …}` was already being
+  # delivered to this pid and was already being swallowed here, which is
+  # how the tile came to render a hardcoded `:idle` while a real signal
+  # went past it every reply.
+  #
+  # `{:agent_activity, …}` arrives on the meeting SHELL topic from
+  # `AgentActivity.mirror_intent_row/2` — one publisher per transition,
+  # and the one topic guests hold.
+  def handle_info(
+        {:agent_activity,
+         %{meeting_id: meeting_id, agent_id: agent_id, signal: signal, active?: active?}},
+        socket
+      ) do
+    if activity_for_this_meeting?(socket, meeting_id) do
+      {:noreply,
+       update(socket, :agent_activity, &AgentActivity.put(&1, signal, agent_id, active?))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # `{:agent_typing, …}` rides the meeting's `chat:space:<id>` topic and
+  # carries a `Chat.Participant` id, NOT an `Agents.Agent` id — every
+  # meeting surface keys agents by the latter, so the bridge is what makes
+  # the signal addressable at all. It returns nil for a human participant,
+  # so a person typing in the meeting chat cannot light an agent tile.
+  #
+  # NOT re-broadcast onto the shell topic: every authenticated MeetingLive
+  # already receives this event once, and a rebroadcast from each of them
+  # would fan one keystroke toggle out N×N. The cost is that guests, who
+  # hold no chat-space topic, do not see typing — stated in
+  # `Platform.Meetings.AgentActivity`'s moduledoc rather than papered over.
+  def handle_info(
+        {:agent_typing, %{space_id: space_id, participant_id: participant_id, typing: typing}},
+        socket
+      ) do
+    with true <- meeting_space?(socket, space_id),
+         agent_id when is_binary(agent_id) <-
+           AgentActivity.agent_id_for_chat_participant(participant_id) do
+      {:noreply,
+       update(socket, :agent_activity, &AgentActivity.put(&1, :typing, agent_id, typing == true))}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   # Catch-all: chat-space topic carries many event shapes (messages,
   # reactions, pins, …). The shell only cares about roster + canvas
   # events; ignore the rest so a broadcast can't crash the LV.
@@ -4313,6 +4374,19 @@ defmodule PlatformWeb.MeetingLive do
 
   defp intents_for_this_meeting?(%{assigns: %{meeting: %{id: id}}}, %{meeting_id: id}), do: true
   defp intents_for_this_meeting?(_socket, _row), do: false
+
+  # Both guard the same way the intents bar does: the topic already
+  # scopes delivery, but a socket that has not yet resolved `:meeting`
+  # (the index action, or a guest still on the name-entry card) has no
+  # `:agent_activity` to update and must not KeyError on one.
+  defp activity_for_this_meeting?(%{assigns: %{meeting: %{id: id}}}, id), do: true
+  defp activity_for_this_meeting?(_socket, _meeting_id), do: false
+
+  defp meeting_space?(%{assigns: %{meeting: %{chat_space_id: space_id}}}, space_id)
+       when is_binary(space_id),
+       do: true
+
+  defp meeting_space?(_socket, _space_id), do: false
 
   defp resolve_pending_cancel(socket, event, row) when event in @cancel_resolving_events do
     assign(
@@ -5419,23 +5493,52 @@ defmodule PlatformWeb.MeetingLive do
   def agent_role_chip(_p, _agents_by_id), do: "agent"
 
   @doc """
-  Status-dot tone class for an agent participant. Maps the agent's `status`
-  enum onto a daisyUI tone (success/warning/neutral).
+  Status-dot tone class for an agent participant (task 01a04a98).
+
+  Reads THIS MEETING's activity first. The `agents.status` column is a
+  global, org-wide field — an agent seated in four meetings has one
+  value of it — so it can never answer "is this agent working here",
+  and until this task it was the only thing the dot read. It survives
+  as the OFFLINE fallback and nothing more:
+
+    * doing something in this meeting -> `bg-success`
+    * idle here, but a live agent row -> `bg-warning`
+    * no agent row, or `archived`     -> `bg-base-content/30`
+
+  `bg-success` is now reachable ONLY through the first branch, which is
+  what makes "globally active, idle in this meeting" render honestly.
+  Note the guest surface passes `agents_by_id: %{}` — a computing agent
+  still goes green there, because activity is decided before the map is
+  consulted.
   """
-  @spec agent_status_dot_class(Platform.Chat.Participant.t(), %{binary() => Agent.t()}) ::
-          String.t()
+  @spec agent_status_dot_class(
+          Platform.Chat.Participant.t(),
+          %{binary() => Agent.t()},
+          AgentActivity.t() | %{binary() => atom()} | nil
+        ) :: String.t()
+  def agent_status_dot_class(participant, agents_by_id, activity \\ nil)
+
   def agent_status_dot_class(
         %{participant_type: "agent", participant_id: agent_id},
-        agents_by_id
+        agents_by_id,
+        activity
       ) do
-    case Map.get(agents_by_id, agent_id) do
-      %Agent{status: "active"} -> "bg-success"
-      %Agent{status: status} when status in ["idle", "paused"] -> "bg-warning"
-      _ -> "bg-base-content/30"
+    cond do
+      AgentActivity.for_agent(activity, agent_id) != :idle ->
+        "bg-success"
+
+      match?(
+        %Agent{status: status} when status in ["active", "paused"],
+        Map.get(agents_by_id, agent_id)
+      ) ->
+        "bg-warning"
+
+      true ->
+        "bg-base-content/30"
     end
   end
 
-  def agent_status_dot_class(_p, _agents_by_id), do: "bg-base-content/30"
+  def agent_status_dot_class(_p, _agents_by_id, _activity), do: "bg-base-content/30"
 
   @doc """
   True when this participant is the meeting's host. Safe with `nil`
@@ -5474,12 +5577,23 @@ defmodule PlatformWeb.MeetingLive do
   def mic_on?(_participant), do: false
 
   @doc """
-  True when this participant is currently speaking. Driven by LiveKit
-  speaking-event hooks in later stages; defaults to `false` here.
+  The `activity_state` for an agent participant's bottom-strip tile.
+
+  Replaces the `activity_state={:idle}` LITERAL that was this
+  component's only non-test call site. `participant.participant_id` is
+  the `agents.id` the intent queue targets and the typing bridge
+  resolves to, so the key needs no translation here.
+
+  Human participants resolve `:idle`: `<.agent_tile>` is only rendered
+  for the agent subset, and this returning anything else for a human
+  would mean the strip had been mis-partitioned.
   """
-  @spec speaking?(Platform.Chat.Participant.t(), MapSet.t()) :: boolean()
-  def speaking?(%{id: id}, %MapSet{} = ids), do: MapSet.member?(ids, id)
-  def speaking?(_participant, _ids), do: false
+  @spec agent_activity_state(map(), AgentActivity.t() | %{binary() => atom()} | nil) ::
+          AgentActivity.state()
+  def agent_activity_state(%{participant_type: "agent", participant_id: agent_id}, activity),
+    do: AgentActivity.for_agent(activity, agent_id)
+
+  def agent_activity_state(_participant, _activity), do: :idle
 
   # ── Bottom-strip helpers (task 019e2475-0037) ────────────────────────────
   #

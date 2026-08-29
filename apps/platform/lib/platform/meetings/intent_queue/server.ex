@@ -267,6 +267,7 @@ defmodule Platform.Meetings.IntentQueue.Server do
 
   require Logger
 
+  alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.Candidates
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
 
@@ -1089,6 +1090,16 @@ defmodule Platform.Meetings.IntentQueue.Server do
       |> apply_cursor_effects(updated, status)
 
     broadcast(state.meeting_id, status, updated)
+
+    # Per-meeting agent activity (task 01a04a98). Mirrored HERE, on the
+    # single status write path, so there is exactly one publisher per
+    # transition — and onto the meeting SHELL topic, which guests hold
+    # and `intents_topic/1` is not. `mirror_intent_row/2` decides
+    # in-flight-vs-not from the row it is handed; every status this
+    # function can produce therefore lands, including the terminal ones
+    # that must turn the tile back off.
+    AgentActivity.mirror_intent_row(state.meeting_id, updated)
+
     maybe_emit_correction_hook(state, updated, status)
 
     {{:ok, updated}, updated, state}

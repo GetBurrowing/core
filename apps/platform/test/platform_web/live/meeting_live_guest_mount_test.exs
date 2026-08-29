@@ -33,6 +33,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
 
   alias Platform.Chat
   alias Platform.Meetings
+  alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.Meeting
   alias Platform.Repo
@@ -171,7 +172,12 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
 
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.agents_by_id == %{}
-      assert assigns.speaking_participant_ids == MapSet.new()
+      # `:speaking_participant_ids` was deleted by task 01a04a98 — nothing
+      # ever wrote it, so asserting it stayed `MapSet.new()` asserted only
+      # that a dead assign was still dead. Its replacement is the
+      # per-meeting activity value, which the guest surface DOES hydrate.
+      assert %Platform.Meetings.AgentActivity{} = assigns.agent_activity
+      assert AgentActivity.resolve(assigns.agent_activity) == %{}
       assert assigns.current_stage_mode == :gallery
       assert assigns.active_space.id == meeting.chat_space_id
       assert %Chat.Space{} = assigns.meeting.chat_space

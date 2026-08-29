@@ -840,7 +840,7 @@
               participants={assigns[:participants] || []}
               agents_by_id={assigns[:agents_by_id] || %{}}
               meeting={@meeting}
-              speaking_participant_ids={assigns[:speaking_participant_ids] || MapSet.new()}
+              agent_activity={assigns[:agent_activity]}
             />
           </div>
         </aside>
@@ -1726,7 +1726,7 @@
               }
             }
             role={agent_role(participant)}
-            activity_state={:idle}
+            activity_state={agent_activity_state(participant, assigns[:agent_activity])}
             avatar_url={participant.avatar_url}
           />
         </section>
