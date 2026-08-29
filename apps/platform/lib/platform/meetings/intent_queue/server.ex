@@ -332,6 +332,13 @@ defmodule Platform.Meetings.IntentQueue.Server do
     :room_id,
     :transcript_chunk_id,
     :chunk_excerpt,
+    # Who said it. Carried on the row rather than re-derived downstream
+    # because the only other way to answer it is
+    # `IntentDispatcher.speaker_for/2`, which scans the transcript for a
+    # matching excerpt and admits in its own comment that it exists
+    # solely because "the row has no speaker column" — a lookup that
+    # cannot disambiguate a repeated line. Task 01a03fb9 stage 1.
+    :speaker,
     :classified_intent,
     :confidence,
     :target_role,
@@ -1253,17 +1260,41 @@ defmodule Platform.Meetings.IntentQueue.Server do
   # rescue posture mirrors `IntentCorrections.exemplars_for_meeting/2`:
   # a recording act must degrade, never propagate.
 
+  # Threading's ONE production decision point (task 01a03fb9 stage 4).
+  #
+  # `Candidates.create_or_attach/1` — not `create/1`. It consults
+  # `open_for_meeting/1` and `ThreadResolver.resolve/2` first, and when
+  # this utterance continues an open candidate it accretes onto that row
+  # instead of opening a second one. The attrs below are unchanged
+  # either way: the resolver derives the utterance it judges from
+  # `:speaker`, `:evidence_quote` and `:last_utterance_at`, which are
+  # exactly the three values this row would have recorded, so what gets
+  # compared is by construction what would otherwise have been written.
+  #
+  # The whole decision sits inside the `mirror/1` wrapper's `fun`, not
+  # outside it. Reading the open candidates is a Postgres round trip and
+  # therefore a new way for this hook to fail; a threading query dying
+  # under a checked-in sandbox connection must degrade exactly like the
+  # insert it replaced, never propagate into `do_enqueue/3`.
   defp mirror_enqueue(state, row, outcome_kind) do
     mirror(%{
       meeting_id: state.meeting_id,
       intent_id: row.id,
       fun: fn ->
-        Candidates.create(%{
+        Candidates.create_or_attach(%{
           intent_id: row.id,
           meeting_id: state.meeting_id,
           room_id: uuid_or_nil(row.room_id),
           transcript_chunk_id: uuid_or_nil(row.transcript_chunk_id),
+          # The plural, seeded with this row's chunk. `transcript_chunk_id`
+          # (singular) stays the FIRST chunk forever; this is the list that
+          # accretes, and before this stage production never wrote it at
+          # all — the slot existed and only tests filled it. Seeding it
+          # here is what makes "two utterances landed on one card" a
+          # readable fact rather than an inference from a missing row.
+          transcript_chunk_ids: List.wrap(uuid_or_nil(row.transcript_chunk_id)),
           evidence_quote: row.chunk_excerpt,
+          speaker: speaker_or_nil(row.speaker),
           classified_intent: stringify(row.classified_intent),
           classifier_confidence: row.confidence,
           classifier_model: row.model_used,
@@ -1273,7 +1304,16 @@ defmodule Platform.Meetings.IntentQueue.Server do
           state: :heard,
           queue_status: "queued",
           outcome_kind: outcome_kind || :task,
-          heard_at: row.enqueued_at
+          heard_at: row.enqueued_at,
+          # Equal to `heard_at` at creation and never again: the first
+          # utterance IS the last one until something attaches. It is
+          # also the timestamp the resolver's window gate reads for THIS
+          # utterance, so it is the enqueue time and not `utc_now()` —
+          # the row's own clock and the clock it is judged by have to be
+          # the same one. `Candidates.attach_utterance/2` moves it on
+          # every attachment and leaves `heard_at` alone, which is the
+          # whole reason they are two columns.
+          last_utterance_at: row.enqueued_at
         })
       end
     })
@@ -1382,6 +1422,21 @@ defmodule Platform.Meetings.IntentQueue.Server do
   defp uuid_or_nil(value) do
     if Platform.UUID.valid?(value), do: value
   end
+
+  # `IntentClassifier.segment_speaker/2` answers `""` — not nil — for a
+  # transcript segment with no attribution, and that empty string must
+  # NOT reach the column. Threading's cheap tier asks "same speaker?",
+  # and `"" == ""` would answer yes for two unrelated people who both
+  # happened to be unattributed. nil is the value that cannot match
+  # itself, so unknown is stored as unknown. Task 01a03fb9 stage 1.
+  defp speaker_or_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp speaker_or_nil(_), do: nil
 
   defp stringify(nil), do: nil
   defp stringify(value) when is_binary(value), do: value
@@ -1556,6 +1611,7 @@ defmodule Platform.Meetings.IntentQueue.Server do
       room_id: nil,
       transcript_chunk_id: nil,
       chunk_excerpt: nil,
+      speaker: nil,
       classified_intent: nil,
       confidence: nil,
       target_role: nil,

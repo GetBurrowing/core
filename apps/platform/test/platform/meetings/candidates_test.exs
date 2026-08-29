@@ -87,6 +87,25 @@ defmodule Platform.Meetings.CandidatesTest do
     candidate
   end
 
+  # Rewrites `inserted_at` directly. `create/1` autogenerates the
+  # timestamp, so three rows made in a row land in insertion order and
+  # in UUIDv7 order at once — and an ordering assertion over them would
+  # pass for `desc: c.id`, for `desc: c.inserted_at`, and for anything
+  # else correlated with "I made this one third". Backdating to a
+  # DIFFERENT permutation is what makes the ordering assertion name a
+  # column instead of an accident.
+  defp backdate!(candidate, seconds_ago) do
+    at = DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
+
+    {1, _} =
+      Repo.update_all(
+        from(c in MeetingCandidate, where: c.id == ^candidate.id),
+        set: [inserted_at: at]
+      )
+
+    %{candidate | inserted_at: at}
+  end
+
   # ── create/1 ──────────────────────────────────────────────────────────────
 
   describe "create/1 — org derivation" do
@@ -204,6 +223,147 @@ defmodule Platform.Meetings.CandidatesTest do
                [first.id, second.id, third.id]
 
       assert Candidates.list_for_meeting(nil) == []
+    end
+  end
+
+  # ── open_for_meeting/1 ────────────────────────────────────────────────────
+
+  describe "open_for_meeting/1 — attachment targets for a new utterance" do
+    # Anti-vacuity, stated once for the whole block:
+    #
+    #   * Every "this row is NOT in the result" assertion is paired with
+    #     a positive control proving the row EXISTS and holds the state
+    #     that was supposed to exclude it. Otherwise a `create/1` that
+    #     quietly failed would read as a correct exclusion.
+    #   * `refute open == []` is asserted before anything else, because
+    #     a `fn _ -> [] end` stub satisfies every exclusion check in
+    #     this block and nothing else here would notice.
+
+    test "returns the open states and excludes acting, closed and other meetings" do
+      meeting_id = Platform.Types.UUIDv7.generate()
+      other_meeting_id = Platform.Types.UUIDv7.generate()
+
+      {:ok, heard} = Candidates.create(candidate_attrs(meeting_id, %{evidence_quote: "heard"}))
+
+      {:ok, thinking} =
+        meeting_id
+        |> candidate_attrs(%{evidence_quote: "thinking"})
+        |> Candidates.create()
+        |> then(fn {:ok, c} -> Candidates.advance(c, :thinking) end)
+
+      {:ok, shaping} =
+        meeting_id
+        |> candidate_attrs(%{evidence_quote: "shaping"})
+        |> Candidates.create()
+        |> then(fn {:ok, c} -> Candidates.advance(c, :shaping) end)
+
+      {:ok, acting} =
+        meeting_id
+        |> candidate_attrs(%{evidence_quote: "acting"})
+        |> Candidates.create()
+        |> then(fn {:ok, c} -> Candidates.advance(c, :acting) end)
+
+      {:ok, closed} =
+        meeting_id
+        |> candidate_attrs(%{evidence_quote: "closed"})
+        |> Candidates.create()
+        |> then(fn {:ok, c} -> Candidates.close(c, :vetoed) end)
+
+      {:ok, other} =
+        Candidates.create(candidate_attrs(other_meeting_id, %{evidence_quote: "other meeting"}))
+
+      open = Candidates.open_for_meeting(meeting_id)
+      ids = MapSet.new(open, & &1.id)
+
+      # (a) NON-EMPTY. A stub returning [] passes every refute below.
+      refute open == []
+
+      # Proves it works: :heard and :shaping are returned (:thinking too
+      # — it is an open state and the board renders it).
+      assert heard.id in ids
+      assert thinking.id in ids
+      assert shaping.id in ids
+
+      # Excluded.
+      refute acting.id in ids
+      refute closed.id in ids
+      # (c) a DIFFERENT meeting's candidate.
+      refute other.id in ids
+
+      assert length(open) == 3
+
+      # Positive controls: the three excluded rows exist and hold the
+      # state that excluded them, so "absent from the result" is a
+      # filter doing work rather than a row that was never written.
+      assert length(Candidates.list_for_meeting(meeting_id)) == 5
+      assert Candidates.get(acting.id).state == :acting
+      assert Candidates.get(closed.id).state == :closed
+      assert Candidates.get(other.id).meeting_id == other_meeting_id
+      assert length(Candidates.list_for_meeting(other_meeting_id)) == 1
+    end
+
+    # (b) ORDERING.
+    test "returns newest first, by inserted_at and not by insertion order" do
+      meeting_id = Platform.Types.UUIDv7.generate()
+
+      {:ok, a} = Candidates.create(candidate_attrs(meeting_id, %{evidence_quote: "a"}))
+      {:ok, b} = Candidates.create(candidate_attrs(meeting_id, %{evidence_quote: "b"}))
+      {:ok, c} = Candidates.create(candidate_attrs(meeting_id, %{evidence_quote: "c"}))
+
+      # Deliberately NOT insertion order: newest is the first row made,
+      # oldest is the second. `desc: c.id` over UUIDv7 would answer
+      # [c, b, a] and `asc: c.inserted_at` would answer [b, c, a]; only
+      # `desc: c.inserted_at` answers the expectation below.
+      a = backdate!(a, 30)
+      b = backdate!(b, 90)
+      c = backdate!(c, 60)
+
+      open = Candidates.open_for_meeting(meeting_id)
+
+      refute open == []
+      assert Enum.map(open, & &1.id) == [a.id, c.id, b.id]
+      assert Enum.map(open, & &1.evidence_quote) == ["a", "c", "b"]
+    end
+
+    test "a closed_reason excludes a row whose state alone would not" do
+      # The state filter already drops a genuinely :closed candidate, so
+      # the `is_nil(closed_reason)` clause is only tested by a row that
+      # carries a reason WITHOUT being :closed. The changeset permits
+      # exactly that — only the reverse (:closed without a reason) is
+      # rejected — and this is the row that clause exists for.
+      meeting_id = Platform.Types.UUIDv7.generate()
+
+      {:ok, live} = Candidates.create(candidate_attrs(meeting_id, %{evidence_quote: "live"}))
+
+      {:ok, marked} =
+        Candidates.create(
+          candidate_attrs(meeting_id, %{
+            evidence_quote: "vetoed but not closed",
+            state: :shaping,
+            closed_reason: :vetoed
+          })
+        )
+
+      # Positive control on the fixture itself: this really is a
+      # non-closed row carrying a reason, not a closed one.
+      assert marked.state == :shaping
+      assert marked.closed_reason == :vetoed
+
+      open = Candidates.open_for_meeting(meeting_id)
+
+      refute open == []
+      assert Enum.map(open, & &1.id) == [live.id]
+    end
+
+    test "nil and an unknown meeting return an empty list" do
+      meeting_id = Platform.Types.UUIDv7.generate()
+      {:ok, _} = Candidates.create(candidate_attrs(meeting_id))
+
+      # Positive control: the same call shape DOES return a hit.
+      refute Candidates.open_for_meeting(meeting_id) == []
+
+      assert Candidates.open_for_meeting(nil) == []
+      assert Candidates.open_for_meeting(Platform.Types.UUIDv7.generate()) == []
     end
   end
 

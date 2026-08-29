@@ -62,12 +62,22 @@ defmodule Platform.Meetings.Candidates do
 
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.MeetingCandidate
+  alias Platform.Meetings.ThreadResolver
   alias Platform.Repo
 
   # Lifecycle order. Position in this list — not the atom — is what
   # `advance/3` compares, so inserting a state changes the ordering
   # everywhere at once.
   @order [:heard, :thinking, :shaping, :acting, :closed]
+
+  # The states a new utterance could still attach to: everything before
+  # `:acting`. Derived from `@order` by taking the prefix rather than
+  # written out again, so inserting a state into the lifecycle lands on
+  # the correct side of the open/closed line automatically. `:acting`
+  # is excluded because a runtime is already working the candidate —
+  # accreting more of the transcript onto it would change the brief
+  # under a run that has already read it.
+  @open_states Enum.take_while(@order, &(&1 != :acting))
 
   # First entry into a state stamps its column. `:thinking` and
   # `:closed` are absent on purpose: thinking is a transient the board
@@ -127,6 +137,155 @@ defmodule Platform.Meetings.Candidates do
     |> Repo.insert()
   end
 
+  # ── threading (task 01a03fb9 stage 4) ─────────────────────────────────────
+
+  @doc """
+  Record an utterance: either as a NEW candidate, or by attaching it to
+  the open candidate it continues.
+
+  This is the only place threading happens in production, and it takes
+  the same `attrs` as `create/1` so the caller does not have to describe
+  the utterance twice. The utterance the resolver judges is DERIVED from
+  those attrs — `:speaker`, `:evidence_quote` and `:last_utterance_at`
+  are exactly the three things the row would have recorded — so the
+  thing compared against the open candidates is by construction the same
+  thing that would otherwise have been written.
+
+  The open list is read BEFORE anything is inserted, so the row this
+  utterance would have created is never in the list it is compared
+  against.
+
+  ## Why this lives here and not in the caller
+
+  `Platform.Meetings.IntentQueue.Server` is the only caller today. The
+  decision is here anyway because the write half of it —
+  `attach_utterance/2` — must stay inside this module for the same
+  reason `close/2` is a single function: a candidate's arc is written in
+  exactly one place. Splitting the decision from the write is how a
+  second caller ends up appending to `threading_events` with its own
+  slightly different entry shape.
+
+  ## What an attached utterance does NOT get
+
+  A threaded utterance gets no candidate row of its own, which is the
+  whole point — but it is worth stating what follows from it. The queue
+  still holds a separate intent row for it, and that intent's later
+  transitions (`mirror_transition`, `mirror_ack`) look their candidate
+  up by `intent_id` and find nothing, so they are no-ops. The card's
+  lifecycle continues to follow the intent that CREATED it. The
+  attached intent is not lost — its id is recorded in the
+  `threading_events` entry — but it does not drive state. Giving a
+  second intent authority over a card somebody else's intent created is
+  a bigger decision than this stage, and it is the countdown ticket
+  (`01a03fba-7b07`) that has to make it.
+  """
+  @spec create_or_attach(map()) ::
+          {:ok, MeetingCandidate.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
+  def create_or_attach(attrs) when is_map(attrs) do
+    utterance = %{
+      speaker: Map.get(attrs, :speaker),
+      text: Map.get(attrs, :evidence_quote),
+      at: Map.get(attrs, :last_utterance_at)
+    }
+
+    open = open_for_meeting(fetch_meeting_id(attrs))
+
+    case ThreadResolver.resolve(utterance, open) do
+      {:thread, candidate, reason} ->
+        attach_utterance(candidate, %{
+          transcript_chunk_id: first_chunk_id(attrs),
+          intent_id: Map.get(attrs, :intent_id),
+          at: utterance.at,
+          reason: reason
+        })
+
+      :new ->
+        create(attrs)
+    end
+  end
+
+  @doc """
+  Attach a continuing utterance to an existing candidate.
+
+  Three writes, and each is load-bearing:
+
+    * `transcript_chunk_ids` gains this utterance's chunk. This is THE
+      accretion record and the only durable evidence that two
+      utterances landed on one card — the row count alone cannot tell
+      "the second utterance attached" apart from "the second utterance
+      was never mirrored at all".
+    * `threading_events` gains one entry carrying the resolver's reason
+      map VERBATIM. Not the rule atom: an atom records *that* a rule
+      fired without recording *what it saw*, and attaching to the wrong
+      candidate is only diagnosable afterwards from the score, the
+      shared tokens and how many candidates were open at the time.
+    * `last_utterance_at` moves to the new utterance. `heard_at` is
+      deliberately untouched — that is the whole reason they are two
+      columns (see `Platform.Meetings.MeetingCandidate`).
+
+  `state` is NOT advanced. An utterance attaching to a `:shaping`
+  candidate is more evidence for the same card, not lifecycle
+  progress.
+
+  Forward motion of `last_utterance_at` is guaranteed by the caller:
+  `Platform.Meetings.ThreadResolver`'s window gate only admits an
+  utterance at or after the candidate's current `last_utterance_at`.
+  """
+  @spec attach_utterance(MeetingCandidate.t() | binary(), map()) ::
+          {:ok, MeetingCandidate.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
+  def attach_utterance(candidate_or_id, attrs) when is_map(attrs) do
+    with {:ok, candidate} <- fetch(candidate_or_id) do
+      at = Map.get(attrs, :at) || DateTime.utc_now()
+      chunk_id = Map.get(attrs, :transcript_chunk_id)
+
+      candidate
+      |> MeetingCandidate.changeset(%{
+        transcript_chunk_ids: candidate.transcript_chunk_ids ++ List.wrap(chunk_id),
+        threading_events: candidate.threading_events ++ [threading_event(attrs, at, chunk_id)],
+        last_utterance_at: at
+      })
+      |> Repo.update()
+    end
+  end
+
+  # The column is jsonb, so the entry is built with STRING keys and
+  # JSON-safe values HERE rather than left to Ecto's dump. An atom
+  # written into jsonb comes back a string, so a map built with atom
+  # keys changes shape across a round trip and a reader matching on it
+  # works in memory and fails after a reload.
+  defp threading_event(attrs, at, chunk_id) do
+    %{
+      "reason" => jsonable(Map.get(attrs, :reason)),
+      "at" => DateTime.to_iso8601(at),
+      "intent_id" => Map.get(attrs, :intent_id),
+      "transcript_chunk_id" => chunk_id
+    }
+  end
+
+  defp jsonable(nil), do: nil
+  defp jsonable(true), do: true
+  defp jsonable(false), do: false
+  defp jsonable(value) when is_atom(value), do: Atom.to_string(value)
+  defp jsonable(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp jsonable(value) when is_list(value), do: Enum.map(value, &jsonable/1)
+
+  defp jsonable(%_struct{} = value), do: value
+
+  defp jsonable(%{} = value),
+    do: Map.new(value, fn {key, inner} -> {to_string(key), jsonable(inner)} end)
+
+  defp jsonable(value), do: value
+
+  # The chunk this utterance carried, whichever way the caller named it.
+  # `mirror_enqueue` seeds the plural on the create path, so the plural
+  # is checked first and the singular is the fallback.
+  defp first_chunk_id(attrs) do
+    case Map.get(attrs, :transcript_chunk_ids) do
+      [id | _] -> id
+      _ -> Map.get(attrs, :transcript_chunk_id)
+    end
+  end
+
   # ── reads ─────────────────────────────────────────────────────────────────
 
   @doc """
@@ -167,6 +326,43 @@ defmodule Platform.Meetings.Candidates do
     MeetingCandidate
     |> where([c], c.meeting_id == ^meeting_id)
     |> order_by([c], asc: c.inserted_at, asc: c.id)
+    |> Repo.all()
+  end
+
+  @doc """
+  The candidates a new utterance could still attach to, NEWEST FIRST.
+
+  Two filters, and neither subsumes the other:
+
+    * `state in [:heard, :thinking, :shaping]` — see `@open_states`.
+    * `closed_reason` is nil. A `:closed` candidate is already excluded
+      by the state filter, so this clause exists for the row `close/2`
+      never wrote: `closed_reason` is the durable mark that somebody
+      retracted, vetoed, dismissed or de-duplicated this card, and a row
+      carrying that mark must not be offered as an attachment target
+      whatever its `state` column happens to say. Dropping the clause as
+      "redundant with the state filter" is how a vetoed candidate starts
+      accreting utterances again.
+
+  Descending is the exact inverse of `list_for_meeting/1`, which is
+  ascending because a board is a narrative. This one is not a board:
+  it answers "what is live right now", so the most recent candidate
+  leads. Ordering is by `inserted_at` with `id` (a time-ordered UUIDv7)
+  as the tiebreak — NOT by `last_utterance_at`, which is nil on every
+  row that did not come through `mirror_enqueue` and would sort those
+  rows arbitrarily. A threading rule that wants recency of ACTIVITY
+  reads `last_utterance_at` off the struct itself; this order only has
+  to be total and stable.
+  """
+  @spec open_for_meeting(binary() | nil) :: [MeetingCandidate.t()]
+  def open_for_meeting(nil), do: []
+
+  def open_for_meeting(meeting_id) when is_binary(meeting_id) do
+    MeetingCandidate
+    |> where([c], c.meeting_id == ^meeting_id)
+    |> where([c], c.state in ^@open_states)
+    |> where([c], is_nil(c.closed_reason))
+    |> order_by([c], desc: c.inserted_at, desc: c.id)
     |> Repo.all()
   end
 

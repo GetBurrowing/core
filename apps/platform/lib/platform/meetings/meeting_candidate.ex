@@ -36,6 +36,28 @@ defmodule Platform.Meetings.MeetingCandidate do
   recording act, and a recording that refuses an unrecognised value
   would drop exactly the new status somebody wants to measure.
 
+  ## Threading columns (task 01a03fb9 stage 1)
+
+  `speaker`, `last_utterance_at` and `threading_events` exist so a later
+  stage can decide whether an incoming utterance CONTINUES this candidate
+  or starts a new one. Nothing threads yet; these are the slots.
+
+    * `speaker` — the transcript's attribution for the utterance that
+      created the row. **nil means unattributed**, and that matters: the
+      classifier answers `""` for an unknown speaker, so the mirror
+      normalises `""` to nil on the way in. A same-speaker rule comparing
+      two empty strings would read them as the same person and thread two
+      strangers together; nil is the value that cannot match itself.
+    * `last_utterance_at` — deliberately NOT `heard_at`. `heard_at`
+      stamps first sight and never moves; this one moves every time an
+      utterance attaches, and it is what a time-window rule reads. They
+      start equal at enqueue and diverge from the first attachment on.
+    * `threading_events` — an append-only jsonb array, one entry per
+      threading decision, recording the REASON the rule fired and not
+      merely that it did. Attaching to the wrong candidate is the
+      failure this feature is warned about, and it is only diagnosable
+      afterwards if the reason was written down next to the result.
+
   ## Cross-field rules
 
   1. A `:closed` candidate must carry a `closed_reason`. A closed card
@@ -98,6 +120,11 @@ defmodule Platform.Meetings.MeetingCandidate do
 
     field(:queue_status, :string)
 
+    # Threading (task 01a03fb9 stage 1). See the moduledoc section.
+    field(:speaker, :string)
+    field(:last_utterance_at, :utc_datetime_usec)
+    field(:threading_events, {:array, :map}, default: [])
+
     field(:heard_at, :utc_datetime_usec)
     field(:dispatched_at, :utc_datetime_usec)
     field(:acted_at, :utc_datetime_usec)
@@ -126,7 +153,8 @@ defmodule Platform.Meetings.MeetingCandidate do
                   assigned_agent_id assigned_agent_slug target_role task_id
                   canvas_id closed_reason closed_note closed_at
                   classified_intent classifier_confidence classifier_model
-                  disposition disposition_at queue_status heard_at
+                  disposition disposition_at queue_status speaker
+                  last_utterance_at threading_events heard_at
                   dispatched_at acted_at)a
 
   @required_fields ~w(meeting_id state outcome_kind)a

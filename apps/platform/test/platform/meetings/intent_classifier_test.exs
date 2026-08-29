@@ -27,6 +27,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
   alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
@@ -677,6 +678,449 @@ defmodule Platform.Meetings.IntentClassifierTest do
       # One row per intent — the unique index on `intent_id` is the
       # mirror's idempotence key.
       assert [^candidate] = Candidates.list_for_meeting(meeting_id)
+    end
+
+    # ── Threading columns (task 01a03fb9 stage 1) ───────────────────────────
+    #
+    # Two DIFFERENT speakers in ONE meeting, on purpose. A single-speaker
+    # case asserting `candidate.speaker != nil` is satisfied by a
+    # hardcoded constant, by the room id, by the classifier's own agent
+    # slug — by anything at all that happens to be a non-empty string at
+    # that point in the code. The only assertion that distinguishes "the
+    # actual speaker was recorded" from "something was recorded" is two
+    # rows in the same meeting carrying two different, correct values.
+    test "the mirror records each utterance's ACTUAL speaker, for two speakers in one meeting",
+         %{meeting_id: meeting_id} do
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.88,
+               "evidence_quote" => echo_quote(messages)
+             })
+         }}
+      end)
+
+      room_id = Ecto.UUID.generate()
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
+      alice_text = "the nav bar contrast is too low on mobile"
+      bruno_text = "the checkout button is the wrong shade of green"
+
+      _ =
+        broadcast_chunk(room_id,
+          meeting_id: meeting_id,
+          segment: %{id: Ecto.UUID.generate(), text: alice_text, speaker_name: "alice"}
+        )
+
+      assert_receive {:intent_classified, alice_row}, 1_000
+
+      _ =
+        broadcast_chunk(room_id,
+          meeting_id: meeting_id,
+          segment: %{id: Ecto.UUID.generate(), text: bruno_text, speaker_name: "bruno"}
+        )
+
+      assert_receive {:intent_classified, bruno_row}, 1_000
+
+      alice = Candidates.get_by_intent_id(alice_row.id)
+      bruno = Candidates.get_by_intent_id(bruno_row.id)
+
+      assert alice, "no candidate row for alice's intent #{alice_row.id} — the mirror is silent"
+      assert bruno, "no candidate row for bruno's intent #{bruno_row.id} — the mirror is silent"
+
+      # Correlate by what was SAID, not by arrival order, so a
+      # transposition is a failure rather than an invisible pass.
+      assert alice.evidence_quote == alice_text
+      assert bruno.evidence_quote == bruno_text
+
+      # THE assertion. Two different speakers, two different recorded
+      # values, each matching the segment it came from.
+      assert alice.speaker == "alice"
+      assert bruno.speaker == "bruno"
+      refute alice.speaker == bruno.speaker
+
+      # Both rows are populated — the mirror wrote a real timestamp, not
+      # a nil the column's default would have supplied anyway.
+      assert alice.last_utterance_at
+      assert bruno.last_utterance_at
+
+      # At creation the first utterance IS the last one, and the two
+      # candidates were created seconds apart in order.
+      assert alice.last_utterance_at == alice.heard_at
+      assert DateTime.compare(alice.last_utterance_at, bruno.last_utterance_at) == :lt
+
+      # Nothing has threaded yet — this stage is the slot, not the rule.
+      assert alice.threading_events == []
+      assert bruno.threading_events == []
+
+      # Two rows, not one: this stage must not have started threading.
+      assert length(Candidates.list_for_meeting(meeting_id)) == 2
+    end
+
+    test "an unattributed segment mirrors a nil speaker, not an empty string", %{
+      meeting_id: meeting_id
+    } do
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.88,
+               "evidence_quote" => echo_quote(messages)
+             })
+         }}
+      end)
+
+      room_id = Ecto.UUID.generate()
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
+      # `segment_speaker/2` answers `""` for a segment with no
+      # attribution — the value that must NOT reach the column, because
+      # stage 3's same-speaker rule would read `"" == ""` as one person.
+      _ =
+        broadcast_chunk(room_id,
+          meeting_id: meeting_id,
+          segment: %{
+            id: Ecto.UUID.generate(),
+            # Comfortably past the content gate's five-word short-utterance
+            # rule, so the only thing this case is testing is the speaker.
+            text: "the sidebar padding is inconsistent across the settings pages"
+          }
+        )
+
+      assert_receive {:intent_classified, row}, 1_000
+
+      candidate = Candidates.get_by_intent_id(row.id)
+
+      assert candidate, "no candidate row for intent #{row.id} — the mirror is silent"
+      assert is_nil(candidate.speaker)
+      refute candidate.speaker == ""
+    end
+  end
+
+  # ── Threading (task 01a03fb9 stage 4) ───────────────────────────────────────
+  #
+  # The probe that established this ticket's premise, INVERTED. Baseline
+  # measured on 590a845d (stage 3, before this stage's wiring): two
+  # related utterances from one speaker produced two independent
+  # candidate rows, both carrying `transcript_chunk_ids == []` and
+  # `threading_events == []`. Every test here runs the real production
+  # path — a transcript chunk over PubSub, the classifier, the
+  # per-meeting queue, and `mirror_enqueue` inside the queue's own
+  # GenServer — because the thing this stage changes is a decision made
+  # in that hook and nowhere else.
+  #
+  # THE ASSERTION IS ON THE ACCUMULATED CHUNK IDS, NOT ON THE ROW COUNT.
+  # "One candidate exists" is also true of an implementation that
+  # silently dropped the second utterance's mirror altogether, which is
+  # a strictly worse outcome than the bug being fixed. The chunk id list
+  # is the only evidence that distinguishes "the second utterance
+  # attached here" from "the second utterance went nowhere".
+  describe "threaded utterances accrete onto one candidate" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-threading"})
+      assign_intent_role!(agent)
+
+      target = create_agent!(%{slug: "intent-target-threading"})
+      :ok = Roles.unassign_role("designer")
+      {:ok, _} = Roles.assign_role("designer", target.id)
+
+      meeting_id = unique_meeting_id()
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      %{agent: agent, meeting_id: meeting_id, room_id: Ecto.UUID.generate()}
+    end
+
+    # One utterance in, one classified intent out, and the id of the
+    # queue row it produced. Each call is a SEPARATE classifier turn: the
+    # reply is awaited before the next chunk is broadcast, so the
+    # same-speaker debounce (which merges consecutive fragments of one
+    # turn into a single classification) has already flushed. Without
+    # that sequencing two same-speaker chunks become ONE utterance and
+    # there is nothing left for threading to do — the test would pass on
+    # the debounce and prove nothing about this stage.
+    defp say!(context, speaker, text) do
+      _ =
+        broadcast_chunk(context.room_id,
+          meeting_id: context.meeting_id,
+          segment: %{id: Ecto.UUID.generate(), text: text, speaker_name: speaker}
+        )
+
+      assert_receive {:intent_classified, row}, 2_000
+      assert row.chunk_excerpt == text
+      row
+    end
+
+    defp start_threading_classifier!(meeting_id) do
+      # A short debounce keeps each utterance its own turn without
+      # waiting out the 1.5s default four times over.
+      {pid, _name} = start_classifier!(debounce_ms: 150)
+
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.91,
+               "evidence_quote" => echo_quote(messages)
+             })
+         }}
+      end)
+
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+      pid
+    end
+
+    # Every utterance below has to be one the classifier would actually
+    # forward. Its content gate drops utterances of five words or fewer
+    # with no action verb, and a scenario built from a chunk that fails
+    # the gate exercises a path production never reaches: green and
+    # meaningless. Asserted here rather than assumed, with a positive
+    # control proving the gate can answer false.
+    @dashboard "we should make the dashboard load faster"
+    @follow_up "make that mobile only"
+    @unrelated "can someone book the offsite room"
+    @release "we should move the release date to the fifteenth"
+    @release_follow_up "the release date needs to slip a week"
+
+    test "every scenario utterance clears the classifier's content gate" do
+      for text <- [@dashboard, @follow_up, @unrelated, @release, @release_follow_up] do
+        assert IntentClassifier.content_bearing?(text),
+               "#{inspect(text)} does not clear the content gate, so the classifier " <>
+                 "never runs on it and any scenario built from it is vacuous"
+      end
+
+      # POSITIVE CONTROL on the gate itself: it is capable of answering
+      # false, so the five assertions above are not trivially true.
+      refute IntentClassifier.content_bearing?("yeah")
+    end
+
+    test "PROVES IT WORKS: two related utterances from one speaker yield ONE candidate carrying TWO chunk ids",
+         context do
+      _pid = start_threading_classifier!(context.meeting_id)
+
+      first = say!(context, "alice", @dashboard)
+      second = say!(context, "alice", @follow_up)
+
+      # The queue still holds TWO intents. Threading is a decision about
+      # the durable candidate mirror, not about the queue — if the queue
+      # had collapsed to one row this test would be measuring the
+      # dedupe index instead.
+      assert length(IntentQueue.list(context.meeting_id)) == 2
+      refute first.id == second.id
+
+      candidates = Candidates.list_for_meeting(context.meeting_id)
+
+      assert [candidate] = candidates,
+             "expected ONE candidate after a threaded follow-up, got #{length(candidates)}"
+
+      # THE assertion. Two chunk ids on one row. A "no duplicate
+      # candidates" check alone is satisfied by an implementation that
+      # simply never mirrored the second utterance.
+      assert length(candidate.transcript_chunk_ids) == 2
+
+      assert candidate.transcript_chunk_ids == [
+               first.transcript_chunk_id,
+               second.transcript_chunk_id
+             ]
+
+      # The singular column is the FIRST chunk and does not move.
+      assert candidate.transcript_chunk_id == first.transcript_chunk_id
+
+      # The candidate is the one the FIRST utterance opened, not a row
+      # the second utterance created and backfilled.
+      assert candidate.intent_id == first.id
+      assert candidate.evidence_quote == @dashboard
+
+      # ONE threading event, and the REASON asserted BY VALUE. The
+      # resolver returns a map on purpose: an atom would record THAT a
+      # rule fired without recording what it saw, and a wrong
+      # attachment is only diagnosable afterwards from what it saw.
+      assert [event] = candidate.threading_events
+
+      assert event["reason"]["rule"] == "anaphoric_fragment"
+      assert event["reason"]["deictic"] == "that"
+      assert event["reason"]["token_count"] == 4
+      assert event["reason"]["open_candidates_in_window"] == 1
+      assert event["transcript_chunk_id"] == second.transcript_chunk_id
+
+      # The attached intent is not lost even though it has no row of its
+      # own — its id is in the event, which is the only place it is
+      # recoverable from.
+      assert event["intent_id"] == second.id
+      refute Candidates.get_by_intent_id(second.id)
+
+      # `last_utterance_at` moved and `heard_at` did not. The two
+      # utterances are at least a debounce apart, so this is a real
+      # ordering assertion and not two reads of the same instant.
+      assert DateTime.compare(candidate.last_utterance_at, candidate.heard_at) == :gt
+      assert candidate.heard_at == first.enqueued_at
+      assert candidate.last_utterance_at == second.enqueued_at
+
+      # Attaching is not lifecycle progress.
+      assert candidate.state == :heard
+    end
+
+    test "CATCHES THE VACUOUS VERSION: an unrelated utterance from the SAME speaker inside the window yields TWO candidates",
+         context do
+      _pid = start_threading_classifier!(context.meeting_id)
+
+      first = say!(context, "alice", @dashboard)
+      second = say!(context, "alice", @unrelated)
+
+      candidates = Candidates.list_for_meeting(context.meeting_id)
+
+      assert length(candidates) == 2,
+             "same speaker and inside the window must NOT be enough to thread — this is " <>
+               "the assertion that fails if the resolver was written as 'attach to the " <>
+               "most recent open candidate'"
+
+      dashboard = Candidates.get_by_intent_id(first.id)
+      offsite = Candidates.get_by_intent_id(second.id)
+
+      assert dashboard, "the first utterance produced no candidate"
+      assert offsite, "the second utterance produced no candidate"
+
+      # One chunk each, not two on one row and none on the other.
+      assert dashboard.transcript_chunk_ids == [first.transcript_chunk_id]
+      assert offsite.transcript_chunk_ids == [second.transcript_chunk_id]
+
+      assert dashboard.threading_events == []
+      assert offsite.threading_events == []
+
+      # POSITIVE CONTROLS that this :new was the relatedness floor and
+      # not a broken scenario: the speaker gate and the time gate were
+      # both satisfied.
+      assert dashboard.speaker == "alice"
+      assert offsite.speaker == "alice"
+      assert DateTime.diff(second.enqueued_at, first.enqueued_at, :second) <= 60
+      assert dashboard.last_utterance_at == dashboard.heard_at
+    end
+
+    test "CATCHES THE VACUOUS VERSION: the same follow-up from a DIFFERENT speaker yields TWO candidates",
+         context do
+      _pid = start_threading_classifier!(context.meeting_id)
+
+      first = say!(context, "alice", @dashboard)
+      second = say!(context, "bruno", @follow_up)
+
+      assert length(Candidates.list_for_meeting(context.meeting_id)) == 2
+
+      dashboard = Candidates.get_by_intent_id(first.id)
+      bruno = Candidates.get_by_intent_id(second.id)
+
+      assert dashboard.transcript_chunk_ids == [first.transcript_chunk_id]
+      assert bruno.transcript_chunk_ids == [second.transcript_chunk_id]
+      assert dashboard.threading_events == []
+
+      # The word-for-word same follow-up threads when alice says it —
+      # asserted in the proves-it-works test above — so the only thing
+      # that changed here is who said it.
+      assert dashboard.speaker == "alice"
+      assert bruno.speaker == "bruno"
+      assert dashboard.last_utterance_at == dashboard.heard_at
+    end
+
+    test "with TWO open candidates the follow-up attaches to the RIGHT one and leaves the other untouched",
+         context do
+      _pid = start_threading_classifier!(context.meeting_id)
+
+      # ORDER IS LOAD-BEARING. The release ask is said FIRST and the
+      # dashboard ask second, so the candidate the follow-up must attach
+      # to is the OLDER one — and `open_for_meeting/1` hands the
+      # resolver its list NEWEST FIRST. Said the other way round the
+      # right answer would also be the head of the list, and an
+      # implementation that ignored the resolver and reached for
+      # `hd(open)` would pass. Measured: it does. Written in the
+      # convenient order this test went green against exactly that
+      # mutant.
+      release_intent = say!(context, "alice", @release)
+      dashboard_intent = say!(context, "alice", @dashboard)
+
+      # Two independent candidates before the follow-up: the dashboard
+      # ask is unrelated to the release ask, so it opened its own row.
+      assert length(Candidates.list_for_meeting(context.meeting_id)) == 2
+
+      dashboard_before = Candidates.get_by_intent_id(dashboard_intent.id)
+      assert dashboard_before.transcript_chunk_ids == [dashboard_intent.transcript_chunk_id]
+
+      # THE PIN that makes this test discriminating: the WRONG candidate
+      # is the head of the list the resolver is given. Asserted rather
+      # than assumed, because it is a property of `open_for_meeting/1`'s
+      # ordering and a change there would silently make this whole test
+      # vacuous again.
+      open = Candidates.open_for_meeting(context.meeting_id)
+      assert hd(open).id == dashboard_before.id
+
+      follow_up_intent = say!(context, "alice", @release_follow_up)
+
+      assert length(Candidates.list_for_meeting(context.meeting_id)) == 2
+
+      release = Candidates.get_by_intent_id(release_intent.id)
+
+      # It attached to the release candidate — the one the resolver
+      # chose, NOT the one at the head of the list.
+      assert release.transcript_chunk_ids == [
+               release_intent.transcript_chunk_id,
+               follow_up_intent.transcript_chunk_id
+             ]
+
+      refute release.id == dashboard_before.id
+
+      assert [event] = release.threading_events
+
+      # A DIFFERENT rule than the proves-it-works case, asserted by
+      # value. A hardcoded event — or one that recorded only the fact of
+      # an attachment — passes that test and fails this one.
+      assert event["reason"]["rule"] == "topic_overlap"
+      assert event["reason"]["shared"] == ["date", "release"]
+      assert event["reason"]["open_candidates_in_window"] == 2
+      assert event["reason"]["score"] == 0.6667
+
+      # THE INVISIBLE FAILURE. Attaching to the wrong candidate silently
+      # moves the wrong card's clock, so the untouched half is asserted
+      # explicitly, READ BACK FROM THE DATABASE rather than from the
+      # struct captured before the follow-up.
+      dashboard_after = Repo.get!(MeetingCandidate, dashboard_before.id)
+
+      assert dashboard_after.transcript_chunk_ids == [dashboard_intent.transcript_chunk_id]
+      assert dashboard_after.threading_events == []
+      assert dashboard_after.last_utterance_at == dashboard_before.last_utterance_at
+      assert dashboard_after.last_utterance_at == dashboard_after.heard_at
+      assert dashboard_after.evidence_quote == @dashboard
+    end
+
+    test "a nil speaker never threads, even onto another unattributed candidate", context do
+      _pid = start_threading_classifier!(context.meeting_id)
+
+      # `segment_speaker/2` answers "" for a segment with no
+      # attribution and stage 1 stores that as nil, precisely so two
+      # unattributed strangers cannot read as one person continuing.
+      first = say!(context, nil, @dashboard)
+      second = say!(context, nil, @follow_up)
+
+      dashboard = Candidates.get_by_intent_id(first.id)
+      follow_up = Candidates.get_by_intent_id(second.id)
+
+      assert is_nil(dashboard.speaker)
+      assert is_nil(follow_up.speaker)
+
+      assert length(Candidates.list_for_meeting(context.meeting_id)) == 2
+      assert dashboard.transcript_chunk_ids == [first.transcript_chunk_id]
+      assert follow_up.transcript_chunk_ids == [second.transcript_chunk_id]
+      assert dashboard.threading_events == []
     end
   end
 

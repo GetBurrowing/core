@@ -876,7 +876,12 @@ defmodule Platform.Meetings.IntentClassifier do
             target_role: target_role,
             confidence: confidence,
             chunk_id: chunk_id,
-            chunk_text: chunk_text
+            chunk_text: chunk_text,
+            # SAME call the prompt renders `{{speaker}}` from, a few
+            # lines up — one derivation, so the attribution the model
+            # was shown is the attribution the row records. Task
+            # 01a03fb9 stage 1.
+            speaker: segment_speaker(segment, payload)
           })
 
         :telemetry.execute(
@@ -995,7 +1000,8 @@ defmodule Platform.Meetings.IntentClassifier do
         target_agent_slug: agent_slug,
         confidence: args.confidence,
         transcript_chunk_id: args.chunk_id,
-        chunk_excerpt: excerpt(args.chunk_text)
+        chunk_excerpt: excerpt(args.chunk_text),
+        speaker: args.speaker
       })
 
     case result do

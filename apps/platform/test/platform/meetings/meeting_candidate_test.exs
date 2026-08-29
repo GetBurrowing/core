@@ -263,4 +263,73 @@ defmodule Platform.Meetings.MeetingCandidateTest do
       assert {:ok, _} = Repo.insert(changeset(%{intent_id: nil}))
     end
   end
+
+  # ── Threading columns (task 01a03fb9 stage 1) ─────────────────────────────
+  #
+  # A `{:array, :map}` schema field over a `:map` (jsonb) COLUMN is the
+  # pairing `tasks.dependencies` uses, and it is the kind of thing that
+  # compiles cleanly and then fails at dump time — so the round trip is
+  # asserted through `Repo`, not through the struct held in memory.
+  describe "persistence — threading columns" do
+    test "threading_events defaults to an empty list and round-trips a populated log" do
+      {:ok, bare} = Repo.insert(changeset())
+
+      # The default is the DB's, read back — not the struct's.
+      assert Repo.get!(MeetingCandidate, bare.id).threading_events == []
+
+      events = [
+        %{"reason" => "same_speaker_within_window", "at" => "2026-08-28T21:00:00Z"},
+        %{"reason" => "same_speaker_within_window", "at" => "2026-08-28T21:00:08Z"}
+      ]
+
+      {:ok, logged} = Repo.insert(changeset(%{threading_events: events}))
+
+      reloaded = Repo.get!(MeetingCandidate, logged.id)
+
+      # By VALUE, not merely non-empty: an append that dropped the reason
+      # would satisfy `length == 2` and lose the only thing that makes a
+      # wrong attachment diagnosable afterwards.
+      assert reloaded.threading_events == events
+
+      assert Enum.map(reloaded.threading_events, & &1["reason"]) == [
+               "same_speaker_within_window",
+               "same_speaker_within_window"
+             ]
+    end
+
+    test "speaker and last_utterance_at round-trip, and last_utterance_at is not heard_at" do
+      heard_at = ~U[2026-08-28 21:00:00.000000Z]
+      last_utterance_at = ~U[2026-08-28 21:00:08.000000Z]
+
+      {:ok, row} =
+        Repo.insert(
+          changeset(%{
+            speaker: "alice",
+            heard_at: heard_at,
+            last_utterance_at: last_utterance_at
+          })
+        )
+
+      reloaded = Repo.get!(MeetingCandidate, row.id)
+
+      assert reloaded.speaker == "alice"
+      assert reloaded.last_utterance_at == last_utterance_at
+
+      # The two timestamps are independently writable. If a later change
+      # ever collapses them into one column, this is the assertion that
+      # notices — a time-window rule reading `heard_at` would call a
+      # candidate that has been accreting for a minute a minute stale.
+      assert reloaded.heard_at == heard_at
+      refute reloaded.heard_at == reloaded.last_utterance_at
+    end
+
+    test "an unattributed candidate carries a nil speaker, never an empty string" do
+      # nil is the value that cannot match itself. Two unattributed
+      # utterances stored as "" would read as the same person to the
+      # same-speaker rule stage 3 adds.
+      {:ok, row} = Repo.insert(changeset())
+
+      assert is_nil(Repo.get!(MeetingCandidate, row.id).speaker)
+    end
+  end
 end
