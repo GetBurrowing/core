@@ -3,7 +3,14 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
   Stage 2 unit tests for the <.agent_tile> component.
 
   Task: 019e2475-0037 — Meetings: bottom video strip (humans + agent presence tiles).
-  Spec: docs/decisions/0042-meeting-system-with-collaborative-canvas.md (Layout → Bottom strip).
+  Meeting system: docs/decisions/0030-meetings-livekit-voice-video.md.
+
+  The bottom-strip layout itself is NOT specified in any ADR. A grep for
+  "bottom strip" across docs/ returns nothing -- the phrase lives only in
+  code. This module and its tests ARE the specification. The citation this
+  line previously carried named a file that has never existed in the repo,
+  and 0042 is a duplicated ADR number besides (01a04a5e-c28f), so it was
+  ambiguous as well as dangling.
 
   Verifies the rendered DOM contract: avatar centered on accent-color background
   (or bg-base-200 fallback), activity dot toggles based on activity_state,

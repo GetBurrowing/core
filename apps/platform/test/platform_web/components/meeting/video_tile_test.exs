@@ -6,7 +6,14 @@ defmodule PlatformWeb.Components.Meeting.VideoTileTest do
   into task 019e2474-bc7c (stage 3) alongside the component itself; the stack
   rollup will reconcile.
 
-  Spec: docs/decisions/0042-meeting-system-with-collaborative-canvas.md (Layout → Bottom strip).
+  Meeting system: docs/decisions/0030-meetings-livekit-voice-video.md.
+
+  The bottom-strip layout itself is NOT specified in any ADR. A grep for
+  "bottom strip" across docs/ returns nothing -- the phrase lives only in
+  code. This module and its tests ARE the specification. The citation this
+  line previously carried named a file that has never existed in the repo,
+  and 0042 is a duplicated ADR number besides (01a04a5e-c28f), so it was
+  ambiguous as well as dangling.
 
   Verifies the rendered DOM contract: video slot vs avatar fallback based on
   video_track presence, mute overlay toggling on audio_muted?, active-speaker

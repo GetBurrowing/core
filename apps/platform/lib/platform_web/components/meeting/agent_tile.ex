@@ -3,7 +3,14 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
   A single agent presence tile for a meeting bottom strip.
 
   Task: 019e2475-0037 — Meetings: bottom video strip (humans + agent presence tiles).
-  Spec: docs/decisions/0042-meeting-system-with-collaborative-canvas.md (Layout → Bottom strip).
+  Meeting system: docs/decisions/0030-meetings-livekit-voice-video.md.
+
+  The bottom-strip layout itself is NOT specified in any ADR. A grep for
+  "bottom strip" across docs/ returns nothing -- the phrase lives only in
+  code. This module and its tests ARE the specification. The citation this
+  line previously carried named a file that has never existed in the repo,
+  and 0042 is a duplicated ADR number besides (01a04a5e-c28f), so it was
+  ambiguous as well as dangling.
 
   Agents do not publish video tracks, so the tile is a presentation-only avatar
   card sized identically to `<.video_tile>` (16:9, full-height of the strip)

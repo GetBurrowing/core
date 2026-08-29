@@ -8,7 +8,14 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   renderer can reuse it without depending on an unmerged sibling branch. The
   stack rollup will reconcile this duplicate.
 
-  Spec: docs/decisions/0042-meeting-system-with-collaborative-canvas.md (Layout → Bottom strip).
+  Meeting system: docs/decisions/0030-meetings-livekit-voice-video.md.
+
+  The bottom-strip layout itself is NOT specified in any ADR. A grep for
+  "bottom strip" across docs/ returns nothing -- the phrase lives only in
+  code. This module and its tests ARE the specification. The citation this
+  line previously carried named a file that has never existed in the repo,
+  and 0042 is a duplicated ADR number besides (01a04a5e-c28f), so it was
+  ambiguous as well as dangling.
 
   Renders one human participant's video feed. The actual LiveKit `MediaStreamTrack`
   is attached client-side: the `MeetingVideoTile` JS hook (mirroring the tile
