@@ -47,6 +47,22 @@ defmodule Platform.Meetings.ThreadResolverTest do
     }
   end
 
+  # A second dashboard-free candidate, carrying `need` and `move`, so
+  # the polarity pairs are not all built on the single verb `make`. A
+  # polarity check that happened to key on `make` would pass a
+  # make-only table.
+  defp c2b do
+    %MeetingCandidate{
+      id: "44444444-4444-7444-8444-444444444444",
+      speaker: "alice",
+      evidence_quote: "we need to move the release date",
+      last_utterance_at: @t0
+    }
+  end
+
+  defp candidate(:c1), do: c1()
+  defp candidate(:c2b), do: c2b()
+
   defp at(seconds), do: DateTime.add(@t0, seconds, :second)
 
   defp utterance(speaker, text, seconds), do: %{speaker: speaker, text: text, at: at(seconds)}
@@ -61,6 +77,43 @@ defmodule Platform.Meetings.ThreadResolverTest do
   # satisfied, and relatedness was not consulted on that path at all.
   @unrelated_fragments ["let's cancel that meeting", "assign that to bruno"]
 
+  # Negation / affirmative pairs, and the candidate each was measured
+  # against. Each pair differs ONLY by the negation particle — same
+  # verb, same deictic, same shared lexical token, same 0.0 topic
+  # relatedness — so a pair that behaves differently can only be
+  # behaving differently because of the polarity. MEASURED 2026-08-28:
+  # before the polarity check every LEFT-hand string threaded.
+  #
+  # `{negation, affirmative twin, candidate}`.
+  @polarity_pairs [
+    {"don't make that", "make that", :c1},
+    {"dont make that", "make that", :c1},
+    {"do not make that", "do make that", :c1},
+    {"actually don't make that", "actually do make that", :c1},
+    {"can't make that", "can make that", :c1},
+    {"won't make that", "will make that", :c1},
+    {"we don't need that", "we do need that", :c2b},
+    {"doesn't need that", "does need that", :c2b},
+    {"let's not move that", "let's move that", :c2b},
+    {"never move that", "always move that", :c2b}
+  ]
+
+  # Fragments carrying a word the ticket SUGGESTED as a marker and that
+  # measurement rejected — `stop`, `cancel`, `no`. Every one of these
+  # threads today and must keep threading; each is a refinement, not a
+  # retraction.
+  @rejected_marker_fragments [
+    "make that stop at five",
+    "make that cancel button bigger",
+    "no make that mobile only",
+    "no, make that friday instead"
+  ]
+
+  # The measured cost of the polarity check: a refinement that negates
+  # an ATTRIBUTE rather than the act. Asserted so the trade is recorded
+  # rather than discovered later.
+  @accepted_polarity_costs ["make that not bold", "make that never expire"]
+
   describe "reachability — the scenarios are things the classifier would actually see" do
     test "every utterance in this suite clears the classifier's content gate" do
       # If any of these were false the classifier would never run on the
@@ -73,7 +126,11 @@ defmodule Platform.Meetings.ThreadResolverTest do
               @follow_up,
               @unrelated,
               @release_follow_up
-            ] ++ @unrelated_fragments do
+            ] ++
+              @unrelated_fragments ++
+              @rejected_marker_fragments ++
+              @accepted_polarity_costs ++
+              Enum.flat_map(@polarity_pairs, fn {negation, twin, _} -> [negation, twin] end) do
         assert IntentClassifier.content_bearing?(text),
                "#{inspect(text)} does not clear the content gate, so the classifier never runs on it"
       end
@@ -268,6 +325,201 @@ defmodule Platform.Meetings.ThreadResolverTest do
       # speaker KNOWN on both sides threads. The four :new answers above
       # are the nil rule, not a scenario that never threads.
       assert {:thread, _, _} = ThreadResolver.resolve(utterance("alice", @follow_up, 8), [c1()])
+    end
+  end
+
+  describe "resolve/2 — a negation does not thread onto what it negates" do
+    # The defect this block exists for, reproduced before it was fixed:
+    # the shared-token floor asks "is this about the same thing?", and a
+    # negation IS about the same thing. `"don't make that"` cleared the
+    # floor on the antecedent's own verb and threaded, so the retraction
+    # was absorbed into the card it was retracting — and moved that
+    # card's `last_utterance_at` forward while it was there.
+
+    test "PROVES IT WORKS — \"don't make that\" does not thread onto the dashboard candidate" do
+      negation = "don't make that"
+
+      # Every other gate is OPEN, stated by value. This is what makes
+      # the :new below the polarity check and nothing else:
+      assert ThreadResolver.shared_lexical(negation, c1().evidence_quote) == ["make"]
+
+      assert length(ThreadResolver.shared_lexical(negation, c1().evidence_quote)) >=
+               ThreadResolver.anaphoric_shared_floor()
+
+      assert length(String.split(negation)) <= 6
+      assert "that" in String.split(negation)
+      assert IntentClassifier.content_bearing?(negation)
+
+      assert ThreadResolver.resolve(utterance("alice", negation, 8), [c1()]) == :new
+
+      # POSITIVE CONTROL — the same fragment with the particle deleted.
+      # Identical verb, identical deictic, identical shared token,
+      # identical topic relatedness, same speaker, same instant, same
+      # single candidate. It threads. The ONLY difference between the
+      # two calls is `don't`.
+      twin = "make that"
+      assert ThreadResolver.shared_lexical(twin, c1().evidence_quote) == ["make"]
+
+      assert ThreadResolver.relatedness(twin, c1().evidence_quote) ==
+               ThreadResolver.relatedness(negation, c1().evidence_quote)
+
+      assert {:thread, threaded, %{rule: :anaphoric_fragment, shared: ["make"]}} =
+               ThreadResolver.resolve(utterance("alice", twin, 8), [c1()])
+
+      assert threaded.id == c1().id
+    end
+
+    test "the whole negation table refuses, and every affirmative twin threads" do
+      for {negation, twin, key} <- @polarity_pairs do
+        candidate = candidate(key)
+        shared = ThreadResolver.shared_lexical(negation, candidate.evidence_quote)
+
+        # Load-bearing: the negation must have had EVIDENCE to attach
+        # on. A negation that shares nothing would answer :new anyway
+        # and would prove nothing about polarity.
+        assert shared != [],
+               "#{inspect(negation)} shares nothing with its candidate, so its :new is the " <>
+                 "shared-token floor and this row proves nothing about polarity"
+
+        assert ThreadResolver.shared_lexical(twin, candidate.evidence_quote) == shared,
+               "#{inspect(negation)} and its twin #{inspect(twin)} do not share the same " <>
+                 "tokens, so they differ by more than the negation"
+
+        assert ThreadResolver.negated?(negation)
+        refute ThreadResolver.negated?(twin)
+
+        assert ThreadResolver.resolve(utterance("alice", negation, 8), [candidate]) == :new,
+               "#{inspect(negation)} threaded onto #{inspect(candidate.evidence_quote)}"
+
+        assert {:thread, _, %{rule: :anaphoric_fragment}} =
+                 ThreadResolver.resolve(utterance("alice", twin, 8), [candidate])
+      end
+
+      # Structural range, so the table cannot be trimmed to one verb or
+      # one candidate and stay green. A polarity check that accidentally
+      # keyed on `make`, or on `c1`, would pass a table without this.
+      verbs = Enum.map(@polarity_pairs, fn {_, twin, _} -> twin end)
+      assert Enum.any?(verbs, &String.contains?(&1, "make"))
+      assert Enum.any?(verbs, &String.contains?(&1, "need"))
+      assert Enum.any?(verbs, &String.contains?(&1, "move"))
+      assert @polarity_pairs |> Enum.map(&elem(&1, 2)) |> Enum.uniq() |> length() == 2
+      assert length(@polarity_pairs) >= 8
+    end
+
+    test "CONTROL — the earlier shared-token fix is not regressed, and not shadowed" do
+      # `"let's cancel that meeting"` must still answer :new. But it
+      # contains `cancel`, which the ticket SUGGESTED as a marker — so
+      # asserting only that it does not thread cannot tell the two
+      # reasons apart. It must fail for the ORIGINAL reason.
+      fragment = "let's cancel that meeting"
+
+      assert ThreadResolver.shared_lexical(fragment, c1().evidence_quote) == [],
+             "the original reason this does not thread is that it shares nothing"
+
+      refute ThreadResolver.negated?(fragment),
+             "`cancel` must NOT be a negation marker, or this fragment stops testing the " <>
+               "shared-token floor and starts testing the polarity check instead"
+
+      assert ThreadResolver.resolve(utterance("alice", fragment, 8), [c1()]) == :new
+
+      # And the other one from that fix, same argument.
+      assert ThreadResolver.shared_lexical("assign that to bruno", c1().evidence_quote) == []
+      refute ThreadResolver.negated?("assign that to bruno")
+      assert ThreadResolver.resolve(utterance("alice", "assign that to bruno", 8), [c1()]) == :new
+    end
+
+    test "CONTROL — the proves-it-works case still threads on the same shared token" do
+      # The vacuous fix this catches: keying on the shared verb rather
+      # than on the negation. `"make that mobile only"` shares exactly
+      # `["make"]` with the candidate — the SAME token `"don't make
+      # that"` shares — so any rule that refuses on the verb kills the
+      # one case the anaphoric path exists for.
+      assert ThreadResolver.shared_lexical(@follow_up, c1().evidence_quote) == ["make"]
+
+      assert ThreadResolver.shared_lexical("don't make that", c1().evidence_quote) ==
+               ThreadResolver.shared_lexical(@follow_up, c1().evidence_quote)
+
+      assert {:thread, threaded, %{rule: :anaphoric_fragment, shared: ["make"]}} =
+               ThreadResolver.resolve(utterance("alice", @follow_up, 8), [c1()])
+
+      assert threaded.id == c1().id
+    end
+
+    test "the markers are a closed grammatical class, not a list of retraction verbs" do
+      markers = ThreadResolver.negation_markers()
+
+      # Present: the particle and its contractions, in both spellings
+      # the tokenizer can produce from ASR output.
+      for marker <- ~w(not never don't dont doesn't doesnt can't cant won't wont) do
+        assert MapSet.member?(markers, marker), "#{marker} is not a negation marker"
+      end
+
+      # ABSENT, each for a measured reason recorded in the moduledoc.
+      # `cancel` and `stop` are verbs whose polarity is contextual and
+      # `no` is a correction's usual preface.
+      for word <- ~w(cancel stop no drop skip forget scratch nevermind) do
+        refute MapSet.member?(markers, word),
+               "#{word} is a marker; it breaks a refinement that must thread"
+      end
+
+      # The check must read the RAW tokens: `@stopwords` already strips
+      # the negation, so a polarity check built on `lexical_tokens/1`
+      # would see an empty hand and pass everything.
+      assert MapSet.size(ThreadResolver.lexical_tokens("don't make that")) == 1
+
+      assert ThreadResolver.lexical_tokens("don't make that") ==
+               ThreadResolver.lexical_tokens("make that")
+
+      # Which is not an abstract worry — these all thread today, and
+      # each one is a refinement of the card, not a retraction of it.
+      for fragment <- @rejected_marker_fragments do
+        refute ThreadResolver.negated?(fragment)
+
+        assert {:thread, _, %{rule: :anaphoric_fragment}} =
+                 ThreadResolver.resolve(utterance("alice", fragment, 8), [c1()]),
+               "#{inspect(fragment)} stopped threading, so a rejected marker got in"
+      end
+    end
+
+    test "the ACCEPTED cost of the check, asserted rather than assumed" do
+      # A refinement that negates an attribute instead of the act
+      # carries the particle too, and does not thread. That is a recall
+      # loss taken in the direction this module already errs in: it
+      # becomes its own visible candidate. Recorded here so the trade is
+      # a decision rather than a surprise.
+      for fragment <- @accepted_polarity_costs do
+        assert ThreadResolver.shared_lexical(fragment, c1().evidence_quote) == ["make"]
+        assert ThreadResolver.negated?(fragment)
+        assert ThreadResolver.resolve(utterance("alice", fragment, 8), [c1()]) == :new
+      end
+    end
+
+    test "negated?/1 answers both ways and survives a curly apostrophe" do
+      assert ThreadResolver.negated?("don't make that")
+      assert ThreadResolver.negated?("don\u2019t make that")
+      refute ThreadResolver.negated?("make that mobile only")
+      refute ThreadResolver.negated?("")
+      refute ThreadResolver.negated?(nil)
+
+      # And the curly form reaches the same VERDICT, not merely the same
+      # predicate — the tokenizer folds it, so the resolver must too.
+      assert ThreadResolver.resolve(utterance("alice", "don\u2019t make that", 8), [c1()]) == :new
+    end
+
+    test "polarity is checked ONLY on the anaphoric path" do
+      # `:topic_overlap` is explicitly out of scope for this ticket. A
+      # negated utterance that clears the TOPIC floor still threads —
+      # the check lives on the fragment path and nowhere else.
+      text = "the dashboard load is not slow"
+
+      assert IntentClassifier.content_bearing?(text)
+      assert ThreadResolver.negated?(text)
+
+      assert ThreadResolver.relatedness(text, c1().evidence_quote) >=
+               ThreadResolver.overlap_floor()
+
+      assert {:thread, _, %{rule: :topic_overlap}} =
+               ThreadResolver.resolve(utterance("alice", text, 8), [c1()])
     end
   end
 

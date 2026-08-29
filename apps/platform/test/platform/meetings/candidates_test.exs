@@ -714,6 +714,91 @@ defmodule Platform.Meetings.CandidatesTest do
     end
   end
 
+  # ── create_or_attach/1 — a negation must not be absorbed ──────────────────
+
+  describe "create_or_attach/1 — a negation gets its own row (task 01a04b6b)" do
+    # `ThreadResolverTest` proves the RESOLVER answers `:new`. This
+    # block proves the two consequences that only exist once a row is
+    # written, and they are the two the ticket is actually about:
+    # the retraction becomes a visible candidate of its own, and the
+    # card it negates does NOT have its clock pushed forward.
+    #
+    # `last_utterance_at` is the one that bites later: once
+    # `01a03fba-7b07` makes it the countdown-extension signal, a
+    # negation that moved it would buy the action it cancels more time
+    # to fire.
+
+    @antecedent "we should make the dashboard load faster"
+    @negation "don't make that"
+    @refinement "make that mobile only"
+
+    defp seed_antecedent!(meeting_id, at) do
+      {:ok, candidate} =
+        Candidates.create(
+          candidate_attrs(meeting_id, %{
+            evidence_quote: @antecedent,
+            speaker: "alice",
+            last_utterance_at: at
+          })
+        )
+
+      candidate
+    end
+
+    defp utter!(meeting_id, text, at) do
+      Candidates.create_or_attach(
+        candidate_attrs(meeting_id, %{
+          evidence_quote: text,
+          speaker: "alice",
+          last_utterance_at: at
+        })
+      )
+    end
+
+    test "the negation is written as its own row and leaves the antecedent's clock alone" do
+      meeting_id = Platform.Types.UUIDv7.generate()
+      t0 = DateTime.truncate(DateTime.utc_now(), :microsecond)
+      t8 = DateTime.add(t0, 8, :second)
+
+      antecedent = seed_antecedent!(meeting_id, t0)
+      assert antecedent.last_utterance_at == t0
+      assert [_] = Candidates.open_for_meeting(meeting_id)
+
+      {:ok, written} = utter!(meeting_id, @negation, t8)
+
+      # ITS OWN ROW: a new candidate, not the antecedent back again.
+      refute written.id == antecedent.id
+      assert written.evidence_quote == @negation
+      assert written.threading_events == []
+      assert length(Candidates.list_for_meeting(meeting_id)) == 2
+
+      # THE CLOCK IS UNMOVED. Reloaded, not the in-memory struct.
+      reloaded = Candidates.get(antecedent.id)
+      assert reloaded.last_utterance_at == t0
+      assert reloaded.threading_events == []
+      assert reloaded.transcript_chunk_ids == antecedent.transcript_chunk_ids
+
+      # POSITIVE CONTROL, same meeting, same speaker, same instant, same
+      # single open antecedent — and this one is a REFINEMENT sharing
+      # the identical token `make`. It attaches, writes a threading
+      # event, and DOES move the clock to t8. So the three assertions
+      # above are the polarity check doing work, not a threading path
+      # that never fires in this setup.
+      control_meeting_id = Platform.Types.UUIDv7.generate()
+      control = seed_antecedent!(control_meeting_id, t0)
+
+      {:ok, attached} = utter!(control_meeting_id, @refinement, t8)
+
+      assert attached.id == control.id
+      assert attached.last_utterance_at == t8
+
+      assert [%{"reason" => %{"rule" => "anaphoric_fragment", "shared" => ["make"]}}] =
+               attached.threading_events
+
+      assert length(Candidates.list_for_meeting(control_meeting_id)) == 1
+    end
+  end
+
   # ── close is ONE function ─────────────────────────────────────────────────
 
   describe "module surface" do

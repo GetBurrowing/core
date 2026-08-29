@@ -72,9 +72,9 @@ defmodule Platform.Meetings.ThreadResolver do
     * `:anaphoric_fragment` — the utterance is a short fragment
       (at most **6** tokens) containing a deictic with no
       antecedent of its own (`that`, `it`, `those`, ...), there is
-      exactly ONE candidate through the speaker and time gates, AND
-      the fragment shares at least **1** *lexical* token with that
-      candidate.
+      exactly ONE candidate through the speaker and time gates, the
+      fragment shares at least **1** *lexical* token with that
+      candidate, AND the fragment carries no negation particle.
 
   The single-candidate clause stops this degenerating into "attach to
   the most recent open candidate". A bare anaphor says "something
@@ -134,6 +134,71 @@ defmodule Platform.Meetings.ThreadResolver do
   of what a fragment rule wants. One shared token is a floor of
   *evidence*, and the point is that it is not zero.
 
+  ## Why the anaphoric path also refuses a NEGATION
+
+  The shared-token floor above asks *"is this about the same thing?"*.
+  A negation is about the same thing — that is what makes it a
+  negation — so it clears the floor on the antecedent's own vocabulary.
+  Measured on the same setup, against *"we should make the dashboard
+  load faster"*:
+
+      "make that mobile only"  shared = ["make"]  -> threads  (correct)
+      "don't make that"        shared = ["make"]  -> threads  (WRONG)
+
+  Identical evidence, identical deictic, identical gates; the two
+  differ only in polarity, and no lexical overlap measure can see
+  polarity. Absorbed into the card it was retracting, the retraction
+  stops being a signal at all — and it moves the candidate's
+  `last_utterance_at` forward, so once that field becomes a countdown
+  extension the retraction buys the very action it cancels more time to
+  fire.
+
+  So the anaphoric path additionally refuses any fragment carrying a
+  negation particle, whatever it shares. It does NOT try to interpret
+  the negation: answering `:new` is the whole fix, because the
+  utterance then becomes its own visible candidate instead of being
+  silently swallowed. What a retraction should DO is a different
+  ticket.
+
+  ### Which words count, and why the list is short
+
+  `@negation_markers` is a closed grammatical class — `not`, `never`,
+  and the `n't` contractions in both spellings the tokenizer can
+  produce — not a hand-picked list of retraction verbs. That
+  distinction is the whole design, and three words that LOOK like they
+  belong were measured and left out:
+
+    * **`cancel`** and **`stop`** are verbs whose polarity is
+      contextual. Measured over eight candidates and 22 retraction
+      phrasings, neither stops a single negation that threads today —
+      *"cancel that"* and *"stop that"* already answer `:new` for
+      want of a shared token — while each breaks a real refinement that
+      currently threads: *"make that cancel button bigger"*,
+      *"make that stop at five"*. Zero benefit, non-zero cost.
+      `cancel` is doubly wrong here: it would make
+      *"let's cancel that meeting"* fail for a NEW reason and hide the
+      shared-token floor that is actually holding it.
+    * **`no`** is worse, because its every measured benefit is already
+      covered by the particle in the same sentence (*"no don't make
+      that"* carries `don't`), while as an interjection it prefixes
+      exactly the correction that MUST thread: *"no, make that friday
+      instead"*. Marginal benefit 0, cost 2.
+
+  `never` is the one marker kept against a tie — it stops
+  *"never move that"* and costs *"make that never expire"*, one
+  each. It stays because the two costs are not symmetric: a refinement
+  that fails to thread becomes its own visible card, and a negation
+  that threads becomes invisible. Both halves of that trade are
+  asserted in `ThreadResolverTest` so the tie is recorded rather than
+  forgotten.
+
+  `nevermind` and `scratch that` were dropped for a different reason:
+  every phrasing carrying them fails
+  `IntentClassifier.content_bearing?/1`, so the classifier never hands
+  such a chunk over and no test in this suite can reach them. A marker
+  for an utterance that cannot arrive is untestable weight, and
+  `never` covers *"never mind"* anyway.
+
   ## Why the floor is 0.55
 
   Principle first, corpus second. The overlap coefficient is the
@@ -174,6 +239,11 @@ defmodule Platform.Meetings.ThreadResolver do
       *"put the logo in the top left"*). Without the floor the same
       replay attaches on **288 of 288**. The residual is a known cost
       of the cheap tier; the ticket's third tier is what removes it.
+    * A refinement that negates an ATTRIBUTE rather than the act —
+      *"make that not bold"*, *"make that never expire"* — carries a
+      negation particle and so does not thread either. Measured cost of
+      the polarity check: two phrasings out of eighteen refinements.
+      Same trade, same direction.
     * `@stopwords` strips generic verbs, so a word that is BOTH a
       generic verb and this meeting's topic noun — `release` is the
       obvious one — stops contributing to overlap. It costs recall,
@@ -265,6 +335,28 @@ defmodule Platform.Meetings.ThreadResolver do
   # it leans on. See the moduledoc for why this is a COUNT and not a
   # ratio, and `ThreadResolverTest` for the measurement.
   @anaphoric_shared_floor 1
+
+  # Negation particles, in both spellings the tokenizer can produce
+  # (`don't` and `dont` — the transcript is ASR output and the
+  # apostrophe is not guaranteed). A CLOSED GRAMMATICAL CLASS on
+  # purpose: `cancel`, `stop`, `drop`, `skip` and `no` are not in it,
+  # and the moduledoc records the measurement that kept each of them
+  # out.
+  #
+  # Most of these are ALSO in `@stopwords`, and that is why the check
+  # runs on the RAW tokens: by the time a fragment reaches
+  # `lexical_of/1` its negation has already been stripped out, so a
+  # polarity check reading the lexical set would see nothing at all.
+  @negation_markers MapSet.new(~w(
+    aint ain't arent aren't
+    cannot cant can't couldnt couldn't
+    didnt didn't doesnt doesn't dont don't
+    hadnt hadn't hasnt hasn't havent haven't
+    isnt isn't mustnt mustn't
+    never not
+    shouldnt shouldn't
+    wasnt wasn't werent weren't wont won't wouldnt wouldn't
+  ))
 
   # Function words and generic verbs: tokens that appear in asks about
   # anything at all and so carry no topic. Everything left after these
@@ -382,6 +474,25 @@ defmodule Platform.Meetings.ThreadResolver do
   end
 
   @doc """
+  The negation particles `:anaphoric_fragment` refuses. Exposed so a
+  test can state the set by value instead of asserting the rule against
+  itself.
+  """
+  @spec negation_markers() :: MapSet.t(String.t())
+  def negation_markers, do: @negation_markers
+
+  @doc """
+  Whether a string carries a negation particle.
+
+  Read on the RAW tokens, not the lexical ones: every common negation
+  is a function word and `lexical_tokens/1` has already thrown it away.
+  """
+  @spec negated?(String.t()) :: boolean()
+  def negated?(text) when is_binary(text), do: text |> tokenize() |> negated_tokens?()
+
+  def negated?(_), do: false
+
+  @doc """
   The topic tokens of a string: everything that survives stopword
   removal. Public because the recall guard and the floor measurement
   both need to show their working.
@@ -497,8 +608,11 @@ defmodule Platform.Meetings.ThreadResolver do
       |> MapSet.intersection(candidate_lexical(candidate))
       |> Enum.sort()
 
+    # Polarity is checked LAST and separately from `shared`, so the
+    # answer for a negation is "it was refused for its polarity" and
+    # not "it happened to share nothing".
     if length(raw) <= @fragment_max_tokens and deictic != nil and
-         length(shared) >= @anaphoric_shared_floor do
+         length(shared) >= @anaphoric_shared_floor and not negated_tokens?(raw) do
       {:thread, candidate,
        %{
          rule: :anaphoric_fragment,
@@ -531,6 +645,8 @@ defmodule Platform.Meetings.ThreadResolver do
       MapSet.intersection(a, b) |> MapSet.size() |> Kernel./(smaller)
     end
   end
+
+  defp negated_tokens?(raw), do: Enum.any?(raw, &MapSet.member?(@negation_markers, &1))
 
   defp topic_of(raw), do: raw |> Enum.reject(&MapSet.member?(@stopwords, &1)) |> MapSet.new()
 
