@@ -305,7 +305,8 @@ defmodule Platform.Lifecycle.PhaseDiscriminationTest do
     # Routing either through the choke point would change the behaviour of
     # plan approval and supersession, which is NOT this stack's scope. See
     # `Platform.Lifecycle.EdgeInventory`'s "What this frame DOES NOT
-    # OBSERVE" section for the full list of five bypassing writers.
+    # OBSERVE" section for the full list of bypassing writers (task
+    # 01a049be added a sixth, `apply_operator_correction/6`).
     #
     # SUBSTITUTED EDGE: `backlog -> blocked`. Chosen because `blocked` is
     # enterable from SIX states, the `backlog <-> blocked` cycle genuinely

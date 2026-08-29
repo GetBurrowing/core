@@ -4498,6 +4498,246 @@ defmodule Platform.Tasks do
     |> Repo.one()
   end
 
+  # ── Operator corrections (task 01a049be) ──────────────────────────────
+  #
+  # `cancelled` has NO outbound edges in `@valid_task_transitions`, and
+  # `done` is unreachable from `backlog`. Those two facts compose into a
+  # trap: a task filed in `backlog` whose fix merges by direct PR cannot
+  # reach `done`, the refusal envelopes used to RECOMMEND `cancelled` as
+  # the way to retire it, and `cancelled` is absorbing — so the wrong
+  # close was permanent. See task 01a049be.
+  #
+  # The fix is NOT to widen `@valid_task_transitions`. Both edges stay
+  # closed to the automated pipeline; `cancelled` stays absorbing for
+  # every agent-reachable surface. What is added is an operator-driven,
+  # reason-required, admin-gated correction path, in the shape this module
+  # already uses twice for exactly this class of problem
+  # (`reopen_with_feedback/3` and `supersede_current_plan/3`): a direct
+  # changeset write that bypasses the transition table, attributed through
+  # `TransitionActor` so it lands in `phase_transitions`, and stamped into
+  # `task.metadata` so the correction is greppable afterwards.
+  #
+  # Consequence to build to, not to discover: like the two existing
+  # bypasses, these writers DO NOT reach `maybe_finalize_transition/3`, so
+  # they fire no lifecycle edge hooks and no `TimelineAppender` append. A
+  # correction is a bookkeeping repair, not a pipeline traversal, and
+  # firing deploy/review hooks for work that already shipped would be
+  # wrong. Recorded in `Platform.Lifecycle.EdgeInventory`.
+
+  # Statuses from which `done` is unreachable through the pipeline table
+  # and which are not themselves terminal. `close_as_delivered/3` accepts
+  # ONLY these: `in_progress` / `in_review` / `deploying` already have a
+  # legitimate route to `done`, and offering a second, unaudited one would
+  # let a caller skip the review gate rather than repair a record.
+  # `cancelled` is deliberately absent — a wrongly-cancelled task must be
+  # walked back through `reinstate_cancelled_task/3` first, so the repair
+  # leaves two auditable steps rather than one silent jump.
+  @undeliverable_statuses ~w(backlog planning blocked stack_pending)
+
+  @doc """
+  Return a wrongly-cancelled task to `backlog`.
+
+  `cancelled` is absorbing in `@valid_task_transitions` (no outbound
+  edges), which is correct for the automated pipeline and for every
+  agent-reachable surface: an agent that folds or supersedes a task must
+  not be able to un-fold it. It is wrong as a system-wide invariant,
+  because it makes a mistaken close permanent. This is the correction
+  path — human operator only.
+
+  `admin` must be a `%Platform.Accounts.User{}` (or any struct/map with an
+  `:id`) that satisfies `Platform.Tenancy.fabrikam_admin?/1`. `:system`, an
+  agent actor, `nil` and a non-admin user are all refused with
+  `{:error, :not_authorized}`, and that check runs FIRST so a non-admin
+  cannot use the refusal envelope to probe a task's status.
+
+  On success the task moves to `backlog`, `metadata.reinstated_from_cancelled`
+  records `%{"reason", "by_user_id", "at"}`, a `phase_transitions` row is
+  written with `actor_kind: "user"`, and `{:task_updated, task}` is
+  broadcast on the board topic.
+
+  Refusal cases:
+    * `{:error, :not_authorized}` — actor is not a Fabrikam admin
+    * `{:error, :reason_required}` — `reason` is nil or blank/whitespace
+    * `{:error, :not_cancelled}` — task is not currently `cancelled`
+    * `{:error, :not_found}` — no such task
+  """
+  @spec reinstate_cancelled_task(String.t(), String.t() | nil, any()) ::
+          {:ok, Task.t()}
+          | {:error, :not_authorized | :reason_required | :not_cancelled | :not_found | term()}
+  def reinstate_cancelled_task(task_id, reason, admin) when is_binary(task_id) do
+    cond do
+      not Platform.Tenancy.fabrikam_admin?(admin) ->
+        {:error, :not_authorized}
+
+      blank?(reason) ->
+        {:error, :reason_required}
+
+      true ->
+        apply_operator_correction(
+          task_id,
+          ["cancelled"],
+          :not_cancelled,
+          admin,
+          "reinstate_cancelled_task",
+          fn task ->
+            %{
+              status: "backlog",
+              metadata:
+                stamp_metadata(task, "reinstated_from_cancelled", %{
+                  "reason" => String.trim(reason),
+                  "by_user_id" => admin.id
+                })
+            }
+          end
+        )
+    end
+  end
+
+  @doc """
+  Record a task as `done` when the work was genuinely delivered without a
+  plan cycle.
+
+  ADR 0029 defines `done` as "work is reviewed, accepted, merged, and
+  deployed (or otherwise completed per task policy)". A `backlog` task
+  whose fix merged by direct PR satisfies that sentence, but the pipeline
+  table cannot express it: `backlog -> done` is absent, and the only
+  terminal state reachable from `backlog` is `cancelled`, which means
+  ABANDONED. Recording delivered work as abandoned is a lie about the
+  audit trail, and it is the lie the refusal envelopes used to recommend.
+
+  This is the deliberate, auditable alternative. It is NOT a general
+  completion route: `delivery_reference` is required and is persisted, the
+  actor must be a Fabrikam admin, and only the statuses from which `done` is
+  otherwise unreachable are accepted (`#{Enum.join(@undeliverable_statuses, "`, `")}`).
+  The plan gate that ADR 0029 exists to protect is untouched — no agent,
+  and no automated path, gains a route to `done` from this function.
+
+  `delivery_reference` should identify the merged work: a commit sha, a PR
+  URL, or `"#841"`. It is stored verbatim under
+  `metadata.closed_as_delivered` alongside the actor and timestamp, so the
+  set of tasks closed this way is a single query rather than a guess.
+
+  Refusal cases:
+    * `{:error, :not_authorized}` — actor is not a Fabrikam admin
+    * `{:error, :delivery_reference_required}` — nil or blank/whitespace
+    * `{:error, :not_correctable}` — task is `done`, `cancelled`, or in an
+      execution phase that already has a legitimate route to `done`
+    * `{:error, :not_found}` — no such task
+  """
+  @spec close_as_delivered(String.t(), String.t() | nil, any()) ::
+          {:ok, Task.t()}
+          | {:error,
+             :not_authorized
+             | :delivery_reference_required
+             | :not_correctable
+             | :not_found
+             | term()}
+  def close_as_delivered(task_id, delivery_reference, admin) when is_binary(task_id) do
+    cond do
+      not Platform.Tenancy.fabrikam_admin?(admin) ->
+        {:error, :not_authorized}
+
+      blank?(delivery_reference) ->
+        {:error, :delivery_reference_required}
+
+      true ->
+        apply_operator_correction(
+          task_id,
+          @undeliverable_statuses,
+          :not_correctable,
+          admin,
+          "close_as_delivered",
+          fn task ->
+            %{
+              status: "done",
+              metadata:
+                stamp_metadata(task, "closed_as_delivered", %{
+                  "reference" => String.trim(delivery_reference),
+                  "by_user_id" => admin.id,
+                  "from_status" => task.status
+                })
+            }
+          end
+        )
+    end
+  end
+
+  @doc """
+  The statuses `close_as_delivered/3` accepts — those from which `done` is
+  unreachable in `valid_task_transitions/0`.
+
+  Surfaced so a test can DERIVE the expectation from the transition table
+  instead of transcribing it. A transcribed copy would go stale silently
+  the moment the table is widened, which is precisely the change this
+  function's guard exists to notice.
+  """
+  @spec undeliverable_statuses() :: [String.t()]
+  def undeliverable_statuses, do: @undeliverable_statuses
+
+  # The shared writer for both corrections. Mirrors `reopen_with_feedback/3`:
+  # one `Repo.transaction/1`, a status precondition checked INSIDE it (so a
+  # concurrent transition cannot slip between the read and the write), a
+  # direct `Task.changeset/2` write that bypasses `@valid_task_transitions`,
+  # and a post-commit board broadcast that cannot roll the change back.
+  defp apply_operator_correction(task_id, from_statuses, refusal, admin, via, attrs_fun) do
+    # `task_id` arrives as a RAW BINARY from a human — these functions are
+    # invoked from an operator console, where the id is typed or pasted
+    # rather than read off a struct. `Repo.get/2` raises
+    # `Ecto.Query.CastError` on a malformed uuid, so a truncated paste
+    # would surface as a stacktrace instead of an answer. Guarded to
+    # `:not_found`, which is the honest reply to "no such task".
+    if not Platform.UUID.valid?(task_id) do
+      {:error, :not_found}
+    else
+      do_apply_operator_correction(task_id, from_statuses, refusal, admin, via, attrs_fun)
+    end
+  end
+
+  defp do_apply_operator_correction(task_id, from_statuses, refusal, admin, via, attrs_fun) do
+    Repo.transaction(fn ->
+      case Repo.get(Task, task_id) do
+        nil ->
+          Repo.rollback(:not_found)
+
+        %Task{status: status} = task ->
+          if status in from_statuses do
+            TransitionActor.with_actor({:user, admin.id}, via, fn ->
+              task
+              |> Task.changeset(attrs_fun.(task))
+              |> Repo.update()
+            end)
+            |> case do
+              {:ok, updated} -> updated
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+          else
+            Repo.rollback(refusal)
+          end
+      end
+    end)
+    |> case do
+      {:ok, task} ->
+        preloaded = Repo.preload(task, [:project, :epic, :sponsor, plans: :stages])
+        broadcast_board({:task_updated, preloaded})
+        {:ok, preloaded}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Merge a correction stamp into `task.metadata` without disturbing any
+  # other key. `at` is added here so both call sites cannot disagree about
+  # the format.
+  defp stamp_metadata(%Task{metadata: metadata}, key, stamp) do
+    stamped = Map.put(stamp, "at", DateTime.to_iso8601(DateTime.utc_now()))
+    Map.put(metadata || %{}, key, stamped)
+  end
+
+  defp blank?(nil), do: true
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(_), do: true
+
   # ── View predicates (UI badge logic — task 019e2c25) ────────────────────
   #
   # `needs_human_action?/1` and `needs_human_action?/2` answer the question

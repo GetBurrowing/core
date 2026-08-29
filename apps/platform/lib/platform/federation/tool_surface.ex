@@ -4155,9 +4155,14 @@ defmodule Platform.Federation.ToolSurface do
                error: "Cannot transition task from '#{task.status}' to 'done'",
                recoverable: false,
                suggestion:
-                 "Check the task's current status — only in_progress and deploying can move to done. " <>
-                   "If you want to retire a non-started task instead, use task_update with status='cancelled' " <>
-                   "(terminal, allowed from backlog/planning/in_progress/blocked/stack_pending)."
+                 "Only in_progress, in_review and deploying can move to 'done'. " <>
+                   "Do NOT reach for 'cancelled' here: it is terminal, it has no outbound " <>
+                   "edges, and it means the work was ABANDONED \u2014 recording delivered work " <>
+                   "as cancelled is unrecoverable and is the corruption task 01a049be exists " <>
+                   "to stop. If the work genuinely shipped without a plan cycle, ask a Fabrikam " <>
+                   "admin to record it via Platform.Tasks.close_as_delivered/3, which requires " <>
+                   "a merge/PR reference. If it truly was abandoned or superseded, then " <>
+                   "task_update with status='cancelled' is correct."
              }}
 
           {:error, changeset} ->
@@ -4304,9 +4309,12 @@ defmodule Platform.Federation.ToolSurface do
                  recoverable: true,
                  suggestion:
                    "Check allowed transitions for the current status. " <>
-                     "To retire a non-started task without walking it through in_progress, " <>
-                     "transition to 'cancelled' (terminal, allowed from backlog/planning/" <>
-                     "in_progress/blocked/stack_pending)."
+                     "'cancelled' is TERMINAL \u2014 it has no outbound edges and it means the " <>
+                     "work was ABANDONED. Use it only to retire work that was genuinely " <>
+                     "abandoned or superseded, never to close work that actually shipped. " <>
+                     "Delivered-but-unplanned work is recorded by a Fabrikam admin via " <>
+                     "Platform.Tasks.close_as_delivered/3; a task already cancelled by " <>
+                     "mistake is corrected via Platform.Tasks.reinstate_cancelled_task/3."
                }}
 
             {:error, :no_approved_plan} ->

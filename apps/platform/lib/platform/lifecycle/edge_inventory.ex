@@ -49,10 +49,11 @@ defmodule Platform.Lifecycle.EdgeInventory do
 
   ## What this frame DOES NOT OBSERVE
 
-  There are FIVE status writers. Only one reaches the choke point. The other
-  four DO NOT OBSERVE the pipeline, and that is a deliberate scope boundary,
+  There are SIX status writers. Only one reaches the choke point. The other
+  five DO NOT OBSERVE the pipeline, and that is a deliberate scope boundary,
   not a bug to fix in passing — routing them through the choke point would
-  change the behaviour of manual board drops, plan approval and supersession.
+  change the behaviour of manual board drops, plan approval, supersession and
+  operator corrections.
 
     * `Platform.Tasks.drop_task_to_column/3` — the human drag-and-drop path.
       It writes `task |> Task.changeset(%{status: target_status})
@@ -80,6 +81,17 @@ defmodule Platform.Lifecycle.EdgeInventory do
 
     * The plan-supersession writer, which writes the same changeset after
       marking the plan `superseded`.
+
+    * `Platform.Tasks.apply_operator_correction/6` (task 01a049be) — the
+      shared writer behind `Platform.Tasks.reinstate_cancelled_task/3`
+      (`cancelled -> backlog`) and `Platform.Tasks.close_as_delivered/3`
+      (`backlog|planning|blocked|stack_pending -> done`). BOTH of those
+      edges are absent from `@valid_task_transitions` and stay absent: the
+      pipeline still cannot leave `cancelled`, and no agent-reachable
+      surface gains a route to `done` that skips the plan gate. These are
+      admin-gated bookkeeping repairs for records the pipeline made
+      unrepresentable, so they fire no hooks by design — running deploy or
+      review pipelines for work that already shipped would be wrong.
 
   Because BOTH `done -> planning` writers bypass the choke point,
   **the `done -> planning` edge fires nothing today.** Any re-entry-bound
