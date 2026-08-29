@@ -51,6 +51,31 @@ defmodule Platform.VaultTest do
     cred |> logs_for() |> Enum.map(& &1.action) |> Enum.sort()
   end
 
+  # Both rows are legitimate rotate targets for `owner_id`: it owns the
+  # agent-scoped one outright and holds an explicit "rotate" grant on the
+  # platform-scoped one. That is what makes the untouched-row assertions
+  # below non-vacuous — under a slug-only lookup either row really can be the
+  # one that moves, and `insert_order` decides which.
+  defp ambiguous_pair!(slug, owner_id, insert_order) do
+    {platform, agent} =
+      case insert_order do
+        :platform_first ->
+          p = insert_credential!(slug, value: "PLATFORM-V1", scope: {:platform, nil})
+          a = insert_credential!(slug, value: "AGENT-V1", scope: {:agent, owner_id})
+          {p, a}
+
+        :agent_first ->
+          a = insert_credential!(slug, value: "AGENT-V1", scope: {:agent, owner_id})
+          p = insert_credential!(slug, value: "PLATFORM-V1", scope: {:platform, nil})
+          {p, a}
+      end
+
+    grant!(platform, owner_id, ["use", "rotate"])
+    {platform, agent}
+  end
+
+  defp reload(%Credential{id: id}), do: Repo.get!(Credential, id)
+
   # ── put/4 ────────────────────────────────────────────────────────────────────
 
   describe "put/4" do
@@ -405,6 +430,186 @@ defmodule Platform.VaultTest do
 
     test "returns :not_found for an unknown slug" do
       assert {:error, :not_found} = Vault.rotate("nonexistent-#{System.unique_integer()}", "v")
+    end
+  end
+
+  # ── rotate/3 — target selection ──────────────────────────────────────────────
+  #
+  # Uniqueness is per scope (`vault_credentials_unique_slug_per_scope` covers
+  # `(workspace_id, scope_type, scope_id, slug)`), so one slug can name more
+  # than one credential and a slug-only `limit: 1` with no `order_by` has no
+  # defined target. These tests pin which row moves and, just as importantly,
+  # that the other one does not.
+
+  describe "rotate/3 target selection" do
+    test "the positive control: an unambiguous slug still rotates, with or without :scope" do
+      owner_id = Ecto.UUID.generate()
+
+      unscoped = unique_slug("target-control-unscoped")
+      cred = insert_credential!(unscoped, value: "V1", scope: {:agent, owner_id})
+      assert {:ok, _} = Vault.rotate(unscoped, "V2", accessor: {:agent, owner_id})
+      assert reload(cred).encrypted_data == "V2"
+
+      scoped = unique_slug("target-control-scoped")
+      cred2 = insert_credential!(scoped, value: "V1", scope: {:agent, owner_id})
+
+      assert {:ok, _} =
+               Vault.rotate(scoped, "V2",
+                 scope: {:agent, owner_id},
+                 accessor: {:agent, owner_id}
+               )
+
+      assert reload(cred2).encrypted_data == "V2"
+    end
+
+    test ":scope selects the agent-scoped row and leaves the platform-scoped one untouched" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("target-agent")
+      {platform, agent} = ambiguous_pair!(slug, owner_id, :platform_first)
+
+      assert {:ok, _} =
+               Vault.rotate(slug, "AGENT-V2",
+                 scope: {:agent, owner_id},
+                 accessor: {:agent, owner_id}
+               )
+
+      moved = reload(agent)
+      assert moved.encrypted_data == "AGENT-V2"
+      assert %DateTime{} = moved.rotated_at
+
+      # The refutation that matters: read the other row's decrypted value and
+      # its timestamp, not a row count. This is the assertion that goes red on
+      # a slug-only lookup.
+      untouched = reload(platform)
+      assert untouched.encrypted_data == "PLATFORM-V1"
+      assert is_nil(untouched.rotated_at)
+    end
+
+    test ":scope selects the platform-scoped row and leaves the agent-scoped one untouched" do
+      owner_id = Ecto.UUID.generate()
+      admin_id = Ecto.UUID.generate()
+      slug = unique_slug("target-platform")
+      {platform, agent} = ambiguous_pair!(slug, owner_id, :platform_first)
+
+      assert {:ok, _} =
+               Vault.rotate(slug, "PLATFORM-V2",
+                 scope: {:platform, nil},
+                 accessor: {:platform, admin_id}
+               )
+
+      moved = reload(platform)
+      assert moved.encrypted_data == "PLATFORM-V2"
+      assert %DateTime{} = moved.rotated_at
+
+      untouched = reload(agent)
+      assert untouched.encrypted_data == "AGENT-V1"
+      assert is_nil(untouched.rotated_at)
+    end
+
+    test "insertion order does not decide which row rotates" do
+      # The defect in one line: identical fixtures differing only in the order
+      # the two rows were written, and a slug-only `limit: 1` follows the heap.
+      # With :scope, both orders must land on the agent-scoped row.
+      for order <- [:platform_first, :agent_first] do
+        owner_id = Ecto.UUID.generate()
+        slug = unique_slug("target-order-#{order}")
+        {platform, agent} = ambiguous_pair!(slug, owner_id, order)
+
+        assert {:ok, _} =
+                 Vault.rotate(slug, "AGENT-V2",
+                   scope: {:agent, owner_id},
+                   accessor: {:agent, owner_id}
+                 )
+
+        assert reload(agent).encrypted_data == "AGENT-V2",
+               "insert order #{order}: the agent-scoped row should have rotated"
+
+        assert reload(platform).encrypted_data == "PLATFORM-V1",
+               "insert order #{order}: the platform-scoped row must be untouched"
+
+        assert is_nil(reload(platform).rotated_at),
+               "insert order #{order}: the platform-scoped row must not be stamped"
+      end
+    end
+
+    test "without :scope an ambiguous slug is refused and neither row is mutated" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("target-ambiguous")
+      {platform, agent} = ambiguous_pair!(slug, owner_id, :platform_first)
+
+      assert {:error, :ambiguous_slug} =
+               Vault.rotate(slug, "SHOULD-NOT-LAND", accessor: {:agent, owner_id})
+
+      for cred <- [platform, agent] do
+        row = reload(cred)
+        refute row.encrypted_data == "SHOULD-NOT-LAND"
+        assert is_nil(row.rotated_at)
+      end
+
+      assert reload(platform).encrypted_data == "PLATFORM-V1"
+      assert reload(agent).encrypted_data == "AGENT-V1"
+    end
+
+    test "two rows at the SAME scope are ambiguous too, and :scope cannot disambiguate them" do
+      # `vault_credentials_unique_slug_per_scope` is a Postgres unique index and
+      # Postgres treats NULLs as distinct, so `(NULL, "platform", NULL, slug)`
+      # does not conflict with itself: put/4 will happily create this pair. A
+      # scope predicate alone would still leave rotate guessing.
+      slug = unique_slug("target-same-scope")
+      first = insert_credential!(slug, value: "FIRST-V1", scope: {:platform, nil})
+      second = insert_credential!(slug, value: "SECOND-V1", scope: {:platform, nil})
+      assert first.id != second.id
+
+      assert {:error, :ambiguous_slug} =
+               Vault.rotate(slug, "SHOULD-NOT-LAND",
+                 scope: {:platform, nil},
+                 accessor: {:system, nil}
+               )
+
+      assert reload(first).encrypted_data == "FIRST-V1"
+      assert reload(second).encrypted_data == "SECOND-V1"
+      assert is_nil(reload(first).rotated_at)
+      assert is_nil(reload(second).rotated_at)
+    end
+
+    test "the ambiguity refusal names the slug and the scopes but never the new value" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("target-log")
+      ambiguous_pair!(slug, owner_id, :platform_first)
+
+      secret = "PLAINTEXT-#{System.unique_integer([:positive])}"
+
+      log =
+        capture_log(fn ->
+          assert {:error, :ambiguous_slug} =
+                   Vault.rotate(slug, secret, accessor: {:agent, owner_id})
+        end)
+
+      # Positive control on the capture itself: if this assertion passed while
+      # the log were empty, the secret check below would prove nothing.
+      assert log =~ slug
+      assert log =~ "platform:nil"
+      refute log =~ secret
+    end
+
+    test "a scoped rotation still keeps the row id and its access grants" do
+      # #869 pinned this for do_rotate/4; target selection must not cost it.
+      owner_id = Ecto.UUID.generate()
+      grantee_id = Ecto.UUID.generate()
+      slug = unique_slug("target-grants")
+
+      cred = insert_credential!(slug, value: "V1", scope: {:agent, owner_id})
+      grant = grant!(cred, grantee_id, ["use", "rotate"])
+
+      assert {:ok, rotated} =
+               Vault.rotate(slug, "V2",
+                 scope: {:agent, owner_id},
+                 accessor: {:agent, owner_id}
+               )
+
+      assert rotated.id == cred.id
+      assert Repo.get(AccessGrant, grant.id)
+      assert Repo.get(AccessGrant, grant.id).permissions == ["use", "rotate"]
     end
   end
 

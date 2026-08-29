@@ -223,6 +223,10 @@ defmodule Platform.Vault do
   ## Options
 
     * `:accessor`     - `{accessor_type, accessor_id}` tuple identifying the requester
+    * `:scope`        - `{scope_type, scope_id}` naming the credential exactly.
+                        Optional. Without it the lookup matches on slug alone,
+                        and a slug living at two scopes resolves to an
+                        undetermined one of them — see `rotate/3`.
     * `:workspace_id` - workspace context (used to narrow the lookup)
   """
   @spec get(String.t(), keyword()) ::
@@ -272,21 +276,50 @@ defmodule Platform.Vault do
   scope or hold such a grant. A refused rotation mutates nothing, emits
   `[:platform, :vault, :access_denied]` and writes a `"denied"` access-log row.
 
+  ## A slug alone does not name a credential
+
+  Uniqueness is per scope — `vault_credentials_unique_slug_per_scope` covers
+  `(workspace_id, scope_type, scope_id, slug)` — so the same slug legitimately
+  exists at more than one scope, and (because Postgres unique indexes treat
+  NULLs as distinct) even twice at `{:platform, nil}`. A slug-only lookup with
+  `limit: 1` and no `order_by` therefore has no defined target: it returns
+  whichever row the planner happens to reach first, which in practice is
+  insertion order.
+
+  Rotation is what you run *because* a key leaked, so picking arbitrarily is
+  the worst available behaviour — it leaves the compromised value live and
+  overwrites an unrelated integration, both silently. Instead:
+
+    * pass `:scope` to name the credential exactly, in the shape `put/4` takes;
+    * with no `:scope`, an ambiguous slug is **refused** with
+      `{:error, :ambiguous_slug}` and nothing is mutated.
+
+  `get/2` and `delete/2` still resolve by slug alone and carry the same
+  ambiguity; both accept `:scope` to narrow, but neither refuses. Tightening
+  those is separate work — a read that starts failing is a different blast
+  radius from a write that hits the wrong row.
+
   ## Options
 
     * `:accessor`     - `{accessor_type, accessor_id}` performing the rotation
+    * `:scope`        - `{scope_type, scope_id}` naming the credential to rotate.
+                        Optional; omitting it means "the only credential with
+                        this slug", and is refused if there is more than one.
     * `:workspace_id` - workspace context (used to narrow the lookup)
   """
   @spec rotate(String.t(), binary(), keyword()) ::
-          {:ok, Credential.t()} | {:error, :not_found | :access_denied | any()}
+          {:ok, Credential.t()} | {:error, :not_found | :ambiguous_slug | :access_denied | any()}
   def rotate(slug, new_value, opts \\ []) do
     accessor = Keyword.get(opts, :accessor)
 
-    case lookup_by_slug(slug, opts) do
-      nil ->
+    case resolve_one_by_slug(slug, opts) do
+      {:error, :not_found} ->
         {:error, :not_found}
 
-      credential ->
+      {:error, :ambiguous_slug} ->
+        refuse_ambiguous(slug, opts)
+
+      {:ok, credential} ->
         case check_access(credential, accessor, :rotate) do
           {:error, :access_denied} ->
             deny(credential, slug, accessor)
@@ -295,6 +328,27 @@ defmodule Platform.Vault do
             do_rotate(credential, slug, new_value, accessor)
         end
     end
+  end
+
+  # Names the slug and the scopes it was found at so an operator mid-incident
+  # can see why the rotation refused and which `:scope` to pass. The new value
+  # is NOT in scope here and must never be — a rotation log line is exactly
+  # where a plaintext secret would go unnoticed.
+  defp refuse_ambiguous(slug, opts) do
+    scopes =
+      slug
+      |> slug_query(opts)
+      |> Repo.all()
+      |> Enum.map(&"#{&1.scope_type}:#{inspect(&1.scope_id)}")
+      |> Enum.sort()
+      |> Enum.join(", ")
+
+    Logger.warning(
+      "vault: refusing to rotate #{slug} — the slug matches more than one credential " <>
+        "(#{scopes}). Pass :scope to name the one you mean. Nothing was changed."
+    )
+
+    {:error, :ambiguous_slug}
   end
 
   defp do_rotate(credential, slug, new_value, accessor) do
@@ -401,6 +455,9 @@ defmodule Platform.Vault do
   ## Options
 
     * `:accessor`     - `{accessor_type, accessor_id}` performing the deletion
+    * `:scope`        - `{scope_type, scope_id}` naming the credential exactly.
+                        Optional, and **not** enforced: unlike `rotate/3`, an
+                        ambiguous slug is not refused here. See `rotate/3`.
     * `:workspace_id` - workspace context (used to narrow the lookup)
   """
   @spec delete(String.t(), keyword()) ::
@@ -538,8 +595,31 @@ defmodule Platform.Vault do
 
   # ── Private: Lookup ──────────────────────────────────────────────────────────
 
+  # The unnarrowed lookup, kept for get/2 and delete/2: takes the first row the
+  # planner returns. Correct only when the slug is unambiguous — see rotate/3's
+  # docs. Pass `:scope` to make it exact.
   defp lookup_by_slug(slug, opts) do
-    base = from(c in Credential, where: c.slug == ^slug, limit: 1)
+    slug
+    |> slug_query(opts)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  # Resolve a slug to exactly ONE credential, or say why not. Fetches two rows
+  # so "more than one" is a fact about the data rather than an inference from a
+  # count query racing the read.
+  defp resolve_one_by_slug(slug, opts) do
+    case slug |> slug_query(opts) |> limit(2) |> Repo.all() do
+      [] -> {:error, :not_found}
+      [credential] -> {:ok, credential}
+      [_, _] -> {:error, :ambiguous_slug}
+    end
+  end
+
+  # Scope matching mirrors list/1's clauses exactly — `{scope_type, nil}` means
+  # `IS NULL`, not `= NULL`, which would match nothing and read as :not_found.
+  defp slug_query(slug, opts) do
+    base = from(c in Credential, where: c.slug == ^slug)
 
     base =
       case Keyword.get(opts, :workspace_id) do
@@ -547,7 +627,16 @@ defmodule Platform.Vault do
         wid -> where(base, [c], c.workspace_id == ^wid)
       end
 
-    Repo.one(base)
+    case Keyword.get(opts, :scope) do
+      nil ->
+        base
+
+      {scope_type, nil} ->
+        where(base, [c], c.scope_type == ^to_string(scope_type) and is_nil(c.scope_id))
+
+      {scope_type, scope_id} ->
+        where(base, [c], c.scope_type == ^to_string(scope_type) and c.scope_id == ^scope_id)
+    end
   end
 
   # ── Private: Access Control ──────────────────────────────────────────────────
