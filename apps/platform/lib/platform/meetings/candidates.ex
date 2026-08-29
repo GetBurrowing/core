@@ -36,7 +36,14 @@ defmodule Platform.Meetings.Candidates do
 
   Retraction, duplicate-detection, veto and dismissal are four CALLERS
   of `close/2`, not four functions. There is exactly one `Repo.update`
-  in this module that sets `closed_reason`. The board renders all four
+  in this module that sets `closed_reason`.
+
+  Three of the four exist as of task 01a03fba: dismissal and
+  duplicate-detection call in from
+  `Platform.Meetings.IntentClassifier`'s `close_skeleton/4`, and
+  retraction calls in from `retract/4` below when a later utterance
+  takes an open card back. Veto still has no producer anywhere in
+  `lib/`. The board renders all four
   uniformly *because* they took the same write path; a `retract/1`
   convenience wrapper would be the first step in letting them diverge.
   `advance/3` targeting `:closed` therefore delegates here rather than
@@ -320,42 +327,125 @@ defmodule Platform.Meetings.Candidates do
     at = Map.get(attrs, :heard_at) || Map.get(attrs, :last_utterance_at) || DateTime.utc_now()
     speaker = speaker_or_nil(Map.get(attrs, :speaker))
     text = Map.get(attrs, :evidence_quote)
+    utterance = %{speaker: speaker, text: text, at: at}
 
-    case ThreadResolver.resolve(
-           %{speaker: speaker, text: text, at: at},
-           open_for_meeting(meeting_id)
-         ) do
-      {:thread, candidate, reason} ->
-        case attach_utterance(candidate, %{
-               transcript_chunk_id: chunk_id,
-               intent_id: Map.get(attrs, :intent_id),
-               at: at,
-               reason: reason
-             }) do
-          {:ok, host} -> {:attached, host}
-          other -> other
+    # Read ONCE and handed to both questions, so the retraction gate and
+    # the threading resolver are answering about the same set of open
+    # cards. Two reads would let a card close between them.
+    open = open_for_meeting(meeting_id)
+
+    # The retraction gate runs BEFORE the resolver, and the order is
+    # load-bearing. `105da003` refuses a negation only on the ANAPHORIC
+    # path; a longer negation that repeats the candidate's own topic
+    # ("don't make the dashboard load faster") scores 1.0 on
+    # `:topic_overlap` and threads onto the card it negates. Running the
+    # gate second would never see it, because it would already have been
+    # absorbed. `RetractionGateTest` asserts that exact string against
+    # `resolve/2` so this is a measured ordering, not a defensive one.
+    case ThreadResolver.retraction_target(utterance, open) do
+      {:retraction, candidate, reason} ->
+        retract(candidate, text, chunk_id, reason)
+
+        # The resolver is deliberately NOT consulted afterwards. The gate
+        # only fires when exactly one candidate survives the same-speaker
+        # + window filter, and that one is now closed — so resolving
+        # against what is left is resolving against an empty gated list,
+        # which is `:new` by definition. Calling it anyway would let the
+        # utterance thread onto the card it just retracted.
+        open_new(attrs, meeting_id, chunk_id, text, speaker, at)
+
+      :none ->
+        case ThreadResolver.resolve(utterance, open) do
+          {:thread, candidate, reason} ->
+            case attach_utterance(candidate, %{
+                   transcript_chunk_id: chunk_id,
+                   intent_id: Map.get(attrs, :intent_id),
+                   at: at,
+                   reason: reason
+                 }) do
+              {:ok, host} -> {:attached, host}
+              other -> other
+            end
+
+          :new ->
+            open_new(attrs, meeting_id, chunk_id, text, speaker, at)
         end
-
-      :new ->
-        create(%{
-          meeting_id: meeting_id,
-          # Guarded exactly like `mirror_enqueue/3` guards it: a LiveKit
-          # room name is not always a UUID, and letting a non-UUID reach
-          # a `:binary_id` cast would fail the whole changeset and turn
-          # "no early card for this room" into a silent, room-wide
-          # outage of this feature.
-          room_id: uuid_or_nil(Map.get(attrs, :room_id)),
-          transcript_chunk_id: chunk_id,
-          transcript_chunk_ids: [chunk_id],
-          evidence_quote: text,
-          speaker: speaker,
-          state: :heard,
-          outcome_kind: Map.get(attrs, :outcome_kind) || :task,
-          heard_at: at,
-          last_utterance_at: at
-        })
     end
   end
+
+  defp open_new(attrs, meeting_id, chunk_id, text, speaker, at) do
+    create(%{
+      meeting_id: meeting_id,
+      # Guarded exactly like `mirror_enqueue/3` guards it: a LiveKit
+      # room name is not always a UUID, and letting a non-UUID reach
+      # a `:binary_id` cast would fail the whole changeset and turn
+      # "no early card for this room" into a silent, room-wide
+      # outage of this feature.
+      room_id: uuid_or_nil(Map.get(attrs, :room_id)),
+      transcript_chunk_id: chunk_id,
+      transcript_chunk_ids: [chunk_id],
+      evidence_quote: text,
+      speaker: speaker,
+      state: :heard,
+      outcome_kind: Map.get(attrs, :outcome_kind) || :task,
+      heard_at: at,
+      last_utterance_at: at
+    })
+  end
+
+  # The machine's second-thoughts check, and the SECOND caller of
+  # `close/2` (task 01a03fba). It goes through `close/2` like every
+  # other one — no `retract/1` in the public API — so the board renders
+  # a machine-detected retraction and a human's cancel identically,
+  # which is the whole point of the single close path.
+  #
+  # `:retracted` already had producers before this: `queue_status_to_state`
+  # maps `cancelled`/`cancelled_late` onto it, and `IntentQueue.Server`'s
+  # `close_ack` writes it when a human presses stop. Those are the
+  # HUMAN's stop button. This is the machine hearing the same decision
+  # said out loud, and it deliberately lands on the same reason atom
+  # rather than a sixth one — the card was taken back; who noticed is
+  # `closed_note`'s job, not the vocabulary's.
+  #
+  # Non-fatal. A failed close is logged and the retracting utterance
+  # still gets its own row: recording a card is a recording act, and
+  # losing the new card as well would turn one missed close into two
+  # missing cards.
+  defp retract(candidate, text, chunk_id, reason) do
+    case close(candidate, {:retracted, retraction_note(text, chunk_id, reason)}) do
+      {:ok, closed} ->
+        {:ok, closed}
+
+      {:error, error} ->
+        Logger.warning(
+          "meeting candidate retraction close failed: " <>
+            "candidate=#{candidate.id} reason=#{inspect(error)}"
+        )
+
+        {:error, error}
+    end
+  end
+
+  # Everything a reader needs to second-guess the gate after the fact:
+  # what was said, which chunk said it, how long after, which particle
+  # fired and what it shared. `threading_events` is not used for this —
+  # that log is per-ATTACHMENT and a retraction attaches nothing.
+  defp retraction_note(text, chunk_id, reason) do
+    "retracted by a later utterance from the same speaker, " <>
+      "#{inspect(reason.elapsed_seconds)}s later: #{inspect(excerpt(text))} " <>
+      "(chunk #{chunk_id}; markers #{inspect(reason.markers)}; " <>
+      "shared #{inspect(reason.shared)})"
+  end
+
+  @note_excerpt_limit 200
+
+  defp excerpt(text) when is_binary(text) do
+    if String.length(text) > @note_excerpt_limit,
+      do: String.slice(text, 0, @note_excerpt_limit) <> "...",
+      else: text
+  end
+
+  defp excerpt(text), do: text
 
   # The classified fields land on the skeleton; everything the skeleton
   # accreted while the model was thinking stays put.

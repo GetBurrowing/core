@@ -276,6 +276,14 @@ defmodule Platform.Meetings.ThreadResolver do
 
   @type result :: {:thread, MeetingCandidate.t(), reason()} | :new
 
+  @typedoc """
+  What `retraction_target/2` answers. `{:retraction, candidate, reason}`
+  names the ONE open candidate this utterance takes back; `:none` means
+  no candidate is being taken back and the caller should carry on as
+  before.
+  """
+  @type retraction :: {:retraction, MeetingCandidate.t(), reason()} | :none
+
   # How long after a candidate's last utterance a continuation is still
   # plausible. The classifier holds a chunk at most
   # `IntentClassifier.@default_max_hold_ms` (4_000) before emitting, so
@@ -440,6 +448,151 @@ defmodule Platform.Meetings.ThreadResolver do
   @doc "The time window, in seconds, exposed so a test can state it rather than guess it."
   @spec window_seconds() :: pos_integer()
   def window_seconds, do: @window_seconds
+
+  @doc """
+  The open candidate this utterance RETRACTS, if it retracts one.
+
+  `resolve/2` answers "does this continue something". This answers the
+  question `resolve/2` deliberately refuses to: `105da003` made a
+  negation stop threading onto the card it negates, and stopped there —
+  the negation became its own visible candidate and the card it was
+  aimed at carried on regardless. This names that card so
+  `Platform.Meetings.Candidates` can close it.
+
+  Returns `{:retraction, candidate, reason}` or `:none`. `reason` is a
+  map for the same purpose `resolve/2`'s is: it is written into the
+  close as an operator note, and a bare atom would record THAT the gate
+  fired without recording what it saw.
+
+  ## Three conditions, and each one refuses something the others admit
+
+  1. **The utterance carries a negation particle** — `negated?/1`, the
+     same closed grammatical class `:anaphoric_fragment` refuses on, not
+     a second lexicon. What this protects is narrower than it looks, and
+     `RetractionGateTest`'s mutation M1 is what pinned it down.
+     `"make that mobile only"` does NOT need it — clause 3 refuses that
+     one anyway, because `mobile` is a topic token the candidate does
+     not have. What needs it is an AFFIRMATIVE refinement whose every
+     topic token the candidate ALREADY has — `"make that faster"` after
+     `"we should make the dashboard load faster"`. That clears both
+     halves of clause 3, and polarity is the only thing between it and
+     a close.
+
+  2. **Exactly ONE candidate survives the same-speaker + window gate.**
+     Identical reasoning to the anaphoric path's `[candidate]` clause:
+     with two cards open a bare negation names neither, and closing the
+     wrong card is strictly worse than closing none. This is a hard
+     `[candidate]` match, not "pick the best".
+
+  3. **It is about that candidate, and it brings nothing new.** Two
+     halves, and they refuse different things:
+
+       * at least `anaphoric_shared_floor/0` shared `lexical_tokens/1`.
+         Positive evidence that the negation is aimed at THIS card.
+         Without it `"we can't do it"` — which shares no vocabulary at
+         all, because `do` is an auxiliary and not a generic verb —
+         closes whatever card happens to be open.
+       * every `topic_tokens/1` of the utterance is already a
+         `topic_tokens/1` of the candidate. **This is the clause that
+         separates a retraction from a refinement**, and it is the
+         whole reason this function is not just `negated?/1`:
+
+             candidate: "we should make the dashboard load faster"
+                        topic = ["dashboard", "faster", "load"]
+
+             "don't make that"        topic = []        subset -> RETRACTION
+             "don't make the          topic = ["dashboard",
+              dashboard load faster"          "faster", "load"]
+                                                        subset -> RETRACTION
+             "make that not bold"     topic = ["bold"]  new    -> refinement
+             "make that never expire" topic = ["expire"] new   -> refinement
+
+         A retraction takes the act back and therefore says nothing the
+         card does not already say. A refinement negates an ATTRIBUTE
+         and must bring that attribute with it, or there is nothing to
+         refine. Those last two strings are `ThreadResolverTest`'s
+         recorded `@accepted_polarity_costs` — refinements that already
+         fail to thread. Closing them would turn a recall cost into a
+         correctness one, so they are asserted to survive this gate.
+
+  ## What this deliberately does NOT catch
+
+  `"cancel that"`, `"scratch that"`, `"forget it"` and `"never mind"`
+  are retractions in plain English and answer `:none` here. Two
+  separate reasons, both measured in `RetractionGateTest`:
+
+    * `cancel`, `stop`, `drop` and `no` are not negation markers, and
+      the moduledoc above records the measurement that kept each of
+      them out — `"make that cancel button bigger"` is a refinement.
+      Widening the marker set to catch a retraction would break a
+      refinement, which is the trade this module has already made once.
+    * `"scratch that"`, `"forget it"` and `"never mind"` carry no token
+      in `IntentClassifier`'s action set, so `content_bearing?/1` drops
+      the chunk and the classifier never calls
+      `Platform.Meetings.Candidates.record_heard/1` for it at all.
+      **No gate placed after the content gate can see them**, whatever
+      its vocabulary.
+
+  ## Why this is not folded into `resolve/2`
+
+  `resolve/2` returns `:new | {:thread, ...}` and four call sites read
+  that contract. A third return value would make every one of them
+  handle a case they have no opinion about. More importantly the two
+  questions have different shapes: `resolve/2` picks a best match above
+  a floor, this refuses unless there is exactly one. Sharing the gate
+  (`gate/3`) is the reuse that matters; sharing the return type is not.
+  """
+  @spec retraction_target(utterance(), [MeetingCandidate.t()]) :: retraction()
+  def retraction_target(utterance, open_candidates)
+
+  def retraction_target(_utterance, []), do: :none
+
+  def retraction_target(%{} = utterance, open_candidates) when is_list(open_candidates) do
+    speaker = normalize_speaker(Map.get(utterance, :speaker))
+    text = Map.get(utterance, :text)
+    at = Map.get(utterance, :at)
+
+    with true <- is_binary(speaker),
+         true <- is_binary(text),
+         true <- match?(%DateTime{}, at),
+         [_ | _] = raw <- tokenize(text),
+         true <- negated_tokens?(raw),
+         [candidate] <- gate(open_candidates, speaker, at),
+         true <- takes_back?(raw, candidate) do
+      {:retraction, candidate, retraction_reason(raw, candidate, at)}
+    else
+      _ -> :none
+    end
+  end
+
+  def retraction_target(_utterance, _open_candidates), do: :none
+
+  # Condition 3. Both halves, in the order that fails cheapest first.
+  defp takes_back?(raw, candidate) do
+    length(shared_of(raw, candidate)) >= @anaphoric_shared_floor and
+      new_topic_of(raw, candidate) == []
+  end
+
+  defp shared_of(raw, candidate),
+    do: raw |> lexical_of() |> MapSet.intersection(candidate_lexical(candidate)) |> Enum.sort()
+
+  # The topic tokens this utterance brings that the candidate does not
+  # already have. Empty means it said nothing new — see the doc above.
+  defp new_topic_of(raw, candidate),
+    do: raw |> topic_of() |> MapSet.difference(candidate_tokens(candidate)) |> Enum.sort()
+
+  defp retraction_reason(raw, candidate, at) do
+    %{
+      rule: :retraction,
+      markers:
+        raw |> Enum.filter(&MapSet.member?(@negation_markers, &1)) |> Enum.uniq() |> Enum.sort(),
+      shared: shared_of(raw, candidate),
+      utterance_topic: raw |> topic_of() |> Enum.sort(),
+      antecedent_topic: candidate |> candidate_tokens() |> Enum.sort(),
+      elapsed_seconds: elapsed_seconds(candidate, at),
+      open_candidates_in_window: 1
+    }
+  end
 
   @doc "The topic-overlap floor, exposed for the same reason."
   @spec overlap_floor() :: float()
