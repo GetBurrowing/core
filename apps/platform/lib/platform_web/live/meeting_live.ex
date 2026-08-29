@@ -216,8 +216,7 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
 
-  import PlatformWeb.Components.Meetings.CandidateCountdown,
-    only: [candidate_countdown_rail: 1]
+  import PlatformWeb.Components.Meetings.CandidateRail, only: [candidate_rail: 1]
 
   import PlatformWeb.Components.Meetings.IntentsCollapse,
     only: [intents_collapse: 1, intents_overlays: 1]
@@ -238,6 +237,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Chat.CanvasDocument
   alias Platform.Meetings
   alias Platform.Meetings.Archive
+  alias Platform.Meetings.CandidateEvents
   alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
@@ -691,6 +691,8 @@ defmodule PlatformWeb.MeetingLive do
     # the only reason it is empty here is that no meeting is resolved
     # yet. `handle_params/3` loads the real list.
     |> assign(:meeting_candidates, [])
+    |> assign(:meeting_candidates_closed, [])
+    |> assign(:meeting_candidate_events, %{})
     |> assign(:candidate_error, nil)
   end
 
@@ -943,7 +945,7 @@ defmodule PlatformWeb.MeetingLive do
           # the seed's `[]`: a participant joining a meeting whose cards
           # were already counting down must be able to stop them on
           # first paint, not only after the next utterance.
-          |> assign(:meeting_candidates, Candidates.open_for_meeting(meeting.id))
+          |> assign_candidate_board(meeting.id)
           |> MeetingHooks.attach(List.wrap(meeting.chat_space_id))
 
         # Auto-join on connected mount unless ?no_autojoin=true is set
@@ -3095,6 +3097,38 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_event("stop_candidate", _params, socket), do: {:noreply, socket}
 
+  # The human gate on a card that is NOT counting down (task
+  # 01a03f4e-78b1). `Go ahead` and `Not now` are the review half of the
+  # ticket's two modes; the countdown above is the act half, and the two
+  # are mutually exclusive because a card in review has no `acts_at`.
+  #
+  # Ungated for the same reason `stop_candidate` is: the board is a
+  # participant-facing surface, not the producer's tuning bar.
+  #
+  # `graduate/2` is what its own doc calls "the board that calls it" —
+  # this is that board. It mints the deliverable and closes the row out,
+  # so the card leaves the live list and lands in Closed with a reason,
+  # exactly as a fired card does.
+  def handle_event("approve_candidate", %{"candidate_id" => candidate_id}, socket)
+      when is_binary(candidate_id) do
+    {:noreply, with_own_candidate(socket, candidate_id, &apply_candidate_approve/2)}
+  end
+
+  def handle_event("approve_candidate", _params, socket), do: {:noreply, socket}
+
+  # `Not now` closes `:dismissed` — the same reason a stop writes,
+  # because they are the same human decision reached through two
+  # affordances. Deliberately NOT a sixth `closed_reason`: the
+  # vocabulary is the Architect's and `candidates_test.exs` asserts no
+  # `dismiss/1` wrapper exists, so this goes through `close/2` like
+  # every other close in the tree.
+  def handle_event("decline_candidate", %{"candidate_id" => candidate_id}, socket)
+      when is_binary(candidate_id) do
+    {:noreply, with_own_candidate(socket, candidate_id, &apply_candidate_decline/2)}
+  end
+
+  def handle_event("decline_candidate", _params, socket), do: {:noreply, socket}
+
   # The X opens a reason picker rather than removing immediately. A
   # cancel carries no reason until a human states one, and stage 6's
   # corpus requires a reason on every row — so the reason has to be
@@ -3587,7 +3621,7 @@ defmodule PlatformWeb.MeetingLive do
   # could disagree with the sweeper's.
   def handle_info({:candidate_event, %{meeting_id: meeting_id}}, socket) do
     if socket.assigns[:meeting] && socket.assigns.meeting.id == meeting_id do
-      {:noreply, assign(socket, :meeting_candidates, Candidates.open_for_meeting(meeting_id))}
+      {:noreply, assign_candidate_board(socket, meeting_id)}
     else
       {:noreply, socket}
     end
@@ -4448,7 +4482,7 @@ defmodule PlatformWeb.MeetingLive do
       {:ok, _stopped} ->
         socket
         |> assign(:candidate_error, nil)
-        |> assign(:meeting_candidates, Candidates.open_for_meeting(candidate.meeting_id))
+        |> assign_candidate_board(candidate.meeting_id)
 
       # The sweeper won the race. Said out loud rather than swallowed:
       # the deliverable now exists, and a stop button that silently did
@@ -4456,12 +4490,98 @@ defmodule PlatformWeb.MeetingLive do
       {:error, :already_fired} ->
         socket
         |> assign(:candidate_error, "Too late — this one already went ahead.")
-        |> assign(:meeting_candidates, Candidates.open_for_meeting(candidate.meeting_id))
+        |> assign_candidate_board(candidate.meeting_id)
 
       {:error, _reason} ->
         assign(socket, :candidate_error, "Could not stop this one.")
     end
   end
+
+  # Resolve a candidate id against THIS socket's meeting before touching
+  # it. Same posture as `stop_candidate`: a click on a card belonging to
+  # another meeting writes nothing and says nothing, because an error
+  # message would only tell a prober that the id exists.
+  defp with_own_candidate(socket, candidate_id, fun) do
+    meeting_id = socket.assigns[:meeting] && socket.assigns.meeting.id
+
+    case Candidates.get(candidate_id) do
+      %{meeting_id: ^meeting_id} = candidate when is_binary(meeting_id) -> fun.(socket, candidate)
+      _ -> socket
+    end
+  end
+
+  defp apply_candidate_approve(socket, candidate) do
+    case Candidates.graduate(candidate) do
+      {:ok, _graduated} ->
+        socket
+        |> assign(:candidate_error, nil)
+        |> assign_candidate_board(candidate.meeting_id)
+
+      {:error, _reason} ->
+        socket
+        |> assign(:candidate_error, "Could not start this one.")
+        |> assign_candidate_board(candidate.meeting_id)
+    end
+  end
+
+  defp apply_candidate_decline(socket, candidate) do
+    note = decline_note(socket.assigns[:display_name])
+
+    case Candidates.close(candidate, {:dismissed, note}) do
+      {:ok, _closed} ->
+        socket
+        |> assign(:candidate_error, nil)
+        |> assign_candidate_board(candidate.meeting_id)
+
+      {:error, _reason} ->
+        assign(socket, :candidate_error, "Could not close this one.")
+    end
+  end
+
+  defp decline_note(name) when is_binary(name), do: "Not now — " <> name
+  defp decline_note(_name), do: "Not now — a participant"
+
+  # The board's own live/closed split, and it is NOT
+  # `open_for_meeting/1`.
+  #
+  # That function answers a THREADING question — "what could an
+  # incoming utterance still attach to" — and so excludes `:acting`
+  # (`@open_states` stops before it). A board asking the same question
+  # would drop a card off the rail at the exact moment the sweeper
+  # claimed it and began doing the work, which is the one moment a
+  # participant most wants to see it. Stage 4 of the mockup IS `:acting`.
+  #
+  # So the split is stated once, here, over a single `list_for_meeting/1`
+  # read: a card is closed when its `state` says so OR when it carries a
+  # `closed_reason` — the second clause for the same reason
+  # `open_for_meeting/1` carries it, namely that `closed_reason` is the
+  # durable mark and a row carrying it must not be offered as live
+  # whatever its `state` column happens to say.
+  #
+  # Events are fetched for the whole meeting in ONE query and grouped,
+  # rather than per card: a rail of twenty cards would otherwise issue
+  # twenty queries on every broadcast, and candidate broadcasts arrive
+  # at transcript speed.
+  defp assign_candidate_board(socket, meeting_id) when is_binary(meeting_id) do
+    {closed, live} =
+      meeting_id
+      |> Candidates.list_for_meeting()
+      |> Enum.split_with(&candidate_closed?/1)
+
+    socket
+    |> assign(:meeting_candidates, live)
+    |> assign(:meeting_candidates_closed, closed)
+    |> assign(
+      :meeting_candidate_events,
+      meeting_id |> CandidateEvents.list_for_meeting() |> Enum.group_by(& &1.candidate_id)
+    )
+  end
+
+  defp assign_candidate_board(socket, _meeting_id), do: socket
+
+  defp candidate_closed?(%{state: :closed}), do: true
+  defp candidate_closed?(%{closed_reason: reason}) when not is_nil(reason), do: true
+  defp candidate_closed?(_candidate), do: false
 
   defp with_intents_gate(%{assigns: %{intents_visible?: true}} = socket, fun) do
     {:noreply, fun.(socket)}

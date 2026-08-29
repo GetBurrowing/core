@@ -5157,3 +5157,441 @@ body, .font-fabrikam {
   flex: none;
   align-self: center;
 }
+
+/* ── Meeting task cards (task 01a03f4e-78b1) ─────────────────────────
+   The rail on `01a03f90` ("Meeting task card states") is drawn dark-only,
+   with literal hexes. The meeting shell inherits the app theme, so those
+   hexes are the DARK half of a pair here rather than the values themselves:
+   dropped in raw, a #161a23 card on a light meeting page is a black box.
+
+   The organising idea the palette encodes — "colour is earned, never
+   given" — is why the stage tints are three separate variables and not one
+   accent that changes hue. A grey card must read as *absence* of colour, so
+   `--cc-border` and `--cc-bg` are deliberately near-neutral against the
+   surface, while the shaping/acting pair carry real chroma. Flattening them
+   to a single token would delete the distinction the rail is built on.
+
+   Same dual-selector pattern as the shadow tokens above: an explicit
+   `data-theme` wins over the OS preference. */
+:root {
+  --cc-bg: #ffffff;
+  --cc-border: #e2e5ec;
+  --cc-border-thinking: #cfd4de;
+  --cc-border-shaping: #9db4dc;
+  --cc-bg-shaping: linear-gradient(180deg, #eef3fc 0%, #f8fafd 100%);
+  --cc-border-acting: #8dc0a2;
+  --cc-bg-acting: linear-gradient(180deg, #eaf6ee 0%, #f7fbf8 100%);
+  --cc-bg-closed: #f4f5f7;
+  --cc-border-closed: #e6e8ec;
+  --cc-title: #1f2430;
+  --cc-title-half: #626b7d;
+  --cc-title-dead: #767d8d;
+  --cc-byline: #6a7284;
+  --cc-stage: #7b8395;
+  --cc-reason: #6a7284;
+  --cc-micro: #6b7385;
+  --cc-chip-bg: #eef0f4;
+  --cc-chip-fg: #5f6779;
+  --cc-ask-fg: #2c4f8f;
+  --cc-ask-bg: #eaf1fd;
+  --cc-ask-rule: #4f7cc4;
+  --cc-btn-bg: #f4f5f8;
+  --cc-btn-border: #d5d9e2;
+  --cc-btn-fg: #3d4453;
+  --cc-go-bg: #2f57a0;
+  --cc-go-border: #3a68bd;
+  --cc-go-fg: #ffffff;
+  --cc-ring-track: #d8e6dd;
+  --cc-ring-progress: #2f9e63;
+  --cc-ring-secs: #2c7d51;
+  --cc-foot-fg: #2c7d51;
+  --cc-skeleton-a: #eceef2;
+  --cc-skeleton-b: #dcdfe7;
+  --cc-log-dot: #b9bfcc;
+  --cc-log-fg: #5f6779;
+  --cc-live-dot: #22c55e;
+  --cc-ghost-bg: #f0f1f5;
+  --cc-ghost-fg: #8d94a3;
+  --cc-ghost-border: #cdd2dc;
+}
+
+/* The mockup's own values. */
+[data-theme="dark"] {
+  --cc-bg: #161a23;
+  --cc-border: #232838;
+  --cc-border-thinking: #2b3244;
+  --cc-border-shaping: #3a4a6b;
+  --cc-bg-shaping: linear-gradient(180deg, #182033 0%, #161b26 100%);
+  --cc-border-acting: #3f6a4d;
+  --cc-bg-acting: linear-gradient(180deg, #152418 0%, #141a19 100%);
+  --cc-bg-closed: #12151c;
+  --cc-border-closed: #1b2029;
+  --cc-title: #dfe3ec;
+  --cc-title-half: #8f97a8;
+  --cc-title-dead: #767d8d;
+  --cc-byline: #7f8798;
+  --cc-stage: #5d6577;
+  --cc-reason: #5f6779;
+  --cc-micro: #6b7385;
+  --cc-chip-bg: #1b202c;
+  --cc-chip-fg: #7f8798;
+  --cc-ask-fg: #9fb4dd;
+  --cc-ask-bg: #16203a;
+  --cc-ask-rule: #4f7cc4;
+  --cc-btn-bg: #1a1f2b;
+  --cc-btn-border: #2c3448;
+  --cc-btn-fg: #aeb6c6;
+  --cc-go-bg: #2f57a0;
+  --cc-go-border: #3a68bd;
+  --cc-go-fg: #ffffff;
+  --cc-ring-track: #233026;
+  --cc-ring-progress: #43c07a;
+  --cc-ring-secs: #7fd4a0;
+  --cc-foot-fg: #89c9a4;
+  --cc-skeleton-a: #1d2230;
+  --cc-skeleton-b: #2b3244;
+  --cc-log-dot: #39415a;
+  --cc-log-fg: #7a8296;
+  --cc-live-dot: #22c55e;
+  --cc-ghost-bg: #1e2432;
+  --cc-ghost-fg: #4b5365;
+  --cc-ghost-border: #333b4d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --cc-bg: #161a23;
+    --cc-border: #232838;
+    --cc-border-thinking: #2b3244;
+    --cc-border-shaping: #3a4a6b;
+    --cc-bg-shaping: linear-gradient(180deg, #182033 0%, #161b26 100%);
+    --cc-border-acting: #3f6a4d;
+    --cc-bg-acting: linear-gradient(180deg, #152418 0%, #141a19 100%);
+    --cc-bg-closed: #12151c;
+    --cc-border-closed: #1b2029;
+    --cc-title: #dfe3ec;
+    --cc-title-half: #8f97a8;
+    --cc-title-dead: #767d8d;
+    --cc-byline: #7f8798;
+    --cc-stage: #5d6577;
+    --cc-reason: #5f6779;
+    --cc-micro: #6b7385;
+    --cc-chip-bg: #1b202c;
+    --cc-chip-fg: #7f8798;
+    --cc-ask-fg: #9fb4dd;
+    --cc-ask-bg: #16203a;
+    --cc-ask-rule: #4f7cc4;
+    --cc-btn-bg: #1a1f2b;
+    --cc-btn-border: #2c3448;
+    --cc-btn-fg: #aeb6c6;
+    --cc-go-bg: #2f57a0;
+    --cc-go-border: #3a68bd;
+    --cc-go-fg: #ffffff;
+    --cc-ring-track: #233026;
+    --cc-ring-progress: #43c07a;
+    --cc-ring-secs: #7fd4a0;
+    --cc-foot-fg: #89c9a4;
+    --cc-skeleton-a: #1d2230;
+    --cc-skeleton-b: #2b3244;
+    --cc-log-dot: #39415a;
+    --cc-log-fg: #7a8296;
+    --cc-live-dot: #22c55e;
+    --cc-ghost-bg: #1e2432;
+    --cc-ghost-fg: #4b5365;
+    --cc-ghost-border: #333b4d;
+  }
+}
+
+.candidate-rail-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cc-live-dot);
+  box-shadow: 0 0 0 3px rgb(34 197 94 / 0.16);
+}
+
+.candidate-card {
+  position: relative;
+  border-radius: 12px;
+  padding: 13px 14px;
+  border: 1px solid var(--cc-border);
+  background: var(--cc-bg);
+}
+
+/* Colour is earned. `heard` and `thinking` inherit the neutral base above
+   and differ only in border weight, which is the mockup's own one-step
+   lift rather than a hue. */
+.candidate-card--thinking {
+  border-color: var(--cc-border-thinking);
+}
+
+.candidate-card--taking-shape {
+  border-color: var(--cc-border-shaping);
+  background: var(--cc-bg-shaping);
+}
+
+.candidate-card--acting {
+  border-color: var(--cc-border-acting);
+  background: var(--cc-bg-acting);
+}
+
+.candidate-card--closed {
+  background: var(--cc-bg-closed);
+  border-color: var(--cc-border-closed);
+  opacity: 0.72;
+}
+
+.candidate-card__stage {
+  font-size: 9.5px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--cc-stage);
+  margin-bottom: 9px;
+}
+
+.candidate-card__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--cc-title);
+  overflow-wrap: anywhere;
+}
+
+.candidate-card__title--half {
+  color: var(--cc-title-half);
+  font-weight: 500;
+}
+
+.candidate-card__title--dead {
+  color: var(--cc-title-dead);
+  font-weight: 500;
+}
+
+.candidate-card__byline {
+  font-size: 11px;
+  color: var(--cc-byline);
+  margin-top: 3px;
+}
+
+.candidate-card__reason {
+  font-size: 11px;
+  color: var(--cc-reason);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.candidate-card__micro {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--cc-micro);
+  font-style: italic;
+}
+
+.candidate-card__chips {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.candidate-card__chip {
+  background: var(--cc-chip-bg);
+  border-radius: 20px;
+  padding: 3px 9px;
+  font-size: 11px;
+  color: var(--cc-chip-fg);
+}
+
+.candidate-card__ask {
+  margin-top: 11px;
+  font-size: 11.5px;
+  color: var(--cc-ask-fg);
+  background: var(--cc-ask-bg);
+  border-left: 2px solid var(--cc-ask-rule);
+  padding: 6px 9px;
+  border-radius: 0 6px 6px 0;
+}
+
+.candidate-btn {
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  border: 1px solid var(--cc-btn-border);
+  background: var(--cc-btn-bg);
+  color: var(--cc-btn-fg);
+}
+
+.candidate-btn--go {
+  background: var(--cc-go-bg);
+  border-color: var(--cc-go-border);
+  color: var(--cc-go-fg);
+  font-weight: 600;
+}
+
+/* ── Skeleton ──
+   Two bars at the mockup's widths. The shimmer is a background-position
+   sweep rather than an opacity pulse so it reads as "arriving" rather than
+   "broken", and it is dropped entirely under reduced-motion — a shimmer is
+   decoration, and the caption beneath already says what the card is doing. */
+.candidate-skeleton {
+  display: block;
+  height: 9px;
+  border-radius: 5px;
+  background: linear-gradient(
+    90deg,
+    var(--cc-skeleton-a) 25%,
+    var(--cc-skeleton-b) 50%,
+    var(--cc-skeleton-a) 75%
+  );
+  background-size: 220% 100%;
+  animation: candidate-shimmer 1.5s infinite;
+}
+
+.candidate-skeleton--a {
+  width: 82%;
+  margin-bottom: 8px;
+}
+
+.candidate-skeleton--b {
+  width: 54%;
+}
+
+@keyframes candidate-shimmer {
+  0% {
+    background-position: 110% 0;
+  }
+  100% {
+    background-position: -110% 0;
+  }
+}
+
+.candidate-avatar-ghost {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--cc-ghost-bg);
+  color: var(--cc-ghost-fg);
+  border: 1px dashed var(--cc-ghost-border);
+}
+
+.candidate-avatar-fallback {
+  background: var(--cc-ghost-bg);
+  color: var(--cc-byline);
+}
+
+/* ── Activity log ── */
+.candidate-log {
+  list-style: none;
+  margin: 11px 0 0;
+  padding: 0;
+}
+
+.candidate-log__line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--cc-log-fg);
+  padding: 2.5px 0;
+}
+
+.candidate-log__dot {
+  flex: 0 0 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cc-log-dot);
+}
+
+/* ── Countdown foot ── */
+.candidate-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.candidate-ring {
+  position: relative;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+}
+
+/* -90deg so the drain starts at twelve o'clock. */
+.candidate-ring__svg {
+  width: 32px;
+  height: 32px;
+  transform: rotate(-90deg);
+}
+
+.candidate-ring__track {
+  fill: none;
+  stroke: var(--cc-ring-track);
+  stroke-width: 3;
+}
+
+/* No CSS animation on the progress arc: `stroke-dashoffset` is set by the
+   server on render and by the `CandidateRing` hook every second, both from
+   the same `acts_at`. A keyframe animation here would be a third clock,
+   started at paint, drifting away from the deadline the sweeper fires on —
+   which is the "timer that lies" this feature exists to remove. */
+.candidate-ring__progress {
+  fill: none;
+  stroke: var(--cc-ring-progress);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.9s linear;
+}
+
+.candidate-ring__secs {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--cc-ring-secs);
+  font-variant-numeric: tabular-nums;
+}
+
+.candidate-foot__txt {
+  font-size: 11.5px;
+  color: var(--cc-foot-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Closed disclosure ──
+   A `<details>` so the reasons stay in the DOM while collapsed. The ticket
+   is explicit that collapse is a display affordance and not a retention
+   policy: "a record you cannot reopen is a deletion with extra steps". */
+.candidate-closed {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cc-border);
+}
+
+.candidate-closed__summary {
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cc-stage);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .candidate-skeleton {
+    animation: none;
+  }
+
+  .candidate-ring__progress {
+    transition: none;
+  }
+}

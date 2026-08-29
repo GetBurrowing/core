@@ -1245,8 +1245,10 @@ defmodule Platform.Meetings.Candidates do
 
   Since task 01a03fba this IS reached in production, from
   `Platform.Meetings.CandidateSweeper` via `fire/1` — the server-side
-  countdown. It is still not called from any LiveView or PubSub
-  handler.
+  countdown. Since task 01a03f4e-78b1 it is ALSO reached from a
+  LiveView: `PlatformWeb.MeetingLive`'s `approve_candidate` handler is
+  the `Go ahead` button on the meeting task board, which is the "board
+  that calls it" this doc used to be waiting for.
   """
   @spec graduate(MeetingCandidate.t() | binary(), keyword() | map()) ::
           {:ok, MeetingCandidate.t()} | {:error, term()}

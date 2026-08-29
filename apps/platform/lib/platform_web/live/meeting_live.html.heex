@@ -1559,8 +1559,10 @@
              stop works from any participant's session, and the intents
              bar vanishes for anyone without that role. Renders nothing
              when no candidate is counting down. --%>
-          <.candidate_countdown_rail
+          <.candidate_rail
             candidates={@meeting_candidates}
+            closed={@meeting_candidates_closed}
+            events={@meeting_candidate_events}
             error={@candidate_error}
           />
 
