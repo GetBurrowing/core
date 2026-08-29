@@ -155,7 +155,7 @@ defmodule Platform.Chat.AgentResponder do
 
     result =
       with {:ok, response} <-
-             chat_module().chat(context.user_message,
+             chat_module().chat(agent_body(context.user_message, context.attachments),
                history: context.history,
                space_id: context.message.space_id,
                participant_id: context.agent_participant.id
@@ -256,19 +256,20 @@ defmodule Platform.Chat.AgentResponder do
           author_name =
             if author_participant, do: author_participant.display_name, else: "unknown"
 
-          trigger_attachments =
-            context.message.id
-            |> List.wrap()
-            |> Chat.list_attachments_for_messages()
-            |> Map.get(context.message.id, [])
-            |> serialize_attachments()
-
           payload = %{
             signal: build_external_signal(signal, space_id, context.agent),
             message: %{
+              # DELIBERATELY the literal trimmed body, NOT `agent_body/2`.
+              # A federated runtime is handed the attachments structurally
+              # under `message.attachments` and renders them itself; a
+              # server-side manifest here would put the same facts in two
+              # places and let a client read whichever it found first. The
+              # built-in path has no such second channel — the provider sees
+              # `content` and nothing else — which is why THAT path renders
+              # and this one does not (task 019ff107).
               content: context.user_message,
               author: author_name,
-              attachments: trigger_attachments
+              attachments: context.attachments
             },
             history: context.history,
             context: bundle,
@@ -351,6 +352,12 @@ defmodule Platform.Chat.AgentResponder do
          agent: agent,
          agent_participant: active_agent_participant,
          message: message,
+         # Fetched HERE rather than in `dispatch_to_external/2` (where this
+         # query used to live) because BOTH dispatch paths need it now: the
+         # external payload carries it as structured `message.attachments`,
+         # and `dispatch_to_built_in/2` needs it to render a body for an
+         # attachment-only message. One query, one source (task 019ff107).
+         attachments: message_attachments(message),
          user_message: String.trim(message.content || ""),
          history: history
        }}
@@ -382,6 +389,7 @@ defmodule Platform.Chat.AgentResponder do
            agent: agent,
            agent_participant: nil,
            message: nil,
+           attachments: [],
            user_message: nil,
            history: [],
            responsibility_key: Map.get(metadata, :responsibility_key),
@@ -825,24 +833,96 @@ defmodule Platform.Chat.AgentResponder do
          agent_id,
          attachments
        )
-       when is_binary(content) do
-    trimmed = String.trim(content)
+       # `is_nil(content)` is load-bearing, not defensive padding. `Ecto.cast/3`
+       # treats "" as a missing value, so a message posted with an empty body
+       # persists `content` as NULL, not as "". The old `is_binary(content)`
+       # guard therefore never matched an attachment-only message at all — it
+       # fell to the catch-all clause below and was dropped one step EARLIER
+       # than the blank-body branch that looks like the drop site. Both had to
+       # go (task 019ff107); fixing only the visible one changes nothing.
+       when is_binary(content) or is_nil(content) do
+    trimmed = String.trim(content || "")
 
-    if trimmed == "" do
-      nil
-    else
-      role =
-        cond do
-          message.participant_id == agent_id -> "assistant"
-          message.author_participant_type == "agent" -> "assistant"
-          true -> "user"
-        end
+    role =
+      cond do
+        message.participant_id == agent_id -> "assistant"
+        message.author_participant_type == "agent" -> "assistant"
+        true -> "user"
+      end
 
-      %{role: role, content: history_content(trimmed, message, role), attachments: attachments}
+    # THREE outcomes, not two (task 019ff107). Before this change a blank
+    # body dropped the turn outright, which threw away the `attachments`
+    # this function was already handed — so a colleague's screenshot-only
+    # message was indistinguishable, in history, from a message that never
+    # existed. The built-in provider path only ever sees `content`
+    # (`Platform.Agents.QuickAgent.chat/2` concatenates history entries
+    # straight into the provider message list), so an entry whose body is
+    # "" carries nothing at all.
+    #
+    #   text present            -> the text
+    #   no text, attachments    -> a manifest naming them
+    #   no text, no attachments -> still dropped, as before
+    #
+    # The last branch is the one that must NOT change: a genuinely empty
+    # message is not a message, and turning every one into an
+    # "attachments: 0" turn would be the mirror-image defect.
+    cond do
+      trimmed != "" ->
+        %{role: role, content: history_content(trimmed, message, role), attachments: attachments}
+
+      attachments != [] ->
+        %{
+          role: role,
+          content: history_content(describe_attachments(attachments), message, role),
+          attachments: attachments
+        }
+
+      true ->
+        nil
     end
   end
 
   defp history_message(_message, _agent_id, _attachments), do: nil
+
+  # The trigger body as a built-in agent should read it.
+  #
+  # Non-empty text passes through untouched — this must never rewrite a real
+  # body. Empty text with attachments renders a manifest instead, so the agent
+  # can tell "there is something here I cannot render as text" from "there is
+  # nothing here". Those are different facts and an attachment-only message
+  # collapsed them into one empty string, which produced confident wrong
+  # answers to humans ("your message arrived empty, please resend"). Empty text
+  # AND no attachments stays empty: nothing arrived, and saying so is correct.
+  @spec agent_body(binary() | nil, list()) :: binary()
+  defp agent_body(text, _attachments) when is_binary(text) and text != "", do: text
+  defp agent_body(text, []), do: text || ""
+  defp agent_body(_text, attachments), do: describe_attachments(attachments)
+
+  # Shared by `agent_body/2` and `history_message/3` so the current message and
+  # a history turn describe an attachment the same way. Byte counts are raw
+  # rather than humanised: the agent may need to decide whether a file fits
+  # under `attachment.get_inline`'s 25 MB cap, and a rounded "134 KB" cannot
+  # answer that. The URL is included because it is where the attachment UUID
+  # lives — `attachment.get_inline`'s own parameter documentation points the
+  # agent at `message.attachments[].url` for exactly this — so the agent can
+  # fetch the bytes without a round trip to the human.
+  @spec describe_attachments(list()) :: binary()
+  defp describe_attachments(attachments) do
+    lines =
+      Enum.map_join(attachments, "\n", fn a ->
+        "- #{a.filename} (#{a.content_type}, #{a.byte_size} bytes) — #{a.url}"
+      end)
+
+    "Message with no text body. #{length(attachments)} attachment(s):\n" <> lines
+  end
+
+  defp message_attachments(%Message{id: id}) do
+    id
+    |> List.wrap()
+    |> Chat.list_attachments_for_messages()
+    |> Map.get(id, [])
+    |> serialize_attachments()
+  end
 
   defp serialize_attachments(attachments) do
     Enum.map(attachments, fn a ->
