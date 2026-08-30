@@ -9,10 +9,14 @@ defmodule Platform.Tasks.BranchProvisioner.Runner do
     * `list_matching_refs/1` — does a ref with this exact name already
       exist?
     * `create_ref/1` — create it.
+    * `compare_refs/1` — how does one ref stand against another?
 
   There is deliberately NO update/force operation in this behaviour.
   Moving a branch an executor has already committed to would destroy
   work, so the capability does not exist to be reached for by mistake.
+  `compare_refs/1` is a READ: it reports the divergence, and reporting
+  is the whole point — a caller that learns a branch is stale still has
+  no way, through this seam, to move it.
 
   Same seam shape as `Platform.Tasks.MergeControl.Runner`: a behaviour
   with a `gh`-backed default, so tests pin a stub through
@@ -47,6 +51,22 @@ defmodule Platform.Tasks.BranchProvisioner.Runner do
   @callback create_ref(%{repo: repo(), ref: String.t(), sha: String.t()}) ::
               {:ok, String.t()}
               | {:error, :ref_exists}
+              | {:error, atom(), String.t()}
+              | {:error, term()}
+
+  @doc """
+  Compare `head` against `base` on `repo`.
+
+  Answers GitHub's `compare` shape: `ahead_by` is how many commits
+  `head` carries that `base` does not, `behind_by` how many `base`
+  carries that `head` does not. Both are needed and neither is
+  derivable from the other — `ahead_by` alone cannot tell a branch that
+  has never been pushed to apart from one whose work has already
+  landed, and `behind_by` alone is true of essentially every task
+  branch and so distinguishes nothing.
+  """
+  @callback compare_refs(%{repo: repo(), base: String.t(), head: String.t()}) ::
+              {:ok, %{ahead_by: non_neg_integer(), behind_by: non_neg_integer()}}
               | {:error, atom(), String.t()}
               | {:error, term()}
 end

@@ -30,4 +30,7 @@ defmodule Platform.Tasks.BranchProvisioner.NoopRunner do
 
   @impl true
   def create_ref(_args), do: @disabled
+
+  @impl true
+  def compare_refs(_args), do: @disabled
 end

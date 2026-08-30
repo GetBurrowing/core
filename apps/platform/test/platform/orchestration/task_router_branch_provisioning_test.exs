@@ -75,6 +75,15 @@ defmodule Platform.Orchestration.TaskRouterBranchProvisioningTest do
       report({:create_ref, repo, ref, sha}, {:ok, ref})
     end
 
+    # `stale_branch_step/3` probes this seam during prompt rendering. The
+    # stub answers "the branch has commits of its own", the ordinary case,
+    # so the freshness warning stays out of the prompts this file asserts
+    # on and the provisioning assertions below measure only provisioning.
+    @impl true
+    def compare_refs(%{repo: repo, base: base, head: head}) do
+      report({:compare_refs, repo, base, head}, {:ok, %{ahead_by: 1, behind_by: 3}})
+    end
+
     defp report(call, ok_result) do
       config = Application.get_env(:platform, :branch_provisioner, [])
 

@@ -40,6 +40,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Orchestration.ProviderGuidance
+  alias Platform.Tasks.BranchFreshness
   alias Platform.Tasks.BranchReconciler
   alias Platform.Tasks.ReviewRequest
   alias Platform.Tasks.Stage
@@ -1719,6 +1720,44 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     "   - If `git ls-remote --heads origin 'task/#{task_slug}'` prints nothing in #{heading}, this task was dispatched before branch names carried the full task UUID and its branch may be on the remote under the 8-char prefix instead: run `git ls-remote --heads origin 'task/#{legacy_branch_prefix}*'`, deploy whichever ref actually exists, and name that branch explicitly in the PR body. Transitional only — every new dispatch creates `task/#{task_slug}`."
   end
 
+  # Task 01a04bb9. `BranchProvisioner` cuts `task/<uuid>` off the default branch
+  # at the first dispatch and never moves it again. When an earlier stage's work
+  # reached the default branch from some OTHER branch, that ref still holds
+  # nothing, and `--track`ing it puts a later stage in a tree where its own
+  # predecessor's artefacts are absent. Absence is not an error — it reads as
+  # "this was never built", so the executor reports a false finding about the
+  # work instead of a true one about the tree.
+  #
+  # `:fresh` and `:unknown` render the EMPTY STRING, so the ordinary prompt is
+  # byte-identical to what it was before this change. That matters twice over:
+  # a failed probe must not put a warning into every dispatch (see
+  # `BranchFreshness`), and the recovery below must never be offered on a
+  # branch that has commits of its own.
+  #
+  # The sanctioned move is `merge --ff-only`, and the choice is the whole
+  # safety argument: git itself refuses a fast-forward the moment the branch
+  # carries unmerged work, so the executor cannot discard anything by
+  # following this step even if the probe were wrong. A `reset --hard` or a
+  # re-cut from the default branch would do the same job and silently throw
+  # work away, which is why they are named and forbidden rather than left
+  # unmentioned.
+  defp stale_branch_step(repo_url, task_slug, default_branch) do
+    case BranchFreshness.assess(repo_url, "task/" <> task_slug, default_branch) do
+      {:stale_stub, behind} ->
+        """
+           - Suite checked this branch before dispatching: `task/#{task_slug}` carries NO commits of its own and is #{behind} behind `origin/#{default_branch}`. If an earlier stage of THIS task already merged, its work is NOT in this worktree — treat a missing file as a stale branch, not as evidence the thing was never built.
+             ```
+             git merge --ff-only origin/#{default_branch}
+             ```
+             - Succeeded: continue. The fast-forward moved a branch that held nothing, so nothing was lost.
+             - Failed: STOP and `report_blocker`. A refusal means the branch DOES carry work, which contradicts what Suite measured. Do NOT `git reset --hard`, do NOT delete and re-cut the branch, and do NOT `--force` anything — those discard commits, which is precisely what `--ff-only` is here to prevent.
+        """
+
+      _ ->
+        ""
+    end
+  end
+
   # Task 01a001ac stage 4. The line above is a CONDITIONAL the deployer has to
   # run itself; this one is an OBSERVATION Suite already made. When
   # `BranchReconciler` finds a sibling ref under the same 8-hex prefix while
@@ -2154,6 +2193,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
        - Preflight printed NOTHING: the worktree does not exist. Run `git worktree add` exactly as shown.
        - Preflight printed exactly `task/#{task_slug}`: this is a redispatch of THIS task. Skip `git worktree add`, `cd` into the existing worktree and continue on that branch.
        - Preflight printed ANYTHING ELSE: STOP. That directory belongs to another task. Do NOT `cd` into it, do NOT commit, do NOT `git worktree add` over it. Call `report_blocker` naming both the expected branch `task/#{task_slug}` and the actual branch the preflight printed.
+    #{stale_branch_step(primary_repo_url(repos), task_slug, default_branch)}\
     2. Do ALL work in the worktree directory.
     3. When implementation is complete:
        - Run the full test suite and lint checks

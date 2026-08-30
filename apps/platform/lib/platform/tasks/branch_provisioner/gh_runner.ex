@@ -6,6 +6,7 @@ defmodule Platform.Tasks.BranchProvisioner.GhRunner do
       gh api repos/<owner>/<name>/git/ref/heads/<b>     # its head sha
       gh api repos/<owner>/<name>/git/matching-refs/... # existence
       gh api -X POST repos/<owner>/<name>/git/refs      # create
+      gh api repos/<owner>/<name>/compare/<base>...<head>  # divergence
 
   ## Missing binary
 
@@ -63,6 +64,28 @@ defmodule Platform.Tasks.BranchProvisioner.GhRunner do
       {:error, _, _} = err -> err
       {:error, _} = err -> err
       other -> {:error, {:unexpected_response, other}}
+    end
+  end
+
+  @impl true
+  def compare_refs(%{repo: repo, base: base, head: head}) do
+    # `basehead` is `BASE...HEAD` (three dots). GitHub reports `ahead_by`
+    # relative to HEAD, so the argument order is load-bearing: swapping
+    # base and head exchanges the two counts and turns "this branch has
+    # commits of its own" into its opposite.
+    case api(["api", "repos/#{repo}/compare/#{base}...#{head}"]) do
+      {:ok, %{"ahead_by" => ahead, "behind_by" => behind}}
+      when is_integer(ahead) and is_integer(behind) ->
+        {:ok, %{ahead_by: ahead, behind_by: behind}}
+
+      {:error, _, _} = err ->
+        err
+
+      {:error, _} = err ->
+        err
+
+      other ->
+        {:error, {:unexpected_response, other}}
     end
   end
 
