@@ -77,7 +77,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     ]
 
   import PlatformWeb.ChatLive.Partials, only: [brand_new_user_empty_state: 1]
-  import PlatformWeb.Components.ChatHelpers, only: [present?: 1]
+  import PlatformWeb.Components.ChatHelpers, only: [present?: 1, relative_time: 1]
   import PlatformWeb.CoreComponents, only: [input: 1]
   import PlatformWeb.Components.ChatMessage, only: [local_time: 1]
   import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
@@ -912,6 +912,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:current_participant, :any, required: true)
   attr(:new_canvas_form, :any, required: true)
   attr(:show_canvases, :boolean, required: true)
+  attr(:canvas_sort, :atom, required: true)
 
   @doc """
   The live-canvases drawer and its `#new-canvas-form`.
@@ -927,6 +928,28 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
             Live Canvases
           </p>
+
+          <%!-- Sort control. Options and labels come from
+               `CanvasHooks.sort_options/0`, so the allow-list that PARSES the
+               incoming value and the list that OFFERS it are one list. A select
+               that can emit a value its handler rejects is a bug waiting for
+               whoever adds the fifth option. --%>
+          <form phx-change="canvas_sort" class="flex items-center gap-2">
+            <label for="canvas-sort" class="text-[11px] text-base-content/50">Sort</label>
+            <select
+              id="canvas-sort"
+              name="order"
+              class="select select-xs select-bordered w-auto text-xs"
+            >
+              <option
+                :for={{value, label} <- CanvasHooks.sort_options()}
+                value={value}
+                selected={to_string(@canvas_sort) == value}
+              >
+                {label}
+              </option>
+            </select>
+          </form>
 
           <%!-- Scroll container, matching `pins_drawer/1` above. Without a
                height bound this list grows with the space's canvas count, and
@@ -953,6 +976,19 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                 </p>
                 <p class="text-[11px] uppercase tracking-widest text-base-content/50">
                   {CanvasHooks.humanize_kind(canvas)}
+                  <%!-- `title` carries the absolute timestamps: the relative
+                       form is what you scan a list with, the absolute is what
+                       you need once you care about one row. `relative_time/1`
+                       is imported from `ChatHelpers` rather than written here —
+                       four implementations of it already exist in this app and
+                       a fifth would be the drift this panel keeps
+                       demonstrating. --%>
+                  <span
+                    class="normal-case tracking-normal"
+                    title={"updated #{canvas.updated_at} · created #{canvas.inserted_at}"}
+                  >
+                    · {relative_time(canvas.updated_at)}
+                  </span>
                 </p>
               </div>
 

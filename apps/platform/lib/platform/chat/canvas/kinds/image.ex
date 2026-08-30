@@ -68,14 +68,34 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
       @props["rounded"] != false && "rounded-xl",
       @props["class_overrides"]
     ]}>
-      <img
-        src={@props["src"] || ""}
-        alt={@props["alt"] || ""}
-        class={[
-          "max-w-full h-auto block",
-          @props["border"] && "border border-base-300"
-        ]}
-      />
+      <%!-- Wrapped in a link to the full-size blob. A design screenshot is
+           usually captured at 1280-1440px and rendered into a much narrower
+           canvas column, so `max-w-full` scales it down to the point of being
+           unreadable — and a bare <img> offers no way back out. `target`
+           opens the original at native size in a new tab, which needs no
+           JS, no lightbox dependency, and keeps working on the standalone
+           canvas page as well as inside chat.
+
+           Deliberately NOT a click-to-expand overlay: canvases render in two
+           different surfaces and an overlay would need its own z-index and
+           dismissal behaviour in each. Same reasoning as the drawer scroll
+           fix — reuse the mechanism the browser already has. --%>
+      <a
+        href={@props["src"] || ""}
+        target="_blank"
+        rel="noopener"
+        title="Open full size"
+        class="block cursor-zoom-in"
+      >
+        <img
+          src={@props["src"] || ""}
+          alt={@props["alt"] || ""}
+          class={[
+            "max-w-full h-auto block",
+            @props["border"] && "border border-base-300"
+          ]}
+        />
+      </a>
       <p :if={@props["caption"]} class="text-[11px] text-base-content/50 text-center mt-1">
         {@props["caption"]}
       </p>

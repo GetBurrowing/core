@@ -30,6 +30,32 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias PlatformWeb.ChatLive.MessagesHooks
 
+  # Most-recently-edited first. `Chat.list_canvases/2` still defaults to
+  # `:inserted_asc` for its other callers — the panel asks for what it wants
+  # rather than changing the sequence the MCP tools already see.
+  @default_sort :updated_desc
+
+  # The allow-list IS the parse. `String.to_existing_atom/1` on a client-supplied
+  # string would still admit any atom the VM happens to have loaded, which is
+  # most of them; this admits exactly four and falls back to the default.
+  @sorts %{
+    "updated_desc" => :updated_desc,
+    "inserted_desc" => :inserted_desc,
+    "inserted_asc" => :inserted_asc,
+    "title_asc" => :title_asc
+  }
+
+  @doc "The sort options offered in the canvases drawer, in display order."
+  @spec sort_options() :: [{String.t(), String.t()}]
+  def sort_options do
+    [
+      {"updated_desc", "Last updated"},
+      {"inserted_desc", "Newest"},
+      {"inserted_asc", "Oldest"},
+      {"title_asc", "Title"}
+    ]
+  end
+
   @doc "Attach canvas handlers. Call from `ChatLive.mount/3`."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def attach(socket) do
@@ -38,6 +64,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:canvases_by_id, %{})
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
+    |> assign(:canvas_sort, @default_sort)
     |> assign(:recent_canvas_events, [])
     |> assign(:show_versions_panel, false)
     |> assign(:canvas_versions, [])
@@ -50,7 +77,8 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   @doc "Load canvases for a space."
   @spec load_for_space(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
   def load_for_space(socket, space_id) do
-    canvases = Chat.list_canvases(space_id)
+    sort = Map.get(socket.assigns, :canvas_sort, @default_sort)
+    canvases = Chat.list_canvases(space_id, order: sort)
 
     unsubscribe_all_canvases(socket)
     Enum.each(canvases, fn c -> ChatPubSub.subscribe_canvas(c.id) end)
@@ -60,6 +88,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:canvases_by_id, build_map(canvases))
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
+    |> assign(:canvas_sort, sort)
     |> assign_new_form()
   end
 
@@ -197,6 +226,31 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   end
 
   # ── Hook callbacks ────────────────────────────────────────────────────
+
+  defp handle_event("canvas_sort", %{"order" => order}, socket) do
+    sort = Map.get(@sorts, order, @default_sort)
+
+    case socket.assigns[:active_space] do
+      %{id: space_id} when is_binary(space_id) ->
+        # Re-query rather than sorting the loaded list in memory. An in-memory
+        # sort would be a SECOND implementation of an ordering the query already
+        # defines, and the two would drift — the exact failure this codebase
+        # keeps producing. The canvas SET is unchanged here, only its sequence,
+        # so this deliberately does not re-subscribe or touch `:show_canvases`;
+        # going through `load_for_space/2` would close the drawer the user is
+        # looking at.
+        canvases = Chat.list_canvases(space_id, order: sort)
+
+        {:halt,
+         socket
+         |> assign(:canvas_sort, sort)
+         |> assign(:canvases, canvases)
+         |> assign(:canvases_by_id, build_map(canvases))}
+
+      _ ->
+        {:halt, assign(socket, :canvas_sort, sort)}
+    end
+  end
 
   defp handle_event("canvas_panel_toggle", _params, socket) do
     {:halt, assign(socket, :show_canvases, !socket.assigns.show_canvases)}

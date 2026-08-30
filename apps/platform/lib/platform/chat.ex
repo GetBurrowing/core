@@ -3514,24 +3514,55 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  List canvases in a space (excluding soft-deleted), oldest first.
+  List canvases in a space (excluding soft-deleted).
 
   The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) yields `[]` when
   the `space_id` is out of the external caller's participant set (canvas embeds
   from an off-limits space can't be resolved from an external session). Absent
   / nil / internal scopes are pass-through.
+
+  `:order` selects the sequence, defaulting to `:inserted_asc` — the order this
+  function has always returned. **The default is deliberately unchanged.** Two
+  other callers read this list (`Platform.Deploy.ProjectFiles` and the
+  `canvas_list` / `task_list_canvases` MCP tools), and agents may depend on the
+  order they already see; the human-facing panel asks for what it wants instead
+  of everyone silently inheriting a new sequence.
+
+  `:updated_desc` is most-recently-edited first. That is a real signal rather
+  than a proxy: `Canvas.Server.do_persist/5` writes every patch through
+  `Multi.update(:canvas, Canvas.changeset(canvas, %{"document" => document}))`
+  (`chat/canvas/server.ex:429`), so a document edit bumps the row's
+  `updated_at`. Confirmed against production, where 228 of 818 canvases carry
+  `updated_at > inserted_at`.
   """
   @spec list_canvases(binary(), keyword()) :: [Canvas.t()]
   def list_canvases(space_id, opts \\ []) do
     scope = Keyword.get(opts, :scope)
 
     from(c in Canvas,
-      where: c.space_id == ^space_id and is_nil(c.deleted_at),
-      order_by: [asc: c.inserted_at]
+      where: c.space_id == ^space_id and is_nil(c.deleted_at)
     )
+    |> canvas_order(Keyword.get(opts, :order, :inserted_asc))
     |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
+
+  # Title sort is case-insensitive: an `asc: c.title` would file "Zebra" before
+  # "apple" on Postgres's default collation, which reads as broken rather than
+  # as sorted. Ties break on `inserted_at` so the sequence is stable — without a
+  # tiebreaker two canvases sharing a title (or a timestamp) can swap between
+  # reads, which is the same defect #864 fixed in task paging.
+  defp canvas_order(query, :updated_desc),
+    do: order_by(query, [c], desc: c.updated_at, desc: c.inserted_at)
+
+  defp canvas_order(query, :inserted_desc),
+    do: order_by(query, [c], desc: c.inserted_at, desc: c.id)
+
+  defp canvas_order(query, :title_asc),
+    do: order_by(query, [c], asc: fragment("lower(?)", c.title), asc: c.inserted_at)
+
+  defp canvas_order(query, _inserted_asc),
+    do: order_by(query, [c], asc: c.inserted_at, asc: c.id)
 
   @doc """
   List the ids of non-deleted messages that reference a given canvas.
