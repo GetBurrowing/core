@@ -928,36 +928,45 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             Live Canvases
           </p>
 
-          <button
-            :for={canvas <- @canvases}
-            type="button"
-            phx-click="canvas_open"
-            phx-value-canvas-id={canvas.id}
-            class={[
-              "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors",
-              "border-base-300 bg-base-100 hover:border-primary/40 hover:bg-base-100/80",
-              @active_canvas && @active_canvas.id == canvas.id && "border-primary bg-primary/5"
-            ]}
-          >
-            <div class="min-w-0">
-              <p class="truncate text-sm font-semibold text-base-content">
-                {canvas.title || CanvasHooks.humanize_kind(canvas)}
-              </p>
-              <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-                {CanvasHooks.humanize_kind(canvas)}
-              </p>
+          <%!-- Scroll container, matching `pins_drawer/1` above. Without a
+               height bound this list grows with the space's canvas count, and
+               the drawer is a flex child of a `flex-col overflow-hidden`
+               column — so the overflow is CLIPPED with no scrollbar anywhere
+               and the last entries become unreachable rather than merely far
+               down. Reported at 16 canvases; the heading stays outside so it
+               does not scroll away with the items. --%>
+          <div class="flex flex-col gap-2 max-h-80 overflow-y-auto">
+            <button
+              :for={canvas <- @canvases}
+              type="button"
+              phx-click="canvas_open"
+              phx-value-canvas-id={canvas.id}
+              class={[
+                "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors",
+                "border-base-300 bg-base-100 hover:border-primary/40 hover:bg-base-100/80",
+                @active_canvas && @active_canvas.id == canvas.id && "border-primary bg-primary/5"
+              ]}
+            >
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold text-base-content">
+                  {canvas.title || CanvasHooks.humanize_kind(canvas)}
+                </p>
+                <p class="text-[11px] uppercase tracking-widest text-base-content/50">
+                  {CanvasHooks.humanize_kind(canvas)}
+                </p>
+              </div>
+
+              <span class="ml-3 rounded-full bg-base-300 px-2 py-0.5 text-[11px] text-base-content/60">
+                Open
+              </span>
+            </button>
+
+            <div
+              :if={@canvases == []}
+              class="rounded-xl border border-dashed border-base-300 bg-base-100 px-3 py-4 text-sm text-base-content/50"
+            >
+              No canvases yet. Create one to collaborate live in this channel.
             </div>
-
-            <span class="ml-3 rounded-full bg-base-300 px-2 py-0.5 text-[11px] text-base-content/60">
-              Open
-            </span>
-          </button>
-
-          <div
-            :if={@canvases == []}
-            class="rounded-xl border border-dashed border-base-300 bg-base-100 px-3 py-4 text-sm text-base-content/50"
-          >
-            No canvases yet. Create one to collaborate live in this channel.
           </div>
         </div>
 
