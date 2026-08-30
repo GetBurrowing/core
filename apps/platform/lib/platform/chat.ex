@@ -2001,7 +2001,18 @@ defmodule Platform.Chat do
     base =
       from(m in Message,
         where: m.space_id == ^space_id and is_nil(m.deleted_at),
-        order_by: [{^order, m.inserted_at}],
+        # `m.id` is a REQUIRED tiebreaker, not decoration. `inserted_at` is
+        # `:utc_datetime_usec` and messages posted in the same microsecond DO
+        # collide — production currently holds 7,909 timestamps shared by more
+        # than one message. With ties, Postgres may return them in any order,
+        # so an anchored window can place the anchor row at a different index
+        # on each read and the reader sees the target surrounded by messages
+        # that are not its neighbours.
+        #
+        # `id` is `Platform.Types.UUIDv7`, which is time-ordered, so it agrees
+        # with insertion order rather than fighting it. Same defect and same
+        # remedy as the task-paging fix in #864.
+        order_by: [{^order, m.inserted_at}, {^order, m.id}],
         limit: ^limit
       )
 

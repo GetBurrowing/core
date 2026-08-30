@@ -12,7 +12,7 @@ on:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     container:
       image: elixir:1.19.5-otp-28-slim
     services:
@@ -247,7 +247,7 @@ jobs:
     name: Build and push image
     if: github.event_name == 'push'
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
       packages: write
