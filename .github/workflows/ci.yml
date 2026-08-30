@@ -13,6 +13,25 @@ jobs:
   test:
     name: Test
     runs-on: [self-hosted, linux, x64]
+    # WORKSPACE OWNERSHIP ON A SELF-HOSTED RUNNER
+    #
+    # This container runs as root, which it must — `Install system packages`
+    # below calls apt-get, and a non-root container fails there with
+    # "List directory /var/lib/apt/lists/partial is missing".
+    #
+    # But on a self-hosted runner every job shares one `_work` checkout, so a
+    # root container leaves root-owned files the NEXT job — running on the
+    # host as uid 1000 — cannot delete. `actions/checkout` then dies at its
+    # "Deleting the contents of" step with `EACCES: unlink`, seconds in and
+    # before any step of the job it belongs to. That is what broke
+    # `Build and push image` on the first push to main after #879.
+    #
+    # Pinning the container to `--user 1000:1000` fixes the ownership and
+    # breaks apt. `Hand the workspace back` at the end of this job does
+    # neither: stay root, and chown on the way out.
+    #
+    # None of this is visible on GitHub-hosted runners, where every job gets a
+    # fresh machine and nothing is shared.
     container:
       image: elixir:1.19.5-otp-28-slim
     services:
@@ -242,6 +261,15 @@ jobs:
         run: |
           pair="test/platform/audit/historian_latency_test.exs test/platform/accounts/external_admission_notifier_test.exs"
           mix test $pair --seed 0 || (echo "::warning::boot-telemetry pair failed; re-running the SAME two-file command" && mix test $pair --seed 0)
+
+      # Runs even when the suite fails: an aborted job leaves the same
+      # root-owned files as a passing one, and the next job is equally unable
+      # to remove them. Guarding on success would mean a single red run
+      # poisons the workspace until someone clears it by hand from a root
+      # container — which is the state this repo was actually in.
+      - name: Hand the workspace back to the runner
+        if: always()
+        run: chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
 
   build-and-push:
     name: Build and push image
