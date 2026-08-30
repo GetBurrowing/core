@@ -280,11 +280,17 @@ defmodule Platform.Vault do
 
   Uniqueness is per scope — `vault_credentials_unique_slug_per_scope` covers
   `(workspace_id, scope_type, scope_id, slug)` — so the same slug legitimately
-  exists at more than one scope, and (because Postgres unique indexes treat
-  NULLs as distinct) even twice at `{:platform, nil}`. A slug-only lookup with
-  `limit: 1` and no `order_by` therefore has no defined target: it returns
-  whichever row the planner happens to reach first, which in practice is
-  insertion order.
+  exists at more than one scope. A slug-only lookup with `limit: 1` and no
+  `order_by` therefore has no defined target: it returns whichever row the
+  planner happens to reach first, which in practice is insertion order.
+
+  Until `20260829140000_enforce_vault_slug_uniqueness_across_null_scopes` that
+  index was `NULLS DISTINCT` over two nullable columns, so a slug could also
+  repeat *within* one scope — twice at `{:platform, nil}`, and in fact at any
+  scope, since nothing populates `workspace_id`. It is now `NULLS NOT
+  DISTINCT`, so ambiguity is once again only across scopes. Rows that predate
+  the migration were parked under `__dup_`-suffixed slugs rather than deleted,
+  so a slug that used to be ambiguous within its scope now resolves.
 
   Rotation is what you run *because* a key leaked, so picking arbitrarily is
   the worst available behaviour — it leaves the compromised value live and

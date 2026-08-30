@@ -4,6 +4,8 @@ defmodule Platform.VaultTest do
   import Ecto.Query
   import ExUnit.CaptureLog
 
+  require Logger
+
   alias Platform.Vault
   alias Platform.Vault.AccessGrant
   alias Platform.Vault.AccessLog
@@ -120,6 +122,232 @@ defmodule Platform.VaultTest do
       assert meta.slug == slug
 
       :telemetry.detach(ref)
+    end
+  end
+
+  # ── put/4 slug uniqueness ────────────────────────────────────────────────────
+
+  # `vault_credentials_unique_slug_per_scope` covers
+  # `(workspace_id, scope_type, scope_id, slug)`. It shipped without a
+  # `nulls_distinct:` option, so Postgres built it NULLS DISTINCT and it skipped
+  # the conflict check whenever ANY of those columns was NULL. Two are nullable,
+  # and nothing in `lib/` ever passes `:workspace_id`, so in practice it
+  # rejected nothing at any scope.
+  #
+  # `20260829140000_enforce_vault_slug_uniqueness_across_null_scopes` rebuilds it
+  # NULLS NOT DISTINCT. These tests pin both halves of that: duplicates within a
+  # scope are refused, and the same slug ACROSS scopes still inserts.
+  describe "put/4 slug uniqueness within a scope" do
+    defp credential_count(slug) do
+      Repo.one(from(c in Credential, where: c.slug == ^slug, select: count(c.id)))
+    end
+
+    defp assert_slug_taken(result) do
+      assert {:error, %Ecto.Changeset{} = changeset} = result
+      assert {"has already been taken", meta} = changeset.errors[:slug]
+
+      assert meta[:constraint_name] == "vault_credentials_unique_slug_per_scope",
+             "expected the unique-slug index to be the constraint that fired, got #{inspect(meta)}"
+
+      changeset
+    end
+
+    test "a second credential with the same slug at {:platform, nil} is refused" do
+      slug = unique_slug("dup-platform")
+
+      assert {:ok, _} = Vault.put(slug, :api_key, "first", scope: {:platform, nil})
+
+      assert_slug_taken(Vault.put(slug, :api_key, "second", scope: {:platform, nil}))
+
+      assert credential_count(slug) == 1
+      # The row that survives is the one that was already there — a refused
+      # insert must not have overwritten the live value.
+      assert {:ok, "first"} = Vault.get(slug)
+    end
+
+    test "a duplicate at agent scope is refused — a NULL workspace_id alone had disabled the index" do
+      # The ticket framed this as a platform-scope defect, on the reasoning that
+      # `{:platform, nil}` nulls both `workspace_id` and `scope_id`. Measured on
+      # Postgres 16.14, an agent-scoped pair with a populated `scope_id` also
+      # inserted twice before the migration: one NULL column is enough.
+      slug = unique_slug("dup-agent")
+      agent_id = Ecto.UUID.generate()
+
+      assert {:ok, _} = Vault.put(slug, :api_key, "first", scope: {:agent, agent_id})
+
+      assert_slug_taken(Vault.put(slug, :api_key, "second", scope: {:agent, agent_id}))
+
+      assert credential_count(slug) == 1
+    end
+
+    test "a duplicate with a populated workspace_id and a NULL scope_id is refused" do
+      slug = unique_slug("dup-ws-platform")
+      workspace_id = Ecto.UUID.generate()
+
+      assert {:ok, _} =
+               Vault.put(slug, :api_key, "first",
+                 scope: {:platform, nil},
+                 workspace_id: workspace_id
+               )
+
+      assert_slug_taken(
+        Vault.put(slug, :api_key, "second", scope: {:platform, nil}, workspace_id: workspace_id)
+      )
+
+      assert credential_count(slug) == 1
+    end
+
+    test "a duplicate with every indexed column populated is refused" do
+      # POSITIVE CONTROL for the three tests above. This is the one shape that
+      # collided BEFORE the migration too, because no indexed column is NULL.
+      # It fails only if the index is missing or misnamed outright, so it
+      # discriminates "the constraint mechanism works" from "the NULL handling
+      # changed" — the assertions above are about the second.
+      slug = unique_slug("dup-full")
+      workspace_id = Ecto.UUID.generate()
+      agent_id = Ecto.UUID.generate()
+      opts = [scope: {:agent, agent_id}, workspace_id: workspace_id]
+
+      assert {:ok, _} = Vault.put(slug, :api_key, "first", opts)
+
+      assert_slug_taken(Vault.put(slug, :api_key, "second", opts))
+
+      assert credential_count(slug) == 1
+    end
+  end
+
+  describe "put/4 slug uniqueness stays per scope, not global" do
+    test "the same slug at three different scope_types all insert" do
+      slug = unique_slug("cross-scope")
+      agent_id = Ecto.UUID.generate()
+      integration_id = Ecto.UUID.generate()
+
+      assert {:ok, _} = Vault.put(slug, :api_key, "platform-value", scope: {:platform, nil})
+      assert {:ok, _} = Vault.put(slug, :api_key, "agent-value", scope: {:agent, agent_id})
+
+      assert {:ok, _} =
+               Vault.put(slug, :api_key, "integration-value",
+                 scope: {:integration, integration_id}
+               )
+
+      assert credential_count(slug) == 3
+    end
+
+    test "the same slug for two different agents both insert" do
+      slug = unique_slug("cross-agent")
+
+      assert {:ok, _} = Vault.put(slug, :api_key, "a", scope: {:agent, Ecto.UUID.generate()})
+      assert {:ok, _} = Vault.put(slug, :api_key, "b", scope: {:agent, Ecto.UUID.generate()})
+
+      assert credential_count(slug) == 2
+    end
+
+    test "the same slug under two different workspace_ids both insert" do
+      # NULLS NOT DISTINCT makes NULL compare equal to NULL. It must not make
+      # two DISTINCT non-NULL workspace ids compare equal to each other.
+      slug = unique_slug("cross-workspace")
+
+      assert {:ok, _} =
+               Vault.put(slug, :api_key, "a",
+                 scope: {:platform, nil},
+                 workspace_id: Ecto.UUID.generate()
+               )
+
+      assert {:ok, _} =
+               Vault.put(slug, :api_key, "b",
+                 scope: {:platform, nil},
+                 workspace_id: Ecto.UUID.generate()
+               )
+
+      assert credential_count(slug) == 2
+    end
+
+    test "a NULL workspace_id does not collide with a populated one at the same scope" do
+      slug = unique_slug("null-vs-ws")
+
+      assert {:ok, _} = Vault.put(slug, :api_key, "no-workspace", scope: {:platform, nil})
+
+      assert {:ok, _} =
+               Vault.put(slug, :api_key, "with-workspace",
+                 scope: {:platform, nil},
+                 workspace_id: Ecto.UUID.generate()
+               )
+
+      assert credential_count(slug) == 2
+    end
+  end
+
+  # Enforcing the constraint makes `put/4`'s `{:error, changeset}` path reachable
+  # for the first time, and that changeset carries the submitted value under
+  # `changes.encrypted_data` — Cloak encrypts on dump, so in memory it is
+  # plaintext. `Platform.Vault.Credential` marks the field `redact: true` so
+  # every `inspect/1` of it prints `**redacted**`.
+  describe "put/4 rejection does not expose the submitted secret" do
+    test "an inspected rejection changeset does not carry the plaintext into the log" do
+      slug = unique_slug("redact-log")
+      secret = "sk-live-#{System.unique_integer([:positive])}-NEVER-LOG-ME"
+
+      {:ok, _} = Vault.put(slug, :api_key, secret, scope: {:platform, nil})
+
+      log =
+        capture_log(fn ->
+          assert {:error, %Ecto.Changeset{} = changeset} =
+                   Vault.put(slug, :api_key, secret, scope: {:platform, nil})
+
+          Logger.error("vault: could not store #{slug}: #{inspect(changeset)}")
+        end)
+
+      # CONTROL. Without these the refutation below would also pass against an
+      # empty log, a log that never reached this credential, or a changeset
+      # inspected down to `#Ecto.Changeset<...>` with no changes in it at all.
+      assert log =~ slug, "the log line must name the credential it is about"
+      assert log =~ "has already been taken", "the log line must carry the constraint error"
+      assert log =~ "**redacted**", "the changeset must show the field, redacted"
+
+      # REFUTATION.
+      refute log =~ secret
+    end
+
+    test "the MatchError from a hard-matched put/4 does not carry the plaintext" do
+      # `Platform.Agents.Config.import_auth_profile!/4` writes
+      # `{:ok, credential} = Platform.Vault.put(...)`. A refused duplicate now
+      # raises here, and an exception message is built with `inspect/1`.
+      slug = unique_slug("redact-matcherror")
+      secret = "sk-live-#{System.unique_integer([:positive])}-NEVER-RAISE-ME"
+
+      {:ok, _} = Vault.put(slug, :api_key, secret, scope: {:platform, nil})
+
+      message =
+        try do
+          {:ok, _credential} = Vault.put(slug, :api_key, secret, scope: {:platform, nil})
+          flunk("expected the duplicate slug to be refused")
+        rescue
+          error in MatchError -> Exception.message(error)
+        end
+
+      # CONTROL: the message really is the inspected rejection changeset.
+      assert message =~ "has already been taken"
+      assert message =~ slug
+      assert message =~ "**redacted**"
+
+      # REFUTATION.
+      refute message =~ secret
+    end
+
+    test "inspecting the stored credential struct does not print the value" do
+      slug = unique_slug("redact-struct")
+      secret = "sk-live-#{System.unique_integer([:positive])}-NEVER-INSPECT-ME"
+
+      {:ok, _} = Vault.put(slug, :api_key, secret, scope: {:platform, nil})
+      loaded = Repo.get_by!(Credential, slug: slug)
+
+      # CONTROL: the struct is loaded, decrypted and really does hold the value.
+      assert loaded.encrypted_data == secret
+      rendered = inspect(loaded)
+      assert rendered =~ slug
+
+      # REFUTATION.
+      refute rendered =~ secret
     end
   end
 
@@ -550,26 +778,34 @@ defmodule Platform.VaultTest do
       assert reload(agent).encrypted_data == "AGENT-V1"
     end
 
-    test "two rows at the SAME scope are ambiguous too, and :scope cannot disambiguate them" do
-      # `vault_credentials_unique_slug_per_scope` is a Postgres unique index and
-      # Postgres treats NULLs as distinct, so `(NULL, "platform", NULL, slug)`
-      # does not conflict with itself: put/4 will happily create this pair. A
-      # scope predicate alone would still leave rotate guessing.
+    test "two rows at the SAME scope can no longer be created, so :scope now always resolves" do
+      # This test used to build a same-scope pair and assert rotate/3 refused
+      # it. `vault_credentials_unique_slug_per_scope` was NULLS DISTINCT, so
+      # `(NULL, "platform", NULL, slug)` did not conflict with itself and put/4
+      # created the pair happily. Task 01a04e18 rebuilt the index NULLS NOT
+      # DISTINCT, so that pair is unreachable through put/4 and a scope
+      # predicate now names at most one row by construction.
+      #
+      # The refusal branch itself still matters for rows that predate the
+      # migration, and is covered against a deliberately relaxed index in
+      # `Platform.Repo.Migrations.EnforceVaultSlugUniquenessAcrossNullScopesTest`.
       slug = unique_slug("target-same-scope")
       first = insert_credential!(slug, value: "FIRST-V1", scope: {:platform, nil})
-      second = insert_credential!(slug, value: "SECOND-V1", scope: {:platform, nil})
-      assert first.id != second.id
 
-      assert {:error, :ambiguous_slug} =
-               Vault.rotate(slug, "SHOULD-NOT-LAND",
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Vault.put(slug, :api_key, "SECOND-V1", scope: {:platform, nil})
+
+      assert {"has already been taken", _} = changeset.errors[:slug]
+
+      # And because there is only one row, the scoped rotation lands on it
+      # instead of refusing.
+      assert {:ok, _} =
+               Vault.rotate(slug, "FIRST-V2",
                  scope: {:platform, nil},
                  accessor: {:system, nil}
                )
 
-      assert reload(first).encrypted_data == "FIRST-V1"
-      assert reload(second).encrypted_data == "SECOND-V1"
-      assert is_nil(reload(first).rotated_at)
-      assert is_nil(reload(second).rotated_at)
+      assert reload(first).encrypted_data == "FIRST-V2"
     end
 
     test "the ambiguity refusal names the slug and the scopes but never the new value" do
