@@ -906,6 +906,7 @@ defmodule PlatformWeb.MeetingLive do
           # here and re-derived by `refresh_participants/1`, so an agent that
           # joins the call leaves the list on the same tick its tile appears.
           |> assign(:invitable_agents, invitable_agents(meeting.chat_space_id, participants))
+          |> assign(:pending_invite_agent_ids, pending_invite_agent_ids(participants))
           # Per-meeting agent activity (task 01a04a98), seeded from the
           # LIVE intent queue rather than from the tile's old
           # `activity_state={:idle}` literal. A socket that mounts at
@@ -4149,6 +4150,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:participants, participants)
     |> assign(:agents_by_id, load_agents_by_id(participants))
     |> assign(:invitable_agents, invitable_agents(space_id, participants))
+    |> assign(:pending_invite_agent_ids, pending_invite_agent_ids(participants))
   end
 
   defp refresh_participants(socket), do: socket
@@ -4166,26 +4168,98 @@ defmodule PlatformWeb.MeetingLive do
   # the whole `agents` table, which is what makes a forged `agent-id` a miss
   # instead of a cross-space reach.
   #
-  # Excluding the in-call agents is not cosmetic: `invite_agent/3` goes
-  # through `participant_joined/2`, a plain insert, so a second invite for an
-  # agent already present would write a duplicate roster row and re-dispatch.
-  defp invitable_agents(space_id, participants) when is_binary(space_id) do
-    in_call =
-      for %{participant_type: "agent", participant_id: id} <- participants,
-          is_binary(id),
-          into: MapSet.new(),
-          do: id
-
+  # Excluding the in-call agents is not cosmetic: an agent already in the
+  # room does not need inviting, and offering it invites a pointless
+  # re-dispatch at a worker that is already connected.
+  #
+  # ## The exclusion is on ARRIVAL, not on the participant row (01a04e0f)
+  #
+  # It used to be on the row: any agent with a `meeting_participants` row was
+  # dropped from this list. `Meetings.invite_agent/3` writes that row BEFORE
+  # it broadcasts `meeting_join`, and `Phoenix.Endpoint.broadcast/3` returns
+  # `:ok` whether or not anybody is subscribed. So an invite sent to an agent
+  # whose runtime is registered but whose voice worker has not connected
+  # reached nobody, logged "dispatched", left a row — and the row removed the
+  # only control that could have fired the invite again. The founder hit this
+  # on the first real use and had to abandon the meeting.
+  #
+  # `invite_agent/3` already refuses an agent with NO runtime for exactly
+  # this reason (task 01a04f31, quoting itself: a row for it "would remove
+  # the control that is the only way to try again"). "Runtime resolved,
+  # nobody listening" is the same hazard one step further out, and unlike the
+  # first it cannot be pre-flighted — a broadcast into an empty topic is
+  # indistinguishable from a delivered one. The fix is therefore not a
+  # sharper pre-flight; it is to stop treating a dispatch-time row as proof
+  # of arrival.
+  #
+  # `metadata["identity"]` is that proof, and it is not a proxy for it:
+  # `Meetings.upsert_live_participant/2` — the LiveKit webhook path, the only
+  # writer of real presence — stamps the joiner's LiveKit identity there, and
+  # backfills it onto a row that already exists. `invite_agent/3` writes no
+  # metadata at all. An `"agent:…"` identity therefore means a worker
+  # published itself into the room; its absence means only that a human
+  # clicked Invite.
+  #
+  # This is not "show everyone always": an agent that has arrived is still
+  # excluded, which is what `agent_in_call?/2` below decides.
+  #
+  # Public so the exclusion can be exercised against hand-built participant
+  # lists, for the same reason `build_meeting_participants/1` is.
+  @doc false
+  def invitable_agents(space_id, participants) when is_binary(space_id) do
     space_id
     |> Chat.list_space_agents()
     |> Enum.flat_map(fn
       %{agent: %Agent{} = agent} -> [agent]
       _ -> []
     end)
-    |> Enum.reject(&MapSet.member?(in_call, &1.id))
+    |> Enum.reject(&agent_in_call?(&1, participants))
   end
 
-  defp invitable_agents(_space_id, _participants), do: []
+  def invitable_agents(_space_id, _participants), do: []
+
+  # True when some participant row proves THIS agent published into the room.
+  #
+  # Matched on the identity STRING as well as on the `agent_id` FK because
+  # the two come apart in practice: `dispatch_meeting_join/3` hands the
+  # worker `agent_identity: "agent:<slug>"`, `Meetings.parse_identity/1`
+  # casts an identity suffix as a UUID and so answers `:unknown` for a slug,
+  # and `upsert_live_participant/2` then falls back to matching by display
+  # name. A worker that publishes under a name that does not match the
+  # invite's `display_name` gets its own row carrying the identity and NO
+  # agent FK — still proof of arrival, and invisible to an FK-only test.
+  defp agent_in_call?(%Agent{} = agent, participants) do
+    Enum.any?(participants, fn participant ->
+      case Map.get(participant, :identity) do
+        "agent:" <> suffix when suffix != "" ->
+          suffix == agent.id or suffix == agent.slug or
+            (Map.get(participant, :participant_type) == "agent" and
+               Map.get(participant, :participant_id) == agent.id)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  # The agents holding a roster row from an earlier invite that has never
+  # been answered. Purely presentational: the control is offered either way,
+  # but a dispatch nobody received and one that worked are otherwise
+  # indistinguishable on this screen, and that is half of what made the
+  # original defect unrecoverable — the founder had no way to tell.
+  @doc false
+  def pending_invite_agent_ids(participants) do
+    for %{participant_type: "agent", participant_id: id} = participant <- participants,
+        is_binary(id),
+        not Meetings.agent_identity?(Map.get(participant, :identity)),
+        into: MapSet.new(),
+        do: id
+  end
+
+  @doc false
+  def invite_pending?(pending_ids, agent_id) do
+    is_struct(pending_ids, MapSet) and MapSet.member?(pending_ids, agent_id)
+  end
 
   # The `"meeting_invite_agent"` body. Every failure ends in a flash rather
   # than a raise: unlike the calendar surface's invite, this control lives on

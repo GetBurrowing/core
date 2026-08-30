@@ -850,11 +850,18 @@
              had no way in from the product. This is that way in.
 
              Options come from `@invitable_agents` — the meeting space's own
-             agent roster minus whoever is already in the call — so the
-             section disappears once every space agent has joined, and never
-             renders at all for a space with no agents. Each button carries
-             only the agent id; the handler resolves it back against this same
-             server-built list. --%>
+             agent roster minus whoever has actually ARRIVED in the call — so
+             the section disappears once every space agent has joined, and
+             never renders at all for a space with no agents. Each button
+             carries only the agent id; the handler resolves it back against
+             this same server-built list.
+
+             "Arrived", not "has a participant row": task 01a04e0f. An invite
+             whose `meeting_join` reached no subscriber still writes a row,
+             and excluding on the row alone made that invite unretryable. See
+             `invitable_agents/2`. `@pending_invite_agent_ids` marks the
+             agents in this list that are in exactly that state — offered
+             again, and labelled so the two cases are told apart. --%>
           <div
             :if={assigns[:invitable_agents] not in [nil, []]}
             class="border-t border-base-300 px-3 py-2"
@@ -871,11 +878,26 @@
                   phx-value-agent-id={agent.id}
                   data-role="meeting-agent-invite-button"
                   data-agent-id={agent.id}
-                  aria-label={"Invite #{agent.name || agent.slug} to the meeting"}
+                  data-invite-pending={
+                    invite_pending?(assigns[:pending_invite_agent_ids], agent.id) && "true"
+                  }
+                  aria-label={
+                    if invite_pending?(assigns[:pending_invite_agent_ids], agent.id),
+                      do:
+                        "Invite #{agent.name || agent.slug} to the meeting again — the first invite has not been answered",
+                      else: "Invite #{agent.name || agent.slug} to the meeting"
+                  }
                   class="btn btn-ghost btn-xs w-full justify-start gap-2 font-normal text-base-content/70 hover:text-base-content"
                 >
                   <span class="hero-plus-small size-4 shrink-0" aria-hidden="true"></span>
                   <span class="truncate">{agent.name || agent.slug}</span>
+                  <span
+                    :if={invite_pending?(assigns[:pending_invite_agent_ids], agent.id)}
+                    class="ml-auto shrink-0 text-[0.625rem] uppercase tracking-wide text-base-content/40"
+                    data-role="meeting-agent-invite-pending"
+                  >
+                    no answer yet
+                  </span>
                 </button>
               </li>
             </ul>

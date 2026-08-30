@@ -43,6 +43,30 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   kept, subscribed, and `refute_receive`d, so a regression to it fails here
   twice. `Platform.Meetings.MeetingJoinDispatchTopicTest` carries the rest.
 
+  ## Where this file encoded the NEXT defect (task 01a04e0f)
+
+  Two assertions here read a `meeting_participants` row as "the agent is in
+  the call", because that is what `invitable_agents/2` read. It is not:
+  `invite_agent/3` writes the row before it broadcasts, and a broadcast into
+  a topic with no subscribers returns `:ok`. So a founder invited an agent
+  whose voice worker had not connected, got a row and a success flash, and
+  the row removed the agent from the invite list — the only control that
+  could have retried. The meeting had to be abandoned.
+
+  Those assertions now stand on ARRIVAL — `metadata["identity"]`, which only
+  `Meetings.upsert_live_participant/2` (the LiveKit webhook path) ever
+  writes. The load-bearing test is "an invite whose broadcast reached
+  nobody": it clicks with no client on the runtime topic (asserted empty
+  against the pubsub registry, not assumed), proves the control survives,
+  connects the worker, clicks again, and asserts the retry is PUSHED to that
+  client and that no second roster row was written.
+
+  Its positive control lives in `the invite-an-agent control` and is written
+  so it cannot pass vacuously: `refute arrived.id in offered` would be green
+  on an empty list, and an empty list is the bug. The assertion pins the
+  exact list instead, so it fails if the arrived agent is offered AND if the
+  other roster agent is not.
+
   ## Why the negative viewer is shaped the way it is
 
   `handle_params/3` admits any viewer in the meeting's org
@@ -267,24 +291,208 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       assert LazyHTML.attribute(buttons, "phx-value-agent-id") == [agent.id]
     end
 
-    test "does not offer an agent that is already in the call",
-         %{conn: conn, space: space, meeting: meeting, agent: agent} do
-      # Same roster agent, already a live participant. The section must lose
-      # its only row — otherwise a second click writes a duplicate
-      # `meeting_participants` row and re-dispatches a join.
+    # THE POSITIVE CONTROL for everything task 01a04e0f loosened. Written so
+    # it cannot pass by accident: a bare `refute arrived.id in ids` is green
+    # whenever the list is empty, and the list being empty is precisely the
+    # bug being fixed. So the same assertion pins the list non-empty and pins
+    # the OTHER roster agent present in it.
+    test "does not offer an agent that has actually arrived, while still offering the others",
+         %{conn: conn, space: space, meeting: meeting, agent: arrived} do
+      other = bare_roster_agent!(space)
+
       {:ok, room} = Meetings.ensure_room(space.id)
       {:ok, room} = Meetings.activate_room(room)
 
-      {:ok, _p} =
-        Meetings.participant_joined(room, %{display_name: agent.name, agent_id: agent.id})
+      # The real production sequence, not a shortcut: the invite writes the
+      # roster row, and the LiveKit webhook then finds that same row and
+      # backfills the joiner's identity onto it. `upsert_live_participant/2`
+      # is the only writer of `metadata["identity"]`, which is what the
+      # exclusion now reads.
+      {:ok, invited_row} =
+        Meetings.participant_joined(room, %{display_name: arrived.name, agent_id: arrived.id})
+
+      {:ok, live_row} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "agent:#{arrived.slug}",
+          name: arrived.name
+        })
+
+      # Same row, backfilled — not a second one. If this ever stops holding,
+      # the test below is asserting about a different row than it thinks.
+      assert live_row.id == invited_row.id
+      assert live_row.metadata["identity"] == "agent:#{arrived.slug}"
 
       {:ok, _view, html} =
         conn |> login(user!("already-in")) |> live(~p"/meetings/#{meeting.slug}")
 
-      assert html
-             |> LazyHTML.from_fragment()
-             |> LazyHTML.query(~s([data-role="meeting-agent-invite-button"]))
-             |> Enum.empty?()
+      offered =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-agent-invite-button"]))
+        |> LazyHTML.attribute("data-agent-id")
+
+      assert offered == [other.id]
+    end
+  end
+
+  # ── Retrying an invite nobody received (task 01a04e0f) ───────────────────
+  #
+  # `invite_agent/3` writes the participant row BEFORE it broadcasts, and
+  # `Phoenix.Endpoint.broadcast/3` returns `:ok` into a topic with no
+  # subscribers. So an agent whose runtime is registered but whose voice
+  # worker has not connected got a roster row, a success flash, and no
+  # invite — and the row then removed it from the invite list, which was the
+  # only control that could have tried again.
+  #
+  # The zero-subscriber condition here is real and not simulated: the first
+  # click happens while no client has joined `runtime:<runtime_id>`, and the
+  # test asserts that emptiness against the pubsub registry rather than
+  # trusting the setup.
+  describe "an invite whose broadcast reached nobody" do
+    test "leaves the agent invitable, marked unanswered, and the retry is received",
+         %{
+           conn: conn,
+           space: space,
+           meeting: meeting,
+           agent: agent,
+           runtime: runtime,
+           runtime_agent: runtime_agent
+         } do
+      topic = "runtime:#{runtime.runtime_id}"
+      assert Registry.lookup(Platform.PubSub, topic) == []
+
+      {:ok, view, _html} =
+        conn |> login(user!("retry-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
+      _ = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting
+
+      selector = ~s([data-role="meeting-agent-invite-button"][data-agent-id="#{agent.id}"])
+
+      after_first = view |> element(selector) |> render_click()
+
+      # The invite "succeeded" exactly as it did for the founder: a flash, a
+      # roster row, and nothing on the wire.
+      assert after_first =~ "is joining the meeting"
+      assert [_row] = agent_participant_rows(space.id, agent.id)
+
+      # …and the control survives it. This is the whole fix. Before 01a04e0f
+      # the row above deleted this button and the meeting was unrecoverable.
+      first_button =
+        after_first |> LazyHTML.from_fragment() |> LazyHTML.query(selector)
+
+      assert LazyHTML.attribute(first_button, "data-agent-id") == [agent.id]
+
+      # And it says so, rather than looking identical to a delivered invite.
+      assert LazyHTML.attribute(first_button, "data-invite-pending") == ["true"]
+
+      # Now the worker connects — the thing that had not happened yet.
+      channel = join_runtime_client!(runtime_agent)
+      assert Registry.lookup(Platform.PubSub, topic) != []
+
+      after_second = view |> element(selector) |> render_click()
+      assert after_second =~ "is joining the meeting"
+
+      # The load-bearing assertion: the retry is actually DELIVERED to a
+      # client that went through `RuntimeSocket.connect/3` and
+      # `RuntimeChannel.join/3`, not merely broadcast.
+      assert_push("meeting_join", payload, 1_000)
+      assert payload.agent_identity == "agent:#{agent.slug}"
+      assert is_binary(payload.token) and payload.token != ""
+
+      # The LiveKit room the invite names is the SPACE's active room, not
+      # `meeting.livekit_room_name` — `invite_agent/3` is handed
+      # `get_active_room(space_id)`.
+      assert payload.room_name == Meetings.get_active_room(space.id).livekit_room_name
+
+      # Retrying must not accumulate roster rows. `participant_joined/2` is a
+      # plain insert; `invite_agent/3` now reuses the row it already wrote.
+      assert [_still_one] = agent_participant_rows(space.id, agent.id)
+
+      # Silence the "channel unused" warning while keeping the binding
+      # meaningful — the pushes above were asserted against this process,
+      # which `subscribe_and_join/3` made the channel's owner.
+      assert is_pid(channel.channel_pid)
+    end
+  end
+
+  # ── The exclusion itself, against hand-built participant lists ───────────
+  #
+  # `invitable_agents/2` is the function the defect lived in, and driving it
+  # directly is the only way to pin the cases the rendered page cannot reach
+  # — notably an arrival row that carries a LiveKit identity but NO agent FK,
+  # which is what a worker publishing under an unexpected display name
+  # produces.
+  describe "invitable_agents/2" do
+    test "an agent with a roster row but no LiveKit identity is still invitable",
+         %{space: space, agent: agent} do
+      participants = [
+        %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          identity: nil,
+          display_name: agent.name
+        }
+      ]
+
+      assert [%Agent{id: offered}] =
+               PlatformWeb.MeetingLive.invitable_agents(space.id, participants)
+
+      assert offered == agent.id
+
+      assert PlatformWeb.MeetingLive.pending_invite_agent_ids(participants) ==
+               MapSet.new([agent.id])
+    end
+
+    test "the same row, once a LiveKit identity is on it, is not invitable and not pending",
+         %{space: space, agent: agent} do
+      participants = [
+        %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          identity: "agent:#{agent.slug}",
+          display_name: agent.name
+        }
+      ]
+
+      assert PlatformWeb.MeetingLive.invitable_agents(space.id, participants) == []
+      assert PlatformWeb.MeetingLive.pending_invite_agent_ids(participants) == MapSet.new()
+    end
+
+    test "an identity-bearing row with no agent FK still counts as arrival",
+         %{space: space, agent: agent} do
+      # What `upsert_live_participant/2` inserts when nothing matches: the
+      # dispatched identity is `"agent:<slug>"`, `parse_identity/1` casts the
+      # suffix as a UUID and answers `:unknown`, so the row carries the
+      # identity and no FK at all. An FK-only exclusion misses it entirely
+      # and would offer an agent that is in the room.
+      participants = [
+        %{
+          participant_type: "user",
+          participant_id: nil,
+          identity: "agent:#{agent.slug}",
+          display_name: agent.name
+        }
+      ]
+
+      assert PlatformWeb.MeetingLive.invitable_agents(space.id, participants) == []
+    end
+
+    test "a non-agent identity on someone else's row does not exclude the agent",
+         %{space: space, agent: agent} do
+      participants = [
+        %{
+          participant_type: "user",
+          participant_id: Platform.Types.UUIDv7.generate(),
+          identity: "user:#{Platform.Types.UUIDv7.generate()}",
+          display_name: "A human"
+        }
+      ]
+
+      assert [%Agent{id: offered}] =
+               PlatformWeb.MeetingLive.invitable_agents(space.id, participants)
+
+      assert offered == agent.id
     end
   end
 
@@ -354,11 +562,20 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       # And the durable half: the agent is on the meeting roster.
       assert [%MeetingParticipant{}] = agent_participant_rows(space.id, agent.id)
 
-      # The control has consumed its own option.
-      assert html
-             |> LazyHTML.from_fragment()
-             |> LazyHTML.query(~s([data-role="meeting-agent-invite-button"]))
-             |> Enum.empty?()
+      # The control is NOT consumed by its own click (task 01a04e0f). It used
+      # to be, and that is what made an undelivered invite unrecoverable.
+      # Delivery to the runtime channel — which this test has just proved —
+      # is still not ARRIVAL: nothing has published into the LiveKit room, no
+      # webhook has stamped an identity on the roster row, and this process
+      # cannot tell a worker that connects from one that silently does not.
+      # So the option stays, marked as unanswered.
+      offered =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-agent-invite-button"]))
+
+      assert LazyHTML.attribute(offered, "data-agent-id") == [agent.id]
+      assert LazyHTML.attribute(offered, "data-invite-pending") == ["true"]
     end
   end
 

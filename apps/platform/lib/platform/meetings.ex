@@ -5159,6 +5159,23 @@ defmodule Platform.Meetings do
   is one extra `Repo.get/2` on a human-speed path, and it keeps
   `dispatch_meeting_join/3` a self-contained function that every other
   caller can use without knowing to pre-resolve.
+
+  ## A second invite reuses the first invite's row (01a04e0f)
+
+  The guard above stops short of the case that actually hurt: an agent
+  whose runtime resolves but whose voice worker is not connected. Nothing
+  is listening on the topic, `Phoenix.Endpoint.broadcast/3` returns `:ok`
+  anyway, and the invite is lost — a failure that is not detectable here,
+  at broadcast time, or anywhere else on this path. Retrying is therefore
+  the only recovery, and `PlatformWeb.MeetingLive` now keeps offering the
+  control until the agent actually publishes into the room.
+
+  So this function must be safe to call twice. `participant_joined/2` is a
+  plain insert, so it is called only when no active row exists for this
+  room + agent; a retry reuses the row it already wrote and re-dispatches.
+  Same find-or-reuse shape, and the same reason, as
+  `upsert_live_participant/2`: one stable row per participant, not one per
+  delivery attempt.
   """
   @spec invite_agent(Room.t(), Agent.t(), SpaceAccess.actor()) ::
           {:ok, Participant.t()} | {:error, term()}
@@ -5167,14 +5184,23 @@ defmodule Platform.Meetings do
          {:ok, _topic} <- meeting_join_topic(agent),
          {:ok, _token} <-
            generate_agent_token(agent, room.livekit_room_name),
-         {:ok, participant} <-
-           participant_joined(room, %{
-             display_name: agent.name,
-             agent_id: agent.id
-           }) do
+         {:ok, participant} <- invite_participant_row(room, agent) do
       # Dispatch to agent runtime
       dispatch_meeting_join(agent, room.livekit_room_name, %{space_id: room.space_id})
       {:ok, participant}
+    end
+  end
+
+  # Find-or-insert the invited agent's roster row. Deliberately writes no
+  # `metadata` — `metadata["identity"]` is what `upsert_live_participant/2`
+  # stamps when a worker really publishes into the LiveKit room, and
+  # `PlatformWeb.MeetingLive` reads its absence as "invited, never arrived".
+  # Putting anything identity-shaped here would make a dispatch nobody
+  # received look exactly like a join, which is the defect 01a04e0f is about.
+  defp invite_participant_row(%Room{} = room, %Agent{} = agent) do
+    case find_active_participant(room.id, %{agent_id: agent.id}, agent.name) do
+      %Participant{} = existing -> {:ok, existing}
+      nil -> participant_joined(room, %{display_name: agent.name, agent_id: agent.id})
     end
   end
 
