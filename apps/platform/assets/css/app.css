@@ -4899,7 +4899,83 @@ body, .font-fabrikam {
   }
 
   /* Soft-tint chip — the one formula, any hue (approved palette).
-     bg: tint @ 12% (dark 16%) · border: tint @ 25% · label: AA-tuned. */
+     bg: tint @ 12% (dark 16%) · border: tint @ 25% · label: AA-tuned.
+
+     VERDICT: the border is LOAD-BEARING. Measured task 01a01b22 (the formula
+     itself is older than that task and older than 01a01a4a, which only
+     *reported* a figure and changed nothing here — do not bisect to either).
+
+     The pair that matters is chip FILL vs CARD SURFACE, both `--color-base-100`
+     derivatives. It is NOT the chip against `--color-base-300`: base-300 is the
+     card's own 1px border token (`border border-base-300 bg-base-100`,
+     board_component.ex kanban card and compact row), and a chip is inset by the
+     card's padding, so its edge never abuts base-300 anywhere it renders. And
+     `background-clip` is left at its `border-box` default here — no rule in this
+     file or utility at any call site overrides it — so the 25%-alpha border
+     composites over the chip's OWN fill, not over the card surface.
+
+     Contrast of the chip fill against the adjacent card surface, unrounded,
+     all six tones, both themes (WCAG 2.x, sRGB relative luminance):
+
+       | tone    | light: fill vs base-100 | dark: fill vs base-100 |
+       |---------|-------------------------|------------------------|
+       | neutral | 1.1716                  | 1.2223                 |
+       | info    | 1.1741                  | 1.2715                 |
+       | success | 1.1335                  | 1.2176                 |
+       | warning | 1.0891                  | 1.2973                 |
+       | error   | 1.1550                  | 1.1948                 |
+       | primary | 1.0666                  | 1.2867                 |
+
+     Worst pair is `primary` at 1.0666:1 light and `error` at 1.1948:1 dark —
+     NOT `warning`, which is the second-worst light tone and the BEST dark one,
+     so measuring on warning would have mis-ranked the component. No tone in
+     either theme reaches the 3:1 non-text floor on fill alone, so the fill does
+     not identify the chip and every boundary the chip has is the border. That
+     is what "load-bearing" means here, and it is why the border MUST NOT be
+     removed or dropped below its current strength as decoration.
+
+     The border is load-bearing and still short: composited over its own fill it
+     reads 1.2461–1.6241 vs the card surface light, 1.5816–2.0770 dark. Any
+     change lands on all six tones at once — they share this one formula —
+     never on a single tone.
+
+     DISPOSITION (settled 2026-08-31, task 01a01b22 stages 2-4): NOT fixed.
+     Neither arm of the fork was taken; the sub-3:1 border is deliberate and
+     documented, on the `--color-pipeline-human` precedent near the top of this
+     file. It holds for all six tones — neutral, info, success, warning, error,
+     primary — because they share this formula; a per-tone override is wrong by
+     construction. The shortfall is pre-existing: task 01a01a4a stage 4 only
+     measured it, and the formula predates that task.
+
+     Why no obligation attaches: `chip/1` (core_components.ex) emits a bare
+     non-interactive <span> at every call site — no phx-click, href, role or
+     tabindex — and its state is always named in label text that already clears
+     AA. WCAG 1.4.11 asks 3:1 of a boundary only where that boundary is needed
+     to identify a component or state; here it is redundant with the text, so
+     the 3:1 obligation does not attach. Load-bearing (the fill does not separate
+     the chip) and obligated (the border owes 3:1) are different claims.
+
+     MUST NOT "fix" this; the mechanism for each arm:
+       - MUST NOT raise the border alpha. The ceiling is `--chip-tint` at 100%
+         opacity vs `--color-base-100`, and in the light theme two tones cannot
+         reach 3:1 at ANY alpha: `.chip-primary` --chip-tint vs --color-base-100
+         = 1.78748833:1 and `.chip-warning` --chip-tint vs --color-base-100 =
+         2.21457697:1 (error 3.89478250, success 3.23613436, neutral 4.87868930,
+         info 5.11825478). Dark clears on all six at that ceiling (neutral
+         5.2957, info 6.9412, success 5.3194, warning 7.7732, error 4.4198,
+         primary 7.4956), but the change must be component-wide across both
+         themes and light cannot be satisfied.
+       - MUST NOT deepen the tint. Fill-vs-outline is the only thing separating
+         the needs-merge chip from the outlined priority badges beside it in the
+         Tasks board Deploy column (task_display.ex); a deeper tint walks a soft
+         chip toward a filled badge and collapses that hierarchy.
+       - MUST NOT draw the border from `--chip-label`. A near-label-strength
+         edge (about 75% alpha light, 55% dark) would clear 3:1 but IS the
+         outlined box punched into the surface that "soft" exists to avoid.
+
+     Mis-picked pair, reported honestly: the 1.12:1 / 2.12:1 figures first
+     attached to this border were taken against `--color-base-300`, which the
+     chip never abuts, and are superseded by the table above. */
   .chip-soft {
     /* Fallbacks: an unrecognized tone renders neutral, never transparent. */
     --chip-tint: oklch(55% 0.01 0);
