@@ -486,7 +486,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                              `stack_member_action_label/1` so the
                              `:plan_pending_review` branch does NOT
                              render an action chip — the adjacent
-                             `task_display_status/1` "Plan Ready" status
+                             `task_display_status/2` "Plan Ready" status
                              chip is the single signal. Other reasons
                              still render the action chip. --%>
                           <% {member_action_label, member_action_reason_attr} =
@@ -560,7 +560,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                       Tasks.needs_human_action_reason(task, mobile_review_count) %>
                     <%!-- Post-rejection fix (stage 4): same doubled-chip
                        pattern as the mobile stack-member row above —
-                       the `task_display_status/1` "Plan Ready" badge
+                       the `task_display_status/2` "Plan Ready" badge
                        below already covers `:plan_pending_review`, so
                        suppress the action chip there. --%>
                     <% {mobile_action_label, mobile_action_reason_attr} =
@@ -660,7 +660,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                            019e2c25 stage 3): mobile solo task cards now
                            render the same warning chip the stack-detail
                            rows + desktop kanban surface. The status badge
-                           `task_display_status/1` is also rendered for the
+                           `task_display_status/2` is also rendered for the
                            four "interesting" statuses so "Plan Ready"
                            appears on mobile (previously hidden — that's
                            why a pending-review plan was invisible on the
@@ -1424,7 +1424,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   defp plan_progress(_), do: nil
 
   # Stage-4 follow-up of task 019e2c25 (post-rejection fix): on the mobile
-  # surfaces (stack-member rows and solo task cards) `task_display_status/1`
+  # surfaces (stack-member rows and solo task cards) `task_display_status/2`
   # ALREADY surfaces "Plan Ready" with a warning badge for the
   # `:plan_pending_review` case, so rendering the action chip there too
   # produces a doubled chip on the same row. Suppress it — the status chip
@@ -1432,7 +1432,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   defp mobile_stack_member_action_label(:plan_pending_review), do: {nil, nil}
 
   # Same doubled-chip rule for the human-only merge gate (task 01a01a4a
-  # stage 4). `task_display_status/1` ALREADY replaces the neutral
+  # stage 4). `task_display_status/2` ALREADY replaces the neutral
   # `deploying` chip with the warning-toned "needs merge" chip on these
   # surfaces, and both the mobile solo card and the mobile stack-member row
   # render the status chip beside the action chip — so emitting the action

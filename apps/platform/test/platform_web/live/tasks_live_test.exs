@@ -9986,7 +9986,7 @@ defmodule PlatformWeb.TasksLiveTest do
     # solo task card (the `<% _ -> %>` arm of the mobile @board_items
     # loop) renders the same warning chip the stack-detail rows + desktop
     # kanban already surface, plus the previously-hidden
-    # `task_display_status/1` badge so "Plan Ready" appears on mobile.
+    # `task_display_status/2` badge so "Plan Ready" appears on mobile.
     # The action chip carries `data-role="mobile-task-action"` so tests
     # can target it without coupling to layout.
 
@@ -10283,7 +10283,7 @@ defmodule PlatformWeb.TasksLiveTest do
     test "(a) mobile stack-member with `pending_review` plan shows ONLY the 'Plan Ready' status chip (no doubled action chip)",
          %{conn: conn, stack: stack} do
       # Post-rejection fix (stage 4): the mobile stack-member row's
-      # `task_display_status/1` chip already surfaces "Plan Ready"
+      # `task_display_status/2` chip already surfaces "Plan Ready"
       # (warning badge) for `status="planning"` + pending-review plan.
       # Stage 4's action chip rendered "Plan ready" for the same case
       # — two chips on the same row Rowan rejected. The mobile-only
@@ -10307,7 +10307,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # Row exists.
       assert html =~ ~s(id="stack-member-mobile-#{member.id}")
 
-      # Status chip (existing "Plan Ready" via `task_display_status/1`)
+      # Status chip (existing "Plan Ready" via `task_display_status/2`)
       # is the single signal.
       assert html =~ "Plan Ready"
 

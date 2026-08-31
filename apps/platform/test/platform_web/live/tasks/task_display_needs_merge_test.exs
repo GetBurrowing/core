@@ -132,6 +132,37 @@ defmodule PlatformWeb.Tasks.TaskDisplayNeedsMergeTest do
     end
   end
 
+  describe "task_display_status/2 — no default reason (task 01a01b96)" do
+    # WHY EXPORT REFLECTION AND NOT A SOURCE SCAN. A `\\ nil` default on the
+    # second argument makes the compiler emit BOTH a `/1` and a `/2` export,
+    # so the `/1` export IS the defect, observed directly on the loaded
+    # module. A source scan for "no arity-1 call sites" was rejected because
+    # a scanner cannot tell a comment from a call: `board_component.ex`
+    # carries several `task_display_status/1` mentions in prose, and the
+    # rationale comment in `task_display.ex` itself would be scanned. Export
+    # reflection cannot be fooled by prose.
+    #
+    # WHAT THIS GUARD CANNOT CATCH. It does not stop a caller passing an
+    # EXPLICIT `nil` (which still renders the neutral chip); it says nothing
+    # about whether the five render sites pass the RESOLVED reason from
+    # `Tasks.needs_human_action_reason/2` (that is the behaviour tests'
+    # job, above); and it is per-module — a default re-added on some other
+    # function is invisible to it.
+    test "task_display_status is exported at arity 2 only — no default reason" do
+      # Load-bearing: `function_exported?/3` returns `false` for an UNLOADED
+      # module, which would make the `refute` below pass vacuously.
+      Code.ensure_loaded!(PlatformWeb.Tasks.TaskDisplay)
+
+      # Anti-vacuity control: the function must actually exist, so a rename
+      # cannot make the refute below pass by absence.
+      assert function_exported?(PlatformWeb.Tasks.TaskDisplay, :task_display_status, 2)
+
+      refute function_exported?(PlatformWeb.Tasks.TaskDisplay, :task_display_status, 1),
+             "task_display_status/1 is exported — a default on `action_reason` is back, " <>
+               "and an omitted reason silently renders the neutral chip"
+    end
+  end
+
   describe "stack_member_action_label/1" do
     test "the stack row and the data-action-reason hook agree with the board" do
       assert PlatformWeb.Tasks.StackStyles.stack_member_action_label(:awaiting_human_merge) ==

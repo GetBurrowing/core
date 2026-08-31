@@ -4855,7 +4855,7 @@ defmodule Platform.Tasks do
   #      desktop board.)
   #   3. The task's latest plan is in `pending_review` — the "Plan Ready"
   #      case where a planner has submitted a plan that has not been
-  #      approved yet. Mirrors `task_display_status/1` in `tasks_live.ex`.
+  #      approved yet. Mirrors `PlatformWeb.Tasks.TaskDisplay.task_display_status/2`.
   #
   # The 2-arity form takes a precomputed pending review count as the second
   # arg. Batch callers (the LV's stack detail panel) already compute counts

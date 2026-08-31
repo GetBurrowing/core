@@ -64,9 +64,20 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   action-needed. All other cases fall through to `status_label/1` with the
   neutral outline badge. Requires `:plans` preloaded — both
   `Tasks.list_all_tasks/1` and `Tasks.get_task_detail/1` do this.
-  """
-  def task_display_status(task, action_reason \\ nil)
 
+  ## Why there is no default for `action_reason`
+
+  This function is the single source of truth for "needs you" precedence
+  (task 01a01a4a deleted the second decider that re-derived it from
+  `metadata["awaiting_human_action"]`). It takes NO default on purpose: an
+  omitted reason would resolve to `nil`, match no `:awaiting_human_merge`
+  clause, and render the neutral `Deploying` chip — a wrong output that
+  looks plausible, and that neither a screenshot nor a green suite would
+  surface. Arity is the guard. A caller that cannot resolve a reason must
+  pass an explicit value so the decision is visible at the call site; a
+  caller that omits it fails to compile (`undefined function
+  task_display_status/1`) instead of silently rendering the wrong chip.
+  """
   def task_display_status(%Task{status: "deploying"} = _task, :awaiting_human_merge) do
     {"needs merge", @needs_merge_chip_class}
   end
