@@ -1,0 +1,954 @@
+{
+ "gate": "5",
+ "validation": "01a05893-b917-7008",
+ "git": "0139de08-gate5-moon",
+ "viewport": {
+  "w": 1440,
+  "h": 900
+ },
+ "app": "http://192.0.2.200:4012/chat/follow-probe",
+ "cdp": "192.0.2.200:9222",
+ "started": "2026-08-31T22:22:06.697Z",
+ "fatal": null,
+ "instrumentation": {
+  "ok": true,
+  "hasViewportResize": true
+ },
+ "baseline": {
+  "vw": 1440,
+  "vh": 900,
+  "st": 3273,
+  "sh": 3995,
+  "ch": 722,
+  "d": 0,
+  "taH": 32,
+  "taRows": 1,
+  "chip": false,
+  "rows": 50,
+  "lastRow": "DR Dev Reader 9:56 PM 👍 ❤️ 😂 🎉 A second long body, again ",
+  "lastVisible": {
+   "visible": true,
+   "rowTop": 703,
+   "rowBottom": 794,
+   "scTop": 88,
+   "scBottom": 810
+  },
+  "drawerOpen": false,
+  "connected": true
+ },
+ "composer": {
+  "growthCurve": [
+   56,
+   80,
+   104,
+   128,
+   152,
+   176,
+   200,
+   200,
+   200,
+   200,
+   200,
+   200,
+   200,
+   200,
+   200
+  ],
+  "after": {
+   "vw": 1440,
+   "vh": 900,
+   "st": 3429,
+   "sh": 3995,
+   "ch": 566,
+   "d": 0,
+   "taH": 200,
+   "taRows": 16,
+   "chip": false,
+   "rows": 50,
+   "lastRow": "DR Dev Reader 9:56 PM 👍 ❤️ 😂 🎉 A second long body, again ",
+   "lastVisible": {
+    "visible": true,
+    "rowTop": 547,
+    "rowBottom": 638,
+    "scTop": 88,
+    "scBottom": 654
+   },
+   "drawerOpen": false,
+   "connected": true
+  },
+  "stabilityAt1500": {
+   "vw": 1440,
+   "vh": 900,
+   "st": 3429,
+   "sh": 3995,
+   "ch": 566,
+   "d": 0,
+   "taH": 200,
+   "taRows": 16,
+   "chip": false,
+   "rows": 50,
+   "lastRow": "DR Dev Reader 9:56 PM 👍 ❤️ 😂 🎉 A second long body, again ",
+   "lastVisible": {
+    "visible": true,
+    "rowTop": 547,
+    "rowBottom": 638,
+    "scTop": 88,
+    "scBottom": 654
+   },
+   "drawerOpen": false,
+   "connected": true
+  },
+  "judge": {
+   "distanceAtOrUnder150": true,
+   "newestVisible": true,
+   "noChip": true
+  },
+  "verdict": "PASS",
+  "trace": [
+   {
+    "t": 11,
+    "type": "viewportResize:enter",
+    "st": 3273,
+    "sh": 3995,
+    "ch": 710,
+    "d": 12,
+    "chip": false
+   },
+   {
+    "t": 11,
+    "type": "reportDistance",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 710,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 11,
+    "type": "viewportResize:exit",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 710,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 30,
+    "type": "scroll",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 710,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 30,
+    "type": "reportDistance",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 710,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 78,
+    "type": "viewportResize:enter",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 686,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 78,
+    "type": "reportDistance",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 686,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 78,
+    "type": "viewportResize:exit",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 686,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 95,
+    "type": "scroll",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 686,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 95,
+    "type": "reportDistance",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 686,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 144,
+    "type": "viewportResize:enter",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 662,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 144,
+    "type": "reportDistance",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 662,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 144,
+    "type": "viewportResize:exit",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 662,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 160,
+    "type": "scroll",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 662,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 161,
+    "type": "reportDistance",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 662,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 211,
+    "type": "viewportResize:enter",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 638,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 211,
+    "type": "reportDistance",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 638,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 211,
+    "type": "viewportResize:exit",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 638,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 227,
+    "type": "scroll",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 638,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 227,
+    "type": "reportDistance",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 638,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 264,
+    "type": "viewportResize:enter",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 614,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 264,
+    "type": "reportDistance",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 614,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 264,
+    "type": "viewportResize:exit",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 614,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 284,
+    "type": "scroll",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 614,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 284,
+    "type": "reportDistance",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 614,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 328,
+    "type": "viewportResize:enter",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 590,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 328,
+    "type": "reportDistance",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 590,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 328,
+    "type": "viewportResize:exit",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 590,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 337,
+    "type": "scroll",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 590,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 337,
+    "type": "reportDistance",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 590,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 396,
+    "type": "viewportResize:enter",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 566,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 396,
+    "type": "reportDistance",
+    "st": 3429,
+    "sh": 3995,
+    "ch": 566,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 396,
+    "type": "viewportResize:exit",
+    "st": 3429,
+    "sh": 3995,
+    "ch": 566,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 411,
+    "type": "scroll",
+    "st": 3429,
+    "sh": 3995,
+    "ch": 566,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 411,
+    "type": "reportDistance",
+    "st": 3429,
+    "sh": 3995,
+    "ch": 566,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   }
+  ]
+ },
+ "drawer": {
+  "toggleRect": {
+   "x": 1302,
+   "y": 64,
+   "w": 44,
+   "h": 20
+  },
+  "after": {
+   "vw": 1440,
+   "vh": 900,
+   "st": 4152,
+   "sh": 7955,
+   "ch": 339,
+   "d": 3464,
+   "taH": 200,
+   "taRows": 16,
+   "chip": true,
+   "rows": 100,
+   "lastRow": "DR Dev Reader 9:56 PM 👍 ❤️ 😂 🎉 A second long body, again ",
+   "lastVisible": {
+    "visible": false,
+    "rowTop": 4011,
+    "rowBottom": 4102,
+    "scTop": 315,
+    "scBottom": 654
+   },
+   "drawerOpen": true,
+   "connected": true
+  },
+  "stabilityAt1500": {
+   "vw": 1440,
+   "vh": 900,
+   "st": 4152,
+   "sh": 7955,
+   "ch": 339,
+   "d": 3464,
+   "taH": 200,
+   "taRows": 16,
+   "chip": true,
+   "rows": 100,
+   "lastRow": "DR Dev Reader 9:56 PM 👍 ❤️ 😂 🎉 A second long body, again ",
+   "lastVisible": {
+    "visible": false,
+    "rowTop": 4011,
+    "rowBottom": 4102,
+    "scTop": 315,
+    "scBottom": 654
+   },
+   "drawerOpen": true,
+   "connected": true
+  },
+  "judge": {
+   "distanceAtOrUnder150": false,
+   "newestVisible": false,
+   "noChip": false
+  },
+  "verdict": "FAIL",
+  "trace": [
+   {
+    "t": 11,
+    "type": "viewportResize:enter",
+    "st": 3273,
+    "sh": 3995,
+    "ch": 710,
+    "d": 12,
+    "chip": false
+   },
+   {
+    "t": 11,
+    "type": "reportDistance",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 710,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 11,
+    "type": "viewportResize:exit",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 710,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 30,
+    "type": "scroll",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 710,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 30,
+    "type": "reportDistance",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 710,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 78,
+    "type": "viewportResize:enter",
+    "st": 3285,
+    "sh": 3995,
+    "ch": 686,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 78,
+    "type": "reportDistance",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 686,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 78,
+    "type": "viewportResize:exit",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 686,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 95,
+    "type": "scroll",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 686,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 95,
+    "type": "reportDistance",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 686,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 144,
+    "type": "viewportResize:enter",
+    "st": 3309,
+    "sh": 3995,
+    "ch": 662,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 144,
+    "type": "reportDistance",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 662,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 144,
+    "type": "viewportResize:exit",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 662,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 160,
+    "type": "scroll",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 662,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 161,
+    "type": "reportDistance",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 662,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 211,
+    "type": "viewportResize:enter",
+    "st": 3333,
+    "sh": 3995,
+    "ch": 638,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 211,
+    "type": "reportDistance",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 638,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 211,
+    "type": "viewportResize:exit",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 638,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 227,
+    "type": "scroll",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 638,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 227,
+    "type": "reportDistance",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 638,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 264,
+    "type": "viewportResize:enter",
+    "st": 3357,
+    "sh": 3995,
+    "ch": 614,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 264,
+    "type": "reportDistance",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 614,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 264,
+    "type": "viewportResize:exit",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 614,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 284,
+    "type": "scroll",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 614,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 284,
+    "type": "reportDistance",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 614,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 328,
+    "type": "viewportResize:enter",
+    "st": 3381,
+    "sh": 3995,
+    "ch": 590,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 328,
+    "type": "reportDistance",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 590,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 328,
+    "type": "viewportResize:exit",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 590,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 337,
+    "type": "scroll",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 590,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 337,
+    "type": "reportDistance",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 590,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 396,
+    "type": "viewportResize:enter",
+    "st": 3405,
+    "sh": 3995,
+    "ch": 566,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 396,
+    "type": "reportDistance",
+    "st": 3429,
+    "sh": 3995,
+    "ch": 566,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 396,
+    "type": "viewportResize:exit",
+    "st": 3429,
+    "sh": 3995,
+    "ch": 566,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 411,
+    "type": "scroll",
+    "st": 3429,
+    "sh": 3995,
+    "ch": 566,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 411,
+    "type": "reportDistance",
+    "st": 3429,
+    "sh": 3995,
+    "ch": 566,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 2531,
+    "type": "viewportResize:enter",
+    "st": 0,
+    "sh": 3995,
+    "ch": 339,
+    "d": 3656,
+    "chip": false
+   },
+   {
+    "t": 2531,
+    "type": "viewportResize:exit",
+    "st": 0,
+    "sh": 3995,
+    "ch": 339,
+    "d": 3656,
+    "chip": false
+   },
+   {
+    "t": 2588,
+    "type": "beforeUpdate",
+    "st": 0,
+    "sh": 3995,
+    "ch": 339,
+    "d": 3656,
+    "chip": false,
+    "preD": 3656
+   },
+   {
+    "t": 2598,
+    "type": "updated:enter",
+    "st": 0,
+    "sh": 8331,
+    "ch": 339,
+    "d": 7992,
+    "chip": false
+   },
+   {
+    "t": 2639,
+    "type": "scrollToBottom:enter",
+    "st": 0,
+    "sh": 8147,
+    "ch": 339,
+    "d": 7808,
+    "chip": false,
+    "arg": 3656
+   },
+   {
+    "t": 2639,
+    "type": "scrollToBottom:exit",
+    "st": 0,
+    "sh": 8147,
+    "ch": 339,
+    "d": 7808,
+    "chip": false,
+    "snapRan": false
+   },
+   {
+    "t": 2639,
+    "type": "reportDistance",
+    "st": 0,
+    "sh": 8147,
+    "ch": 339,
+    "d": 7808,
+    "chip": false,
+    "arg": 3656,
+    "away": true
+   },
+   {
+    "t": 2640,
+    "type": "updated:exit",
+    "st": 0,
+    "sh": 8147,
+    "ch": 339,
+    "d": 7808,
+    "chip": false
+   },
+   {
+    "t": 2689,
+    "type": "scroll",
+    "st": 4152,
+    "sh": 7988,
+    "ch": 339,
+    "d": 3497,
+    "chip": true
+   },
+   {
+    "t": 2689,
+    "type": "reportDistance",
+    "st": 4152,
+    "sh": 7988,
+    "ch": 339,
+    "d": 3497,
+    "chip": true,
+    "arg": null,
+    "away": true
+   }
+  ]
+ },
+ "finished": "2026-08-31T22:22:12.050Z"
+}

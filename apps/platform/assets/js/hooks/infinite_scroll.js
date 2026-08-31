@@ -47,6 +47,18 @@ const InfiniteScroll = {
     // guard client-side because the LV update is async.
     this._inflight = false;
 
+    // The realign-guard memory (see `_trigger`): every scroll event carries
+    // the offset the reader actually moved to, so the last observed value
+    // survives a patch that destroys the offset silently. Passive: this
+    // listener never calls preventDefault.
+    this._scrollObservedTop = this.scrollEl.scrollTop;
+    this._onScrollObserved = () => {
+      this._scrollObservedTop = this.scrollEl.scrollTop;
+    };
+    this.scrollEl.addEventListener("scroll", this._onScrollObserved, {
+      passive: true,
+    });
+
     this._observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -74,6 +86,10 @@ const InfiniteScroll = {
       this._observer.disconnect();
       this._observer = null;
     }
+    if (this._onScrollObserved) {
+      this.scrollEl.removeEventListener("scroll", this._onScrollObserved);
+      this._onScrollObserved = null;
+    }
   },
 
   _trigger() {
@@ -84,8 +100,31 @@ const InfiniteScroll = {
       // LV update lands. The LV reply triggers a stream_insert which
       // grows scrollHeight; we add the delta back to scrollTop to keep
       // the user pinned on the previously-earliest visible message.
+      //
+      // ── The destructive-move capture guard (task 01a05873) ──────────
+      // The live offset is not always the reader's offset. A LiveView
+      // patch can RELOCATE the scroller (morphdom realigns a child list
+      // that grew ahead of it by removing and re-inserting the keyed
+      // nodes — measured on the canvases-drawer toggle), and a detached
+      // scroller forgets its scroll offset: it re-inserts reading 0,
+      // with NO scroll event. Capturing here would record 0 for a reader
+      // parked thousands of pixels deep, and `_afterOlder`'s
+      // compensation would then throw them to `0 + Δ`. So: if the live
+      // offset is 0 while the last scroll-observed offset was not, the
+      // offset was destroyed under the reader rather than scrolled away
+      // — a genuine scroll to the top delivers scroll events, and with
+      // rootMargin 200px this hook fires long before the live offset
+      // could reach 0 on its own — and the memory is the only surviving
+      // record of where the reader was. (The ScrollToBottom hook
+      // repairs the offset itself when it is mounted; this guard covers
+      // the capture when it is not.)
+      const live = this.scrollEl.scrollTop;
+      const preTop =
+        live === 0 && this._scrollObservedTop > 0
+          ? this._scrollObservedTop
+          : live;
       this._preHeight = this.scrollEl.scrollHeight;
-      this._preTop = this.scrollEl.scrollTop;
+      this._preTop = preTop;
       this.pushEvent("load_older_messages", {}, () => this._afterOlder());
     } else if (this.direction === "newer") {
       // Appends to the bottom — no anchor preservation needed. The

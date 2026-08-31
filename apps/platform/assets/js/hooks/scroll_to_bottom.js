@@ -236,7 +236,15 @@ const ScrollToBottom = {
     // a change from nothing and snap a reader who has not moved.
     this._lastClientHeight = this.scrollEl.clientHeight;
     this._lastClientWidth = this.scrollEl.clientWidth;
+    // Pre-resize scrollHeight for the WIDTH path below. Seeded with the
+    // other dimensions so the ResizeObserver's first (current-size)
+    // delivery has all three to compare against.
+    this._lastScrollHeight = this.scrollEl.scrollHeight;
     this._connectViewportObserver();
+    // Seed the realign-guard memory (below) with the position the server
+    // render landed the reader at, and arm its observer.
+    this._scrollObservedTop = this.scrollEl.scrollTop;
+    this._connectRealignObserver();
     // Seeds `_spaceId`, `_initialScroll` and `_anchoredFor`, and arms the
     // ResizeObserver. `updated()` calls the SAME method when the rendered
     // conversation changes, so there is exactly one definition of what
@@ -273,6 +281,13 @@ const ScrollToBottom = {
     // scroller evaluates the predicate at most once per frame.
     this._scrollFrame = null;
     this._onScroll = () => {
+      // Realign-guard memory: EVERY scroll event carries the offset the
+      // reader (or one of this hook's own snaps) actually moved to. Record
+      // it BEFORE the rAF coalescing gate — a coalesced-away event must
+      // still refresh the memory, because `_repairRealignedScroll` below
+      // distinguishes "the reader moved" (an event delivered the new
+      // offset) from "the offset was destroyed" (no event ever came).
+      this._scrollObservedTop = this.scrollEl.scrollTop;
       if (this._scrollFrame) return;
       this._scrollFrame = requestAnimationFrame(() => {
         this._scrollFrame = null;
@@ -455,11 +470,42 @@ const ScrollToBottom = {
     if (this._initialScroll) return;
 
     // A WIDTH change rewraps every message, so `scrollHeight` moved in the
-    // same frame and the substitution below — which reads the NEW scrollHeight
-    // against the OLD height — is not comparable. The width case is the rail
-    // transition and it already has an owner: `holdAnchorThroughReflow`, armed
-    // from `sidebar_collapsed_changed`.
-    if (width !== prevWidth) return;
+    // same frame and the height path's substitution — NEW scrollHeight
+    // against OLD height — is not comparable. The width case has TWO
+    // owners now, answering different questions:
+    //
+    //   * `holdAnchorThroughReflow`, armed from `sidebar_collapsed_changed`,
+    //     pins the reader's DISTANCE through the rail's 200ms width
+    //     animation (task 019f51d1). Deliberately NOT re-armed broadly —
+    //     pinning a moving reader for 400ms is the stutter task 01a0419a
+    //     stage 2 measured and stage 3 removed; see the KEEP-OR-DROP note
+    //     in `_reportDistance`.
+    //   * THIS path, added by task 01a05873, owns the ONE-SHOT resizes the
+    //     pin was never armed for: window resizes and the sidebar drag,
+    //     both desktop-only (mobile has no resizable sidebar or window).
+    //     It re-anchors the same way the height path does — snap when the
+    //     PRE-resize distance was within NEAR_BOTTOM_PX, preserve the
+    //     pixel otherwise — but the pre-resize distance must be
+    //     reconstructed from the PRE-resize scrollHeight (`_lastScrollHeight`,
+    //     refreshed on every layout-changing event below), because the
+    //     live scrollHeight already includes the rewrap.
+    //
+    // Before 01a05873 this case fell through to a bare `return`, which
+    // stranded a bottom-parked reader: rewrap grew `scrollHeight` under an
+    // unchanged `scrollTop` (measured 800px stranded on a 1440→1200 window
+    // resize, 400px on a sidebar drag), after which the follow rule
+    // correctly declined — the reader was no longer near the bottom — and
+    // the pill appeared for someone who never scrolled.
+    if (width !== prevWidth) {
+      const preDistance =
+        this._lastScrollHeight - this.scrollEl.scrollTop - prevHeight;
+      if (preDistance <= NEAR_BOTTOM_PX) {
+        this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+        this._reportDistance();
+      }
+      this._lastScrollHeight = this.scrollEl.scrollHeight;
+      return;
+    }
     if (height === prevHeight) return;
 
     // Where the reader WAS, in the instant before the box changed size. A
@@ -477,10 +523,116 @@ const ScrollToBottom = {
     // boundary is NEAR_BOTTOM_PX, the same constant the follow rule uses, so
     // "followed through a resize" and "followed a new message" cannot name
     // different readers.
-    if (preDistance > NEAR_BOTTOM_PX) return;
+    if (preDistance > NEAR_BOTTOM_PX) {
+      this._lastScrollHeight = this.scrollEl.scrollHeight;
+      return;
+    }
 
     this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
     this._reportDistance();
+    this._lastScrollHeight = this.scrollEl.scrollHeight;
+  },
+  // ── The morphdom realignment guard (task 01a05873 stage 2) ─────────────────
+  //
+  // WHAT WAS MEASURED, in the real app over CDP
+  // (priv/measurements/01a05873-desktop-follow/, gate-5 harness + zero-hunt
+  // trace): a reader parked at the bottom clicks the canvases drawer toggle
+  // and the `canvas_panel_toggle` patch — which only flips `@show_canvases`
+  // and renders the drawer div into `#chat-drop-zone`, NEVER touching
+  // `#message-list` — leaves the scroller at scrollTop 0. Not by any
+  // `scrollTop = 0` write: the recorded DOM op is a REMOVE of
+  // `#chat-message-scroller` from `#chat-drop-zone` followed immediately by
+  // an ADD of the SAME node back into the SAME parent, ~25ms after the
+  // patch, with no scroll event and scrollHeight still full.
+  //
+  // WHY morphdom does it. The patch grows `#chat-drop-zone`'s child list
+  // ahead of the keyed siblings (`#inline-focus-listener`,
+  // `#chat-message-scroller`), and LiveView's DOM patcher realigns a changed
+  // child list by RELOCATING the existing keyed nodes
+  // (`fromEl.insertBefore(matchingFromEl, …)` in the bundled morphdom).
+  // Giving the new drawer an id does NOT avoid this — measured: the move
+  // still happens, because the alignment walk starts from the insertion
+  // point, not from the new node's key. `Node.insertBefore` of an attached
+  // node removes it first, and a detached scroller forgets its scroll
+  // offset: on re-insert scrollTop reads 0.
+  //
+  // WHY NOTHING ELSE SEES IT:
+  //   * no scroll event — the offset was destroyed with the detached
+  //     render box, not scrolled away; every scroll-event-driven path
+  //     (including `_reportDistance` and the realign-guard memory below)
+  //     is silent.
+  //   * `beforeUpdate` / `updated` — they fire only when LiveView patches
+  //     `#message-list`, and this patch does not.
+  //   * the #848 viewport observer — it fires on the drawer's clientHeight
+  //     shrink, but its pre-resize reconstruction
+  //     (`scrollHeight - scrollTop - prevHeight`) reads the ALREADY-zeroed
+  //     scrollTop: a bottom-parked reader at 3273px reconstructs as "was
+  //     3273px away" and the path declines. The exact reader #848 exists
+  //     to hold is the one it cannot see.
+  //   * InfiniteScroll's top sentinel — at scrollTop 0 it intersects and
+  //     fires `load_older_messages` with `_preTop` captured AFTER the
+  //     reset (0); the post-prepend compensation then lands the reader at
+  //     `0 + Δ` ≈ 3960px away with the jump chip raised. That is the
+  //     reported defect.
+  //
+  // THE REPAIR. The parent-level childList observer below sees the scroller
+  // (or an ancestor of it) among a batch's removedNodes, and the
+  // `_scrollObservedTop` memory — refreshed on every scroll event, see
+  // `_onScroll` — still holds the offset the reader actually had, because
+  // the destruction produced no event. Restoring it in the observer
+  // microtask puts the reader back before the browser paints, before any
+  // ResizeObserver / IntersectionObserver delivery, so the #848 height
+  // path then sees the true pre-resize distance and does its own job (snap
+  // a bottom-parked reader to the drawer-shrunk edge), and the sentinel
+  // never intersects. Nothing about the follow rule, the thresholds or the
+  // capture contract changes: this only un-corrupts the input they read.
+  //
+  // The memory can only disagree with the live offset through a silent
+  // destruction. A real move — user scroll, one of this hook's snaps, a
+  // browser clamp of a rendered box — delivers a scroll event first, which
+  // refreshes the memory to the live value and makes the repair a no-op.
+  // A space switch re-renders the pane and snaps to bottom during arrival,
+  // so a transient repair there is immediately overwritten by the arrival
+  // snap.
+  _connectRealignObserver() {
+    if (typeof MutationObserver === "undefined") return;
+    this._disconnectRealignObserver();
+    const parent = this.scrollEl.parentElement;
+    if (!parent) return;
+    this._realignObservedParent = parent;
+    this._realignObserver = new MutationObserver((muts) => {
+      // The patch that moved the scroller may also have swapped its
+      // parent; re-arm on the new one before judging this batch.
+      if (this.scrollEl.parentElement !== this._realignObservedParent) {
+        this._connectRealignObserver();
+      }
+      for (const mut of muts) {
+        for (const n of mut.removedNodes) {
+          if (
+            n === this.scrollEl ||
+            (n.contains && n.contains(this.scrollEl))
+          ) {
+            this._repairRealignedScroll();
+            return;
+          }
+        }
+      }
+    });
+    this._realignObserver.observe(parent, { childList: true });
+  },
+  _disconnectRealignObserver() {
+    if (this._realignObserver) {
+      this._realignObserver.disconnect();
+      this._realignObserver = null;
+      this._realignObservedParent = null;
+    }
+  },
+  _repairRealignedScroll() {
+    const memory = this._scrollObservedTop;
+    if (memory == null) return;
+    const live = this.scrollEl.scrollTop;
+    if (live === memory) return;
+    this.scrollEl.scrollTop = memory;
   },
   // Restart the quiet-period countdown. Called on every snap and every
   // observed resize during the arrival phase, so the phase ends only once
@@ -535,6 +687,11 @@ const ScrollToBottom = {
     // from the bottom without any scroll event firing. Re-evaluate here or
     // the chip never appears for a stationary reader.
     this._reportDistance(preDistance);
+    // Keep the pre-resize scrollHeight fresh on every patch — it is the
+    // ONLY term the WIDTH path of `_onViewportResize` cannot reconstruct
+    // after a rewrap, and a stale value there strands a bottom-parked
+    // reader on the next window resize / sidebar drag (task 01a05873).
+    this._lastScrollHeight = this.scrollEl.scrollHeight;
   },
   updated() {
     // A `patch=` navigation to another channel/DM re-renders `#message-list`
@@ -576,6 +733,7 @@ const ScrollToBottom = {
     if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
     this._disconnectResizeObserver();
     this._disconnectViewportObserver();
+    this._disconnectRealignObserver();
     if (this._iosFallbackTimer) {
       clearTimeout(this._iosFallbackTimer);
       this._iosFallbackTimer = null;
@@ -622,6 +780,16 @@ const ScrollToBottom = {
       : distance > nominal + THRESHOLD_HYSTERESIS_PX;
   },
   _reportDistance(preDistance) {
+    // Keep the pre-resize scrollHeight fresh on EVERY report path — not
+    // just patches. A rewrap can happen with no LiveView patch at all
+    // (webfont swap reflows every body once, mid-conversation), and when
+    // it shrinks the content the browser CLAMPS scrollTop, which fires a
+    // real scroll event that lands HERE. Without this refresh the width
+    // path in `_onViewportResize` reads a stale pre-resize height and a
+    // bottom-parked reader can be misclassified as mid-band on the next
+    // window resize (observed stale by 192px in the real app, task
+    // 01a05873).
+    this._lastScrollHeight = this.scrollEl.scrollHeight;
     const distance = preDistance ?? this.distanceFromBottom();
     // Banded, not bare comparisons — see `THRESHOLD_HYSTERESIS_PX`. The
     // nominal crossing points are still NEAR_BOTTOM_PX and DEEP_HISTORY_PX.

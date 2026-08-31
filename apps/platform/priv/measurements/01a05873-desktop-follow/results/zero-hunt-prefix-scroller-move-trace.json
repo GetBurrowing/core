@@ -1,0 +1,1375 @@
+{
+ "started": "2026-08-31T22:46:19.831Z",
+ "url": "http://192.0.2.200:4012/chat/follow-probe",
+ "fatal": null,
+ "baseline": {
+  "st": 3273,
+  "sh": 3995,
+  "ch": 722,
+  "d": 0
+ },
+ "instrumentation": {
+  "ok": true,
+  "hookFound": true,
+  "sentinelFound": true,
+  "accessorOn": "found"
+ },
+ "clickAt": {
+  "x": 1302,
+  "y": 64
+ },
+ "final": {
+  "st": 3960,
+  "sh": 7955,
+  "ch": 495,
+  "d": 3500,
+  "drawerOpen": true,
+  "rows": 100,
+  "chip": true
+ },
+ "events": [
+  {
+   "t": 241.6,
+   "type": "removed",
+   "rel": "SELF",
+   "node": "DIV#chat-message-scroller.flex-1.min-h-0 @SC",
+   "scConnected": true,
+   "parent": "DIV#chat-drop-zone.flex.flex-1 @a1"
+  },
+  {
+   "t": 241.6,
+   "type": "added",
+   "rel": "SELF",
+   "node": "DIV#chat-message-scroller.flex-1.min-h-0 @SC",
+   "scConnected": true,
+   "parent": "DIV#chat-drop-zone.flex.flex-1 @a1"
+  },
+  {
+   "t": 267.5,
+   "type": "frame",
+   "st": 0,
+   "sh": 3995,
+   "ch": 495,
+   "conn": true,
+   "chain": [
+    "DIV#chat-message-scroller.flex-1.min-h-0@SC",
+    "DIV#chat-drop-zone.flex.flex-1@a1",
+    "DIV.flex.flex-1@a2",
+    "DIV.flex.h-full@a3",
+    "MAIN.flex-1.min-h-0@a4",
+    "DIV.flex.flex-1@a5",
+    "DIV.app-shell-root.flex@a6",
+    "DIV#phx-GNEFUvtb4jo70hbI.phx-connected@a7",
+    "BODY@body"
+   ],
+   "displays": [
+    "block",
+    "flex",
+    "flex",
+    "flex",
+    "block",
+    "flex",
+    "flex",
+    "contents",
+    "block"
+   ],
+   "activeElement": "BUTTON.flex.items-center"
+  },
+  {
+   "t": 269.2,
+   "type": "viewportResize:enter",
+   "st": 0,
+   "ch": 495
+  },
+  {
+   "t": 269.2,
+   "type": "viewportResize:exit",
+   "st": 0,
+   "ch": 495
+  },
+  {
+   "t": 274,
+   "type": "sentinel:trigger",
+   "preTop": 0
+  },
+  {
+   "t": 274.2,
+   "type": "sentinel:triggered",
+   "capturedPreTop": 0,
+   "capturedPreHeight": 3995
+  },
+  {
+   "t": 303.3,
+   "type": "beforeUpdate",
+   "preD": 3500
+  },
+  {
+   "t": 316,
+   "type": "updated:enter"
+  },
+  {
+   "t": 316.4,
+   "type": "scrollToBottom:enter",
+   "arg": 3500
+  },
+  {
+   "t": 340.6,
+   "type": "reportDistance",
+   "arg": 3500,
+   "away": true
+  },
+  {
+   "t": 341.8,
+   "type": "updated:exit"
+  },
+  {
+   "t": 341.9,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7096-abab-1ed2fe4ee8cb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7096-abab-1ed2fe4ee8cb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7096-abab-1ed2fe4ee8cb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7095-b3d5-0dfc0a93be15.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7095-b3d5-0dfc0a93be15.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7095-b3d5-0dfc0a93be15.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7094-9dde-2eef35d13987.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7094-9dde-2eef35d13987.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7094-9dde-2eef35d13987.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7093-8ee9-caa00eeb30eb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 341.9,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7093-8ee9-caa00eeb30eb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7093-8ee9-caa00eeb30eb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7092-9eb8-903d619e35b6.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7092-9eb8-903d619e35b6.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7092-9eb8-903d619e35b6.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7091-a35b-4568c04915a9.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7091-a35b-4568c04915a9.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7091-a35b-4568c04915a9.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7090-82d6-036c4c6e4197.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7090-82d6-036c4c6e4197.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7090-82d6-036c4c6e4197.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708f-9d67-d0a78bd6d5cb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708f-9d67-d0a78bd6d5cb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708f-9d67-d0a78bd6d5cb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708e-859c-3c113ef5082a.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708e-859c-3c113ef5082a.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708e-859c-3c113ef5082a.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708d-910b-88b653848716.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708d-910b-88b653848716.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708d-910b-88b653848716.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708c-a5cc-1657dc6b0747.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708c-a5cc-1657dc6b0747.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708c-a5cc-1657dc6b0747.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708b-a84a-dcee968f6bab.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708b-a84a-dcee968f6bab.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708b-a84a-dcee968f6bab.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708a-89d5-30c82ad49f59.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708a-89d5-30c82ad49f59.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-708a-89d5-30c82ad49f59.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7089-be7f-135eb765ad83.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7089-be7f-135eb765ad83.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7089-be7f-135eb765ad83.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7088-890e-926dbd43a164.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7088-890e-926dbd43a164.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7088-890e-926dbd43a164.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7087-b9f1-2edd0d996437.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7087-b9f1-2edd0d996437.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7087-b9f1-2edd0d996437.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7086-9233-6c792ca20091.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7086-9233-6c792ca20091.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7086-9233-6c792ca20091.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7085-8c6f-c9e1537c4f32.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7085-8c6f-c9e1537c4f32.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7085-8c6f-c9e1537c4f32.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7084-9497-1014b2aceae4.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7084-9497-1014b2aceae4.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7084-9497-1014b2aceae4.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7083-bff7-05367badc684.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7083-bff7-05367badc684.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7083-bff7-05367badc684.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7082-90b3-9b63b1466be1.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7082-90b3-9b63b1466be1.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7082-90b3-9b63b1466be1.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7081-abc2-1455fd058524.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7081-abc2-1455fd058524.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7081-abc2-1455fd058524.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7080-9b58-4539c9a387ba.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7080-9b58-4539c9a387ba.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7080-9b58-4539c9a387ba.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707f-82ad-90023ddf51a7.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707f-82ad-90023ddf51a7.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707f-82ad-90023ddf51a7.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707e-a36d-be59f31e91b0.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707e-a36d-be59f31e91b0.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707e-a36d-be59f31e91b0.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707d-9418-c1b8a7fc99f8.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707d-9418-c1b8a7fc99f8.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707d-9418-c1b8a7fc99f8.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707c-8817-c97c4915cd7b.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707c-8817-c97c4915cd7b.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707c-8817-c97c4915cd7b.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707b-b5b0-bf2604cf0a4d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707b-b5b0-bf2604cf0a4d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707b-b5b0-bf2604cf0a4d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707a-a441-102d12c1aacb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707a-a441-102d12c1aacb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-707a-a441-102d12c1aacb.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.1,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7079-8f92-c57f2fb40bb8.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.2,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7079-8f92-c57f2fb40bb8.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.2,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7079-8f92-c57f2fb40bb8.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.2,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7078-9715-6432edf39021.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.2,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7078-9715-6432edf39021.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.2,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7078-9715-6432edf39021.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7077-9ac2-647a63242f8a.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7077-9ac2-647a63242f8a.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7077-9ac2-647a63242f8a.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7076-9646-84b8321886dc.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7076-9646-84b8321886dc.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7076-9646-84b8321886dc.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7075-9348-338894efa300.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7075-9348-338894efa300.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7075-9348-338894efa300.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7074-922b-177d814c7f1f.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7074-922b-177d814c7f1f.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7074-922b-177d814c7f1f.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7073-affb-ab9ed1449849.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7073-affb-ab9ed1449849.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7073-affb-ab9ed1449849.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7072-818f-139dbc4fcfa4.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7072-818f-139dbc4fcfa4.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7072-818f-139dbc4fcfa4.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7071-a7e9-9c62ca2791ae.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7071-a7e9-9c62ca2791ae.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7071-a7e9-9c62ca2791ae.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7070-a909-083cd06333f1.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7070-a909-083cd06333f1.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7070-a909-083cd06333f1.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706f-a65e-087e56b9cc5d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706f-a65e-087e56b9cc5d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706f-a65e-087e56b9cc5d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706e-a29b-449c52b1ab9f.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706e-a29b-449c52b1ab9f.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706e-a29b-449c52b1ab9f.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706d-9cd2-b8d72934fcf2.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706d-9cd2-b8d72934fcf2.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706d-9cd2-b8d72934fcf2.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.3,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706c-9e48-d848aca65542.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706c-9e48-d848aca65542.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706c-9e48-d848aca65542.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706b-b6ae-d6c3e7650834.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706b-b6ae-d6c3e7650834.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706b-b6ae-d6c3e7650834.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706a-b82b-60b3783657cc.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706a-b82b-60b3783657cc.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-706a-b82b-60b3783657cc.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7069-b8c1-278d98a0d9b0.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7069-b8c1-278d98a0d9b0.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7069-b8c1-278d98a0d9b0.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7068-a8d7-186955c40a49.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7068-a8d7-186955c40a49.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7068-a8d7-186955c40a49.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7067-aa28-e34849c0848e.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7067-aa28-e34849c0848e.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7067-aa28-e34849c0848e.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7066-aa03-6edcb03d0757.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7066-aa03-6edcb03d0757.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7066-aa03-6edcb03d0757.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7065-85f0-899ea1cfd87d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "removed",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7065-85f0-899ea1cfd87d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 342.4,
+   "type": "added",
+   "rel": "DESCENDANT-OF-SC",
+   "node": "DIV#messages-01a059fa-b2c6-7065-85f0-899ea1cfd87d.group.relative @UNTAGGED",
+   "scConnected": true,
+   "parent": "DIV#message-list.px-5.py-4 @UNTAGGED"
+  },
+  {
+   "t": 348.6,
+   "type": "scrollTopWrite",
+   "from": 0,
+   "to": 3960,
+   "stack": "    at HTMLDivElement.set (<anonymous>:78:21) |     at http://192.0.2.200:4012/assets/js/app.js:9912:35"
+  },
+  {
+   "t": 393.6,
+   "type": "scroll",
+   "st": 3960
+  },
+  {
+   "t": 393.6,
+   "type": "frame",
+   "st": 3960,
+   "sh": 7955,
+   "ch": 495,
+   "conn": true,
+   "chain": [
+    "DIV#chat-message-scroller.flex-1.min-h-0@SC",
+    "DIV#chat-drop-zone.flex.flex-1@a1",
+    "DIV.flex.flex-1@a2",
+    "DIV.flex.h-full@a3",
+    "MAIN.flex-1.min-h-0@a4",
+    "DIV.flex.flex-1@a5",
+    "DIV.app-shell-root.flex@a6",
+    "DIV#phx-GNEFUvtb4jo70hbI.phx-connected@a7",
+    "BODY@body"
+   ],
+   "displays": [
+    "block",
+    "flex",
+    "flex",
+    "flex",
+    "block",
+    "flex",
+    "flex",
+    "contents",
+    "block"
+   ],
+   "activeElement": "BUTTON.flex.items-center"
+  },
+  {
+   "t": 393.6,
+   "type": "reportDistance",
+   "arg": null,
+   "away": true
+  }
+ ]
+}

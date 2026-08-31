@@ -1,0 +1,133 @@
+{
+ "started": "2026-08-31T23:13:59.702Z",
+ "url": "http://192.0.2.200:4012/chat/follow-probe",
+ "fatal": null,
+ "baseline": {
+  "st": 3273,
+  "sh": 3995,
+  "ch": 722,
+  "d": 0
+ },
+ "instrumentation": {
+  "ok": true,
+  "hookFound": true,
+  "sentinelFound": true,
+  "accessorOn": "found"
+ },
+ "clickAt": {
+  "x": 1302,
+  "y": 64
+ },
+ "final": {
+  "st": 3500,
+  "sh": 3995,
+  "ch": 495,
+  "d": 0,
+  "drawerOpen": true,
+  "rows": 50,
+  "chip": false
+ },
+ "events": [
+  {
+   "t": 245.4,
+   "type": "scrollTopWrite",
+   "from": 0,
+   "to": 3273,
+   "stack": "    at HTMLDivElement.set (<anonymous>:78:21) |     at _ViewHook._repairRealignedScroll (http://192.0.2.200:4012/assets/js/app.js:40963:31) |     at MutationObserver.<anonymous> (http://192.0.2.200:4012/assets/js/app.js:40943:20)"
+  },
+  {
+   "t": 246.9,
+   "type": "removed",
+   "rel": "SELF",
+   "node": "DIV#chat-message-scroller.flex-1.min-h-0 @SC",
+   "scConnected": true,
+   "parent": "DIV#chat-drop-zone.flex.flex-1 @a1"
+  },
+  {
+   "t": 246.9,
+   "type": "added",
+   "rel": "SELF",
+   "node": "DIV#chat-message-scroller.flex-1.min-h-0 @SC",
+   "scConnected": true,
+   "parent": "DIV#chat-drop-zone.flex.flex-1 @a1"
+  },
+  {
+   "t": 249,
+   "type": "scroll",
+   "st": 3273
+  },
+  {
+   "t": 249.2,
+   "type": "reportDistance",
+   "arg": null,
+   "away": true
+  },
+  {
+   "t": 249.8,
+   "type": "viewportResize:enter",
+   "st": 3273,
+   "ch": 495
+  },
+  {
+   "t": 249.8,
+   "type": "scrollTopWrite",
+   "from": 3273,
+   "to": 3995,
+   "stack": "    at HTMLDivElement.set (<anonymous>:78:21) |     at _ViewHook._onViewportResize (http://192.0.2.200:4012/assets/js/app.js:40864:31) |     at hk._onViewportResize (<anonymous>:204:9) |     at ResizeObserver.<anonymous> (http://192.0.2.200:4012/assets/js/app.js:40832:62)"
+  },
+  {
+   "t": 250,
+   "type": "reportDistance",
+   "arg": null,
+   "away": false
+  },
+  {
+   "t": 250,
+   "type": "viewportResize:exit",
+   "st": 3500,
+   "ch": 495
+  },
+  {
+   "t": 261.4,
+   "type": "scroll",
+   "st": 3500
+  },
+  {
+   "t": 261.5,
+   "type": "frame",
+   "st": 3500,
+   "sh": 3995,
+   "ch": 495,
+   "conn": true,
+   "chain": [
+    "DIV#chat-message-scroller.flex-1.min-h-0@SC",
+    "DIV#chat-drop-zone.flex.flex-1@a1",
+    "DIV.flex.flex-1@a2",
+    "DIV.flex.h-full@a3",
+    "MAIN.flex-1.min-h-0@a4",
+    "DIV.flex.flex-1@a5",
+    "DIV.app-shell-root.flex@a6",
+    "DIV#phx-GNEG1ZZ6Dn7UCU0B.phx-connected@a7",
+    "BODY@body"
+   ],
+   "displays": [
+    "block",
+    "flex",
+    "flex",
+    "flex",
+    "block",
+    "flex",
+    "flex",
+    "contents",
+    "block"
+   ],
+   "activeElement": "BUTTON.flex.items-center"
+  },
+  {
+   "t": 261.5,
+   "type": "reportDistance",
+   "arg": null,
+   "away": false
+  }
+ ]
+}

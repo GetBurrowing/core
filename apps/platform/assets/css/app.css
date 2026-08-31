@@ -1,3 +1,29 @@
+/*
+ * #chat-sidebar width — carried by a root-level custom property, NOT an
+ * inline style (task 01a05873).
+ *
+ * `ResizableSidebar` (assets/js/hooks/resizable_sidebar.js) writes
+ * `--suite-sidebar-width` onto `document.documentElement` from the stored
+ * preference. It deliberately does NOT write `el.style.width` on the aside:
+ * LiveView's morphdom resets inline styles when it patches an element, and
+ * between that reset and the hook's `updated()` re-apply the aside rendered
+ * at its INTRINSIC width (468px on a 1440px desktop instead of the
+ * configured 224px) — squeezing the chat column ~244px narrower mid-patch.
+ * Because the aside precedes #message-list in document order, morphdom
+ * hit the aside before firing ScrollToBottom's beforeUpdate, so that hook's
+ * pre-patch distance capture measured the rewrap-inflated scrollHeight and
+ * desktop chat silently stopped following new messages (the exact defect
+ * this rule exists to prevent). A custom property on <html> is outside
+ * everything LiveView patches, so the width cannot be stripped mid-patch.
+ *
+ * The fallback MUST stay 224px: it matches the expanded icon-rail
+ * (w-56) so the channel rail visually aligns with the primary nav on
+ * first paint, before the hook has run.
+ */
+#chat-sidebar {
+  width: var(--suite-sidebar-width, 224px);
+}
+
 /* Fabrikam Design System — Public Sans */
 @import url("https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800;900&display=swap");
 

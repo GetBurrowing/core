@@ -1,0 +1,926 @@
+{
+ "gate": "5",
+ "validation": "01a05893-b917-7008",
+ "git": "2dc198c4-gate5-fix2",
+ "viewport": {
+  "w": 1440,
+  "h": 900
+ },
+ "app": "http://192.0.2.200:4012/chat/follow-probe",
+ "cdp": "127.0.0.1:9224",
+ "started": "2026-08-31T23:25:37.891Z",
+ "fatal": null,
+ "instrumentation": {
+  "ok": true,
+  "hasViewportResize": true
+ },
+ "baseline": {
+  "vw": 1440,
+  "vh": 900,
+  "st": 2689,
+  "sh": 3411,
+  "ch": 722,
+  "d": 0,
+  "taH": 32,
+  "taRows": 1,
+  "chip": false,
+  "rows": 50,
+  "lastRow": "DS Dev Sender 11:25 PM 👍 ❤️ 😂 🎉 after window resize 17882",
+  "lastVisible": {
+   "visible": true,
+   "rowTop": 763,
+   "rowBottom": 794,
+   "scTop": 88,
+   "scBottom": 810
+  },
+  "drawerOpen": false,
+  "connected": true
+ },
+ "composer": {
+  "growthCurve": [
+   56,
+   80,
+   104,
+   128,
+   152,
+   176,
+   200,
+   200,
+   200,
+   200,
+   200,
+   200,
+   200,
+   200,
+   200
+  ],
+  "after": {
+   "vw": 1440,
+   "vh": 900,
+   "st": 2845,
+   "sh": 3411,
+   "ch": 566,
+   "d": 0,
+   "taH": 200,
+   "taRows": 16,
+   "chip": false,
+   "rows": 50,
+   "lastRow": "DS Dev Sender 11:25 PM 👍 ❤️ 😂 🎉 after window resize 17882",
+   "lastVisible": {
+    "visible": true,
+    "rowTop": 607,
+    "rowBottom": 638,
+    "scTop": 88,
+    "scBottom": 654
+   },
+   "drawerOpen": false,
+   "connected": true
+  },
+  "stabilityAt1500": {
+   "vw": 1440,
+   "vh": 900,
+   "st": 2845,
+   "sh": 3411,
+   "ch": 566,
+   "d": 0,
+   "taH": 200,
+   "taRows": 16,
+   "chip": false,
+   "rows": 50,
+   "lastRow": "DS Dev Sender 11:25 PM 👍 ❤️ 😂 🎉 after window resize 17882",
+   "lastVisible": {
+    "visible": true,
+    "rowTop": 607,
+    "rowBottom": 638,
+    "scTop": 88,
+    "scBottom": 654
+   },
+   "drawerOpen": false,
+   "connected": true
+  },
+  "judge": {
+   "distanceAtOrUnder150": true,
+   "newestVisible": true,
+   "noChip": true
+  },
+  "verdict": "PASS",
+  "trace": [
+   {
+    "t": 36,
+    "type": "viewportResize:enter",
+    "st": 2689,
+    "sh": 3411,
+    "ch": 710,
+    "d": 12,
+    "chip": false
+   },
+   {
+    "t": 36,
+    "type": "reportDistance",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 710,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 36,
+    "type": "viewportResize:exit",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 710,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 52,
+    "type": "scroll",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 710,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 52,
+    "type": "reportDistance",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 710,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 103,
+    "type": "viewportResize:enter",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 686,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 103,
+    "type": "reportDistance",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 686,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 103,
+    "type": "viewportResize:exit",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 686,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 119,
+    "type": "scroll",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 686,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 119,
+    "type": "reportDistance",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 686,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 170,
+    "type": "viewportResize:enter",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 662,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 170,
+    "type": "reportDistance",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 662,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 170,
+    "type": "viewportResize:exit",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 662,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 186,
+    "type": "scroll",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 662,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 186,
+    "type": "reportDistance",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 662,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 236,
+    "type": "viewportResize:enter",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 638,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 236,
+    "type": "reportDistance",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 638,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 236,
+    "type": "viewportResize:exit",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 638,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 252,
+    "type": "scroll",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 638,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 252,
+    "type": "reportDistance",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 638,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 290,
+    "type": "viewportResize:enter",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 614,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 290,
+    "type": "reportDistance",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 614,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 290,
+    "type": "viewportResize:exit",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 614,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 303,
+    "type": "scroll",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 614,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 303,
+    "type": "reportDistance",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 614,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 369,
+    "type": "viewportResize:enter",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 590,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 370,
+    "type": "reportDistance",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 590,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 370,
+    "type": "viewportResize:exit",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 590,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 399,
+    "type": "scroll",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 590,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 399,
+    "type": "reportDistance",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 590,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 419,
+    "type": "viewportResize:enter",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 566,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 420,
+    "type": "reportDistance",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 566,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 420,
+    "type": "viewportResize:exit",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 566,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 436,
+    "type": "scroll",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 566,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 436,
+    "type": "reportDistance",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 566,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   }
+  ]
+ },
+ "drawer": {
+  "toggleRect": {
+   "x": 1302,
+   "y": 64,
+   "w": 44,
+   "h": 20
+  },
+  "after": {
+   "vw": 1440,
+   "vh": 900,
+   "st": 3072,
+   "sh": 3411,
+   "ch": 339,
+   "d": 0,
+   "taH": 200,
+   "taRows": 16,
+   "chip": false,
+   "rows": 50,
+   "lastRow": "DS Dev Sender 11:25 PM 👍 ❤️ 😂 🎉 after window resize 17882",
+   "lastVisible": {
+    "visible": true,
+    "rowTop": 607,
+    "rowBottom": 638,
+    "scTop": 315,
+    "scBottom": 654
+   },
+   "drawerOpen": true,
+   "connected": true
+  },
+  "stabilityAt1500": {
+   "vw": 1440,
+   "vh": 900,
+   "st": 3072,
+   "sh": 3411,
+   "ch": 339,
+   "d": 0,
+   "taH": 200,
+   "taRows": 16,
+   "chip": false,
+   "rows": 50,
+   "lastRow": "DS Dev Sender 11:25 PM 👍 ❤️ 😂 🎉 after window resize 17882",
+   "lastVisible": {
+    "visible": true,
+    "rowTop": 607,
+    "rowBottom": 638,
+    "scTop": 315,
+    "scBottom": 654
+   },
+   "drawerOpen": true,
+   "connected": true
+  },
+  "judge": {
+   "distanceAtOrUnder150": true,
+   "newestVisible": true,
+   "noChip": true
+  },
+  "verdict": "PASS",
+  "trace": [
+   {
+    "t": 36,
+    "type": "viewportResize:enter",
+    "st": 2689,
+    "sh": 3411,
+    "ch": 710,
+    "d": 12,
+    "chip": false
+   },
+   {
+    "t": 36,
+    "type": "reportDistance",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 710,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 36,
+    "type": "viewportResize:exit",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 710,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 52,
+    "type": "scroll",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 710,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 52,
+    "type": "reportDistance",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 710,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 103,
+    "type": "viewportResize:enter",
+    "st": 2701,
+    "sh": 3411,
+    "ch": 686,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 103,
+    "type": "reportDistance",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 686,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 103,
+    "type": "viewportResize:exit",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 686,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 119,
+    "type": "scroll",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 686,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 119,
+    "type": "reportDistance",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 686,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 170,
+    "type": "viewportResize:enter",
+    "st": 2725,
+    "sh": 3411,
+    "ch": 662,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 170,
+    "type": "reportDistance",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 662,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 170,
+    "type": "viewportResize:exit",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 662,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 186,
+    "type": "scroll",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 662,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 186,
+    "type": "reportDistance",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 662,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 236,
+    "type": "viewportResize:enter",
+    "st": 2749,
+    "sh": 3411,
+    "ch": 638,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 236,
+    "type": "reportDistance",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 638,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 236,
+    "type": "viewportResize:exit",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 638,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 252,
+    "type": "scroll",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 638,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 252,
+    "type": "reportDistance",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 638,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 290,
+    "type": "viewportResize:enter",
+    "st": 2773,
+    "sh": 3411,
+    "ch": 614,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 290,
+    "type": "reportDistance",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 614,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 290,
+    "type": "viewportResize:exit",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 614,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 303,
+    "type": "scroll",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 614,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 303,
+    "type": "reportDistance",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 614,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 369,
+    "type": "viewportResize:enter",
+    "st": 2797,
+    "sh": 3411,
+    "ch": 590,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 370,
+    "type": "reportDistance",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 590,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 370,
+    "type": "viewportResize:exit",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 590,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 399,
+    "type": "scroll",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 590,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 399,
+    "type": "reportDistance",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 590,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 419,
+    "type": "viewportResize:enter",
+    "st": 2821,
+    "sh": 3411,
+    "ch": 566,
+    "d": 24,
+    "chip": false
+   },
+   {
+    "t": 420,
+    "type": "reportDistance",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 566,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 420,
+    "type": "viewportResize:exit",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 566,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 436,
+    "type": "scroll",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 566,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 436,
+    "type": "reportDistance",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 566,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 2562,
+    "type": "scroll",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 339,
+    "d": 227,
+    "chip": false
+   },
+   {
+    "t": 2562,
+    "type": "reportDistance",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 339,
+    "d": 227,
+    "chip": false,
+    "arg": null,
+    "away": true
+   },
+   {
+    "t": 2563,
+    "type": "viewportResize:enter",
+    "st": 2845,
+    "sh": 3411,
+    "ch": 339,
+    "d": 227,
+    "chip": false
+   },
+   {
+    "t": 2563,
+    "type": "reportDistance",
+    "st": 3072,
+    "sh": 3411,
+    "ch": 339,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   },
+   {
+    "t": 2563,
+    "type": "viewportResize:exit",
+    "st": 3072,
+    "sh": 3411,
+    "ch": 339,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 2573,
+    "type": "scroll",
+    "st": 3072,
+    "sh": 3411,
+    "ch": 339,
+    "d": 0,
+    "chip": false
+   },
+   {
+    "t": 2573,
+    "type": "reportDistance",
+    "st": 3072,
+    "sh": 3411,
+    "ch": 339,
+    "d": 0,
+    "chip": false,
+    "arg": null,
+    "away": false
+   }
+  ]
+ },
+ "finished": "2026-08-31T23:25:43.440Z"
+}

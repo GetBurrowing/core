@@ -1,0 +1,25 @@
+{
+ "fatal": null,
+ "baselineRows": 50,
+ "baselineSh": 3411,
+ "instrumented": {
+  "ok": true,
+  "anchorId": "01a05a23-4891-7097-bc8e-9d5272c9001e"
+ },
+ "afterRows": 100,
+ "triggers": [
+  {
+   "preTop": 0,
+   "preHeight": 3411
+  }
+ ],
+ "geo": {
+  "st": 3971,
+  "sh": 7382,
+  "ch": 722,
+  "d": 2689,
+  "delta": 3971,
+  "anchorTopInScroller": 48
+ },
+ "verdict": "PASS"
+}
