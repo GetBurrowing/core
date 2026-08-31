@@ -45,8 +45,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
-        ports:
-          - 5432:5432
+        # NO `ports:` MAPPING, DELIBERATELY.
+        #
+        # The job talks to this service by its network alias — `PGHOST:
+        # postgres` below — over the per-job container network Actions
+        # creates. It never needs a host port, and publishing one makes
+        # 5432 a machine-wide singleton: the SECOND concurrent job on the
+        # same runner host dies at "Initialize containers" with
+        #
+        #   Bind for 0.0.0.0:5432 failed: port is already allocated
+        #
+        # before a single step of it runs. That was invisible while the org
+        # had one self-hosted runner and could only ever run one job at a
+        # time; it surfaced the moment a second and third were registered.
     env:
       MIX_ENV: test
       PGHOST: postgres
