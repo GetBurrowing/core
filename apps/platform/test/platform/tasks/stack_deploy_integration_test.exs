@@ -261,9 +261,16 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
   describe "four-gap composition: synthetic stack, full lifecycle, zero hand-reconciliation" do
     test "forming → members merged → auto-advance → PR opens (mixed shapes) → merged → all done",
          %{conn: conn} do
-      # Gap 1: the initial async rollup-branch create is LOST — the first
-      # ensure (fired by commence's handle_stack_transition) fails; the
-      # merge-time ensure must self-heal it.
+      # Gap 1: the rollup-branch create is LOST on the first attempt.
+      #
+      # CONTRACT CHANGE (task 01a05392 stage 1): this used to be swallowed —
+      # commence proceeded, members cascaded with no rollup on origin, and the
+      # merge-time ensure self-healed the branch AFTER the members had already
+      # been dispatched off the wrong base. The create is now synchronous and
+      # blocking, so a lost create REFUSES the commence and promotes nobody;
+      # the retry (the same `commence_if_ready` the reconcile tick fires)
+      # succeeds. The merge-time ensure self-heal is unchanged and keeps its
+      # own coverage in `stack_deployer_test.exs` ("Gap 1 FIX 1").
       FakeRunner.fail_next_ensures(1)
 
       %{stack: stack, members: [m1, m2, m3], rollup_branch: rollup_branch} =
@@ -272,6 +279,15 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
       # Members start at backlog on a `forming` stack.
       assert Stacks.get_stack(stack.id).status == "forming"
 
+      # First commence attempt: the rollup create fails, so NOTHING starts and
+      # the stack stays `forming` — i.e. retryable, not wedged.
+      assert {:error, {:rollup_branch_unavailable, :simulated_lost_create}} =
+               Stacks.commence_if_ready(stack)
+
+      assert Stacks.get_stack(stack.id).status == "forming"
+      assert Tasks.get_task_record(m1.task.id).status == "backlog"
+      assert length(FakeRunner.ensure_calls()) == 1
+
       # ── Gap 3: commence the forming-but-ready stack (no manual flip) ──
       assert {:ok, %{stack: commenced}} = Stacks.commence_if_ready(stack)
       assert commenced.status == "in_progress"
@@ -279,9 +295,12 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
       assert Tasks.get_task_record(m2.task.id).status == "stack_pending"
       assert Tasks.get_task_record(m3.task.id).status == "stack_pending"
 
-      # The initial ensure (from the commence transition) was attempted and
-      # FAILED — the rollup branch was NOT created up front.
-      assert length(FakeRunner.ensure_calls()) == 1
+      # The rollup branch is live BEFORE the root was promoted — the ordering
+      # this ticket exists to guarantee.
+      assert length(FakeRunner.ensure_calls()) == 2
+
+      assert %{"base_sha" => _} =
+               Stacks.get_stack(stack.id).metadata["rollup_branch_ready"]
 
       # ── Gaps 1+2: drive M1 to review-ready; passing its LAST validation
       # merges it (ensure self-heals the branch) and auto-advances it

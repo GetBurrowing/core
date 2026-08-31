@@ -348,6 +348,11 @@ defmodule Platform.Tasks.Stacks do
       `stack_pending` via `Tasks.transition_task/2`. Same backlog-only
       filter so we never overwrite committed work.
     * Flip the stack-level status from `forming` to `in_progress`.
+    * BEFORE any of the above, synchronously ensure the stack's rollup
+      branch is live on origin (task 01a05392 stage 1). When it cannot be
+      made to exist, returns
+      `{:error, {:rollup_branch_unavailable, reason}}`, promotes NO member
+      and leaves the stack at `forming` so the call is retryable.
 
   Returns `{:ok, %{stack: stack, started: roots, parked: pending}}` on
   success. Per-member transition failures (e.g. a root with no
@@ -372,6 +377,7 @@ defmodule Platform.Tasks.Stacks do
                parked: [Task.t()],
                errors: [%{task_id: String.t(), target_status: String.t(), reason: term()}]
              }}
+          | {:error, {:rollup_branch_unavailable, term()}}
           | {:error, :invalid_stack_status | :stack_not_found | term()}
           | {:error, :stack_plans_pending, %{stack_id: String.t(), waiting_on: [String.t()]}}
   def start_stack(%Stack{status: status}) when status != "forming",
@@ -399,6 +405,75 @@ defmodule Platform.Tasks.Stacks do
   end
 
   defp do_start_stack(%Stack{} = stack) do
+    # ADR 0045 Decision 2 (task 01a05392 stage 1): the rollup branch MUST be
+    # live on origin BEFORE any member is promoted to `in_progress`, because
+    # the HeartbeatScheduler cuts a member branch from `origin/<rollup_branch>`
+    # only when `stack.metadata["rollup_branch_ready"]` is stamped, and
+    # silently falls back to `origin/<default_branch>` otherwise. Kicking the
+    # create off asynchronously (the previous
+    # `StackDeployer.handle_stack_transition/3` call that stood here) raced the
+    # root cascade: a root dispatched before the push landed started on the
+    # DEFAULT branch and never saw its siblings — the exact property the rollup
+    # exists to provide.
+    #
+    # So: run `ensure_rollup_branch/1` SYNCHRONOUSLY (it is the documented
+    # idempotent delegate, short-circuiting with `:already_exists` when
+    # `handle_stack_created/1` already made the branch at `stack_create` time,
+    # so the common path is a cheap existence check rather than a fresh clone).
+    # A git failure now fails `start_stack/1` outright instead of degrading
+    # quietly — a stack whose members start on `main` has already lost the
+    # property the rollup exists for, so refusing to start is strictly better
+    # than starting wrong.
+    #
+    # The ensure runs BEFORE the `forming -> in_progress` flip, NOT after it.
+    # A failure that left the stack `in_progress` with every root still
+    # `backlog` would wedge it permanently: `rollup_status_for` computes
+    # `forming`, `Stack.changeset`'s `guard_no_forming_regression` silently
+    # drops the write back, and `start_stack/1` refuses anything that is not
+    # `forming` — so a transient git failure would be unrecoverable. Ensuring
+    # first leaves a failed start on a still-`forming` stack, which is exactly
+    # retryable. `ensure_rollup_branch/1` is happy against a `forming` stack —
+    # `handle_stack_created/1` already calls it in that state.
+    #
+    # Deliberately NOT inside a `Repo.transaction` here: the call performs a
+    # clone/push and takes its own per-stack advisory lock internally, and
+    # pinning a pool connection across a network round-trip is how a slow
+    # remote becomes a pool outage.
+    case StackDeployer.ensure_rollup_branch(stack) do
+      {:ok, _create_result} ->
+        do_start_stack_cascade(stack)
+
+      # A project with no `repo_url` has no git surface AT ALL: there is no
+      # rollup branch to guarantee, no member branch to mis-parent, and the
+      # HeartbeatScheduler suppresses the whole git-workflow block for such a
+      # task anyway (`deploy_repos_present?/1`). Refusing to start would be
+      # refusing over a property that cannot be violated. The failure this
+      # gate exists for is a REAL repo whose rollup push has not landed.
+      {:error, :no_repo_url} ->
+        Logger.info(
+          "[Stacks.start_stack] stack #{stack.id} project has no repo_url; " <>
+            "no rollup branch to ensure, commencing anyway"
+        )
+
+        do_start_stack_cascade(stack)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Stacks.start_stack] stack #{stack.id} rollup branch #{stack.rollup_branch} " <>
+            "unavailable (#{inspect(reason)}); NO member promoted, stack left forming"
+        )
+
+        {:error, {:rollup_branch_unavailable, reason}}
+    end
+  end
+
+  defp do_start_stack_cascade(%Stack{} = stack) do
+    # Re-read the stack so the `rollup_branch_ready` stamp that
+    # `stamp_rollup_branch_ready/2` just wrote is present on the struct the
+    # cascade (and every dispatch derived from it) sees. The in-memory struct
+    # we were handed predates that write and cannot witness it.
+    stack = Repo.get(Stack, stack.id) || stack
+
     # ADR 0042 Decision 4: flip the stack to `in_progress` BEFORE cascading
     # members. The commencement gate (`CommencementGate.open?/1`) enforced
     # inside `transition_task_status/2` reads `stack.status` and refuses
@@ -409,15 +484,6 @@ defmodule Platform.Tasks.Stacks do
     # surface, so the observable invariant is unchanged.
     case Stack.changeset(stack, %{status: "in_progress"}) |> Repo.update() do
       {:ok, updated} ->
-        # Stage 1 of T5: kick off rollup-branch creation as soon as the
-        # stack flips into `in_progress`. The deployer runs async so
-        # the cascade returns quickly, and any failure is logged via
-        # `Logger.warning` rather than crashing the cascade. We invoke
-        # via Stacks for testability — handle_stack_transition is the
-        # public seam and is itself a no-op when `from`/`to` don't
-        # match.
-        _ = StackDeployer.handle_stack_transition(updated, :forming, :in_progress)
-
         members = members(updated)
         roots = executable_members(updated)
         root_ids = MapSet.new(roots, & &1.id)

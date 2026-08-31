@@ -7010,4 +7010,305 @@ defmodule Platform.Tasks.StacksTest do
       assert after_second.updated_at == after_first.updated_at
     end
   end
+
+  # ── Task 01a05392 stage 1: synchronous rollup branch before any promotion ──
+  #
+  # `do_start_stack/1` used to fire `StackDeployer.handle_stack_transition/3`
+  # (async under Task.Supervisor) and then immediately cascade the roots. The
+  # HeartbeatScheduler cuts a member branch from `origin/<rollup_branch>` ONLY
+  # when `stack.metadata["rollup_branch_ready"]` is stamped, so a root that got
+  # dispatched before the push landed started from the DEFAULT branch and never
+  # saw its siblings. The ensure is now synchronous and runs BEFORE the flip.
+  defmodule RollupGateRunner do
+    @moduledoc false
+    @behaviour Platform.Tasks.StackDeployer.GitRunner
+
+    use Agent
+    import Ecto.Query, only: [where: 2]
+
+    def start_link(_opts \\ []) do
+      Agent.start_link(
+        fn ->
+          %{
+            response: {:ok, %{status: :created, base_sha: "basesha0"}},
+            # Member statuses observed AT the moment `ensure_rollup_branch/1`
+            # was invoked. This is the ordering witness: if any member already
+            # reads `in_progress` here, the cascade beat the branch creation.
+            member_statuses_at_ensure: nil,
+            # The stack's OWN status at ensure-time. This is the ordering
+            # discriminator that survives the test config: the old code
+            # ensured the branch AFTER flipping the stack to `in_progress`,
+            # the new code ensures BEFORE, so this reads `in_progress` on the
+            # pre-change tree and `forming` on the post-change tree.
+            stack_status_at_ensure: nil,
+            ensure_calls: 0
+          }
+        end,
+        name: __MODULE__
+      )
+    end
+
+    def stop, do: Agent.stop(__MODULE__)
+    def set_response(response), do: Agent.update(__MODULE__, &%{&1 | response: response})
+    def ensure_calls, do: Agent.get(__MODULE__, & &1.ensure_calls)
+    def member_statuses_at_ensure, do: Agent.get(__MODULE__, & &1.member_statuses_at_ensure)
+    def stack_status_at_ensure, do: Agent.get(__MODULE__, & &1.stack_status_at_ensure)
+
+    @impl true
+    def ensure_rollup_branch(%{stack_id: stack_id}) do
+      statuses =
+        Platform.Tasks.Task
+        |> where(stack_id: ^stack_id)
+        |> Platform.Repo.all()
+        |> Enum.map(& &1.status)
+        |> Enum.sort()
+
+      stack_status = Platform.Repo.get(Platform.Tasks.Stack, stack_id).status
+
+      Agent.get_and_update(__MODULE__, fn state ->
+        {state.response,
+         %{
+           state
+           | member_statuses_at_ensure: statuses,
+             stack_status_at_ensure: stack_status,
+             ensure_calls: state.ensure_calls + 1
+         }}
+      end)
+    end
+
+    @impl true
+    def merge_member_into_rollup(_args),
+      do: {:ok, %{status: :merged, merge_sha: String.duplicate("0", 40)}}
+
+    @impl true
+    def open_stack_pr(_args),
+      do: {:ok, %{number: 0, url: "https://github.com/example/example/pull/0"}}
+
+    @impl true
+    def diff_stat(_args), do: {:ok, ""}
+
+    @impl true
+    def revert_member_merge(_args),
+      do: {:ok, %{status: :reverted, revert_sha: String.duplicate("0", 40)}}
+
+    @impl true
+    def close_stack_pr(_args), do: {:ok, :closed}
+
+    @impl true
+    def delete_rollup_branch(_args), do: {:ok, :deleted}
+
+    @impl true
+    def sha_reachable?(_args), do: {:ok, true}
+  end
+
+  describe "start_stack/1 — rollup branch is live before any member is promoted" do
+    setup do
+      prev = Application.get_env(:platform, :stack_deployer, [])
+      {:ok, _} = RollupGateRunner.start_link()
+
+      Application.put_env(:platform, :stack_deployer,
+        git_runner: RollupGateRunner,
+        async: false
+      )
+
+      on_exit(fn ->
+        Application.put_env(:platform, :stack_deployer, prev)
+
+        try do
+          RollupGateRunner.stop()
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      :ok
+    end
+
+    test "stamps rollup_branch_ready, and no member reads in_progress before the stamp" do
+      %{stack: stack, root: root, child: child} = rollup_gate_fixture("Sync rollup ok")
+
+      assert {:ok, %{started: started}} = Stacks.start_stack(stack)
+      assert [%Task{id: started_id}] = started
+      assert started_id == root.id
+
+      # Assert on the RELOADED stack — the in-memory struct we handed to
+      # `start_stack/1` predates the stamp write and cannot witness it.
+      reloaded = Stacks.get_stack!(stack.id)
+      assert %{"base_sha" => "basesha0", "at" => _} = reloaded.metadata["rollup_branch_ready"]
+
+      # ORDERING: at the instant the branch was ensured, NO member was yet
+      # `in_progress`. This is what the async version got wrong.
+      assert RollupGateRunner.ensure_calls() == 1
+      statuses = RollupGateRunner.member_statuses_at_ensure()
+      assert statuses == ["backlog", "backlog"]
+      refute "in_progress" in statuses
+
+      # And the stack itself was still `forming` when the branch was ensured.
+      # This is the assertion that separates the trees: the previous code
+      # flipped the stack to `in_progress` FIRST and only then kicked the
+      # branch creation off, so a git failure stranded the stack in a status
+      # it could never be started from again.
+      assert RollupGateRunner.stack_status_at_ensure() == "forming"
+
+      assert Tasks.get_task_record(root.id).status == "in_progress"
+      assert Tasks.get_task_record(child.id).status == "stack_pending"
+    end
+
+    # ANTI-VACUITY PAIR (ask 1). The claim is "a root dispatched right after
+    # stack_start branches from the rollup". Half (a) alone is passed by a
+    # change that hardcodes the rollup string into the prompt; half (b) is the
+    # control that separates them. Both halves ship or the claim is untested.
+    #
+    # HONEST NOTE ON WHAT THIS PAIR DOES AND DOES NOT CATCH: neither half
+    # detonates on the pre-change tree, and that is not a defect in the pair.
+    # The whole suite pins `:platform, :stack_deployer, async: false`, under
+    # which the OLD `handle_stack_transition/3` call also ran synchronously —
+    # so the stamp was already present by dispatch time in test. The defect
+    # lived in the `async: true` spawn, which is a race and therefore cannot
+    # be asserted deterministically from here. What this pair DOES guard,
+    # permanently, is the vacuity failure mode: the prompt must derive the
+    # parent branch from the stack's real stamp state, so a future change that
+    # hardcodes `stack/<slug>` fails (b), and one that drops the retargeting
+    # fails (a). The ordering claim itself is carried by
+    # `stack_status_at_ensure`, which DOES detonate.
+    test "(a) a root dispatched after stack_start has parent_branch == the rollup branch" do
+      %{stack: stack, root: root} = rollup_gate_fixture("Parent branch ready")
+
+      assert {:ok, _} = Stacks.start_stack(stack)
+
+      prompt = dispatch_prompt_for_member(root.id)
+
+      assert prompt =~ "origin/#{stack.rollup_branch}"
+      assert prompt =~ "cut from `origin/#{stack.rollup_branch}`"
+      refute prompt =~ "INDEPENDENTLY"
+    end
+
+    test "(b) CONTROL: with the stamp genuinely absent, parent_branch is NOT the rollup branch" do
+      # Same fixture, same slug shape, same code path — the ONLY difference is
+      # that `start_stack/1` never ran, so nothing stamped
+      # `rollup_branch_ready`. A prompt that names the rollup branch here is
+      # naming a ref that does not exist on origin.
+      %{stack: stack, root: root} = rollup_gate_fixture("Parent branch absent")
+
+      refute Map.has_key?(Stacks.get_stack!(stack.id).metadata || %{}, "rollup_branch_ready")
+
+      root |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+
+      # The backstop logs a warning; capture it so it does not pollute output.
+      prompt = capture_prompt_log(fn -> dispatch_prompt_for_member(root.id) end)
+
+      # Task 01a05392 stage 4: the stamp-absent arm no longer falls back to
+      # `origin/main` — it renders NO worktree creation and tells the executor
+      # to stop. The rollup NAME still appears (as the ref that is not
+      # confirmed), so the discriminator is the creation instruction and the
+      # "cut from" prose, which only the ready arm renders.
+      refute prompt =~ "-b task/#{root.id} origin/#{stack.rollup_branch}"
+      refute prompt =~ "is cut from `origin/#{stack.rollup_branch}` so you see"
+      refute prompt =~ "cut from `origin/main`"
+      refute prompt =~ "git worktree add"
+      assert prompt =~ "STOP — do not create a worktree or branch for this task"
+    end
+
+    test "a rollup failure returns rollup_branch_unavailable and promotes NOBODY" do
+      %{stack: stack, root: root, child: child} = rollup_gate_fixture("Sync rollup fails")
+
+      RollupGateRunner.set_response({:error, :push_rejected})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:rollup_branch_unavailable, :push_rejected}} =
+                   Stacks.start_stack(stack)
+        end)
+
+      assert log =~ "NO member promoted"
+
+      # Every member is untouched — none promoted, none parked.
+      assert Tasks.get_task_record(root.id).status == "backlog"
+      assert Tasks.get_task_record(child.id).status == "backlog"
+
+      # And the stack is still `forming`, so the call is retryable. Leaving it
+      # `in_progress` with every root at `backlog` would wedge it: the status
+      # recompute reads `forming`, `guard_no_forming_regression` drops the
+      # write back, and `start_stack/1` refuses anything but `forming`.
+      reloaded = Stacks.get_stack!(stack.id)
+      assert reloaded.status == "forming"
+      refute Map.has_key?(reloaded.metadata || %{}, "rollup_branch_ready")
+
+      # Retry after the git failure clears: the same stack starts cleanly.
+      RollupGateRunner.set_response({:ok, %{status: :created, base_sha: "basesha1"}})
+      assert {:ok, _} = Stacks.start_stack(Stacks.get_stack!(stack.id))
+      assert Tasks.get_task_record(root.id).status == "in_progress"
+    end
+
+    test "a project with no repo_url has no rollup to guarantee and still starts" do
+      # There is no git surface at all here, so there is no wrong-parent state
+      # to prevent. Refusing would be refusing over an unviolatable property.
+      {:ok, project} = Tasks.create_project(%{name: "No repo url stack"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, root} = Tasks.create_task(%{project_id: project.id, title: "Root"})
+      {:ok, _} = Stacks.add_task(stack, root)
+      {:ok, _} = Tasks.create_plan(%{task_id: root.id, status: "approved"})
+
+      assert {:ok, %{started: [%Task{id: started_id}]}} = Stacks.start_stack(stack)
+      assert started_id == root.id
+    end
+  end
+
+  # A started-ready fixture: project WITH a repo_url (so the rollup path is
+  # live), one root and one dependent child, both plan-approved.
+  defp rollup_gate_fixture(name) do
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: name <> " " <> Ecto.UUID.generate(),
+        repo_url: "https://github.com/test/rollup-gate"
+      })
+
+    stack = stack_fixture(project_id: project.id)
+
+    {:ok, root} = Tasks.create_task(%{project_id: project.id, title: "Root"})
+
+    {:ok, child} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Child",
+        dependencies: [%{"task_id" => root.id, "kind" => "blocks"}]
+      })
+
+    {:ok, root} = Stacks.add_task(stack, root)
+    {:ok, child} = Stacks.add_task(stack, child)
+
+    {:ok, _} = Tasks.create_plan(%{task_id: root.id, status: "approved"})
+    {:ok, _} = Tasks.create_plan(%{task_id: child.id, status: "approved"})
+
+    %{stack: Stacks.get_stack!(stack.id), root: root, child: child}
+  end
+
+  # Run `fun` with the log captured and return `fun`'s value (CaptureLog
+  # returns the log, not the result).
+  defp capture_prompt_log(fun) do
+    parent = self()
+    ExUnit.CaptureLog.capture_log(fn -> send(parent, {:captured, fun.()}) end)
+
+    receive do
+      {:captured, value} -> value
+    after
+      0 -> flunk("capture_prompt_log/1 produced no value")
+    end
+  end
+
+  # Render the real dispatch prompt for a member, exactly as the scheduler
+  # would: task reloaded with `:project` and `:stack` preloaded, so
+  # `stack_membership/1` reads the CURRENT stack metadata rather than a
+  # struct captured before `start_stack/1` ran.
+  defp dispatch_prompt_for_member(task_id) do
+    task =
+      Platform.Tasks.Task
+      |> Repo.get!(task_id)
+      |> Repo.preload([:project, :stack])
+
+    stage = %{id: "stage-1", position: 1, name: "implement", validations: []}
+    plan = %{version: 1, stages: [stage]}
+
+    Platform.Orchestration.HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+  end
 end

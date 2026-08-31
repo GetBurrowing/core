@@ -2468,6 +2468,25 @@ defmodule Platform.Federation.ToolSurface do
           "When a stack's membership is finalized and you want the engine to begin dispatching its level-0 roots."
       },
       %{
+        name: "stack_retry_member_merge",
+        description:
+          "Re-run the server-side rollup fast-forward for ONE stack member (task 01a05392). Use it after the member's rollup merge was paused as `rollup_diverged` (visible as `paused_reason` on `task_get` / `stack_get`, and in the `execution.blocked` event that named this tool) and you have rebased the member branch onto `origin/<rollup_branch>` and force-pushed. Runs synchronously and returns the merge outcome directly. Idempotent: a member already merged into the rollup is a successful no-op (`outcome: already_merged`), and a member that is STILL not fast-forwardable is reported (`outcome: still_diverged`) with both SHAs and the exact rebase, never silently retried.\n\nWhy a named tool and not `task_update status: in_review` on an already-in_review member: that overload would attach a real side effect to a call that is a status NO-OP (in_review -> in_review). It appears in no tool list, its documentation would have to describe a side effect that fires on a non-transition (which reads as a bug), and `task_update` returns a task, so the caller could not learn whether the merge succeeded, was already merged, or diverged again. This tool is the one trigger; there is deliberately no second.",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The MEMBER task id (the paused task) — NOT the stack id. Find it in the blocker's `member_task_id`, or via `stack_get` members whose `paused_reason` is non-nil."
+          }
+        },
+        returns:
+          "On success `{outcome, task_id, stack_id, rollup_branch, task}` where `outcome` is `merged` (plus `merge_sha`, the new rollup HEAD) or `already_merged` (plus the existing `merged_into_rollup_at` stamp). `task` is the reloaded member: after `merged`, `merged_into_rollup_at` is present and `paused_reason` is nil. Error envelopes carry `code` + `outcome`: `rollup_diverged` / `still_diverged` (recoverable; echoes `rollup_branch`, `rollup_sha`, `member_sha`, and the rebase in `suggestion`), `merge_conflict` / `conflict` (NOT recoverable; the stack is now `blocked`; `files` lists the conflicts), `member_not_ready` (recoverable; names the prior step the member still needs), `not_in_stack` / `task_not_found` / `stack_not_found` / `no_repo_url` (NOT recoverable), and `merge_failed` (recoverable; the underlying git reason).",
+        limitations:
+          "Only merges members the deployer would merge on its own: status `in_review` with every review-stage validation `passed`. It does not rebase for you — a member that is still not a descendant of rollup HEAD returns `still_diverged` again (and files no duplicate blocker while rollup HEAD is unchanged). The task must belong to a stack.",
+        when_to_use:
+          "When a stack member's rollup merge is paused (`paused_reason.kind == \"rollup_diverged\"`) and you have rebased its branch onto the rollup. Also safe to call when unsure whether a member landed: `already_merged` answers without side effects."
+      },
+      %{
         name: "stack_start_planning",
         description:
           "Stack-level \"Start Planning\" lifecycle action. Behaviour depends on the stack's `auto_plan` flag (a top-level field settable via `stack_create` or `stack_update`):\n\n• `auto_plan: false` (default, MANUAL mode) — walks the in-stack DAG in wave order (topologically bucketed levels). Only the root wave (members with no in-stack deps) transitions `backlog → planning`; downstream waves stay at `backlog` and advance one wave at a time as each upstream member's plan lands `approved` (post-commit hook in `Tasks.approve_plan/3`).\n\n• `auto_plan: true` (AUTO mode) — every wave fans out to `planning` in a single concurrent pass. Wave discipline still emits one `:wave_dispatched` telemetry event per wave for observability, but no gating occurs.\n\nA sibling flag `auto_accept_plan` controls the plan-approval hop: when true, plans submitted by member planners auto-approve without human review (resolved via `Tasks.maybe_auto_approve/1` reading the parent stack). The two flags compose — auto-plan + auto-accept = fully-headless stack; auto-plan alone = concurrent dispatch but human-gated approvals; neither set = classic wave-gated manual mode.\n\nIdempotent: if ANY member is already past `backlog` (planning/in_progress/…), the tool returns a noop envelope (`noop: true, noop_reason: :already_in_flight`) without re-dispatching. Cyclic DAGs and cross-stack deps also short-circuit — the tool returns an error envelope and no member transitions. Does not write the stack-level status itself: an all-`planning` stack rolls up to `forming` per the ADR 0041 status mapping.",
@@ -5345,6 +5364,25 @@ defmodule Platform.Federation.ToolSurface do
                  "Approve the missing plans (via plan_approve) before calling stack_start again."
              }}
 
+          {:error, {:rollup_branch_unavailable, reason}} ->
+            # Task 01a05392 stage 1: the rollup branch is now created
+            # SYNCHRONOUSLY before any member is promoted, so a git failure
+            # fails the whole start rather than quietly dispatching members off
+            # the default branch. Nothing started and the stack is still
+            # `forming`, so this is retryable — but the caller has to be told
+            # WHICH branch and WHY, or "failed to start" is unactionable.
+            {:error,
+             %{
+               error:
+                 "Stack not started — the rollup branch `#{stack.rollup_branch}` could not be " <>
+                   "created on origin (#{inspect(reason)}). No members were started and the " <>
+                   "stack is still `forming`.",
+               recoverable: true,
+               suggestion:
+                 "Fix the underlying git failure (check the project's repo_url and that the " <>
+                   "base branch `#{stack.base_branch}` exists on origin), then call stack_start again."
+             }}
+
           {:error, %Ecto.Changeset{} = changeset} ->
             {:error,
              %{
@@ -5360,6 +5398,63 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: true
              }}
         end
+    end
+  end
+
+  # Task 01a05392 stage 3 — the named retry for a paused stack member.
+  #
+  # Considered and REJECTED: overloading `task_update status: in_review` so
+  # that a no-op status write re-runs the merge. That attaches a real side
+  # effect to a call that is a status NO-OP (in_review -> in_review); it
+  # appears in no tool list; its documentation would have to describe a side
+  # effect that fires on a non-transition, which reads as a bug to every
+  # future reader; and `task_update` returns a task, so the caller learns
+  # nothing about whether the merge succeeded, was already merged, or
+  # diverged again. A named tool is in `tools/list`, is greppable, and
+  # returns the outcome. Do NOT add the overload as well — two triggers for
+  # one action is two things to keep in sync.
+  #
+  # BINDING (stage 2 finding): the deployer is called with the task ID, not
+  # the struct. `StackDeployer.merge_member_into_rollup(%TaskRecord{})`
+  # reloads nothing — its already-merged short-circuit and the divergence
+  # dedupe read whatever metadata they are handed — so only the id arity is
+  # guaranteed to judge the row as it is at the moment of the call.
+  def execute("stack_retry_member_merge", args, _context) do
+    with {:ok, task_id} <- require_string(args, "task_id", "stack_retry_member_merge") do
+      case Tasks.get_task_record(task_id) do
+        nil ->
+          {:error,
+           %{
+             code: :task_not_found,
+             error: "Task not found: #{inspect(task_id)}",
+             recoverable: false,
+             suggestion:
+               "Pass the MEMBER task id (the blocker's `member_task_id`), not the stack id."
+           }}
+
+        %Task{stack_id: nil} = task ->
+          {:error,
+           %{
+             code: :not_in_stack,
+             error:
+               "Task #{task.id} is not a stack member; there is no rollup branch to merge it into.",
+             recoverable: false,
+             suggestion:
+               "stack_retry_member_merge only applies to tasks with a `stack_id`. " <>
+                 "Check `task_get` — a task that was ejected from its stack lands via its own PR."
+           }}
+
+        %Task{stack_id: stack_id} = task when is_binary(stack_id) ->
+          rollup_branch =
+            case Stacks.get_stack(stack_id) do
+              %Stack{rollup_branch: branch} -> branch
+              _ -> nil
+            end
+
+          task.id
+          |> StackDeployer.merge_member_into_rollup()
+          |> retry_merge_envelope(task, rollup_branch)
+      end
     end
   end
 
@@ -7853,6 +7948,159 @@ defmodule Platform.Federation.ToolSurface do
   defp maybe_put_edges_skipped_reason(payload, reason) when is_atom(reason),
     do: Map.put(payload, :edges_skipped_reason, reason)
 
+  # ── stack_retry_member_merge envelopes (task 01a05392 stage 3) ──────────
+
+  defp retry_merge_envelope({:ok, %{status: :merged, merge_sha: sha}}, %Task{} = task, rollup) do
+    {:ok,
+     %{
+       outcome: "merged",
+       task_id: task.id,
+       stack_id: task.stack_id,
+       rollup_branch: rollup,
+       merge_sha: sha,
+       task: serialize_task(Tasks.get_task_record(task.id))
+     }}
+  end
+
+  defp retry_merge_envelope({:ok, :already_merged}, %Task{} = task, rollup) do
+    reloaded = Tasks.get_task_record(task.id)
+
+    {:ok,
+     %{
+       outcome: "already_merged",
+       task_id: task.id,
+       stack_id: task.stack_id,
+       rollup_branch: rollup,
+       merged_into_rollup_at: metadata_map_field(reloaded, "merged_into_rollup_at"),
+       task: serialize_task(reloaded)
+     }}
+  end
+
+  defp retry_merge_envelope({:ok, {:not_ready, reason}}, %Task{} = task, rollup) do
+    {:error,
+     %{
+       code: :member_not_ready,
+       outcome: "not_ready",
+       error:
+         "Task #{task.id} is not in a state the deployer will merge into " <>
+           "#{inspect(rollup)}: #{retry_not_ready_detail(task, reason)}",
+       recoverable: reason != :member_past_review,
+       reason: retry_not_ready_reason(reason),
+       suggestion: retry_not_ready_suggestion(reason)
+     }}
+  end
+
+  defp retry_merge_envelope(
+         {:error, :not_fast_forwardable, %{member_sha: member_sha, rollup_sha: rollup_sha}},
+         %Task{} = task,
+         rollup
+       ) do
+    {:error,
+     %{
+       code: :rollup_diverged,
+       outcome: "still_diverged",
+       error:
+         "Task #{task.id} is still not fast-forwardable onto rollup #{rollup}: member branch " <>
+           "#{StackDeployer.member_branch_for(task)} is at #{member_sha}, rollup HEAD is at " <>
+           "#{rollup_sha}, and the member is not a descendant of it.",
+       recoverable: true,
+       rollup_branch: rollup,
+       rollup_sha: rollup_sha,
+       member_sha: member_sha,
+       suggestion:
+         "git fetch origin && git rebase origin/#{rollup} && git push --force-with-lease, " <>
+           "then call stack_retry_member_merge again with task_id #{task.id}."
+     }}
+  end
+
+  defp retry_merge_envelope({:error, :conflict, files}, %Task{} = task, rollup) do
+    {:error,
+     %{
+       code: :merge_conflict,
+       outcome: "conflict",
+       error:
+         "Task #{task.id} conflicts with rollup #{rollup} in #{length(List.wrap(files))} file(s); " <>
+           "the stack has been flipped to `blocked`.",
+       recoverable: false,
+       rollup_branch: rollup,
+       files: List.wrap(files),
+       suggestion:
+         "Resolve the conflict on the member branch against origin/#{rollup}, then have a " <>
+           "human unblock the stack (stack_update status) before retrying."
+     }}
+  end
+
+  defp retry_merge_envelope({:error, reason}, %Task{} = task, rollup)
+       when reason in [:task_not_found, :not_in_stack, :stack_not_found, :project_not_found] do
+    {:error,
+     %{
+       code: reason,
+       outcome: "error",
+       error: "Cannot merge task #{task.id} into #{inspect(rollup)}: #{inspect(reason)}",
+       recoverable: false,
+       suggestion:
+         "Check the task's stack via task_get / stack_get; the record the merge needs is missing."
+     }}
+  end
+
+  defp retry_merge_envelope({:error, :no_repo_url}, %Task{} = task, rollup) do
+    {:error,
+     %{
+       code: :no_repo_url,
+       outcome: "error",
+       error:
+         "Cannot merge task #{task.id} into #{inspect(rollup)}: the project has no repo_url.",
+       recoverable: false,
+       suggestion: "Set the project's repo_url (project_update) before retrying."
+     }}
+  end
+
+  defp retry_merge_envelope({:error, other}, %Task{} = task, rollup) do
+    {:error,
+     %{
+       code: :merge_failed,
+       outcome: "error",
+       error:
+         "Rollup merge for task #{task.id} into #{inspect(rollup)} failed: #{inspect(other)}",
+       recoverable: true,
+       suggestion:
+         "Fix the underlying git failure (see the reason above), then call " <>
+           "stack_retry_member_merge again."
+     }}
+  end
+
+  defp retry_not_ready_reason({:stages_pending, passed, total}),
+    do: %{kind: "stages_pending", passed: passed, total: total}
+
+  defp retry_not_ready_reason(reason) when is_atom(reason), do: %{kind: Atom.to_string(reason)}
+
+  defp retry_not_ready_detail(%Task{status: status}, :member_not_in_review),
+    do: "the member is at `#{status}`; the deployer merges only members at `in_review`."
+
+  defp retry_not_ready_detail(%Task{status: status}, :member_past_review),
+    do:
+      "the member is at `#{status}` with no `merged_into_rollup_at` stamp, which no " <>
+        "sanctioned path produces."
+
+  defp retry_not_ready_detail(_task, {:stages_pending, passed, total}),
+    do: "#{passed}/#{total} review-stage validations are `passed`."
+
+  defp retry_not_ready_suggestion(:member_not_in_review),
+    do:
+      "Required prior step: finish the task's stages so it transitions to `in_review` " <>
+        "(stage_complete on the last running stage); the deployer merges eagerly on that " <>
+        "transition and this tool retries it."
+
+  defp retry_not_ready_suggestion(:member_past_review),
+    do:
+      "This is an invariant violation, not a retryable state — a human must investigate " <>
+        "before re-stamping by hand."
+
+  defp retry_not_ready_suggestion({:stages_pending, _passed, _total}),
+    do:
+      "Required prior step: pass the remaining review-stage validations (validation_pass), " <>
+        "then call stack_retry_member_merge again."
+
   # ── Stack helpers ────────────────────────────────────────────────────────
 
   defp serialize_stack(%Stack{} = stack) do
@@ -7883,6 +8131,13 @@ defmodule Platform.Federation.ToolSurface do
       # Mirrors the task serializer's shape.
       sponsor_user_id: Map.get(stack, :sponsor_user_id),
       sponsor: serialize_sponsor(Map.get(stack, :sponsor)),
+      # Task 01a05392 stage 3. The `rollup_branch_ready` stamp
+      # (`%{"at", "base_sha"}`, written by StackDeployer once the rollup
+      # branch exists on origin) or nil while it does not. Together with the
+      # members' `paused_reason` this lets `stack_get` alone answer "is the
+      # rollup live, and is any member paused". The stamp only — not the
+      # whole metadata blob.
+      rollup_branch_ready: metadata_map_field(stack, "rollup_branch_ready"),
       inserted_at: format_datetime(stack.inserted_at),
       updated_at: format_datetime(stack.updated_at)
     }
@@ -7899,8 +8154,30 @@ defmodule Platform.Federation.ToolSurface do
       # or carries an individual assignee override (`"override"`).
       assignment: if(Stacks.member_overridden?(task), do: "override", else: "inherited"),
       assignee_id: task.assignee_id,
-      assignee_type: task.assignee_type
+      assignee_type: task.assignee_type,
+      # Task 01a05392 stage 3. The member's pause stamp (e.g.
+      # `%{"kind" => "rollup_diverged", "member_sha", "rollup_sha", ...}`)
+      # or nil. See `serialize_task/1` for why this is one key, not `metadata`.
+      paused_reason: metadata_map_field(task, "paused_reason")
     }
+  end
+
+  # A single map-valued key out of a record's `metadata`, or nil when the
+  # key is absent or not a map. Used for the pause / readiness stamps that
+  # `task_get` and `stack_get` expose (task 01a05392 stage 3) so the wire
+  # contract names each stamp explicitly instead of leaking every metadata
+  # key any writer ever adds.
+  defp metadata_map_field(record, key) when is_binary(key) do
+    case Map.get(record, :metadata) do
+      %{} = meta ->
+        case Map.get(meta, key) do
+          %{} = value -> value
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
   end
 
   # Partition each member's declared dep edges into:
@@ -10655,6 +10932,15 @@ defmodule Platform.Federation.ToolSurface do
       # will bypass the review gate. The create envelope (stage 3) already
       # returns this flag inline; this pin is for downstream reads.
       auto_approve_plan: task.auto_approve_plan,
+      # Task 01a05392 stage 3. Before this, a stack member whose rollup merge
+      # was paused (`metadata["paused_reason"]`, kind `rollup_diverged`) could
+      # not learn that through `task_get`: neither `metadata` nor `stack_id`
+      # was serialized, so the stamp was read by nothing. `stack_id` says
+      # whether the task is a member at all; `paused_reason` is the pause
+      # stamp map or nil. Deliberately NOT the whole `metadata` blob — that
+      # would widen the wire contract to every key any writer ever adds.
+      stack_id: Map.get(task, :stack_id),
+      paused_reason: metadata_map_field(task, "paused_reason"),
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
     }

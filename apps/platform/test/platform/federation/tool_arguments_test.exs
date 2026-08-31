@@ -105,7 +105,13 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # a silent, empty conversation in a person's rail — a notification with
   # nothing in it, which is the exact noise failure the tool's own description
   # argues against.
-  @surveyed_required_count 137
+  # 138 with `stack_retry_member_merge`'s `task_id` (task 01a05392 stage 3).
+  # HONEST. The handler opens with `require_string/3`, declares no `"id"`
+  # alias, and defaults nothing: an absent task id must refuse, because the
+  # deployer's id arity would otherwise be asked to merge `nil` — and this is
+  # the MEMBER id, not the stack id, so the refusal is also the one place the
+  # caller is told which id the tool wants.
+  @surveyed_required_count 138
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

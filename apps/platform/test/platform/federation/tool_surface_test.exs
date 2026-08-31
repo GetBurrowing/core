@@ -82,7 +82,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 99 tools with required components" do
+    test "returns all 100 tools with required components" do
       tools = ToolSurface.tool_definitions()
       # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
       # `task` bundle. 89 as of ADR-0046 member 5 stage 4, which added
@@ -117,7 +117,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # mention path into a DM (`chat.ex`'s DM exemption), and no implicit
       # join (`@implicitly_joinable_kinds` excludes `dm`). Being ADDED to a DM
       # by a human was the only way in.
-      assert length(tools) == 99
+      # 100 as of task 01a05392 stage 3, which added `stack_retry_member_merge`
+      # to the `task` bundle — a stack member whose rollup merge was paused as
+      # `rollup_diverged` had no named way to re-run it: the only retriggers
+      # were side effects (a validation_pass on an in_review task, or an
+      # in_review -> in_progress -> in_review round trip) documented nowhere an
+      # agent reads.
+      assert length(tools) == 100
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -170,6 +176,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "stack_complete" in tool_names
       assert "stack_start" in tool_names
       assert "stack_start_planning" in tool_names
+      # Task 01a05392 stage 3 — the named retry for a paused stack member.
+      # Pinned by exact string so a declaration-without-executor or an
+      # executor-without-declaration cannot pass.
+      assert "stack_retry_member_merge" in tool_names
       assert "stack_assign_agents" in tool_names
       assert "meeting_create" in tool_names
       assert "plan_create" in tool_names

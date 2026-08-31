@@ -1164,4 +1164,431 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
     entry = %{"assignee_id" => agent_id, "assignee_type" => "agent"}
     %{"planning" => entry, "execution" => entry, "review" => entry}
   end
+
+  # ── Task 01a05392 stage 1: stack_start now fails LOUDLY on a dead rollup ──
+  defmodule FailingRollupRunner do
+    @moduledoc false
+    @behaviour Platform.Tasks.StackDeployer.GitRunner
+
+    @impl true
+    def ensure_rollup_branch(_args), do: {:error, {:git_exit, 128, "fatal: repository not found"}}
+
+    @impl true
+    def merge_member_into_rollup(_args), do: {:error, :not_reached}
+    @impl true
+    def open_stack_pr(_args), do: {:error, :not_reached}
+    @impl true
+    def diff_stat(_args), do: {:ok, ""}
+    @impl true
+    def revert_member_merge(_args), do: {:error, :not_reached}
+    @impl true
+    def close_stack_pr(_args), do: {:ok, :closed}
+    @impl true
+    def delete_rollup_branch(_args), do: {:ok, :deleted}
+    @impl true
+    def sha_reachable?(_args), do: {:ok, true}
+  end
+
+  describe "stack_start — rollup branch unavailable" do
+    setup do
+      prev = Application.get_env(:platform, :stack_deployer, [])
+
+      Application.put_env(:platform, :stack_deployer,
+        git_runner: FailingRollupRunner,
+        async: false
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :stack_deployer, prev) end)
+      :ok
+    end
+
+    test "returns a RECOVERABLE envelope naming the rollup branch and the git reason" do
+      # A project WITH a repo_url — the rollup path is live, and the runner
+      # refuses. Nothing may start: a member cut from the default branch has
+      # already lost the property the rollup exists for.
+      project = create_project(%{repo_url: "https://github.com/test/dead-repo"})
+      slug = unique_slug("rollup-dead")
+
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, slug, "Dead rollup")
+
+      {:ok, member} = Tasks.create_task(%{project_id: project.id, title: "Member"})
+      {:ok, _} = Tasks.create_plan(%{task_id: member.id, status: "approved"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => member.id}, %{})
+
+      assert {:error, error} =
+               ToolSurface.execute("stack_start", %{"stack_id" => stack_id}, %{})
+
+      # Recoverable: the stack is still `forming`, so the caller can fix the
+      # remote and call again. A non-recoverable envelope would tell a
+      # federated agent to give up on a transient git failure.
+      assert error.recoverable == true
+      # Names WHICH branch and WHY — "failed to start stack" alone is
+      # unactionable from the other side of the MCP wire.
+      assert error.error =~ "stack/#{slug}"
+      assert error.error =~ "repository not found"
+      assert error.error =~ "No members were started"
+      assert error.suggestion =~ "stack_start"
+
+      # And the surface agrees: nothing moved.
+      {:ok, after_start} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert after_start.stack.status == "forming"
+      assert Enum.all?(after_start.members, &(&1.status == "backlog"))
+    end
+  end
+
+  # ── Task 01a05392 stage 3: pause state on the read tools + the named retry ──
+  #
+  # Before this stage `paused_reason` was read by nothing: `serialize_task/1`
+  # emitted neither `metadata` nor `stack_id`, and `serialize_stack/1`
+  # emitted no stamp. Every assertion here is PAIRED with its negative
+  # (a clean sibling reads `nil`, a forming stack reads `nil`) so a change
+  # that returns a constant map is red.
+
+  describe "task_get / stack_get pause state (01a05392 stage 3)" do
+    test "task_get returns the paused_reason map + stack_id for a diverged member and nil for a clean sibling" do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-paused"))
+
+      paused = member_in_stack!(project, stack_id, position: 1)
+      clean = member_in_stack!(project, stack_id, position: 2)
+      {:ok, lone} = Tasks.create_task(%{project_id: project.id, title: "Lone"})
+
+      stamp = %{
+        "kind" => "rollup_diverged",
+        "member_sha" => "aaaa1111",
+        "rollup_sha" => "bbbb2222",
+        "at" => "2026-08-30T00:00:00Z"
+      }
+
+      {:ok, _} = Tasks.update_task(paused, %{metadata: %{"paused_reason" => stamp}})
+
+      {:ok, paused_view} = ToolSurface.execute("task_get", %{"task_id" => paused.id}, %{})
+      assert paused_view.stack_id == stack_id
+      assert paused_view.paused_reason == stamp
+      assert paused_view.paused_reason["kind"] == "rollup_diverged"
+      assert paused_view.paused_reason["member_sha"] == "aaaa1111"
+      assert paused_view.paused_reason["rollup_sha"] == "bbbb2222"
+      # The stamp, not the blob: no `metadata` key on the wire.
+      refute Map.has_key?(paused_view, :metadata)
+
+      {:ok, clean_view} = ToolSurface.execute("task_get", %{"task_id" => clean.id}, %{})
+      assert clean_view.stack_id == stack_id
+      assert is_nil(clean_view.paused_reason)
+
+      {:ok, lone_view} = ToolSurface.execute("task_get", %{"task_id" => lone.id}, %{})
+      assert is_nil(lone_view.stack_id)
+      assert is_nil(lone_view.paused_reason)
+    end
+
+    test "stack_get exposes rollup_branch_ready on a started stack, nil on a forming one, and per-member paused_reason" do
+      project =
+        create_project(%{repo_url: "https://github.com/test/e2e-ready-#{unique_slug("r")}"})
+
+      %{stack_id: started_id} = create_stack_via_tool(project.id, unique_slug("e2e-ready"))
+
+      # `handle_stack_created/1` creates (and stamps) the rollup at creation
+      # time whenever the project has a repo_url, so "rollup never created"
+      # is a stack on a project WITHOUT one: creation logs `:no_repo_url`
+      # and writes no stamp.
+      no_repo = create_project()
+      %{stack_id: forming_id} = create_stack_via_tool(no_repo.id, unique_slug("e2e-forming"))
+
+      {:ok, root} = Tasks.create_task(%{project_id: project.id, title: "Root"})
+      {:ok, _} = Tasks.create_plan(%{task_id: root.id, status: "approved"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => started_id, "task_id" => root.id}, %{})
+
+      # The default NoopRunner answers `already_exists`, which the deployer
+      # still stamps — stage 1 made that stamp synchronous inside
+      # `start_stack/1`, so it is present the moment the tool returns.
+      {:ok, _} = ToolSurface.execute("stack_start", %{"stack_id" => started_id}, %{})
+
+      {:ok, started} = ToolSurface.execute("stack_get", %{"stack_id" => started_id}, %{})
+      assert %{"at" => at} = started.stack.rollup_branch_ready
+      assert is_binary(at)
+      refute Map.has_key?(started.stack, :metadata)
+
+      {:ok, forming} = ToolSurface.execute("stack_get", %{"stack_id" => forming_id}, %{})
+      assert forming.stack.status == "forming"
+      assert is_nil(forming.stack.rollup_branch_ready)
+
+      # Members: one paused, one clean, on the same stack_get call.
+      paused = member_in_stack!(no_repo, forming_id, position: 1)
+      clean = member_in_stack!(no_repo, forming_id, position: 2)
+      stamp = %{"kind" => "rollup_diverged", "member_sha" => "m", "rollup_sha" => "r"}
+      {:ok, _} = Tasks.update_task(paused, %{metadata: %{"paused_reason" => stamp}})
+
+      {:ok, view} = ToolSurface.execute("stack_get", %{"stack_id" => forming_id}, %{})
+      assert Enum.find(view.members, &(&1.id == paused.id)).paused_reason == stamp
+      assert is_nil(Enum.find(view.members, &(&1.id == clean.id)).paused_reason)
+    end
+  end
+
+  describe "stack_retry_member_merge (01a05392 stage 3)" do
+    alias Platform.Federation.ToolArguments
+    alias Platform.Tasks.StackDeployer
+    alias Platform.Tasks.StackDeployer.GitShellRunner
+
+    test "is registered under the exact name with task_id required (declaration and executor both present)" do
+      names = ToolSurface.list_tools(["task"]) |> Enum.map(& &1.name)
+      assert "stack_retry_member_merge" in names
+
+      assert ToolArguments.required_params("stack_retry_member_merge") ==
+               [%{key: "task_id", aliases: []}]
+
+      # Executor present: a declaration with no handler would fall through
+      # to the unknown-tool clause, which does not know `:not_in_stack`.
+      {:ok, lone} = Tasks.create_task(%{project_id: create_project().id, title: "Lone"})
+
+      assert {:error, %{code: :not_in_stack}} =
+               ToolSurface.execute("stack_retry_member_merge", %{"task_id" => lone.id}, %{})
+    end
+
+    test "a task with no stack_id is refused with a NON-recoverable envelope" do
+      {:ok, lone} = Tasks.create_task(%{project_id: create_project().id, title: "Lone"})
+
+      assert {:error, error} =
+               ToolSurface.execute("stack_retry_member_merge", %{"task_id" => lone.id}, %{})
+
+      assert error.code == :not_in_stack
+      assert error.recoverable == false
+      assert error.error =~ lone.id
+    end
+
+    test "an unknown task id is non-recoverable; a missing task_id is refused" do
+      assert {:error, %{code: :task_not_found, recoverable: false}} =
+               ToolSurface.execute(
+                 "stack_retry_member_merge",
+                 %{"task_id" => Ecto.UUID.generate()},
+                 %{}
+               )
+
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute("stack_retry_member_merge", %{}, %{})
+
+      assert msg =~ "task_id"
+    end
+
+    test "a member the deployer will not merge yet is refused RECOVERABLY, naming the prior step" do
+      project = create_project(%{repo_url: "https://github.com/test/e2e-notready"})
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-notready"))
+      member = member_in_stack!(project, stack_id, position: 1, status: "in_progress")
+
+      assert {:error, error} =
+               ToolSurface.execute("stack_retry_member_merge", %{"task_id" => member.id}, %{})
+
+      assert error.code == :member_not_ready
+      assert error.outcome == "not_ready"
+      assert error.recoverable == true
+      assert error.reason == %{kind: "member_not_in_review"}
+      assert error.error =~ "in_progress"
+      assert error.suggestion =~ "in_review"
+    end
+
+    test "a still-diverged member returns still_diverged naming the rollup branch, both SHAs, and the rebase" do
+      slug = unique_slug("e2e-still-diverged")
+      origin = real_origin_with_rollup!(slug)
+      sibling_sha = push_sibling_commit_to_rollup!(origin, slug)
+
+      project = create_project(%{repo_url: origin.bare})
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, slug)
+      member = review_ready_member!(project, stack_id)
+
+      # Cut from origin/main, not rollup HEAD — the dispatcher's manufactured
+      # divergence.
+      member_sha =
+        push_member_branch!(origin, StackDeployer.member_branch_for(member), origin.main_sha)
+
+      assert {:error, error} =
+               ToolSurface.execute("stack_retry_member_merge", %{"task_id" => member.id}, %{})
+
+      assert error.code == :rollup_diverged
+      assert error.outcome == "still_diverged"
+      assert error.recoverable == true
+      assert error.error =~ "stack/#{slug}"
+      assert error.rollup_branch == "stack/#{slug}"
+      assert error.rollup_sha == sibling_sha
+      assert error.member_sha == member_sha
+      assert error.suggestion =~ "git rebase origin/stack/#{slug}"
+
+      # The pause is now readable through task_get — the stage's whole point.
+      {:ok, view} = ToolSurface.execute("task_get", %{"task_id" => member.id}, %{})
+      assert view.paused_reason["kind"] == "rollup_diverged"
+      assert view.paused_reason["rollup_sha"] == sibling_sha
+      assert view.paused_reason["member_sha"] == member_sha
+    end
+
+    test "a diverged member that has since been rebased onto rollup HEAD merges; the reload has the stamp and no paused_reason; a second call is already_merged" do
+      slug = unique_slug("e2e-retry-merged")
+      origin = real_origin_with_rollup!(slug)
+      sibling_sha = push_sibling_commit_to_rollup!(origin, slug)
+
+      project = create_project(%{repo_url: origin.bare})
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, slug)
+      # A second, unmerged member keeps the stack-PR gate closed so no
+      # `gh pr create` runs against the stand-in origin after the merge.
+      _unmerged = member_in_stack!(project, stack_id, position: 2, status: "in_progress")
+      member = review_ready_member!(project, stack_id)
+      branch = StackDeployer.member_branch_for(member)
+
+      _stale_sha = push_member_branch!(origin, branch, origin.main_sha)
+
+      assert {:error, %{outcome: "still_diverged"}} =
+               ToolSurface.execute("stack_retry_member_merge", %{"task_id" => member.id}, %{})
+
+      assert Tasks.get_task_record(member.id).metadata["paused_reason"]["kind"] ==
+               "rollup_diverged"
+
+      # The agent's remediation: rebase onto rollup HEAD and force-push. Here
+      # that is a fresh commit cut from the sibling's SHA, force-pushed to
+      # the same member branch.
+      rebased_sha = push_member_branch!(origin, branch, sibling_sha, force: true)
+
+      assert {:ok, result} =
+               ToolSurface.execute("stack_retry_member_merge", %{"task_id" => member.id}, %{})
+
+      assert result.outcome == "merged"
+      assert result.merge_sha == rebased_sha
+      assert result.task_id == member.id
+      assert result.stack_id == stack_id
+      assert result.rollup_branch == "stack/#{slug}"
+      assert is_nil(result.task.paused_reason)
+      assert result.task.stack_id == stack_id
+
+      reloaded = Tasks.get_task_record(member.id)
+      assert reloaded.metadata["merged_into_rollup_at"]["sha"] == rebased_sha
+      refute Map.has_key?(reloaded.metadata, "paused_reason")
+
+      # Idempotent: the second call is a successful no-op that echoes the
+      # existing stamp, and the origin is untouched.
+      assert {:ok, again} =
+               ToolSurface.execute("stack_retry_member_merge", %{"task_id" => member.id}, %{})
+
+      assert again.outcome == "already_merged"
+      assert again.merged_into_rollup_at["sha"] == rebased_sha
+      assert is_nil(again.task.paused_reason)
+    end
+
+    # ── Fixtures ────────────────────────────────────────────────────────
+
+    # A real bare origin with one commit on `main` and `stack/<slug>` at
+    # that same commit; the deployer is switched to the REAL
+    # `GitShellRunner` with a scratch clone root. Mirrors the stage 2
+    # fixture in `stack_deployer_test.exs`.
+    defp real_origin_with_rollup!(slug) do
+      root = Platform.TestTemp.mkdir!("ts-retry")
+      prev = Application.get_env(:platform, :stack_deployer, [])
+
+      Application.put_env(
+        :platform,
+        :stack_deployer,
+        Keyword.merge(prev,
+          git_runner: GitShellRunner,
+          async: false,
+          repo_root: Path.join(root, "clones")
+        )
+      )
+
+      on_exit(fn ->
+        Application.put_env(:platform, :stack_deployer, prev)
+        File.rm_rf(root)
+      end)
+
+      bare = Path.join(root, "origin.git")
+      work = Path.join(root, "seed")
+
+      git!(["init", "--quiet", "--bare", "--initial-branch=main", bare])
+      git!(["init", "--quiet", "--initial-branch=main", work])
+      git!(["config", "user.email", "test@example.com"], work)
+      git!(["config", "user.name", "Test"], work)
+      File.write!(Path.join(work, "README.md"), "seed\n")
+      git!(["add", "README.md"], work)
+      git!(["commit", "--quiet", "-m", "seed"], work)
+      git!(["remote", "add", "origin", bare], work)
+      git!(["push", "--quiet", "origin", "main"], work)
+      git!(["push", "--quiet", "origin", "main:refs/heads/stack/#{slug}"], work)
+
+      %{bare: bare, work: work, main_sha: git!(["rev-parse", "HEAD"], work)}
+    end
+
+    defp push_sibling_commit_to_rollup!(origin, slug) do
+      local = "sibling-#{System.unique_integer([:positive])}"
+      git!(["checkout", "--quiet", "-b", local, origin.main_sha], origin.work)
+      File.write!(Path.join(origin.work, "#{local}.txt"), "sibling\n")
+      git!(["add", "#{local}.txt"], origin.work)
+      git!(["commit", "--quiet", "-m", "sibling"], origin.work)
+      git!(["push", "--quiet", "origin", "#{local}:refs/heads/stack/#{slug}"], origin.work)
+      git!(["rev-parse", "HEAD"], origin.work)
+    end
+
+    defp push_member_branch!(origin, branch, base_sha, opts \\ []) do
+      local = "local-#{System.unique_integer([:positive])}"
+      git!(["checkout", "--quiet", "-b", local, base_sha], origin.work)
+      File.write!(Path.join(origin.work, "#{local}.txt"), "member\n")
+      git!(["add", "#{local}.txt"], origin.work)
+      git!(["commit", "--quiet", "-m", "member"], origin.work)
+      force = if Keyword.get(opts, :force, false), do: ["--force"], else: []
+
+      git!(
+        ["push", "--quiet"] ++ force ++ ["origin", "#{local}:refs/heads/#{branch}"],
+        origin.work
+      )
+
+      git!(["rev-parse", "HEAD"], origin.work)
+    end
+
+    defp git!(args, cd \\ nil) do
+      opts = [stderr_to_stdout: true] ++ if(cd, do: [cd: cd], else: [])
+
+      case System.cmd("git", args, opts) do
+        {out, 0} -> String.trim(out)
+        {out, code} -> flunk("git #{Enum.join(args, " ")} exited #{code}: #{out}")
+      end
+    end
+
+    # A member at `in_review` whose one review stage has every validation
+    # `passed` — exactly what `StackDeployer.review_readiness/1` merges.
+    defp review_ready_member!(project, stack_id) do
+      task = member_in_stack!(project, stack_id, position: 1, status: "in_review")
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Task-level review",
+          status: "passed"
+        })
+
+      {:ok, _} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "lint_pass", status: "passed"})
+
+      {:ok, _} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass", status: "passed"})
+
+      Tasks.get_task_record(task.id)
+    end
+  end
+
+  # Shared by both stage-3 describes: a task placed directly into a stack
+  # (bypassing `stack_add`'s status cascade so the fixture controls status).
+  defp member_in_stack!(project, stack_id, opts) do
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Member #{System.unique_integer([:positive])}",
+        status: Keyword.get(opts, :status, "backlog")
+      })
+
+    {:ok, task} =
+      Tasks.update_task(task, %{
+        stack_id: stack_id,
+        stack_position: Keyword.get(opts, :position, 1)
+      })
+
+    Tasks.get_task_record(task.id)
+  end
 end

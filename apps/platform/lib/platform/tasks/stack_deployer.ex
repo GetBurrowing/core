@@ -36,11 +36,13 @@ defmodule Platform.Tasks.StackDeployer do
 
     * On `:not_fast_forwardable` the deployer stamps
       `task.metadata["paused_reason"] = %{kind: "rollup_diverged", …}`
-      but does NOT flip the stack to `blocked` — divergence is a
-      task-scoped anomaly (someone rebased manually, a race left
-      the branch cut from stale HEAD, etc.) that a human can
-      unstick by rebasing the task branch onto rollup HEAD. Other
-      stack members can keep merging.
+      AND files a needs_human `execution.blocked` runtime event addressed
+      to the member's execution assignee, naming both SHAs, the rebase,
+      and the `stack_retry_member_merge` retry. It does NOT flip the stack
+      to `blocked` — divergence is a task-scoped anomaly (someone rebased
+      manually, a race left the branch cut from stale HEAD, etc.). Other
+      stack members can keep merging. A later successful merge clears the
+      stamp in the same write that records `merged_into_rollup_at`.
     * On `:conflict` (practically unreachable under `--ff-only`, kept
       as defence-in-depth) the deployer halts the stack: stack
       `status -> "blocked"` and `metadata.conflict` records the
@@ -321,14 +323,19 @@ defmodule Platform.Tasks.StackDeployer do
   # `deploying`. File the same needs_human blocker a raise would, so a
   # failed merge surfaces / self-heals instead of vanishing.
   #
-  # Benign outcomes are NOT escalated and must NOT double-file:
+  # Only two outcomes are benign and must NOT file a blocker here:
   #   * `{:ok, _}` (merged / already_merged / not_ready) — success or no-op.
-  #   * `{:error, :not_fast_forwardable, _}` — records its own divergence
-  #     paused_reason; the human rebases, not a blocker.
   #   * `{:error, :conflict, _}` — records its own conflict + flips the
   #     stack to blocked; a blocker row would be redundant.
+  #
+  # Divergence (`{:error, :not_fast_forwardable, _}`) IS escalated (task
+  # 01a05392 stage 2) — but by `record_divergence/3`, not here. That
+  # function has the member/rollup SHAs in hand and owns the double-file
+  # guard (same `rollup_sha` == same fact), so it files the blocker in the
+  # same breath as the `paused_reason` stamp. Adding a clause for it here
+  # would file twice; it falls through to the catch-all below because the
+  # tuple is 3-ary and never matches the 2-ary `{:error, reason}` clause.
   defp maybe_escalate_merge_error(_task, {:ok, _}), do: :ok
-  defp maybe_escalate_merge_error(_task, {:error, :not_fast_forwardable, _}), do: :ok
   defp maybe_escalate_merge_error(_task, {:error, :conflict, _}), do: :ok
 
   defp maybe_escalate_merge_error(%TaskRecord{} = task, {:error, reason}) do
@@ -338,19 +345,36 @@ defmodule Platform.Tasks.StackDeployer do
 
   defp maybe_escalate_merge_error(_task, _other), do: :ok
 
-  defp record_merge_blocker(%TaskRecord{id: task_id}, description) do
+  # `extra_payload` is merged UNDER the canonical keys so a caller can add
+  # routing / remediation fields (assignee, SHAs, retry call) without being
+  # able to downgrade `needs_human` or re-point the event.
+  #
+  # Public (`@doc false`) since task 01a05392 stage 4: the dispatch prompt
+  # renderer (`HeartbeatScheduler.stack_member_git_workflow_section/2`) files
+  # the same needs_human shape when a member of an `in_progress` stack is
+  # dispatched without the `rollup_branch_ready` stamp. It holds a task MAP
+  # (not always a `%TaskRecord{}`), hence the binary `task_id` clause.
+  @doc false
+  def record_merge_blocker(task, description, extra_payload \\ %{})
+
+  def record_merge_blocker(%TaskRecord{id: task_id}, description, extra_payload) do
+    record_merge_blocker(task_id, description, extra_payload)
+  end
+
+  def record_merge_blocker(task_id, description, extra_payload) when is_binary(task_id) do
     attrs = %{
       "task_id" => task_id,
       "phase" => "execution",
       "runtime_id" => "stack_deployer",
       "event_type" => "execution.blocked",
       "execution_space_id" => execution_space_id_for_task(task_id),
-      "payload" => %{
-        "stage_id" => nil,
-        "description" => description,
-        "needs_human" => true,
-        "reported_by" => "stack_deployer"
-      }
+      "payload" =>
+        Map.merge(extra_payload, %{
+          "stage_id" => nil,
+          "description" => description,
+          "needs_human" => true,
+          "reported_by" => "stack_deployer"
+        })
     }
 
     case Platform.Orchestration.record_runtime_event(attrs) do
@@ -1213,8 +1237,15 @@ defmodule Platform.Tasks.StackDeployer do
     base = if is_map(metadata), do: metadata, else: %{}
     merged_at = DateTime.utc_now()
 
+    # Task 01a05392 stage 2: a member that merged is by definition no longer
+    # diverged, so a stale `paused_reason` from an earlier
+    # `:not_fast_forwardable` is cleared in the SAME write as the merge
+    # stamp. One update, not two — no observer ever reads a task that is
+    # both merged and paused.
     new_metadata =
-      Map.put(base, "merged_into_rollup_at", %{
+      base
+      |> Map.delete("paused_reason")
+      |> Map.put("merged_into_rollup_at", %{
         "sha" => merge_sha,
         "at" => DateTime.to_iso8601(merged_at)
       })
@@ -1322,6 +1353,19 @@ defmodule Platform.Tasks.StackDeployer do
   # we stamp the task with a `paused_reason` so ops can see WHY the
   # task is stuck and what SHAs to eyeball, and we leave the stack
   # status alone — other members can keep merging past this one.
+  #
+  # Task 01a05392 stage 2: the stamp alone was invisible to the agent that
+  # owns the branch — nothing reads `paused_reason`, and the member sat in
+  # `in_review` until a human noticed. So AFTER the stamp commits we file an
+  # `execution.blocked` runtime event (needs_human, addressed to the
+  # member's execution assignee) whose description carries the literal
+  # rebase remediation and the retry call. Filed outside any Repo
+  # transaction so no subscriber can read the task before the stamp lands.
+  #
+  # Double-file guard: a retry against an UNCHANGED rollup HEAD reproduces
+  # the same fact, so an existing `rollup_diverged` stamp at the same
+  # `rollup_sha` suppresses the second blocker. A different `rollup_sha`
+  # means the rollup moved since — new information, filed again.
   defp record_divergence(%Stack{} = stack, %TaskRecord{} = task, %{} = detail) do
     member_sha = Map.get(detail, :member_sha)
     rollup_sha = Map.get(detail, :rollup_sha)
@@ -1329,6 +1373,8 @@ defmodule Platform.Tasks.StackDeployer do
     at_iso = DateTime.utc_now() |> DateTime.to_iso8601()
 
     base_meta = if is_map(task.metadata), do: task.metadata, else: %{}
+
+    already_filed? = divergence_already_filed?(base_meta, rollup_sha)
 
     paused_reason =
       %{
@@ -1349,6 +1395,15 @@ defmodule Platform.Tasks.StackDeployer do
             "rollup HEAD to unstick."
         )
 
+        if already_filed? do
+          Logger.info(
+            "[StackDeployer] task #{task.id} divergence at rollup #{rollup_sha} " <>
+              "already has a blocker on file; not filing a second one"
+          )
+        else
+          file_divergence_blocker(stack, task, member_sha, rollup_sha)
+        end
+
       {:error, reason} ->
         Logger.warning(
           "[StackDeployer] task #{task.id} branch diverged from rollup " <>
@@ -1368,6 +1423,50 @@ defmodule Platform.Tasks.StackDeployer do
     )
 
     :ok
+  end
+
+  defp divergence_already_filed?(%{"paused_reason" => %{} = paused}, rollup_sha)
+       when is_binary(rollup_sha) do
+    paused["kind"] == "rollup_diverged" and paused["rollup_sha"] == rollup_sha
+  end
+
+  defp divergence_already_filed?(_meta, _rollup_sha), do: false
+
+  # The blocker must be actionable WITHOUT a further lookup: it names the
+  # member, the rollup branch, both SHAs, the exact rebase, and the retry
+  # call (`stack_retry_member_merge`, task 01a05392 stage 3). It is addressed
+  # to the member's EXECUTION assignee — the agent whose branch it is —
+  # falling back to the current-phase assignee.
+  defp file_divergence_blocker(%Stack{} = stack, %TaskRecord{} = task, member_sha, rollup_sha) do
+    assignee_id = execution_assignee_id(task)
+
+    description =
+      "Rollup merge for stack member #{task.id} is not fast-forwardable: branch " <>
+        "#{member_branch_for(task)} (#{member_sha}) has diverged from rollup " <>
+        "#{stack.rollup_branch} (#{rollup_sha}). Nothing retries this on its own. " <>
+        "Remediation: `git fetch origin && git rebase origin/#{stack.rollup_branch} && " <>
+        "git push --force-with-lease`, then call `stack_retry_member_merge` with " <>
+        "task_id #{task.id}."
+
+    record_merge_blocker(task, description, %{
+      "kind" => "rollup_diverged",
+      "assignee_id" => assignee_id,
+      "member_task_id" => task.id,
+      "stack_id" => stack.id,
+      "rollup_branch" => stack.rollup_branch,
+      "member_sha" => member_sha,
+      "rollup_sha" => rollup_sha,
+      "retry_tool" => "stack_retry_member_merge"
+    })
+  end
+
+  defp execution_assignee_id(%TaskRecord{} = task) do
+    phase_assignees = if is_map(task.phase_assignees), do: task.phase_assignees, else: %{}
+
+    case get_in(phase_assignees, ["execution", "assignee_id"]) do
+      id when is_binary(id) and id != "" -> id
+      _ -> task.assignee_id
+    end
   end
 
   defp log_merge_result(%TaskRecord{id: id}, {:ok, :already_merged}) do

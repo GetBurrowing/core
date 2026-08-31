@@ -601,7 +601,14 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert call.repo_url == project.repo_url
     end
 
-    test "deployer error does NOT crash or alter the cascade result" do
+    # CONTRACT REVERSAL (task 01a05392 stage 1). This test used to assert
+    # "deployer error does NOT crash or alter the cascade result" — i.e. a
+    # failed rollup push was swallowed and the members started anyway. That
+    # IS the defect: a member cascaded without a rollup branch gets its
+    # worktree cut from the default branch and never sees its siblings, which
+    # is the whole property the rollup exists to provide. The rollup create is
+    # now synchronous and BLOCKING, so the failure is loud.
+    test "deployer error FAILS the start and promotes nobody (was: swallowed)" do
       {:ok, _} =
         FakeRunner.start_link(
           responses: [{:error, {:git_failed, ["push"], 128, "permission denied"}}]
@@ -614,10 +621,18 @@ defmodule Platform.Tasks.StackDeployerTest do
       {:ok, _} = Stacks.add_task(stack, root)
       {:ok, _} = Tasks.create_plan(%{task_id: root.id, status: "approved"})
 
-      assert {:ok, %{stack: started, started: started_tasks}} = Stacks.start_stack(stack)
-      assert started.status == "in_progress"
-      assert length(started_tasks) == 1
+      assert {:error, {:rollup_branch_unavailable, {:git_failed, ["push"], 128, _}}} =
+               Stacks.start_stack(stack)
+
       assert [_] = FakeRunner.calls()
+
+      # The member is untouched, and the stack is still `forming` so the call
+      # is retryable once the remote is fixed. Leaving it `in_progress` with
+      # its only root at `backlog` would wedge it: the status recompute reads
+      # `forming`, `guard_no_forming_regression` drops the write back, and
+      # `start_stack/1` refuses anything that is not `forming`.
+      assert Tasks.get_task_record(root.id).status == "backlog"
+      assert Stacks.get_stack!(stack.id).status == "forming"
     end
 
     test "no deployer call if start_stack rejects with :invalid_stack_status" do
@@ -2073,7 +2088,11 @@ defmodule Platform.Tasks.StackDeployerTest do
              |> Platform.Repo.all() == []
     end
 
-    test "divergence (:not_fast_forwardable) return does NOT double-file a blocker" do
+    # Task 01a05392 stage 2 reversed this contract: divergence IS escalated,
+    # but by `record_divergence/3` (which owns the SHAs and the double-file
+    # guard), never additionally by `maybe_escalate_merge_error/2`. Exactly
+    # one row — an event COUNT, so a second filer would detonate here.
+    test "divergence (:not_fast_forwardable) return files exactly ONE blocker, from record_divergence" do
       {:ok, _} =
         FakeRunner.start_link(
           merge_responses: [
@@ -2082,16 +2101,298 @@ defmodule Platform.Tasks.StackDeployerTest do
         )
 
       project = project_with_repo!()
-      stack = stack_for!(project, slug: "gap1-diverge-nodup")
+      stack = stack_for!(project, slug: "gap1-diverge-once")
       task = stack_member_at_in_review!(project, stack)
 
       assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
 
       import Ecto.Query
 
-      assert Platform.Orchestration.RuntimeEvent
-             |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
-             |> Platform.Repo.all() == []
+      assert [event] =
+               Platform.Orchestration.RuntimeEvent
+               |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+               |> Platform.Repo.all()
+
+      assert event.payload["kind"] == "rollup_diverged"
+      assert event.payload["needs_human"] == true
+    end
+  end
+
+  # ── Task 01a05392 stage 2: rollup divergence is escalated ────────────────
+  #
+  # Before this stage a `:not_fast_forwardable` merge stamped
+  # `paused_reason` and stopped. Nothing read the stamp; the member sat in
+  # `in_review` until a human happened to look. Now `record_divergence/3`
+  # files a needs_human `execution.blocked` addressed to the member's
+  # execution assignee, naming both SHAs and the literal remediation.
+  #
+  # (a)/(b) below are a PAIRED anti-vacuity requirement against a real bare
+  # origin driven through `GitShellRunner` (no stubs): (a) proves the
+  # blocker is filed on genuine divergence; (b) proves it is NOT filed on a
+  # genuine fast-forward. Without (b), a change that files a blocker on
+  # EVERY merge is green.
+
+  describe "rollup divergence escalation (01a05392 stage 2)" do
+    import Ecto.Query
+
+    alias Platform.Tasks.StackDeployer.GitShellRunner
+
+    test "(a) member cut from main AFTER a sibling merged -> not_fast_forwardable -> needs_human blocker to the execution assignee" do
+      slug = "diverge-a-#{uniq()}"
+      origin = real_origin_with_rollup!(slug)
+      sibling_sha = push_sibling_commit_to_rollup!(origin, slug)
+
+      project = project_with_repo!(repo_url: origin.bare)
+      stack = stack_for!(project, slug: slug)
+      exec_assignee = Ecto.UUID.generate()
+      task = review_ready_member!(project, stack)
+
+      {:ok, task} =
+        Tasks.update_task(task, %{
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_assignee, "assignee_type" => "agent"}
+          }
+        })
+
+      # Cut from origin/main (the seed commit), NOT from rollup HEAD — the
+      # exact shape the dispatcher manufactures.
+      member_sha =
+        push_member_branch!(origin, StackDeployer.member_branch_for(task), origin.main_sha)
+
+      assert {:error, :not_fast_forwardable, %{member_sha: ^member_sha, rollup_sha: ^sibling_sha}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.metadata["paused_reason"]["kind"] == "rollup_diverged"
+      assert reloaded.metadata["paused_reason"]["rollup_sha"] == sibling_sha
+      refute Map.has_key?(reloaded.metadata, "merged_into_rollup_at")
+
+      assert [event] = blocked_events(task.id)
+      assert event.payload["needs_human"] == true
+      assert event.payload["assignee_id"] == exec_assignee
+      assert event.payload["kind"] == "rollup_diverged"
+      assert event.payload["rollup_branch"] == "stack/#{slug}"
+      assert event.payload["rollup_sha"] == sibling_sha
+      assert event.payload["member_sha"] == member_sha
+      assert event.payload["retry_tool"] == "stack_retry_member_merge"
+      assert event.runtime_id == "stack_deployer"
+      assert event.phase == "execution"
+
+      # Actionable without a further lookup.
+      desc = event.payload["description"]
+      assert desc =~ task.id
+      assert desc =~ "stack/#{slug}"
+      assert desc =~ sibling_sha
+      assert desc =~ member_sha
+
+      assert desc =~
+               "git fetch origin && git rebase origin/stack/#{slug} && git push --force-with-lease"
+
+      assert desc =~ "stack_retry_member_merge"
+    end
+
+    test "(b) member cut from rollup HEAD -> fast-forwards -> NO execution.blocked event" do
+      slug = "diverge-b-#{uniq()}"
+      origin = real_origin_with_rollup!(slug)
+      sibling_sha = push_sibling_commit_to_rollup!(origin, slug)
+
+      project = project_with_repo!(repo_url: origin.bare)
+      stack = stack_for!(project, slug: slug)
+      # A second, unmerged member keeps the stack-PR gate :not_ready so the
+      # `gh pr create` hook never runs against the stand-in origin.
+      _unmerged = unmerged_member!(project, stack, position: 2)
+      task = review_ready_member!(project, stack)
+
+      {:ok, task} =
+        Tasks.update_task(task, %{
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
+      # Cut from rollup HEAD (the sibling's commit) — a clean descendant.
+      member_sha = push_member_branch!(origin, StackDeployer.member_branch_for(task), sibling_sha)
+
+      assert {:ok, %{status: :merged, merge_sha: ^member_sha}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.metadata["merged_into_rollup_at"]["sha"] == member_sha
+      refute Map.has_key?(reloaded.metadata, "paused_reason")
+
+      assert blocked_events(task.id) == []
+    end
+
+    test "divergence followed by a successful merge: paused_reason ABSENT, merged_into_rollup_at PRESENT" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [
+            {:error, :not_fast_forwardable,
+             %{member_sha: "m1", rollup_sha: "r1", output: "not ff"}},
+            {:ok, %{status: :merged, merge_sha: "ff000001"}}
+          ]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "diverge-then-merge")
+      _unmerged = unmerged_member!(project, stack, position: 2)
+      task = review_ready_member!(project, stack)
+
+      assert {:error, :not_fast_forwardable, _} = StackDeployer.merge_member_into_rollup(task.id)
+      paused = Tasks.get_task_record(task.id)
+      assert paused.metadata["paused_reason"]["rollup_sha"] == "r1"
+
+      assert {:ok, %{status: :merged}} = StackDeployer.merge_member_into_rollup(task.id)
+
+      merged = Tasks.get_task_record(task.id)
+      refute Map.has_key?(merged.metadata, "paused_reason")
+      assert merged.metadata["merged_into_rollup_at"]["sha"] == "ff000001"
+    end
+
+    test "a second divergence at the SAME rollup_sha files exactly ONE event total" do
+      detail = %{member_sha: "m1", rollup_sha: "same-r", output: "not ff"}
+
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [
+            {:error, :not_fast_forwardable, detail},
+            {:error, :not_fast_forwardable, detail}
+          ]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "diverge-same-sha")
+      task = review_ready_member!(project, stack)
+
+      assert {:error, :not_fast_forwardable, _} = StackDeployer.merge_member_into_rollup(task.id)
+      assert {:error, :not_fast_forwardable, _} = StackDeployer.merge_member_into_rollup(task.id)
+
+      # Both attempts still stamp (the `at` advances), but the fact is the
+      # same fact — one blocker.
+      assert Tasks.get_task_record(task.id).metadata["paused_reason"]["rollup_sha"] == "same-r"
+      assert length(blocked_events(task.id)) == 1
+    end
+
+    test "a second divergence at a DIFFERENT rollup_sha is new information and files again" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [
+            {:error, :not_fast_forwardable, %{member_sha: "m1", rollup_sha: "r1", output: "x"}},
+            {:error, :not_fast_forwardable, %{member_sha: "m1", rollup_sha: "r2", output: "x"}}
+          ]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "diverge-new-sha")
+      task = review_ready_member!(project, stack)
+
+      assert {:error, :not_fast_forwardable, _} = StackDeployer.merge_member_into_rollup(task.id)
+      assert {:error, :not_fast_forwardable, _} = StackDeployer.merge_member_into_rollup(task.id)
+
+      assert ["r1", "r2"] =
+               task.id
+               |> blocked_events()
+               |> Enum.map(& &1.payload["rollup_sha"])
+               |> Enum.sort()
+    end
+
+    test "with no execution phase assignee the blocker falls back to task.assignee_id" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [
+            {:error, :not_fast_forwardable, %{member_sha: "m1", rollup_sha: "r1", output: "x"}}
+          ]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "diverge-fallback")
+      task = review_ready_member!(project, stack)
+      fallback = Ecto.UUID.generate()
+      {:ok, task} = Tasks.update_task(task, %{assignee_id: fallback, assignee_type: "agent"})
+      assert task.phase_assignees in [nil, %{}]
+
+      assert {:error, :not_fast_forwardable, _} = StackDeployer.merge_member_into_rollup(task)
+
+      assert [event] = blocked_events(task.id)
+      assert event.payload["assignee_id"] == fallback
+    end
+
+    defp blocked_events(task_id) do
+      Platform.Orchestration.RuntimeEvent
+      |> where([e], e.task_id == ^task_id and e.event_type == "execution.blocked")
+      |> Platform.Repo.all()
+    end
+
+    # A real bare origin with one commit on `main` and the rollup branch
+    # `stack/<slug>` pointing at that same commit — the state right after
+    # `ensure_rollup_branch/1`. The deployer is switched to the REAL
+    # `GitShellRunner` with a scratch clone root for the rest of the test.
+    defp real_origin_with_rollup!(slug) do
+      root = Platform.TestTemp.mkdir!("sd-diverge")
+      prev = Application.get_env(:platform, :stack_deployer, [])
+
+      Application.put_env(
+        :platform,
+        :stack_deployer,
+        Keyword.merge(prev,
+          git_runner: GitShellRunner,
+          async: false,
+          repo_root: Path.join(root, "clones")
+        )
+      )
+
+      on_exit(fn ->
+        Application.put_env(:platform, :stack_deployer, prev)
+        File.rm_rf(root)
+      end)
+
+      bare = Path.join(root, "origin.git")
+      work = Path.join(root, "seed")
+
+      git!(["init", "--quiet", "--bare", "--initial-branch=main", bare])
+      git!(["init", "--quiet", "--initial-branch=main", work])
+      git!(["config", "user.email", "test@example.com"], work)
+      git!(["config", "user.name", "Test"], work)
+      File.write!(Path.join(work, "README.md"), "seed\n")
+      git!(["add", "README.md"], work)
+      git!(["commit", "--quiet", "-m", "seed"], work)
+      git!(["remote", "add", "origin", bare], work)
+      git!(["push", "--quiet", "origin", "main"], work)
+      git!(["push", "--quiet", "origin", "main:refs/heads/stack/#{slug}"], work)
+
+      %{bare: bare, work: work, main_sha: git!(["rev-parse", "HEAD"], work)}
+    end
+
+    # Simulates a sibling member having merged: rollup HEAD moves one
+    # commit past `main`. Returns the new rollup SHA.
+    defp push_sibling_commit_to_rollup!(origin, slug) do
+      git!(["checkout", "--quiet", "-b", "sibling", origin.main_sha], origin.work)
+      File.write!(Path.join(origin.work, "sibling.txt"), "sibling\n")
+      git!(["add", "sibling.txt"], origin.work)
+      git!(["commit", "--quiet", "-m", "sibling"], origin.work)
+      git!(["push", "--quiet", "origin", "sibling:refs/heads/stack/#{slug}"], origin.work)
+      git!(["rev-parse", "HEAD"], origin.work)
+    end
+
+    # Cuts `branch` from `base_sha`, adds one commit, pushes it. Returns
+    # the member's tip SHA.
+    defp push_member_branch!(origin, branch, base_sha) do
+      local = "local-#{uniq()}"
+      git!(["checkout", "--quiet", "-b", local, base_sha], origin.work)
+      File.write!(Path.join(origin.work, "#{local}.txt"), "member\n")
+      git!(["add", "#{local}.txt"], origin.work)
+      git!(["commit", "--quiet", "-m", "member"], origin.work)
+      git!(["push", "--quiet", "origin", "#{local}:refs/heads/#{branch}"], origin.work)
+      git!(["rev-parse", "HEAD"], origin.work)
+    end
+
+    defp git!(args, cd \\ nil) do
+      opts = [stderr_to_stdout: true] ++ if(cd, do: [cd: cd], else: [])
+
+      case System.cmd("git", args, opts) do
+        {out, 0} -> String.trim(out)
+        {out, code} -> flunk("git #{Enum.join(args, " ")} exited #{code}: #{out}")
+      end
     end
   end
 

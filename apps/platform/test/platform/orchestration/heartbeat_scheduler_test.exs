@@ -1472,7 +1472,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
                stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
                stack_slug: "meeting-module",
                rollup_branch: "stack/meeting-module",
-               stack_metadata: %{}
+               stack_metadata: %{},
+               stack_status: nil
              }
     end
 
@@ -1491,7 +1492,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
                stack_id: "019e3000-0000-7000-8000-000000000001",
                stack_slug: "solo-stack",
                rollup_branch: "stack/solo-stack",
-               stack_metadata: %{}
+               stack_metadata: %{},
+               stack_status: nil
              }
     end
 
@@ -1537,7 +1539,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
                stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
                stack_slug: nil,
                rollup_branch: nil,
-               stack_metadata: %{}
+               stack_metadata: %{},
+               stack_status: nil
              }
     end
   end
@@ -1732,7 +1735,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         priority: "high",
         project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
         stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
-        stack: meeting_module_stack()
+        stack: meeting_module_stack_ready()
       }
 
       {:ok,
@@ -1898,9 +1901,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
 
     # A `task_stacks` row as the orchestrator preloads it onto `task.stack`.
-    # No `rollup_branch_ready` metadata stamp — mimics the pre-ADR-0042 default
-    # where a member dispatches before StackDeployer's async ensure lands. The
-    # dispatch prompt falls back to `origin/<default_branch>` in that state.
+    # No `rollup_branch_ready` metadata stamp. Since task 01a05392 stage 1 the
+    # stamp lands before any root is promoted, so this is the ANOMALOUS state:
+    # the dispatch prompt refuses the `origin/<default_branch>` fallback and
+    # tells the executor to stop (stage 4). No `status` on purpose — the
+    # backstop only files a blocker for an `in_progress` stack, and that DB
+    # path is covered by `heartbeat_scheduler_rollup_backstop_test.exs`.
     defp meeting_module_stack do
       %{
         id: "019e2782-09d6-7e2c-9502-c106290e5add",
@@ -1937,7 +1943,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         priority: "high",
         project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
         stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
-        stack: meeting_module_stack()
+        stack: meeting_module_stack_ready()
       }
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
@@ -1945,7 +1951,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Git Workflow (CRITICAL)"
 
       assert prompt =~
-               "git worktree add ../worktrees/019e2474-11c1-7000-8000-000000000001 -b task/019e2474-11c1-7000-8000-000000000001 origin/main"
+               "git worktree add ../worktrees/019e2474-11c1-7000-8000-000000000001 -b task/019e2474-11c1-7000-8000-000000000001 origin/stack/meeting-module"
 
       assert prompt =~ "cd ../worktrees/019e2474-11c1-7000-8000-000000000001"
       assert prompt =~ "git push -u origin task/019e2474-11c1-7000-8000-000000000001"
@@ -1965,7 +1971,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         priority: "high",
         project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
         stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
-        stack: meeting_module_stack()
+        stack: meeting_module_stack_ready()
       }
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
@@ -1974,9 +1980,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "This task is a stack member"
       assert prompt =~ "stack_id: `019e2782-09d6-7e2c-9502-c106290e5add`"
       assert prompt =~ "Rollup branch: `stack/meeting-module`"
-      # Independent-branching instruction per the task contract.
-      assert prompt =~ "INDEPENDENTLY"
-      assert prompt =~ "Do NOT depend on a sibling member's unpushed work"
+      # ADR-0042 Decision 2: the member is cut FROM the rollup and merges back
+      # into it. The pre-01a05392 "INDEPENDENTLY" wording is gone from every
+      # arm — the wrong-base state is no longer a supported mode.
+      assert prompt =~ "cut from `origin/stack/meeting-module`"
+      assert prompt =~ "Merge back into it via fast-forward on validation pass"
+      refute prompt =~ "INDEPENDENTLY"
     end
 
     test "rollup branch is derived from stack_slug when not explicitly stored", %{
@@ -2007,7 +2016,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       plan: plan,
       stage: stage
     } do
-      stack = meeting_module_stack()
+      stack = meeting_module_stack_ready()
       stack_id = stack.id
 
       task_f = %{
@@ -2099,10 +2108,10 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     # These three tests cover the branch-parent decision surface introduced by
     # `stack.metadata["rollup_branch_ready"]`. With the stamp present, member
     # branches cut FROM the rollup HEAD so a member sees prior siblings' merged
-    # work. Without the stamp (rollup push not yet landed on origin), we fall
-    # back to `origin/<default_branch>` and log a warning so the race is
-    # auditable — never dispatch a `git worktree add ... origin/stack/foo`
-    # against a non-existent remote ref.
+    # work. Without the stamp the prompt (task 01a05392 stage 4) renders NO
+    # `git worktree add` at all and tells the executor to stop and report —
+    # never `origin/stack/foo` against a non-existent remote ref, and never
+    # `origin/<default_branch>`, which is the divergence stage 2 escalates.
 
     test "stack member WITH rollup_branch_ready stamp branches from origin/<rollup_branch>", %{
       plan: plan,
@@ -2134,21 +2143,39 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       # path — that would contradict the retargeting.
       refute prompt =~ "INDEPENDENTLY"
 
+      # Task 01a05392 stage 4: the divergence loop lives in the prompt, since
+      # the prompt is where an executor reads instructions. Rebase onto the
+      # ROLLUP (never main), `--force-with-lease` (never bare `--force`), and
+      # the stage 3 retry tool named exactly as declared, with THIS task's id.
+      assert prompt =~ "### STACK-MEMBER GIT WORKFLOW"
+
+      assert prompt =~
+               "git fetch origin && git rebase origin/stack/meeting-module && git push --force-with-lease"
+
+      assert prompt =~
+               "call `stack_retry_member_merge` with `task_id` = `019e2474-11c1-7000-8000-000000000001`"
+
+      refute prompt =~ "git rebase origin/main"
+      refute prompt =~ "--force "
+      refute prompt =~ "--force\n"
+      # The ready arm never carries the stop instruction.
+      refute prompt =~ "STOP — do not create a worktree or branch for this task"
+
       # `Base branch:` (an audit hint) still lists the project default so a
       # human reader can spot the retargeting.
       assert prompt =~ "Base branch: main"
     end
 
-    test "stack member WITHOUT rollup_branch_ready stamp falls back to origin/<default_branch>",
+    test "stack member WITHOUT rollup_branch_ready stamp is told to STOP — no origin/<default_branch> fallback",
          %{plan: plan, stage: stage} do
       task = %{
         id: "019e2474-11c1-7000-8000-000000000001",
-        title: "Stack member — fallback",
+        title: "Stack member — missing stamp",
         status: "in_progress",
         priority: "high",
         project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
         stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
-        # No metadata stamp → rollup push hasn't landed yet.
+        # No metadata stamp → the rollup branch cannot be assumed to exist.
         stack: meeting_module_stack()
       }
 
@@ -2156,20 +2183,36 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         ExUnit.CaptureLog.capture_log(fn ->
           prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
-          # Legacy branch shape — no risk of `origin/stack/…` no-such-ref.
-          assert prompt =~
-                   "git worktree add ../worktrees/019e2474-11c1-7000-8000-000000000001 -b task/019e2474-11c1-7000-8000-000000000001 origin/main"
+          # The section still renders (the heading is what the strip and the
+          # reader key on) but carries NO worktree/branch creation at all —
+          # neither from the rollup (it may not exist) nor from main (that is
+          # the divergence stage 2 escalates). `-b task/<id> origin/main` is the
+          # exact instruction the old fallback rendered; a bare `main` refute
+          # would be satisfied by the `Base branch: main` audit line.
+          assert prompt =~ "Git Workflow (CRITICAL)"
+          refute prompt =~ "git worktree add"
 
-          assert prompt =~ "cut from `origin/main`"
-          assert prompt =~ "INDEPENDENTLY"
+          refute prompt =~
+                   "-b task/019e2474-11c1-7000-8000-000000000001 origin/main"
+
+          refute prompt =~ "cut from `origin/main`"
+          refute prompt =~ "INDEPENDENTLY"
+
+          # The stop-and-report instruction, verbatim from the stop arm.
+          assert prompt =~ "STOP — do not create a worktree or branch for this task"
+          assert prompt =~ "there is NO supported fallback"
+          assert prompt =~ "Call `report_blocker` now (needs_human: true)"
+          assert prompt =~ "the missing `rollup_branch_ready` stamp"
+          assert prompt =~ "Stop and report a blocker; do not proceed from `origin/main`."
+
           # The Task Stack Membership block still names the rollup branch — the
           # rollup exists at the schema level even if not yet pushed.
           assert prompt =~ "Rollup branch: `stack/meeting-module`"
-          refute prompt =~ "origin/stack/meeting-module"
+          assert prompt =~ "stack_id: `019e2782-09d6-7e2c-9502-c106290e5add`"
         end)
 
-      # The race is auditable — the fallback fires a warning naming the stack
-      # and member so ops can spot repeat offenders.
+      # The anomaly is auditable — the warning names the stack and member so
+      # ops can spot repeat offenders.
       assert log =~ "rollup not yet ready"
       assert log =~ "019e2782-09d6-7e2c-9502-c106290e5add"
       assert log =~ "019e2474-11c1-7000-8000-000000000001"

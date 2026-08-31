@@ -36,6 +36,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   `:check_no_ack` / `:check_safety_net` timers from.
   """
 
+  alias Platform.Orchestration.Diagnostics
   alias Platform.Orchestration.DispatchPhase
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
@@ -43,6 +44,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   alias Platform.Tasks.BranchFreshness
   alias Platform.Tasks.BranchReconciler
   alias Platform.Tasks.ReviewRequest
+  alias Platform.Tasks.StackDeployer
   alias Platform.Tasks.Stage
   alias Platform.Tasks.Validation
 
@@ -2212,52 +2214,70 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     task_slug = member_slug(task)
     rollup_branch = membership.rollup_branch || "stack/#{membership.stack_slug}"
 
-    # ADR-0042 Decision 2: retarget member branches to rollup HEAD (so a member
-    # sees its already-merged siblings). Gate on the async `rollup_branch_ready`
-    # stamp from `StackDeployer.do_create_rollup_branch/2` — if the stamp is
-    # absent (the rollup push has not landed yet), fall back to
-    # `origin/#{default_branch}` and log a warning. That keeps the executor from
-    # dispatching `git worktree add ... origin/stack/foo` before the ref exists.
-    parent_branch =
-      case rollup_branch_ready(membership) do
-        true ->
+    # ADR-0042 Decision 2: member branches are cut from rollup HEAD (so a
+    # member sees its already-merged siblings). Gate on the `rollup_branch_ready`
+    # stamp from `StackDeployer.do_create_rollup_branch/2`. Since task 01a05392
+    # stage 1 the stamp is written synchronously in `Stacks.start_stack/1`
+    # BEFORE any root is promoted, so an execution dispatch for a member of an
+    # `in_progress` stack without the stamp is an anomaly, not a race to paper
+    # over. The old else-arm branched the member from `origin/<default>` with a
+    # warning nobody read — the dispatcher itself manufactured the divergence
+    # stage 2 escalates. That arm is now a LOUD backstop: it still logs, it
+    # files the same needs_human `execution.blocked` event stage 2 files (once
+    # per task + rollup branch — the renderer runs on every redispatch), and it
+    # renders a section that tells the executor to STOP and report a blocker.
+    # It never renders a `git worktree add … origin/<default>` instruction.
+    case rollup_branch_ready(membership) do
+      true ->
+        stack_member_ready_section(
+          task,
+          membership,
+          repos,
+          default_branch,
+          task_slug,
           rollup_branch
+        )
 
-        false ->
-          Logger.warning(
-            "[HeartbeatScheduler] stack #{membership.stack_id} rollup not yet ready; " <>
-              "member #{full_task_id(task)} branching from #{default_branch}"
-          )
+      false ->
+        Logger.warning(
+          "[HeartbeatScheduler] stack #{membership.stack_id} rollup not yet ready; " <>
+            "member #{full_task_id(task)} dispatch refuses the #{default_branch} fallback " <>
+            "and instructs the executor to stop"
+        )
 
-          default_branch
-      end
+        maybe_file_rollup_branch_missing_blocker(task, membership, rollup_branch, default_branch)
 
-    membership_note =
-      if parent_branch == rollup_branch do
-        "- Your member branch `task/#{task_slug}` is cut from `origin/#{rollup_branch}` " <>
-          "so you see previously-merged sibling members.\n" <>
-          "    - The ROLLUP branch `#{rollup_branch}` is what reconciles sibling members. " <>
-          "Merge back into it via fast-forward on validation pass — do NOT open a per-member PR."
-      else
-        "- Your member branch `task/#{task_slug}` is cut from `origin/#{default_branch}` " <>
-          "INDEPENDENTLY — the rollup branch was not ready at dispatch time.\n" <>
-          "    - The ROLLUP branch `#{rollup_branch}` is what reconciles sibling members. " <>
-          "Do NOT depend on a sibling member's unpushed work; treat each member branch as isolated."
-      end
+        stack_member_stop_section(
+          membership,
+          repos,
+          default_branch,
+          task_slug,
+          rollup_branch
+        )
+    end
+  end
 
+  defp stack_member_ready_section(
+         task,
+         membership,
+         repos,
+         default_branch,
+         task_slug,
+         rollup_branch
+       ) do
     """
 
     ## Git Workflow (CRITICAL)
     Repository: #{primary_repo_url(repos)}
     Base branch: #{default_branch}
-    #{additional_repos_block(repos, task_slug, parent_branch, :create)}\
+    #{additional_repos_block(repos, task_slug, rollup_branch, :create)}\
 
-    1. Create a worktree from the latest #{parent_branch} branch:
+    1. Create a worktree from the latest #{rollup_branch} branch:
        ```
        git fetch origin
        # Preflight: if the worktree already exists, it MUST be on this task's branch.
        if [ -d ../worktrees/#{task_slug} ]; then git -C ../worktrees/#{task_slug} rev-parse --abbrev-ref HEAD; fi
-       git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{parent_branch}
+       git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{rollup_branch}
        cd ../worktrees/#{task_slug}
        ```
        - Preflight printed NOTHING: the worktree does not exist. Run `git worktree add` exactly as shown.
@@ -2269,20 +2289,135 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
        - Commit all changes with a descriptive message referencing task #{full_task_id(task)}
        - Push the branch: `git push -u origin task/#{task_slug}`
        - Do NOT open a PR yet — PR opening happens in the deploy phase
-    4. NEVER work on ANOTHER task's branch. When creating, branch from latest origin/#{parent_branch}; reuse an existing worktree ONLY when its HEAD is `task/#{task_slug}`.
+    4. NEVER work on ANOTHER task's branch. When creating, branch from latest origin/#{rollup_branch}; reuse an existing worktree ONLY when its HEAD is `task/#{task_slug}`.
 
     ## Task Stack Membership
     This task is a stack member (part of task stack `#{membership.stack_id}`).
     - stack_id: `#{membership.stack_id}`
     - Rollup branch: `#{rollup_branch}`
-    #{membership_note}
+    - Your member branch `task/#{task_slug}` is cut from `origin/#{rollup_branch}` so you see previously-merged sibling members.
+        - The ROLLUP branch `#{rollup_branch}` is what reconciles sibling members. Merge back into it via fast-forward on validation pass — do NOT open a per-member PR.
+
+    ### STACK-MEMBER GIT WORKFLOW — when the rollup fast-forward is refused
+    Suite fast-forwards `task/#{task_slug}` into `origin/#{rollup_branch}` when your review validations pass. If that merge is refused as not fast-forwardable (`task_get` shows `paused_reason.kind == "rollup_diverged"`, or an `execution.blocked` event names this loop), a sibling landed on the rollup after you branched. Nothing retries this on its own. Recover in your worktree with exactly:
+    ```
+    git fetch origin && git rebase origin/#{rollup_branch} && git push --force-with-lease
+    ```
+    then call `stack_retry_member_merge` with `task_id` = `#{full_task_id(task)}` (THIS task's id, not the stack id). Never use bare `--force`, and never rebase onto `origin/#{default_branch}` — the rollup is your parent, not the default branch. A retry that is still not fast-forwardable returns `still_diverged` with both SHAs and the same rebase; repeat the loop.
     """
   end
 
-  # The rollup branch is created async by StackDeployer. Members branching from
-  # `origin/#{rollup_branch}` before that push lands would hit `fatal: origin/…:
-  # no such ref` in the executor. Gate on the `rollup_branch_ready` metadata
-  # stamp so the flip is deterministic.
+  # Rendered when a member of an `in_progress` stack is dispatched without the
+  # `rollup_branch_ready` stamp. Deliberately contains NO `git worktree add`:
+  # the only supported parent for a member branch is `origin/<rollup_branch>`,
+  # and a branch cut from `origin/<default>` is the divergence stage 2 has to
+  # escalate later. The executor's move is to stop and report.
+  defp stack_member_stop_section(
+         membership,
+         repos,
+         default_branch,
+         task_slug,
+         rollup_branch
+       ) do
+    """
+
+    ## Git Workflow (CRITICAL)
+    Repository: #{primary_repo_url(repos)}
+    Base branch: #{default_branch}
+
+    STOP — do not create a worktree or branch for this task. This task is a member of stack `#{membership.stack_id}` whose rollup branch `origin/#{rollup_branch}` has not been confirmed on origin (the stack's `rollup_branch_ready` stamp is absent). Your member branch `task/#{task_slug}` MUST be cut from `origin/#{rollup_branch}` and there is NO supported fallback: do NOT branch from `origin/#{default_branch}`, do NOT create `../worktrees/#{task_slug}` from any other parent, and do NOT plan to rebase onto the rollup later. Call `report_blocker` now (needs_human: true) naming stack `#{membership.stack_id}`, rollup branch `#{rollup_branch}` and the missing `rollup_branch_ready` stamp, then end your turn. Suite has filed the matching blocker (`kind: rollup_branch_missing`) for a human; once the stamp is present a redispatch of this task renders the normal rollup-parent workflow.
+
+    ## Task Stack Membership
+    This task is a stack member (part of task stack `#{membership.stack_id}`).
+    - stack_id: `#{membership.stack_id}`
+    - Rollup branch: `#{rollup_branch}`
+    - Your member branch `task/#{task_slug}` has NOT been created: the rollup branch `#{rollup_branch}` it must be cut from is not ready. Stop and report a blocker; do not proceed from `origin/#{default_branch}`.
+    """
+  end
+
+  @rollup_branch_missing_kind "rollup_branch_missing"
+
+  # The backstop's escalation. Only a member of an `in_progress` stack can be
+  # here legitimately (stage 1 stamps `rollup_branch_ready` before promoting
+  # roots), so any other stack status is left to the warning alone. The event
+  # reuses `StackDeployer.record_merge_blocker/3` — the stage 2 shape, same
+  # `needs_human: true`, same `execution.blocked` type — and is recorded
+  # OUTSIDE any Repo transaction: the renderer runs from the router's
+  # `handle_info` dispatch path, not inside a Multi.
+  #
+  # Dedupe: the prompt is rendered again on every redispatch and heartbeat
+  # re-render, and the missing stamp is the same fact each time. An existing
+  # `execution.blocked` event for this task with `kind: rollup_branch_missing`
+  # and the same `rollup_branch` suppresses a second filing.
+  defp maybe_file_rollup_branch_missing_blocker(task, membership, rollup_branch, default_branch) do
+    task_id = full_task_id(task)
+
+    cond do
+      membership.stack_status != "in_progress" ->
+        :ok
+
+      rollup_branch_missing_blocker_filed?(task_id, rollup_branch) ->
+        Logger.info(
+          "[HeartbeatScheduler] member #{task_id} already has a rollup_branch_missing " <>
+            "blocker on file for #{rollup_branch}; not filing a second one"
+        )
+
+        :ok
+
+      true ->
+        description =
+          "Stack member #{task_id} was dispatched for execution but stack " <>
+            "#{membership.stack_id} carries no `rollup_branch_ready` stamp, so " <>
+            "`origin/#{rollup_branch}` cannot be assumed to exist. The dispatch prompt " <>
+            "told the executor to STOP rather than branch from origin/#{default_branch}. " <>
+            "Nothing retries this on its own. Remediation: confirm the rollup branch " <>
+            "exists on origin and the stack carries the `rollup_branch_ready` stamp " <>
+            "(`stack_get` surfaces it), then redispatch the member — the prompt renders " <>
+            "the normal rollup-parent workflow once the stamp is present."
+
+        StackDeployer.record_merge_blocker(task_id, description, %{
+          "kind" => @rollup_branch_missing_kind,
+          "assignee_id" => execution_assignee_id(task),
+          "member_task_id" => task_id,
+          "stack_id" => membership.stack_id,
+          "rollup_branch" => rollup_branch,
+          "default_branch" => default_branch,
+          "reported_by" => "heartbeat_scheduler"
+        })
+    end
+  end
+
+  defp rollup_branch_missing_blocker_filed?(task_id, rollup_branch) do
+    task_id
+    |> Diagnostics.list_runtime_events(
+      event_type: "execution.blocked",
+      limit: Diagnostics.max_limit()
+    )
+    |> Enum.any?(fn %{payload: payload} ->
+      is_map(payload) and payload["kind"] == @rollup_branch_missing_kind and
+        payload["rollup_branch"] == rollup_branch
+    end)
+  end
+
+  # Same resolution stage 2 uses for the divergence blocker: the execution
+  # phase assignee (whose branch it is), falling back to the task's assignee.
+  defp execution_assignee_id(task) do
+    phase_assignees = Map.get(task, :phase_assignees) || Map.get(task, "phase_assignees")
+    phase_assignees = if is_map(phase_assignees), do: phase_assignees, else: %{}
+
+    case get_in(phase_assignees, ["execution", "assignee_id"]) do
+      id when is_binary(id) and id != "" -> id
+      _ -> Map.get(task, :assignee_id) || Map.get(task, "assignee_id")
+    end
+  end
+
+  # The rollup branch is created by StackDeployer and stamped as
+  # `rollup_branch_ready` (a MAP: `at`, `base_sha`) — since task 01a05392
+  # stage 1, synchronously in `Stacks.start_stack/1` before any root is
+  # promoted. Members branching from `origin/#{rollup_branch}` before that push
+  # lands would hit `fatal: origin/…: no such ref` in the executor. Gate on the
+  # stamp so the decision is deterministic; the value must be a map — a bare
+  # `true` does not count.
   defp rollup_branch_ready(%{stack_metadata: %{"rollup_branch_ready" => %{}}}), do: true
   defp rollup_branch_ready(_), do: false
 
@@ -2530,11 +2665,18 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           _ -> %{}
         end
 
+      # `stack_status` gates the missing-stamp backstop in
+      # `stack_member_git_workflow_section/2`: only a member of an
+      # `in_progress` stack files a blocker. `nil` when the association is
+      # absent or the row carries no status.
+      stack_status = stack && (Map.get(stack, :status) || Map.get(stack, "status"))
+
       %{
         stack_id: stack_id,
         stack_slug: stack_slug,
         rollup_branch: rollup_branch,
-        stack_metadata: stack_metadata
+        stack_metadata: stack_metadata,
+        stack_status: stack_status
       }
     else
       nil

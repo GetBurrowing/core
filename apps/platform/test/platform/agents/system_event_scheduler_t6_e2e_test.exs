@@ -660,7 +660,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # directly at all: no DM tool, no mention path into a DM, and `dm` is not
     # implicitly joinable. Not a T6 concern — it adds no schedule, no trigger
     # and no historian surface (+dm_create -> 99)
-    @t6_baseline_tool_count 99
+    # bumped by task 01a05392 stage 3 — `stack_retry_member_merge`, added to
+    # the existing `task` bundle beside `stack_start`. A stack member whose
+    # rollup merge was paused as `rollup_diverged` had no named way to re-run
+    # it. Not a T6 concern — it adds no schedule, no trigger and no historian
+    # surface (+stack_retry_member_merge -> 100)
+    @t6_baseline_tool_count 100
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

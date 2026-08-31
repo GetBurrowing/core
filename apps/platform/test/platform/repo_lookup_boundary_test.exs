@@ -35,7 +35,7 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   1. **Aggregation.** A key is `{path, call_kind, schema_alias}` and may
      cover several calls. It takes the classification of its **most
-     exposed** call. `platform/tasks/stacks.ex :get "Stack"` covers 17
+     exposed** call. `platform/tasks/stacks.ex :get "Stack"` covers 18
      calls; one boundary-reachable call makes the key `:must_cast`.
   2. **Conservative default.** Where provenance could not be established
      with confidence, the key is `:must_cast`. The cost of that error is
@@ -510,8 +510,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_review_request/1 checks Platform.UUID.valid?/1 on the phx-value- id from the review UI, returning nil. Count 1 -> 2 at task 019fed8d stage 3: `ensure_request_actionable/1` reads `review_request_id` off a `%ReviewItem{}` that `fetch_item/1` just loaded, so it is a `review_requests.id` FK column and a canonical UUID by construction — Ecto cast it on the way out of the database, and the untrusted `phx-value-` item_id upstream is already guarded by `fetch_item/1`'s own Platform.UUID.valid?/1 check. The key's classification is set by its MOST exposed call and that is still the guarded `get_review_request/1` arm, so :safe_internal is unchanged"},
     {"platform/tasks/review_requests.ex", :get, "Validation", 1, :safe_internal,
      "the single remaining site is maybe_reopen_manual_approval/1's guarded arm, which checks Platform.UUID.valid?/1 on validation_id before Repo.get and keeps its :ok fallthrough, so an unparseable id never reaches the database. Count 2 -> 1 at task 01a006f6 stage 3: the second site was `carry_prior_rulings/2`, retired when the prior_rulings archive merge moved into PlanEngine.evaluate_validation/2 — the engine now reads the archive off the validation struct it has already loaded, so ReviewRequests no longer re-fetches the row to re-attach it and the guarantee no longer depends on this caller"},
-    {"platform/tasks/stacks.ex", :get, "Stack", 17, :safe_internal,
-     "Stacks.get_stack/1 checks Platform.UUID.valid?/1, so the seven tool_surface.ex sites that pass a raw stack_id tool argument return nil; the remaining calls reload ids off loaded structs"},
+    {"platform/tasks/stacks.ex", :get, "Stack", 18, :safe_internal,
+     "Stacks.get_stack/1 checks Platform.UUID.valid?/1, so the seven tool_surface.ex sites that pass a raw stack_id tool argument return nil; the remaining calls reload ids off loaded structs. Count 17 -> 18 with task 01a05392 stage 1: `do_start_stack_cascade/1` re-reads the stack after the synchronous rollup-branch ensure so the cascade sees the `rollup_branch_ready` stamp the ensure just wrote. Classification unchanged — the id comes off the `%Stack{}` struct the caller already loaded, never off a tool argument"},
     {"platform/tasks/stacks.ex", :get, "Task", 5, :safe_internal,
      "all five read a member `task_id` off a `stack.members` / `%Task{}` row already loaded in the same function"},
     {"platform/tasks/stacks.ex", :get!, "Stack", 2, :safe_internal,
