@@ -222,6 +222,29 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     %{agent: agent, runtime: Federation.get_runtime(activated.id), raw_token: raw_token}
   end
 
+  # A roster agent whose runtime has DECLARED a capability set.
+  #
+  # Written straight onto the runtime's metadata in the shape
+  # `PlatformWeb.RuntimeChannel.persist_client_info/2` writes, rather than by
+  # driving a real join with a `client_info` payload: the declaration is the
+  # input under test here, and a channel round-trip would make these tests
+  # depend on the handshake as well as on the filter.
+  #
+  # `features: nil` writes a `client_info` with NO `features` key — the third
+  # case, a client that connected before the field existed. It is NOT the same
+  # as `features: []`, and the tests below turn on that difference.
+  defp declaring_roster_agent!(space, features) do
+    %{agent: agent, runtime: runtime} = ctx = roster_agent!(space)
+
+    client_info =
+      %{"product" => "openclaw", "version" => "0.1.0"}
+      |> then(fn ci -> if is_nil(features), do: ci, else: Map.put(ci, "features", features) end)
+
+    {:ok, _runtime} = Federation.update_metadata(runtime, %{"client_info" => client_info})
+
+    %{ctx | agent: agent, runtime: Federation.get_runtime(runtime.id)}
+  end
+
   # A connected, authenticated websocket client for that runtime, joined on
   # the ONE topic `RuntimeChannel.join/3` accepts for it.
   defp join_runtime_client!(%{runtime: runtime, raw_token: raw_token}) do
@@ -373,7 +396,13 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       # The invite "succeeded" exactly as it did for the founder: a flash, a
       # roster row, and nothing on the wire.
-      assert after_first =~ "is joining the meeting"
+      #
+      # The copy is now "Invited … — waiting for it to join" and the second
+      # assertion is the load-bearing one (task 01a0554f): a dispatch that
+      # reached nobody must not be reported as arrival. `assert` alone would
+      # stay green over a flash that claimed the agent had joined.
+      assert after_first =~ "waiting for it to join"
+      refute after_first =~ "is joining the meeting"
       assert [_row] = agent_participant_rows(space.id, agent.id)
 
       # …and the control survives it. This is the whole fix. Before 01a04e0f
@@ -391,7 +420,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       assert Registry.lookup(Platform.PubSub, topic) != []
 
       after_second = view |> element(selector) |> render_click()
-      assert after_second =~ "is joining the meeting"
+      assert after_second =~ "waiting for it to join"
+      refute after_second =~ "is joining the meeting"
 
       # The load-bearing assertion: the retry is actually DELIVERED to a
       # client that went through `RuntimeSocket.connect/3` and
@@ -423,6 +453,179 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   # — notably an arrival row that carries a LiveKit identity but NO agent FK,
   # which is what a worker publishing under an unexpected display name
   # produces.
+  # ── The ack that nobody read (task 01a0554f) ────────────────────────────
+
+  describe "a runtime that answers the join with an error" do
+    # End to end, through the real subscription: the click dispatches, the
+    # agent's runtime answers "error", and the SCREEN changes. Before this
+    # task the ack reached core's log and the invite flash stood unchallenged
+    # for the rest of the call, which is how five test meetings were spent
+    # waiting on an agent that had already refused.
+    #
+    # Driven through `Meetings.record_agent_join_ack/3` on the room name — not
+    # by `send/2` into the view — so it also pins that MeetingLive is actually
+    # SUBSCRIBED to the topic the ack lands on. A `send/2` would pass against a
+    # view subscribed to nothing at all.
+    test "turns the optimistic invite flash into a visible failure",
+         %{conn: conn, space: space, meeting: meeting, agent: agent} do
+      {:ok, view, _html} =
+        conn |> login(user!("ack-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
+      _ = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting
+
+      after_click =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{agent.id}"]))
+        |> render_click()
+
+      assert after_click =~ "waiting for it to join"
+
+      room = Meetings.get_active_room(space.id)
+      :ok = Meetings.record_agent_join_ack(agent.id, room.livekit_room_name, "error")
+
+      html = render(view)
+
+      assert html =~ "could not join the meeting"
+      assert html =~ agent.name
+
+      # The optimistic copy is GONE, not merely joined by an error beneath it.
+      # A banner that says both things at once is the state the founder was
+      # already in.
+      refute html =~ "waiting for it to join"
+    end
+
+    # The control. If the clause fired on every ack, a working join would show
+    # the user an error, which is a worse screen than the one being fixed.
+    test "a successful ack leaves the screen alone",
+         %{conn: conn, space: space, meeting: meeting, agent: agent} do
+      {:ok, view, _html} =
+        conn |> login(user!("ack-ok-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
+      _ = render(view)
+
+      view
+      |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{agent.id}"]))
+      |> render_click()
+
+      room = Meetings.get_active_room(space.id)
+      :ok = Meetings.record_agent_join_ack(agent.id, room.livekit_room_name, "joined")
+
+      html = render(view)
+
+      refute html =~ "could not join the meeting"
+      assert html =~ "waiting for it to join"
+    end
+
+    # The retry documented by `invite_agent/3` has to survive the failure —
+    # a red banner that also removes the only button is not a fix.
+    test "the invite control survives the failure",
+         %{conn: conn, space: space, meeting: meeting, agent: agent} do
+      {:ok, view, _html} =
+        conn |> login(user!("ack-retry-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
+      _ = render(view)
+
+      selector = ~s([data-role="meeting-agent-invite-button"][data-agent-id="#{agent.id}"])
+      view |> element(selector) |> render_click()
+
+      room = Meetings.get_active_room(space.id)
+      :ok = Meetings.record_agent_join_ack(agent.id, room.livekit_room_name, "error")
+
+      html = render(view)
+
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(selector)
+             |> Enum.any?()
+
+      assert agent_participant_rows(space.id, agent.id) != []
+    end
+  end
+
+  # ── The list stops offering seats that cannot be taken (task 01a0554f) ──
+
+  describe "the invite list and declared voice capability" do
+    # The load-bearing test, and it pins the whole three-valued predicate in
+    # one assertion. Asserting only "the incapable agent is gone" would be
+    # green against a filter that returned `[]`, and an empty list is the
+    # failure mode that would put us back where we started — with the one
+    # agent that CAN join missing from the rail.
+    test "offers the voice-capable and the undeclared, and drops the declared-without-voice",
+         %{conn: conn, space: space, meeting: meeting, agent: setup_agent} do
+      %{agent: voice} = declaring_roster_agent!(space, ["meeting_voice"])
+      %{agent: text_only} = declaring_roster_agent!(space, ["system_event_prompt"])
+      %{agent: declared_empty} = declaring_roster_agent!(space, [])
+      %{agent: never_declared} = declaring_roster_agent!(space, nil)
+
+      {:ok, _view, html} =
+        conn |> login(user!("capability")) |> live(~p"/meetings/#{meeting.slug}")
+
+      offered =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-agent-invite-button"]))
+        |> LazyHTML.attribute("data-agent-id")
+        |> MapSet.new()
+
+      # Kept: declared voice, and never declared at all.
+      assert voice.id in offered
+      assert never_declared.id in offered
+
+      # Dropped: declared its features, and voice was not among them.
+      refute text_only.id in offered
+      refute declared_empty.id in offered
+
+      # And the setup agent — a runtime with no client_info written — is still
+      # offered. This is the assertion that stops the filter being "hide
+      # everything we are unsure about".
+      assert setup_agent.id in offered
+    end
+
+    # `:incapable` is about the DECLARATION, not about reachability. An agent
+    # with no runtime keeps its control and its own, actionable error, which
+    # task 01a04f31 added deliberately.
+    test "an agent with no linked runtime is still offered, and still explains itself",
+         %{conn: conn, space: space, meeting: meeting} do
+      orphan = bare_roster_agent!(space)
+
+      {:ok, view, _html} =
+        conn |> login(user!("orphan-capability")) |> live(~p"/meetings/#{meeting.slug}")
+
+      _ = render(view)
+
+      html =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{orphan.id}"]))
+        |> render_click()
+
+      assert html =~ "no connected runtime"
+    end
+  end
+
+  describe "join_capability/1" do
+    test "reads the three cases apart", %{space: space} do
+      %{agent: voice} = declaring_roster_agent!(space, ["meeting_voice"])
+      %{agent: text_only} = declaring_roster_agent!(space, ["system_event_prompt"])
+      %{agent: declared_empty} = declaring_roster_agent!(space, [])
+      %{agent: never_declared} = declaring_roster_agent!(space, nil)
+
+      assert Meetings.join_capability(voice) == :capable
+      assert Meetings.join_capability(text_only) == :incapable
+      assert Meetings.join_capability(declared_empty) == :incapable
+      assert Meetings.join_capability(never_declared) == :unknown
+      assert Meetings.join_capability(bare_roster_agent!(space)) == :unknown
+    end
+
+    # The feature is matched exactly. A client declaring something that merely
+    # contains the word must not be admitted on a substring.
+    test "does not admit a near-miss feature name", %{space: space} do
+      %{agent: near} = declaring_roster_agent!(space, ["meeting_voice_beta", "voice"])
+
+      assert Meetings.join_capability(near) == :incapable
+    end
+  end
+
   describe "invitable_agents/2" do
     test "an agent with a roster row but no LiveKit identity is still invitable",
          %{space: space, agent: agent} do
@@ -683,6 +886,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
         |> render_click()
 
       assert html =~ "no connected runtime"
+      refute html =~ "waiting for it to join"
       refute html =~ "is joining the meeting"
 
       assert agent_participant_rows(space.id, orphan.id) == []

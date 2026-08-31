@@ -15,6 +15,7 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Federation.RuntimePresence
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
+  alias Platform.Meetings
   alias Platform.Meetings.IntentQueue
 
   @valid_client_products ~w(openclaw claude_channel)
@@ -205,6 +206,16 @@ defmodule PlatformWeb.RuntimeChannel do
       %{system_time: System.system_time()},
       %{agent_id: agent_id, room_name: room_name, status: status}
     )
+
+    # The receipt has to reach the SCREEN, not just the log (task 01a0554f).
+    # Until this call, a `status: "error"` ack was logged here and dropped,
+    # while `PlatformWeb.MeetingLive` went on showing "… is joining the
+    # meeting." Core held the disproof of its own flash and never used it.
+    #
+    # Still fire-and-forget, in the shape of the two acks either side of it:
+    # a receipt that cannot be landed is not something the runtime can act
+    # on, so nothing is pushed back down the socket.
+    Meetings.record_agent_join_ack(agent_id, room_name, status)
 
     {:noreply, socket}
   end

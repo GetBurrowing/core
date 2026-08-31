@@ -3331,6 +3331,37 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, refresh_participants(socket)}
   end
 
+  # A runtime answered `meeting_join` with a failure (task 01a0554f).
+  #
+  # This is the clause that makes the invite control honest. Before it, the
+  # ONLY feedback a human got was the optimistic flash at dispatch time, so an
+  # agent that answered "error" a few hundred milliseconds later was
+  # indistinguishable on this screen from one that was still connecting — and
+  # stayed that way for the rest of the call.
+  #
+  # The roster row is left alone on purpose. `Meetings.invite_agent/3` is safe
+  # to call twice and reuses the row it already wrote, so keeping the row keeps
+  # the retry available; `pending_invite_agent_ids/1` still marks the agent as
+  # invited-never-arrived, which is exactly what it is.
+  #
+  # `refresh_participants/1` is NOT called: nothing about the roster changed,
+  # and re-reading it would only cost a query to render the same list.
+  # `clear_flash(:info)` is load-bearing, not tidiness. `put_flash/3` on a
+  # different key LEAVES the existing one standing, so without it the screen
+  # renders "Invited X — waiting for it to join." directly above "X could not
+  # join the meeting." — the contradiction this task exists to remove, in a
+  # single viewport. Only the `:info` key is cleared: an unrelated error
+  # already on screen is not this clause's to discard.
+  def handle_info({:agent_join_failed, %{agent_name: agent_name}}, socket) do
+    {:noreply,
+     socket
+     |> clear_flash(:info)
+     |> put_flash(
+       :error,
+       "#{agent_name} could not join the meeting. It may not have a voice worker connected."
+     )}
+  end
+
   # Live presence delta on the per-space topic. `broadcast_presence_change`
   # fires this on every LiveKit join/leave (even before/after a room row
   # exists), so it's the resilient signal that keeps the rail + count live
@@ -4203,6 +4234,18 @@ defmodule PlatformWeb.MeetingLive do
   # This is not "show everyone always": an agent that has arrived is still
   # excluded, which is what `agent_in_call?/2` below decides.
   #
+  # Nor is it "every agent in the space" any more (task 01a0554f). It was, and
+  # that is why a text-only agent was offered a seat in a call it could never
+  # take: the founder clicked it through five test meetings. An agent whose
+  # runtime DECLARED its features and did not name `meeting_voice` is dropped
+  # here — the control could only ever have failed.
+  #
+  # `:incapable` specifically, NOT `!= :capable`. An agent that has never
+  # declared anything is `:unknown` and stays in the list; see
+  # `Meetings.join_capability/1` for why that distinction is kept rather than
+  # collapsed. Silently hiding a client core has never heard from would
+  # reproduce this task's defect one layer over.
+  #
   # Public so the exclusion can be exercised against hand-built participant
   # lists, for the same reason `build_meeting_participants/1` is.
   @doc false
@@ -4214,6 +4257,7 @@ defmodule PlatformWeb.MeetingLive do
       _ -> []
     end)
     |> Enum.reject(&agent_in_call?(&1, participants))
+    |> Enum.reject(&(Meetings.join_capability(&1) == :incapable))
   end
 
   def invitable_agents(_space_id, _participants), do: []
@@ -4274,9 +4318,17 @@ defmodule PlatformWeb.MeetingLive do
          %Room{} = room <- Meetings.get_active_room(space_id),
          {:ok, _participant} <-
            Meetings.invite_agent(room, agent, socket.assigns[:current_user_record]) do
+      # "Invited", not "is joining" (task 01a0554f). A successful return from
+      # `invite_agent/3` means the join was BROADCAST, and
+      # `Phoenix.Endpoint.broadcast/3` returns `:ok` into a topic with no
+      # subscriber just as readily as into a live one — the hazard
+      # `Meetings.invite_agent/3` documents at length. The old copy asserted
+      # arrival on the strength of a send, which is the claim this whole task
+      # is about. Arrival is reported by the `{:agent_join_failed, _}` clause
+      # above and by the participant rail when the worker actually publishes.
       socket
       |> refresh_participants()
-      |> put_flash(:info, "#{agent.name} is joining the meeting.")
+      |> put_flash(:info, "Invited #{agent.name} — waiting for it to join.")
     else
       {:error, :forbidden} ->
         put_flash(socket, :error, "You do not have permission to invite an agent here.")

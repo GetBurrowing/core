@@ -19,7 +19,9 @@ defmodule Platform.Meetings do
   alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Agents.AgentRuntime
   alias Platform.Agents.Voice
+  alias Platform.Federation
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.SpaceAccess
@@ -5201,6 +5203,174 @@ defmodule Platform.Meetings do
     case find_active_participant(room.id, %{agent_id: agent.id}, agent.name) do
       %Participant{} = existing -> {:ok, existing}
       nil -> participant_joined(room, %{display_name: agent.name, agent_id: agent.id})
+    end
+  end
+
+  @doc """
+  The capability a client must declare to be offered a seat in a call.
+
+  Matches the string `Platform.Meetings.IntentRuntimeAdapter` dispatches
+  against and that `suite-voice-worker` sends in its join payload. It is a
+  plain string on purpose: `RuntimeChannel` deliberately keeps `features` an
+  open set rather than a server-side allowlist, so a new client capability
+  must not need a core deploy before it can be reported.
+  """
+  @voice_feature "meeting_voice"
+  def voice_feature, do: @voice_feature
+
+  @doc """
+  Whether this agent's runtime can join a LiveKit room: `:capable`,
+  `:incapable`, or `:unknown`.
+
+  ## Three values, because two would throw away the distinction core paid for
+
+  `PlatformWeb.RuntimeChannel.persist_client_info/2` writes `features` on
+  every declared join, INCLUDING as `[]`, and its `declared?` gate skips the
+  write entirely for a client that sends no `client_info` at all. Its own
+  comment says why: so *"never told us"* stays distinguishable from *"told us
+  it lacks the feature"*. Collapsing this to a boolean would discard that at
+  the first consumer.
+
+  The two answers differ in what they license:
+
+  - `:incapable` is **positive evidence**. The client declared its features
+    and voice was not among them. Excluding it from the invite list removes a
+    control that could only ever have failed.
+  - `:unknown` is **absence of evidence** — a legacy bridge, or a client that
+    has not reconnected since the field existed. It is still offered. Hiding a
+    client we have never heard from would be the same defect as task 01a0554f
+    in a new place: a thing the user cannot see, cannot try, and gets no
+    reason for. Since that task the failing ack reports itself, so an
+    optimistic offer here is recoverable rather than a dead end.
+
+  ## An agent with no linked runtime is `:unknown`, not `:incapable`
+
+  Tempting to call it incapable — `dispatch_meeting_join/3` refuses it with
+  `{:error, :no_runtime}`, so a join cannot land. But this function answers
+  *what has this client declared about itself*, and an agent with no runtime
+  has declared nothing. The two failures also differ in kind, which is the
+  part that matters to whoever is looking at the screen:
+
+  - **no runtime** is transient and actionable. The runtime can reconnect a
+    second later, and `PlatformWeb.MeetingLive` already flashes *"That agent
+    has no connected runtime, so it cannot join the meeting."* — added by task
+    01a04f31 precisely because it is the one failure a human can do something
+    about. Hiding the control would take that message away.
+  - **declared without voice** is a property of the build that is running. No
+    amount of waiting changes it, and there is nothing to tell the user
+    except that the control was never real.
+
+  So this returns `:unknown` and the no-runtime path keeps its own, better
+  error.
+  """
+  @spec join_capability(Agent.t()) :: :capable | :incapable | :unknown
+  def join_capability(%Agent{} = agent) do
+    case Federation.get_runtime_for_agent(agent) do
+      %AgentRuntime{metadata: metadata} -> capability_from_metadata(metadata)
+      _ -> :unknown
+    end
+  end
+
+  def join_capability(_other), do: :unknown
+
+  # Read through `metadata["client_info"]["features"]`, the shape
+  # `persist_client_info/2` writes. A `client_info` that exists but carries no
+  # `features` key is treated as undeclared rather than empty: only a list
+  # that is actually present is evidence about what the client can do.
+  defp capability_from_metadata(metadata) when is_map(metadata) do
+    with %{} = client_info <- Map.get(metadata, "client_info"),
+         features when is_list(features) <- Map.get(client_info, "features") do
+      if @voice_feature in features, do: :capable, else: :incapable
+    else
+      _ -> :unknown
+    end
+  end
+
+  defp capability_from_metadata(_), do: :unknown
+
+  @doc """
+  Record a runtime's answer to a `meeting_join` dispatch.
+
+  ## Why this exists: the ack already came back and nothing read it
+
+  `PlatformWeb.RuntimeChannel.handle_in("meeting_join_ack", ...)` logged the
+  ack, emitted `[:platform, :meetings, :agent_join_ack]`, and returned
+  `{:noreply, socket}`. So when a runtime answered `status: "error"` — as a
+  text-only agent with no voice worker does — core *knew* the join had failed
+  and the meeting screen went on saying "… is joining the meeting."
+  indefinitely. Five test meetings were sat through on the strength of that
+  flash (task 01a0554f).
+
+  This is a different defect from the silent ones around it. The corrective
+  signal was not missing, it was **unconsumed**. So the fix is not another
+  detector: it is reading the receipt that already arrives.
+
+  ## Only a FAILING ack is surfaced
+
+  A `"joined"` ack means the worker accepted the dispatch, NOT that it
+  published into the LiveKit room — those come apart exactly the way
+  `invite_participant_row/2` documents. Arrival is already evidenced by
+  `upsert_live_participant/2` stamping `metadata["identity"]`, which is what
+  `PlatformWeb.MeetingLive.pending_invite_agent_ids/1` reads. Broadcasting a
+  success here would let an accepted-but-never-arrived join render as arrival
+  and re-open 01a04e0f from the other side.
+
+  So: failure is news, success is not.
+
+  ## The roster row is deliberately left in place
+
+  A failed join does not remove the participant row `invite_agent/3` wrote.
+  Retrying is the documented recovery for a lost dispatch, `invite_agent/3`
+  is safe to call twice, and `MeetingLive` keeps offering the control until
+  the agent actually publishes. Clearing the row here would take the retry
+  away at the moment it is most wanted.
+
+  Returns `:ok` in every case, including an unknown room: an ack for a room
+  that has ended is a late receipt, not a caller error.
+  """
+  @spec record_agent_join_ack(binary() | nil, String.t(), String.t()) :: :ok
+  def record_agent_join_ack(agent_id, room_name, status)
+      when is_binary(room_name) and is_binary(status) do
+    if join_ack_success?(status) do
+      :ok
+    else
+      broadcast_agent_join_failure(agent_id, room_name, status)
+    end
+  end
+
+  def record_agent_join_ack(_agent_id, _room_name, _status), do: :ok
+
+  # "joined" is the documented success token and the default RuntimeChannel
+  # applies when a client omits `status` entirely. Anything else — "error",
+  # a client's own spelling of failure, a token added by a future worker — is
+  # treated as a failure and shown.
+  #
+  # That default direction is the deliberate one. An unrecognised token
+  # rendering as "could not join" is a visible, retryable wrong answer; the
+  # same token silently rendering as success is the defect this function
+  # exists to remove.
+  defp join_ack_success?(status), do: String.downcase(String.trim(status)) == "joined"
+
+  defp broadcast_agent_join_failure(agent_id, room_name, status) do
+    case get_room_by_name(room_name) do
+      %Room{} = room ->
+        agent = if is_binary(agent_id), do: resolve_agent(agent_id), else: nil
+
+        MeetingsPubSub.broadcast_room(
+          room.id,
+          {:agent_join_failed,
+           %{
+             agent_id: agent_id,
+             agent_name: (agent && agent.name) || "That agent",
+             room_name: room_name,
+             status: status
+           }}
+        )
+
+      nil ->
+        Logger.info("[Meetings] meeting_join_ack status=#{status} for unknown room #{room_name}")
+
+        :ok
     end
   end
 
