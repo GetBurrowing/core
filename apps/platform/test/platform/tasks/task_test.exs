@@ -169,11 +169,23 @@ defmodule Platform.Tasks.TaskTest do
         # Stage-2 (019f42db) deploy-target guard fires ahead of the invalid-
         # transition check on `deploying` targets — accept either refusal so
         # the terminal property still holds regardless of the ordering.
-        expected_error =
-          if target == "deploying", do: :no_deploy_target_resolved, else: :invalid_transition
+        # Likewise the stack guard (01a05393 stage 6) refuses `stack_pending`
+        # on a stackless task before the table is consulted.
+        result = Tasks.transition_task_status(task, target)
 
-        assert {:error, ^expected_error} = Tasks.transition_task_status(task, target),
-               "expected cancelled -> #{target} to be rejected, but it succeeded"
+        case target do
+          "deploying" ->
+            assert {:error, :no_deploy_target_resolved} = result,
+                   "expected cancelled -> #{target} to be rejected, but it succeeded"
+
+          "stack_pending" ->
+            assert {:error, :stack_pending_requires_stack, %{}} = result,
+                   "expected cancelled -> #{target} to be rejected, but it succeeded"
+
+          _ ->
+            assert {:error, :invalid_transition} = result,
+                   "expected cancelled -> #{target} to be rejected, but it succeeded"
+        end
       end
     end
   end

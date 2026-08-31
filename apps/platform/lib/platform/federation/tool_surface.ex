@@ -2326,9 +2326,9 @@ defmodule Platform.Federation.ToolSurface do
           task_id: %{type: "string", required: true, description: "The task to attach"}
         },
         returns:
-          "%{task_id, stack_id, stack_position} on success. Error envelopes carry a `code` field: `already_in_stack`, `cycle` (with `path` of task ids), `cross_stack_dep` (with `from_task_id` and `to_task_id`).",
+          "%{task_id, stack_id, stack_position, status, warning, gate_closed, waiting_on} on success. On a stack that has already commenced (status not `forming`) the task is parked at `stack_pending`, `gate_closed` is true, `waiting_on` lists the members without an approved plan, and `warning` explains that the stack's commencement gate is closed for every member until this task's plan is approved. Error envelopes carry a `code` field: `already_in_stack`, `stack_terminal` (stack is done/abandoned), `cycle` (with `path` of task ids), `cross_stack_dep` (with `from_task_id` and `to_task_id`).",
         limitations:
-          "Task must not already be in any stack. The in-stack DAG must remain acyclic and contain no cross-stack dep edges after the add; otherwise the attach is rolled back.",
+          "Task must not already be in any stack. A done or abandoned stack refuses new members. The in-stack DAG must remain acyclic and contain no cross-stack dep edges after the add; otherwise the attach is rolled back.",
         when_to_use:
           "When grouping an existing task into a stack. To create-and-attach in one call, pass `stack_id` to `task_create` instead."
       },
@@ -4490,6 +4490,27 @@ defmodule Platform.Federation.ToolSurface do
             # a 2-tuple) and raises `WithClauseError` → 500.
             {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
               {:error, stack_plans_pending_envelope(stack_id, waiting_on)}
+
+            # Task 01a05393 stage 6 (defect D): `stack_pending` is the
+            # parked-behind-a-stack status. A task with no `stack_id`
+            # moved there is invisible to the dispatcher, to the promote
+            # sweep AND to the board's drag-out — nothing can move it
+            # again. `Tasks.require_stack_commencement_for/2` refuses the
+            # write; this arm keeps the refusal from falling into the
+            # changeset catch-all (a 3-tuple → `WithClauseError` → 500).
+            {:error, :stack_pending_requires_stack, _} ->
+              {:error,
+               %{
+                 error:
+                   "Cannot transition to 'stack_pending': task #{task.id} is not in a stack. " <>
+                     "'stack_pending' means \"parked until the stack's dependencies land\" and is " <>
+                     "unreachable by the dispatcher, the promote sweep and the board once set on a stackless task.",
+                 recoverable: true,
+                 suggestion:
+                   "Put the task in a stack first with stack_add(stack_id, task_id) — a started stack " <>
+                     "parks the newcomer at 'stack_pending' itself. To simply pause a stackless task, " <>
+                     "use 'blocked' instead."
+               }}
           end
         else
           {:error, {:invalid_phase_keys, keys}} ->
@@ -5139,13 +5160,17 @@ defmodule Platform.Federation.ToolSurface do
     stack_id = Map.get(args, "stack_id")
     task_id = Map.get(args, "task_id")
 
-    case Stacks.add_task(stack_id, task_id) do
-      {:ok, %Task{} = task} ->
+    case Stacks.add_task_with_report(stack_id, task_id) do
+      {:ok, %Task{} = task, report} ->
         {:ok,
          %{
            task_id: task.id,
            stack_id: task.stack_id,
-           stack_position: task.stack_position
+           stack_position: task.stack_position,
+           status: task.status,
+           warning: report.warning,
+           gate_closed: report.gate_closed,
+           waiting_on: report.waiting_on
          }}
 
       {:error, _} = err ->
@@ -5192,7 +5217,8 @@ defmodule Platform.Federation.ToolSurface do
          %{
            from_task_id: result.from_task_id,
            to_task_id: result.to_task_id,
-           executable_now: result.executable_now
+           executable_now: result.executable_now,
+           promoted: Map.get(result, :promoted, [])
          }}
 
       {:error, _} = err ->
@@ -8300,6 +8326,18 @@ defmodule Platform.Federation.ToolSurface do
      }}
   end
 
+  defp stack_add_error_envelope({:error, :stack_terminal, %{stack_status: status}}) do
+    {:error,
+     %{
+       code: "stack_terminal",
+       error: "Stack is #{status} and no longer accepts members",
+       recoverable: false,
+       stack_status: status,
+       suggestion:
+         "Create a new stack for this task, or attach it to a stack that is still forming or in progress"
+     }}
+  end
+
   defp stack_add_error_envelope({:error, %Ecto.Changeset{} = changeset}) do
     {:error,
      %{
@@ -8416,6 +8454,22 @@ defmodule Platform.Federation.ToolSurface do
          "Move both tasks into the same stack, or drop the cross-stack dep edge before retrying",
        from_task_id: from.id,
        to_task_id: to_id
+     }}
+  end
+
+  defp stack_dependency_error_envelope(
+         {:error, :dependent_already_started, %{task_id: task_id, status: status}}
+       ) do
+    {:error,
+     %{
+       code: "dependent_already_started",
+       error:
+         "Task #{task_id} is already at #{status} — a member that has started cannot acquire a new predecessor; nothing would enforce the edge",
+       recoverable: false,
+       suggestion:
+         "Declare dependencies before the dependent starts. If the ordering matters, move the dependent back to stack_pending via task_update first.",
+       task_id: task_id,
+       status: status
      }}
   end
 

@@ -128,9 +128,20 @@ defmodule Platform.Tasks.OperatorCorrectionTest do
       cancelled = task!(project, "cancelled")
 
       for target <- Task.statuses() -- ["cancelled"] do
-        assert {:error, :invalid_transition} =
-                 Tasks.transition_task_status(cancelled, target),
-               "expected `cancelled -> #{target}` to be refused by the transition table"
+        case target do
+          # `stack_pending` on a stackless task is refused by the stack guard
+          # (01a05393 stage 6) BEFORE the table is consulted; the door is
+          # still shut, only the refusal's name differs.
+          "stack_pending" ->
+            assert {:error, :stack_pending_requires_stack, %{}} =
+                     Tasks.transition_task_status(cancelled, target),
+                   "expected `cancelled -> #{target}` to be refused ahead of the transition table"
+
+          _ ->
+            assert {:error, :invalid_transition} =
+                     Tasks.transition_task_status(cancelled, target),
+                   "expected `cancelled -> #{target}` to be refused by the transition table"
+        end
       end
 
       assert reload(cancelled).status == "cancelled"

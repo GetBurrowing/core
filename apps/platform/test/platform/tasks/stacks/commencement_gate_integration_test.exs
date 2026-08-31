@@ -82,11 +82,14 @@ defmodule Platform.Tasks.Stacks.CommencementGateIntegrationTest do
       assert Enum.sort(executable_ids) == Enum.sort([m1.id, m2.id, m3.id])
 
       # m3 auto-promoted (open? returned true at the moment of its
-      # gate check). m1 and m2 stay at stack_pending — they were
-      # parked earlier before the stack flipped, and nothing
-      # retroactively promotes them.
-      assert Tasks.get_task_record(m1.id).status == "stack_pending"
-      assert Tasks.get_task_record(m2.id).status == "stack_pending"
+      # gate check). m1 and m2 were parked earlier, before the stack
+      # flipped; task 01a05393 stage 5's `Stacks.redrive_gate/1` runs on
+      # this same approval event (post-commit) and promotes every
+      # `stack_pending` member whose in-stack deps are clear — a flat
+      # stack has none, so all three are `in_progress` with no sweep.
+      # (Before stage 5 they stayed parked until the reconcile tick.)
+      assert Tasks.get_task_record(m1.id).status == "in_progress"
+      assert Tasks.get_task_record(m2.id).status == "in_progress"
       assert Tasks.get_task_record(m3.id).status == "in_progress"
 
       # Stack stays in_progress.
@@ -97,18 +100,14 @@ defmodule Platform.Tasks.Stacks.CommencementGateIntegrationTest do
       #         commenced. Under bug #6 semantics, the explicit-start
       #         hook exists for the initial `forming → in_progress`
       #         transition; once the stack has auto-commenced, the
-      #         hook is no-op'd. Operators who need to promote stuck
-      #         `stack_pending` members drive them individually via
-      #         `Tasks.transition_task/2` (the gate now returns true
-      #         because all three preconditions hold). ──
+      #         hook is no-op'd. ──
       assert {:error, :invalid_stack_status} =
                Stacks.start_stack(Repo.reload!(stack))
 
-      # Direct promotion of m1 now succeeds — the gate is truly open.
-      assert {:ok, m1_updated} =
-               Tasks.transition_task(Tasks.get_task_record(m1.id), "in_progress")
-
-      assert m1_updated.status == "in_progress"
+      # The gate is truly open: `open?/1` says so for a member the
+      # re-drive already promoted, and a re-drive has nothing left to do.
+      assert Platform.Tasks.Stacks.CommencementGate.open?(Tasks.get_task_record(m1.id))
+      assert {:ok, %{promoted: []}} = Stacks.redrive_gate(Repo.reload!(stack))
 
       # ── (v) Redundant re-transition of an already-in_progress task
       #         hits `:invalid_transition` — NOT the gate. Proves
@@ -386,6 +385,165 @@ defmodule Platform.Tasks.Stacks.CommencementGateIntegrationTest do
       refute_receive {[:platform, :stacks, :commencement, :gate_opened], ^ref, _, _}, 50
 
       :telemetry.detach({:telemetry_test, self(), ref})
+    end
+  end
+
+  describe "redrive_gate/1 — a late joiner re-closes the gate, its approval reopens it (01a05393 stage 5)" do
+    alias Platform.Tasks.Stacks.CommencementGate
+
+    # `in_progress` stack, gate OPEN, three members with approved plans:
+    #   p1 parked at `stack_pending` with no in-stack deps (the sibling the
+    #      ticket talks about),
+    #   p2 `in_progress`, NOT yet landed on the rollup,
+    #   p3 parked at `stack_pending` and blocked on p2 (the "rule loses" member).
+    # Plus an unattached, planless `newcomer`.
+    defp seed_started_stack_with_parked_siblings do
+      {project, stack, [p1, p2, p3]} = flat_stack_of(3)
+      {:ok, _edge} = Stacks.add_dependency_edge(stack, p3.id, p2.id)
+
+      for member <- [p1, p2, p3] do
+        {:ok, _} = Tasks.create_plan(%{task_id: member.id, status: "approved"})
+      end
+
+      stack = stack |> Ecto.Changeset.change(status: "in_progress") |> Repo.update!()
+      p1 = force_task_status(p1, "stack_pending")
+      p2 = force_task_status(p2, "in_progress")
+      p3 = force_task_status(p3, "stack_pending")
+
+      {:ok, newcomer} =
+        Tasks.create_task(%{project_id: project.id, title: "Late joiner " <> short_id()})
+
+      # Gate provably OPEN before the add, so "closed after" is the add's
+      # doing and "open after approval" is the approval's doing.
+      assert Repo.reload!(stack).status == "in_progress"
+      assert CommencementGate.plans_ready?(stack)
+      assert CommencementGate.open?(Tasks.get_task_record(p1.id))
+      assert CommencementGate.waiting_on(stack) == []
+
+      %{stack: stack, p1: p1, p2: p2, p3: p3, newcomer: newcomer}
+    end
+
+    # Park the newcomer and pin the CLOSED gate. Returns the parked task.
+    defp add_newcomer_and_assert_gate_closed!(stack, newcomer, p1) do
+      assert {:ok, %Task{status: "stack_pending"} = parked, report} =
+               Stacks.add_task_with_report(stack, newcomer)
+
+      assert report.gate_closed == true
+      assert report.waiting_on == [newcomer.id]
+      refute CommencementGate.open?(Tasks.get_task_record(p1.id))
+      refute CommencementGate.plans_ready?(stack)
+      assert Tasks.get_task_record(p1.id).status == "stack_pending"
+
+      parked
+    end
+
+    test "approving the newcomer's plan promotes the parked sibling on the approval event, never the sweep" do
+      %{stack: stack, p1: p1, p2: p2, p3: p3, newcomer: newcomer} =
+        seed_started_stack_with_parked_siblings()
+
+      _parked = add_newcomer_and_assert_gate_closed!(stack, newcomer, p1)
+
+      :ok = Tasks.subscribe_board()
+
+      # This test NEVER calls `sweep_stack_pending_members/0` or
+      # `reconcile_stack_lifecycle/0`; the assertions below run
+      # synchronously after `approve_plan/3` returns, so the promotion can
+      # only have come from the approval's post-commit re-drive.
+      approve_new_plan(newcomer)
+
+      # Gate reopened on the event.
+      assert CommencementGate.plans_ready?(stack)
+      assert CommencementGate.waiting_on(stack) == []
+      assert CommencementGate.open?(Tasks.get_task_record(p1.id))
+
+      # The sibling the ticket names: parked before, promoted now.
+      assert Tasks.get_task_record(p1.id).status == "in_progress"
+      # The newcomer had no in-stack deps either, so it rides the same
+      # re-drive (it was at `stack_pending`, so `apply_dispatch_gate/1`
+      # never touched it inside `approve_plan/3`).
+      assert Tasks.get_task_record(newcomer.id).status == "in_progress"
+      # Untouched: already running.
+      assert Tasks.get_task_record(p2.id).status == "in_progress"
+
+      # Where the rule LOSES: p3's own dep (p2) has not landed on the
+      # rollup, so the reopened gate does not promote it. A re-drive that
+      # opened everything would fail here.
+      assert Tasks.get_task_record(p3.id).status == "stack_pending"
+      assert Repo.reload!(p2).metadata["merged_into_rollup_at"] in [nil, ""]
+
+      # Promotion broadcasts fired post-commit for exactly the promoted pair.
+      p1_id = p1.id
+      newcomer_id = newcomer.id
+      assert_receive {:task_updated, %Task{id: ^p1_id, status: "in_progress"}}, 500
+      assert_receive {:task_updated, %Task{id: ^newcomer_id, status: "in_progress"}}, 500
+      p3_id = p3.id
+      refute_receive {:task_updated, %Task{id: ^p3_id, status: "in_progress"}}, 50
+
+      assert Repo.reload!(stack).status == "in_progress"
+    end
+
+    test "adding the newcomer WITHOUT approving leaves the sibling parked; a direct re-drive is :noop" do
+      %{stack: stack, p1: p1, p3: p3, newcomer: newcomer} =
+        seed_started_stack_with_parked_siblings()
+
+      _parked = add_newcomer_and_assert_gate_closed!(stack, newcomer, p1)
+
+      # A sibling's RE-approval while the newcomer is still planless runs
+      # `approve_plan/3` end to end (call site 2 fires on the `:noop`
+      # arm) — and must not promote anyone, because the gate is still
+      # closed on the newcomer.
+      approve_new_plan(Tasks.get_task_record(p3.id))
+      refute CommencementGate.plans_ready?(stack)
+      assert Tasks.get_task_record(p1.id).status == "stack_pending"
+      assert Tasks.get_task_record(p3.id).status == "stack_pending"
+      assert Tasks.get_task_record(newcomer.id).status == "stack_pending"
+
+      # Direct re-drive on the closed gate: refuses, promotes nothing.
+      assert :noop = Stacks.redrive_gate(Stacks.get_stack(stack.id))
+      assert :noop = Stacks.redrive_gate(stack.id)
+      assert Tasks.get_task_record(p1.id).status == "stack_pending"
+      assert Tasks.get_task_record(newcomer.id).status == "stack_pending"
+      refute CommencementGate.open?(Tasks.get_task_record(p1.id))
+    end
+
+    test "redrive_gate/1 on an open in_progress gate returns the promoted ids in position order and skips blocked members" do
+      %{stack: stack, p1: p1, p3: p3} = seed_started_stack_with_parked_siblings()
+
+      assert {:ok, %{promoted: [p1_id]}} = Stacks.redrive_gate(stack)
+      assert p1_id == p1.id
+      assert Tasks.get_task_record(p1.id).status == "in_progress"
+      assert Tasks.get_task_record(p3.id).status == "stack_pending"
+
+      # Idempotent: nothing left to promote, still `{:ok, promoted: []}`,
+      # no status churn.
+      assert {:ok, %{promoted: []}} = Stacks.redrive_gate(stack)
+      assert Tasks.get_task_record(p1.id).status == "in_progress"
+      assert Tasks.get_task_record(p3.id).status == "stack_pending"
+    end
+
+    test "redrive_gate/1 is :noop for a status outside forming/in_progress/gated and for an unknown id" do
+      %{stack: stack, p1: p1} = seed_started_stack_with_parked_siblings()
+      deploying = stack |> Ecto.Changeset.change(status: "deploying") |> Repo.update!()
+
+      assert :noop = Stacks.redrive_gate(deploying)
+      assert Tasks.get_task_record(p1.id).status == "stack_pending"
+
+      assert :noop = Stacks.redrive_gate(Ecto.UUID.generate())
+      assert :noop = Stacks.redrive_gate("not-a-uuid")
+    end
+
+    test "redrive_gate/1 on a forming stack delegates to commence_if_ready/1" do
+      {_project, stack, [m1]} = flat_stack_of(1)
+      assert stack.status == "forming"
+
+      # No plan yet: forming-but-not-ready → :noop, member untouched.
+      assert :noop = Stacks.redrive_gate(stack)
+      assert Tasks.get_task_record(m1.id).status == "backlog"
+
+      # Approved plan: forming-and-ready → commences like commence_if_ready/1.
+      {:ok, _} = Tasks.create_plan(%{task_id: m1.id, status: "approved"})
+      assert {:ok, _} = Stacks.redrive_gate(Stacks.get_stack(stack.id))
+      assert Repo.reload!(stack).status == "in_progress"
     end
   end
 

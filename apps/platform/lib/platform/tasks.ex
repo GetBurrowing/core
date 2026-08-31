@@ -3941,7 +3941,13 @@ defmodule Platform.Tasks do
             # members to `in_progress`. Idempotent + log-and-swallow: a
             # stack already `in_progress` is a no-op, and a cascade failure
             # never rolls back the (already-committed) approval.
-            _ = Platform.Tasks.Stacks.commence_if_ready(stack)
+            #
+            # Task 01a05393 stage 5: `redrive_gate/1` is `commence_if_ready/1`
+            # for a `forming` stack and, for a stack that ALREADY commenced,
+            # promotes the `stack_pending` members a late joiner had
+            # re-closed the gate on — so the promotion rides this approval
+            # event instead of waiting for the reconcile sweep.
+            _ = Platform.Tasks.Stacks.redrive_gate(stack)
 
             broadcast_board({:stack_gate_opened, stack.id, executable_ids})
 
@@ -3950,7 +3956,18 @@ defmodule Platform.Tasks do
             )
 
           :noop ->
-            :ok
+            # Task 01a05393 stage 5: no closed→open transition was detected,
+            # but if the approved plan belongs to a stack member, re-drive
+            # the gate anyway. `redrive_gate/1` re-checks `plans_ready?/1`
+            # itself and answers `:noop` on a still-closed gate, so this is
+            # only ever a promotion when the gate really is open.
+            case previous_task do
+              %Task{stack_id: stack_id} when is_binary(stack_id) ->
+                _ = Platform.Tasks.Stacks.redrive_gate(stack_id)
+
+              _ ->
+                :ok
+            end
         end
 
         if finalized_task do
@@ -5647,11 +5664,19 @@ defmodule Platform.Tasks do
   Returns `:ok` unless a stack member is transitioning into `in_progress`
   before every sibling has an approved plan (ADR 0042 Decision 4).
 
-  Non-stack tasks (`stack_id: nil`) always return `:ok` — this guard is a
-  no-op for plain tasks. Transitions to statuses other than `"in_progress"`
-  also return `:ok`; the gate exists specifically to hold members in
-  `pending`/`backlog`/`planning`/`stack_pending` until the whole stack's
-  plans have landed.
+  Non-stack tasks (`stack_id: nil`) return `:ok` for every target EXCEPT
+  `"stack_pending"`, which is refused with
+  `{:error, :stack_pending_requires_stack, %{}}` (task 01a05393 stage 6,
+  defect D). `stack_pending` is the "parked behind the stack" status: the
+  dispatcher's `@active_statuses` ignores it, `Stacks.try_promote/1` is
+  `:noop` on a `stack_id: nil` task, and `drop_task_to_column/2` has no
+  `stack_pending` source column — so a stackless task moved there is
+  unreachable by every mover. Put the task in a stack first
+  (`Stacks.add_task/2`, MCP `stack_add`); the parking write then carries
+  a `stack_id`. Transitions to statuses other than `"in_progress"` and
+  `"stack_pending"` return `:ok`; the gate exists specifically to hold
+  members in `pending`/`backlog`/`planning`/`stack_pending` until the
+  whole stack's plans have landed.
 
   When the gate is closed for a stack member, returns
   `{:error, :stack_plans_pending, %{stack_id, waiting_on}}` where
@@ -5666,6 +5691,13 @@ defmodule Platform.Tasks do
   @spec require_stack_commencement_for(Task.t(), String.t()) ::
           :ok
           | {:error, :stack_plans_pending, %{stack_id: String.t(), waiting_on: [String.t()]}}
+          | {:error, :stack_pending_requires_stack, %{}}
+  # Clause ORDER is load-bearing: the `stack_id: nil` catch-all directly
+  # below matches ANY target, so this refusal must sit in front of it or
+  # it is shadowed and the defect returns silently.
+  def require_stack_commencement_for(%Task{stack_id: nil}, "stack_pending"),
+    do: {:error, :stack_pending_requires_stack, %{}}
+
   def require_stack_commencement_for(%Task{stack_id: nil}, _new_status), do: :ok
 
   def require_stack_commencement_for(%Task{} = task, "in_progress") do

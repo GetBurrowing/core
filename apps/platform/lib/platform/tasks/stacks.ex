@@ -21,7 +21,7 @@ defmodule Platform.Tasks.Stacks do
   alias Platform.Tenancy.Lifecycle
   alias Platform.Tasks.{Plan, PlanEngine, ReviewRequests, Stack, StackDeployer, Task}
   alias Platform.Tasks.Stage
-  alias Platform.Tasks.Stacks.{CommencementGate, DepInference}
+  alias Platform.Tasks.Stacks.{CommencementGate, DepInference, MemberSet}
 
   @slug_regex ~r/^[a-z0-9][a-z0-9-]*$/
   @max_slug_length 60
@@ -570,6 +570,93 @@ defmodule Platform.Tasks.Stacks do
   end
 
   def commence_if_ready(%Stack{}), do: :noop
+
+  # Statuses whose members can be parked at `stack_pending` behind a
+  # re-closed gate. `"gated"` is carried over from
+  # `@promotable_stack_statuses` for parity; `Platform.Tasks.Stack` never
+  # writes it, so that branch is unreachable today (task 01a05393 stage 5).
+  @redrivable_stack_statuses ~w(in_progress gated)
+
+  @doc """
+  Re-drive the commencement gate for a stack that has ALREADY commenced
+  (task 01a05393 stage 5, defect A part 2).
+
+  `commence_if_ready/1` only ever opens a `forming` stack. Once a stack is
+  `in_progress`, a late joiner added through `add_task_with_report/3` with
+  no approved plan re-closes `CommencementGate` for every member, and the
+  ONLY thing that used to reopen it was the 5-minute
+  `sweep_stack_pending_members/0` tick. This function is the event-side
+  reopen: called from `Tasks.approve_plan/3` post-commit, it promotes every
+  `stack_pending` member of THIS stack whose in-stack deps have landed
+  (`try_promote/1`, in `stack_position` order), the moment the last
+  outstanding plan is approved.
+
+    * `forming` → delegates to `commence_if_ready/1` unchanged.
+    * `in_progress` / `gated` → if `CommencementGate.plans_ready?/1`,
+      `{:ok, %{promoted: [task_id]}}` (possibly empty: a member whose OWN
+      deps have not landed stays parked — the gate reopening is not a
+      licence to skip the DAG); else `:noop`.
+    * anything else → `:noop`.
+
+  Must run OUTSIDE the caller's transaction: `try_promote/1` goes through
+  `Tasks.transition_task/2`, whose inner rollback on a closed gate poisons
+  an enclosing transaction (stage 3's lesson), and the `{:task_updated, _}`
+  broadcasts it fires must not be observable before the approval commits.
+  Log-and-swallow like `commence_if_ready/1`: a failed re-drive never
+  surfaces to the approval that triggered it.
+  """
+  @spec redrive_gate(Stack.t() | binary()) ::
+          {:ok, map()} | {:partial, map()} | {:error, term()} | :noop
+  def redrive_gate(stack_id) when is_binary(stack_id) do
+    case get_stack(stack_id) do
+      %Stack{} = stack -> redrive_gate(stack)
+      nil -> :noop
+    end
+  end
+
+  def redrive_gate(%Stack{status: "forming"} = stack), do: commence_if_ready(stack)
+
+  def redrive_gate(%Stack{status: status} = stack) when status in @redrivable_stack_statuses do
+    if CommencementGate.plans_ready?(stack) do
+      promoted =
+        Task
+        |> where([t], t.stack_id == ^stack.id)
+        |> where([t], t.status == "stack_pending")
+        |> where([t], is_nil(t.deleted_at))
+        |> order_by([t], asc: t.stack_position, asc: t.inserted_at)
+        |> Repo.all()
+        |> Enum.reduce([], fn member, acc ->
+          case safe_try_promote(member) do
+            {:ok, updated} -> [updated.id | acc]
+            _ -> acc
+          end
+        end)
+        |> Enum.reverse()
+
+      Logger.info(
+        "[Stacks.redrive_gate] stack #{stack.id} (#{status}) gate is open; " <>
+          "promoted #{length(promoted)} stack_pending member(s): #{inspect(promoted)}"
+      )
+
+      {:ok, %{promoted: promoted}}
+    else
+      :noop
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Stacks.redrive_gate] raised for stack #{stack.id}: #{Exception.message(e)}"
+      )
+
+      :noop
+  catch
+    :exit, reason ->
+      Logger.warning("[Stacks.redrive_gate] exited for stack #{stack.id}: #{inspect(reason)}")
+
+      :noop
+  end
+
+  def redrive_gate(%Stack{}), do: :noop
 
   @doc """
   Gap 3 + Gap 4 periodic reconcile (task 019f921d): the timer-side backstop
@@ -1784,7 +1871,11 @@ defmodule Platform.Tasks.Stacks do
   # and a gap at stack_position 3 as the only visible trace.
   defp pending_members(stack_id) do
     Task
-    |> where([t], t.stack_id == ^stack_id and t.status != "done" and is_nil(t.deleted_at))
+    |> where(
+      [t],
+      t.stack_id == ^stack_id and t.status not in ^MemberSet.excluded_statuses() and
+        is_nil(t.deleted_at)
+    )
     |> select([t], %{id: t.id, title: t.title, status: t.status})
     |> Repo.all()
   end
@@ -1821,25 +1912,103 @@ defmodule Platform.Tasks.Stacks do
   `Platform.Tasks.set_phase_assignees/2` inside this transaction (after
   the `stack_id` write, before `recompute_stack_status/1`). A task that
   carries its own `assignee_override` flag keeps its own assignment.
+
+  ## Adding to a stack that has already commenced (task 01a05393 stage 4)
+
+  A stack whose status is `done` or `abandoned` refuses new members with
+  `{:error, :stack_terminal, %{stack_status: status}}`.
+
+  A stack whose status is anything other than `forming` has already
+  commenced. A member added at that point arrives with no plan, so
+  `CommencementGate.plans_ready?/1` goes false for the WHOLE stack and
+  every sibling's `open?/1` re-closes until the newcomer's plan is
+  approved. Rather than leave the newcomer at `backlog` (where the
+  dispatcher would try to route it as if it were a solo task), it is
+  parked at `stack_pending` in the same `Tasks.update_task/2` write, and
+  `add_task_with_report/3` returns a warning naming the consequence.
+  `add_task/2` and `add_task/3` keep the bare `{:ok, task}` contract;
+  callers that want the warning use `add_task_with_report/3`.
+
+  The status write goes through `Tasks.update_task/2`, whose
+  `Task.changeset/2` casts `:status` with only an inclusion check (no
+  transition table), so the direct `backlog -> stack_pending` write is
+  accepted; the same edge is also listed in
+  `Platform.Tasks.valid_task_transitions/0` for the guarded path.
   """
   @spec add_task(Stack.t() | binary(), Task.t() | binary()) ::
           {:ok, Task.t()}
           | {:error, :already_in_stack | :stack_not_found | :task_not_found | term()}
           | {:error, :cycle, [Task.t()]}
           | {:error, :cross_stack_dep, %{from: Task.t(), to_task_id: String.t()}}
-  def add_task(stack_or_id, task_or_id) do
+          | {:error, :stack_terminal, %{stack_status: String.t()}}
+  def add_task(stack_or_id, task_or_id), do: add_task(stack_or_id, task_or_id, [])
+
+  @doc """
+  `add_task/2` with an `opts` keyword list. See `add_task_with_report/3`
+  for the accepted options. Returns the same `{:ok, task}` shape as
+  `add_task/2`, dropping the report.
+  """
+  @spec add_task(Stack.t() | binary(), Task.t() | binary(), keyword()) ::
+          {:ok, Task.t()}
+          | {:error, :already_in_stack | :stack_not_found | :task_not_found | term()}
+          | {:error, :cycle, [Task.t()]}
+          | {:error, :cross_stack_dep, %{from: Task.t(), to_task_id: String.t()}}
+          | {:error, :stack_terminal, %{stack_status: String.t()}}
+  def add_task(stack_or_id, task_or_id, opts) when is_list(opts) do
+    case add_task_with_report(stack_or_id, task_or_id, opts) do
+      {:ok, %Task{} = task, _report} -> {:ok, task}
+      other -> other
+    end
+  end
+
+  @typedoc """
+  What `add_task_with_report/3` says about the commencement gate after
+  the add.
+
+    * `gate_closed` — `true` only when the stack had already commenced
+      and the newcomer was parked at `stack_pending`; the gate is closed
+      for every sibling until the newcomer's plan is approved. `false`
+      on a `forming` stack (the gate was never open, nothing changed).
+    * `waiting_on` — `CommencementGate.waiting_on/1` for the stack after
+      the write when `gate_closed` is `true`; `[]` otherwise.
+    * `warning` — a sentence naming the consequence when `gate_closed`
+      is `true`; `nil` otherwise.
+  """
+  @type add_task_report :: %{
+          warning: String.t() | nil,
+          gate_closed: boolean(),
+          waiting_on: [String.t()]
+        }
+
+  @doc """
+  `add_task/3` that also reports the effect on the commencement gate.
+
+  Returns `{:ok, task, report}` where `report` is an `t:add_task_report/0`.
+  Errors are the same as `add_task/2`.
+
+  `opts` is currently reserved (no keys are read); it exists so the
+  arity is stable when stage 5 of task 01a05393 adds the re-drive.
+  """
+  @spec add_task_with_report(Stack.t() | binary(), Task.t() | binary(), keyword()) ::
+          {:ok, Task.t(), add_task_report()}
+          | {:error, :already_in_stack | :stack_not_found | :task_not_found | term()}
+          | {:error, :cycle, [Task.t()]}
+          | {:error, :cross_stack_dep, %{from: Task.t(), to_task_id: String.t()}}
+          | {:error, :stack_terminal, %{stack_status: String.t()}}
+  def add_task_with_report(stack_or_id, task_or_id, opts \\ []) when is_list(opts) do
     txn =
       Repo.transaction(fn ->
         with {:ok, %Stack{} = stack} <- load_stack(stack_or_id),
+             :ok <- ensure_stack_accepts_members(stack),
              {:ok, %Task{} = task} <- load_task(task_or_id),
              :ok <- ensure_not_in_stack(task),
              position = next_stack_position(stack.id),
-             {:ok, attached_task} <-
-               Tasks.update_task(task, %{stack_id: stack.id, stack_position: position}),
+             attrs = add_task_attrs(stack, position),
+             {:ok, attached_task} <- Tasks.update_task(task, attrs),
              {:ok, updated_task} <- maybe_inherit_stack_assignees(stack, attached_task),
              {:ok, _levels} <- normalize_dag_result(validate_dag(stack)),
              {:ok, _stack} <- recompute_stack_status(stack) do
-          updated_task
+          {updated_task, add_task_report(stack, updated_task)}
         else
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -1849,12 +2018,53 @@ defmodule Platform.Tasks.Stacks do
     # 2-tuple shape on the way into `Repo.rollback/1` so the `with`
     # chain stays uniform; unpack them here so callers see the
     # original `{:error, :cycle, path}` / `{:error, :cross_stack_dep,
-    # payload}` shape without wrapping.
+    # payload}` shape without wrapping. `:stack_terminal` rides the
+    # same bridge.
     case txn do
+      {:ok, {task, report}} -> {:ok, task, report}
       {:error, {:cycle, path}} -> {:error, :cycle, path}
       {:error, {:cross_stack_dep, payload}} -> {:error, :cross_stack_dep, payload}
+      {:error, {:stack_terminal, payload}} -> {:error, :stack_terminal, payload}
       other -> other
     end
+  end
+
+  @stack_terminal_statuses ~w(done abandoned)
+
+  defp ensure_stack_accepts_members(%Stack{status: status})
+       when status in @stack_terminal_statuses,
+       do: {:error, {:stack_terminal, %{stack_status: status}}}
+
+  defp ensure_stack_accepts_members(%Stack{}), do: :ok
+
+  # A `forming` stack has not commenced: the newcomer stays at its own
+  # status (normally `backlog`) and goes through planning with the rest.
+  # Any other status means the stack has commenced, and the newcomer is
+  # parked at `stack_pending` in the same write as the membership.
+  defp add_task_attrs(%Stack{status: "forming"} = stack, position),
+    do: %{stack_id: stack.id, stack_position: position}
+
+  defp add_task_attrs(%Stack{} = stack, position),
+    do: %{stack_id: stack.id, stack_position: position, status: "stack_pending"}
+
+  defp add_task_report(%Stack{status: "forming"}, %Task{}),
+    do: %{warning: nil, gate_closed: false, waiting_on: []}
+
+  defp add_task_report(%Stack{} = stack, %Task{} = task) do
+    waiting_on = CommencementGate.waiting_on(stack)
+
+    %{
+      warning:
+        "Stack #{stack.id} had already commenced (status #{stack.status}). " <>
+          "Task #{task.id} joined with no approved plan, so the stack's commencement gate " <>
+          "is closed for EVERY member until this task's plan is approved: no sibling can be " <>
+          "promoted from stack_pending to in_progress while CommencementGate.waiting_on/1 " <>
+          "is non-empty (currently #{length(waiting_on)} member(s)). The new task was parked " <>
+          "at stack_pending, which the task router does not treat as active, so it is " <>
+          "invisible to dispatch until it is promoted.",
+      gate_closed: true,
+      waiting_on: waiting_on
+    }
   end
 
   # Bridge `validate_dag/1`'s 3-tuple errors into the `with` chain's
@@ -1948,6 +2158,15 @@ defmodule Platform.Tasks.Stacks do
 
     * `{:error, :cycle, path}` — the new edge introduces a cycle in the
       in-stack subgraph; the dep write is undone before returning.
+    * `{:error, :dependent_already_started, %{task_id, status}}` — the
+      dependent (`from_task_id`) is already at `in_progress`, `in_review`,
+      `deploying` or `done`. A member that has already started cannot
+      retroactively acquire a predecessor: nothing in the engine would
+      enforce the new edge (the promote gate only looks at `stack_pending`
+      members), so the edge would be advisory at best and misleading at
+      worst. `backlog`, `planning`, `stack_pending`, `blocked` and
+      `cancelled` dependents are still accepted — for a `stack_pending`
+      dependent the edge simply adds one more unmet dep.
 
   Returns `{:ok, %{from_task_id, to_task_id, kind, executable_now}}` on
   success, where `executable_now` is the recomputed
@@ -1966,6 +2185,7 @@ defmodule Platform.Tasks.Stacks do
           | {:error, :not_in_stack, binary()}
           | {:error, :duplicate_edge}
           | {:error, :cycle, [Task.t()]}
+          | {:error, :dependent_already_started, %{task_id: binary(), status: String.t()}}
           | {:error, term()}
   def add_dependency_edge(stack_or_id, from_task_id, to_task_id, opts \\ [])
       when is_binary(from_task_id) and is_binary(to_task_id) do
@@ -1979,6 +2199,7 @@ defmodule Platform.Tasks.Stacks do
              {:ok, %Task{} = to_task} <- load_task(to_task_id),
              :ok <- ensure_in_stack(stack, from_task),
              :ok <- ensure_in_stack(stack, to_task),
+             :ok <- ensure_dependent_not_started(from_task),
              {:ok, _updated_from} <- Tasks.add_dependency(from_task, to_task_id, kind),
              {:ok, _levels} <- normalize_dag_result(validate_dag(stack)),
              {:ok, _stack} <- recompute_stack_status(stack) do
@@ -1989,18 +2210,42 @@ defmodule Platform.Tasks.Stacks do
             executable_now: stack |> executable_members() |> Enum.map(& &1.id)
           }
         else
-          {:error, :not_in_stack, task_id} -> Repo.rollback({:not_in_stack, task_id})
-          {:error, reason} -> Repo.rollback(reason)
+          {:error, :not_in_stack, task_id} ->
+            Repo.rollback({:not_in_stack, task_id})
+
+          {:error, :dependent_already_started, payload} ->
+            Repo.rollback({:dependent_already_started, payload})
+
+          {:error, reason} ->
+            Repo.rollback(reason)
         end
       end)
 
     case txn do
-      {:error, {:cycle, path}} -> {:error, :cycle, path}
-      {:error, {:cross_stack_dep, payload}} -> {:error, :cross_stack_dep, payload}
-      {:error, {:not_in_stack, task_id}} -> {:error, :not_in_stack, task_id}
-      other -> other
+      {:error, {:cycle, path}} ->
+        {:error, :cycle, path}
+
+      {:error, {:cross_stack_dep, payload}} ->
+        {:error, :cross_stack_dep, payload}
+
+      {:error, {:not_in_stack, task_id}} ->
+        {:error, :not_in_stack, task_id}
+
+      {:error, {:dependent_already_started, payload}} ->
+        {:error, :dependent_already_started, payload}
+
+      other ->
+        other
     end
   end
+
+  @started_dependent_statuses ~w(in_progress in_review deploying done)
+
+  defp ensure_dependent_not_started(%Task{status: status} = task)
+       when status in @started_dependent_statuses,
+       do: {:error, :dependent_already_started, %{task_id: task.id, status: status}}
+
+  defp ensure_dependent_not_started(%Task{}), do: :ok
 
   @doc """
   Remove an in-stack dependency edge from `from_task_id` to `to_task_id`.
@@ -2018,8 +2263,26 @@ defmodule Platform.Tasks.Stacks do
   re-remove from a successful one). All other guards match the add
   side.
 
-  Returns `{:ok, %{from_task_id, to_task_id, kind, executable_now}}` on
-  success.
+  Once the edge removal has COMMITTED, the freed dependent (`from_task_id`)
+  is reloaded and handed to `try_promote/1` synchronously in this same
+  call, so a `stack_pending` member whose last unmet predecessor was just
+  removed moves to `in_progress` here rather than waiting for the periodic
+  `sweep_stack_pending_members/0`. The promoted ids are returned under
+  `promoted` (`[]` when nothing moved).
+
+  The promote runs AFTER `Repo.transaction/1` returns, not inside the fn,
+  for two reasons. First, `Tasks.transition_task/2` wraps the
+  `in_progress` flip in its own transaction and `Repo.rollback/1`s on a
+  refused gate (`:stack_plans_pending`, `:no_approved_plan`); Ecto nests
+  transactions without savepoints, so that inner rollback would poison the
+  outer one and undo the edge removal — the opposite of what a refused
+  promote must do. Second, the transition broadcasts `{:task_updated, task}`
+  as soon as its own transaction commits; running it after ours has
+  committed makes that broadcast post-commit for the edge removal as well,
+  so no subscriber can read pre-commit state and no re-broadcast is needed.
+
+  Returns `{:ok, %{from_task_id, to_task_id, kind, executable_now, promoted}}`
+  on success.
   """
   @spec remove_dependency_edge(Stack.t() | binary(), binary(), binary(), keyword()) ::
           {:ok,
@@ -2027,7 +2290,8 @@ defmodule Platform.Tasks.Stacks do
              from_task_id: binary(),
              to_task_id: binary(),
              kind: String.t(),
-             executable_now: [binary()]
+             executable_now: [binary()],
+             promoted: [binary()]
            }}
           | {:error, :stack_not_found | :task_not_found | :self_edge}
           | {:error, :not_in_stack, binary()}
@@ -2061,11 +2325,55 @@ defmodule Platform.Tasks.Stacks do
       end)
 
     case txn do
-      {:error, {:cycle, path}} -> {:error, :cycle, path}
-      {:error, {:cross_stack_dep, payload}} -> {:error, :cross_stack_dep, payload}
-      {:error, {:not_in_stack, task_id}} -> {:error, :not_in_stack, task_id}
-      other -> other
+      {:ok, result} ->
+        # Post-commit on purpose — see the moduledoc above: a refused
+        # promote rolls back its own transaction, which would take the
+        # edge removal with it if we were still inside ours.
+        promoted = promote_freed_dependent(from_task_id)
+        {:ok, Map.put(result, :promoted, Enum.map(promoted, & &1.id))}
+
+      {:error, {:cycle, path}} ->
+        {:error, :cycle, path}
+
+      {:error, {:cross_stack_dep, payload}} ->
+        {:error, :cross_stack_dep, payload}
+
+      {:error, {:not_in_stack, task_id}} ->
+        {:error, :not_in_stack, task_id}
+
+      other ->
+        other
     end
+  end
+
+  # Reload the dependent whose edge was just removed (`Tasks.remove_dependency/3`
+  # wrote a fresh row) and try to promote it — `try_promote/1`'s id clause
+  # does the reload. Every non-`{:ok, _}` outcome is swallowed on purpose:
+  # the edge removal has already committed and the member simply stays
+  # where it was, exactly as it would have before the sweep reached it.
+  defp promote_freed_dependent(task_id) when is_binary(task_id) do
+    case try_promote(task_id) do
+      {:ok, %Task{} = promoted} ->
+        [promoted]
+
+      :noop ->
+        []
+
+      {:error, reason} ->
+        log_freed_promote_failure(task_id, reason)
+        []
+
+      {:error, reason, _details} ->
+        log_freed_promote_failure(task_id, reason)
+        []
+    end
+  end
+
+  defp log_freed_promote_failure(task_id, reason) do
+    Logger.info(
+      "[Stacks.remove_dependency_edge] freed member #{task_id} not promoted: " <>
+        inspect(reason)
+    )
   end
 
   defp ensure_distinct_endpoints(id, id) when is_binary(id), do: {:error, :self_edge}
@@ -2373,7 +2681,13 @@ defmodule Platform.Tasks.Stacks do
   defp rollup_status_for([]), do: "forming"
 
   defp rollup_status_for(members) do
-    statuses = Enum.map(members, & &1.status)
+    # A cancelled member owes nothing, so it must not hold the stack out of
+    # `done` / `deploying`. Filtered through the shared `MemberSet`
+    # predicate rather than a local status check.
+    statuses =
+      members
+      |> Enum.filter(&MemberSet.counts_as_pending?/1)
+      |> Enum.map(& &1.status)
 
     # Bug #6 (task 019f708f): the previous shape used
     # `Enum.any?(&1 == "deploying")` here, which collapsed a mixed
@@ -3306,9 +3620,12 @@ defmodule Platform.Tasks.Stacks do
         # If a declared dep id has no row (e.g. soft-deleted out from
         # under us), treat it as unmet — better to stall than to
         # falsely promote.
+        # A cancelled dep releases its dependent (`MemberSet.dependency_satisfied?/1`)
+        # and has no stamp sha to reach, so it is left out of the
+        # reachability list below.
         length(deps) == length(ids) and
-          Enum.all?(deps, &threshold_cleared?/1) and
-          all_dep_shas_reachable?(deps, stack_id)
+          Enum.all?(deps, &MemberSet.dependency_satisfied?/1) and
+          all_dep_shas_reachable?(Enum.reject(deps, &(&1.status == "cancelled")), stack_id)
     end
   end
 
@@ -3423,8 +3740,6 @@ defmodule Platform.Tasks.Stacks do
 
   def member_landed_on_rollup?(_), do: false
 
-  defp threshold_cleared?(dep), do: member_landed_on_rollup?(dep)
-
   @doc """
   Promote a `stack_pending` member to `in_progress` iff its in-stack deps
   have all cleared the ADR 0041 §"Unblock threshold".
@@ -3445,14 +3760,20 @@ defmodule Platform.Tasks.Stacks do
   the transition itself fails.
   """
   @spec try_promote(Task.t() | binary()) ::
-          {:ok, Task.t()} | :noop | {:error, term()}
+          {:ok, Task.t()} | :noop | {:error, term()} | {:error, term(), map()}
   def try_promote(%Task{stack_id: nil}), do: :noop
 
   def try_promote(%Task{status: "stack_pending"} = task) do
     if unblocked_in_stack?(task) do
+      # `transition_task/2` returns a 3-tuple
+      # `{:error, :stack_plans_pending, %{stack_id, waiting_on}}` when the
+      # commencement gate is closed. Matching only the 2-tuple raised
+      # CaseClauseError here; inside `remove_dependency_edge/4`'s
+      # transaction that crash would have rolled back the edge removal.
       case Tasks.transition_task(task, "in_progress") do
         {:ok, updated} -> {:ok, updated}
         {:error, reason} -> {:error, reason}
+        {:error, reason, details} -> {:error, reason, details}
       end
     else
       :noop

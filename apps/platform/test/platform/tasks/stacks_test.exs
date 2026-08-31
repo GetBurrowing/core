@@ -5882,6 +5882,469 @@ defmodule Platform.Tasks.StacksTest do
 
   # Bypass the broadcast pipeline + status-transition guards for setup —
   # we're exercising the rollup math, not the dispatcher.
+  describe "MemberSet wiring — a cancelled predecessor releases, a live one holds (defect B part 2)" do
+    # Two roots in ONE stack, each with its own stack_pending dependent.
+    # Root A is the one we cancel; root B stays live. Having both in the
+    # same stack is what separates "clears on cancelled" from "clears on
+    # everything": if the predicate were `fn _ -> true end`, D would
+    # promote too.
+    defp seed_two_root_stack!(name) do
+      {:ok, project} = Tasks.create_project(%{name: name})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, root_a} = Tasks.create_task(%{project_id: project.id, title: "Root A"})
+      {:ok, root_b} = Tasks.create_task(%{project_id: project.id, title: "Root B"})
+
+      {:ok, dep_c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C depends on A",
+          dependencies: [%{"task_id" => root_a.id, "kind" => "blocks"}]
+        })
+
+      {:ok, dep_d} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "D depends on B",
+          dependencies: [%{"task_id" => root_b.id, "kind" => "blocks"}]
+        })
+
+      {:ok, root_a} = Stacks.add_task(stack, root_a)
+      {:ok, root_b} = Stacks.add_task(stack, root_b)
+      {:ok, dep_c} = Stacks.add_task(stack, dep_c)
+      {:ok, dep_d} = Stacks.add_task(stack, dep_d)
+
+      # Post-cascade shape: approved plans on every member (the commencement
+      # gate refuses while any counted member lacks one) and the stack itself
+      # at in_progress, so the only thing standing between a dependent and
+      # promotion is its in-stack dep.
+      for member <- [root_a, root_b, dep_c, dep_d] do
+        {:ok, _} = Tasks.create_plan(%{task_id: member.id, status: "approved"})
+      end
+
+      stack |> Ecto.Changeset.change(status: "in_progress") |> Repo.update!()
+
+      root_a = root_a |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+      root_b = root_b |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+      dep_c = dep_c |> Task.changeset(%{status: "stack_pending"}) |> Repo.update!()
+      dep_d = dep_d |> Task.changeset(%{status: "stack_pending"}) |> Repo.update!()
+
+      %{stack: stack, root_a: root_a, root_b: root_b, dep_c: dep_c, dep_d: dep_d}
+    end
+
+    defp set_status_direct!(%Task{} = task, status),
+      do: task |> Task.changeset(%{status: status}) |> Repo.update!()
+
+    test "cancelling root A promotes C; root B at in_progress still holds D" do
+      %{root_a: root_a, dep_c: dep_c, dep_d: dep_d} =
+        seed_two_root_stack!("Cancelled root releases")
+
+      # Both dependents are held BEFORE the mutation — the fixture starts
+      # in the wedged state, not the released one.
+      assert Tasks.get_task_record(dep_c.id).status == "stack_pending"
+      assert Tasks.get_task_record(dep_d.id).status == "stack_pending"
+      refute Stacks.unblocked_in_stack?(dep_c)
+      refute Stacks.unblocked_in_stack?(dep_d)
+      assert Stacks.try_promote(dep_c) == :noop
+      assert Stacks.try_promote(dep_d) == :noop
+
+      set_status_direct!(root_a, "cancelled")
+
+      assert Stacks.unblocked_in_stack?(dep_c)
+      assert {:ok, %Task{status: "in_progress"}} = Stacks.try_promote(dep_c)
+      assert Tasks.get_task_record(dep_c.id).status == "in_progress"
+
+      # The rule loses here: B is live, so D stays parked.
+      refute Stacks.unblocked_in_stack?(dep_d)
+      assert Stacks.try_promote(dep_d) == :noop
+      assert Tasks.get_task_record(dep_d.id).status == "stack_pending"
+    end
+
+    test "a blocked predecessor still holds its dependent" do
+      %{root_b: root_b, dep_d: dep_d} = seed_two_root_stack!("Blocked root holds")
+
+      assert Tasks.get_task_record(dep_d.id).status == "stack_pending"
+      set_status_direct!(root_b, "blocked")
+
+      refute Stacks.unblocked_in_stack?(dep_d)
+      assert Stacks.try_promote(dep_d) == :noop
+      assert Tasks.get_task_record(dep_d.id).status == "stack_pending"
+    end
+
+    test "a done predecessor WITHOUT a rollup stamp still holds its dependent" do
+      %{root_b: root_b, dep_d: dep_d} = seed_two_root_stack!("Unstamped done root holds")
+
+      set_status_direct!(root_b, "done")
+
+      refute Stacks.unblocked_in_stack?(dep_d)
+      assert Stacks.try_promote(dep_d) == :noop
+    end
+
+    test "unblocked_in_stack?: [cancelled, landed] deps clear; [cancelled, in_progress] do not" do
+      {:ok, project} = Tasks.create_project(%{name: "Mixed deps"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C",
+          dependencies: [
+            %{"task_id" => a.id, "kind" => "blocks"},
+            %{"task_id" => b.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, a} = Stacks.add_task(stack, a)
+      {:ok, b} = Stacks.add_task(stack, b)
+      {:ok, c} = Stacks.add_task(stack, c)
+
+      set_status_direct!(a, "cancelled")
+      b = set_status_direct!(b, "in_progress")
+      refute Stacks.unblocked_in_stack?(c)
+
+      b
+      |> Task.changeset(%{
+        status: "in_review",
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+        }
+      })
+      |> Repo.update!()
+
+      assert Stacks.unblocked_in_stack?(c)
+    end
+
+    test "complete_stack/2: a cancelled member no longer wedges members_not_done" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+
+      m_done = stamp_unmerged_member!(project, stack, position: 1)
+      m_cancelled = stamp_unmerged_member!(project, stack, position: 2)
+      set_member_status(stack, m_done, "done")
+      set_member_status(stack, m_cancelled, "cancelled")
+
+      assert {:ok, %Stack{status: "done"}} = Stacks.complete_stack(stack, "cancelled one dropped")
+    end
+
+    test "complete_stack/2: an in_progress member still holds, and the cancelled one is not listed" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+
+      m_done = stamp_unmerged_member!(project, stack, position: 1)
+      m_cancelled = stamp_unmerged_member!(project, stack, position: 2)
+      m_open = stamp_unmerged_member!(project, stack, position: 3)
+      set_member_status(stack, m_done, "done")
+      set_member_status(stack, m_cancelled, "cancelled")
+      set_member_status(stack, m_open, "in_progress")
+
+      assert {:error, :members_not_done, %{pending: pending}} = Stacks.complete_stack(stack)
+      assert [%{id: pending_id, status: "in_progress"}] = pending
+      assert pending_id == m_open.id
+      refute Enum.any?(pending, &(&1.id == m_cancelled.id))
+    end
+
+    test "recompute_stack_status/1: a cancelled member cannot hold the stack out of done" do
+      %{stack: stack} = seed_stack_with_members!("Cancelled vs done", ["done", "cancelled"])
+
+      assert {:ok, %Stack{status: "done"}} = Stacks.recompute_stack_status(stack)
+    end
+
+    test "recompute_stack_status/1: a cancelled member cannot hold the stack out of deploying" do
+      %{stack: stack} =
+        seed_stack_with_members!("Cancelled vs deploying", ["deploying", "done", "cancelled"])
+
+      assert {:ok, %Stack{status: "deploying"}} = Stacks.recompute_stack_status(stack)
+    end
+
+    test "recompute_stack_status/1: an in_progress member still holds the stack at in_progress" do
+      %{stack: stack} =
+        seed_stack_with_members!("Cancelled vs in_progress", ["done", "cancelled", "in_progress"])
+
+      assert {:ok, %Stack{status: "in_progress"}} = Stacks.recompute_stack_status(stack)
+    end
+  end
+
+  describe "remove_dependency_edge/4 releases and add_dependency_edge/4 re-gates (defect C)" do
+    alias Platform.Tasks.Stacks.CommencementGate
+
+    # A started stack (in_progress, every member with an approved plan so the
+    # commencement gate is OPEN) with two live predecessors P1 and P2 and one
+    # dependent DEP parked at stack_pending. `deps` picks which predecessors
+    # DEP is edged to. The sweep is never called anywhere in this block: a
+    # promotion observed here is attributable to the call under test only.
+    defp seed_started_stack!(name, deps) do
+      {:ok, project} = Tasks.create_project(%{name: name})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, p1} = Tasks.create_task(%{project_id: project.id, title: "P1"})
+      {:ok, p2} = Tasks.create_task(%{project_id: project.id, title: "P2"})
+      {:ok, dep} = Tasks.create_task(%{project_id: project.id, title: "DEP"})
+
+      {:ok, p1} = Stacks.add_task(stack, p1)
+      {:ok, p2} = Stacks.add_task(stack, p2)
+      {:ok, dep} = Stacks.add_task(stack, dep)
+
+      preds = %{p1: p1, p2: p2}
+
+      for key <- deps do
+        {:ok, _} = Stacks.add_dependency_edge(stack, dep.id, preds[key].id)
+      end
+
+      for member <- [p1, p2, dep] do
+        {:ok, _} = Tasks.create_plan(%{task_id: member.id, status: "approved"})
+      end
+
+      stack = stack |> Ecto.Changeset.change(status: "in_progress") |> Repo.update!()
+
+      p1 = p1 |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+      p2 = p2 |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+      dep = dep |> Task.changeset(%{status: "stack_pending"}) |> Repo.update!()
+
+      %{stack: stack, p1: p1, p2: p2, dep: dep}
+    end
+
+    test "removing the only unmet edge promotes the dependent in the same call" do
+      %{stack: stack, p1: p1, dep: dep} = seed_started_stack!("Release on remove", [:p1])
+      Tasks.subscribe_board([{:task, dep.id}])
+
+      # Wedged state pinned BEFORE the mutation, and the gate provably open —
+      # otherwise the "promoted in the same call" assertion is unreachable
+      # rather than tested.
+      dep_before = Tasks.get_task_record(dep.id)
+      assert dep_before.status == "stack_pending"
+      assert Tasks.dependency_task_ids(dep_before) == [p1.id]
+      assert CommencementGate.open?(dep_before)
+      refute Stacks.unblocked_in_stack?(dep_before)
+
+      assert {:ok, result} = Stacks.remove_dependency_edge(stack, dep.id, p1.id)
+
+      assert result.promoted == [dep.id]
+      dep_after = Tasks.get_task_record(dep.id)
+      assert dep_after.status == "in_progress"
+      assert Tasks.dependency_task_ids(dep_after) == []
+      assert dep.id in result.executable_now
+
+      # The post-commit re-broadcast carries the promoted row.
+      assert_receive {:task_updated, %Task{id: promoted_id, status: "in_progress"}}
+      assert promoted_id == dep.id
+    end
+
+    test "removing ONE of TWO edges leaves the dependent parked; the second removal releases" do
+      %{stack: stack, p1: p1, p2: p2, dep: dep} =
+        seed_started_stack!("One of two edges", [:p1, :p2])
+
+      assert Tasks.get_task_record(dep.id).status == "stack_pending"
+      assert CommencementGate.open?(Tasks.get_task_record(dep.id))
+
+      assert {:ok, first} = Stacks.remove_dependency_edge(stack, dep.id, p1.id)
+
+      # The rule loses here: P2 still holds DEP.
+      assert first.promoted == []
+      dep_mid = Tasks.get_task_record(dep.id)
+      assert dep_mid.status == "stack_pending"
+      assert Tasks.dependency_task_ids(dep_mid) == [p2.id]
+      refute dep.id in first.executable_now
+
+      assert {:ok, second} = Stacks.remove_dependency_edge(stack, dep.id, p2.id)
+
+      assert second.promoted == [dep.id]
+      assert Tasks.get_task_record(dep.id).status == "in_progress"
+    end
+
+    test "a failed promote (gate closed, 3-tuple error) does not roll back the edge removal" do
+      %{stack: stack, p1: p1, p2: p2, dep: dep} =
+        seed_started_stack!("Promote fails, edge stays", [:p1])
+
+      # Close the commencement gate by rejecting P2's plan: DEP is now
+      # unblocked once the edge goes, but `transition_task/2` refuses with
+      # `{:error, :stack_plans_pending, %{...}}` — the 3-tuple that used to
+      # CaseClauseError out of `try_promote/1`.
+      Platform.Tasks.Plan
+      |> Repo.get_by!(task_id: p2.id)
+      |> Ecto.Changeset.change(status: "rejected")
+      |> Repo.update!()
+
+      assert Tasks.get_task_record(dep.id).status == "stack_pending"
+      refute CommencementGate.open?(Tasks.get_task_record(dep.id))
+
+      assert {:ok, result} = Stacks.remove_dependency_edge(stack, dep.id, p1.id)
+
+      assert result.promoted == []
+      dep_after = Tasks.get_task_record(dep.id)
+      assert dep_after.status == "stack_pending"
+      # The edge removal committed even though the promote did not.
+      assert Tasks.dependency_task_ids(dep_after) == []
+      assert Stacks.unblocked_in_stack?(dep_after)
+    end
+
+    test "add_dependency_edge/4 refuses an in_progress dependent and writes nothing" do
+      %{stack: stack, p1: p1, p2: p2} = seed_started_stack!("Started dependent refused", [])
+
+      assert Tasks.get_task_record(p2.id).status == "in_progress"
+      assert Tasks.dependency_task_ids(Tasks.get_task_record(p2.id)) == []
+
+      assert {:error, :dependent_already_started, %{task_id: task_id, status: "in_progress"}} =
+               Stacks.add_dependency_edge(stack, p2.id, p1.id)
+
+      assert task_id == p2.id
+      assert Tasks.dependency_task_ids(Tasks.get_task_record(p2.id)) == []
+    end
+
+    test "add_dependency_edge/4 refuses in_review, deploying and done dependents" do
+      for status <- ~w(in_review deploying done) do
+        %{stack: stack, p1: p1, p2: p2} =
+          seed_started_stack!("Started dependent refused #{status}", [])
+
+        p2 |> Task.changeset(%{status: status}) |> Repo.update!()
+
+        assert {:error, :dependent_already_started, %{status: ^status}} =
+                 Stacks.add_dependency_edge(stack, p2.id, p1.id)
+
+        assert Tasks.dependency_task_ids(Tasks.get_task_record(p2.id)) == []
+      end
+    end
+
+    test "add_dependency_edge/4 still succeeds for a stack_pending dependent (guard must not over-fire)" do
+      %{stack: stack, p1: p1, p2: p2, dep: dep} =
+        seed_started_stack!("Parked dependent accepted", [:p1])
+
+      assert Tasks.get_task_record(dep.id).status == "stack_pending"
+
+      assert {:ok, result} = Stacks.add_dependency_edge(stack, dep.id, p2.id)
+
+      assert result.from_task_id == dep.id
+
+      assert Enum.sort(Tasks.dependency_task_ids(Tasks.get_task_record(dep.id))) ==
+               Enum.sort([p1.id, p2.id])
+
+      # Still parked: adding an edge never promotes.
+      assert Tasks.get_task_record(dep.id).status == "stack_pending"
+    end
+
+    test "add_dependency_edge/4 still succeeds for backlog and blocked dependents" do
+      for status <- ~w(backlog blocked) do
+        %{stack: stack, p1: p1, dep: dep} = seed_started_stack!("Not-started #{status}", [])
+        dep |> Task.changeset(%{status: status}) |> Repo.update!()
+
+        assert {:ok, _} = Stacks.add_dependency_edge(stack, dep.id, p1.id)
+        assert Tasks.dependency_task_ids(Tasks.get_task_record(dep.id)) == [p1.id]
+      end
+    end
+  end
+
+  describe "add_task on a started stack parks the member and re-closes the gate (defect A, part 1)" do
+    alias Platform.Tasks.Stacks.CommencementGate
+
+    # A stack that has commenced with its gate OPEN: two members, each
+    # with an approved plan, stack and members at in_progress.
+    defp seed_open_stack!(name) do
+      {:ok, project} = Tasks.create_project(%{name: name})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, p1} = Tasks.create_task(%{project_id: project.id, title: "P1"})
+      {:ok, p2} = Tasks.create_task(%{project_id: project.id, title: "P2"})
+      {:ok, p1} = Stacks.add_task(stack, p1)
+      {:ok, p2} = Stacks.add_task(stack, p2)
+
+      for member <- [p1, p2] do
+        {:ok, _} = Tasks.create_plan(%{task_id: member.id, status: "approved"})
+      end
+
+      stack = stack |> Ecto.Changeset.change(status: "in_progress") |> Repo.update!()
+      p1 = p1 |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+      p2 = p2 |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+
+      {:ok, newcomer} = Tasks.create_task(%{project_id: project.id, title: "Late joiner"})
+
+      %{stack: stack, p1: p1, p2: p2, newcomer: newcomer}
+    end
+
+    test "a planless newcomer closes the sibling's OPEN gate, is parked, and the report says so" do
+      %{stack: stack, p1: p1, newcomer: newcomer} = seed_open_stack!("Late joiner closes gate")
+
+      # Gate provably OPEN before the mutation — otherwise "closed after"
+      # is the fixture's state, not the add's effect.
+      assert CommencementGate.open?(Tasks.get_task_record(p1.id))
+      assert CommencementGate.waiting_on(stack) == []
+      assert newcomer.status == "backlog"
+
+      assert {:ok, %Task{} = parked, report} = Stacks.add_task_with_report(stack, newcomer)
+
+      assert parked.id == newcomer.id
+      assert parked.stack_id == stack.id
+      assert parked.stack_position == 3
+      assert parked.status == "stack_pending"
+      assert Tasks.get_task_record(newcomer.id).status == "stack_pending"
+
+      # The CURRENT consequence, pinned: the sibling's gate is closed
+      # and the newcomer is the only thing it waits on. Stage 5 adds the
+      # re-drive; this stage only names the state.
+      refute CommencementGate.open?(Tasks.get_task_record(p1.id))
+      assert CommencementGate.waiting_on(stack) == [newcomer.id]
+
+      assert report.gate_closed == true
+      assert report.waiting_on == [newcomer.id]
+      assert is_binary(report.warning)
+      assert report.warning =~ "commencement gate"
+      assert report.warning =~ "closed for EVERY member until this task's plan is approved"
+      assert report.warning =~ "CommencementGate.waiting_on/1"
+      assert report.warning =~ "invisible to dispatch"
+      assert report.warning =~ newcomer.id
+      assert report.warning =~ stack.id
+    end
+
+    test "add_task/2 on a started stack parks the newcomer too (arity-2 contract keeps its shape)" do
+      %{stack: stack, newcomer: newcomer} = seed_open_stack!("Arity-2 parks")
+
+      assert {:ok, %Task{status: "stack_pending"} = parked} = Stacks.add_task(stack, newcomer)
+      assert parked.stack_id == stack.id
+    end
+
+    test "the rule loses on a forming stack: newcomer stays at backlog, no warning" do
+      {:ok, project} = Tasks.create_project(%{name: "Forming keeps backlog"})
+      stack = stack_fixture(project_id: project.id)
+      assert stack.status == "forming"
+      {:ok, newcomer} = Tasks.create_task(%{project_id: project.id, title: "Early joiner"})
+
+      assert {:ok, %Task{} = attached, report} = Stacks.add_task_with_report(stack, newcomer)
+
+      assert attached.status == "backlog"
+      assert Tasks.get_task_record(newcomer.id).status == "backlog"
+      assert report == %{warning: nil, gate_closed: false, waiting_on: []}
+    end
+
+    test "refuses a done stack and an abandoned stack; the task is left unattached" do
+      for terminal <- ~w(done abandoned) do
+        %{stack: stack, newcomer: newcomer} = seed_open_stack!("Terminal #{terminal}")
+        stack = stack |> Ecto.Changeset.change(status: terminal) |> Repo.update!()
+
+        assert {:error, :stack_terminal, %{stack_status: ^terminal}} =
+                 Stacks.add_task_with_report(stack, newcomer)
+
+        assert {:error, :stack_terminal, %{stack_status: ^terminal}} =
+                 Stacks.add_task(stack.id, newcomer.id)
+
+        after_task = Tasks.get_task_record(newcomer.id)
+        assert after_task.stack_id == nil
+        assert after_task.stack_position == nil
+        assert after_task.status == "backlog"
+      end
+    end
+
+    test "does not refuse an in_progress stack" do
+      %{stack: stack, newcomer: newcomer} = seed_open_stack!("In progress accepts")
+      assert stack.status == "in_progress"
+
+      assert {:ok, %Task{stack_id: stack_id}, %{gate_closed: true}} =
+               Stacks.add_task_with_report(stack, newcomer)
+
+      assert stack_id == stack.id
+    end
+  end
+
   defp set_member_status(stack, %Task{id: id}, status) do
     member = Enum.find(Stacks.members(stack), &(&1.id == id))
 
@@ -7008,6 +7471,109 @@ defmodule Platform.Tasks.StacksTest do
       after_second = Repo.get(Task, attached_child.id)
       assert after_second.status == "in_progress"
       assert after_second.updated_at == after_first.updated_at
+    end
+  end
+
+  # Task 01a05393 stage 6 (defect D): `stack_pending` was settable on a
+  # task with no `stack_id`. Such a task is unreachable by every mover —
+  # `TaskRouterWatcher.@active_statuses` ignores the status,
+  # `try_promote(%Task{stack_id: nil})` is `:noop`, and the board has no
+  # `stack_pending` drop column. The refusal lives on
+  # `require_stack_commencement_for/2`, the primitive every transition
+  # path runs, so ONE clause covers LiveView, MCP, drops and the dispatch
+  # gate. Both directions sit in this block on purpose: the rule must
+  # LOSE for a stacked task, because parking a stacked member at
+  # `stack_pending` is `apply_dispatch_gate/1`'s and `add_task/2`'s own
+  # path — refusing it deadlocks every stack.
+  describe "require_stack_commencement_for/2 — stack_pending needs a stack (defect D)" do
+    # `create_task/1` defaults to `backlog`, and `backlog → stack_pending`
+    # is not a table edge. Build the source status explicitly so the
+    # refusal is the GUARD's and not the transition table's.
+    defp at_status!(task, status) do
+      task |> Task.changeset(%{status: status}) |> Repo.update!()
+    end
+
+    defp stackless_task!(status) do
+      {:ok, project} = Tasks.create_project(%{name: "Stackless #{status}"})
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Loner"})
+      task = at_status!(task, status)
+      assert is_nil(task.stack_id)
+      task
+    end
+
+    defp stacked_task!(status) do
+      {:ok, project} = Tasks.create_project(%{name: "Stacked #{status}"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Member"})
+      {:ok, member} = Stacks.add_task(stack, task)
+      member = at_status!(member, status)
+      assert member.stack_id == stack.id
+      member
+    end
+
+    test "the guard refuses stack_pending on a stackless task with the named error" do
+      task = stackless_task!("planning")
+
+      assert {:error, :stack_pending_requires_stack, %{}} =
+               Tasks.require_stack_commencement_for(task, "stack_pending")
+    end
+
+    test "the guard still returns :ok for a stackless task on every other target" do
+      task = stackless_task!("planning")
+
+      for target <- ~w(backlog in_progress blocked in_review deploying done cancelled) do
+        assert :ok == Tasks.require_stack_commencement_for(task, target),
+               "stackless → #{target} must not be gated"
+      end
+    end
+
+    test "the rule loses: the guard accepts stack_pending on a stacked task" do
+      member = stacked_task!("planning")
+
+      assert :ok == Tasks.require_stack_commencement_for(member, "stack_pending")
+    end
+
+    test "transition_task_status/2 refuses a stackless task from planning AND in_progress; row untouched" do
+      for source <- ~w(planning in_progress) do
+        task = stackless_task!(source)
+        # The edge itself is legal — so a refusal here is the guard's.
+        assert Tasks.transition_valid?(task, "stack_pending")
+
+        assert {:error, :stack_pending_requires_stack, %{}} =
+                 Tasks.transition_task_status(task, "stack_pending")
+
+        after_task = Tasks.get_task_record(task.id)
+        assert after_task.status == source
+        assert is_nil(after_task.stack_id)
+      end
+    end
+
+    test "transition_task_status/2 parks a stacked task at stack_pending from planning AND in_progress" do
+      for source <- ~w(planning in_progress) do
+        member = stacked_task!(source)
+
+        assert {:ok, %Task{status: "stack_pending"} = parked} =
+                 Tasks.transition_task_status(member, "stack_pending")
+
+        assert parked.stack_id == member.stack_id
+        assert Tasks.get_task_record(member.id).status == "stack_pending"
+      end
+    end
+
+    test "the refusal is the guard's, not the transition table's: an illegal edge on a stackless task still reads :invalid_transition" do
+      # `done → stack_pending` is not a table edge (`done` only re-opens
+      # to `planning`). The guard runs first in `transition_task_status/2`,
+      # so the stackless refusal wins even on an illegal edge — pinned so a
+      # reorder of the `with` is visible. The table refusal is reachable
+      # only on a STACKED task.
+      loner = stackless_task!("done")
+      refute Tasks.transition_valid?(loner, "stack_pending")
+
+      assert {:error, :stack_pending_requires_stack, %{}} =
+               Tasks.transition_task_status(loner, "stack_pending")
+
+      member = stacked_task!("done")
+      assert {:error, :invalid_transition} = Tasks.transition_task_status(member, "stack_pending")
     end
   end
 

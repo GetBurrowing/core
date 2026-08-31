@@ -85,14 +85,16 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
 
   alias Platform.Repo
   alias Platform.Tasks.{Plan, Stack, Task}
+  alias Platform.Tasks.Stacks.MemberSet
 
   @approved_plan_statuses ~w(approved completed)
 
   # Member statuses that are NOT counted as gate members. Shared by both
   # member queries (`load_member_ids/1` and `load_members_ordered/1`) so
   # `plans_ready?/1` and `waiting_on/1` can never disagree about the
-  # membership set.
-  @excluded_member_statuses ~w(cancelled done)
+  # membership set. The list itself now lives in `MemberSet` so the
+  # completion path (`Stacks.pending_members/1`) cannot drift from it.
+  # (see `MemberSet.excluded_statuses/0`, called directly at both query sites)
 
   @doc """
   True when the given task is allowed to be in `in_progress` under the
@@ -211,7 +213,7 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
       |> where(
         [t],
         t.stack_id == ^stack_id and is_nil(t.deleted_at) and
-          t.status not in ^@excluded_member_statuses
+          t.status not in ^MemberSet.excluded_statuses()
       )
       |> order_by([t], asc: t.stack_position)
       |> select([t], t.id)
@@ -229,7 +231,7 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
     |> where(
       [t],
       t.stack_id == ^stack_id and is_nil(t.deleted_at) and
-        t.status not in ^@excluded_member_statuses
+        t.status not in ^MemberSet.excluded_statuses()
     )
     |> order_by([t], asc: t.stack_position)
     |> Repo.all()

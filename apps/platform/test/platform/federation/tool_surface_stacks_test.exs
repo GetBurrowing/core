@@ -775,6 +775,165 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
     end
   end
 
+  describe "stack_add_dependency / stack_remove_dependency after start (defect C)" do
+    # Started stack: in_progress, every member with an approved plan, P at
+    # in_progress, DEP parked at stack_pending behind P.
+    defp seed_started_stack_via_tool do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-defect-c"))
+
+      {:ok, p} = Tasks.create_task(%{project_id: project.id, title: "P"})
+      {:ok, dep} = Tasks.create_task(%{project_id: project.id, title: "DEP"})
+
+      for task <- [p, dep] do
+        {:ok, _} =
+          ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+        {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      end
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{"stack_id" => stack_id, "from_task_id" => dep.id, "to_task_id" => p.id},
+          %{}
+        )
+
+      Platform.Tasks.Stack
+      |> Repo.get!(stack_id)
+      |> Ecto.Changeset.change(status: "in_progress")
+      |> Repo.update!()
+
+      Repo.get!(Task, p.id) |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+      Repo.get!(Task, dep.id) |> Task.changeset(%{status: "stack_pending"}) |> Repo.update!()
+
+      %{stack_id: stack_id, p: p, dep: dep}
+    end
+
+    test "stack_add_dependency on an in_progress dependent returns a named envelope, not a crash" do
+      %{stack_id: stack_id, p: p, dep: dep} = seed_started_stack_via_tool()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "stack_add_dependency",
+                 %{"stack_id" => stack_id, "from_task_id" => p.id, "to_task_id" => dep.id},
+                 %{}
+               )
+
+      assert envelope.code == "dependent_already_started"
+      assert envelope.task_id == p.id
+      assert envelope.status == "in_progress"
+      assert Tasks.dependency_task_ids(Repo.get!(Task, p.id)) == []
+    end
+
+    test "stack_remove_dependency names the member it promoted" do
+      %{stack_id: stack_id, p: p, dep: dep} = seed_started_stack_via_tool()
+      assert Repo.get!(Task, dep.id).status == "stack_pending"
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "stack_remove_dependency",
+                 %{"stack_id" => stack_id, "from_task_id" => dep.id, "to_task_id" => p.id},
+                 %{}
+               )
+
+      assert result.promoted == [dep.id]
+      assert Repo.get!(Task, dep.id).status == "in_progress"
+    end
+  end
+
+  describe "stack_add after start parks the member and warns (defect A, part 1)" do
+    alias Platform.Tasks.Stacks.CommencementGate
+
+    # Started stack with an OPEN gate: one member with an approved plan,
+    # stack and member at in_progress.
+    defp seed_open_stack_via_tool do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-defect-a"))
+
+      {:ok, p} = Tasks.create_task(%{project_id: project.id, title: "P"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => p.id}, %{})
+
+      {:ok, _} = Tasks.create_plan(%{task_id: p.id, status: "approved"})
+
+      Platform.Tasks.Stack
+      |> Repo.get!(stack_id)
+      |> Ecto.Changeset.change(status: "in_progress")
+      |> Repo.update!()
+
+      Repo.get!(Task, p.id) |> Task.changeset(%{status: "in_progress"}) |> Repo.update!()
+
+      {:ok, newcomer} = Tasks.create_task(%{project_id: project.id, title: "Late joiner"})
+
+      %{stack_id: stack_id, p: p, newcomer: newcomer}
+    end
+
+    test "stack_add on a started stack returns status, warning, gate_closed and waiting_on" do
+      %{stack_id: stack_id, p: p, newcomer: newcomer} = seed_open_stack_via_tool()
+
+      assert CommencementGate.open?(Repo.get!(Task, p.id))
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "stack_add",
+                 %{"stack_id" => stack_id, "task_id" => newcomer.id},
+                 %{}
+               )
+
+      assert result.task_id == newcomer.id
+      assert result.stack_id == stack_id
+      assert result.status == "stack_pending"
+      assert result.gate_closed == true
+      assert result.waiting_on == [newcomer.id]
+      assert result.warning =~ "commencement gate"
+      assert result.warning =~ "CommencementGate.waiting_on/1"
+
+      assert Repo.get!(Task, newcomer.id).status == "stack_pending"
+      refute CommencementGate.open?(Repo.get!(Task, p.id))
+    end
+
+    test "stack_add on a forming stack carries no warning and gate_closed false" do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-forming"))
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Early joiner"})
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "stack_add",
+                 %{"stack_id" => stack_id, "task_id" => task.id},
+                 %{}
+               )
+
+      assert result.status == "backlog"
+      assert result.warning == nil
+      assert result.gate_closed == false
+      assert result.waiting_on == []
+    end
+
+    test "stack_add on an abandoned stack returns the stack_terminal envelope" do
+      %{stack_id: stack_id, newcomer: newcomer} = seed_open_stack_via_tool()
+
+      Platform.Tasks.Stack
+      |> Repo.get!(stack_id)
+      |> Ecto.Changeset.change(status: "abandoned")
+      |> Repo.update!()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "stack_add",
+                 %{"stack_id" => stack_id, "task_id" => newcomer.id},
+                 %{}
+               )
+
+      assert envelope.code == "stack_terminal"
+      assert envelope.stack_status == "abandoned"
+      assert envelope.recoverable == false
+      assert Repo.get!(Task, newcomer.id).stack_id == nil
+    end
+  end
+
   describe "stack_eject and stack_abandon end-to-end" do
     test "stack_eject detaches a member and returns task_id + stack_id" do
       project = create_project()
@@ -1157,6 +1316,69 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       assert error.error =~ "Invalid status transition from 'done' to 'in_progress'"
       refute error.error =~ "missing an approved plan"
       refute error.error =~ "has not started yet"
+    end
+  end
+
+  # Task 01a05393 stage 6 (defect D): `task_update(status: "stack_pending")`
+  # on a stackless task used to succeed and strand the task. The refusal
+  # comes from `Tasks.require_stack_commencement_for/2`; this block pins
+  # the MCP envelope for it, and — the direction where the rule LOSES —
+  # that a stacked member is still parked, because that is the stack
+  # machinery's own path.
+  describe "task_update(status: stack_pending) requires a stack (defect D)" do
+    defp planning_task!(project_id, title) do
+      {:ok, task} = Tasks.create_task(%{project_id: project_id, title: title})
+      task |> Task.changeset(%{status: "planning"}) |> Repo.update!()
+    end
+
+    test "a stackless task gets a recoverable envelope that points at stack_add" do
+      project = create_project()
+      task = planning_task!(project.id, "Loner")
+      assert is_nil(task.stack_id)
+
+      assert {:error, error} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{"task_id" => task.id, "status" => "stack_pending"},
+                 %{}
+               )
+
+      assert error.recoverable == true
+      assert error.error =~ "Cannot transition to 'stack_pending'"
+      assert error.error =~ "not in a stack"
+      assert error.error =~ task.id
+      assert error.suggestion =~ "stack_add"
+      # Distinguishing wording of the neighbouring arms must be absent:
+      # this is neither the table refusal nor the commencement gate.
+      refute error.error =~ "Invalid status transition"
+      refute error.error =~ "missing an approved plan"
+      refute error.error =~ "has not started yet"
+
+      assert Tasks.get_task_record(task.id).status == "planning"
+    end
+
+    test "the rule loses: a stacked member is parked at stack_pending" do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-park"), "Park")
+      task = planning_task!(project.id, "Member")
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      member = Tasks.get_task_record(task.id)
+      assert member.stack_id == stack_id
+      # A forming stack leaves the newcomer's status alone.
+      assert member.status == "planning"
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{"task_id" => task.id, "status" => "stack_pending"},
+                 %{}
+               )
+
+      assert result.status == "stack_pending"
+      assert Tasks.get_task_record(task.id).status == "stack_pending"
     end
   end
 
