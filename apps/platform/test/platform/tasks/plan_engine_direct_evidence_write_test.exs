@@ -8,7 +8,12 @@ defmodule Platform.Tasks.PlanEngineDirectEvidenceWriteTest do
   history. A DIRECT `PlanEngine.evaluate_validation/2` — which is what the MCP
   validation tools reach — replaced `evidence` wholesale and dropped the archive
   on the floor. Stage 2 moved the merge into the engine write and stage 3
-  removed the caller-side duplicate, so the engine is now the sole owner.
+  removed the caller-side duplicate. The merge has since been extracted to
+  `Platform.Tasks.EvidenceCarry.carry_prior_rulings/2` (task `01a0167c`),
+  which is the owner; the engine is one of TWO writers that call it — the
+  bare `Platform.Tasks.evaluate_validation/3` is the other. This file pins
+  the engine path only; `evidence_carry_agreement_test.exs` pins that both
+  writers persist the same map.
 
   Case 1 was EXPECTED TO FAIL on unmodified main. Its red output was the
   deliverable of stage 1; the fix landed in stage 2. Cases 2 and 3 pin the

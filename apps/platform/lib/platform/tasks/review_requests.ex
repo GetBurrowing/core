@@ -459,7 +459,12 @@ defmodule Platform.Tasks.ReviewRequests do
   # itself before each write (task `01a00575`); it no longer does.
   # `PlanEngine.evaluate_validation/2` merges the archive at the write, so the
   # guarantee holds for every caller including the tool surface, and the plain
-  # evidence maps below are complete as written (task `01a006f6`).
+  # evidence maps below are complete as written (task `01a006f6`). The merge
+  # itself now lives in `Platform.Tasks.EvidenceCarry.carry_prior_rulings/2`,
+  # and both writers — `PlanEngine.evaluate_validation/2` and the bare
+  # `Platform.Tasks.evaluate_validation/3` — call it (task `01a0167c`), so the
+  # statement no longer depends on which writer a caller reaches. Their
+  # agreement is pinned by `test/platform/tasks/evidence_carry_agreement_test.exs`.
   defp resolve_request(request) do
     now = DateTime.utc_now()
 

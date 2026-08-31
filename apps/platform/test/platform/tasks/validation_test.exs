@@ -146,6 +146,41 @@ defmodule Platform.Tasks.ValidationTest do
       assert {:error, :not_found} =
                Tasks.evaluate_validation(Ecto.UUID.generate(), "passed", %{})
     end
+
+    test "carries a manual_approval row's prior_rulings across the write", %{stage: stage} do
+      prior = [%{"verdict" => "rejected", "note" => "invented sample note"}]
+
+      {:ok, v} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          evidence: %{"prior_rulings" => prior}
+        })
+
+      assert {:ok, _} = Tasks.evaluate_validation(v.id, "passed", %{"summary" => "second look"})
+
+      reloaded = Repo.get!(Tasks.Validation, v.id)
+      assert reloaded.status == "passed"
+      assert reloaded.evidence["summary"] == "second look"
+      assert reloaded.evidence["prior_rulings"] == prior
+      assert length(reloaded.evidence["prior_rulings"]) == 1
+    end
+
+    test "writes a test_pass row's evidence wholesale — no carry outside manual_approval",
+         %{stage: stage} do
+      {:ok, v} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "test_pass",
+          evidence: %{"prior_rulings" => [%{"verdict" => "rejected", "note" => "stray"}]}
+        })
+
+      assert {:ok, _} = Tasks.evaluate_validation(v.id, "passed", %{"summary" => "second look"})
+
+      reloaded = Repo.get!(Tasks.Validation, v.id)
+      assert reloaded.evidence == %{"summary" => "second look"}
+      refute Map.has_key?(reloaded.evidence, "prior_rulings")
+    end
   end
 
   defp errors_on(changeset) do

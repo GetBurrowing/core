@@ -39,6 +39,7 @@ defmodule Platform.Tasks do
 
   alias Platform.Tasks.{
     Epic,
+    EvidenceCarry,
     Indexer,
     Plan,
     PlanEngine,
@@ -5083,6 +5084,24 @@ defmodule Platform.Tasks do
     |> Repo.all()
   end
 
+  @doc """
+  Bare row write: records `status`, `evidence`, and `evaluated_at` on the
+  validation `id` and nothing else.
+
+  The `prior_rulings` archive on a `manual_approval` row is carried across
+  the write by `Platform.Tasks.EvidenceCarry.carry_prior_rulings/2`, the same
+  merge the lifecycle writer uses, so a caller supplying fresh evidence does
+  not erase the human's recorded rulings. That carry is the ONLY thing this
+  function does beyond the update itself: there is NO transaction, NO
+  `evaluated_by`, NO telemetry, NO stage advance, and NO broadcast.
+
+  Production and MCP traffic goes through
+  `Platform.Tasks.PlanEngine.evaluate_validation/2`, the lifecycle writer.
+  This arity exists for tests that need a recorded evaluation without a
+  stage transition.
+  """
+  @spec evaluate_validation(Ecto.UUID.t(), String.t(), map()) ::
+          {:ok, Validation.t()} | {:error, :not_found} | {:error, Ecto.Changeset.t()}
   def evaluate_validation(id, status, evidence) when status in ~w(passed failed) do
     case Repo.get(Validation, id) do
       nil ->
@@ -5092,7 +5111,7 @@ defmodule Platform.Tasks do
         validation
         |> Validation.changeset(%{
           status: status,
-          evidence: evidence,
+          evidence: EvidenceCarry.carry_prior_rulings(validation, evidence),
           evaluated_at: DateTime.utc_now()
         })
         |> Repo.update()
