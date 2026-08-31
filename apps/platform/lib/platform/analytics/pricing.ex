@@ -40,6 +40,52 @@ defmodule Platform.Analytics.Pricing do
       cached_input: 0.30,
       output: 15.00,
       cache_write: 0.375
+    },
+    # Zhipu (via OpenRouter, rates 2026-08-31)
+    "glm-5.3" => %{
+      input: 1.40,
+      cached_input: 0.26,
+      output: 4.40,
+      cache_write: 0.0
+    },
+    "glm-5.3-flash" => %{
+      input: 0.075,
+      cached_input: 0.015,
+      output: 0.25,
+      cache_write: 0.0
+    },
+    # Moonshot (via OpenRouter, rates 2026-08-31)
+    "kimi-k3" => %{
+      input: 3.00,
+      cached_input: 0.30,
+      output: 15.00,
+      cache_write: 0.0
+    },
+    "kimi-k2.5" => %{
+      input: 0.45,
+      cached_input: 0.07,
+      output: 2.25,
+      cache_write: 0.0
+    },
+    # Google (via OpenRouter, rates 2026-08-31)
+    "gemini-3.1-pro-preview" => %{
+      input: 2.00,
+      cached_input: 0.20,
+      output: 12.00,
+      cache_write: 0.375
+    },
+    "gemma-4-31b-it" => %{
+      input: 0.09,
+      cached_input: 0.05,
+      output: 0.34,
+      cache_write: 0.0
+    },
+    # NVIDIA (via OpenRouter, rates 2026-08-31; no cached-input rate published)
+    "nemotron-3-super-120b-a12b" => %{
+      input: 0.085,
+      cached_input: 0.0,
+      output: 0.40,
+      cache_write: 0.0
     }
   }
 

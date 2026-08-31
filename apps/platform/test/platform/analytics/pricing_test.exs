@@ -181,6 +181,48 @@ defmodule Platform.Analytics.PricingTest do
       assert_in_delta cost, 0.016688, 0.000002
       assert cost > 0
     end
+
+    test "calculates cost for glm-5.3 with provider prefix and cache reads" do
+      cost =
+        Pricing.calculate_cost(%{
+          model: "z-ai/glm-5.3",
+          input_tokens: 1_000_000,
+          output_tokens: 500_000,
+          cache_read_tokens: 2_000_000
+        })
+
+      # input: 1.40 + output: 4.40 * 0.5 = 2.20 + cached: 0.26 * 2 = 0.52 → 4.12
+      assert cost == 4.12
+    end
+
+    test "calculates cost for kimi-k3 with moonshotai prefix" do
+      cost =
+        Pricing.calculate_cost(%{
+          model: "moonshotai/kimi-k3",
+          input_tokens: 842_126,
+          output_tokens: 53_980,
+          cache_read_tokens: 26_198_322
+        })
+
+      # input: 3.00 * 0.842126 = 2.526378
+      # output: 15.00 * 0.05398 = 0.8097
+      # cached: 0.30 * 26.198322 = 7.8594966
+      assert_in_delta cost, 11.1955746, 0.000002
+    end
+
+    test "calculates cost for gemini-3.1-pro-preview" do
+      cost =
+        Pricing.calculate_cost(%{
+          model: "google/gemini-3.1-pro-preview",
+          input_tokens: 1_000_000,
+          output_tokens: 1_000_000,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0
+        })
+
+      # input: 2.00 + output: 12.00 = 14.00
+      assert cost == 14.00
+    end
   end
 
   describe "pricing_table/0" do
@@ -191,6 +233,8 @@ defmodule Platform.Analytics.PricingTest do
       assert Map.has_key?(table, "gpt-5.4-nano")
       assert Map.has_key?(table, "claude-opus-4-6")
       assert Map.has_key?(table, "claude-sonnet-4-6")
+      assert Map.has_key?(table, "glm-5.3")
+      assert Map.has_key?(table, "kimi-k3")
     end
   end
 
@@ -199,7 +243,10 @@ defmodule Platform.Analytics.PricingTest do
       models = Pricing.known_models()
       assert "gpt-5.4" in models
       assert "claude-sonnet-4-6" in models
-      assert length(models) == 5
+      assert "glm-5.3" in models
+      assert "kimi-k3" in models
+      assert "gemini-3.1-pro-preview" in models
+      assert length(models) == 12
     end
   end
 end
