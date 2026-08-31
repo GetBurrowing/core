@@ -414,6 +414,120 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
     end
   end
 
+  describe "when it was said" do
+    # The target screen commits to it in as many words: "Cards land as
+    # they're made, and say who made them AND WHEN." Before this the
+    # byline said who and never when, so a card thirty seconds old and
+    # one sitting there ten minutes read identically.
+    #
+    # Both directions in one test. Asserting only that a time appears
+    # would pass against a byline that printed a constant; asserting
+    # only its absence would pass against one that never printed a time
+    # at all — which is the bug.
+    test "a card with an utterance time says how long ago; one without says nothing",
+         %{conn: conn, meeting: meeting} do
+      recent =
+        candidate!(meeting, %{
+          evidence_quote: "rotate the staging secrets",
+          state: :shaping,
+          classified_intent: "action_item",
+          assigned_agent_slug: "octavius",
+          last_utterance_at: DateTime.utc_now()
+        })
+
+      older =
+        candidate!(meeting, %{
+          evidence_quote: "and send the SOC2 pack",
+          state: :shaping,
+          classified_intent: "action_item",
+          assigned_agent_slug: "mycroft",
+          last_utterance_at: DateTime.add(DateTime.utc_now(), -12 * 60, :second)
+        })
+
+      timeless =
+        candidate!(meeting, %{
+          evidence_quote: "we should add a CSV export",
+          state: :shaping,
+          classified_intent: "action_item",
+          assigned_agent_slug: "saru"
+        })
+
+      {_view, html} = mount_board(conn, meeting)
+
+      assert text_of(card(html, recent), "[data-role='meeting-candidate-byline']") ==
+               "octavius · drafting · just now"
+
+      # A DIFFERENT time, not a constant — the assertion the "just now"
+      # above cannot make on its own.
+      assert text_of(card(html, older), "[data-role='meeting-candidate-byline']") ==
+               "mycroft · drafting · 12m ago"
+
+      # And a card with no utterance timestamp does not grow an empty
+      # separator or a fabricated time.
+      assert text_of(card(html, timeless), "[data-role='meeting-candidate-byline']") ==
+               "saru · drafting"
+    end
+  end
+
+  describe "what the card produced" do
+    # `✓ Added to Tasks`, drawn from a stored id.
+    #
+    # The control is the `:acting` card with NO `task_id`: `graduate/2`
+    # can fail against an archived project and leave the row acting with
+    # no deliverable, which its own docs call "the truthful reading of
+    # what happened". A label keyed on `state` would announce a task
+    # that was never created — so the test drives both rows at the same
+    # state and asserts they render differently.
+    test "a card with a task id says so; an acting card with no id claims nothing",
+         %{conn: conn, meeting: meeting} do
+      landed =
+        candidate!(meeting, %{
+          evidence_quote: "file the pricing objection",
+          state: :acting,
+          classified_intent: "action_item",
+          task_id: Ecto.UUID.generate()
+        })
+
+      failed_mint =
+        candidate!(meeting, %{
+          evidence_quote: "file the other one",
+          state: :acting,
+          classified_intent: "action_item"
+        })
+
+      {_view, html} = mount_board(conn, meeting)
+
+      assert text_of(card(html, landed), "[data-role='meeting-candidate-outcome']") =~
+               "Added to Tasks"
+
+      assert card(html, failed_mint)
+             |> LazyHTML.query("[data-role='meeting-candidate-outcome']")
+             |> Enum.empty?()
+
+      # Same state on both rows, so the difference above is the ID and
+      # nothing else.
+      assert landed.state == failed_mint.state
+    end
+
+    test "a canvas outcome names the canvas, not Tasks", %{conn: conn, meeting: meeting} do
+      canvas_card =
+        candidate!(meeting, %{
+          evidence_quote: "sketch the new rail",
+          state: :acting,
+          classified_intent: "visual_adjust",
+          outcome_kind: :artifact,
+          canvas_id: Ecto.UUID.generate()
+        })
+
+      {_view, html} = mount_board(conn, meeting)
+
+      outcome = text_of(card(html, canvas_card), "[data-role='meeting-candidate-outcome']")
+
+      assert outcome =~ "Added to Canvas"
+      refute outcome =~ "Tasks"
+    end
+  end
+
   # ── 6. The countdown carries a real, per-card deadline ────────────────
 
   describe "the countdown" do

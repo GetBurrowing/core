@@ -171,7 +171,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
             {CandidateDisplay.stage_label(candidate.state)}
           </p>
 
-          <.card_head candidate={candidate} />
+          <.card_head candidate={candidate} now={@now} />
 
           <.activity_log
             :if={presentation(candidate) in [:skeleton, :forming]}
@@ -187,6 +187,20 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
             <span class="candidate-card__chip" data-role="meeting-candidate-utterances">
               {utterance_count(candidate)}
             </span>
+          </p>
+
+          <%!-- `✓ Added to Tasks`. Drawn from a stored `task_id` /
+               `canvas_id`, never from `state == :acting`: `graduate/2`
+               can fail against an archived project and leave the row
+               acting with no deliverable, so a state-keyed label would
+               announce a task that was never created. --%>
+          <p
+            :if={CandidateDisplay.outcome_label(candidate)}
+            class="candidate-card__outcome"
+            data-role="meeting-candidate-outcome"
+          >
+            <span aria-hidden="true">✓</span>
+            {CandidateDisplay.outcome_label(candidate)}
           </p>
 
           <.review_row :if={review?(candidate)} candidate={candidate} />
@@ -241,6 +255,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   # claim the card cannot back up, and inventing a title is how you get
   # a confident card about somebody's dropped audio.
   attr(:candidate, :map, required: true)
+  attr(:now, :any, required: true)
 
   defp card_head(assigns) do
     assigns = assign(assigns, :presentation, presentation(assigns.candidate))
@@ -266,11 +281,11 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
           {@candidate.evidence_quote}
         </p>
         <p
-          :if={byline(@candidate)}
+          :if={byline(@candidate, @now)}
           class="candidate-card__byline"
           data-role="meeting-candidate-byline"
         >
-          {byline(@candidate)}
+          {byline(@candidate, @now)}
         </p>
       </div>
     </div>
@@ -462,12 +477,28 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   # `Octavius · drafting`. Falls back to the state word alone when no
   # agent has been assigned — the presence mockup's own pattern for a
   # row with no name on it — and to nothing at all when there is neither.
-  defp byline(candidate) do
-    case {CandidateDisplay.agent_name(candidate), CandidateDisplay.byline_state(candidate)} do
-      {nil, nil} -> nil
-      {nil, state} -> state
-      {name, nil} -> name
-      {name, state} -> name <> " · " <> state
+  # `— Dalton, just now`: who, what they are doing, and WHEN it was said.
+  #
+  # The time was missing until now, and the target screen commits to it
+  # in as many words: "Cards land as they're made, and say who made them
+  # and when." Without it a card thirty seconds old and one that has been
+  # sitting there ten minutes read identically.
+  #
+  # Joined with the same `·` the name and state already use, so the
+  # byline stays one line at rail width rather than growing a second
+  # element that wraps. A candidate with no agent and no state still
+  # shows its time — "just now" alone is more use than nothing while the
+  # card is still forming.
+  defp byline(candidate, now) do
+    [
+      CandidateDisplay.agent_name(candidate),
+      CandidateDisplay.byline_state(candidate),
+      CandidateDisplay.said_ago(candidate, now)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, " · ")
     end
   end
 

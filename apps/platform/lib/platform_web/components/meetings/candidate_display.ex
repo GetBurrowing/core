@@ -51,6 +51,75 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
   alias Platform.Meetings.MeetingCandidate
 
   @doc """
+  How long ago the words behind this card were spoken.
+
+  The mockup's `— Dalton, just now` / `— Mycroft, 2m`, and the target
+  screen commits to it explicitly: *"Cards land as they're made, and say
+  who made them and when."* Until this existed the byline said who and
+  never when, so a card that arrived thirty seconds ago and one that had
+  been sitting there for ten minutes read identically — the same
+  can't-tell-fresh-from-stale problem the `Couldn't` state fixes on the
+  agent dock.
+
+  Reads `last_utterance_at`, not `inserted_at`: the card is about
+  something a person SAID, and a threaded follow-up moves the utterance
+  forward while the row keeps its original insert time. "2m ago" should
+  mean "they said it two minutes ago", which is the only reading a
+  participant will give it.
+
+  ## Why it takes `now` instead of calling `DateTime.utc_now/0`
+
+  `PlatformWeb.Components.ChatHelpers.relative_time/1` says the same
+  words and reads its own clock. That is right for a chat line and wrong
+  here: this card also draws a countdown ring computed from the rail's
+  `now` assign, and a byline reading a *different* clock could say "just
+  now" beside a ring that has already expired. One render, one clock.
+
+  Same vocabulary as `relative_time/1` deliberately — two spellings of
+  "2m ago" on one screen is its own small lie about whether they mean
+  the same thing.
+
+  `nil` for a candidate with no utterance timestamp, so the caller omits
+  the element rather than printing an empty separator.
+  """
+  @spec said_ago(map(), DateTime.t()) :: String.t() | nil
+  def said_ago(%{last_utterance_at: %DateTime{} = at}, %DateTime{} = now) do
+    case DateTime.diff(now, at, :second) do
+      diff when diff < 0 -> "just now"
+      diff when diff < 60 -> "just now"
+      diff when diff < 3600 -> "#{div(diff, 60)}m ago"
+      diff when diff < 86_400 -> "#{div(diff, 3600)}h ago"
+      diff -> "#{div(diff, 86_400)}d ago"
+    end
+  end
+
+  def said_ago(_candidate, _now), do: nil
+
+  @doc """
+  What this card actually produced, or `nil` while it has produced
+  nothing.
+
+  The mockup's `✓ added to Tasks`. It is drawn ONLY from a stored id —
+  `task_id` or `canvas_id`, both written by `Platform.Meetings.Candidates.graduate/2`
+  — never from `state == :acting`, and that distinction is the whole
+  value of the line. `graduate/2` can fail against an archived project
+  and leave the row `:acting` and disarmed with no deliverable
+  (`candidates.ex:1117`), which its own docs call "the truthful reading
+  of what happened". A label keyed on the state would announce a task
+  that was never created.
+
+  So: present id, present claim. No id, no claim.
+
+  `outcome_kind` is deliberately NOT consulted. It declares what the
+  card was *aiming* at; the ids record what it *reached*, and this line
+  is about the second.
+  """
+  @spec outcome_label(map()) :: String.t() | nil
+  def outcome_label(%{task_id: task_id}) when is_binary(task_id), do: "Added to Tasks"
+  def outcome_label(%{canvas_id: canvas_id}) when is_binary(canvas_id), do: "Added to Canvas"
+  def outcome_label(_candidate), do: nil
+
+  @doc """
   The stage tag drawn at the top of a card — the mockup's `1 · heard`.
 
   The ordinal is part of the copy rather than derived, because the

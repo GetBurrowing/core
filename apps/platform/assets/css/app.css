@@ -5402,6 +5402,21 @@ body, .font-fabrikam {
   color: var(--cc-chip-fg);
 }
 
+/* `✓ Added to Tasks` — what the card actually produced.
+   Rendered only when a task_id/canvas_id exists, so this style never
+   appears on a card that produced nothing. Uses the theme's success
+   token rather than a literal green so it survives both themes; the
+   tick glyph is aria-hidden and the words carry the meaning, matching
+   the agent dock's ring-glyph-word rule. */
+.candidate-card__outcome {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 9px;
+  font-size: 11px;
+  color: var(--color-success);
+}
+
 .candidate-card__ask {
   margin-top: 11px;
   font-size: 11.5px;
