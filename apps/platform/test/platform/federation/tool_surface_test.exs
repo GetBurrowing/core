@@ -3925,8 +3925,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.stack.slug == slug
       assert length(result.members) == 2
       assert Enum.any?(result.edges, &(&1.from_task_id == t2.id and &1.to_task_id == t1.id))
-      assert t1.id in result.executable_now
+      # Status-aware since 01a05394-8300 stage 2: two `backlog` members in
+      # a `forming` stack are not runnable now, so both are `blocked_now`.
+      refute t1.id in result.executable_now
       refute t2.id in result.executable_now
+      assert Enum.sort(result.blocked_now) == Enum.sort([t1.id, t2.id])
       assert result.cross_stack_deps == []
     end
 
@@ -3959,7 +3962,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
           %{}
         )
 
-      {:ok, results} =
+      # Task 01a05394-8300 stage 4: `stack_list` returns an envelope, not a
+      # bare array.
+      {:ok, %{stacks: results, total: 1, has_more: false}} =
         ToolSurface.execute("stack_list", %{"project_id" => project_a.id}, %{})
 
       slugs = Enum.map(results, & &1.slug)

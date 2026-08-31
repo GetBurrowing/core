@@ -220,13 +220,59 @@ defmodule Platform.Tasks.Stacks do
   """
   @spec list_stacks(map()) :: [Stack.t()]
   def list_stacks(filters \\ %{}) when is_map(filters) do
+    filters
+    |> list_stacks_query()
+    |> preload(:sponsor)
+    |> Repo.all()
+  end
+
+  @doc """
+  One page of `list_stacks/1`, in the same total order, over the same
+  filters (task 01a05394-8300 stage 4 — `stack_list` pagination).
+
+  `page_opts` requires `:limit`; `:offset` defaults to 0. Shares its query
+  builder with `list_stacks/1` and `count_stacks/1` so the page and the
+  `total` beside it can never describe two different sets.
+  """
+  @spec list_stacks_page(map(), keyword()) :: [Stack.t()]
+  def list_stacks_page(filters, page_opts) when is_map(filters) and is_list(page_opts) do
+    limit = Keyword.fetch!(page_opts, :limit)
+    offset = Keyword.get(page_opts, :offset, 0)
+
+    filters
+    |> list_stacks_query()
+    |> limit(^limit)
+    |> offset(^offset)
+    |> preload(:sponsor)
+    |> Repo.all()
+  end
+
+  @doc """
+  How many stacks `list_stacks/1` would return for `filters`, without
+  loading them. A `SELECT count(*)` over the same filters — what makes
+  `stack_list`'s `has_more` a fact rather than a restatement of the page
+  size (see `Platform.Tasks.count_tasks/1` for the boundary argument).
+  """
+  @spec count_stacks(map()) :: non_neg_integer()
+  def count_stacks(filters) when is_map(filters) do
+    filters
+    |> list_stacks_query()
+    |> exclude(:order_by)
+    |> Repo.aggregate(:count, :id)
+  end
+
+  # Shared filter + order builder for `list_stacks/1`, `list_stacks_page/2`
+  # and `count_stacks/1`. `desc: s.id` is the tiebreaker that makes the
+  # order TOTAL: stack ids are UUIDv7, so it agrees with `inserted_at` and
+  # only decides the ties the timestamp leaves open. Without it Postgres may
+  # return equal-key rows in a different order between two executions, and
+  # two consecutive pages can skip one row and repeat another with no error.
+  defp list_stacks_query(filters) when is_map(filters) do
     Stack
     |> filter_by_project(Map.get(filters, :project_id))
     |> filter_by_status(Map.get(filters, :status))
     |> filter_by_sponsor(Map.get(filters, :sponsor_user_id))
-    |> order_by([s], desc: s.inserted_at)
-    |> preload(:sponsor)
-    |> Repo.all()
+    |> order_by([s], desc: s.inserted_at, desc: s.id)
   end
 
   defp filter_by_project(query, nil), do: query

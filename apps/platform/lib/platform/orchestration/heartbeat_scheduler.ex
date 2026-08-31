@@ -45,6 +45,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   alias Platform.Tasks.BranchReconciler
   alias Platform.Tasks.ReviewRequest
   alias Platform.Tasks.StackDeployer
+  alias Platform.Tasks.Stacks
   alias Platform.Tasks.Stage
   alias Platform.Tasks.Validation
 
@@ -683,6 +684,130 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp render_upstream_plans_section(_), do: ""
+
+  # ── Stack predecessors on the EXECUTION dispatch (task 01a05394-8300 stage 5) ──
+  #
+  # `render_upstream_plans_section/1` above is reached from the PLANNING
+  # dispatch only and renders PLAN state (each dep parent's approved plan,
+  # pre-resolved by `ContextAssembler`). An executor needs a different
+  # property — whether each in-stack predecessor has LANDED on the rollup
+  # (`metadata["merged_into_rollup_at"]`, read through
+  # `Stacks.member_has_merged_into_rollup_at?/1`). An `in_review` predecessor
+  # that has not landed still blocks the rollup, so status alone misleads.
+  # This is therefore a SIBLING renderer with its own resolver, not an
+  # overload: the two take different inputs (plan entries vs task rows) and
+  # answer different questions.
+  #
+  # Renders "" (no header) for a non-stack task, for a root member (no
+  # in-stack deps), and when every declared dep points outside the stack —
+  # cross-stack deps are gated by the `done`-only sweep, not by landing.
+  @stack_predecessors_heading "## Stack predecessors (landing state)"
+
+  defp render_stack_predecessors_section(task) do
+    case stack_membership(task) do
+      nil ->
+        ""
+
+      %{stack_id: stack_id} ->
+        case resolve_stack_predecessors(task, stack_id) do
+          [] -> ""
+          predecessors -> stack_predecessors_block(predecessors)
+        end
+    end
+  end
+
+  # Resolves the TRANSITIVE in-stack closure of the member's deps (stage 5 fix
+  # after the behavioural gate): on a chain A -> B -> C where C declares B
+  # only, A is still a predecessor whose landing state C's executor needs —
+  # if A is the one holding the rollup, a single-hop resolver names nobody
+  # who holds it. One query loads the stack's members; the dep map is
+  # restricted to in-stack ids, and the walk from the direct deps runs to a
+  # fixpoint over a visited set (cycle-safe even though `validate_dag`
+  # should keep cycles out). Output is in `stack_position` order.
+  defp resolve_stack_predecessors(task, stack_id) do
+    self_id = full_task_id(task)
+
+    # A member with no declared deps (a root) resolves to [] without a
+    # query — the plain-map fixtures in `heartbeat_scheduler_test.exs`
+    # depend on that, and there is nothing to walk from anyway.
+    case declared_dep_ids(task, self_id) do
+      [] ->
+        []
+
+      declared ->
+        members = Stacks.members(stack_id)
+        member_ids = MapSet.new(members, & &1.id)
+
+        dep_map =
+          Map.new(members, fn member ->
+            {member.id, in_stack_dep_ids(member, member_ids, member.id)}
+          end)
+
+        direct = Enum.filter(declared, &MapSet.member?(member_ids, &1))
+
+        closure =
+          direct
+          |> walk_stack_predecessors(dep_map, MapSet.new())
+          |> MapSet.delete(self_id)
+
+        members
+        |> Enum.filter(&MapSet.member?(closure, &1.id))
+        |> Enum.sort_by(&{&1.stack_position, &1.id})
+    end
+  end
+
+  defp declared_dep_ids(task, self_id) do
+    case Map.get(task, :dependencies) || Map.get(task, "dependencies") do
+      deps when is_list(deps) ->
+        deps
+        |> Enum.map(fn dep ->
+          is_map(dep) and (Map.get(dep, "task_id") || Map.get(dep, :task_id))
+        end)
+        |> Enum.filter(&is_binary/1)
+        |> Enum.reject(&(&1 == self_id))
+        |> Enum.uniq()
+
+      _ ->
+        []
+    end
+  end
+
+  defp in_stack_dep_ids(task, member_ids, self_id) do
+    task
+    |> declared_dep_ids(self_id)
+    |> Enum.filter(&MapSet.member?(member_ids, &1))
+  end
+
+  defp walk_stack_predecessors([], _dep_map, visited), do: visited
+
+  defp walk_stack_predecessors([id | rest], dep_map, visited) do
+    if MapSet.member?(visited, id) do
+      walk_stack_predecessors(rest, dep_map, visited)
+    else
+      next = Map.get(dep_map, id, [])
+      walk_stack_predecessors(next ++ rest, dep_map, MapSet.put(visited, id))
+    end
+  end
+
+  defp stack_predecessors_block(predecessors) do
+    lines =
+      Enum.map_join(predecessors, "\n", fn pred ->
+        landing =
+          if Stacks.member_has_merged_into_rollup_at?(pred),
+            do: "[LANDED]",
+            else: "[NOT LANDED]"
+
+        "- `#{pred.id}` — #{pred.title} (status: `#{pred.status}`) #{landing}"
+      end)
+
+    """
+
+    #{@stack_predecessors_heading}
+    This task is a stack member with in-stack predecessors. What matters to you is whether each has LANDED on the rollup branch (`merged_into_rollup_at` stamp), not its status: a predecessor at `in_review` that is `[NOT LANDED]` still holds the rollup, and your member branch will not see its work until it lands.
+
+    #{lines}
+    """
+  end
 
   # Task 019f7b7e stage 3 — surface the migration slot reserved at plan
   # approval (stage 2) so the executor writes the reserved filename instead
@@ -1844,6 +1969,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     |> maybe_strip_git_workflow(task)
     |> insert_before_context(execution_contract(task, stage))
     |> maybe_insert_git_workflow(task)
+    # Task 01a05394-8300 stage 5: predecessor landing state for stack members,
+    # JOINED after the git-workflow block (its own `insert_before_context`
+    # call — it never replaces or reflows the section above it). Renders ""
+    # for a root member and for a non-stack task.
+    |> insert_before_context(render_stack_predecessors_section(task))
   end
 
   defp enrich_in_review_prompt(prompt, task, stage) do

@@ -396,10 +396,14 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
                &(&1.from_task_id == child.id and &1.to_task_id == root.id and &1.kind == "blocks")
              )
 
-      # `executable_now` lists the in-stack roots that have no
-      # unsatisfied in-stack deps — the child is blocked by the root.
-      assert root.id in result.executable_now
-      refute child.id in result.executable_now
+      # `executable_now` is status-aware (01a05394-8300 stage 2): both
+      # members are still `backlog` in a `forming` stack, so neither is
+      # runnable now — they sit in `blocked_now`, and the member entries
+      # say WHY: the root has no unmet deps, the child is behind the root.
+      assert result.executable_now == []
+      assert Enum.sort(result.blocked_now) == Enum.sort([root.id, child.id])
+      assert Enum.find(result.members, &(&1.id == root.id)).blocked_by == []
+      assert Enum.find(result.members, &(&1.id == child.id)).blocked_by == [root.id]
 
       # No cross-stack edges in this scenario.
       assert result.cross_stack_deps == []
@@ -491,8 +495,11 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       {:ok, _} =
         ToolSurface.execute("stack_start", %{"stack_id" => started_a_id}, %{})
 
-      # project filter: only project_a's two stacks come back.
-      {:ok, project_a_results} =
+      # project filter: only project_a's two stacks come back. Task
+      # 01a05394-8300 stage 4: the result is an envelope, and `total` is a
+      # count over the same filters, so it is 2 here regardless of
+      # project_b's stack.
+      {:ok, %{stacks: project_a_results, total: 2, has_more: false}} =
         ToolSurface.execute("stack_list", %{"project_id" => project_a.id}, %{})
 
       project_a_ids = Enum.map(project_a_results, & &1.id)
@@ -501,8 +508,8 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       refute forming_b_id in project_a_ids
 
       # status filter (combined with project_id): only the in_progress
-      # member of project_a comes back.
-      {:ok, in_progress_results} =
+      # member of project_a comes back — and `total` narrows with it.
+      {:ok, %{stacks: in_progress_results, total: 1, has_more: false}} =
         ToolSurface.execute(
           "stack_list",
           %{"project_id" => project_a.id, "status" => "in_progress"},
@@ -514,6 +521,208 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       refute forming_a_id in in_progress_ids
       refute forming_b_id in in_progress_ids
       assert Enum.all?(in_progress_results, &(&1.status == "in_progress"))
+    end
+
+    # Task 01a05394-8300 stage 4 — pagination envelope, mirroring task_list.
+    # Every fixture below is scoped to a project the test owns, and `total`
+    # is asserted over that same filter, so stacks other tests leave in the
+    # shared database cannot move the numbers.
+    test "has_more is a fact from a real count, not a restatement of the page size" do
+      project = create_project()
+
+      ids =
+        for i <- 1..3 do
+          %{stack_id: id} =
+            create_stack_via_tool(project.id, unique_slug("e2e-page-#{i}"), "Page #{i}")
+
+          id
+        end
+
+      # More stacks than the limit: a full page, and has_more says so.
+      {:ok, over} =
+        ToolSurface.execute("stack_list", %{"project_id" => project.id, "limit" => 2}, %{})
+
+      assert over.total == 3
+      assert over.limit == 2
+      assert over.offset == 0
+      assert length(over.stacks) == 2
+      assert over.total > length(over.stacks)
+      assert over.has_more == true
+
+      # PAIRED: a corpus of EXACTLY `limit`. This is the boundary where
+      # `length(rows) == limit` lies — the page is full, and there is no more.
+      {:ok, exact} =
+        ToolSurface.execute("stack_list", %{"project_id" => project.id, "limit" => 3}, %{})
+
+      assert exact.total == 3
+      assert length(exact.stacks) == 3
+      assert exact.has_more == false
+
+      # Paging is total and stable: two consecutive pages neither skip nor
+      # repeat an id, and their concatenation IS the unpaged order.
+      {:ok, page_2} =
+        ToolSurface.execute(
+          "stack_list",
+          %{"project_id" => project.id, "limit" => 2, "offset" => 2},
+          %{}
+        )
+
+      assert page_2.offset == 2
+      assert page_2.total == 3
+      assert length(page_2.stacks) == 1
+      assert page_2.has_more == false
+
+      paged_ids = Enum.map(over.stacks ++ page_2.stacks, & &1.id)
+      unpaged_ids = Enum.map(exact.stacks, & &1.id)
+
+      assert paged_ids == unpaged_ids
+      assert Enum.sort(paged_ids) == Enum.sort(ids)
+      assert Enum.uniq(paged_ids) == paged_ids
+
+      # The tool order is the context order (inserted_at desc, id desc), so
+      # the third-created stack leads.
+      assert hd(unpaged_ids) == List.last(ids)
+
+      # An empty page past the end is still a well-formed envelope.
+      {:ok, past} =
+        ToolSurface.execute(
+          "stack_list",
+          %{"project_id" => project.id, "limit" => 2, "offset" => 3},
+          %{}
+        )
+
+      assert past.stacks == []
+      assert past.total == 3
+      assert past.has_more == false
+    end
+
+    test "description is a visible preview: truncated flag + original length, intact when short" do
+      alias Platform.Federation.ResultBound
+      alias Platform.Tasks.Stack
+
+      project = create_project()
+      chars = ResultBound.snippet_chars()
+
+      %{stack_id: long_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-desc-long"), "Long")
+
+      %{stack_id: short_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-desc-short"), "Short")
+
+      long_description = String.duplicate("x", chars) <> String.duplicate("y", 137)
+      short_description = "a short description"
+
+      Repo.update!(
+        Ecto.Changeset.change(Repo.get!(Stack, long_id), description: long_description)
+      )
+
+      Repo.update!(
+        Ecto.Changeset.change(Repo.get!(Stack, short_id), description: short_description)
+      )
+
+      {:ok, %{stacks: rows}} =
+        ToolSurface.execute("stack_list", %{"project_id" => project.id}, %{})
+
+      long_row = Enum.find(rows, &(&1.id == long_id))
+      short_row = Enum.find(rows, &(&1.id == short_id))
+
+      assert long_row.description_truncated == true
+      assert long_row.description_length == byte_size(long_description)
+      assert long_row.description == String.duplicate("x", chars)
+      assert byte_size(long_row.description) < byte_size(long_description)
+
+      # PAIRED positive control: a short description comes back whole.
+      assert short_row.description_truncated == false
+      assert short_row.description_length == byte_size(short_description)
+      assert short_row.description == short_description
+    end
+
+    test "rows are identity + state: stack_get's sub-records are dropped by exact key" do
+      alias Platform.Tasks.Stack
+
+      project = create_project()
+
+      %{stack_id: stack_id, rollup_branch: rollup_branch} =
+        create_stack_via_tool(project.id, unique_slug("e2e-row-shape"), "Row Shape")
+
+      # Stamp a rollup_pr so the curated sub-map is exercised, not just nil.
+      stack = Repo.get!(Stack, stack_id)
+
+      Repo.update!(
+        Ecto.Changeset.change(stack,
+          metadata:
+            Map.merge(stack.metadata || %{}, %{
+              "rollup_pr" => %{
+                "number" => 42,
+                "url" => "https://github.com/example/core/pull/42",
+                "opened_at" => "2026-08-30T00:00:00Z",
+                "auto_merge_armed" => true,
+                "extra_writer_key" => "must not leak"
+              }
+            })
+        )
+      )
+
+      {:ok, %{stacks: [row]}} =
+        ToolSurface.execute("stack_list", %{"project_id" => project.id}, %{})
+
+      assert row.id == stack_id
+      assert row.rollup_branch == rollup_branch
+      assert row.project_id == project.id
+      assert row.status == "forming"
+
+      assert row.rollup_pr == %{
+               status: nil,
+               number: 42,
+               url: "https://github.com/example/core/pull/42",
+               merged_at: nil,
+               auto_merge_armed: true
+             }
+
+      assert row.rollup_branch_ready == nil
+
+      # The exact key set. A revert of the row serializer to
+      # `serialize_stack/1` adds `phase_assignees`, `sponsor`,
+      # `sponsor_user_id`, `auto_plan` and `auto_accept_plan`, and the
+      # `stack_get` envelope additionally carries `members`; none belong on a
+      # list row.
+      assert Map.keys(row) |> Enum.sort() ==
+               Enum.sort([
+                 :id,
+                 :slug,
+                 :name,
+                 :status,
+                 :rollup_branch,
+                 :base_branch,
+                 :description,
+                 :description_truncated,
+                 :description_length,
+                 :project_id,
+                 :epic_id,
+                 :rollup_branch_ready,
+                 :rollup_pr,
+                 :inserted_at,
+                 :updated_at
+               ])
+
+      for dropped <- [
+            :members,
+            :phase_assignees,
+            :sponsor,
+            :sponsor_user_id,
+            :auto_plan,
+            :auto_accept_plan,
+            :metadata
+          ] do
+        refute Map.has_key?(row, dropped), "list row must not carry #{inspect(dropped)}"
+      end
+
+      # And the same stack through `stack_get` DOES carry what the row drops,
+      # so the refutes above are about the row, not about the data.
+      {:ok, %{stack: full}} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert Map.has_key?(full, :phase_assignees)
+      assert Map.has_key?(full, :auto_plan)
+      refute Map.has_key?(full, :description_truncated)
     end
   end
 
@@ -2602,6 +2811,284 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
 
   # Shared by both stage-3 describes: a task placed directly into a stack
   # (bypassing `stack_add`'s status cascade so the fixture controls status).
+  # ── Task 01a05394-8300 stage 1: task_get exposes stack_position + a curated
+  # `stack` sub-map (landed_at / blocked_reason / blocked_reason_at) ──
+  #
+  # Every positive is PAIRED with a negative on a sibling in the same stack
+  # (stamped vs unstamped, blocked vs clean), plus a third, distinct
+  # non-member case where the sub-map itself is `nil`. The unstamped member
+  # asserts the KEY IS PRESENT with a nil value — `refute Map.has_key?`
+  # would be green under a serializer that dropped the key entirely.
+
+  describe "task_get stack sub-map (01a05394-8300 stage 1)" do
+    test "a stamped member reads landed_at = the stamp; an unstamped sibling reads the key as nil; a non-member reads stack: nil" do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-landed"))
+
+      landed = member_in_stack!(project, stack_id, position: 1)
+      pending = member_in_stack!(project, stack_id, position: 2)
+      {:ok, lone} = Tasks.create_task(%{project_id: project.id, title: "Lone"})
+
+      stamp = %{"sha" => "abc1234", "at" => "2026-08-30T12:00:00Z"}
+      {:ok, _} = Tasks.update_task(landed, %{metadata: %{"merged_into_rollup_at" => stamp}})
+
+      {:ok, landed_view} = ToolSurface.execute("task_get", %{"task_id" => landed.id}, %{})
+      assert landed_view.stack_id == stack_id
+      assert landed_view.stack_position == 1
+      assert %{} = landed_view.stack
+      assert landed_view.stack.landed_at == stamp
+      assert landed_view.stack.landed_at["sha"] == "abc1234"
+      # Curated keys only — no raw metadata anywhere on the wire.
+      refute Map.has_key?(landed_view, :metadata)
+
+      assert Map.keys(landed_view.stack) |> Enum.sort() ==
+               [:blocked_reason, :blocked_reason_at, :landed_at]
+
+      {:ok, pending_view} = ToolSurface.execute("task_get", %{"task_id" => pending.id}, %{})
+      assert pending_view.stack_id == stack_id
+      assert pending_view.stack_position == 2
+      assert Map.has_key?(pending_view.stack, :landed_at) and pending_view.stack.landed_at == nil
+
+      {:ok, lone_view} = ToolSurface.execute("task_get", %{"task_id" => lone.id}, %{})
+      assert Map.has_key?(lone_view, :stack) and lone_view.stack == nil
+      assert Map.has_key?(lone_view, :stack_position) and lone_view.stack_position == nil
+    end
+
+    test "blocked_reason + blocked_reason_at are the plain strings from stamp_blocked_reason/2; a clean sibling reads both as nil" do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-blocked"))
+
+      blocked = member_in_stack!(project, stack_id, position: 1, status: "in_progress")
+      clean = member_in_stack!(project, stack_id, position: 2)
+
+      {:ok, _} = Tasks.stamp_blocked_reason(blocked, "Waiting on predecessor #1 to land.")
+
+      {:ok, blocked_view} = ToolSurface.execute("task_get", %{"task_id" => blocked.id}, %{})
+      assert blocked_view.stack.blocked_reason == "Waiting on predecessor #1 to land."
+      assert is_binary(blocked_view.stack.blocked_reason_at)
+      assert {:ok, _, _} = DateTime.from_iso8601(blocked_view.stack.blocked_reason_at)
+      # Blocked but not landed: the two stamps are independent.
+      assert Map.has_key?(blocked_view.stack, :landed_at) and blocked_view.stack.landed_at == nil
+
+      {:ok, clean_view} = ToolSurface.execute("task_get", %{"task_id" => clean.id}, %{})
+
+      assert Map.has_key?(clean_view.stack, :blocked_reason) and
+               clean_view.stack.blocked_reason == nil
+
+      assert Map.has_key?(clean_view.stack, :blocked_reason_at) and
+               clean_view.stack.blocked_reason_at == nil
+    end
+
+    test "a member whose metadata column is NULL (old row) serializes without raising" do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-nilmeta"))
+      member = member_in_stack!(project, stack_id, position: 1)
+
+      import Ecto.Query, only: [from: 2]
+      {1, _} = Repo.update_all(from(t in Task, where: t.id == ^member.id), set: [metadata: nil])
+      assert is_nil(Tasks.get_task_record(member.id).metadata)
+
+      {:ok, view} = ToolSurface.execute("task_get", %{"task_id" => member.id}, %{})
+      assert view.stack_id == stack_id
+      assert view.stack_position == 1
+
+      assert view.stack == %{landed_at: nil, blocked_reason: nil, blocked_reason_at: nil}
+      assert is_nil(view.paused_reason)
+    end
+  end
+
+  describe "stack_get member fields + status-aware executable_now (01a05394-8300 stage 2)" do
+    setup do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-s2"))
+      %{project: project, stack_id: stack_id}
+    end
+
+    defp set_status!(%Task{} = task, status) do
+      Repo.get!(Task, task.id) |> Task.changeset(%{status: status}) |> Repo.update!()
+    end
+
+    defp stamp_landed!(%Task{} = task, sha) do
+      {:ok, _} =
+        Tasks.update_task(Repo.get!(Task, task.id), %{
+          metadata: %{"merged_into_rollup_at" => %{"sha" => sha, "at" => "2026-08-30T12:00:00Z"}}
+        })
+
+      task
+    end
+
+    defp add_dep!(%Task{} = task, %Task{} = dep) do
+      {:ok, _} =
+        Tasks.update_task(Repo.get!(Task, task.id), %{
+          dependencies: [%{"task_id" => dep.id, "kind" => "blocks"}]
+        })
+
+      task
+    end
+
+    defp get_stack!(stack_id) do
+      {:ok, result} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      result
+    end
+
+    defp member_entry(result, %Task{id: id}), do: Enum.find(result.members, &(&1.id == id))
+
+    test "landed_at: a stamped member reads the stamp; an unstamped sibling reads explicit nil",
+         %{project: project, stack_id: stack_id} do
+      landed = member_in_stack!(project, stack_id, position: 1) |> stamp_landed!("abc1234")
+      pending = member_in_stack!(project, stack_id, position: 2)
+
+      result = get_stack!(stack_id)
+
+      assert member_entry(result, landed).landed_at ==
+               %{"sha" => "abc1234", "at" => "2026-08-30T12:00:00Z"}
+
+      entry = member_entry(result, pending)
+      assert Map.has_key?(entry, :landed_at) and entry.landed_at == nil
+      # Curated keys only — the raw metadata map never crosses the wire.
+      refute Enum.any?(result.members, &Map.has_key?(&1, :metadata))
+      refute Map.has_key?(result.stack, :metadata)
+    end
+
+    test "rollup_pr: never-opened → nil; mid-open placeholder → number nil without raising; merged shape exposes number/url/merged_at",
+         %{project: project, stack_id: stack_id} do
+      _member = member_in_stack!(project, stack_id, position: 1)
+
+      never = get_stack!(stack_id)
+      assert Map.has_key?(never.stack, :rollup_pr) and never.stack.rollup_pr == nil
+
+      # The deployer's lock placeholder: the FIRST write has no number/url.
+      {:ok, _} =
+        Platform.Tasks.Stacks.update_stack(Platform.Tasks.Stacks.get_stack(stack_id), %{
+          metadata: %{"rollup_pr" => %{"status" => "opening", "at" => "2026-08-30T12:00:00Z"}}
+        })
+
+      opening = get_stack!(stack_id)
+      assert opening.stack.rollup_pr.status == "opening"
+
+      assert Map.has_key?(opening.stack.rollup_pr, :number) and
+               opening.stack.rollup_pr.number == nil
+
+      assert opening.stack.rollup_pr.url == nil
+      assert opening.stack.rollup_pr.merged_at == nil
+
+      {:ok, _} =
+        Platform.Tasks.Stacks.update_stack(Platform.Tasks.Stacks.get_stack(stack_id), %{
+          metadata: %{
+            "rollup_pr" => %{
+              "number" => 42,
+              "url" => "https://github.com/example/core/pull/42",
+              "opened_at" => "2026-08-30T12:01:00Z",
+              "auto_merge_armed" => true,
+              "merged_at" => "2026-08-30T12:30:00Z"
+            }
+          }
+        })
+
+      merged = get_stack!(stack_id)
+
+      assert merged.stack.rollup_pr == %{
+               status: nil,
+               number: 42,
+               url: "https://github.com/example/core/pull/42",
+               merged_at: "2026-08-30T12:30:00Z",
+               auto_merge_armed: true
+             }
+    end
+
+    test "plan_status: approved → \"approved\", pending_review → \"pending_review\", no plan → nil; the LATEST plan wins",
+         %{project: project, stack_id: stack_id} do
+      approved = member_in_stack!(project, stack_id, position: 1)
+      reviewing = member_in_stack!(project, stack_id, position: 2)
+      planless = member_in_stack!(project, stack_id, position: 3)
+
+      # v1 approved then superseded by a v2 that is now approved: the
+      # highest version's status must be the one reported.
+      {:ok, v1} = Tasks.create_plan(%{task_id: approved.id, status: "rejected"})
+      {:ok, _v2} = Tasks.create_plan(%{task_id: approved.id, status: "approved"})
+      assert v1.version == 1
+      {:ok, _} = Tasks.create_plan(%{task_id: reviewing.id, status: "pending_review"})
+
+      result = get_stack!(stack_id)
+      assert member_entry(result, approved).plan_status == "approved"
+      assert member_entry(result, reviewing).plan_status == "pending_review"
+      entry = member_entry(result, planless)
+      assert Map.has_key?(entry, :plan_status) and entry.plan_status == nil
+    end
+
+    test "blocked_by: an unlanded in-stack predecessor is listed; once it lands (in_review + stamp) the list is [] — not nil, not absent",
+         %{project: project, stack_id: stack_id} do
+      root = member_in_stack!(project, stack_id, position: 1, status: "in_progress")
+      child = member_in_stack!(project, stack_id, position: 2) |> add_dep!(root)
+
+      before = get_stack!(stack_id)
+      assert member_entry(before, child).blocked_by == [root.id]
+      assert member_entry(before, root).blocked_by == []
+
+      # A stamp alone is not "landed" for the engine — status must clear too.
+      stamp_landed!(root, "def5678")
+      stamped_only = get_stack!(stack_id)
+      assert member_entry(stamped_only, child).blocked_by == [root.id]
+
+      set_status!(root, "in_review")
+      after_land = get_stack!(stack_id)
+      entry = member_entry(after_land, child)
+      assert Map.has_key?(entry, :blocked_by) and entry.blocked_by == []
+    end
+
+    test "executable_now is status-aware: a done root is NOT listed, an in_progress root IS; blocked_now holds the rest; every member is in exactly one bucket",
+         %{project: project, stack_id: stack_id} do
+      done_root = member_in_stack!(project, stack_id, position: 1, status: "in_progress")
+      live_root = member_in_stack!(project, stack_id, position: 2, status: "in_progress")
+      set_status!(done_root, "done")
+
+      # Deps all landed but still parked at stack_pending — the promotion
+      # sweep has not run. Must be VISIBLE in blocked_now with blocked_by [].
+      parked =
+        member_in_stack!(project, stack_id, position: 3, status: "in_progress")
+        |> add_dep!(live_root)
+
+      set_status!(parked, "stack_pending")
+      stamp_landed!(live_root, "0a1b2c3")
+      # live_root: in_progress + stamped. For the engine a dep is only
+      # satisfied at in_review|deploying|done, so flip it — it stays
+      # runnable (in_review is in the dispatcher's live set).
+      set_status!(live_root, "in_review")
+
+      # A promoted non-root whose only dep has landed IS runnable now.
+      promoted =
+        member_in_stack!(project, stack_id, position: 4, status: "in_progress")
+        |> add_dep!(live_root)
+
+      # A non-root still waiting on an unlanded dep.
+      waiting =
+        member_in_stack!(project, stack_id, position: 5, status: "in_progress")
+        |> add_dep!(parked)
+
+      result = get_stack!(stack_id)
+
+      refute done_root.id in result.executable_now
+      assert live_root.id in result.executable_now
+      assert promoted.id in result.executable_now
+      refute parked.id in result.executable_now
+      refute waiting.id in result.executable_now
+
+      assert done_root.id in result.blocked_now
+      assert parked.id in result.blocked_now
+      assert member_entry(result, parked).blocked_by == []
+      assert member_entry(result, parked).status == "stack_pending"
+      assert waiting.id in result.blocked_now
+      assert member_entry(result, waiting).blocked_by == [parked.id]
+
+      # Partition: union covers ALL members, intersection empty.
+      all_ids = result.members |> Enum.map(& &1.id) |> Enum.sort()
+      assert length(result.members) == 5
+      assert Enum.sort(result.executable_now ++ result.blocked_now) == all_ids
+      assert result.executable_now -- result.blocked_now == result.executable_now
+      assert result.blocked_now -- result.executable_now == result.blocked_now
+    end
+  end
+
   defp member_in_stack!(project, stack_id, opts) do
     {:ok, task} =
       Tasks.create_task(%{

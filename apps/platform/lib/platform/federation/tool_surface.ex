@@ -2297,9 +2297,9 @@ defmodule Platform.Federation.ToolSurface do
           stack_id: %{type: "string", required: true, description: "The stack to fetch"}
         },
         returns:
-          "%{stack: %{id, slug, name, status, rollup_branch, base_branch, description, auto_plan, auto_accept_plan}, members: [%{id, title, status, stack_position, dependencies}], edges: [%{from_task_id, to_task_id, kind}], executable_now: [task_id], cross_stack_deps: [%{from_task_id, to_task_id, kind}]}. `stack.auto_plan` and `stack.auto_accept_plan` are Stack v2 lifecycle flags (see `stack_create` for semantics). `edges` are in-stack dep edges only; cross-stack dep edges (deps to tasks in OTHER stacks) surface separately under `cross_stack_deps`. Deps pointing at non-stack tasks are silently dropped per ADR 0041.",
+          "%{stack: %{id, slug, name, status, rollup_branch, base_branch, description, auto_plan, auto_accept_plan, rollup_branch_ready, rollup_pr}, members: [%{id, title, status, stack_position, dependencies, paused_reason, landed_at, plan_status, blocked_by}], edges: [%{from_task_id, to_task_id, kind}], executable_now: [task_id], blocked_now: [task_id], members_in_merge_order: [task_id], cross_stack_deps: [%{from_task_id, to_task_id, kind}]}. `stack.auto_plan` and `stack.auto_accept_plan` are Stack v2 lifecycle flags (see `stack_create` for semantics). `stack.rollup_pr` is nil until the deployer starts opening the rollup PR, then a curated `%{status, number, url, merged_at, auto_merge_armed}` where every key is individually nilable (`status: \"opening\"` with no number/url while the open is in flight; `merged_at` set once merged). Per member: `landed_at` is the `%{sha, at}` rollup-merge stamp or nil; `plan_status` is the status of the member's latest plan (`draft` / `pending_review` / `approved` / `completed` / `rejected` / `superseded`) or nil when it has none; `blocked_by` is the list of THIS member's in-stack dependency ids the engine does not yet consider satisfied (`[]` when unblocked). `executable_now` is status-aware: a member is listed iff its status is one the dispatcher treats as live (`planning` / `in_progress` / `in_review` / `deploying`) AND `blocked_by == []`; every other member is in `blocked_now`, so the two lists partition `members` (a `stack_pending` member whose deps all landed but has not been promoted yet sits in `blocked_now` with `blocked_by: []`). `edges` are in-stack dep edges only; cross-stack dep edges (deps to tasks in OTHER stacks) surface separately under `cross_stack_deps`. Deps pointing at non-stack tasks are silently dropped per ADR 0041.",
         limitations:
-          "Returns an error envelope if the stack does not exist. `executable_now` is empty when the in-stack DAG fails validation (cycle or cross-stack-dep) — inspect `edges` / `cross_stack_deps` to diagnose.",
+          "Returns an error envelope if the stack does not exist. `executable_now` is empty (and every member sits in `blocked_now`) when the in-stack DAG fails validation (cycle or cross-stack-dep) — inspect `edges` / `cross_stack_deps` to diagnose. `blocked_by` reflects the rollup-merge stamp and status of each dep, not the git reachability check the promotion sweep additionally runs.",
         when_to_use:
           "When inspecting a stack's current shape, members, in-stack dep graph, or which members are runnable now."
       },
@@ -2317,11 +2317,40 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Filter by status: forming, in_progress, in_review, deploying, done, abandoned"
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description:
+              "Maximum stacks to return. Defaults to #{ResultBound.default_limit()}, capped at #{ResultBound.max_limit()}."
+          },
+          offset: %{
+            type: "integer",
+            required: false,
+            description: "How many stacks to skip before the page. Defaults to 0."
           }
         },
         returns:
-          "Array of stack objects (same shape as `stack_get`'s `stack` field), ordered by inserted_at descending.",
-        limitations: "Returns all matching stacks; no pagination yet (matches list_stacks/1).",
+          "%{stacks: [...], total, limit, offset, has_more} — an ENVELOPE, not a bare array. `total` is the " <>
+            "number of stacks matching the filters, counted in the database, independent of `limit`; " <>
+            "`has_more` is true exactly when stacks matching the filters remain beyond this page. Read " <>
+            "`has_more` rather than comparing `stacks` against `limit`. Each entry in `stacks` is a ROW, " <>
+            "not the `stack_get` shape: identity and state only — id, slug, name, status, rollup_branch, " <>
+            "base_branch, project_id, epic_id, rollup_branch_ready, rollup_pr (%{status, number, url, " <>
+            "merged_at, auto_merge_armed} or nil), inserted_at, updated_at — plus `description` as a " <>
+            "preview truncated to #{ResultBound.snippet_chars()} characters with `description_truncated` " <>
+            "(boolean) and `description_length` (the original size in bytes) beside it. Rows carry no " <>
+            "members, phase_assignees, sponsor, or lifecycle flags; call `stack_get` for those.",
+        limitations:
+          "Paginated: returns at most `limit` stacks (default #{ResultBound.default_limit()}, max " <>
+            "#{ResultBound.max_limit()}) from `offset`. To read every stack, page with `offset` until " <>
+            "`has_more` is false; do NOT stop because a page came back short of `limit`. `total` and the " <>
+            "page are two statements, so a concurrent write can leave `has_more` stale by one call. Rows " <>
+            "are ordered `inserted_at` descending, tie-broken by `id`, which is a total order — paging " <>
+            "cannot skip or repeat a stack. `description` is always a preview here; the full text is one " <>
+            "`stack_get` away. Before task 01a05394-8300 this tool returned a bare array of every matching " <>
+            "stack in the full `stack_get` shape with every full description, and descriptions grow " <>
+            "without bound (abandon and complete append to them forever).",
         when_to_use: "When you need an overview of stacks in a project or by lifecycle status."
       },
       %{
@@ -4432,13 +4461,30 @@ defmodule Platform.Federation.ToolSurface do
             {:ok, serialize_task(updated)}
           else
             {:error, :invalid_transition} ->
+              # Task 01a05394 stage 3: name the legal exits, derived from
+              # `Tasks.valid_task_transitions/0` (never a second copy of the
+              # table). An empty exit list says so in words rather than
+              # rendering a dangling enumeration.
+              exits = Map.get(Tasks.valid_task_transitions(), task.status, [])
+
+              exits_sentence =
+                case exits do
+                  [] ->
+                    "'#{task.status}' has no valid outbound transitions."
+
+                  _ ->
+                    "Valid next statuses from '#{task.status}': #{Enum.join(exits, ", ")}."
+                end
+
               {:error,
                %{
-                 error: "Invalid status transition from '#{task.status}' to '#{status_change}'",
+                 error:
+                   "Invalid status transition from '#{task.status}' to '#{status_change}'. " <>
+                     exits_sentence,
                  recoverable: true,
                  suggestion:
-                   "Check allowed transitions for the current status. " <>
-                     "'cancelled' is TERMINAL \u2014 it has no outbound edges and it means the " <>
+                   exits_sentence <>
+                     " 'cancelled' is TERMINAL \u2014 it has no outbound edges and it means the " <>
                      "work was ABANDONED. Use it only to retire work that was genuinely " <>
                      "abandoned or superseded, never to close work that actually shipped. " <>
                      "Delivered-but-unplanned work is recorded by a Fabrikam admin via " <>
@@ -5167,16 +5213,49 @@ defmodule Platform.Federation.ToolSurface do
 
       %Stack{} = stack ->
         members = Stacks.members(stack)
-        executable_ids = stack |> Stacks.executable_members() |> Enum.map(& &1.id)
+        # `Stacks.executable_members/1` stays the DAG source: it is `[]`
+        # when the in-stack DAG is invalid (cycle / cross-stack dep), and
+        # a valid DAG over a non-empty member set always has a level-0.
+        dag_valid? = members == [] or Stacks.executable_members(stack) != []
         merge_order_ids = stack |> Stacks.members_in_merge_order() |> Enum.map(& &1.id)
         {edges, cross_stack_deps} = classify_member_edges(members)
+
+        # Task 01a05394-8300 stage 2. Plans and dep-landing are resolved
+        # ONCE for the whole member set here and handed to the serializer,
+        # so a ten-member stack costs one plan query, not ten.
+        context = stack_member_context(members)
+        serialized = Enum.map(members, &serialize_stack_member(&1, context))
+
+        # Status-aware `executable_now` — the members the engine would
+        # actually run right now. A member is runnable iff BOTH:
+        #   * its status is in the dispatcher's live set
+        #     (`TaskRouterWatcher.active_statuses/0`: the same set
+        #     `TaskRouterWatcher` scans for dispatch, so a `done`,
+        #     `backlog`, `cancelled` or `stack_pending` root is NOT
+        #     runnable); and
+        #   * `blocked_by == []` — every in-stack dep passes
+        #     `MemberSet.dependency_satisfied?/1`, the per-dep predicate
+        #     `Stacks.unblocked_in_stack?/1` (→ `try_promote/1` and the
+        #     redrive gate's `handle_member_regression/2`) is built on.
+        # Roots have no in-stack deps, so a runnable-status root is always
+        # listed; a promoted non-root whose deps all landed is listed too.
+        # Everything else — including a `stack_pending` member whose deps
+        # all landed but which the promotion sweep has not flipped yet —
+        # goes to `blocked_now`, so the two lists partition `members`.
+        executable_ids =
+          if dag_valid?,
+            do: serialized |> Enum.filter(&stack_member_runnable_now?/1) |> Enum.map(& &1.id),
+            else: []
+
+        blocked_ids = serialized |> Enum.map(& &1.id) |> Enum.reject(&(&1 in executable_ids))
 
         {:ok,
          %{
            stack: serialize_stack(stack),
-           members: Enum.map(members, &serialize_stack_member/1),
+           members: serialized,
            edges: edges,
            executable_now: executable_ids,
+           blocked_now: blocked_ids,
            members_in_merge_order: merge_order_ids,
            cross_stack_deps: cross_stack_deps
          }}
@@ -5193,8 +5272,35 @@ defmodule Platform.Federation.ToolSurface do
       |> maybe_put_filter(:project_id, Map.get(args, "project_id"))
       |> maybe_put_filter(:status, Map.get(args, "status"))
 
-    stacks = Stacks.list_stacks(filters)
-    {:ok, Enum.map(stacks, &serialize_stack/1)}
+    # Task 01a05394-8300 stage 4. Mirrors `task_list` (task 01a04a7a): an
+    # ENVELOPE, never a bare array, because a JSON array cannot say whether
+    # it is the whole answer. `total` is a real `SELECT count(*)` over the
+    # same filters (`Stacks.count_stacks/1`), the page is SQL-paged in the
+    # same total order (`Stacks.list_stacks_page/2`; both share one private
+    # query builder), and every row is `serialize_stack_row/1` — identity
+    # and state, with `description` snippeted and the truncation VISIBLE —
+    # rather than the full `stack_get` shape, whose `description` grows
+    # unboundedly (abandon/complete append to it forever).
+    {limit, offset} = ResultBound.page(args)
+
+    total = Stacks.count_stacks(filters)
+
+    rows =
+      filters
+      |> Stacks.list_stacks_page(limit: limit, offset: offset)
+      |> Enum.map(&serialize_stack_row/1)
+
+    # `offset + length(rows) < total`, never `length(rows) == limit`: the
+    # cheap form reports "more" on a corpus of exactly `limit` and sends the
+    # caller to fetch an empty page. See `task_list` for the full argument.
+    {:ok,
+     %{
+       stacks: rows,
+       total: total,
+       limit: limit,
+       offset: offset,
+       has_more: offset + length(rows) < total
+     }}
   end
 
   def execute("stack_add", args, _context) do
@@ -8393,12 +8499,33 @@ defmodule Platform.Federation.ToolSurface do
       # rollup live, and is any member paused". The stamp only — not the
       # whole metadata blob.
       rollup_branch_ready: metadata_map_field(stack, "rollup_branch_ready"),
+      # Task 01a05394-8300 stage 2. Curated view of `metadata["rollup_pr"]`
+      # or nil while the deployer has never touched it. The stamp has (at
+      # least) three live shapes — `%{"status" => "opening", "at"}` (the
+      # lock placeholder: no number/url), `%{"number", "url", "opened_at",
+      # "auto_merge_armed"}`, and the same plus `"merged_at"` — so every
+      # key is read individually and nil when absent; nothing is invented.
+      rollup_pr: serialize_rollup_pr(metadata_map_field(stack, "rollup_pr")),
       inserted_at: format_datetime(stack.inserted_at),
       updated_at: format_datetime(stack.updated_at)
     }
   end
 
+  # The 1-arity resolves the member's context on its own (one plan query
+  # plus one sibling-members query per call) for the callers that hand
+  # over a handful of members; `stack_get` builds the context ONCE via
+  # `stack_member_context/1` and uses the 2-arity.
   defp serialize_stack_member(%Task{} = task) do
+    siblings =
+      case task.stack_id do
+        nil -> [task]
+        stack_id -> Stacks.members(stack_id)
+      end
+
+    serialize_stack_member(task, stack_member_context(siblings))
+  end
+
+  defp serialize_stack_member(%Task{} = task, %{plan_status: plan_status, members: by_id}) do
     %{
       id: task.id,
       title: task.title,
@@ -8413,7 +8540,120 @@ defmodule Platform.Federation.ToolSurface do
       # Task 01a05392 stage 3. The member's pause stamp (e.g.
       # `%{"kind" => "rollup_diverged", "member_sha", "rollup_sha", ...}`)
       # or nil. See `serialize_task/1` for why this is one key, not `metadata`.
-      paused_reason: metadata_map_field(task, "paused_reason")
+      paused_reason: metadata_map_field(task, "paused_reason"),
+      # Task 01a05394-8300 stage 2. Same stamp predicate as
+      # `serialize_task_stack/1` (`Stacks.member_has_merged_into_rollup_at?/1`).
+      landed_at: stack_member_landed_at(task),
+      # Status of the member's LATEST plan (highest version, any status) —
+      # the same "current plan" `CommencementGate` keys its approved-set
+      # query on — or nil when the member has no plan.
+      plan_status: Map.get(plan_status, task.id),
+      # In-stack dep ids the engine does not yet consider satisfied
+      # (`MemberSet.dependency_satisfied?/1`: cancelled releases; otherwise
+      # `in_review|deploying|done` AND stamped). `[]` when unblocked or
+      # when the member has no in-stack deps. Deps outside the stack are
+      # not this list's business (see `cross_stack_deps`).
+      blocked_by: stack_member_blocked_by(task, by_id)
+    }
+  end
+
+  # Per-member-set context for `serialize_stack_member/2`: the latest plan
+  # status per member id (one query) and the members keyed by id (for the
+  # in-stack dep lookup). Built once per `stack_get`.
+  defp stack_member_context(members) when is_list(members) do
+    %{
+      plan_status: latest_plan_status_by_task_id(Enum.map(members, & &1.id)),
+      members: Map.new(members, &{&1.id, &1})
+    }
+  end
+
+  # Latest-plan-per-task in ONE round-trip. Mirrors `CommencementGate`'s
+  # notion of a member's current plan (highest `version`, any status); the
+  # gate's batched query is private and only returns the approved subset,
+  # so the reduction happens here over `{task_id, version, status}` rows.
+  defp latest_plan_status_by_task_id([]), do: %{}
+
+  defp latest_plan_status_by_task_id(task_ids) when is_list(task_ids) do
+    from(p in Plan,
+      where: p.task_id in ^task_ids,
+      select: {p.task_id, p.version, p.status}
+    )
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn {task_id, version, status}, acc ->
+      case Map.get(acc, task_id) do
+        {seen, _} when seen >= version -> acc
+        _ -> Map.put(acc, task_id, {version, status})
+      end
+    end)
+    |> Map.new(fn {task_id, {_version, status}} -> {task_id, status} end)
+  end
+
+  defp stack_member_landed_at(%Task{} = task) do
+    if Stacks.member_has_merged_into_rollup_at?(task),
+      do: Map.get(task.metadata, "merged_into_rollup_at"),
+      else: nil
+  end
+
+  defp stack_member_blocked_by(%Task{} = task, by_id) when is_map(by_id) do
+    task
+    |> Tasks.dependency_task_ids()
+    |> Enum.reject(&(&1 == task.id))
+    |> Enum.uniq()
+    |> Enum.filter(fn dep_id ->
+      case Map.get(by_id, dep_id) do
+        %Task{} = dep -> not Platform.Tasks.Stacks.MemberSet.dependency_satisfied?(dep)
+        nil -> false
+      end
+    end)
+  end
+
+  # See the comment in `execute("stack_get", ...)` for the predicate.
+  defp stack_member_runnable_now?(%{status: status, blocked_by: blocked_by}) do
+    status in Platform.Orchestration.TaskRouterWatcher.active_statuses() and blocked_by == []
+  end
+
+  # One `stack_list` row (task 01a05394-8300 stage 4). Deliberately NOT
+  # `serialize_stack/1`: a list row is identity plus state, no prose and no
+  # sub-records. Dropped on purpose — `members`-style hydration never lived
+  # here, but `phase_assignees`, `sponsor`, `sponsor_user_id`, `auto_plan`
+  # and `auto_accept_plan` did, and they are `stack_get`'s to answer.
+  # `description` is kept as a snippet rather than dropped, so an existing
+  # caller reading it still gets a string, and `description_truncated` /
+  # `description_length` say whether it is the whole thing. The rollup
+  # stamps reuse the `stack_get` helpers so the two tools cannot drift.
+  defp serialize_stack_row(%Stack{} = stack) do
+    %{
+      id: stack.id,
+      slug: stack.slug,
+      name: stack.name,
+      status: stack.status,
+      rollup_branch: stack.rollup_branch,
+      base_branch: stack.base_branch,
+      description: stack.description,
+      project_id: stack.project_id,
+      epic_id: stack.epic_id,
+      rollup_branch_ready: metadata_map_field(stack, "rollup_branch_ready"),
+      rollup_pr: serialize_rollup_pr(metadata_map_field(stack, "rollup_pr")),
+      inserted_at: format_datetime(stack.inserted_at),
+      updated_at: format_datetime(stack.updated_at)
+    }
+    |> ResultBound.snippet(:description)
+    # `snippet/2` leaves a nil field untouched, which would make the row's
+    # key set depend on whether anyone ever wrote a description. Pin the
+    # markers so a caller can always read them.
+    |> Map.put_new(:description_truncated, false)
+    |> Map.put_new(:description_length, 0)
+  end
+
+  defp serialize_rollup_pr(nil), do: nil
+
+  defp serialize_rollup_pr(%{} = pr) do
+    %{
+      status: Map.get(pr, "status"),
+      number: Map.get(pr, "number"),
+      url: Map.get(pr, "url"),
+      merged_at: Map.get(pr, "merged_at"),
+      auto_merge_armed: Map.get(pr, "auto_merge_armed")
     }
   end
 
@@ -11224,6 +11464,14 @@ defmodule Platform.Federation.ToolSurface do
       # would widen the wire contract to every key any writer ever adds.
       stack_id: Map.get(task, :stack_id),
       paused_reason: metadata_map_field(task, "paused_reason"),
+      # Task 01a05394-8300 stage 1. `stack_position` plus a CURATED `stack`
+      # sub-map (`nil` for a non-member): `landed_at` is the
+      # `merged_into_rollup_at` stamp — the actual release threshold — and
+      # `blocked_reason`/`blocked_reason_at` are `Tasks.stamp_blocked_reason/2`'s
+      # strings. Curated, not the `metadata` blob: emitting the blob would
+      # widen the wire contract to every key any writer ever adds.
+      stack_position: Map.get(task, :stack_position),
+      stack: serialize_task_stack(task),
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
     }
@@ -11238,6 +11486,43 @@ defmodule Platform.Federation.ToolSurface do
 
   defp serialize_sponsor(%Platform.Accounts.User{} = user) do
     %{id: user.id, name: user.name, email: user.email}
+  end
+
+  # Task 01a05394-8300 stage 1 — the curated `stack` sub-map for
+  # `serialize_task/1`. `nil` when the task is not a stack member. Reuses
+  # `Stacks.member_has_merged_into_rollup_at?/1` for the stamp rather than
+  # re-deriving its shape here; `metadata` may be nil on old rows, so every
+  # read goes through `metadata_string_field/2`.
+  defp serialize_task_stack(task) do
+    case Map.get(task, :stack_id) do
+      nil ->
+        nil
+
+      _stack_id ->
+        landed_at =
+          if Stacks.member_has_merged_into_rollup_at?(task),
+            do: Map.get(task.metadata, "merged_into_rollup_at"),
+            else: nil
+
+        %{
+          landed_at: landed_at,
+          blocked_reason: metadata_string_field(task, "blocked_reason"),
+          blocked_reason_at: metadata_string_field(task, "blocked_reason_at")
+        }
+    end
+  end
+
+  defp metadata_string_field(record, key) when is_binary(key) do
+    case Map.get(record, :metadata) do
+      %{} = meta ->
+        case Map.get(meta, key) do
+          value when is_binary(value) -> value
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
   end
 
   # Task 01a006c2 stage 3 — `plan_get`'s status resolution.

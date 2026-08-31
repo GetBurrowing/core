@@ -68,6 +68,14 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   @active_statuses ~w(planning in_progress in_review deploying)
 
+  @doc """
+  The task statuses the dispatcher treats as live — the set `stack_get`'s
+  `executable_now` reuses so "runnable now" on the MCP surface is the
+  dispatcher's own notion, not a parallel one (task 01a05394-8300 stage 2).
+  """
+  @spec active_statuses() :: [String.t()]
+  def active_statuses, do: @active_statuses
+
   # Bug #4 (task 019f708f): stall sweep debounce. A stack member that
   # cleared every review validation but never flipped to `deploying`
   # (because the async transition was dropped or the finalizer never
