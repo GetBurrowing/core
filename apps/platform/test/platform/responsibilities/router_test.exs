@@ -1287,15 +1287,36 @@ defmodule Platform.Responsibilities.RouterTest do
       # Eleven registered rows already carry that marker with a
       # different meaning — "registered ahead of its own runtime,
       # grep-able by an operator" — and seven of them dispatch today.
-      # `meetings.intent_classify` is one, and its delivery is exactly
-      # what stage 1 of this task repaired, so a status-keyed veto would
-      # have re-broken it in the same PR that fixed it.
+      # This test USED to make its point with the real
+      # `meetings.intent_classify` row, which carried `status:
+      # "placeholder"` and dispatched. That row is now deliberately
+      # inert — the Router was double-classifying every transcript
+      # chunk alongside `Platform.Meetings.IntentClassifier` — so it can
+      # no longer play the "placeholder that fires" part.
+      #
+      # A synthetic row takes over, on the same topic, carrying the
+      # status marker and NOTHING else. That is the actual claim: the
+      # marker alone does not veto.
+      placeholder =
+        insert!(%{
+          key: "routertest.status_marker_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{
+            "topic" => "meeting:transcript_chunk",
+            "event_match" => "transcript_chunk"
+          },
+          metadata: %{"owner" => "routertest", "status" => "placeholder"}
+        })
+
+      assert placeholder.metadata["status"] == "placeholder"
+      refute Map.has_key?(placeholder.metadata, "dispatch")
+
+      # And the real row is registered too, so the second half below is
+      # about a row that exists rather than about a name nothing matches.
       [intent_spec] = Platform.Responsibilities.Handlers.IntentClassify.register()
       {:ok, intent} = Responsibilities.upsert_by_key(intent_spec)
-
-      # The premise: this row really does declare `status: "placeholder"`.
       assert intent.metadata["status"] == "placeholder"
-      refute Map.has_key?(intent.metadata, "dispatch")
+      assert intent.metadata["dispatch"] == "inert"
 
       {_pid, _name} = start_router()
 
@@ -1312,8 +1333,16 @@ defmodule Platform.Responsibilities.RouterTest do
           :timer.sleep(80)
         end)
 
-      assert log =~ "[ResponsibilityRouter] unfilled responsibility=meetings.intent_classify"
-      refute log =~ @placeholder_log <> "meetings.intent_classify"
+      # THE CLAIM: `status: "placeholder"` did not stop this row.
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{placeholder.key}"
+      refute log =~ @placeholder_log <> placeholder.key
+
+      # THE CONTROL, and it is what makes the assertions above mean
+      # something: an otherwise identical row on the SAME broadcast,
+      # differing only by `dispatch: "inert"`, IS refused. Without this
+      # the test would pass equally against a Router with no veto at all.
+      assert log =~ @placeholder_log <> "meetings.intent_classify — declared inert"
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=meetings.intent_classify"
     end
 
     test "every registered provider row that fires today still has no dispatch veto" do
@@ -1329,7 +1358,12 @@ defmodule Platform.Responsibilities.RouterTest do
         |> Enum.uniq()
         |> Enum.sort()
 
-      assert inert_keys == ["meetings.attendance_followup"]
+      # `meetings.intent_classify` joined this list deliberately: its real
+      # runtime is `Platform.Meetings.IntentClassifier`, a GenServer on
+      # the same topic, so a Router fire was a duplicate model call whose
+      # answer the handler discarded. Adding a THIRD key here should be
+      # just as hard a decision as adding this one was.
+      assert inert_keys == ["meetings.attendance_followup", "meetings.intent_classify"]
 
       # …and the `status: "placeholder"` population is genuinely large,
       # which is what makes the assertion above load-bearing rather than

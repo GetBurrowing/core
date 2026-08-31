@@ -233,10 +233,10 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
                )
     end
 
-    test "routes an intent_classify responsibility to the IntentClassify placeholder" do
+    test "routes an intent_classify responsibility to the IntentClassify handler" do
       log =
         capture_log(fn ->
-          assert :ok =
+          assert {:error, :not_implemented} =
                    MeetingsProvider.handle_output(
                      intent_classify_responsibility(),
                      %{"intent" => "assign_task", "confidence" => 0.9},
@@ -244,10 +244,14 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
                    )
         end)
 
-      # The placeholder log line is the smoke signal the runtime ticket
-      # hasn't landed yet — it must fire on every dispatch until then.
+      # The routing is what this test is about, and the error return is
+      # how it proves the call arrived: the row is declared
+      # `dispatch: "inert"` (the real runtime is the
+      # `Platform.Meetings.IntentClassifier` GenServer), so reaching this
+      # handler at all is a Router fire that should not have happened and
+      # is recorded as a failure rather than a completed step.
       assert log =~ "[meetings.intent_classify]"
-      assert log =~ "placeholder handler"
+      assert log =~ "inert row"
     end
 
     test "returns :unknown_meetings_responsibility for an unmapped key" do

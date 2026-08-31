@@ -97,10 +97,20 @@ defmodule Platform.Responsibilities.Handlers.IntentClassifyTest do
   end
 
   describe "handle_output/3" do
-    test "logs the placeholder line and returns :ok" do
+    # Returns an ERROR, not `:ok`. The row is declared
+    # `dispatch: "inert"` because the real runtime is the
+    # `Platform.Meetings.IntentClassifier` GenServer, so a call landing
+    # here means the Router fired something it should not have. ADR-0046's
+    # `outcome/1` maps the error to `:failed`, which records that rather
+    # than counting a discarded output as a completed step.
+    #
+    # `:ok` was the old return, and it is exactly why the Router
+    # double-classifying every transcript chunk stayed invisible: the
+    # handler threw the answer away and reported success.
+    test "returns {:error, :not_implemented} so a stray fire records as a failure" do
       log =
         capture_log(fn ->
-          assert :ok =
+          assert {:error, :not_implemented} =
                    IntentClassify.handle_output(
                      responsibility(),
                      %{"intent" => "assign_task", "confidence" => 0.9},
@@ -109,20 +119,39 @@ defmodule Platform.Responsibilities.Handlers.IntentClassifyTest do
         end)
 
       assert log =~ "[meetings.intent_classify]"
-      assert log =~ "placeholder handler"
-      assert log =~ "019f2452-0210"
+      assert log =~ "inert row"
+      assert log =~ "Platform.Meetings.IntentClassifier"
+    end
+
+    # The declaration and the return value have to agree. A handler that
+    # errors while its row still dispatches is a broken key; a row that
+    # is inert while its handler returns :ok hides the fires.
+    test "the row it registers declares itself inert, naming its real executor" do
+      [spec] = IntentClassify.register()
+
+      assert spec.metadata["dispatch"] == "inert"
+      assert spec.metadata["executor"] == "platform.meetings.intent_classifier"
+
+      # Still enabled and still registered: the row is the ON SWITCH for
+      # the GenServer. `IntentClassifier`'s guard 2 is
+      # `Roles.assignee_for("meetings.intent_classify")` and its doc says
+      # "Assignment IS the enable signal", so deleting or disabling this
+      # row drops every chunk before any model is consulted.
+      refute Map.get(spec, :enabled) == false
+      assert spec.key == "meetings.intent_classify"
     end
   end
 
   describe "handle_output/2" do
-    test "arity-2 delegates to arity-3 with default meta" do
+    test "arity-2 delegates to arity-3 with the same error" do
       log =
         capture_log(fn ->
-          assert :ok = IntentClassify.handle_output(responsibility(), %{"intent" => "x"})
+          assert {:error, :not_implemented} =
+                   IntentClassify.handle_output(responsibility(), %{"intent" => "x"})
         end)
 
       assert log =~ "[meetings.intent_classify]"
-      assert log =~ "placeholder handler"
+      assert log =~ "inert row"
     end
   end
 
