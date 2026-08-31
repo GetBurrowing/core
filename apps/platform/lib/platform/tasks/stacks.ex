@@ -1797,26 +1797,153 @@ defmodule Platform.Tasks.Stacks do
   end
 
   @doc """
-  Terminal transition: mark a stack `abandoned` and record the reason.
+  Terminal transition: mark a stack `abandoned`, record the reason, and
+  release every live member.
 
-  Per ADR 0041 (Lifecycle / Rollback / abandon), the per-member handling on
-  abandon is non-trivial: members already merged into the rollup retain
-  their status with `stack_id` cleared, while unmerged members return to
-  `backlog`. That logic depends on the membership/eject helpers landing in
-  stage 2 of this task; for now this function only flips the stack-level
-  status and stamps the reason into `description`.
+  Per ADR 0041 (Lifecycle / Rollback / abandon) and the product ruling on
+  task 01a05393 (Moore, 2026-08-30 18:35): membership (`stack_id` and
+  `stack_position`) is cleared ONLY on members this sweep demotes. Members
+  whose status is kept also keep their membership:
+
+  | member                                             | status     | membership |
+  |----------------------------------------------------|------------|------------|
+  | landed on rollup (`member_landed_on_rollup?/1`)    | untouched  | kept       |
+  | `done` / `cancelled` / `in_review` w/o stamp, `blocked` | untouched | kept   |
+  | `stack_pending` / `planning` / `backlog`           | `backlog`  | cleared    |
+  | `in_progress`                                      | `blocked`  | cleared    |
+
+  Why: the members whose work reached the rollup are the only durable record
+  of what that branch contains; nulling their `stack_id` would make
+  `stack_get` on the abandoned stack return no members. Demoted members go
+  back to the solo pipeline and must not be re-swept or re-gated, so clearing
+  is correct there.
+
+  `in_progress -> blocked` is the ticket's "the executor must stop" ask,
+  expressed in the EXISTING `@valid_task_transitions` vocabulary rather than
+  a new blocker subsystem. Both `stack_pending -> backlog` and
+  `planning -> backlog` are in that map (`Platform.Tasks`, `@valid_task_transitions`)
+  — verified, not assumed. A member already AT `backlog` is left alone,
+  because an identity transition is refused by that same map.
+
+  Soft-deleted members are excluded (`is_nil(deleted_at)`): they are already
+  invisible to `members/1`, and touching them would resurrect state no caller
+  can see.
+
+  The per-member sweep runs AFTER the stack row commits, and is
+  reduce-and-drop: one member failing to transition never aborts the sweep
+  over the others, and never rolls back the `abandoned` write. Running it
+  post-commit also keeps `recompute_stack_status/1` — which
+  `transition_task/2` fires as a status hook — from observing a pre-commit
+  stack row.
+
+  `recompute_stack_status/1` is deliberately NOT called from this path: the
+  stack is already terminal and recompute would fight the `abandoned` write.
+
+  Refuses a `done` stack with `{:error, :invalid_stack_status}` — the same
+  term `start_stack/1` returns — without touching the row. Abandoning shipped
+  work would flip `done` to `abandoned` and re-run the member sweep over
+  tasks that already landed; the caller who wants one member out of a
+  finished stack has `eject_task/2`.
   """
   @spec abandon_stack(Stack.t(), String.t() | nil) ::
-          {:ok, Stack.t()} | {:error, Ecto.Changeset.t()}
-  def abandon_stack(%Stack{} = stack, reason \\ nil) do
-    # TODO(stage 2): per-member handling — clear stack_id on every member;
-    # leave already-merged members at their current status, return unmerged
-    # members to backlog. Requires `eject_task/2` from the membership stage.
+          {:ok, Stack.t()} | {:error, :invalid_stack_status | Ecto.Changeset.t()}
+  def abandon_stack(stack, reason \\ nil)
+
+  def abandon_stack(%Stack{status: "done"}, _reason), do: {:error, :invalid_stack_status}
+
+  def abandon_stack(%Stack{} = stack, reason) do
     attrs = %{status: "abandoned", description: abandon_description(stack, reason)}
 
-    stack
-    |> Stack.changeset(attrs)
-    |> Repo.update()
+    result =
+      Repo.transaction(fn ->
+        case stack |> Stack.changeset(attrs) |> Repo.update() do
+          {:ok, abandoned} -> abandoned
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+
+    case result do
+      {:ok, %Stack{} = abandoned} ->
+        _released = abandon_members(abandoned)
+        {:ok, abandoned}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  # Release every live member of a now-abandoned stack. Query shape mirrors
+  # `pending_members/1`; the reducer mirrors `sweep_stack_pending_members/0`
+  # so one raising or refusing member never strands the rest.
+  #
+  # Returns the count of members whose membership clear succeeded.
+  @spec abandon_members(Stack.t()) :: non_neg_integer()
+  defp abandon_members(%Stack{id: stack_id}) do
+    Task
+    |> where([t], t.stack_id == ^stack_id and is_nil(t.deleted_at))
+    |> Repo.all()
+    |> Enum.reduce(0, fn member, acc ->
+      case safe_abandon_member(member) do
+        {:ok, _updated} -> acc + 1
+        _ -> acc
+      end
+    end)
+  end
+
+  defp safe_abandon_member(%Task{} = member) do
+    abandon_member(member)
+  rescue
+    e ->
+      Logger.warning(
+        "[Stacks.abandon_stack] releasing member #{member.id} raised: " <>
+          Exception.message(e)
+      )
+
+      :error
+  end
+
+  # Route the member's status, and clear its membership ONLY on the demote
+  # path. A `:keep_status` member (landed on the rollup, unstamped
+  # done/cancelled/in_review, blocked) keeps `stack_id` / `stack_position`
+  # so the abandoned stack still lists what reached its branch. On the
+  # demote path the clear runs even when the transition was refused, so an
+  # invalid-transition refusal can never leave a demoted task pointing at an
+  # abandoned stack.
+  defp abandon_member(%Task{} = member) do
+    case abandon_member_target(member) do
+      {:transition, target} when target != member.status ->
+        routed =
+          case Tasks.transition_task(member, target) do
+            {:ok, updated} ->
+              updated
+
+            {:error, reason} ->
+              Logger.warning(
+                "[Stacks.abandon_stack] member #{member.id} refused " <>
+                  "#{member.status} -> #{target}: #{inspect(reason)}; " <>
+                  "clearing membership anyway"
+              )
+
+              member
+          end
+
+        Tasks.update_task(routed, %{stack_id: nil, stack_position: nil})
+
+      _ ->
+        {:ok, member}
+    end
+  end
+
+  # The routing decision, isolated so it is one matchable expression.
+  # See the routing table in `abandon_stack/2`'s @doc.
+  @spec abandon_member_target(Task.t()) :: :keep_status | {:transition, String.t()}
+  defp abandon_member_target(%Task{} = member) do
+    cond do
+      member_landed_on_rollup?(member) -> :keep_status
+      member.status in ["stack_pending", "planning", "backlog"] -> {:transition, "backlog"}
+      member.status == "in_progress" -> {:transition, "blocked"}
+      true -> :keep_status
+    end
   end
 
   defp abandon_description(%Stack{description: existing}, nil), do: existing
@@ -1841,12 +1968,22 @@ defmodule Platform.Tasks.Stacks do
   Returns `{:error, :members_not_done, %{pending: [%{id, title, status}]}}`
   when any member is still in flight. Returns `{:error, changeset}` on a
   schema-level write failure. Returns `{:ok, stack}` on success.
+
+  Refuses an `abandoned` stack with `{:error, :invalid_stack_status}` — the
+  same term `start_stack/1` returns — before the member check runs and
+  without touching the row. `abandoned` is terminal; `abandon_stack/2` has
+  already released the members, so "every member is done" can be true of a
+  stack nobody shipped.
   """
   @spec complete_stack(Stack.t(), String.t() | nil) ::
           {:ok, Stack.t()}
           | {:error, :members_not_done, %{pending: [map()]}}
-          | {:error, Ecto.Changeset.t()}
-  def complete_stack(%Stack{} = stack, note \\ nil) do
+          | {:error, :invalid_stack_status | Ecto.Changeset.t()}
+  def complete_stack(stack, note \\ nil)
+
+  def complete_stack(%Stack{status: "abandoned"}, _note), do: {:error, :invalid_stack_status}
+
+  def complete_stack(%Stack{} = stack, note) do
     case pending_members(stack.id) do
       [] ->
         attrs = %{status: "done", description: complete_description(stack, note)}
@@ -2087,10 +2224,16 @@ defmodule Platform.Tasks.Stacks do
   exist.
 
   On a clean eject, clears `stack_id` and `stack_position` via
-  `Platform.Tasks.update_task/2`. Per ADR 0041, the member's
-  `status` is intentionally left as-is — the caller (or the stack-level
-  abandon flow) decides whether to drop it back to backlog. After the
-  write, calls `recompute_stack_status/1` and returns `{:ok, task}`.
+  `Platform.Tasks.update_task/2`. Per ADR 0041, the member's `status` is
+  left as-is — the caller decides what to do with it — with ONE
+  exception: a member at `stack_pending` is transitioned to `backlog`
+  first (via `Platform.Tasks.transition_task/2`). `stack_pending` is a
+  status only the stack's own promotion sweep can leave, and
+  `sweep_stack_pending_members/0` scans members by `stack_id`; clearing
+  the id would put the task somewhere no sweep and no watcher will ever
+  pick it up again. Every other status (including `in_progress`,
+  `blocked`, `done`) is untouched. After the write, calls
+  `recompute_stack_status/1` and returns `{:ok, task}`.
   """
   @spec eject_task(Stack.t() | binary(), Task.t() | binary()) ::
           {:ok, Task.t()}
@@ -2106,6 +2249,7 @@ defmodule Platform.Tasks.Stacks do
            {:ok, %Task{} = task} <- load_task(task_or_id),
            :ok <- ensure_in_stack(stack, task),
            :ok <- ensure_no_in_stack_dependents(stack, task),
+           {:ok, task} <- demote_if_stack_pending(task),
            {:ok, updated_task} <-
              Tasks.update_task(task, %{stack_id: nil, stack_position: nil}),
            {:ok, _stack} <- recompute_stack_status(stack) do
@@ -2120,6 +2264,18 @@ defmodule Platform.Tasks.Stacks do
       end
     end)
   end
+
+  # The one status-scoped exception to "eject leaves status as-is". A
+  # `stack_pending` member with no `stack_id` is parked forever: the
+  # promotion sweep cannot see it and `TaskRouterWatcher` never treats the
+  # status as active. `stack_pending -> backlog` is in
+  # `Platform.Tasks`' `@valid_task_transitions`. Every other status falls
+  # through untouched — the decision is this single head, nothing wider.
+  @spec demote_if_stack_pending(Task.t()) :: {:ok, Task.t()} | {:error, term()}
+  defp demote_if_stack_pending(%Task{status: "stack_pending"} = task),
+    do: Tasks.transition_task(task, "backlog")
+
+  defp demote_if_stack_pending(%Task{} = task), do: {:ok, task}
 
   @doc """
   Add an in-stack dependency edge from `from_task_id` to `to_task_id`.

@@ -652,6 +652,174 @@ defmodule Platform.Tasks.StacksTest do
       assert abandoned.status == "abandoned"
       assert abandoned.description == "Keep me"
     end
+
+    # Paired guard tests (ticket ask 3). The refusal fixture carries a live
+    # `in_progress` member so the bad state — the row flipped to `abandoned`
+    # AND the member sweep run over shipped work — is one the fixture could
+    # actually exhibit; the control proves the guard matches `done` only.
+    test "refuses a done stack with :invalid_stack_status and writes nothing" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id, description: "Shipped notes")
+      member = stamp_unmerged_member!(project, stack, position: 1)
+      {:ok, stack} = Stacks.update_stack(stack, %{status: "done"})
+
+      assert {:error, :invalid_stack_status} = Stacks.abandon_stack(stack, "too late")
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.status == "done"
+      assert reloaded.description == "Shipped notes"
+      refute reloaded.description =~ "Abandoned"
+
+      # The per-member sweep must not have run either.
+      member_after = Repo.get!(Task, member.id)
+      assert member_after.stack_id == stack.id
+      assert member_after.status == "in_progress"
+    end
+
+    test "control: still abandons an in_progress stack" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      member = stamp_unmerged_member!(project, stack, position: 1)
+      {:ok, stack} = Stacks.update_stack(stack, %{status: "in_progress"})
+
+      assert {:ok, abandoned} = Stacks.abandon_stack(stack, "scope cut")
+      assert abandoned.status == "abandoned"
+      assert Stacks.get_stack(stack.id).status == "abandoned"
+
+      # And the sweep ran: the in_progress member was released.
+      member_after = Repo.get!(Task, member.id)
+      assert is_nil(member_after.stack_id)
+      assert member_after.status == "blocked"
+    end
+  end
+
+  describe "abandon_stack/2 per-member handling" do
+    # `Task.changeset/2` validates the rollup stamp shape: it must carry BOTH
+    # `sha` and `at`. A bare `%{"sha" => ...}` is rejected at the fixture, so
+    # a stamp that only looked right would have made every test in this block
+    # fail in setup rather than at its assertion.
+    @landed_sha "abc123def4567890abc123def4567890abc123de"
+    @landed_at "2026-08-30T12:00:00Z"
+
+    # The core fixture is deliberately FOUR live members, not one. A
+    # one-member fixture cannot distinguish "cleared every member" from
+    # "cleared the first member", and a fixture whose members are all in the
+    # same status cannot show the fix does not over-reach.
+    setup do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+
+      # Two members seeded EXPLICITLY at stack_pending. Seeding the excluded
+      # state is the point: "no longer stack_pending" is satisfied vacuously
+      # by a fixture that never put it there.
+      pending_a = abandon_member_fixture!(project, stack, status: "stack_pending", position: 1)
+      pending_b = abandon_member_fixture!(project, stack, status: "stack_pending", position: 2)
+
+      # Over-reach control: already landed on the rollup. Must keep `done`.
+      landed =
+        abandon_member_fixture!(project, stack,
+          status: "done",
+          position: 3,
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => @landed_sha, "at" => @landed_at}
+          }
+        )
+
+      wip = abandon_member_fixture!(project, stack, status: "in_progress", position: 4)
+
+      # The `is_nil(deleted_at)` filter is load-bearing: this member is in a
+      # status the sweep WOULD rewrite if it could see it.
+      deleted = abandon_member_fixture!(project, stack, status: "stack_pending", position: 5)
+      {:ok, deleted} = Tasks.soft_delete_task(deleted)
+
+      %{
+        project: project,
+        stack: stack,
+        pending_a: pending_a,
+        pending_b: pending_b,
+        landed: landed,
+        wip: wip,
+        deleted: deleted
+      }
+    end
+
+    test "returns BOTH stack_pending members to backlog", ctx do
+      assert {:ok, abandoned} = Stacks.abandon_stack(ctx.stack, "scope changed")
+      assert abandoned.status == "abandoned"
+
+      a = Repo.get!(Task, ctx.pending_a.id)
+      b = Repo.get!(Task, ctx.pending_b.id)
+
+      assert a.status == "backlog"
+      assert b.status == "backlog"
+      refute a.status == "stack_pending"
+      refute b.status == "stack_pending"
+    end
+
+    test "does NOT over-reach onto a member already landed on the rollup", ctx do
+      assert {:ok, _abandoned} = Stacks.abandon_stack(ctx.stack, "scope changed")
+
+      landed = Repo.get!(Task, ctx.landed.id)
+      assert landed.status == "done"
+      # The stamp itself survives — the routing read it, it did not consume it.
+      assert landed.metadata["merged_into_rollup_at"] ==
+               %{"sha" => @landed_sha, "at" => @landed_at}
+    end
+
+    test "blocks an in_progress member so its executor stops", ctx do
+      assert {:ok, _abandoned} = Stacks.abandon_stack(ctx.stack, "scope changed")
+
+      wip = Repo.get!(Task, ctx.wip.id)
+      assert wip.status == "blocked"
+      refute wip.status == "in_progress"
+    end
+
+    # Ruling (Moore, 2026-08-30 18:35): membership is cleared ONLY on the
+    # members the sweep demotes. The landed member is the over-reach control
+    # — a blanket clear must fail its `== stack.id` assertion.
+    test "clears membership on the DEMOTED members and keeps it on the landed one", ctx do
+      assert {:ok, _abandoned} = Stacks.abandon_stack(ctx.stack, "scope changed")
+
+      for %Task{id: id} <- [ctx.pending_a, ctx.pending_b, ctx.wip] do
+        reloaded = Repo.get!(Task, id)
+        assert is_nil(reloaded.stack_id), "demoted member #{id} still points at a stack"
+        assert is_nil(reloaded.stack_position)
+      end
+
+      landed = Repo.get!(Task, ctx.landed.id)
+      assert landed.stack_id == ctx.stack.id
+      assert landed.stack_position == 3
+    end
+
+    test "an abandoned stack still lists its landed member", ctx do
+      assert {:ok, abandoned} = Stacks.abandon_stack(ctx.stack, "scope changed")
+
+      member_ids = abandoned |> Stacks.members() |> Enum.map(& &1.id)
+      assert member_ids == [ctx.landed.id]
+    end
+
+    test "leaves a soft-deleted member completely untouched", ctx do
+      assert {:ok, _abandoned} = Stacks.abandon_stack(ctx.stack, "scope changed")
+
+      # Read straight from the Repo, bypassing any deleted_at filter.
+      deleted = Repo.get!(Task, ctx.deleted.id)
+      assert deleted.status == "stack_pending"
+      assert deleted.stack_id == ctx.stack.id
+      assert deleted.stack_position == 5
+      refute is_nil(deleted.deleted_at)
+    end
+
+    test "a formerly stack_pending member can be started after abandon", ctx do
+      {:ok, _plan} = Tasks.create_plan(%{task_id: ctx.pending_a.id, status: "approved"})
+
+      assert {:ok, _abandoned} = Stacks.abandon_stack(ctx.stack, "scope changed")
+
+      released = Repo.get!(Task, ctx.pending_a.id)
+      assert released.status == "backlog"
+
+      assert {:ok, started} = Tasks.transition_task(released, "in_progress")
+      assert started.status == "in_progress"
+    end
   end
 
   describe "complete_stack/2" do
@@ -764,6 +932,40 @@ defmodule Platform.Tasks.StacksTest do
       assert [%{id: pending_id, status: "in_progress"}] = pending
       assert pending_id == open.id
     end
+
+    # Paired guard tests (ticket ask 3). The refusal fixture is an abandoned
+    # stack whose only member is `done` — exactly the shape the member check
+    # would wave through, so without the guard this stack WOULD complete.
+    test "refuses an abandoned stack with :invalid_stack_status and writes nothing" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      m = stamp_unmerged_member!(project, stack, position: 1)
+      set_member_status(stack, m, "done")
+      {:ok, stack} = Stacks.abandon_stack(stack, "dropped")
+
+      # Precondition: the member check alone would pass here.
+      assert Repo.get!(Task, m.id).status == "done"
+      assert stack.status == "abandoned"
+
+      assert {:error, :invalid_stack_status} = Stacks.complete_stack(stack, "sneaky")
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.status == "abandoned"
+      assert reloaded.description == stack.description
+      refute reloaded.description =~ "Completed"
+    end
+
+    test "control: still completes an in_review stack whose members are all done" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      m = stamp_unmerged_member!(project, stack, position: 1)
+      set_member_status(stack, m, "done")
+      {:ok, stack} = Stacks.update_stack(stack, %{status: "in_review"})
+
+      assert {:ok, completed} = Stacks.complete_stack(stack, "shipped")
+      assert completed.status == "done"
+      assert Stacks.get_stack(stack.id).status == "done"
+    end
   end
 
   describe "rollup_branch_name/1" do
@@ -867,6 +1069,74 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Free task"})
 
       assert {:error, :not_in_stack} = Stacks.eject_task(stack, task)
+    end
+  end
+
+  describe "eject_task/2 status handling" do
+    # Two members in DIFFERENT statuses. A one-member fixture at
+    # `stack_pending` could not show the demotion is status-scoped; a
+    # fixture that never seeded `stack_pending` would pass "no longer
+    # stack_pending" vacuously. `create_task/1` defaults to `backlog`, so the
+    # excluded state is written explicitly and asserted before the eject.
+    setup do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{status: "in_progress"})
+
+      pending = abandon_member_fixture!(project, stack, status: "stack_pending", position: 1)
+      wip = abandon_member_fixture!(project, stack, status: "in_progress", position: 2)
+
+      assert pending.status == "stack_pending"
+      assert wip.status == "in_progress"
+
+      %{project: project, stack: stack, pending: pending, wip: wip}
+    end
+
+    test "returns an ejected stack_pending member to backlog", ctx do
+      assert {:ok, ejected} = Stacks.eject_task(ctx.stack, ctx.pending)
+
+      assert ejected.status == "backlog"
+      refute ejected.status == "stack_pending"
+      assert ejected.stack_id == nil
+      assert ejected.stack_position == nil
+
+      reloaded = Repo.get!(Task, ctx.pending.id)
+      assert reloaded.status == "backlog"
+      refute reloaded.status == "stack_pending"
+      assert reloaded.stack_id == nil
+    end
+
+    test "control: an ejected in_progress member keeps its status", ctx do
+      # Over-reach control: the demotion clause must match ONLY
+      # `stack_pending`. A blanket demotion would flip this one too.
+      assert {:ok, ejected} = Stacks.eject_task(ctx.stack, ctx.wip)
+
+      assert ejected.status == "in_progress"
+      refute ejected.status == "backlog"
+      assert ejected.stack_id == nil
+      assert ejected.stack_position == nil
+
+      reloaded = Repo.get!(Task, ctx.wip.id)
+      assert reloaded.status == "in_progress"
+      assert reloaded.stack_id == nil
+
+      # And the sibling is untouched by this eject: still parked, still a member.
+      sibling = Repo.get!(Task, ctx.pending.id)
+      assert sibling.status == "stack_pending"
+      assert sibling.stack_id == ctx.stack.id
+    end
+
+    test "an ejected stack_pending member can be started", ctx do
+      {:ok, _plan} = Tasks.create_plan(%{task_id: ctx.pending.id, status: "approved"})
+
+      assert {:ok, ejected} = Stacks.eject_task(ctx.stack, ctx.pending)
+      assert ejected.status == "backlog"
+
+      # No `stack_id`, so the commencement gate is not consulted — the
+      # transition that `stack_pending` + a closed gate refused now succeeds.
+      assert {:ok, started} = Tasks.transition_task(ejected, "in_progress")
+      assert started.status == "in_progress"
+      assert Repo.get!(Task, ctx.pending.id).status == "in_progress"
     end
   end
 
@@ -6728,6 +6998,26 @@ defmodule Platform.Tasks.StacksTest do
     else
       String.duplicate("0", 7 - byte_size(hex_only)) <> hex_only
     end
+  end
+
+  # Seed a stack member directly at an arbitrary status (and optional
+  # metadata stamp), bypassing `transition_task/2` so the fixture can hold
+  # states the transition map would refuse to reach from `backlog`.
+  defp abandon_member_fixture!(project, stack, opts) do
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Abandon member " <> short_id()
+      })
+
+    task
+    |> Task.changeset(%{
+      stack_id: stack.id,
+      stack_position: Keyword.fetch!(opts, :position),
+      status: Keyword.fetch!(opts, :status),
+      metadata: Keyword.get(opts, :metadata, %{})
+    })
+    |> Repo.update!()
   end
 
   defp stamp_unmerged_member!(project, stack, opts) do

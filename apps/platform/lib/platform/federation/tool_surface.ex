@@ -4856,13 +4856,7 @@ defmodule Platform.Federation.ToolSurface do
              }}
 
           {:error, :invalid_transition} ->
-            {:error,
-             %{
-               error:
-                 "Cannot start task from status #{task.status}. Must be backlog or planning (per ADR 0029, plan approval transitions to in_progress automatically).",
-               recoverable: true,
-               suggestion: "Check task status with task_get first"
-             }}
+            {:error, invalid_start_envelope(task)}
 
           {:error, :no_approved_plan} ->
             {:error,
@@ -5345,6 +5339,15 @@ defmodule Platform.Federation.ToolSurface do
           {:ok, %Stack{} = updated} ->
             {:ok, serialize_stack(updated)}
 
+          {:error, :invalid_stack_status} ->
+            {:error,
+             %{
+               error:
+                 "Stack #{stack.id} is already done; abandoning it would flip shipped work to abandoned. " <>
+                   "Use stack_eject to detach an individual member.",
+               recoverable: false
+             }}
+
           {:error, changeset} ->
             {:error,
              %{
@@ -5372,6 +5375,13 @@ defmodule Platform.Federation.ToolSurface do
         case Stacks.complete_stack(stack, note) do
           {:ok, %Stack{} = updated} ->
             {:ok, serialize_stack(updated)}
+
+          {:error, :invalid_stack_status} ->
+            {:error,
+             %{
+               error: "Stack #{stack.id} is abandoned and cannot be completed.",
+               recoverable: false
+             }}
 
           {:error, :members_not_done, %{pending: pending}} ->
             {:error,
@@ -5417,9 +5427,10 @@ defmodule Platform.Federation.ToolSurface do
           {:error, :invalid_stack_status} ->
             {:error,
              %{
-               error: "Stack is not at `forming`; only forming stacks can be started.",
+               error:
+                 "Stack is not at `forming`; only forming stacks can be started. This stack is #{stack.status}.",
                recoverable: false,
-               suggestion: "Check the stack's current status via stack_get."
+               suggestion: stack_start_refusal_suggestion(stack)
              }}
 
           {:error, :stack_plans_pending, %{waiting_on: waiting_on}} ->
@@ -7104,15 +7115,16 @@ defmodule Platform.Federation.ToolSurface do
   #     `CommencementGate.open?/1` still returns false because the stack
   #     row itself is not `"in_progress"`. Rendering the blocker list
   #     here would emit a dangling empty enumeration ("waiting on: "),
-  #     so this branch names the real cause instead: nobody has called
-  #     `stack_start` yet.
+  #     so this branch names the real cause instead — and the cause
+  #     depends on the stack's CURRENT status (task 01a05393 stage 4).
+  #     `stack_start` is only the answer for a `forming` stack;
+  #     `Stacks.start_stack/1` refuses every other status, so telling
+  #     an agent to call it on an `abandoned` stack sends it round a
+  #     loop between this envelope and the `stack_start` refusal.
   defp stack_plans_pending_envelope(stack_id, []) do
-    %{
-      error:
-        "Cannot start task: stack #{stack_id} has not started yet. Every member holds an approved plan, but the stack itself is not in_progress, so the commencement gate stays closed.",
-      recoverable: true,
-      suggestion: "Call stack_start with stack_id #{stack_id} to open the stack, then retry."
-    }
+    stack_id
+    |> Stacks.get_stack()
+    |> stack_not_open_envelope(stack_id)
   end
 
   defp stack_plans_pending_envelope(stack_id, waiting_on) when is_list(waiting_on) do
@@ -7122,6 +7134,111 @@ defmodule Platform.Federation.ToolSurface do
           Enum.join(describe_waiting_on(stack_id, waiting_on), ", "),
       recoverable: true,
       suggestion: "Approve the missing plans (via plan_approve) before starting this task again."
+    }
+  end
+
+  # The `waiting_on == []` envelope, keyed on the stack row's status.
+  # Every branch names an action that is actually legal for the status
+  # observed. Wording for `abandoned` is derived from what
+  # `Stacks.abandon_stack/2` does on THIS branch (`abandon_member_target/1`):
+  # `stack_pending` / `planning` / `backlog` members go to `backlog` and are
+  # detached; members that landed on the rollup keep their membership. So a
+  # `stack_pending` task that still points at an abandoned stack was attached
+  # after the sweep or slipped past it. It must not mention `stack_start` —
+  # that is the loop.
+  defp stack_not_open_envelope(%Stack{status: "forming"}, stack_id) do
+    %{
+      error:
+        "Cannot start task: stack #{stack_id} has not started yet. Every member holds an approved plan, but the stack itself is not in_progress, so the commencement gate stays closed.",
+      recoverable: true,
+      suggestion: "Call stack_start with stack_id #{stack_id} to open the stack, then retry."
+    }
+  end
+
+  defp stack_not_open_envelope(%Stack{status: "abandoned"}, stack_id) do
+    %{
+      error:
+        "Cannot start task: stack #{stack_id} is abandoned, so its commencement gate will never open. Abandoning a stack returns stack_pending members to backlog and detaches them, while members that landed on the rollup keep their membership; this task is still stack_pending and still belongs to the stack, so it was not released.",
+      recoverable: true,
+      suggestion:
+        "Detach this task with stack_eject (a stack_pending member is returned to backlog), or move it with task_update status: \"backlog\". Once it no longer belongs to the stack, task_start runs it as a solo task."
+    }
+  end
+
+  defp stack_not_open_envelope(%Stack{status: "blocked"}, stack_id) do
+    %{
+      error:
+        "Cannot start task: stack #{stack_id} is blocked. A member branch failed to merge into the rollup and the conflict is recorded in the stack's metadata; the commencement gate stays closed until the stack is back at in_progress.",
+      recoverable: true,
+      suggestion:
+        "Resolve the rollup merge conflict recorded on the stack (an operator returns the stack to in_progress), or detach this task with stack_eject and run it as a solo task."
+    }
+  end
+
+  defp stack_not_open_envelope(%Stack{status: status}, stack_id)
+       when status in ["in_review", "deploying", "done"] do
+    %{
+      error:
+        "Cannot start task: stack #{stack_id} is #{status}, past the point where members are started. New execution inside it cannot begin.",
+      recoverable: true,
+      suggestion:
+        "Detach this task with stack_eject and run it as a solo task, or create a new stack with stack_create and add it there."
+    }
+  end
+
+  defp stack_not_open_envelope(%Stack{status: status}, stack_id) do
+    # `in_progress` cannot reach here (the gate is open once every member
+    # is planned), but a new status added to `Stack.@statuses` would. Say
+    # what was seen rather than guess an action.
+    %{
+      error:
+        "Cannot start task: stack #{stack_id} is #{status} and the commencement gate is closed.",
+      recoverable: true,
+      suggestion: "Detach this task with stack_eject and run it as a solo task."
+    }
+  end
+
+  defp stack_not_open_envelope(nil, stack_id) do
+    %{
+      error:
+        "Cannot start task: it belongs to stack #{stack_id}, which no longer exists, so the commencement gate cannot open.",
+      recoverable: true,
+      suggestion: "Detach this task with stack_eject and run it as a solo task."
+    }
+  end
+
+  # `task_start`'s `:invalid_transition` envelope (task 01a05393 stage 4).
+  # The allowed sources are READ from `Tasks.valid_task_transitions/0`
+  # rather than hand-listed: the old text said "Must be backlog or
+  # planning", which was false for `stack_pending`, `blocked`, `in_review`
+  # and `deploying`. `stack_pending -> in_progress` IS in the table; a
+  # `stack_pending` member is refused by the commencement gate, which
+  # runs first in `Tasks.transition_task_status/2` and returns the
+  # `:stack_plans_pending` 3-tuple, not `:invalid_transition`. The
+  # `stack_pending` head below is therefore defensive — reachable only if
+  # the gate ordering changes — and says so rather than blaming the table.
+  defp invalid_start_envelope(%Task{status: "stack_pending"} = task) do
+    %{
+      error:
+        "Cannot start task from status stack_pending: the transition itself is allowed, so the refusal is the stack's commencement gate, not the transition table.",
+      recoverable: true,
+      suggestion:
+        "Call stack_get with stack_id #{task.stack_id} to see which members are unplanned or unlanded, or detach this task with stack_eject to run it solo."
+    }
+  end
+
+  defp invalid_start_envelope(%Task{status: status}) do
+    sources =
+      Tasks.valid_task_transitions()
+      |> Enum.filter(fn {_from, targets} -> "in_progress" in targets end)
+      |> Enum.map(fn {from, _targets} -> from end)
+      |> Enum.sort()
+
+    %{
+      error:
+        "Cannot start task from status #{status}. in_progress is reachable from: #{Enum.join(sources, ", ")} (per ADR 0029, plan approval transitions to in_progress automatically).",
+      recoverable: true,
+      suggestion: "Check task status with task_get first"
     }
   end
 
@@ -7976,6 +8093,40 @@ defmodule Platform.Federation.ToolSurface do
     do: %{"assignee_id" => id, "assignee_type" => "agent"}
 
   defp stack_phase_entry(_), do: %{}
+
+  # `stack_start`'s `:invalid_stack_status` suggestion (task 01a05393
+  # stage 4). The handler already holds the `%Stack{}`, so name the action
+  # that is legal for the status it saw instead of sending the caller to
+  # `stack_get` — a read, and one that `stack_plans_pending_envelope/2`
+  # used to point back at. The `abandoned` wording states what
+  # `Stacks.abandon_stack/2` does on this branch: `stack_pending` /
+  # `planning` / `backlog` members go to `backlog`, `in_progress` members
+  # go to `blocked`, and those demoted members are detached; members that
+  # landed on the rollup keep their membership.
+  defp stack_start_refusal_suggestion(%Stack{status: "abandoned"}) do
+    "This stack is abandoned; abandoning it released its unfinished members (stack_pending, planning and backlog members were returned to backlog and detached, in_progress members were moved to blocked and detached; members that landed on the rollup keep their membership). Start a released task directly with task_start, or create a new stack with stack_create."
+  end
+
+  defp stack_start_refusal_suggestion(%Stack{status: "in_progress"}) do
+    "This stack is already in_progress; there is nothing to start. Members still parked at stack_pending are promoted by the in-stack sweep once their predecessors land on the rollup."
+  end
+
+  defp stack_start_refusal_suggestion(%Stack{status: "blocked"}) do
+    "This stack is blocked on a rollup merge conflict recorded in its metadata. Resolve the conflict (an operator returns the stack to in_progress); no member can be started until then."
+  end
+
+  defp stack_start_refusal_suggestion(%Stack{status: "done"}) do
+    "This stack is done; its work has shipped. Create a new stack with stack_create for further work."
+  end
+
+  defp stack_start_refusal_suggestion(%Stack{status: status})
+       when status in ["in_review", "deploying"] do
+    "This stack is #{status}; its rollup is already landing. Wait for it to finish, then stack_complete once every member is done, or create a new stack with stack_create for further work."
+  end
+
+  defp stack_start_refusal_suggestion(%Stack{status: status}) do
+    "This stack is #{status}, which stack_start does not accept. Create a new stack with stack_create if you need one that can be started."
+  end
 
   defp stack_start_payload(%Stack{} = stack, started, parked, errors) do
     payload =

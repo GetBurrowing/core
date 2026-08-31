@@ -990,6 +990,211 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
     end
   end
 
+  describe "stack_eject status handling" do
+    # Fixture-only status write (Repo for setup, envelopes for outcomes).
+    # `create_task/1` defaults to `backlog`; the excluded `stack_pending`
+    # state is seeded explicitly and asserted before the eject so the
+    # "no longer stack_pending" refute cannot pass vacuously.
+    defp seed_member!(project, stack_id, status, position) do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Eject member #{status}"})
+
+      {:ok, task} =
+        Tasks.update_task(task, %{stack_id: stack_id, stack_position: position, status: status})
+
+      assert task.status == status
+      assert task.stack_id == stack_id
+      task
+    end
+
+    setup do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-eject-status"), "Eject Status")
+
+      pending = seed_member!(project, stack_id, "stack_pending", 1)
+      wip = seed_member!(project, stack_id, "in_progress", 2)
+
+      %{project: project, stack_id: stack_id, pending: pending, wip: wip}
+    end
+
+    test "stack_eject returns a stack_pending member to backlog", ctx do
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_eject",
+          %{"stack_id" => ctx.stack_id, "task_id" => ctx.pending.id},
+          %{}
+        )
+
+      assert result.task_id == ctx.pending.id
+
+      ejected = Platform.Repo.get!(Platform.Tasks.Task, ctx.pending.id)
+      assert ejected.status == "backlog"
+      refute ejected.status == "stack_pending"
+      assert ejected.stack_id == nil
+    end
+
+    test "control: stack_eject leaves an in_progress member at in_progress", ctx do
+      {:ok, _result} =
+        ToolSurface.execute(
+          "stack_eject",
+          %{"stack_id" => ctx.stack_id, "task_id" => ctx.wip.id},
+          %{}
+        )
+
+      ejected = Platform.Repo.get!(Platform.Tasks.Task, ctx.wip.id)
+      assert ejected.status == "in_progress"
+      refute ejected.status == "backlog"
+      assert ejected.stack_id == nil
+
+      # Sibling untouched: still parked and still a member.
+      sibling = Platform.Repo.get!(Platform.Tasks.Task, ctx.pending.id)
+      assert sibling.status == "stack_pending"
+      assert sibling.stack_id == ctx.stack_id
+    end
+
+    test "task_start succeeds on the ejected member", ctx do
+      {:ok, _plan} = Tasks.create_plan(%{task_id: ctx.pending.id, status: "approved"})
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_eject",
+          %{"stack_id" => ctx.stack_id, "task_id" => ctx.pending.id},
+          %{}
+        )
+
+      assert {:ok, started} =
+               ToolSurface.execute("task_start", %{"task_id" => ctx.pending.id}, %{})
+
+      assert started.status == "in_progress"
+      refute Platform.Repo.get!(Platform.Tasks.Task, ctx.pending.id).status == "stack_pending"
+    end
+  end
+
+  describe "terminal-transition refusals through the MCP surface" do
+    # Fixture-only status write; the moduledoc rule stands (Repo for setup,
+    # envelopes for outcomes).
+    defp force_stack_status!(stack_id, status) do
+      {:ok, stack} =
+        stack_id
+        |> Platform.Tasks.Stacks.get_stack()
+        |> Platform.Tasks.Stacks.update_stack(%{status: status})
+
+      stack
+    end
+
+    defp attach_member!(project, stack_id, status) do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Member #{status}", status: status})
+
+      {:ok, task} = Tasks.update_task(task, %{stack_id: stack_id, stack_position: 1})
+      task
+    end
+
+    test "stack_abandon on a done stack refuses, names stack_eject, and leaves the stack done" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-abandon-done"), "Already Shipped")
+
+      member = attach_member!(project, stack_id, "in_progress")
+      force_stack_status!(stack_id, "done")
+
+      assert {:error, error} =
+               ToolSurface.execute(
+                 "stack_abandon",
+                 %{"stack_id" => stack_id, "reason" => "too late"},
+                 %{}
+               )
+
+      assert error.error ==
+               "Stack #{stack_id} is already done; abandoning it would flip shipped work to abandoned. " <>
+                 "Use stack_eject to detach an individual member."
+
+      assert error.recoverable == false
+      refute Map.has_key?(error, :suggestion)
+
+      {:ok, after_refusal} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert after_refusal.stack.status == "done"
+      # No description was set at create; a half-write would have put
+      # "Abandoned: too late" here.
+      assert is_nil(after_refusal.stack.description)
+      # The member sweep did not run: the member is still attached.
+      assert Enum.any?(after_refusal.members, &(&1.id == member.id))
+    end
+
+    test "control: stack_abandon on an in_progress stack still succeeds" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-abandon-wip"), "In Flight")
+
+      force_stack_status!(stack_id, "in_progress")
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "stack_abandon",
+                 %{"stack_id" => stack_id, "reason" => "scope cut"},
+                 %{}
+               )
+
+      assert result.status == "abandoned"
+      {:ok, after_abandon} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert after_abandon.stack.status == "abandoned"
+    end
+
+    test "stack_complete on an abandoned stack refuses and leaves the stack abandoned" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-complete-abandoned"), "Dropped")
+
+      # A done member: the members_not_done check alone would let this through.
+      _member = attach_member!(project, stack_id, "done")
+      force_stack_status!(stack_id, "abandoned")
+
+      assert {:error, error} =
+               ToolSurface.execute(
+                 "stack_complete",
+                 %{"stack_id" => stack_id, "note" => "sneaky"},
+                 %{}
+               )
+
+      assert error.error == "Stack #{stack_id} is abandoned and cannot be completed."
+      assert error.recoverable == false
+      refute Map.has_key?(error, :code)
+      refute Map.has_key?(error, :suggestion)
+
+      {:ok, after_refusal} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert after_refusal.stack.status == "abandoned"
+      # No description was set at create; a half-write would have put
+      # "Completed: sneaky" here.
+      assert is_nil(after_refusal.stack.description)
+    end
+
+    test "control: stack_complete on an in_review stack with all members done still succeeds" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-complete-review"), "Reviewed")
+
+      _member = attach_member!(project, stack_id, "done")
+      force_stack_status!(stack_id, "in_review")
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "stack_complete",
+                 %{"stack_id" => stack_id, "note" => "shipped"},
+                 %{}
+               )
+
+      assert result.status == "done"
+      {:ok, after_complete} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert after_complete.stack.status == "done"
+    end
+  end
+
   describe "task_create with stack_id end-to-end" do
     test "persists both the task and its stack membership in one call" do
       project = create_project()
@@ -1316,6 +1521,196 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       assert error.error =~ "Invalid status transition from 'done' to 'in_progress'"
       refute error.error =~ "missing an approved plan"
       refute error.error =~ "has not started yet"
+    end
+  end
+
+  describe "looping error envelopes (task 01a05393 stage 4)" do
+    # Every refusal here must name an action that is LEGAL for the status
+    # the fixture is actually in, and must NOT carry the old text that
+    # pointed at another refusal. Each refute is paired with a control
+    # fixture that still produces the old wording, so a blanket string
+    # swap cannot pass.
+
+    # A fully-planned stack member parked at `stack_pending`, with the
+    # stack row forced to `status`. Fixture-only writes (Repo/update for
+    # setup, envelopes for outcomes): `abandon_stack/2` would clear the
+    # membership we need the gate to see.
+    defp parked_member_in_stack_at(status) do
+      %{stack_id: stack_id, subject: subject} = gated_stack(plan_blocker?: true)
+      {:ok, subject} = Tasks.update_task(subject, %{status: "stack_pending"})
+      force_stack_status!(stack_id, status)
+      %{stack_id: stack_id, subject: Tasks.get_task_record(subject.id)}
+    end
+
+    test "task_start on a stack_pending member of an abandoned stack names stack_eject and never stack_start" do
+      %{stack_id: stack_id, subject: subject} = parked_member_in_stack_at("abandoned")
+      assert subject.status == "stack_pending"
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => subject.id}, %{})
+
+      assert error.recoverable == true
+      assert error.error =~ "stack #{stack_id} is abandoned"
+      assert error.suggestion =~ "stack_eject"
+      assert error.suggestion =~ ~s(task_update status: "backlog")
+      # The loop: the old head told every caller to run stack_start, which
+      # refuses anything but `forming`. Check BOTH fields.
+      refute error.error =~ "stack_start"
+      refute error.suggestion =~ "stack_start"
+      # (a): the transition-table wording must not surface for a status
+      # whose refusal is the gate.
+      refute error.error =~ "Must be backlog or planning"
+      refute error.suggestion =~ "Must be backlog or planning"
+      # The wording describes what abandon does on this branch, not more —
+      # and per the ruling it must not claim membership is cleared on every
+      # member: landed members keep theirs.
+      assert error.error =~ "returns stack_pending members to backlog"
+      assert error.error =~ "landed on the rollup keep their membership"
+      refute error.error =~ "every member"
+      refute error.error =~ "moved to blocked"
+    end
+
+    test "task_update(status: in_progress) on the same member gets the same abandoned envelope" do
+      %{stack_id: stack_id, subject: subject} = parked_member_in_stack_at("abandoned")
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => subject.id, "status" => "in_progress"},
+          %{}
+        )
+
+      assert error.error =~ "stack #{stack_id} is abandoned"
+      assert error.suggestion =~ "stack_eject"
+      refute error.error =~ "stack_start"
+      refute error.suggestion =~ "stack_start"
+    end
+
+    test "control: the same member in a forming stack is still told to call stack_start" do
+      %{stack_id: stack_id, subject: subject} = parked_member_in_stack_at("forming")
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => subject.id}, %{})
+
+      assert error.error =~ "stack #{stack_id} has not started yet"
+
+      assert error.suggestion ==
+               "Call stack_start with stack_id #{stack_id} to open the stack, then retry."
+
+      refute error.error =~ "abandoned"
+      refute error.suggestion =~ "stack_eject"
+    end
+
+    test "a blocked stack names the conflict and does not suggest stack_start" do
+      %{stack_id: stack_id, subject: subject} = parked_member_in_stack_at("blocked")
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => subject.id}, %{})
+
+      assert error.error =~ "stack #{stack_id} is blocked"
+      assert error.error =~ "failed to merge into the rollup"
+      assert error.suggestion =~ "stack_eject"
+      refute error.error =~ "stack_start"
+      refute error.suggestion =~ "stack_start"
+    end
+
+    test "a done stack says the status seen and points at stack_eject / stack_create" do
+      %{stack_id: stack_id, subject: subject} = parked_member_in_stack_at("done")
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => subject.id}, %{})
+
+      assert error.error =~ "stack #{stack_id} is done"
+      assert error.suggestion =~ "stack_eject"
+      assert error.suggestion =~ "stack_create"
+      refute error.error =~ "stack_start"
+      refute error.suggestion =~ "stack_start"
+    end
+
+    test "task_start :invalid_transition lists the sources read from the transition table" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Shipped"})
+      {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, task} = Tasks.update_task(task, %{status: "done"})
+
+      {:error, error} = ToolSurface.execute("task_start", %{"task_id" => task.id}, %{})
+
+      # Pinned literal: this is what the table says today. If the table
+      # widens or narrows, the envelope must follow it and this pin tells.
+      assert error.error ==
+               "Cannot start task from status done. in_progress is reachable from: " <>
+                 "backlog, blocked, deploying, in_review, planning, stack_pending " <>
+                 "(per ADR 0029, plan approval transitions to in_progress automatically)."
+
+      refute error.error =~ "Must be backlog or planning"
+      assert error.recoverable == true
+
+      # Derivation check: the enumerated set is exactly the table's sources
+      # for in_progress, so the literal above cannot drift from the table
+      # without one of these two assertions going red.
+      expected =
+        Tasks.valid_task_transitions()
+        |> Enum.filter(fn {_from, targets} -> "in_progress" in targets end)
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.sort()
+
+      assert expected == ~w(backlog blocked deploying in_review planning stack_pending)
+    end
+
+    test "stack_start on an abandoned stack names task_start / stack_create, not stack_get" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-start-abandoned"), "Dropped")
+
+      force_stack_status!(stack_id, "abandoned")
+
+      {:error, error} = ToolSurface.execute("stack_start", %{"stack_id" => stack_id}, %{})
+
+      assert error.recoverable == false
+      assert error.error =~ "This stack is abandoned"
+      assert error.suggestion =~ "This stack is abandoned"
+      assert error.suggestion =~ "task_start"
+      assert error.suggestion =~ "stack_create"
+      # The other half of the loop: a READ is not an action.
+      refute error.error =~ "stack_get"
+      refute error.suggestion =~ "stack_get"
+      refute error.suggestion =~ "via stack_get"
+
+      {:ok, after_refusal} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert after_refusal.stack.status == "abandoned"
+    end
+
+    test "stack_start refusal wording follows the status it saw" do
+      project = create_project()
+
+      for {status, phrase} <- [
+            {"in_progress", "already in_progress; there is nothing to start"},
+            {"done", "This stack is done; its work has shipped"},
+            {"blocked", "blocked on a rollup merge conflict"},
+            {"in_review", "This stack is in_review; its rollup is already landing"}
+          ] do
+        %{stack_id: stack_id} =
+          create_stack_via_tool(
+            project.id,
+            unique_slug("e2e-start-#{String.replace(status, "_", "-")}"),
+            "At #{status}"
+          )
+
+        force_stack_status!(stack_id, status)
+
+        {:error, error} = ToolSurface.execute("stack_start", %{"stack_id" => stack_id}, %{})
+
+        assert error.error =~ "This stack is #{status}."
+
+        assert error.suggestion =~ phrase,
+               "status #{status}: expected #{inspect(phrase)} in #{inspect(error.suggestion)}"
+
+        refute error.suggestion =~ "via stack_get"
+      end
+    end
+
+    test "control: stack_start on a forming stack with planned members still starts it" do
+      %{stack_id: stack_id} = gated_stack(plan_blocker?: true)
+
+      assert {:ok, started} = ToolSurface.execute("stack_start", %{"stack_id" => stack_id}, %{})
+      assert started.status == "in_progress"
     end
   end
 
