@@ -273,6 +273,64 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
   @impl true
   def list_added_migrations(_args), do: {:error, {:invalid_args, "missing required keys"}}
 
+  # ── pr_merge_state (task 01a05394 stage 1) ──────────────────────────────
+
+  @impl true
+  def pr_merge_state(%{repo_url: repo_url, pr_number: pr_number})
+      when is_binary(repo_url) and is_integer(pr_number) and pr_number > 0 do
+    args = [
+      "pr",
+      "view",
+      Integer.to_string(pr_number),
+      "-R",
+      repo_url,
+      "--json",
+      "merged,mergedAt,mergeCommit,url"
+    ]
+
+    with {:ok, gh} <- gh_executable(["pr", "view"]) do
+      case System.cmd(gh, args,
+             stderr_to_stdout: true,
+             env: [{"GIT_TERMINAL_PROMPT", "0"}]
+           ) do
+        {output, 0} ->
+          parse_pr_merge_state(output)
+
+        {output, code} ->
+          {:error, {:gh_failed, ["pr", "view"], code, String.trim(output)}}
+      end
+    end
+  end
+
+  @impl true
+  def pr_merge_state(_args), do: {:error, {:invalid_args, "missing required keys"}}
+
+  @doc false
+  # Parse the `gh pr view --json merged,mergedAt,mergeCommit,url` payload.
+  #
+  # Exposed (doc-hidden) so the suite can drive the parse directly against
+  # merged / unmerged / malformed payloads without a real `gh` on PATH — an
+  # uninstalled binary prints nothing, so a shell-out test would fail
+  # silently on host state rather than on the code.
+  #
+  # Unparseable output is an ERROR, never `merged: false`: a parse failure
+  # read as "not merged" is indistinguishable from a genuinely open PR.
+  def parse_pr_merge_state(output) when is_binary(output) do
+    case Jason.decode(output) do
+      {:ok, %{"merged" => merged} = json} when is_boolean(merged) ->
+        {:ok,
+         %{
+           merged: merged,
+           merged_at: json["mergedAt"],
+           merge_commit_sha: get_in(json, ["mergeCommit", "oid"]),
+           url: json["url"]
+         }}
+
+      _ ->
+        {:error, {:pr_view_unparseable, output}}
+    end
+  end
+
   # ── revert_member_merge / close_stack_pr (stage 5) ──────────────────────
 
   @impl true

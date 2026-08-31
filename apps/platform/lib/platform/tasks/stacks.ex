@@ -514,7 +514,11 @@ defmodule Platform.Tasks.Stacks do
     * re-fires the rollup-PR open for any stack stuck at `deploying` with no
       `metadata["rollup_pr"]` (`reconcile_deploying_stacks/0`), and
     * promotes any member still parked at `stack_pending` whose in-stack deps
-      have since cleared (`sweep_stack_pending_members/0`).
+      have since cleared (`sweep_stack_pending_members/0`), and
+    * polls GitHub for any `deploying` stack whose numbered rollup PR merged
+      without the webhook ever arriving (`reconcile_merged_rollups/0`, task
+      01a05394); the `rollup_merges:` key of the summary carries its
+      `checked` / `completed` / `unmerged` / `errored` counts.
 
   Invoked from `TaskRouterWatcher`'s 5-minute reconcile tick. Log-and-swallow
   throughout: a single bad stack never aborts the sweep. Returns a summary
@@ -523,7 +527,13 @@ defmodule Platform.Tasks.Stacks do
   @spec reconcile_stack_lifecycle() :: %{
           commenced: non_neg_integer(),
           pr_reopened: non_neg_integer(),
-          promoted: non_neg_integer()
+          promoted: non_neg_integer(),
+          rollup_merges: %{
+            checked: non_neg_integer(),
+            completed: non_neg_integer(),
+            unmerged: non_neg_integer(),
+            errored: non_neg_integer()
+          }
         }
   def reconcile_stack_lifecycle do
     commenced =
@@ -540,8 +550,14 @@ defmodule Platform.Tasks.Stacks do
 
     pr_reopened = reconcile_deploying_stacks()
     promoted = sweep_stack_pending_members()
+    rollup_merges = reconcile_merged_rollups()
 
-    %{commenced: commenced, pr_reopened: pr_reopened, promoted: promoted}
+    %{
+      commenced: commenced,
+      pr_reopened: pr_reopened,
+      promoted: promoted,
+      rollup_merges: rollup_merges
+    }
   end
 
   # Stack statuses whose members can legitimately be sitting at
@@ -685,6 +701,206 @@ defmodule Platform.Tasks.Stacks do
       Logger.warning(
         "[Stacks.reconcile_deploying_stacks] maybe_open_stack_pr exited for stack " <>
           "#{stack.id}: #{inspect(reason)}"
+      )
+
+      :error
+  end
+
+  @doc """
+  Rollup-merge backstop poll (task 01a05394 stage 2): the reconciliation
+  path behind the GitHub webhook.
+
+  The webhook (`RollupWebhookProcessor.process_stack_merged_pr/4`, reached
+  from `GithubWebhookController` on `pull_request` `closed`+`merged`) is the
+  FAST path and is unchanged. But `deploying` is a state nothing retries: a
+  stack whose rollup PR merged while the delivery was missed sits there
+  forever, and an observer cannot tell "still waiting for a merge" from
+  "stuck". This poll asks the git runner for GitHub's current merge state of
+  every `deploying` stack that HAS a numbered `metadata["rollup_pr"]` — the
+  exact complement of `reconcile_deploying_stacks/0`, which handles the
+  stacks with NO stamped PR — and, on `merged: true`, routes through the
+  SAME replay-aware entry point the webhook uses.
+
+  Observability: every stack checked gets
+  `metadata["rollup_merge_watch"]` stamped with `last_checked_at`, a
+  monotonically bumped `checks` count, `last_result` in
+  `"unmerged" | "merged" | "error"`, and `last_error` (`nil` unless
+  `"error"`). A poll that ran and found the PR still open is `"unmerged"`;
+  a poll that could not answer (runner error, missing callback, project
+  without `repo_url`, or a raise inside the completion path) is `"error"`.
+  Those two are distinguishable both in the stored stamp and in the
+  returned summary — `unmerged` is never counted in `completed`.
+
+  The stamp is a plain `update_stack/2` outside any transaction. Completion
+  broadcasting is owned by `RollupWebhookProcessor` /
+  `StackDeployer.handle_rollup_pr_merged/2`; nothing is broadcast here.
+  Log-and-swallow per stack: one bad stack never aborts the sweep.
+  """
+  @spec reconcile_merged_rollups() :: %{
+          checked: non_neg_integer(),
+          completed: non_neg_integer(),
+          unmerged: non_neg_integer(),
+          errored: non_neg_integer()
+        }
+  def reconcile_merged_rollups do
+    Stack
+    |> where([s], s.status == "deploying")
+    |> Repo.all()
+    |> Enum.filter(&is_integer(rollup_pr_number(&1)))
+    |> Enum.reduce(%{checked: 0, completed: 0, unmerged: 0, errored: 0}, fn stack, acc ->
+      outcome = safe_reconcile_merged_rollup(stack)
+      _ = stamp_rollup_merge_watch(stack, outcome)
+
+      acc = %{acc | checked: acc.checked + 1}
+
+      case outcome do
+        :completed -> %{acc | completed: acc.completed + 1}
+        :unmerged -> %{acc | unmerged: acc.unmerged + 1}
+        {:error, _reason} -> %{acc | errored: acc.errored + 1}
+      end
+    end)
+  end
+
+  defp rollup_pr_number(%Stack{metadata: %{"rollup_pr" => %{"number" => number}}}), do: number
+  defp rollup_pr_number(_), do: nil
+
+  # One stack's merge check. Returns `:completed`, `:unmerged`, or
+  # `{:error, reason}`; never raises — mirrors `safe_reopen_stack_pr/1`.
+  defp safe_reconcile_merged_rollup(%Stack{} = stack) do
+    with {:ok, repo_url} <- rollup_repo_url(stack),
+         {:ok, state} <- call_pr_merge_state(stack, repo_url) do
+      complete_if_merged(stack, state)
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Stacks.reconcile_merged_rollups] merge check raised for stack " <>
+          "#{stack.id}: #{Exception.message(e)}"
+      )
+
+      {:error, {:raised, Exception.message(e)}}
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Stacks.reconcile_merged_rollups] merge check exited for stack " <>
+          "#{stack.id}: #{inspect(reason)}"
+      )
+
+      {:error, {:exit, reason}}
+  end
+
+  defp rollup_repo_url(%Stack{} = stack) do
+    case Tasks.get_project(stack.project_id) do
+      %{repo_url: url} when is_binary(url) and url != "" -> {:ok, url}
+      nil -> {:error, :project_not_found}
+      _ -> {:error, :no_repo_url}
+    end
+  end
+
+  # Mirrors `StackDeployer.call_open_pr/3`: `pr_merge_state/1` is an
+  # optional `GitRunner` callback, so a runner without it is a recorded
+  # error, not a crash and not a silent "unmerged".
+  defp call_pr_merge_state(%Stack{} = stack, repo_url) do
+    runner = StackDeployer.git_runner()
+
+    args = %{
+      repo_url: repo_url,
+      pr_number: rollup_pr_number(stack),
+      project_id: stack.project_id,
+      stack_id: stack.id
+    }
+
+    if Code.ensure_loaded?(runner) and function_exported?(runner, :pr_merge_state, 1) do
+      case runner.pr_merge_state(args) do
+        {:ok, %{merged: merged} = state} when is_boolean(merged) -> {:ok, state}
+        {:error, reason} -> {:error, reason}
+        other -> {:error, {:unexpected_runner_reply, other}}
+      end
+    else
+      {:error, {:runner_missing_callback, :pr_merge_state}}
+    end
+  end
+
+  defp complete_if_merged(%Stack{}, %{merged: false}), do: :unmerged
+
+  defp complete_if_merged(%Stack{} = stack, %{merged: true} = state) do
+    number = rollup_pr_number(stack)
+    stamped_url = get_in(stack.metadata, ["rollup_pr", "url"])
+
+    # Synthetic `pr` map in the webhook payload's shape — the SAME entry
+    # point the webhook uses, which is already replay-aware.
+    pr = %{
+      "number" => number,
+      "html_url" => Map.get(state, :url) || stamped_url,
+      "merge_commit_sha" => Map.get(state, :merge_commit_sha)
+    }
+
+    merged_at = Map.get(state, :merged_at) || DateTime.to_iso8601(DateTime.utc_now())
+
+    Logger.info(
+      "[Stacks.reconcile_merged_rollups] rollup PR ##{number} for stack #{stack.id} " <>
+        "is merged on GitHub but the stack is still deploying (webhook missed); " <>
+        "routing through process_stack_merged_pr"
+    )
+
+    # Re-read before completing. `stack` is the sweep's candidate snapshot,
+    # taken BEFORE the origin round-trip; a webhook that lands in that
+    # window has already flipped the row to `done` + stamped
+    # `rollup_merge`. The processor's replay guard reads `status` and
+    # `metadata` off the struct it is given, so handing it the snapshot
+    # would re-complete on top of the webhook's stamp (task 01a05394
+    # stage 3 caught exactly that: the poll's sha overwrote the webhook's).
+    case get_stack(stack.id) do
+      nil ->
+        {:error, :stack_not_found}
+
+      %Stack{} = fresh ->
+        case Platform.Tasks.RollupWebhookProcessor.process_stack_merged_pr(
+               fresh,
+               pr,
+               merged_at,
+               nil
+             ) do
+          :ok -> :completed
+          other -> {:error, {:process_stack_merged_pr, other}}
+        end
+    end
+  end
+
+  # Per-stack watch stamp. Re-reads the row first: on `:completed` the
+  # completion path has just rewritten `metadata` (`rollup_merge`) and
+  # `status`, and stamping over the stale struct would clobber that.
+  defp stamp_rollup_merge_watch(%Stack{id: id}, outcome) do
+    case get_stack(id) do
+      nil ->
+        :noop
+
+      %Stack{} = fresh ->
+        base_meta = if is_map(fresh.metadata), do: fresh.metadata, else: %{}
+        prev = Map.get(base_meta, "rollup_merge_watch") || %{}
+        prev_checks = if is_integer(prev["checks"]), do: prev["checks"], else: 0
+
+        {result, error} =
+          case outcome do
+            :completed -> {"merged", nil}
+            :unmerged -> {"unmerged", nil}
+            {:error, reason} -> {"error", inspect(reason)}
+          end
+
+        watch = %{
+          "last_checked_at" => DateTime.to_iso8601(DateTime.utc_now()),
+          "checks" => prev_checks + 1,
+          "last_result" => result,
+          "last_error" => error
+        }
+
+        update_stack(fresh, %{metadata: Map.put(base_meta, "rollup_merge_watch", watch)})
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Stacks.reconcile_merged_rollups] watch stamp raised for stack #{id}: " <>
+          Exception.message(e)
       )
 
       :error

@@ -418,6 +418,47 @@ defmodule Platform.Tasks.StackDeployer.GitRunner do
   @callback list_added_migrations(list_added_migrations_args()) ::
               {:ok, [String.t()]} | {:error, term()}
 
+  # ── pr_merge_state (task 01a05394 stage 1) ──────────────────────────────
+
+  @typedoc """
+  Arguments for `pr_merge_state/1`.
+
+  Given a repo and a pull-request number, ask the runner what GitHub
+  currently says about that PR's merge state. This is the ground-truth
+  read backing the rollup-merge backstop poll: the webhook is the fast
+  path, but a webhook that never arrives leaves a stack parked in
+  `deploying` forever, and nothing retries that state.
+  """
+  @type pr_merge_state_args :: %{
+          required(:repo_url) => String.t(),
+          required(:pr_number) => pos_integer(),
+          optional(:project_id) => String.t(),
+          optional(:stack_id) => String.t()
+        }
+
+  @doc """
+  Return `{:ok, %{merged: bool, merged_at: iso8601 | nil, merge_commit_sha:
+  sha | nil, url: url | nil}}` describing GitHub's current view of the PR,
+  or `{:error, reason}` when the runner cannot answer.
+
+  Implementations must distinguish "answered: not merged" from "could not
+  answer". A parse or transport failure MUST surface as `{:error, reason}`
+  and must never be flattened into `merged: false` — a fail-open here is
+  indistinguishable from a genuinely open PR, and callers build a
+  completion decision on this value.
+
+  `merged_at` and `merge_commit_sha` are `nil` whenever `merged` is false.
+  """
+  @callback pr_merge_state(pr_merge_state_args()) ::
+              {:ok,
+               %{
+                 merged: boolean(),
+                 merged_at: String.t() | nil,
+                 merge_commit_sha: String.t() | nil,
+                 url: String.t() | nil
+               }}
+              | {:error, term()}
+
   @optional_callbacks [
     merge_member_into_rollup: 1,
     open_stack_pr: 1,
@@ -426,7 +467,8 @@ defmodule Platform.Tasks.StackDeployer.GitRunner do
     close_stack_pr: 1,
     delete_rollup_branch: 1,
     sha_reachable?: 1,
-    list_added_migrations: 1
+    list_added_migrations: 1,
+    pr_merge_state: 1
   ]
 end
 
@@ -472,4 +514,13 @@ defmodule Platform.Tasks.StackDeployer.NoopRunner do
   # unreachable-stamp behavior swap in a runner that returns `{:ok, false}`.
   @impl true
   def sha_reachable?(_args), do: {:ok, true}
+
+  # Task 01a05394 stage 1: `merged: false` is the deliberate default. The
+  # test-env default runner must make the rollup-merge backstop poll a
+  # NO-OP, so every unrelated Stacks suite is unaffected and no accidental
+  # default can ever complete a stack. Tests exercising the merged path
+  # swap in a runner that returns `merged: true`.
+  @impl true
+  def pr_merge_state(_args),
+    do: {:ok, %{merged: false, merged_at: nil, merge_commit_sha: nil, url: nil}}
 end

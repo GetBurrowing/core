@@ -1717,7 +1717,7 @@ defmodule Platform.Tasks.StackDeployer do
 
   # Compute `duration_ms_in_deploying` from the stack's pre-merge
   # `metadata["rollup_pr"]["opened_at"]` stamp. That timestamp is
-  # written by `finalize_pr_opened/3` when the rollup PR opens, so it
+  # written by `finalize_pr_opened/4` when the rollup PR opens, so it
   # is the canonical "stack entered deploy" marker. `nil` when the
   # stack never went through the dispatch path (e.g. tests that seed
   # `status: "deploying"` directly without an `opened_at` timestamp).
@@ -2441,8 +2441,19 @@ defmodule Platform.Tasks.StackDeployer do
          body = build_pr_body(locked_stack, members, project.repo_url),
          {:ok, %{number: number, url: url}} <-
            call_open_pr(locked_stack, project.repo_url, body) do
-      finalize_pr_opened(locked_stack, number, url)
+      finalize_pr_opened(locked_stack, project, number, url)
     else
+      {:error, :already_locked} ->
+        # Task 01a05394 stage 4: a concurrent caller won the CAS in
+        # `lock_stack_for_pr/1`. Its `open_stack_pr` is in flight or
+        # already finalized — do NOT roll back; that would clear the
+        # winner's placeholder and drop the stack to `in_review` under
+        # a live PR. Short-circuit to the same result a fresh read
+        # would have produced.
+        Logger.info("[StackDeployer] stack #{stack.id} rollup PR lock already held; skipping")
+
+        {:ok, :already_open}
+
       {:error, reason} = err ->
         # Best-effort rollback of the placeholder metadata + status
         # flip so a transient gh failure doesn't strand the stack
@@ -2474,18 +2485,55 @@ defmodule Platform.Tasks.StackDeployer do
   # the gate, but only one wins this update; the other re-loads,
   # sees status == "deploying" + rollup_pr present, and bails via
   # the `:already_open` short-circuit.
+  #
+  # Task 01a05394 stage 4: this is a compare-and-swap, not a
+  # read-then-update. The WHERE carries the guard (`metadata ->
+  # 'rollup_pr' IS NULL`) so two callers holding the same stale
+  # struct — both of which passed `pr_already_opened?/1` — cannot
+  # both write the placeholder. The row is the arbiter, not the
+  # struct. Mirrors the status CAS in `Stacks.dispatch_stack_deploy/1`.
+  # The loser gets `{:error, :already_locked}`, which the caller maps
+  # to `:already_open` WITHOUT touching `rollback_pr_lock/1`.
   defp lock_stack_for_pr(%Stack{} = stack) do
-    base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+    now = DateTime.utc_now()
 
     placeholder = %{
-      "status" => "opening",
-      "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      "rollup_pr" => %{
+        "status" => "opening",
+        "at" => DateTime.to_iso8601(now)
+      }
     }
 
-    Stacks.update_stack(stack, %{
-      status: "deploying",
-      metadata: Map.put(base_meta, "rollup_pr", placeholder)
-    })
+    {count, _} =
+      from(s in Stack,
+        where:
+          s.id == ^stack.id and
+            fragment("(? -> 'rollup_pr') IS NULL", s.metadata),
+        update: [
+          set: [
+            status: "deploying",
+            metadata:
+              fragment(
+                "COALESCE(?, '{}'::jsonb) || ?",
+                s.metadata,
+                type(^placeholder, :map)
+              ),
+            updated_at: ^now
+          ]
+        ]
+      )
+      |> Repo.update_all([])
+
+    case count do
+      1 ->
+        case Stacks.get_stack(stack.id) do
+          %Stack{} = locked -> {:ok, locked}
+          nil -> {:error, :stack_not_found}
+        end
+
+      0 ->
+        {:error, :already_locked}
+    end
   end
 
   defp call_open_pr(%Stack{} = stack, repo_url, body) do
@@ -2508,14 +2556,26 @@ defmodule Platform.Tasks.StackDeployer do
     end
   end
 
-  defp finalize_pr_opened(%Stack{} = stack, number, url)
+  # Task 01a05394 stage 5: auto-merge is NOT armed for rollup PRs.
+  # `GitRunner.open_stack_pr/1` runs `gh pr create` only; nothing on
+  # this path ever runs `gh pr merge --auto`. Whether `--auto` is even
+  # armable depends on the target repo's branch protection (absent on
+  # some repos, present on core since 2026-08), and this path does not
+  # probe it. A project whose deploy config sets `auto_merge: true`
+  # gets task-level auto-merge (`Platform.Tasks.AutoMerger`, unaffected
+  # here) and nothing at the rollup level: a human or the merge webhook
+  # / `Stacks.reconcile_merged_rollups/0` poll has to land the PR. The
+  # `auto_merge_armed: false` stamp and the warning below exist so that
+  # belief cannot be held quietly. Arming here is a separate decision.
+  defp finalize_pr_opened(%Stack{} = stack, project, number, url)
        when is_integer(number) and is_binary(url) do
     base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
 
     pr_meta = %{
       "number" => number,
       "url" => url,
-      "opened_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      "opened_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "auto_merge_armed" => false
     }
 
     new_meta = Map.put(base_meta, "rollup_pr", pr_meta)
@@ -2523,6 +2583,15 @@ defmodule Platform.Tasks.StackDeployer do
     case Stacks.update_stack(stack, %{metadata: new_meta}) do
       {:ok, updated} ->
         Logger.info("[StackDeployer] stack #{stack.id} rollup PR opened: ##{number} #{url}")
+
+        if auto_merge_configured?(project) do
+          Logger.warning(
+            "[StackDeployer] stack #{stack.id} rollup PR ##{number}: project deploy " <>
+              "config sets auto_merge: true, but stack rollup PRs do not arm auto-merge " <>
+              "(this path never runs `gh pr merge --auto`; task-level AutoMerger is " <>
+              "unaffected). The PR requires a human or webhook-driven merge."
+          )
+        end
 
         :telemetry.execute(
           [:platform, :stack_deployer, :pr_opened],
@@ -2542,18 +2611,58 @@ defmodule Platform.Tasks.StackDeployer do
     end
   end
 
-  defp rollback_pr_lock(stack_id) when is_binary(stack_id) do
-    case Stacks.get_stack(stack_id) do
-      %Stack{metadata: meta} = current when is_map(meta) ->
-        case Map.get(meta, "rollup_pr") do
-          %{"status" => "opening"} ->
-            cleared = Map.delete(meta, "rollup_pr")
+  # Reads `auto_merge` the same way `DispatchPhase.agent_unpassable?/2`
+  # and `HeartbeatScheduler` do (`config` first, falling back to the
+  # strategy itself) so the three never disagree about where the key
+  # lives. The stack has no single task to resolve a strategy through,
+  # so the project-wide `deploy_config["default_strategy"]` is the
+  # resolved config here.
+  defp auto_merge_configured?(project) do
+    deploy_config = Map.get(project, :deploy_config) || %{}
 
+    case Map.get(deploy_config, "default_strategy") do
+      %{} = strategy ->
+        config = Map.get(strategy, "config")
+        Map.get(config || strategy, "auto_merge", false) == true
+
+      _ ->
+        false
+    end
+  end
+
+  # Task 01a05394 stage 4: a no-op unless the CURRENT `rollup_pr` is
+  # still the `%{"status" => "opening"}` placeholder this module wrote
+  # in `lock_stack_for_pr/1`. A stack carrying a real `rollup_pr.number`
+  # is never moved — the pre-read check is kept, and the write itself
+  # re-checks the same predicate in its WHERE so a `finalize_pr_opened/4`
+  # that lands between the read and the write cannot be clobbered.
+  # Public (`@doc false`) so the invariant is directly testable.
+  @doc false
+  def rollback_pr_lock(stack_id) when is_binary(stack_id) do
+    case Stacks.get_stack(stack_id) do
+      %Stack{metadata: meta} when is_map(meta) ->
+        case Map.get(meta, "rollup_pr") do
+          %{"status" => "opening"} = placeholder when not is_map_key(placeholder, "number") ->
             # Roll status back to in_review (the most-conservative
             # rollup state given members are merged but PR didn't
             # open). NOT back to in_progress: the merge already
             # happened, members are at in_review.
-            _ = Stacks.update_stack(current, %{status: "in_review", metadata: cleared})
+            _ =
+              from(s in Stack,
+                where:
+                  s.id == ^stack_id and
+                    fragment("(? -> 'rollup_pr' ->> 'status') = 'opening'", s.metadata) and
+                    fragment("(? -> 'rollup_pr' -> 'number') IS NULL", s.metadata),
+                update: [
+                  set: [
+                    status: "in_review",
+                    metadata: fragment("? - 'rollup_pr'", s.metadata),
+                    updated_at: ^DateTime.utc_now()
+                  ]
+                ]
+              )
+              |> Repo.update_all([])
+
             :ok
 
           _ ->
