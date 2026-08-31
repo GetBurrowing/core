@@ -1266,6 +1266,17 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
 
       assert result.promoted == [dep.id]
       assert Repo.get!(Task, dep.id).status == "in_progress"
+
+      # Post-write proof (01a0562f stage 3): the context computed its own
+      # `executable_now` BEFORE the post-commit promotion flipped DEP, so
+      # only a reload after both have run can list the promoted member.
+      assert dep.id in result.executable_now
+      refute dep.id in result.blocked_now
+      assert p.id in result.executable_now
+
+      stack = get_stack!(stack_id)
+      assert result.executable_now == stack.executable_now
+      assert result.blocked_now == stack.blocked_now
     end
   end
 
@@ -3086,6 +3097,160 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       assert Enum.sort(result.executable_now ++ result.blocked_now) == all_ids
       assert result.executable_now -- result.blocked_now == result.executable_now
       assert result.blocked_now -- result.executable_now == result.blocked_now
+    end
+  end
+
+  # ── Task 01a0562f-28ad stage 3: the dependency mutation tools report the
+  # SAME status-aware partition `stack_get` does, reloaded after the write.
+  # The fixture is built so the raw context value (Kahn level-0 over every
+  # member, computed pre-promotion on remove) and the status-aware partition
+  # DISAGREE on `done_root`: a `done` root is level-0 in the raw DAG but is
+  # not runnable, so echoing the context value puts it in `executable_now`.
+  describe "stack_add_dependency / stack_remove_dependency agree with stack_get's partition (01a0562f)" do
+    setup do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-agree"))
+
+      # done_root: level-0 in the raw DAG, NOT runnable (status done), and a
+      # satisfied dep for anyone pointing at it (done + landed stamp).
+      done_root =
+        member_in_stack!(project, stack_id, position: 1, status: "in_progress")
+        |> stamp_landed!("d0e0001")
+        |> set_status!("done")
+
+      # live_root: level-0 in the raw DAG AND runnable (in_review is an
+      # active status), AND a satisfied dep (landed stamp) for `parked`.
+      live_root =
+        member_in_stack!(project, stack_id, position: 2, status: "in_progress")
+        |> stamp_landed!("11e0002")
+        |> set_status!("in_review")
+
+      # parked: every dep landed, but never promoted — sits in blocked_now
+      # with blocked_by == [] under the status-aware partition.
+      parked =
+        member_in_stack!(project, stack_id, position: 3)
+        |> add_dep!(live_root)
+        |> set_status!("stack_pending")
+
+      # child: `planning` is an active status the add guard
+      # (`ensure_dependent_not_started/1`) accepts; `in_progress` would be
+      # refused as `dependent_already_started`.
+      child = member_in_stack!(project, stack_id, position: 4, status: "planning")
+
+      %{
+        stack_id: stack_id,
+        done_root: done_root,
+        live_root: live_root,
+        parked: parked,
+        child: child
+      }
+    end
+
+    defp assert_partition_agrees_with_stack_get(result, stack_id) do
+      members = Platform.Tasks.Stacks.members(Platform.Tasks.Stacks.get_stack(stack_id))
+      assert length(members) == 4
+      all_ids = members |> Enum.map(& &1.id) |> Enum.sort()
+
+      # The two lists partition the members: union is every member, and
+      # they are disjoint.
+      assert Enum.sort(result.executable_now ++ result.blocked_now) == all_ids
+      assert result.executable_now -- result.blocked_now == result.executable_now
+      assert result.blocked_now -- result.executable_now == result.blocked_now
+
+      # AGREEMENT: identical to stack_get, order included — both derive
+      # from `stack_position` order.
+      stack = get_stack!(stack_id)
+      assert result.executable_now == stack.executable_now
+      assert result.blocked_now == stack.blocked_now
+    end
+
+    test "stack_add_dependency reports the status-aware partition, not the raw level-0 set",
+         %{
+           stack_id: stack_id,
+           done_root: done_root,
+           live_root: live_root,
+           parked: parked,
+           child: child
+         } do
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "stack_add_dependency",
+                 %{
+                   "stack_id" => stack_id,
+                   "from_task_id" => child.id,
+                   "to_task_id" => done_root.id
+                 },
+                 %{}
+               )
+
+      # PAIRED: a done root is level-0 in the raw DAG, so the refute alone
+      # would also pass on an empty list; live_root proves the list is
+      # populated.
+      refute done_root.id in result.executable_now
+      assert live_root.id in result.executable_now
+      assert done_root.id in result.blocked_now
+
+      # parked: all deps landed, never promoted → exactly one list.
+      assert parked.id in result.blocked_now
+      refute parked.id in result.executable_now
+
+      # child: its new dep done_root is done AND stamped, so
+      # `MemberSet.dependency_satisfied?/1` holds, blocked_by == [], and
+      # status planning is active → executable.
+      assert child.id in result.executable_now
+      refute child.id in result.blocked_now
+
+      assert_partition_agrees_with_stack_get(result, stack_id)
+    end
+
+    test "stack_remove_dependency reports the status-aware partition, not the raw level-0 set",
+         %{
+           stack_id: stack_id,
+           done_root: done_root,
+           live_root: live_root,
+           parked: parked,
+           child: child
+         } do
+      # Pre-existing edge child -> live_root, made through the add tool.
+      assert {:ok, _} =
+               ToolSurface.execute(
+                 "stack_add_dependency",
+                 %{
+                   "stack_id" => stack_id,
+                   "from_task_id" => child.id,
+                   "to_task_id" => live_root.id
+                 },
+                 %{}
+               )
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "stack_remove_dependency",
+                 %{
+                   "stack_id" => stack_id,
+                   "from_task_id" => child.id,
+                   "to_task_id" => live_root.id
+                 },
+                 %{}
+               )
+
+      # PAIRED: done root absent, live root present.
+      refute done_root.id in result.executable_now
+      assert live_root.id in result.executable_now
+      assert done_root.id in result.blocked_now
+
+      # parked: exactly one list.
+      assert parked.id in result.blocked_now
+      refute parked.id in result.executable_now
+
+      # child: no deps left, status planning → executable.
+      assert child.id in result.executable_now
+      refute child.id in result.blocked_now
+
+      # child is `planning`; `try_promote/1` only flips `stack_pending`.
+      assert result.promoted == []
+
+      assert_partition_agrees_with_stack_get(result, stack_id)
     end
   end
 

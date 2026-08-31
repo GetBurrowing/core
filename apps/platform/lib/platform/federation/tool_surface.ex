@@ -2396,7 +2396,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{from_task_id, to_task_id, kind, executable_now} on success, where `executable_now` is the recomputed in-stack ready set (member ids with no unresolved in-stack deps).",
+          "%{from_task_id, to_task_id, kind, executable_now, blocked_now} on success. `executable_now` / `blocked_now` are the SAME status-aware partition `stack_get` reports, recomputed from the post-write state: a member is in `executable_now` iff its status is in planning/in_progress/in_review/deploying AND `blocked_by == []`; every other member is in `blocked_now`; the two lists partition the members.",
         limitations:
           "Both endpoints must be members of the given stack — non-members or cross-stack endpoints return `not_in_stack`. Self-edges (`from == to`) return `self_edge`. A duplicate `(to_task_id, kind)` already on `from_task` returns `duplicate_edge`. Adds that would close a cycle return `cycle` (with `path`); rare cross-stack-DAG slips return `cross_stack_dep`. All errors roll back atomically.",
         when_to_use:
@@ -2430,7 +2430,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{from_task_id, to_task_id, executable_now} on success. `executable_now` is the recomputed in-stack ready set after the removal.",
+          "%{from_task_id, to_task_id, executable_now, blocked_now, promoted} on success. `executable_now` / `blocked_now` are the SAME status-aware partition `stack_get` reports, recomputed from the post-write state: a member is in `executable_now` iff its status is in planning/in_progress/in_review/deploying AND `blocked_by == []`; every other member is in `blocked_now`; the two lists partition the members. A member this call promoted (`promoted`) appears in `executable_now`.",
         limitations:
           "Both endpoints must be members of the given stack — non-members or cross-stack endpoints return `not_in_stack`. Self-edges return `self_edge`. If no `(to_task_id, kind)` entry exists on `from_task`, returns `not_an_edge` so callers can disambiguate idempotent re-removes from successful ones.",
         when_to_use:
@@ -5213,41 +5213,14 @@ defmodule Platform.Federation.ToolSurface do
 
       %Stack{} = stack ->
         members = Stacks.members(stack)
-        # `Stacks.executable_members/1` stays the DAG source: it is `[]`
-        # when the in-stack DAG is invalid (cycle / cross-stack dep), and
-        # a valid DAG over a non-empty member set always has a level-0.
-        dag_valid? = members == [] or Stacks.executable_members(stack) != []
         merge_order_ids = stack |> Stacks.members_in_merge_order() |> Enum.map(& &1.id)
         {edges, cross_stack_deps} = classify_member_edges(members)
 
-        # Task 01a05394-8300 stage 2. Plans and dep-landing are resolved
-        # ONCE for the whole member set here and handed to the serializer,
-        # so a ten-member stack costs one plan query, not ten.
-        context = stack_member_context(members)
-        serialized = Enum.map(members, &serialize_stack_member(&1, context))
-
-        # Status-aware `executable_now` — the members the engine would
-        # actually run right now. A member is runnable iff BOTH:
-        #   * its status is in the dispatcher's live set
-        #     (`TaskRouterWatcher.active_statuses/0`: the same set
-        #     `TaskRouterWatcher` scans for dispatch, so a `done`,
-        #     `backlog`, `cancelled` or `stack_pending` root is NOT
-        #     runnable); and
-        #   * `blocked_by == []` — every in-stack dep passes
-        #     `MemberSet.dependency_satisfied?/1`, the per-dep predicate
-        #     `Stacks.unblocked_in_stack?/1` (→ `try_promote/1` and the
-        #     redrive gate's `handle_member_regression/2`) is built on.
-        # Roots have no in-stack deps, so a runnable-status root is always
-        # listed; a promoted non-root whose deps all landed is listed too.
-        # Everything else — including a `stack_pending` member whose deps
-        # all landed but which the promotion sweep has not flipped yet —
-        # goes to `blocked_now`, so the two lists partition `members`.
-        executable_ids =
-          if dag_valid?,
-            do: serialized |> Enum.filter(&stack_member_runnable_now?/1) |> Enum.map(& &1.id),
-            else: []
-
-        blocked_ids = serialized |> Enum.map(& &1.id) |> Enum.reject(&(&1 in executable_ids))
+        # Serialization and the runnable partition live in
+        # `stack_runnable_partition/2` so the mutation tools can report the
+        # same status-aware `executable_now` (task 01a0562f-28ad).
+        %{members: serialized, executable_now: executable_ids, blocked_now: blocked_ids} =
+          stack_runnable_partition(stack, members)
 
         {:ok,
          %{
@@ -5328,6 +5301,9 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # `result.executable_now` from the context is the raw Kahn level-0 set over
+  # every member regardless of status; the tool reports `stack_get`'s
+  # status-aware partition instead, reloaded after the write committed.
   def execute("stack_add_dependency", args, _context) do
     stack_id = Map.get(args, "stack_id")
     from_task_id = Map.get(args, "from_task_id")
@@ -5336,12 +5312,16 @@ defmodule Platform.Federation.ToolSurface do
 
     case Stacks.add_dependency_edge(stack_id, from_task_id, to_task_id, kind: kind) do
       {:ok, %{} = result} ->
+        %{executable_now: executable_now, blocked_now: blocked_now} =
+          stack_runnable_partition(stack_id)
+
         {:ok,
          %{
            from_task_id: result.from_task_id,
            to_task_id: result.to_task_id,
            kind: result.kind,
-           executable_now: result.executable_now
+           executable_now: executable_now,
+           blocked_now: blocked_now
          }}
 
       {:error, _} = err ->
@@ -5352,6 +5332,10 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # `result.executable_now` from the context is the raw DAG level-0 set,
+  # computed inside the transaction BEFORE the post-commit
+  # `promote_freed_dependent/1` flips a freed `stack_pending` member; the
+  # tool reloads `stack_get`'s status-aware partition after both have run.
   def execute("stack_remove_dependency", args, _context) do
     stack_id = Map.get(args, "stack_id")
     from_task_id = Map.get(args, "from_task_id")
@@ -5360,11 +5344,15 @@ defmodule Platform.Federation.ToolSurface do
 
     case Stacks.remove_dependency_edge(stack_id, from_task_id, to_task_id, kind: kind) do
       {:ok, %{} = result} ->
+        %{executable_now: executable_now, blocked_now: blocked_now} =
+          stack_runnable_partition(stack_id)
+
         {:ok,
          %{
            from_task_id: result.from_task_id,
            to_task_id: result.to_task_id,
-           executable_now: result.executable_now,
+           executable_now: executable_now,
+           blocked_now: blocked_now,
            promoted: Map.get(result, :promoted, [])
          }}
 
@@ -8607,7 +8595,64 @@ defmodule Platform.Federation.ToolSurface do
     end)
   end
 
-  # See the comment in `execute("stack_get", ...)` for the predicate.
+  # Serialized members plus the status-aware runnable partition `stack_get`
+  # reports (task 01a0562f-28ad stage 1 hoisted this out of the handler so
+  # the dependency mutation tools can reuse it). Returns
+  # `%{members: [serialized member], executable_now: [id], blocked_now: [id]}`;
+  # ids stay in `stack_position` order because `Stacks.members/1` orders
+  # by it.
+  #
+  # `Stacks.executable_members/1` stays the DAG source: it is `[]`
+  # when the in-stack DAG is invalid (cycle / cross-stack dep), and
+  # a valid DAG over a non-empty member set always has a level-0.
+  #
+  # Task 01a05394-8300 stage 2. Plans and dep-landing are resolved
+  # ONCE for the whole member set here and handed to the serializer,
+  # so a ten-member stack costs one plan query, not ten.
+  #
+  # Status-aware `executable_now` — the members the engine would
+  # actually run right now. A member is runnable iff BOTH:
+  #   * its status is in the dispatcher's live set
+  #     (`TaskRouterWatcher.active_statuses/0`: the same set
+  #     `TaskRouterWatcher` scans for dispatch, so a `done`,
+  #     `backlog`, `cancelled` or `stack_pending` root is NOT
+  #     runnable); and
+  #   * `blocked_by == []` — every in-stack dep passes
+  #     `MemberSet.dependency_satisfied?/1`, the per-dep predicate
+  #     `Stacks.unblocked_in_stack?/1` (→ `try_promote/1` and the
+  #     redrive gate's `handle_member_regression/2`) is built on.
+  # Roots have no in-stack deps, so a runnable-status root is always
+  # listed; a promoted non-root whose deps all landed is listed too.
+  # Everything else — including a `stack_pending` member whose deps
+  # all landed but which the promotion sweep has not flipped yet —
+  # goes to `blocked_now`, so the two lists partition `members`.
+  defp stack_runnable_partition(%Stack{} = stack, members) when is_list(members) do
+    dag_valid? = members == [] or Stacks.executable_members(stack) != []
+    context = stack_member_context(members)
+    serialized = Enum.map(members, &serialize_stack_member(&1, context))
+
+    executable_ids =
+      if dag_valid?,
+        do: serialized |> Enum.filter(&stack_member_runnable_now?/1) |> Enum.map(& &1.id),
+        else: []
+
+    blocked_ids = serialized |> Enum.map(& &1.id) |> Enum.reject(&(&1 in executable_ids))
+
+    %{members: serialized, executable_now: executable_ids, blocked_now: blocked_ids}
+  end
+
+  # Reload-by-id clause for the dependency mutation tools: a fresh
+  # `get_stack/1` + `members/1` after the context's transaction (and, on
+  # remove, its post-commit promotion) has run. `stack_id` is the raw args
+  # string, safe here because the context has just resolved it via
+  # `load_stack/1` and `get_stack/1` is `Platform.UUID.valid?/1`-guarded.
+  # A nil stack is a MatchError on purpose — never fall back to `[]`.
+  defp stack_runnable_partition(stack_id) when is_binary(stack_id) do
+    %Stack{} = stack = Stacks.get_stack(stack_id)
+    stack_runnable_partition(stack, Stacks.members(stack))
+  end
+
+  # See the comment on `stack_runnable_partition/2` for the predicate.
   defp stack_member_runnable_now?(%{status: status, blocked_by: blocked_by}) do
     status in Platform.Orchestration.TaskRouterWatcher.active_statuses() and blocked_by == []
   end

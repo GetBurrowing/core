@@ -4124,8 +4124,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.from_task_id == child.id
       assert result.to_task_id == root.id
       assert result.kind == "blocks"
-      # `child` now blocks on `root` — only `root` is executable_now.
-      assert result.executable_now == [root.id]
+      # Status-aware since 01a0562f-28ad stage 2: same partition as
+      # `stack_get`. Both members are `backlog` in a `forming` stack, so a
+      # backlog root is not runnable now — nothing is executable_now and
+      # both (the root and the child now blocking on it) are blocked_now.
+      assert result.executable_now == []
+      assert Enum.sort(result.blocked_now) == Enum.sort([root.id, child.id])
     end
 
     test "stack_add_dependency returns self_edge envelope for from == to" do
@@ -4202,8 +4206,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert result.from_task_id == child.id
       assert result.to_task_id == root.id
-      # With the edge dropped, both members are executable.
-      assert Enum.sort(result.executable_now) == Enum.sort([root.id, child.id])
+      # Status-aware since 01a0562f-28ad stage 2: same partition as
+      # `stack_get`. The edge is gone, but both members are still `backlog`
+      # in a `forming` stack — a backlog root is not runnable now, so
+      # nothing is executable_now and both are blocked_now.
+      assert result.executable_now == []
+      assert Enum.sort(result.blocked_now) == Enum.sort([root.id, child.id])
     end
 
     test "stack_remove_dependency returns not_an_edge envelope when no such edge exists" do
