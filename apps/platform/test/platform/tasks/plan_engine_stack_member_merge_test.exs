@@ -241,7 +241,14 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
       assert call.stack_id == stack.id
     end
 
-    test "stack member NOT yet at in_review still invokes the hook (which noops as :not_ready)",
+    # Task 01a05393 stage 2 rewrote this case. It used to assert that a
+    # command-only member parked at `in_progress` completed its plan with NO
+    # merge call — which was the bug: nothing ever moved such a member to
+    # `in_review`, so the rollup merge never fired. `PlanEngine.maybe_advance_next/3`
+    # now runs `MemberReviewEntry.maybe_enter_in_review/2` on settlement, so
+    # the member reaches `in_review` and the merge fires — once. The
+    # plan-completion hook that follows sees `{:ok, :already_merged}`.
+    test "stack member still at in_progress enters in_review on its last settlement and merges once",
          %{project: project, stack: stack} do
       {:ok, _} = FakeRunner.start_link([])
 
@@ -262,14 +269,17 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
 
       {:ok, _} = PlanEngine.start_stage(build.id)
 
+      assert Tasks.get_task_record(task.id).status == "in_progress"
+
       {:ok, completed_plan} = PlanEngine.advance(plan.id)
       assert completed_plan.status == "completed"
 
-      # The deployer was invoked, but `merge_member_into_rollup/1` short-
-      # circuits as `{:ok, :not_ready}` before reaching the runner because
-      # the task is still in_progress (not in_review). So no runner call
-      # is observed — and crucially, no crash and no double-fire either.
-      assert FakeRunner.merge_calls() == []
+      assert Tasks.get_task_record(task.id).status == "in_review"
+
+      # Exactly one runner call: the `in_progress -> in_review` hook merged,
+      # and the later `:plan_completed` hook short-circuited as already merged.
+      assert [call] = FakeRunner.merge_calls()
+      assert call.member_task_id == task.id
     end
 
     test "re-running engine over an already-merged member is a noop (no double merge call)",

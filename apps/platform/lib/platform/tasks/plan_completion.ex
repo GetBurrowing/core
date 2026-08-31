@@ -143,6 +143,7 @@ defmodule Platform.Tasks.PlanCompletion do
   # happened. They are not evidence about the dropped-broadcast bug this module
   # fixes, and advancing them to `done` would report undeployed work as shipped.
   # This `:noop` is precisely what keeps this change away from them.
+  # Members DO leave `in_progress`, but via `Platform.Tasks.MemberReviewEntry` (from `PlanEngine.maybe_advance_next/3`), not here.
   defp advance(%Task{}, %Plan{}, :stack_member), do: :noop
 
   # Task is in `backlog`/`planning`/`blocked` when its plan completes — it never

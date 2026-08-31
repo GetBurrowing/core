@@ -26,6 +26,7 @@ defmodule Platform.Tasks.PlanEngine do
 
   alias Platform.Architecture.StageAudit
   alias Platform.Tasks
+  alias Platform.Tasks.MemberReviewEntry
   alias Platform.Tasks.PlanCompletion
 
   alias Platform.Tasks.{DeployStageBuilder, Plan, Stacks, Stage, StackDeployer, Task, Validation}
@@ -1477,6 +1478,21 @@ defmodule Platform.Tasks.PlanEngine do
   defp maybe_advance_next(plan, _old_stages, current_position) do
     # Re-fetch stages to get current statuses after transitions
     fresh_stages = ordered_stages(plan.id)
+
+    # Task 01a05393: move a STACK MEMBER `in_progress -> in_review` once its
+    # non-gate work is settled. This runs on EVERY stage settlement, which is
+    # what closes both holes at once: hole A (a command-only member plan has no
+    # gate stage, so no gate-driven seam ever produces the transition) and
+    # hole B (the member's LAST stage is the gated one, so the plan never
+    # completes and no completion seam ever runs). Ordered BEFORE the
+    # `transition_stage(next_stage, "running")` branch below so a member with
+    # remaining non-gate work stays `in_progress`, and before
+    # `maybe_inject_deploy_or_complete/2` so its `handle_member_transition/3`
+    # call sees a task that passes the deployer's `:member_not_in_review` gate.
+    # The predicate's status clause is the ADR-0046 guard; a member already at
+    # `deploying` is untouched.
+    _ = MemberReviewEntry.maybe_enter_in_review(plan, fresh_stages)
+
     next = Enum.find(fresh_stages, &(&1.position > current_position and &1.status == "pending"))
 
     case next do
