@@ -2263,9 +2263,15 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "stack_update",
         description:
-          "Update a task stack's mutable fields (name, description, sponsor). Omitted keys are left untouched; `sponsor_user_id` explicitly accepts `null` to clear the slot (matches `task_update` nilable semantics per ADR 0042). Mirrors `task_update` for the stack surface.",
+          "Update a task stack's mutable fields (name, description, sponsor). Omitted keys are left untouched; `sponsor_user_id` explicitly accepts `null` to clear the slot (matches `task_update` nilable semantics per ADR 0042). Mirrors `task_update` for the stack surface. `clear_conflict: true` is the ONLY status exit for a stack halted at `blocked` on a rollup-merge conflict: it deletes `metadata.conflict` and recomputes the stack status from its members in one atomic write (the stack changeset drops any status change on a conflict-held stack that does not clear the conflict in the same write). There is deliberately no free-form `status` arg — a shipped stack may not be walked backwards.",
         parameters: %{
           stack_id: %{type: "string", required: true, description: "The stack to update"},
+          clear_conflict: %{
+            type: "boolean",
+            required: false,
+            description:
+              "When true, resolve a conflict-held `blocked` stack: clears `metadata.conflict` and moves the status to the rollup of its members in the same write, then returns `conflict_cleared: true` with the resulting `status`. Use after the rollup-branch conflict has been fixed by hand. Returns a recoverable `not_conflicted` error when the stack carries no conflict."
+          },
           name: %{type: "string", required: false, description: "New human-friendly stack name"},
           description: %{type: "string", required: false, description: "New description"},
           sponsor_user_id: %{
@@ -2276,11 +2282,11 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The updated stack object (same shape as `stack_get`'s `stack` field, including `sponsor_user_id` and nested `sponsor: nil | %{id, name, email}`).",
+          "The updated stack object (same shape as `stack_get`'s `stack` field, including `sponsor_user_id` and nested `sponsor: nil | %{id, name, email}`). When `clear_conflict: true` was honoured the envelope also carries `conflict_cleared: true` and `status` is the recomputed rollup status.",
         limitations:
-          "Returns `stack_not_found` if the stack does not exist. `sponsor_user_id` must reference an existing user; passing an unknown UUID returns a recoverable `sponsor_fk` error envelope.",
+          "Returns `stack_not_found` if the stack does not exist. `sponsor_user_id` must reference an existing user; passing an unknown UUID returns a recoverable `sponsor_fk` error envelope. `clear_conflict: true` on a stack with no `metadata.conflict` returns a recoverable `not_conflicted` error and writes nothing (the other attrs are NOT applied). No `status` arg exists.",
         when_to_use:
-          "When you need to rename a stack, edit its description, or set/clear its Sponsor after creation."
+          "When you need to rename a stack, edit its description, set/clear its Sponsor after creation, or release a `blocked` stack after resolving its rollup-merge conflict (`clear_conflict: true`)."
       },
       %{
         name: "stack_get",
@@ -4491,6 +4497,20 @@ defmodule Platform.Federation.ToolSurface do
             {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
               {:error, stack_plans_pending_envelope(stack_id, waiting_on)}
 
+            # ADR 0045 decision 7 (task 01a05393 stage 3): a member of a
+            # stack that already SHIPPED through its rollup cannot re-enter
+            # an execution status. Not recoverable on this task — the
+            # message itself says where the work goes instead.
+            {:error, :stack_already_shipped, %{message: message}} ->
+              {:error,
+               %{
+                 error: message,
+                 recoverable: false,
+                 suggestion:
+                   "Create a new individual task (task_create) for the post-ship change. " <>
+                     "This task may still be cancelled."
+               }}
+
             # Task 01a05393 stage 6 (defect D): `stack_pending` is the
             # parked-behind-a-stack status. A task with no `stack_id`
             # moved there is invisible to the dispatcher, to the promote
@@ -5079,16 +5099,42 @@ defmodule Platform.Federation.ToolSurface do
 
       %Stack{} = stack ->
         attrs = build_stack_update_attrs(args)
+        clear_conflict? = Map.get(args, "clear_conflict") == true
 
-        case Stacks.update_stack(stack, attrs) do
-          {:ok, %Stack{} = updated} ->
-            # Refresh :sponsor so the envelope reflects the current shape —
-            # otherwise a caller that just cleared the sponsor via
-            # `sponsor_user_id: nil` would still see the pre-update user
-            # struct on the response.
-            updated = Repo.preload(updated, :sponsor, force: true)
-            Tasks.broadcast_board({:stack_updated, updated})
-            {:ok, serialize_stack(updated)}
+        # `clear_conflict` is the only status exit on this surface (task
+        # 01a05393 stage 4). The precondition is checked BEFORE the attrs
+        # write so a refused clear leaves the row untouched, and
+        # `Stacks.clear_conflict/2` does the metadata+status write as one
+        # changeset — the shape `Stack.changeset/2`'s conflict-held guard
+        # requires. No general `status` writer exists here on purpose.
+        with :ok <- stack_update_conflict_precheck(stack, clear_conflict?),
+             {:ok, %Stack{} = updated} <- Stacks.update_stack(stack, attrs),
+             {:ok, %Stack{} = updated} <- maybe_clear_stack_conflict(updated, clear_conflict?) do
+          # Refresh :sponsor so the envelope reflects the current shape —
+          # otherwise a caller that just cleared the sponsor via
+          # `sponsor_user_id: nil` would still see the pre-update user
+          # struct on the response.
+          updated = Repo.preload(updated, :sponsor, force: true)
+          Tasks.broadcast_board({:stack_updated, updated})
+
+          envelope = serialize_stack(updated)
+
+          if clear_conflict? do
+            {:ok, Map.put(envelope, :conflict_cleared, true)}
+          else
+            {:ok, envelope}
+          end
+        else
+          {:error, :not_conflicted} ->
+            {:error,
+             %{
+               code: "not_conflicted",
+               error:
+                 "Stack #{stack.slug} is not conflict-held (status=#{stack.status}, no metadata.conflict); nothing to clear",
+               recoverable: true,
+               suggestion:
+                 "Omit clear_conflict, or use stack_get to confirm the stack is blocked on a rollup-merge conflict"
+             }}
 
           {:error, %Ecto.Changeset{} = changeset} ->
             if sponsor_fk_violation?(changeset) do
@@ -7854,6 +7900,23 @@ defmodule Platform.Federation.ToolSurface do
       )
     )
     |> Enum.map(fn row -> %{task_id: row.id, title: row.title, status: row.status} end)
+  end
+
+  # `stack_update` conflict exit helpers (task 01a05393 stage 4).
+  defp stack_update_conflict_precheck(_stack, false), do: :ok
+
+  defp stack_update_conflict_precheck(%Stack{} = stack, true) do
+    if Platform.Tasks.Stacks.ShipState.conflict_held?(stack),
+      do: :ok,
+      else: {:error, :not_conflicted}
+  end
+
+  defp maybe_clear_stack_conflict(%Stack{} = stack, false), do: {:ok, stack}
+
+  defp maybe_clear_stack_conflict(%Stack{} = stack, true) do
+    # The handler broadcasts the final envelope once; suppress the
+    # function's own event so one clear yields one `:stack_updated`.
+    Stacks.clear_conflict(stack, broadcast: false)
   end
 
   # Nilable-semantics writer: only `sponsor_user_id` propagates explicit

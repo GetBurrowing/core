@@ -22,6 +22,7 @@ defmodule Platform.Tasks.Stacks do
   alias Platform.Tasks.{Plan, PlanEngine, ReviewRequests, Stack, StackDeployer, Task}
   alias Platform.Tasks.Stage
   alias Platform.Tasks.Stacks.{CommencementGate, DepInference, MemberSet}
+  alias Platform.Tasks.Stacks.ShipState
 
   @slug_regex ~r/^[a-z0-9][a-z0-9-]*$/
   @max_slug_length 60
@@ -2646,6 +2647,89 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
+  @doc """
+  The operator exit from a conflict-held `blocked` stack (task 01a05393
+  stage 4, ADR 0041 §"Rollup-branch merge").
+
+  `Stack.changeset/2` holds a `blocked` stack's status sticky while
+  `metadata["conflict"]` is set, and its only escape is a changeset that
+  clears the conflict AND moves the status in the SAME write. This
+  function builds exactly that one changeset: `metadata` with `"conflict"`
+  deleted plus the status recomputed from the members. A two-step clear
+  (metadata first, then status) would have its second step dropped by the
+  guard, so the combined write is load-bearing, not a convenience.
+
+  After the write commits the existing `recompute_stack_status/1` path is
+  re-run on the fresh row — a no-op for the status (already recomputed)
+  that re-arms the rollup-PR piggy-back — and `{:stack_updated, stack}` is
+  broadcast on the board. Both happen strictly after the `Repo.update`
+  returns; nothing observes pre-commit state.
+
+  Returns `{:error, :not_conflicted}` without writing when
+  `ShipState.conflict_held?/1` is false, `{:error, :stack_not_found}` for
+  an unknown id, and `{:error, %Ecto.Changeset{}}` if the write fails.
+
+  Options:
+
+    * `:broadcast` — emit the `{:stack_updated, stack}` board event
+      (default `true`). Callers that broadcast their own envelope pass
+      `false` so a single clear produces a single event.
+  """
+  @spec clear_conflict(Stack.t() | binary(), keyword()) ::
+          {:ok, Stack.t()}
+          | {:error, :not_conflicted | :stack_not_found | Ecto.Changeset.t()}
+  def clear_conflict(subject, opts \\ [])
+
+  def clear_conflict(stack_id, opts) when is_binary(stack_id) and is_list(opts) do
+    # Through `get_stack/1` so a raw id is `Platform.UUID.valid?/1`-guarded
+    # before it reaches the Repo (repo_lookup_boundary_test inventory).
+    case get_stack(stack_id) do
+      %Stack{} = stack -> clear_conflict(stack, opts)
+      nil -> {:error, :stack_not_found}
+    end
+  end
+
+  def clear_conflict(%Stack{} = stack, opts) when is_list(opts) do
+    # Re-read the row: the caller's struct may predate the conflict being
+    # recorded (or cleared) by the deployer.
+    stack = Repo.get(Stack, stack.id) || stack
+
+    if ShipState.conflict_held?(stack) do
+      metadata = stack.metadata |> ensure_map() |> Map.delete("conflict")
+      new_status = rollup_status_for(members(stack.id))
+
+      result =
+        stack
+        |> Stack.changeset(%{status: new_status, metadata: metadata})
+        |> Repo.update()
+
+      case result do
+        {:ok, %Stack{} = cleared} ->
+          # Post-commit: re-run the canonical recompute (no-op on status,
+          # re-arms the rollup-PR piggy-back) and then broadcast.
+          final =
+            case recompute_stack_status(cleared) do
+              {:ok, %Stack{} = recomputed} -> recomputed
+              _ -> cleared
+            end
+
+          if Keyword.get(opts, :broadcast, true) do
+            Tasks.broadcast_board({:stack_updated, final})
+          end
+
+          {:ok, final}
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      {:error, :not_conflicted}
+    end
+  end
+
+  defp ensure_map(metadata) when is_map(metadata), do: metadata
+  defp ensure_map(_), do: %{}
+
   # Wrap `StackDeployer.maybe_open_stack_pr/1` so a deployer crash or
   # `{:error, _}` return is logged but never propagates back into the
   # recompute return value. The deployer's gate is internally idempotent
@@ -2753,9 +2837,9 @@ defmodule Platform.Tasks.Stacks do
 
   Returns `true` iff ALL of:
 
-    * the stack's own status is not `"deploying"`, `"done"`, or
-      `"abandoned"` (short-circuit against double-fire and terminal
-      states);
+    * the stack's own status is not `"deploying"`, `"done"`, `"abandoned"`,
+      or `"blocked"` (short-circuit against double-fire, terminal states,
+      and a stack halted on an unresolved rollup conflict);
     * `members/1` is non-empty;
     * every member's status is in `["in_review", "deploying"]`;
     * every non-deploy validation on every non-superseded, non-rejected
@@ -2772,7 +2856,7 @@ defmodule Platform.Tasks.Stacks do
   """
   @spec deploy_ready?(Stack.t() | binary()) :: boolean()
   def deploy_ready?(%Stack{status: status})
-      when status in ["deploying", "done", "abandoned"],
+      when status in ["deploying", "done", "abandoned", "blocked"],
       do: false
 
   def deploy_ready?(%Stack{} = stack) do
@@ -3226,8 +3310,17 @@ defmodule Platform.Tasks.Stacks do
     # merged by then). Members with NO validations remain vacuously
     # completable, preserving the fan-out-fallback contract for members that
     # shipped without a per-task deploy stage.
+    #
+    # Task 01a05393 stage 5: `cancelled` is terminal (no outbound edge in
+    # `Tasks.@valid_task_transitions`), and the rollup fan-out now cancels a
+    # member that never entered execution. Left in `to_transition` it would
+    # fail `-> done` and roll back every sibling's flip — the exact stranded
+    # shape this cascade exists to prevent.
     to_transition =
-      Enum.reject(all_members, &(&1.status == "done" or member_has_open_validations?(&1)))
+      Enum.reject(
+        all_members,
+        &(&1.status in ~w(done cancelled) or member_has_open_validations?(&1))
+      )
 
     # Stage 3 (019f5bc4-3521): wrap the per-member reduce in a
     # `Repo.transaction/1` so a single illegal transition rolls back

@@ -5761,6 +5761,28 @@ defmodule Platform.Tasks.StacksTest do
       assert entry.reason != nil
     end
 
+    # Task 01a05393 stage 5: the rollup fan-out cancels a member that never
+    # entered execution. `cancelled` has no `-> done` edge, so if the cascade
+    # still tried it, the rollback would revert the in_review sibling's flip.
+    test "skips a cancelled member without rolling back its in_review sibling" do
+      {:ok, project} = Tasks.create_project(%{name: "Cascade cancelled"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, t2} = Tasks.create_task(%{project_id: project.id, title: "M2"})
+      {:ok, _} = Stacks.add_task(stack, t1)
+      {:ok, _} = Stacks.add_task(stack, t2)
+
+      set_member_status(stack, t1, "cancelled")
+      set_member_status(stack, t2, "in_review")
+      assert Tasks.get_task_record(t1.id).status == "cancelled"
+
+      assert %{cascaded: [cascaded], skipped: []} = Stacks.cascade_members_to_done(stack)
+      assert cascaded.id == t2.id
+      assert Tasks.get_task_record(t1.id).status == "cancelled"
+      assert Tasks.get_task_record(t2.id).status == "done"
+    end
+
     test "id-vs-struct polymorphism" do
       {:ok, project} = Tasks.create_project(%{name: "Cascade id"})
       stack = stack_fixture(project_id: project.id)
@@ -7471,6 +7493,459 @@ defmodule Platform.Tasks.StacksTest do
       after_second = Repo.get(Task, attached_child.id)
       assert after_second.status == "in_progress"
       assert after_second.updated_at == after_first.updated_at
+    end
+  end
+
+  # Task 01a05393 stage 3 (ADR 0045 decision 7): a member of a stack that
+  # already SHIPPED through its rollup may not re-enter an execution
+  # status. The guard sits on `transition_task_status/2`, the single
+  # primitive every caller funnels through, plus the inline mirror on
+  # `drop_task_to_column/2` (which writes its changeset directly).
+  #
+  # Anti-vacuity: `create_task/1` defaults to `backlog` and
+  # `create_stack/1` to `forming`, so the `done` member and the
+  # `done`+shipped stack are built deliberately and ASSERTED before every
+  # transition attempt. A fixture whose stack never shipped would make
+  # "a shipped stack does not regress" true by construction.
+  describe "require_stack_not_shipped_for/2 — member of a shipped stack" do
+    alias Platform.Tasks.Stacks.ShipState
+
+    @shipped_meta %{
+      "rollup_pr" => %{"number" => 77, "merged_at" => "2026-08-01T00:00:00Z"}
+    }
+
+    # `stack_status` / `stack_meta` are applied in ONE write after the
+    # members are attached and forced, so no member event can recompute
+    # the stack underneath the fixture.
+    defp shipped_lane_fixture(opts) do
+      stack_status = Keyword.fetch!(opts, :stack_status)
+      stack_meta = Keyword.get(opts, :stack_meta, %{})
+      member_status = Keyword.get(opts, :member_status, "done")
+
+      stack = stack_fixture(slug: "ship-guard-" <> short_id())
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: stack.project_id, title: "Ship guard " <> short_id()})
+
+      {:ok, attached} = Stacks.add_task(stack, task)
+      member = force_status(attached, member_status)
+
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{status: stack_status, metadata: stack_meta})
+
+      {Repo.get!(Stack, stack.id), Repo.get!(Task, member.id)}
+    end
+
+    test "a done+merged stack refuses done -> planning on a member with the ADR-0045 message" do
+      {stack, member} = shipped_lane_fixture(stack_status: "done", stack_meta: @shipped_meta)
+
+      # Seeded state, asserted before the attempt.
+      assert member.status == "done"
+      assert stack.status == "done"
+      assert ShipState.shipped?(stack)
+      # The edge itself exists — the refusal below is the guard, not the
+      # transition table.
+      assert "planning" in Map.get(Tasks.valid_task_transitions(), "done")
+
+      assert {:error, :stack_already_shipped, detail} =
+               Tasks.transition_task_status(member, "planning")
+
+      assert detail.stack_id == stack.id
+      assert detail.stack_slug == stack.slug
+      assert detail.message =~ "post-ship changes are new individual tasks"
+      assert detail.message =~ stack.slug
+      assert detail.message =~ "#77"
+
+      assert Repo.get!(Task, member.id).status == "done"
+      assert Repo.get!(Stack, stack.id).status == "done"
+    end
+
+    test "a done stack whose PR was never opened still allows done -> planning (manual-ship lane)" do
+      {stack, member} = shipped_lane_fixture(stack_status: "done", stack_meta: %{})
+
+      assert member.status == "done"
+      assert stack.status == "done"
+      refute ShipState.shipped?(stack)
+
+      assert {:ok, %Task{status: "planning"}} = Tasks.transition_task_status(member, "planning")
+      assert Repo.get!(Task, member.id).status == "planning"
+    end
+
+    test "a done stack with an OPEN but unmerged rollup PR still allows the move" do
+      open_pr = %{"rollup_pr" => %{"number" => 78}}
+      {stack, member} = shipped_lane_fixture(stack_status: "done", stack_meta: open_pr)
+
+      assert stack.status == "done"
+      refute ShipState.shipped?(stack)
+
+      assert {:ok, %Task{status: "planning"}} = Tasks.transition_task_status(member, "planning")
+    end
+
+    # Where the rule LOSES (i): a shipped stack's member can still be
+    # cancelled. `done` has no `cancelled` edge in the transition table,
+    # so the transition-level half uses a late member still in `planning`;
+    # the guard-level half asserts the `done` member directly — one
+    # assertion per side, never a bare refute over the tuple.
+    test "a member of a shipped stack can still move to cancelled" do
+      {stack, late} =
+        shipped_lane_fixture(
+          stack_status: "done",
+          stack_meta: @shipped_meta,
+          member_status: "planning"
+        )
+
+      assert ShipState.shipped?(stack)
+      assert late.status == "planning"
+
+      assert Tasks.require_stack_not_shipped_for(late, "cancelled") == :ok
+      assert Tasks.require_stack_not_shipped_for(late, "done") == :ok
+
+      assert {:error, :stack_already_shipped, _} =
+               Tasks.require_stack_not_shipped_for(late, "in_progress")
+
+      assert {:ok, %Task{status: "cancelled"}} = Tasks.transition_task_status(late, "cancelled")
+      assert Repo.get!(Task, late.id).status == "cancelled"
+    end
+
+    # Where the rule LOSES (ii): a NON-shipped `in_progress` stack's
+    # member still commences normally through the same primitive.
+    test "a member of a non-shipped in_progress stack still moves planning -> in_progress" do
+      stack = stack_fixture(slug: "ship-guard-live-" <> short_id())
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: stack.project_id, title: "Live member " <> short_id()})
+
+      {:ok, attached} = Stacks.add_task(stack, task)
+      {:ok, _} = Tasks.create_plan(%{task_id: attached.id, status: "approved"})
+      member = force_status(attached, "planning")
+      {:ok, stack} = Stacks.update_stack(stack, %{status: "in_progress"})
+
+      assert stack.status == "in_progress"
+      refute ShipState.shipped?(stack)
+      assert member.status == "planning"
+
+      assert {:ok, %Task{status: "in_progress"}} =
+               Tasks.transition_task_status(member, "in_progress")
+    end
+
+    # Where the rule LOSES (iii): a plain task is entirely unaffected.
+    test "a plain task with stack_id: nil moves done -> planning untouched" do
+      {:ok, project} = Tasks.create_project(%{name: "Ship guard plain " <> short_id()})
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plain " <> short_id()})
+      task = force_status(task, "done")
+
+      assert is_nil(task.stack_id)
+      assert task.status == "done"
+
+      assert Tasks.require_stack_not_shipped_for(task, "planning") == :ok
+      assert {:ok, %Task{status: "planning"}} = Tasks.transition_task_status(task, "planning")
+    end
+
+    # Where the rule LOSES (iv), found by the production-caller grep: the
+    # rollup has merged (metadata says shipped) but the stack row is not
+    # yet `done`, and `advance_member_to_deploying/1` walks a straggling
+    # `in_review` member through `deploying` on its own. That lane must
+    # stay open, so the guard keys on `done` AND shipped — the same pair
+    # `Stack.changeset/2` holds the stack row on.
+    test "a merged-but-not-yet-done stack still lets an in_review member advance to deploying" do
+      {stack, member} =
+        shipped_lane_fixture(
+          stack_status: "deploying",
+          stack_meta: @shipped_meta,
+          member_status: "in_review"
+        )
+
+      assert stack.status == "deploying"
+      assert ShipState.shipped?(stack)
+      assert member.status == "in_review"
+
+      # `require_deploy_target_for/2` sits on the same `with` chain; give it
+      # a target so the only guard under test here is the ship hold.
+      {:ok, member} = Tasks.update_task(member, %{deploy_target: "production"})
+
+      assert Tasks.require_stack_not_shipped_for(member, "deploying") == :ok
+      assert {:ok, %Task{status: "deploying"}} = Tasks.transition_task_status(member, "deploying")
+    end
+
+    test "a dangling stack_id is logged and allowed rather than wedging the transition" do
+      phantom = %Task{id: Ecto.UUID.generate(), stack_id: Ecto.UUID.generate(), status: "done"}
+
+      assert Tasks.require_stack_not_shipped_for(phantom, "planning") == :ok
+    end
+
+    test "the board's drag-drop write is refused the same way" do
+      {stack, member} = shipped_lane_fixture(stack_status: "done", stack_meta: @shipped_meta)
+
+      assert ShipState.shipped?(stack)
+      assert member.status == "done"
+
+      assert {:error, :stack_already_shipped, %{stack_id: stack_id}} =
+               Tasks.drop_task_to_column(member, "in_progress")
+
+      assert stack_id == stack.id
+      assert Repo.get!(Task, member.id).status == "done"
+    end
+
+    test "the board's drag-drop write still moves a manual-ship-lane member" do
+      {stack, member} = shipped_lane_fixture(stack_status: "done", stack_meta: %{})
+
+      refute ShipState.shipped?(stack)
+
+      assert {:ok, %Task{status: "in_progress"}} =
+               Tasks.drop_task_to_column(member, "in_progress")
+    end
+
+    # `apply_dispatch_gate/1` parks a member whose gate is closed in
+    # `stack_pending` via the same primitive. For a late member of a
+    # shipped stack that park is refused, and the approval must come back
+    # as a structured error — not a MatchError from the bare `{:ok, _}`
+    # pattern that used to sit there.
+    test "approving a late member's plan on a shipped stack is refused, not crashed" do
+      {stack, late} =
+        shipped_lane_fixture(
+          stack_status: "done",
+          stack_meta: @shipped_meta,
+          member_status: "planning"
+        )
+
+      assert ShipState.shipped?(stack)
+      assert late.status == "planning"
+
+      {:ok, draft} = Tasks.create_plan(%{task_id: late.id})
+      {:ok, pending} = Tasks.submit_plan_for_review(draft)
+
+      assert {:error, {:stack_already_shipped, %{stack_id: stack_id, message: message}}} =
+               Tasks.approve_plan(pending, "system")
+
+      assert stack_id == stack.id
+      assert message =~ "post-ship changes are new individual tasks"
+      assert Repo.get!(Task, late.id).status == "planning"
+      assert Repo.get!(Platform.Tasks.Plan, pending.id).status == "pending_review"
+    end
+  end
+
+  # Task 01a05393 stage 4: the operator exit from a conflict-held `blocked`
+  # stack. Stage 2's changeset guard holds `blocked` sticky while
+  # `metadata["conflict"]` is set and accepts a status change only when
+  # the SAME changeset clears the conflict; `clear_conflict/2` is the one
+  # writer that builds that changeset.
+  #
+  # The deployer's conflict arm is unreachable in production today (the
+  # git runner merges `--ff-only`), so every fixture here constructs the
+  # `blocked` + `metadata.conflict` state DIRECTLY through
+  # `Stacks.update_stack/2`. That path goes through `Stack.changeset/2`,
+  # so the guard applies to the fixture write too: `forming -> blocked`
+  # is not a guarded edge, which is why the seed lands.
+  #
+  # Anti-vacuity (three beats, binding): seed at `blocked`, ASSERT it is
+  # blocked, fire a member transition whose tail calls
+  # `recompute_stack_status/1`, ASSERT it is STILL blocked with the
+  # conflict intact. Only then is the exit exercised.
+  describe "clear_conflict/2 — the exit from a conflict-held blocked stack" do
+    alias Platform.Tasks.Stacks.ShipState
+
+    @conflict %{
+      "member_task_id" => "01a00000-0000-7000-8000-000000000001",
+      "files" => ["apps/platform/lib/platform/tasks/stacks.ex"],
+      "at" => "2026-08-01T00:00:00Z"
+    }
+
+    # Two members: `a` at `in_progress` with an approved plan so it can be
+    # driven `in_progress -> in_review` through `Tasks.transition_task/2`
+    # (whose tail calls `recompute_stack_status/1`), `b` already at
+    # `in_review`. The rollup of `[in_review, in_review]` is `in_review`,
+    # so a recompute that is NOT held moves the stack there.
+    defp conflict_lane_fixture(opts) do
+      stack_status = Keyword.fetch!(opts, :stack_status)
+      stack_meta = Keyword.get(opts, :stack_meta, %{})
+
+      stack = stack_fixture(slug: "conflict-exit-" <> short_id())
+
+      {:ok, a} = Tasks.create_task(%{project_id: stack.project_id, title: "A " <> short_id()})
+      {:ok, b} = Tasks.create_task(%{project_id: stack.project_id, title: "B " <> short_id()})
+      {:ok, a} = Stacks.add_task(stack, a)
+      {:ok, b} = Stacks.add_task(stack, b)
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      a = force_status(a, "in_progress")
+      _b = force_status(b, "in_review")
+
+      {:ok, stack} = Stacks.update_stack(stack, %{status: stack_status, metadata: stack_meta})
+
+      {Repo.get!(Stack, stack.id), Repo.get!(Task, a.id)}
+    end
+
+    test "a blocked+conflict stack survives a member recompute, then exits through clear_conflict/2" do
+      {stack, a} =
+        conflict_lane_fixture(stack_status: "blocked", stack_meta: %{"conflict" => @conflict})
+
+      # Beat 1: seeded state, asserted.
+      assert stack.status == "blocked"
+      assert ShipState.conflict_held?(stack)
+      assert a.status == "in_progress"
+
+      # Beat 2: a member transition whose tail recomputes the stack. The
+      # rollup would be `in_review`; the guard must drop that write.
+      assert {:ok, %Task{status: "in_review"}} = Tasks.transition_task(a, "in_review")
+
+      # Beat 3: STILL blocked, conflict STILL present.
+      held = Repo.get!(Stack, stack.id)
+      assert held.status == "blocked"
+      assert held.metadata["conflict"] == @conflict
+      assert ShipState.conflict_held?(held)
+
+      # The exit: one combined write moves the status AND drops the conflict.
+      assert {:ok, %Stack{} = cleared} = Stacks.clear_conflict(held)
+      assert cleared.status == "in_review"
+      refute Map.has_key?(cleared.metadata, "conflict")
+      refute ShipState.conflict_held?(cleared)
+
+      persisted = Repo.get!(Stack, stack.id)
+      assert persisted.status == "in_review"
+      refute Map.has_key?(persisted.metadata, "conflict")
+    end
+
+    test "clear_conflict/2 keeps the other metadata keys" do
+      meta = %{"conflict" => @conflict, "rollup_pr" => %{"number" => 12}, "note" => "keep"}
+      {stack, _a} = conflict_lane_fixture(stack_status: "blocked", stack_meta: meta)
+      assert ShipState.conflict_held?(stack)
+
+      assert {:ok, cleared} = Stacks.clear_conflict(stack)
+
+      assert cleared.metadata == %{"rollup_pr" => %{"number" => 12}, "note" => "keep"}
+      assert Repo.get!(Stack, stack.id).metadata == cleared.metadata
+    end
+
+    test "accepts a stack id and returns :stack_not_found for an unknown one" do
+      {stack, _a} =
+        conflict_lane_fixture(stack_status: "blocked", stack_meta: %{"conflict" => @conflict})
+
+      # Members are [in_progress, in_review] here (no transition fired), so
+      # the recomputed status is `in_progress` — read from the members, not
+      # hard-wired to `in_review`.
+      assert {:ok, %Stack{status: "in_progress"}} = Stacks.clear_conflict(stack.id)
+      assert {:error, :stack_not_found} = Stacks.clear_conflict(Ecto.UUID.generate())
+    end
+
+    # Where the rule loses (i): no conflict → refuse, and write nothing.
+    test "returns {:error, :not_conflicted} and writes nothing on a stack with no conflict" do
+      {stack, _a} = conflict_lane_fixture(stack_status: "in_progress", stack_meta: %{})
+      refute ShipState.conflict_held?(stack)
+
+      assert {:error, :not_conflicted} = Stacks.clear_conflict(stack)
+
+      after_call = Repo.get!(Stack, stack.id)
+      assert after_call.status == "in_progress"
+      assert after_call.metadata == %{}
+      assert after_call.updated_at == stack.updated_at
+    end
+
+    test "a blocked stack whose conflict was already cleared is :not_conflicted too" do
+      # `blocked` with an empty conflict map is not conflict-held; the guard
+      # does not apply and neither does the exit.
+      {stack, _a} =
+        conflict_lane_fixture(stack_status: "blocked", stack_meta: %{"conflict" => %{}})
+
+      assert stack.status == "blocked"
+      refute ShipState.conflict_held?(stack)
+
+      assert {:error, :not_conflicted} = Stacks.clear_conflict(stack)
+      assert Repo.get!(Stack, stack.id).status == "blocked"
+    end
+
+    # Where the rule loses (ii): a NON-blocked stack still recomputes on a
+    # member transition. A guard that froze every stack would pass the
+    # headline test above.
+    test "a non-blocked stack still recomputes normally on the same member transition" do
+      {stack, a} = conflict_lane_fixture(stack_status: "in_progress", stack_meta: %{})
+      assert stack.status == "in_progress"
+
+      assert {:ok, %Task{status: "in_review"}} = Tasks.transition_task(a, "in_review")
+
+      assert Repo.get!(Stack, stack.id).status == "in_review"
+    end
+
+    test "broadcasts {:stack_updated, stack} after the clear, unless broadcast: false" do
+      {stack, _a} =
+        conflict_lane_fixture(stack_status: "blocked", stack_meta: %{"conflict" => @conflict})
+
+      stack_id = stack.id
+      Tasks.subscribe_board(stack: stack_id)
+
+      assert {:ok, _} = Stacks.clear_conflict(stack)
+
+      assert_receive {:stack_updated,
+                      %Stack{id: ^stack_id, status: "in_progress", metadata: meta}}
+
+      refute Map.has_key?(meta, "conflict")
+
+      {quiet, _a} =
+        conflict_lane_fixture(stack_status: "blocked", stack_meta: %{"conflict" => @conflict})
+
+      quiet_id = quiet.id
+      Tasks.subscribe_board(stack: quiet_id)
+
+      assert {:ok, %Stack{status: "in_progress"}} = Stacks.clear_conflict(quiet, broadcast: false)
+      refute_receive {:stack_updated, %Stack{id: ^quiet_id}}, 100
+    end
+  end
+
+  # Task 01a05393 stage 4: a stack halted on an unresolved rollup conflict
+  # is not deploy-ready. The fixture's members satisfy every member-level
+  # condition (asserted through `pending_members_for_deploy/1 == []` and a
+  # `true` reading BEFORE the halt), so the `false` reading can only come
+  # from the stack-status clause — not from a member that never qualified.
+  describe "deploy_ready?/1 — blocked stack" do
+    defp deploy_ready_members_fixture do
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready blocked " <> short_id()})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      seed_completed_plan!(a)
+      seed_completed_plan!(b)
+
+      set_member_status(stack, a, "in_review")
+      set_member_status(stack, b, "in_review")
+
+      Repo.get!(Stack, stack.id)
+    end
+
+    test "false for a conflict-held blocked stack whose members are all otherwise ready" do
+      stack = deploy_ready_members_fixture()
+
+      # Control: the members qualify before the halt.
+      assert Stacks.deploy_ready?(stack)
+      assert Stacks.pending_members_for_deploy(stack) == []
+
+      {:ok, blocked} =
+        Stacks.update_stack(stack, %{
+          status: "blocked",
+          metadata: %{"conflict" => %{"member_task_id" => "x", "files" => ["f"], "at" => "t"}}
+        })
+
+      assert blocked.status == "blocked"
+      refute Stacks.deploy_ready?(blocked)
+      refute Stacks.deploy_ready?(blocked.id)
+      # Still no member-level reason — the refusal is the stack status.
+      assert Stacks.pending_members_for_deploy(blocked) == []
+
+      # After the exit the same members make the stack ready again.
+      assert {:ok, %Stack{status: "in_review"} = cleared} = Stacks.clear_conflict(blocked)
+      assert Stacks.deploy_ready?(cleared)
+    end
+
+    # Where the rule loses (iii): the new list entry must not fail-closed
+    # for an ordinary `in_review` stack.
+    test "still true for an otherwise-ready in_review stack" do
+      stack = deploy_ready_members_fixture()
+      {:ok, in_review} = Stacks.update_stack(stack, %{status: "in_review"})
+
+      assert in_review.status == "in_review"
+      assert Stacks.deploy_ready?(in_review)
     end
   end
 

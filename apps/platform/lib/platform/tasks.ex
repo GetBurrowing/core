@@ -1537,7 +1537,8 @@ defmodule Platform.Tasks do
   """
   def transition_task_status(%Task{} = task, new_status) do
     with :ok <- require_deploy_target_for(task, new_status),
-         :ok <- require_stack_commencement_for(task, new_status) do
+         :ok <- require_stack_commencement_for(task, new_status),
+         :ok <- require_stack_not_shipped_for(task, new_status) do
       allowed = Map.get(@valid_task_transitions, task.status, [])
 
       if new_status in allowed do
@@ -4161,8 +4162,18 @@ defmodule Platform.Tasks do
     # unmet-dependencies branch.
     case Platform.Tasks.Stacks.CommencementGate.open?(task) do
       false ->
-        {:ok, pending} = transition_task_status(task, "stack_pending")
-        {pending, []}
+        # A late member of a SHIPPED stack (ADR 0045 decision 7) is refused
+        # by `require_stack_not_shipped_for/2` inside the primitive. Roll
+        # the enclosing approval back with the structured refusal rather
+        # than crashing on a bare `{:ok, _}` match — the approver reads
+        # the ship-refusal message instead of a MatchError.
+        case transition_task_status(task, "stack_pending") do
+          {:ok, pending} ->
+            {pending, []}
+
+          {:error, :stack_already_shipped, detail} ->
+            Repo.rollback({:stack_already_shipped, detail})
+        end
 
       true ->
         case unmet_dependencies(task) do
@@ -5724,6 +5735,93 @@ defmodule Platform.Tasks do
 
   def require_stack_commencement_for(_task, _new_status), do: :ok
 
+  # The statuses a member of a SHIPPED stack may no longer enter. `cancelled`
+  # and `done` are deliberately absent: a shipped stack's member must stay
+  # cancellable, and a late member that is already `done` may be re-stamped.
+  @shipped_stack_refused_statuses ~w(planning in_progress in_review deploying stack_pending)
+
+  @doc """
+  Returns `:ok` unless the task is a member of a stack that has already
+  SHIPPED through its rollup branch and `new_status` is an execution
+  status (ADR 0045 decision 7: post-ship changes are new individual tasks).
+
+  "Shipped" here means the stack row is `done` AND
+  `ShipState.shipped?/1` holds — the same pair `Stack.changeset/2` gates
+  the stack row on. A stack whose rollup merged but which has not yet
+  flipped to `done` is still mutable, because
+  `Stacks.advance_member_to_deploying/1` self-completes a straggling
+  `in_review` member through `deploying` on exactly that state.
+
+  Non-stack tasks (`stack_id: nil`) always return `:ok`. Transitions into
+  `cancelled` or `done` always return `:ok` — a shipped stack's member must
+  remain cancellable. A `done` stack that never shipped (no
+  `rollup_merge` / `rollup_pr.merged_at` metadata — the manual-ship lane,
+  see `Platform.Tasks.Stacks.ShipState.shipped?/1`) also returns `:ok`, so
+  its members can still be reopened.
+
+  When refused, returns
+  `{:error, :stack_already_shipped, %{stack_id, stack_slug, message}}`
+  where `message` is `ShipState.ship_refusal_message/1`, the only
+  operator-facing statement of the rule.
+
+  Why the MEMBER is refused when stage 2 already holds the STACK: a member
+  that regresses `done -> planning` and re-enters `in_review` has its
+  branch cut from the OLD rollup, so the deployer's `ensure_rollup_branch`
+  fast-forward fails into a silent `paused_reason` while
+  `maybe_open_stack_pr` answers `:already_open` forever — the member is
+  stranded mid-flight with no exit. Refusing the transition is the fix.
+
+  A `stack_id` whose stack row is missing is logged and treated as `:ok`
+  — a dangling pointer must not wedge every transition on the task.
+
+  Mirrors the surface of `require_deploy_target_for/2` and
+  `require_stack_commencement_for/2`. Wired into `transition_task_status/2`
+  so every entry path — LiveView, MCP `task_update`, `apply_dispatch_gate/1`
+  — is covered by the single base primitive; `drop_task_to_column/2` writes
+  its changeset directly and therefore calls this guard inline, exactly as
+  it does the commencement gate.
+  """
+  @spec require_stack_not_shipped_for(Task.t(), String.t()) ::
+          :ok
+          | {:error, :stack_already_shipped,
+             %{stack_id: String.t(), stack_slug: String.t() | nil, message: String.t()}}
+  def require_stack_not_shipped_for(%Task{stack_id: nil}, _new_status), do: :ok
+
+  def require_stack_not_shipped_for(%Task{stack_id: stack_id}, new_status)
+      when new_status in @shipped_stack_refused_statuses do
+    case Platform.Tasks.Stacks.get_stack(stack_id) do
+      nil ->
+        Logger.warning(
+          "[Tasks.require_stack_not_shipped_for] stack #{stack_id} not found; " <>
+            "allowing transition to #{new_status}"
+        )
+
+        :ok
+
+      %Stack{} = stack ->
+        # `done` AND shipped, exactly the condition `Stack.changeset/2`'s
+        # `guard_status_regression/1` holds the stack row on. Shipped-but-
+        # not-yet-`done` is a live lane, not a terminal one: when the
+        # rollup merges while a member is still `in_review`, the
+        # `cascade_members_to_done` transaction can roll back and
+        # `Stacks.advance_member_to_deploying/1` walks that member
+        # `in_review -> deploying -> done` on its own. Refusing `deploying`
+        # there would strand the member in `in_review` for good.
+        if stack.status == "done" and Platform.Tasks.Stacks.ShipState.shipped?(stack) do
+          {:error, :stack_already_shipped,
+           %{
+             stack_id: stack.id,
+             stack_slug: stack.slug,
+             message: Platform.Tasks.Stacks.ShipState.ship_refusal_message(stack)
+           }}
+        else
+          :ok
+        end
+    end
+  end
+
+  def require_stack_not_shipped_for(_task, _new_status), do: :ok
+
   @doc """
   Transition a task's status and broadcast the change to the board topic.
 
@@ -5906,6 +6004,15 @@ defmodule Platform.Tasks do
             require_stack_commencement_for(task, target_status)
           ) ->
             require_stack_commencement_for(task, target_status)
+
+          # ADR 0045 decision 7: the same inline mirror for the shipped-stack
+          # hold — the board's drag-drop write must not offer a move the
+          # transition primitive refuses.
+          match?(
+            {:error, :stack_already_shipped, _},
+            require_stack_not_shipped_for(task, target_status)
+          ) ->
+            require_stack_not_shipped_for(task, target_status)
 
           true ->
             case task |> Task.changeset(%{status: target_status}) |> Repo.update() do

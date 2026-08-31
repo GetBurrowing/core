@@ -21,6 +21,8 @@ defmodule Platform.Tasks.Stack do
   import Ecto.Changeset
   require Logger
 
+  alias Platform.Tasks.Stacks.ShipState
+
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -102,7 +104,7 @@ defmodule Platform.Tasks.Stack do
     ])
     |> validate_required([:project_id, :slug, :name, :rollup_branch])
     |> validate_inclusion(:status, @statuses)
-    |> guard_no_forming_regression()
+    |> guard_status_regression()
     |> validate_format(:slug, ~r/^[a-z0-9][a-z0-9-]*$/,
       message: "must be lowercase alphanumeric with hyphens"
     )
@@ -116,11 +118,25 @@ defmodule Platform.Tasks.Stack do
   # already an execution phase, rather than erroring — a stray recompute is
   # a silent no-op, not a crash for its caller. Emits telemetry + a warning
   # so the anomaly is observable.
-  defp guard_no_forming_regression(changeset) do
+  #
+  # Two further arms (task 01a05393, ADR 0045 decision 7) live in the same
+  # guard because the changeset is the single funnel every stack writer
+  # passes through (`update_stack/2`, `record_conflict/4`,
+  # `complete_rollup_merge/2` and `recompute_stack_status/1` alike):
+  #
+  #   * A SHIPPED `done` stack is terminal: only `done` and `abandoned` are
+  #     accepted. A `done` stack that never shipped (`ShipState.shipped?/1`
+  #     false — the manual-ship lane) stays mutable.
+  #   * A CONFLICT-HELD `blocked` stack is sticky: the status may move only
+  #     when the same changeset also clears `metadata["conflict"]`. That
+  #     one atomic write is the exit; without it a member event elsewhere
+  #     would silently rewrite the conflicted stack to `in_review`.
+  defp guard_status_regression(changeset) do
     current = changeset.data.status
+    requested = get_change(changeset, :status)
 
-    case get_change(changeset, :status) do
-      "forming" when current in @execution_phase_statuses ->
+    cond do
+      requested == "forming" and current in @execution_phase_statuses ->
         :telemetry.execute(
           [:platform, :stacks, :status_regression_blocked],
           %{count: 1},
@@ -134,8 +150,41 @@ defmodule Platform.Tasks.Stack do
 
         delete_change(changeset, :status)
 
-      _ ->
+      current == "done" and is_binary(requested) and requested not in ~w(done abandoned) and
+          ShipState.shipped?(changeset.data) ->
+        drop_status_change(changeset, current, requested, :shipped)
+
+      current == "blocked" and is_binary(requested) and requested != "blocked" and
+        ShipState.conflict_held?(changeset.data) and
+          not clearing_conflict?(changeset) ->
+        drop_status_change(changeset, current, requested, :conflict_held)
+
+      true ->
         changeset
+    end
+  end
+
+  defp drop_status_change(changeset, from, to, reason) do
+    :telemetry.execute(
+      [:platform, :stacks, :status_regression_blocked],
+      %{count: 1},
+      %{stack_id: changeset.data.id, from: from, to: to, reason: reason}
+    )
+
+    Logger.warning(
+      "[Stack] blocked status change #{from} -> #{to} for stack #{changeset.data.id} " <>
+        "(reason=#{reason}); dropping status change"
+    )
+
+    delete_change(changeset, :status)
+  end
+
+  # The exit from a conflict-held `blocked`: the same changeset replaces
+  # `metadata` with a map whose `"conflict"` key is absent or nil.
+  defp clearing_conflict?(changeset) do
+    case get_change(changeset, :metadata) do
+      %{} = metadata -> is_nil(Map.get(metadata, "conflict"))
+      _ -> false
     end
   end
 end

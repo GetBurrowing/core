@@ -1319,6 +1319,198 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
     end
   end
 
+  # Task 01a05393 stage 3 (ADR 0045 decision 7): `task_update` surfaces the
+  # shipped-stack refusal verbatim, `recoverable: false`, so the agent reads
+  # where the work goes instead. Paired with the manual-ship lane control.
+  describe "task_update on a member of a shipped stack" do
+    alias Platform.Tasks.Stacks
+    alias Platform.Tasks.Stacks.ShipState
+
+    defp done_member_of_done_stack(stack_meta) do
+      project = create_project()
+      slug = unique_slug("shipped")
+
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, slug, "Shipped")
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Late Member"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      member =
+        task.id
+        |> Tasks.get_task_record()
+        |> Task.changeset(%{status: "done"})
+        |> Repo.update!()
+
+      {:ok, stack} =
+        stack_id
+        |> Stacks.get_stack!()
+        |> Stacks.update_stack(%{status: "done", metadata: stack_meta})
+
+      {stack, member}
+    end
+
+    test "refuses status: planning with the ADR-0045 message, recoverable: false" do
+      {stack, member} =
+        done_member_of_done_stack(%{
+          "rollup_pr" => %{"number" => 91, "merged_at" => "2026-08-01T00:00:00Z"}
+        })
+
+      assert stack.status == "done"
+      assert ShipState.shipped?(stack)
+      assert member.status == "done"
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => member.id, "status" => "planning"},
+          %{}
+        )
+
+      assert error.recoverable == false
+      assert error.error =~ "post-ship changes are new individual tasks"
+      assert error.error =~ stack.slug
+      assert error.error =~ "#91"
+      assert error.suggestion =~ "task_create"
+      refute error.error =~ "Invalid status transition"
+      assert Tasks.get_task_record(member.id).status == "done"
+    end
+
+    test "still moves a member of a done stack whose PR was never opened (manual-ship lane)" do
+      {stack, member} = done_member_of_done_stack(%{})
+
+      assert stack.status == "done"
+      refute ShipState.shipped?(stack)
+      assert member.status == "done"
+
+      assert {:ok, %{status: "planning"}} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{"task_id" => member.id, "status" => "planning"},
+                 %{}
+               )
+    end
+  end
+
+  # Task 01a05393 stage 4: `stack_update` gains `clear_conflict: true`, the
+  # only status exit on this surface for a stack halted at `blocked` on a
+  # rollup-merge conflict. The blocked+conflict state is seeded directly
+  # via `Stacks.update_stack/2` (the deployer's conflict arm is unreachable
+  # under the `--ff-only` runner).
+  describe "stack_update with clear_conflict" do
+    alias Platform.Tasks.Stack
+    alias Platform.Tasks.Stacks
+    alias Platform.Tasks.Stacks.ShipState
+
+    @conflict %{"member_task_id" => "m", "files" => ["lib/x.ex"], "at" => "2026-08-01T00:00:00Z"}
+
+    # One member forced to `in_review` so the recomputed rollup is
+    # `in_review` — distinguishable from the `forming` an empty stack
+    # would recompute to, and from the seeded `blocked`.
+    defp stack_with_in_review_member(stack_attrs) do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("clr"), "Held")
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Member"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      task.id
+      |> Tasks.get_task_record()
+      |> Task.changeset(%{status: "in_review"})
+      |> Repo.update!()
+
+      {:ok, stack} = stack_id |> Stacks.get_stack!() |> Stacks.update_stack(stack_attrs)
+      stack
+    end
+
+    test "clears the conflict, recomputes the status, and reports conflict_cleared: true" do
+      stack =
+        stack_with_in_review_member(%{status: "blocked", metadata: %{"conflict" => @conflict}})
+
+      assert stack.status == "blocked"
+      assert ShipState.conflict_held?(stack)
+
+      {:ok, env} =
+        ToolSurface.execute(
+          "stack_update",
+          %{"stack_id" => stack.id, "clear_conflict" => true, "name" => "Released"},
+          %{}
+        )
+
+      assert env.conflict_cleared == true
+      assert env.status == "in_review"
+      assert env.name == "Released"
+
+      persisted = Stacks.get_stack!(stack.id)
+      assert persisted.status == "in_review"
+      refute Map.has_key?(persisted.metadata, "conflict")
+    end
+
+    test "returns a recoverable not_conflicted error and writes nothing when there is no conflict" do
+      stack = stack_with_in_review_member(%{status: "in_review", metadata: %{}})
+      refute ShipState.conflict_held?(stack)
+
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_update",
+          %{"stack_id" => stack.id, "clear_conflict" => true, "name" => "Should Not Land"},
+          %{}
+        )
+
+      assert error.code == "not_conflicted"
+      assert error.recoverable == true
+      assert error.error =~ stack.slug
+
+      persisted = Stacks.get_stack!(stack.id)
+      assert persisted.name == "Held"
+      assert persisted.status == "in_review"
+    end
+
+    test "clear_conflict: false leaves a conflict-held stack blocked and adds no envelope key" do
+      stack =
+        stack_with_in_review_member(%{status: "blocked", metadata: %{"conflict" => @conflict}})
+
+      {:ok, env} =
+        ToolSurface.execute(
+          "stack_update",
+          %{"stack_id" => stack.id, "clear_conflict" => false, "description" => "still held"},
+          %{}
+        )
+
+      refute Map.has_key?(env, :conflict_cleared)
+      assert env.status == "blocked"
+      assert env.description == "still held"
+      assert ShipState.conflict_held?(Stacks.get_stack!(stack.id))
+    end
+
+    test "a free-form status arg is ignored — clear_conflict is the only status exit" do
+      stack =
+        stack_with_in_review_member(%{status: "blocked", metadata: %{"conflict" => @conflict}})
+
+      {:ok, env} =
+        ToolSurface.execute(
+          "stack_update",
+          %{"stack_id" => stack.id, "status" => "in_review"},
+          %{}
+        )
+
+      assert env.status == "blocked"
+      refute Map.has_key?(env, :conflict_cleared)
+      assert %Stack{status: "blocked"} = Stacks.get_stack!(stack.id)
+    end
+
+    test "the tool schema documents clear_conflict" do
+      %{parameters: params} =
+        Enum.find(ToolSurface.tool_definitions(), &(&1.name == "stack_update"))
+
+      assert %{type: "boolean", required: false} = params.clear_conflict
+      assert params.clear_conflict.description =~ "not_conflicted"
+      refute Map.has_key?(params, :status)
+    end
+  end
+
   # Task 01a05393 stage 6 (defect D): `task_update(status: "stack_pending")`
   # on a stackless task used to succeed and strand the task. The refusal
   # comes from `Tasks.require_stack_commencement_for/2`; this block pins

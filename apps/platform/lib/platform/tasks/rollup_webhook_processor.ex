@@ -51,6 +51,20 @@ defmodule Platform.Tasks.RollupWebhookProcessor do
   # where the webhook arrives out of order.
   @rollup_fan_out_expected_member_statuses ["in_review", "deploying"]
 
+  # Task 01a05393 stage 5 (ADR 0045): a member still in one of these
+  # statuses when the rollup PR merges never entered execution, so its
+  # branch is not in the merge. Before this, such a member fell into the
+  # generic `unexpected_status:*` bucket and stayed put while
+  # `complete_rollup_merge/2` flipped the stack to `done` — a `done` stack
+  # holding a `stack_pending` member, whose next touch regressed the stack.
+  # Every one of these has a `-> cancelled` edge in
+  # `Tasks.@valid_task_transitions` (backlog, planning, stack_pending), so
+  # the member is cancelled with a note instead — no widening of the
+  # transition table. `in_review`/`deploying` members DID land and keep the
+  # `-> done` promotion; `done` members keep the idempotent skip.
+  @rollup_fan_out_unlanded_member_statuses ~w(stack_pending backlog planning)
+  @unlanded_member_cancellation_note "rollup merged without this member"
+
   @doc """
   Process a rollup-PR merge end-to-end. See module doc for full
   semantics; equivalent to the controller's private
@@ -188,6 +202,11 @@ defmodule Platform.Tasks.RollupWebhookProcessor do
     Repo.transaction(fn ->
       Enum.reduce(members, {[], []}, fn member, {passed_acc, anomaly_acc} ->
         cond do
+          # Must sit BEFORE the generic unexpected-status branch: that one
+          # matches every non-landed status and would shadow this clause.
+          member.status in @rollup_fan_out_unlanded_member_statuses ->
+            cancel_unlanded_member(stack, member, pr, passed_acc, anomaly_acc)
+
           member.status not in @rollup_fan_out_expected_member_statuses ->
             anomaly = %{
               "task_id" => member.id,
@@ -225,6 +244,65 @@ defmodule Platform.Tasks.RollupWebhookProcessor do
            }
          ]}
     end
+  end
+
+  # A member that never entered execution cannot have landed in the rollup
+  # merge. Cancel it (all three source statuses carry a `-> cancelled` edge),
+  # stamp `metadata["cancellation_note"]` + the rollup PR number, and record
+  # the same fact in the anomaly accumulator so it surfaces in the stack's
+  # `rollup_merge` report rather than only in the log. Never widens the
+  # transition table: a refused transition is reported as an anomaly.
+  defp cancel_unlanded_member(%Stack{} = stack, %Task{} = member, pr, passed_acc, anomaly_acc) do
+    previous_status = member.status
+    pr_number = pr["number"]
+
+    Logger.warning(
+      "[RollupWebhookProcessor] Stack #{stack.id} rollup fan-out: member task " <>
+        "#{member.id} was still #{inspect(previous_status)} when rollup PR ##{pr_number} " <>
+        "merged, so its branch is not in the merge; cancelling it with " <>
+        "cancellation_note=#{inspect(@unlanded_member_cancellation_note)} instead of " <>
+        "promoting it to done or leaving it #{inspect(previous_status)} on a done stack"
+    )
+
+    base_meta = if is_map(member.metadata), do: member.metadata, else: %{}
+
+    new_meta =
+      base_meta
+      |> Map.put("cancellation_note", @unlanded_member_cancellation_note)
+      |> Map.put("cancelled_by_rollup_pr", pr_number)
+
+    outcome =
+      with {:ok, cancelled} <- Tasks.transition_task(member, "cancelled"),
+           {:ok, _noted} <- Tasks.update_task(cancelled, %{metadata: new_meta}) do
+        :ok
+      end
+
+    anomaly = %{
+      "task_id" => member.id,
+      "member_status" => previous_status,
+      "cancellation_note" => @unlanded_member_cancellation_note,
+      "rollup_pr_number" => pr_number,
+      "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    anomaly =
+      case outcome do
+        :ok ->
+          Map.put(anomaly, "reason", "cancelled_unlanded:" <> previous_status)
+
+        error ->
+          Logger.warning(
+            "[RollupWebhookProcessor] Stack #{stack.id} rollup fan-out: failed to cancel " <>
+              "unlanded member #{member.id} (#{previous_status}): #{inspect(error)}; " <>
+              "recording anomaly and leaving status unchanged"
+          )
+
+          anomaly
+          |> Map.put("reason", "cancel_unlanded_failed:" <> previous_status)
+          |> Map.put("detail", inspect(error))
+      end
+
+    {passed_acc, [anomaly | anomaly_acc]}
   end
 
   defp fan_out_member(stack, member, evidence_base, passed_acc, anomaly_acc) do
