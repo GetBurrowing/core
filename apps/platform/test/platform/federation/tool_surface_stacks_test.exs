@@ -573,6 +573,63 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       assert root_member.status == "in_progress"
       assert child_member.status == "stack_pending"
     end
+
+    # Task 01a05394 stage 5: the refusal says WHY each member is waiting
+    # (`CommencementGate.waiting_detail/1`), not just which member.
+    test "refusal names each waiting member with its title, id, and human reason" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-start-why"), "Why Waiting")
+
+      pa = %{
+        "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+      }
+
+      {:ok, orphan} = Tasks.create_task(%{project_id: project.id, title: "Orphan Member"})
+
+      {:ok, pending} =
+        Tasks.create_task(%{project_id: project.id, title: "Pending Member", phase_assignees: pa})
+
+      {:ok, planless} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Planless Member",
+          phase_assignees: pa
+        })
+
+      {:ok, _} = Tasks.create_plan(%{task_id: pending.id, status: "pending_review"})
+
+      for task <- [orphan, pending, planless] do
+        {:ok, _} =
+          ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+      end
+
+      # Anti-vacuity: the orphan has no planner from any source.
+      orphan = Tasks.get_task_record(orphan.id)
+      stack = Platform.Tasks.Stacks.get_stack(stack_id)
+      assert get_in(orphan.phase_assignees || %{}, ["planning"]) == nil
+      assert orphan.assignee_id == nil
+      assert get_in(stack.metadata || %{}, ["phase_assignees", "planning"]) == nil
+
+      {:error, error} = ToolSurface.execute("stack_start", %{"stack_id" => stack_id}, %{})
+
+      assert error.recoverable == true
+      assert error.error =~ "missing an approved plan: "
+
+      orphan_text = "Orphan Member (#{orphan.id}) — no planner assigned"
+      pending_text = "Pending Member (#{pending.id}) — plan pending review"
+      planless_text = "Planless Member (#{planless.id}) — no plan yet"
+
+      assert error.error =~ orphan_text
+      assert error.error =~ pending_text
+      assert error.error =~ planless_text
+
+      # Each reason is attached to ITS member: exactly one of each phrase,
+      # and in stack_position order.
+      [_, tail] = String.split(error.error, "missing an approved plan: ", parts: 2)
+      assert String.split(tail, ", ") == [orphan_text, pending_text, planless_text]
+    end
   end
 
   describe "stack_start_planning end-to-end" do
@@ -582,9 +639,34 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       %{stack_id: stack_id} =
         create_stack_via_tool(project.id, unique_slug("e2e-start-planning"), "Plan Me")
 
-      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Member 1"})
-      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Member 2"})
-      {:ok, m3} = Tasks.create_task(%{project_id: project.id, title: "Member 3"})
+      # Manual mode refuses members with no dispatchable planning assignee
+      # (Stacks.dispatchable_planning_assignee?/2), so give each a planner.
+      {:ok, m1} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member 1",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, m2} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member 2",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, m3} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member 3",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
 
       for task <- [m1, m2, m3] do
         {:ok, _} =
@@ -690,9 +772,21 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
         )
         |> then(fn {:ok, r} -> r end)
 
-      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Auto M1"})
-      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Auto M2"})
-      {:ok, m3} = Tasks.create_task(%{project_id: project.id, title: "Auto M3"})
+      # Auto mode refuses members with no dispatchable planning assignee
+      # (Stacks.dispatchable_planning_assignee?/2), so give each a
+      # planner agent — otherwise they surface under `unassigned:`.
+      pa = %{
+        "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+      }
+
+      {:ok, m1} =
+        Tasks.create_task(%{project_id: project.id, title: "Auto M1", phase_assignees: pa})
+
+      {:ok, m2} =
+        Tasks.create_task(%{project_id: project.id, title: "Auto M2", phase_assignees: pa})
+
+      {:ok, m3} =
+        Tasks.create_task(%{project_id: project.id, title: "Auto M3", phase_assignees: pa})
 
       for task <- [m1, m2, m3] do
         {:ok, _} =
@@ -744,8 +838,23 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
           "Manual Response"
         )
 
-      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Manual M1"})
-      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Manual M2"})
+      {:ok, m1} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Manual M1",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, m2} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Manual M2",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
 
       for task <- [m1, m2] do
         {:ok, _} =
@@ -772,6 +881,115 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       assert result.planning |> Enum.map(& &1.id) == [m1.id]
       assert result.auto_plan == false
       assert result.auto_accept_plan == false
+    end
+
+    # Task 01a05394 stage 4: the envelope must report a member with no
+    # resolvable planner under `unassigned`, never under `planning` — the
+    # bug was precisely that the report and the DB disagreed. Asserts on
+    # the RETURNED payload first; DB state is a secondary check.
+    test "mixed stack: unresolvable member lands in `unassigned`, assigned member in `planning` with assignee_id" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-mixed-assignee"), "Mixed Assignees")
+
+      planner_id = Ecto.UUID.generate()
+
+      {:ok, assigned} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Has planner",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => planner_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, orphan} = Tasks.create_task(%{project_id: project.id, title: "No planner"})
+
+      for task <- [assigned, orphan] do
+        {:ok, _} =
+          ToolSurface.execute(
+            "stack_add",
+            %{"stack_id" => stack_id, "task_id" => task.id},
+            %{}
+          )
+      end
+
+      # Anti-vacuity: the orphan really has nothing to resolve from —
+      # nil per-phase entry, nil top-level assignee, and no stack-level
+      # planning default (stack_add must not have percolated one).
+      orphan = Tasks.get_task_record(orphan.id)
+      stack = Platform.Tasks.Stacks.get_stack(stack_id)
+      assert get_in(orphan.phase_assignees || %{}, ["planning"]) == nil
+      assert orphan.assignee_id == nil
+      assert get_in(stack.metadata || %{}, ["phase_assignees", "planning"]) == nil
+      assert Platform.Tasks.Stacks.resolve_planning_assignee(orphan, stack) == {nil, nil}
+      # ...and the assigned member really does resolve, so a change that
+      # refuses everything cannot pass this test.
+      assert Platform.Tasks.Stacks.dispatchable_planning_assignee?(
+               Tasks.get_task_record(assigned.id),
+               stack
+             )
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      planning_ids = Enum.map(result.planning, & &1.id)
+      unassigned_ids = Enum.map(result.unassigned, & &1.id)
+
+      # Exactly one member each side, and the orphan is nowhere in `planning`.
+      assert planning_ids == [assigned.id]
+      assert unassigned_ids == [orphan.id]
+      refute orphan.id in planning_ids
+
+      [planning_entry] = result.planning
+      assert planning_entry.status == "planning"
+      assert planning_entry.assignee_id == planner_id
+      assert planning_entry.assignee_type == "agent"
+
+      [unassigned_entry] = result.unassigned
+      assert unassigned_entry.status == "backlog"
+      assert unassigned_entry.assignee_id == nil
+
+      # DB agrees with the envelope: the orphan was not moved.
+      assert Tasks.get_task_record(orphan.id).status == "backlog"
+      assert Tasks.get_task_record(assigned.id).status == "planning"
+    end
+
+    # Control for the key contract: an all-assigned stack still carries
+    # `unassigned`, as `[]`, so a caller can distinguish "none unassigned"
+    # from an older server that never emitted the key.
+    test "all-assigned stack returns `unassigned: []` with the key present" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-all-assigned"), "All Assigned")
+
+      pa = %{
+        "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+      }
+
+      {:ok, m1} =
+        Tasks.create_task(%{project_id: project.id, title: "A1", phase_assignees: pa})
+
+      {:ok, m2} =
+        Tasks.create_task(%{project_id: project.id, title: "A2", phase_assignees: pa})
+
+      for task <- [m1, m2] do
+        {:ok, _} =
+          ToolSurface.execute(
+            "stack_add",
+            %{"stack_id" => stack_id, "task_id" => task.id},
+            %{}
+          )
+      end
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      assert Map.has_key?(result, :unassigned)
+      assert result.unassigned == []
+      assert result.planning |> Enum.map(& &1.id) |> Enum.sort() == Enum.sort([m1.id, m2.id])
     end
   end
 

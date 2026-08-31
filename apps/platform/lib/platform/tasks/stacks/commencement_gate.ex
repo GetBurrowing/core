@@ -35,6 +35,12 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
       the structured error payload (`{:error, :stack_plans_pending,
       %{stack_id, waiting_on}}`) so UIs can point at the blockers.
 
+    * `waiting_detail/1` — the same members as `waiting_on/1`, in the
+      same order, each carrying `title` and a `reason` atom that says
+      WHY the member is still waiting (`:no_planner_assigned` /
+      `:plan_pending_review` / `:no_plan`). Rendered by the MCP
+      `stack_plans_pending` refusal so a caller learns what to chase.
+
   ## What counts as "approved"
 
   We reuse the same predicate `Platform.Tasks.current_plan/1` uses:
@@ -84,7 +90,7 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
   import Ecto.Query
 
   alias Platform.Repo
-  alias Platform.Tasks.{Plan, Stack, Task}
+  alias Platform.Tasks.{Plan, Stack, Stacks, Task}
   alias Platform.Tasks.Stacks.MemberSet
 
   @approved_plan_statuses ~w(approved completed)
@@ -95,6 +101,12 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
   # membership set. The list itself now lives in `MemberSet` so the
   # completion path (`Stacks.pending_members/1`) cannot drift from it.
   # (see `MemberSet.excluded_statuses/0`, called directly at both query sites)
+
+  # Latest-plan statuses that mean "a plan exists and is still on its way
+  # to approval". A `rejected`/`superseded` latest plan is NOT pending —
+  # no live plan exists and a fresh one has to be produced — so it reads
+  # as `:no_plan` in `waiting_detail/1`, alongside the no-row case.
+  @pending_plan_statuses ~w(draft pending_review)
 
   @doc """
   True when the given task is allowed to be in `in_progress` under the
@@ -202,6 +214,72 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
     end
   end
 
+  @type waiting_reason :: :no_planner_assigned | :plan_pending_review | :no_plan
+
+  @doc """
+  `waiting_on/1` with a reason attached: `[%{task_id, title, reason}]`
+  in the same `stack_position` order, one entry per member that does
+  NOT currently hold an approved plan. `waiting_on/1` keeps its bare id
+  shape — other callers pattern-match on it — so this is a sibling, not
+  a replacement.
+
+  `reason` is resolved in this precedence:
+
+    1. `:no_planner_assigned` — `Stacks.dispatchable_planning_assignee?/2`
+       is false for the member against its stack. Checked FIRST: a
+       member with no planner will never produce a plan at all, so
+       reporting `:no_plan` for it would be the quiet degradation the
+       reason exists to remove — even if a stale `pending_review` plan
+       row is lying around from before the planner was unassigned.
+    2. `:plan_pending_review` — the member's latest plan is `draft` or
+       `pending_review`.
+    3. `:no_plan` — no plan row at all, or the latest one is
+       `rejected`/`superseded` (no live plan exists either way).
+
+  One member query plus one batched latest-plan query, same as
+  `waiting_on/1` — no per-member round-trip. Missing stacks and empty
+  stacks return `[]`.
+  """
+  @spec waiting_detail(Stack.t() | binary()) :: [
+          %{task_id: binary(), title: String.t() | nil, reason: waiting_reason()}
+        ]
+  def waiting_detail(%Stack{id: stack_id} = stack), do: do_waiting_detail(stack, stack_id)
+
+  def waiting_detail(stack_id) when is_binary(stack_id) do
+    case Stacks.get_stack(stack_id) do
+      nil -> []
+      %Stack{} = stack -> do_waiting_detail(stack, stack_id)
+    end
+  end
+
+  defp do_waiting_detail(%Stack{} = stack, stack_id) do
+    case load_members_ordered(stack_id) do
+      [] ->
+        []
+
+      members ->
+        statuses = latest_plan_status_by_member(Enum.map(members, & &1.id))
+
+        members
+        |> Enum.reject(&(Map.get(statuses, &1.id) in @approved_plan_statuses))
+        |> Enum.map(fn member ->
+          %{
+            task_id: member.id,
+            title: member.title,
+            reason: waiting_reason(member, stack, Map.get(statuses, member.id))
+          }
+        end)
+    end
+  end
+
+  defp waiting_reason(member, stack, latest_status) do
+    cond do
+      not Stacks.dispatchable_planning_assignee?(member, stack) -> :no_planner_assigned
+      latest_status in @pending_plan_statuses -> :plan_pending_review
+      true -> :no_plan
+    end
+  end
+
   # ── internals ────────────────────────────────────────────────────────────
 
   # Returns nil when the stack row is missing (defensive short-circuit for
@@ -246,20 +324,27 @@ defmodule Platform.Tasks.Stacks.CommencementGate do
   defp approved_member_ids([]), do: MapSet.new()
 
   defp approved_member_ids(member_ids) when is_list(member_ids) do
-    latest_plans =
-      from(p in Plan,
-        where: p.task_id in ^member_ids,
-        distinct: p.task_id,
-        order_by: [asc: p.task_id, desc: p.version],
-        select: %{task_id: p.task_id, status: p.status}
-      )
+    member_ids
+    |> latest_plan_status_by_member()
+    |> Enum.filter(fn {_task_id, status} -> status in @approved_plan_statuses end)
+    |> MapSet.new(fn {task_id, _status} -> task_id end)
+  end
 
-    from(lp in subquery(latest_plans),
-      where: lp.status in ^@approved_plan_statuses,
-      select: lp.task_id
+  # `%{task_id => latest plan status}` for the given members, in one
+  # round-trip. Members with no plan row are absent from the map. Shared
+  # by `approved_member_ids/1` and `waiting_detail/1` so the two can never
+  # disagree about which plan is "latest".
+  defp latest_plan_status_by_member([]), do: %{}
+
+  defp latest_plan_status_by_member(member_ids) when is_list(member_ids) do
+    from(p in Plan,
+      where: p.task_id in ^member_ids,
+      distinct: p.task_id,
+      order_by: [asc: p.task_id, desc: p.version],
+      select: {p.task_id, p.status}
     )
     |> Repo.all()
-    |> MapSet.new()
+    |> Map.new()
   end
 
   # Telemetry emission for `open?/1`. Kept as a thin helper so the two

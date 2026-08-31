@@ -1189,6 +1189,13 @@ defmodule Platform.Tasks.Stacks do
       Metadata: `%{stack_id, wave_index}`.
       Manual mode fires it exactly once (wave 0); auto mode fires it N
       times (wave_index 0..N-1) in order.
+    * `[:platform, :stacks, :planning, :unassigned]` — emitted once per
+      dispatching invocation when at least one member was refused for
+      lack of a dispatchable planning assignee. Measurements:
+      `%{member_count}` (refused members). Metadata:
+      `%{stack_id, member_ids}`. Paired with a `Logger.warning`. Note
+      `:wave_dispatched`'s `member_count` counts only members actually
+      transitioned — a wave whose members were all refused reports 0.
     * `[:platform, :stacks, :planning, :noop]` — emitted when the entry
       short-circuits without dispatching. Measurements: `%{}`. Metadata:
       `%{stack_id, reason: :already_in_flight | :cycle | :cross_stack_dep}`.
@@ -1210,9 +1217,17 @@ defmodule Platform.Tasks.Stacks do
 
   ## Return shape
 
-    * `{:ok, %{stack, planning, edges_authored, edges_skipped_reason,
-       waves_total, mode}}` — success. `planning` is the list of members
-      this call transitioned to `planning`. `waves_total` is the total
+    * `{:ok, %{stack, planning, unassigned, edges_authored,
+       edges_skipped_reason, waves_total, mode}}` — success. `planning` is
+      the list of members this call transitioned to `planning`.
+      `unassigned` is the list of members this call REFUSED to transition
+      because `dispatchable_planning_assignee?/2` found no agent-typed
+      planning assignee for them (per-phase, top-level, or stack-level);
+      they stay at `backlog`. The key is always present (`[]` when none),
+      so callers need no `Map.get` default. Auto mode gates every wave
+      this way; the manual head gates wave 0 the same way (later waves are
+      gated in `advance_planning_waves/1`).
+      `waves_total` is the total
       number of waves in the stack's DAG (informational; drives the
       progress UI). `mode` is `:manual | :auto`.
     * `{:partial, %{..., errors}}` — cascade partial success; the
@@ -1229,6 +1244,7 @@ defmodule Platform.Tasks.Stacks do
            %{
              stack: Stack.t(),
              planning: [Task.t()],
+             unassigned: [Task.t()],
              edges_authored: non_neg_integer(),
              edges_skipped_reason: atom() | nil,
              waves_total: non_neg_integer(),
@@ -1238,6 +1254,7 @@ defmodule Platform.Tasks.Stacks do
              %{
                stack: Stack.t(),
                planning: [Task.t()],
+               unassigned: [Task.t()],
                edges_authored: non_neg_integer(),
                edges_skipped_reason: atom() | nil,
                waves_total: non_neg_integer(),
@@ -1349,16 +1366,35 @@ defmodule Platform.Tasks.Stacks do
     # with `wave_index: 0..N-1` so telemetry consumers see the same
     # contract as manual mode — just N events fired in one call instead
     # of a single wave-0 event followed by later N-1 advance events.
+    #
+    # Before any member of a wave transitions, the wave is partitioned on
+    # `dispatchable_planning_assignee?/2`. `Tasks.transition_task/2` will
+    # happily move a member with no resolvable agent planner into
+    # `planning` with `assignee_id: nil`, after which
+    # `TaskRouterWatcher.should_run?/1` refuses to start a router and the
+    # member is reported as dispatched while nobody is ever called. Such
+    # members are NOT transitioned (status stays `backlog`) and are
+    # returned under `unassigned:` instead — hard failure over quiet
+    # degradation.
     member_by_id = Map.new(members, &{&1.id, &1})
 
-    {reversed_dispatched, errors} =
+    {reversed_dispatched, errors, reversed_unassigned} =
       waves
       |> Enum.with_index()
-      |> Enum.reduce({[], []}, fn {wave_members, wave_index}, {ok_acc, err_acc} ->
+      |> Enum.reduce({[], [], []}, fn {wave_members, wave_index},
+                                      {ok_acc, err_acc, unassigned_acc} ->
+        current_wave =
+          Enum.map(wave_members, fn wave_member ->
+            Map.get(member_by_id, wave_member.id, wave_member)
+          end)
+
+        {dispatchable, wave_unassigned} = partition_wave_by_assignee(current_wave, stack)
+
         {wave_dispatched, wave_errors} =
-          Enum.reduce(wave_members, {[], []}, fn wave_member, {ok, errs} ->
-            member = Map.get(member_by_id, wave_member.id, wave_member)
-            cascade_member(member, "planning", ok, errs)
+          Enum.reduce(dispatchable, {[], []}, fn member, {ok, errs} ->
+            member
+            |> stamp_stack_planning_assignee(stack)
+            |> cascade_member("planning", ok, errs)
           end)
 
         wave_dispatched = Enum.reverse(wave_dispatched)
@@ -1369,29 +1405,45 @@ defmodule Platform.Tasks.Stacks do
           %{stack_id: stack.id, wave_index: wave_index}
         )
 
-        {Enum.reverse(wave_dispatched, ok_acc), wave_errors ++ err_acc}
+        {Enum.reverse(wave_dispatched, ok_acc), wave_errors ++ err_acc,
+         Enum.reverse(wave_unassigned, unassigned_acc)}
       end)
 
     dispatched = Enum.reverse(reversed_dispatched)
+    unassigned = Enum.reverse(reversed_unassigned)
 
-    finalize_dispatch(stack, dispatched, errors, waves, edges_authored, reason, :auto)
+    finalize_dispatch(stack, dispatched, errors, unassigned, waves, edges_authored, reason, :auto)
   end
 
   defp dispatch_waves(%Stack{} = stack, members, waves, edges_authored, reason) do
     # Manual mode: dispatch ONLY wave 0. Downstream waves advance via
     # `advance_planning_waves/1` when each upstream member's plan lands
     # `approved` (see `Tasks.approve_plan/3` → `maybe_advance_stack_planning/1`).
+    #
+    # Same gate as the auto head: wave 0 is partitioned on
+    # `dispatchable_planning_assignee?/2` before anyone transitions.
+    # Members with no resolvable agent planner stay at `backlog` and are
+    # returned under `unassigned:`; the rest are stamped with the
+    # stack-level default (when that is what resolved them) and
+    # transitioned. Later waves get the same treatment in
+    # `advance_specific_wave/3`.
     member_by_id = Map.new(members, &{&1.id, &1})
-    wave0 = List.first(waves) || []
+
+    # `waves` was built against the freshly-read DAG, but member structs
+    # it holds carry statuses as of the DAG query. Prefer the `members`
+    # list we just read for cascade decisions so the `backlog` guard
+    # reflects the current DB state.
+    wave0 =
+      (List.first(waves) || [])
+      |> Enum.map(fn wave_member -> Map.get(member_by_id, wave_member.id, wave_member) end)
+
+    {dispatchable, unassigned} = partition_wave_by_assignee(wave0, stack)
 
     {dispatched, errors} =
-      Enum.reduce(wave0, {[], []}, fn wave_member, {ok, errs} ->
-        # `waves` was built against the freshly-read DAG, but member
-        # structs it holds carry statuses as of the DAG query. Prefer the
-        # `members` list we just read for cascade decisions so the
-        # `backlog` guard reflects the current DB state.
-        member = Map.get(member_by_id, wave_member.id, wave_member)
-        cascade_member(member, "planning", ok, errs)
+      Enum.reduce(dispatchable, {[], []}, fn member, {ok, errs} ->
+        member
+        |> stamp_stack_planning_assignee(stack)
+        |> cascade_member("planning", ok, errs)
       end)
 
     dispatched = Enum.reverse(dispatched)
@@ -1402,13 +1454,34 @@ defmodule Platform.Tasks.Stacks do
       %{stack_id: stack.id, wave_index: 0}
     )
 
-    finalize_dispatch(stack, dispatched, errors, waves, edges_authored, reason, :manual)
+    finalize_dispatch(
+      stack,
+      dispatched,
+      errors,
+      unassigned,
+      waves,
+      edges_authored,
+      reason,
+      :manual
+    )
   end
 
-  defp finalize_dispatch(stack, dispatched, errors, waves, edges_authored, reason, mode) do
+  defp finalize_dispatch(
+         stack,
+         dispatched,
+         errors,
+         unassigned,
+         waves,
+         edges_authored,
+         reason,
+         mode
+       ) do
+    report_unassigned(stack, unassigned)
+
     result = %{
       stack: stack,
       planning: dispatched,
+      unassigned: unassigned,
       edges_authored: edges_authored,
       edges_skipped_reason: reason,
       waves_total: length(waves),
@@ -1419,6 +1492,54 @@ defmodule Platform.Tasks.Stacks do
       [] -> {:ok, result}
       errs -> {:partial, Map.put(result, :errors, Enum.reverse(errs))}
     end
+  end
+
+  # Split one wave's members into `{dispatchable, unassigned}` using the
+  # stage-1 resolver (per-phase entry -> top-level assignee -> stack-level
+  # planning default; agent-typed with a non-nil id). Order within each
+  # partition is preserved. Pure — no writes.
+  defp partition_wave_by_assignee(wave_members, %Stack{} = stack) do
+    Enum.split_with(wave_members, &dispatchable_planning_assignee?(&1, stack))
+  end
+
+  # `Tasks.transition_task/2` derives `assignee_id` from the member's own
+  # `phase_assignees` / top-level assignee only — it never consults the
+  # stack-level default. A member that is dispatchable ONLY through the
+  # stack fallback would therefore still land in `planning` with a nil
+  # `assignee_id`. Stamp the resolved pair onto the member's planning
+  # entry first so the transition actually points a router at it. No-op
+  # when the member already resolves on its own.
+  defp stamp_stack_planning_assignee(%Task{} = member, %Stack{} = stack) do
+    case Tasks.assignee_for_phase(member, "planning") do
+      {nil, nil} ->
+        {id, type} = resolve_planning_assignee(member, stack)
+
+        case Tasks.set_phase_assignees(member, %{
+               "planning" => %{"assignee_id" => id, "assignee_type" => type}
+             }) do
+          {:ok, stamped} -> stamped
+          {:error, _} -> member
+        end
+
+      _ ->
+        member
+    end
+  end
+
+  defp report_unassigned(_stack, []), do: :ok
+
+  defp report_unassigned(%Stack{id: stack_id}, unassigned) do
+    ids = Enum.map(unassigned, & &1.id)
+
+    Logger.warning(
+      "[Stacks.start_planning] stack=#{stack_id} members with no dispatchable planning assignee: #{Enum.join(ids, ", ")}"
+    )
+
+    :telemetry.execute(
+      [:platform, :stacks, :planning, :unassigned],
+      %{member_count: length(ids)},
+      %{stack_id: stack_id, member_ids: ids}
+    )
   end
 
   @doc """
@@ -1437,11 +1558,22 @@ defmodule Platform.Tasks.Stacks do
     2. Find the highest wave N where **every** member has an
        `approved`/`completed` plan (via `Tasks.current_plan/1`).
     3. If wave N+1 exists AND any of its members is still at `backlog`,
-       transition those members `backlog → planning` via `cascade_member/4`
-       and emit `[:platform, :stacks, :planning, :wave_dispatched]` with
-       `wave_index: N+1`.
-    4. Return `{:ok, %{stack, dispatched, wave_index}}` when a wave
-       advanced or `{:ok, :noop, reason}` when nothing changed.
+       partition the wave on `dispatchable_planning_assignee?/2`.
+       Members with a resolvable agent planner transition
+       `backlog → planning` via `cascade_member/4` (stack-default-only
+       members are stamped first so `assignee_id` is set); the rest are
+       refused and stay at `backlog`. Emit
+       `[:platform, :stacks, :planning, :wave_dispatched]` and
+       `[:platform, :stacks, :planning, :advanced]` with `wave_index: N+1`
+       and `member_count` = members actually transitioned (0 when the
+       whole wave was refused), plus `:unassigned` + a `Logger.warning`
+       when at least one member was refused.
+    4. Return `{:ok, %{stack, dispatched, unassigned, wave_index}}` when
+       a wave was considered (`unassigned` is always present, `[]` when
+       none) or `{:ok, :noop, reason}` when nothing changed. A wave whose
+       members are all unassigned and all still at `backlog` is NOT a
+       no-op: it returns `dispatched: []` with every member under
+       `unassigned`.
 
   ## No-op reasons
 
@@ -1457,6 +1589,7 @@ defmodule Platform.Tasks.Stacks do
            %{
              stack: Stack.t(),
              dispatched: [Task.t()],
+             unassigned: [Task.t()],
              wave_index: non_neg_integer()
            }}
           | {:ok, :noop, :no_next_wave | :next_wave_already_dispatched | :upstream_incomplete}
@@ -1520,12 +1653,24 @@ defmodule Platform.Tasks.Stacks do
     if Enum.all?(fresh_members, &(&1.status != "backlog")) do
       {:ok, :noop, :next_wave_already_dispatched}
     else
+      # Same gate as `dispatch_waves/5`: only members with a resolvable
+      # agent planner transition. The rest stay at `backlog` and come
+      # back under `unassigned:` with the `:unassigned` warning +
+      # telemetry. Note this runs AFTER the already-dispatched
+      # short-circuit above, so a wave that is entirely unassigned and
+      # entirely at `backlog` is NOT a no-op: it is reported as advanced
+      # with `dispatched: []` and every member listed as refused.
+      {dispatchable, unassigned} = partition_wave_by_assignee(fresh_members, stack)
+
       {dispatched, _errs} =
-        Enum.reduce(fresh_members, {[], []}, fn member, {ok, errs} ->
-          cascade_member(member, "planning", ok, errs)
+        Enum.reduce(dispatchable, {[], []}, fn member, {ok, errs} ->
+          member
+          |> stamp_stack_planning_assignee(stack)
+          |> cascade_member("planning", ok, errs)
         end)
 
       dispatched = Enum.reverse(dispatched)
+      report_unassigned(stack, unassigned)
 
       :telemetry.execute(
         [:platform, :stacks, :planning, :wave_dispatched],
@@ -1554,7 +1699,8 @@ defmodule Platform.Tasks.Stacks do
       # stack. Loud beats stuck.
       audit_migration_slots_for_log(stack)
 
-      {:ok, %{stack: stack, dispatched: dispatched, wave_index: wave_index}}
+      {:ok,
+       %{stack: stack, dispatched: dispatched, unassigned: unassigned, wave_index: wave_index}}
     end
   end
 
@@ -4726,6 +4872,48 @@ defmodule Platform.Tasks.Stacks do
     case stack_phase_assignees(stack_or_metadata) |> Map.get(phase) do
       %{"assignee_id" => id, "assignee_type" => type} -> {id, type}
       _ -> {nil, nil}
+    end
+  end
+
+  @doc """
+  Resolve the planning-phase assignee for a stack member.
+
+  Returns `{assignee_id, assignee_type}`, resolved in this order:
+
+    1. `Platform.Tasks.assignee_for_phase(member, "planning")` — which
+       already folds in the top-level `assignee_id`/`assignee_type`
+       fallback, so this must not be reimplemented here.
+    2. `stack_assignee_for_phase(stack, "planning")` — the stack-level
+       ADR-0041 default, used only when the task resolves to `{nil, nil}`.
+    3. `{nil, nil}` when neither supplies one.
+  """
+  @spec resolve_planning_assignee(Task.t(), Stack.t() | nil) ::
+          {String.t() | nil, String.t() | nil}
+  def resolve_planning_assignee(member, stack \\ nil)
+
+  def resolve_planning_assignee(%Task{} = member, stack) do
+    case Tasks.assignee_for_phase(member, "planning") do
+      {nil, nil} -> stack_assignee_for_phase(stack, "planning")
+      pair -> pair
+    end
+  end
+
+  def resolve_planning_assignee(_, _), do: {nil, nil}
+
+  @doc """
+  True only when `resolve_planning_assignee/2` yields an agent-typed
+  assignee with a non-nil id.
+
+  Mirrors `Platform.Orchestration.TaskRouterWatcher.should_run?/1`, which
+  requires `assignee_type == "agent"` AND a non-nil `assignee_id`: a
+  human-typed planning assignee never starts a router, so for cascade
+  purposes such a member is as unassigned as one with no assignee at all.
+  """
+  @spec dispatchable_planning_assignee?(Task.t(), Stack.t() | nil) :: boolean()
+  def dispatchable_planning_assignee?(member, stack \\ nil) do
+    case resolve_planning_assignee(member, stack) do
+      {id, "agent"} when is_binary(id) -> true
+      _ -> false
     end
   end
 

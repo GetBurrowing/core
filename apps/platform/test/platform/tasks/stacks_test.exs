@@ -3291,7 +3291,13 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Start planning single"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Solo"})
+      {:ok, t} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Solo",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, t)
 
       assert {:ok,
@@ -3312,9 +3318,26 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Start planning happy"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "Member A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "Member B"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "Member C"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member B",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member C",
+          phase_assignees: planning_agent_pa()
+        })
 
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
@@ -3346,9 +3369,26 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Start planning chain"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A root"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B middle"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C leaf"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A root",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B middle",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C leaf",
+          phase_assignees: planning_agent_pa()
+        })
 
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
@@ -3375,8 +3415,20 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Start planning telemetry"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
@@ -3427,8 +3479,20 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Start planning idempotent"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "Member A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "Member B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member B",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
 
@@ -3466,7 +3530,14 @@ defmodule Platform.Tasks.StacksTest do
     test "accepts a stack id and returns {:error, :stack_not_found} for an unknown id" do
       {:ok, project} = Tasks.create_project(%{name: "Start planning by id"})
       stack = stack_fixture(project_id: project.id)
-      {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Member"})
+
+      {:ok, t} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, t)
 
       assert {:ok, %{planning: [planned]}} = Stacks.start_planning(stack.id)
@@ -3480,9 +3551,13 @@ defmodule Platform.Tasks.StacksTest do
       stack = stack_fixture(project_id: project.id)
       {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      # Auto mode refuses members with no dispatchable planning assignee
+      # (see "auto mode gates the wave fan-out" below), so give each a
+      # planner agent.
+      pa = planning_agent_pa()
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A", phase_assignees: pa})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B", phase_assignees: pa})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C", phase_assignees: pa})
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_task(stack, c)
@@ -3506,9 +3581,13 @@ defmodule Platform.Tasks.StacksTest do
       stack = stack_fixture(project_id: project.id)
       {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      # Auto mode refuses members with no dispatchable planning assignee
+      # (see "auto mode gates the wave fan-out" below), so give each a
+      # planner agent.
+      pa = planning_agent_pa()
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A", phase_assignees: pa})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B", phase_assignees: pa})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C", phase_assignees: pa})
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_task(stack, c)
@@ -3535,6 +3614,260 @@ defmodule Platform.Tasks.StacksTest do
 
       :telemetry.detach(ref)
     end
+
+    # ── auto mode gates the wave fan-out on a resolvable planner ────────
+    #
+    # Every test below asserts BOTH observables: what `start_planning/1`
+    # RETURNS (`planning:` / `unassigned:`) AND what the reloaded row says
+    # (`status` / `assignee_id`). The bug being guarded is precisely that
+    # the two disagreed — a member was returned in `planning:` while its
+    # row had `assignee_id: nil` and no router ever ran.
+
+    test "auto mode: mixed wave dispatches the assigned member and refuses the unassigned one" do
+      {:ok, project} = Tasks.create_project(%{name: "Auto gate mixed wave"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      agent = Ecto.UUID.generate()
+
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A (assigned)",
+          phase_assignees: %{"planning" => %{"assignee_id" => agent, "assignee_type" => "agent"}}
+        })
+
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B (unassigned)"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      # No edges: A and B share wave 0.
+      assert {:ok, [[_, _]]} = Stacks.planning_waves(stack)
+
+      # Pin the fixture: B has nothing to resolve through, at any level.
+      b = Repo.get!(Task, b.id)
+      assert b.status == "backlog"
+      assert b.assignee_id == nil
+      assert b.phase_assignees in [nil, %{}]
+      assert Tasks.assignee_for_phase(b, "planning") == {nil, nil}
+      assert Stacks.stack_assignee_for_phase(stack, "planning") == {nil, nil}
+      refute Stacks.dispatchable_planning_assignee?(b, stack)
+      assert Stacks.dispatchable_planning_assignee?(Repo.get!(Task, a.id), stack)
+
+      assert {:ok, %{planning: planning, unassigned: unassigned, mode: :auto}} =
+               Stacks.start_planning(stack)
+
+      # Returned lists.
+      assert Enum.map(planning, & &1.id) == [a.id]
+      assert Enum.map(unassigned, & &1.id) == [b.id]
+      refute b.id in Enum.map(planning, & &1.id)
+
+      # Reloaded rows agree with the returned lists.
+      a_row = Repo.get!(Task, a.id)
+      assert a_row.status == "planning"
+      assert a_row.assignee_id == agent
+      assert a_row.assignee_type == "agent"
+
+      b_row = Repo.get!(Task, b.id)
+      assert b_row.status == "backlog"
+      assert b_row.assignee_id == nil
+    end
+
+    test "auto mode: a member with no per-phase entry but a stack-level planning default dispatches with that agent" do
+      {:ok, project} = Tasks.create_project(%{name: "Auto gate stack default"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      {:ok, m} = Tasks.create_task(%{project_id: project.id, title: "Inherits from stack"})
+      {:ok, _} = Stacks.add_task(stack, m)
+
+      # Write the stack-level default AFTER attaching, straight to
+      # metadata, so nothing percolates onto the member: the member must
+      # resolve through the stage-1 stack fallback alone.
+      agent = Ecto.UUID.generate()
+
+      stack =
+        stack
+        |> Stack.changeset(%{
+          metadata:
+            Map.put(stack.metadata || %{}, "phase_assignees", %{
+              "planning" => %{"assignee_id" => agent, "assignee_type" => "agent"}
+            })
+        })
+        |> Repo.update!()
+
+      m = Repo.get!(Task, m.id)
+      assert m.assignee_id == nil
+      assert Tasks.assignee_for_phase(m, "planning") == {nil, nil}
+      assert Stacks.resolve_planning_assignee(m, stack) == {agent, "agent"}
+
+      assert {:ok, %{planning: planning, unassigned: []}} = Stacks.start_planning(stack)
+      assert Enum.map(planning, & &1.id) == [m.id]
+
+      row = Repo.get!(Task, m.id)
+      assert row.status == "planning"
+      assert row.assignee_id == agent
+      assert row.assignee_type == "agent"
+    end
+
+    test "auto mode: a member with only a top-level agent assignee dispatches" do
+      {:ok, project} = Tasks.create_project(%{name: "Auto gate top-level"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      agent = Ecto.UUID.generate()
+
+      {:ok, m} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Top-level assignee",
+          assignee_id: agent,
+          assignee_type: "agent"
+        })
+
+      {:ok, _} = Stacks.add_task(stack, m)
+
+      assert {:ok, %{planning: planning, unassigned: []}} = Stacks.start_planning(stack)
+      assert Enum.map(planning, & &1.id) == [m.id]
+
+      row = Repo.get!(Task, m.id)
+      assert row.status == "planning"
+      assert row.assignee_id == agent
+    end
+
+    test "auto mode: a human-typed planning assignee is not dispatchable" do
+      {:ok, project} = Tasks.create_project(%{name: "Auto gate human"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      human = Ecto.UUID.generate()
+
+      {:ok, m} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Human planner",
+          phase_assignees: %{"planning" => %{"assignee_id" => human, "assignee_type" => "user"}}
+        })
+
+      {:ok, _} = Stacks.add_task(stack, m)
+
+      assert {:ok, %{planning: [], unassigned: unassigned}} = Stacks.start_planning(stack)
+      assert Enum.map(unassigned, & &1.id) == [m.id]
+
+      row = Repo.get!(Task, m.id)
+      assert row.status == "backlog"
+    end
+
+    test "auto mode: a fully-refused wave reports member_count 0 and emits :unassigned once" do
+      {:ok, project} = Tasks.create_project(%{name: "Auto gate refused wave"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      agent = Ecto.UUID.generate()
+
+      # Wave 0: A (assigned). Wave 1: B and C (both unassigned).
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: %{"planning" => %{"assignee_id" => agent, "assignee_type" => "agent"}}
+        })
+
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, a.id)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :wave_dispatched],
+          [:platform, :stacks, :planning, :unassigned]
+        ])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{planning: planning, unassigned: unassigned, waves_total: 2}} =
+                   Stacks.start_planning(stack)
+
+          assert Enum.map(planning, & &1.id) == [a.id]
+          assert unassigned |> Enum.map(& &1.id) |> Enum.sort() == Enum.sort([b.id, c.id])
+        end)
+
+      assert log =~ "[Stacks.start_planning] stack=#{stack.id}"
+      assert log =~ "no dispatchable planning assignee"
+      assert log =~ b.id
+      assert log =~ c.id
+
+      # Wave 0 dispatched one; wave 1 dispatched NOBODY — it must say 0,
+      # not the wave size (2).
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, meas0, meta0}
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, meas1, meta1}
+      assert {meta0.wave_index, meas0.member_count} == {0, 1}
+      assert {meta1.wave_index, meas1.member_count} == {1, 0}
+
+      assert_receive {[:platform, :stacks, :planning, :unassigned], ^ref, meas_u, meta_u}
+      assert meas_u.member_count == 2
+      assert meta_u.stack_id == stack.id
+      assert Enum.sort(meta_u.member_ids) == Enum.sort([b.id, c.id])
+      refute_receive {[:platform, :stacks, :planning, :unassigned], ^ref, _, _}, 50
+
+      assert Repo.get!(Task, a.id).status == "planning"
+      assert Repo.get!(Task, b.id).status == "backlog"
+      assert Repo.get!(Task, c.id).status == "backlog"
+
+      :telemetry.detach(ref)
+    end
+
+    test "auto mode: no :unassigned telemetry and no warning when every member dispatches" do
+      {:ok, project} = Tasks.create_project(%{name: "Auto gate all assigned"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      {:ok, m} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "M",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, _} = Stacks.add_task(stack, m)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :unassigned]
+        ])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{planning: [_], unassigned: []}} = Stacks.start_planning(stack)
+        end)
+
+      refute log =~ "no dispatchable planning assignee"
+      refute_receive {[:platform, :stacks, :planning, :unassigned], ^ref, _, _}, 50
+
+      :telemetry.detach(ref)
+    end
+
+    test "manual mode result always carries unassigned: [] (key is unconditional)" do
+      {:ok, project} = Tasks.create_project(%{name: "Manual unassigned key"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, m} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "M",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, _} = Stacks.add_task(stack, m)
+
+      assert {:ok, %{mode: :manual} = result} = Stacks.start_planning(stack)
+      assert Map.fetch!(result, :unassigned) == []
+    end
   end
 
   describe "start_planning/1 with dep inference" do
@@ -3549,9 +3882,26 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "DepInf happy"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A creates types"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B consumes types"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C unrelated"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A creates types",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B consumes types",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C unrelated",
+          phase_assignees: planning_agent_pa()
+        })
 
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
@@ -3603,8 +3953,19 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "DepInf empty"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
 
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
@@ -3628,9 +3989,26 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "DepInf cycle"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C",
+          phase_assignees: planning_agent_pa()
+        })
 
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
@@ -3679,9 +4057,26 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "DepInf override"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C",
+          phase_assignees: planning_agent_pa()
+        })
 
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
@@ -3730,8 +4125,19 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "DepInf adapter fail"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
 
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
@@ -3967,8 +4373,20 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Advance upstream incomplete"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
@@ -3985,9 +4403,27 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Advance chain"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_task(stack, c)
@@ -4021,8 +4457,20 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Advance already-dispatched"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
@@ -4080,8 +4528,20 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Advance telemetry"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
@@ -4108,6 +4568,367 @@ defmodule Platform.Tasks.StacksTest do
 
     test "accepts a stack id and returns {:error, :stack_not_found} for an unknown id" do
       assert {:error, :stack_not_found} = Stacks.advance_planning_waves(Ecto.UUID.generate())
+    end
+  end
+
+  describe "manual mode gates wave dispatch on a planning assignee (stage 3)" do
+    # Manual mode has the same hole as auto mode, one wave later:
+    # `start_planning/1` dispatches wave 0 and `advance_planning_waves/1`
+    # promotes wave N+1 on approval. Both must refuse members with no
+    # dispatchable planning assignee (per-phase, top-level, or
+    # stack-level) instead of moving them to `planning` with
+    # `assignee_id: nil`. Every test here asserts BOTH what the call
+    # RETURNS (`planning:` / `dispatched:` / `unassigned:`) and the
+    # reloaded rows, because "reported as dispatched" and "actually
+    # dispatched" are the two observables that disagreed.
+
+    test "wave 0: the assigned member is dispatched with assignee_id set, the unassigned one is refused" do
+      {:ok, project} = Tasks.create_project(%{name: "Manual gate wave 0"})
+      stack = stack_fixture(project_id: project.id)
+
+      agent = Ecto.UUID.generate()
+
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: %{"planning" => %{"assignee_id" => agent, "assignee_type" => "agent"}}
+        })
+
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      assert_no_planner_anywhere(b, stack)
+
+      assert {:ok, %{planning: planning, unassigned: unassigned, mode: :manual}} =
+               Stacks.start_planning(stack)
+
+      assert Enum.map(planning, & &1.id) == [a.id]
+      assert Enum.map(unassigned, & &1.id) == [b.id]
+
+      a_row = Repo.get!(Task, a.id)
+      assert a_row.status == "planning"
+      assert a_row.assignee_id == agent
+
+      b_row = Repo.get!(Task, b.id)
+      assert b_row.status == "backlog"
+      assert b_row.assignee_id == nil
+    end
+
+    test "wave 0: a member with only a stack-level planning default dispatches with that agent" do
+      {:ok, project} = Tasks.create_project(%{name: "Manual gate wave 0 stack default"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, m} = Tasks.create_task(%{project_id: project.id, title: "Inherits from stack"})
+      {:ok, _} = Stacks.add_task(stack, m)
+
+      # Written straight to metadata AFTER attaching so nothing percolates
+      # onto the member: it must resolve through the stack fallback alone.
+      agent = Ecto.UUID.generate()
+      stack = put_stack_planning_default(stack, agent)
+
+      m = Repo.get!(Task, m.id)
+      assert m.assignee_id == nil
+      assert Tasks.assignee_for_phase(m, "planning") == {nil, nil}
+      assert Stacks.resolve_planning_assignee(m, stack) == {agent, "agent"}
+
+      assert {:ok, %{planning: planning, unassigned: [], mode: :manual}} =
+               Stacks.start_planning(stack)
+
+      assert Enum.map(planning, & &1.id) == [m.id]
+
+      row = Repo.get!(Task, m.id)
+      assert row.status == "planning"
+      assert row.assignee_id == agent
+      assert row.assignee_type == "agent"
+    end
+
+    test "advance: wave 1 dispatches only the member with a planner and reports the other under unassigned" do
+      {:ok, project} = Tasks.create_project(%{name: "Manual gate advance mixed"})
+      stack = stack_fixture(project_id: project.id)
+
+      agent_a = Ecto.UUID.generate()
+      agent_b = Ecto.UUID.generate()
+
+      # Wave 0: A (planner). Wave 1: B (planner) and C (nil per-phase, nil
+      # top-level, no stack default).
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => agent_a, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => agent_b, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, a.id)
+      assert_no_planner_anywhere(c, stack)
+
+      assert {:ok, %{planning: [_a], unassigned: [], mode: :manual}} =
+               Stacks.start_planning(stack)
+
+      assert Repo.get!(Task, b.id).status == "backlog"
+      assert Repo.get!(Task, c.id).status == "backlog"
+
+      # Approve A's plan directly so the advance can be called in
+      # isolation and its RETURN asserted (the approve_plan hook path is
+      # covered by the next test).
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :wave_dispatched],
+          [:platform, :stacks, :planning, :advanced],
+          [:platform, :stacks, :planning, :unassigned]
+        ])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{dispatched: dispatched, unassigned: unassigned, wave_index: 1}} =
+                   Stacks.advance_planning_waves(stack)
+
+          assert Enum.map(dispatched, & &1.id) == [b.id]
+          assert Enum.map(unassigned, & &1.id) == [c.id]
+        end)
+
+      assert log =~ "no dispatchable planning assignee"
+      assert log =~ c.id
+      refute log =~ b.id
+
+      b_row = Repo.get!(Task, b.id)
+      assert b_row.status == "planning"
+      assert b_row.assignee_id == agent_b
+
+      c_row = Repo.get!(Task, c.id)
+      assert c_row.status == "backlog"
+      assert c_row.assignee_id == nil
+
+      # The wave has two members; only one was transitioned. Both
+      # `:wave_dispatched` and `:advanced` must say 1, not 2.
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, wd_meas, wd_meta}
+      assert_receive {[:platform, :stacks, :planning, :advanced], ^ref, adv_meas, adv_meta}
+      assert {wd_meta.wave_index, wd_meas.member_count} == {1, 1}
+      assert {adv_meta.wave_index, adv_meas.member_count} == {1, 1}
+
+      assert_receive {[:platform, :stacks, :planning, :unassigned], ^ref, u_meas, u_meta}
+      assert u_meas.member_count == 1
+      assert u_meta.stack_id == stack.id
+      assert u_meta.member_ids == [c.id]
+      refute_receive {[:platform, :stacks, :planning, :unassigned], ^ref, _, _}, 50
+
+      :telemetry.detach(ref)
+    end
+
+    test "advance via Tasks.approve_plan/3: the hook dispatches the planner-bearing member and leaves the other at backlog" do
+      {:ok, project} = Tasks.create_project(%{name: "Manual gate advance hook"})
+      stack = stack_fixture(project_id: project.id)
+
+      agent_b = Ecto.UUID.generate()
+
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => agent_b, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, a.id)
+      assert_no_planner_anywhere(c, stack)
+
+      assert {:ok, %{planning: [_a], unassigned: []}} = Stacks.start_planning(stack)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :advanced],
+          [:platform, :stacks, :planning, :unassigned]
+        ])
+
+      {:ok, plan_a} = Tasks.create_plan(%{task_id: a.id, status: "pending_review"})
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, _approved} = Tasks.approve_plan(plan_a, "system:test")
+      end)
+
+      b_row = Repo.get!(Task, b.id)
+      assert b_row.status == "planning"
+      assert b_row.assignee_id == agent_b
+
+      c_row = Repo.get!(Task, c.id)
+      assert c_row.status == "backlog"
+      assert c_row.assignee_id == nil
+
+      assert_receive {[:platform, :stacks, :planning, :advanced], ^ref, adv_meas, adv_meta}
+      assert {adv_meta.wave_index, adv_meas.member_count} == {1, 1}
+      assert_receive {[:platform, :stacks, :planning, :unassigned], ^ref, u_meas, u_meta}
+      assert {u_meas.member_count, u_meta.member_ids} == {1, [c.id]}
+
+      :telemetry.detach(ref)
+    end
+
+    test "advance: a wave 1 member with only a stack-level planning default dispatches with that agent" do
+      {:ok, project} = Tasks.create_project(%{name: "Manual gate advance stack default"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B inherits from stack"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      agent = Ecto.UUID.generate()
+      stack = put_stack_planning_default(stack, agent)
+
+      b = Repo.get!(Task, b.id)
+      assert b.assignee_id == nil
+      assert Tasks.assignee_for_phase(b, "planning") == {nil, nil}
+      assert Stacks.resolve_planning_assignee(b, stack) == {agent, "agent"}
+
+      assert {:ok, %{planning: [_a], unassigned: []}} = Stacks.start_planning(stack)
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      assert {:ok, %{dispatched: dispatched, unassigned: [], wave_index: 1}} =
+               Stacks.advance_planning_waves(stack)
+
+      assert Enum.map(dispatched, & &1.id) == [b.id]
+
+      row = Repo.get!(Task, b.id)
+      assert row.status == "planning"
+      assert row.assignee_id == agent
+      assert row.assignee_type == "agent"
+    end
+
+    test "advance: a wave whose members are all unassigned is not a no-op — dispatched: [], every member under unassigned, member_count 0" do
+      {:ok, project} = Tasks.create_project(%{name: "Manual gate advance refused wave"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, a.id)
+      assert_no_planner_anywhere(b, stack)
+      assert_no_planner_anywhere(c, stack)
+
+      assert {:ok, %{planning: [_a], unassigned: []}} = Stacks.start_planning(stack)
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :wave_dispatched],
+          [:platform, :stacks, :planning, :advanced],
+          [:platform, :stacks, :planning, :unassigned]
+        ])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          # NOT `{:ok, :noop, :next_wave_already_dispatched}`: that
+          # short-circuit only fires when every member is past `backlog`,
+          # and these are all still there.
+          assert {:ok, %{dispatched: [], unassigned: unassigned, wave_index: 1}} =
+                   Stacks.advance_planning_waves(stack)
+
+          assert unassigned |> Enum.map(& &1.id) |> Enum.sort() == Enum.sort([b.id, c.id])
+        end)
+
+      assert log =~ "no dispatchable planning assignee"
+      assert log =~ b.id
+      assert log =~ c.id
+
+      assert Repo.get!(Task, b.id).status == "backlog"
+      assert Repo.get!(Task, c.id).status == "backlog"
+
+      # Wave size is 2; nobody transitioned. Both counters must say 0.
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, wd_meas, wd_meta}
+      assert_receive {[:platform, :stacks, :planning, :advanced], ^ref, adv_meas, adv_meta}
+      assert {wd_meta.wave_index, wd_meas.member_count} == {1, 0}
+      assert {adv_meta.wave_index, adv_meas.member_count} == {1, 0}
+
+      assert_receive {[:platform, :stacks, :planning, :unassigned], ^ref, u_meas, u_meta}
+      assert u_meas.member_count == 2
+      assert Enum.sort(u_meta.member_ids) == Enum.sort([b.id, c.id])
+      refute_receive {[:platform, :stacks, :planning, :unassigned], ^ref, _, _}, 50
+
+      :telemetry.detach(ref)
+    end
+
+    test "advance: the already-dispatched short-circuit still wins when every member is past backlog" do
+      {:ok, project} = Tasks.create_project(%{name: "Manual gate advance short-circuit"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      # B has no planner but is hand-moved past backlog before the
+      # advance: the no-op check runs BEFORE the partition, so this must
+      # be a no-op, not a refused-wave report.
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      assert_no_planner_anywhere(b, stack)
+
+      assert {:ok, %{planning: [_a], unassigned: []}} = Stacks.start_planning(stack)
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      Repo.get!(Task, b.id) |> Task.changeset(%{status: "planning"}) |> Repo.update!()
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :unassigned]
+        ])
+
+      assert {:ok, :noop, :next_wave_already_dispatched} =
+               Stacks.advance_planning_waves(stack)
+
+      refute_receive {[:platform, :stacks, :planning, :unassigned], ^ref, _, _}, 50
+      :telemetry.detach(ref)
     end
   end
 
@@ -4150,9 +4971,13 @@ defmodule Platform.Tasks.StacksTest do
       stack = stack_fixture(project_id: project.id)
       {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
-      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      # Auto mode refuses members with no dispatchable planning assignee
+      # (see "auto mode gates the wave fan-out" below), so give each a
+      # planner agent.
+      pa = planning_agent_pa()
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A", phase_assignees: pa})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B", phase_assignees: pa})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C", phase_assignees: pa})
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_task(stack, c)
@@ -4182,8 +5007,20 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Noop already in flight"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
@@ -4274,8 +5111,20 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Advanced telemetry"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
@@ -4340,8 +5189,20 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, project} = Tasks.create_project(%{name: "Approve hook chain"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          phase_assignees: planning_agent_pa()
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          phase_assignees: planning_agent_pa()
+        })
+
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
@@ -5621,6 +6482,172 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "resolve_planning_assignee/2" do
+    # (a) per-phase override wins over the top-level owner.
+    test "per-phase planning entry wins over the top-level assignee" do
+      project = project_fixture()
+      planner = Ecto.UUID.generate()
+      owner = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Override",
+          assignee_id: owner,
+          assignee_type: "agent"
+        })
+
+      {:ok, task} =
+        Tasks.set_phase_assignees(task, %{
+          "planning" => %{"assignee_id" => planner, "assignee_type" => "agent"}
+        })
+
+      stack = stack_fixture(project_id: project.id)
+
+      assert Stacks.resolve_planning_assignee(task, stack) == {planner, "agent"}
+      assert Stacks.dispatchable_planning_assignee?(task, stack)
+    end
+
+    # (b) top-level used when the phase map lacks "planning".
+    test "falls back to the top-level assignee when the phase map has no planning entry" do
+      project = project_fixture()
+      owner = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Top level",
+          assignee_id: owner,
+          assignee_type: "agent"
+        })
+
+      assert task.phase_assignees in [nil, %{}]
+
+      stack = stack_fixture(project_id: project.id)
+
+      assert Stacks.resolve_planning_assignee(task, stack) == {owner, "agent"}
+      assert Stacks.dispatchable_planning_assignee?(task, stack)
+    end
+
+    # (c) stack-level default used when the task has neither.
+    test "falls back to the stack-level planning default when the task has neither" do
+      agent = Ecto.UUID.generate()
+
+      stack =
+        stack_with_phase_assignees(%{
+          "planning" => %{"assignee_id" => agent, "assignee_type" => "agent"}
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: stack.project_id, title: "Bare"})
+
+      # Discriminating fixture: assert the nils BEFORE acting, or a positive
+      # result would be about the fixture rather than the resolver.
+      assert task.assignee_id == nil
+      assert task.phase_assignees in [nil, %{}]
+      assert Tasks.assignee_for_phase(task, "planning") == {nil, nil}
+
+      assert Stacks.resolve_planning_assignee(task, stack) == {agent, "agent"}
+      assert Stacks.dispatchable_planning_assignee?(task, stack)
+    end
+
+    # (d) negative: nothing anywhere.
+    test "returns {nil, nil} when the task and the stack both lack a planning assignee" do
+      stack = stack_fixture()
+      {:ok, task} = Tasks.create_task(%{project_id: stack.project_id, title: "Orphan"})
+
+      assert task.assignee_id == nil
+      assert task.phase_assignees in [nil, %{}]
+      assert Stacks.stack_assignee_for_phase(stack, "planning") == {nil, nil}
+
+      assert Stacks.resolve_planning_assignee(task, stack) == {nil, nil}
+      refute Stacks.dispatchable_planning_assignee?(task, stack)
+    end
+
+    test "returns {nil, nil} with a nil stack when the task has no planning assignee" do
+      project = project_fixture()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No stack"})
+
+      assert task.assignee_id == nil
+
+      assert Stacks.resolve_planning_assignee(task, nil) == {nil, nil}
+      refute Stacks.dispatchable_planning_assignee?(task, nil)
+    end
+
+    # (e) a resolved HUMAN assignee is resolvable but NOT dispatchable —
+    # should_run?/1 requires assignee_type == "agent".
+    test "a human-typed planning assignee resolves but is not dispatchable" do
+      project = project_fixture()
+      human = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Human planner",
+          assignee_id: human,
+          assignee_type: "human"
+        })
+
+      stack = stack_fixture(project_id: project.id)
+
+      assert Stacks.resolve_planning_assignee(task, stack) == {human, "human"}
+      refute Stacks.dispatchable_planning_assignee?(task, stack)
+
+      # Paired positive: same shape, agent type, IS dispatchable.
+      agent = Ecto.UUID.generate()
+
+      {:ok, agent_task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Agent planner",
+          assignee_id: agent,
+          assignee_type: "agent"
+        })
+
+      assert Stacks.dispatchable_planning_assignee?(agent_task, stack)
+    end
+
+    test "a human stack-level default is resolved but not dispatchable" do
+      human = Ecto.UUID.generate()
+
+      stack =
+        stack_with_phase_assignees(%{
+          "planning" => %{"assignee_id" => human, "assignee_type" => "human"}
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: stack.project_id, title: "Bare human"})
+      assert task.assignee_id == nil
+
+      assert Stacks.resolve_planning_assignee(task, stack) == {human, "human"}
+      refute Stacks.dispatchable_planning_assignee?(task, stack)
+    end
+
+    test "a task-level agent planner beats an unset stack default and vice versa" do
+      agent = Ecto.UUID.generate()
+
+      stack =
+        stack_with_phase_assignees(%{
+          "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: stack.project_id, title: "Task wins"})
+
+      {:ok, task} =
+        Tasks.set_phase_assignees(task, %{
+          "planning" => %{"assignee_id" => agent, "assignee_type" => "agent"}
+        })
+
+      # Order matters: the task-level entry must be consulted FIRST, or work
+      # routes to the stack default agent instead of the assigned one.
+      assert Stacks.resolve_planning_assignee(task, stack) == {agent, "agent"}
+    end
+
+    test "non-task input resolves to {nil, nil} and is not dispatchable" do
+      assert Stacks.resolve_planning_assignee(nil, nil) == {nil, nil}
+      refute Stacks.dispatchable_planning_assignee?(nil, nil)
+    end
+  end
+
   describe "set_stack_phase_assignees/2" do
     test "writes the stack-level default and percolates to all un-overridden members" do
       project = project_fixture()
@@ -6800,6 +7827,38 @@ defmodule Platform.Tasks.StacksTest do
   end
 
   # All three phases assigned to one agent — the "simple mode" shape.
+  # A fresh agent-typed planning assignee — the minimum a stack member
+  # needs to pass `Stacks.dispatchable_planning_assignee?/2`.
+  # Assert the fixture is what the test claims: no per-phase planner, no
+  # top-level assignee, no stack-level default — nothing for the resolver
+  # to find. Returns the reloaded row.
+  defp assert_no_planner_anywhere(%Task{} = member, %Stack{} = stack) do
+    row = Repo.get!(Task, member.id)
+    assert row.assignee_id == nil
+    assert Tasks.assignee_for_phase(row, "planning") == {nil, nil}
+    assert Stacks.resolve_planning_assignee(row, stack) == {nil, nil}
+    refute Stacks.dispatchable_planning_assignee?(row, stack)
+    row
+  end
+
+  # Write a stack-level planning default straight to `metadata` (no
+  # percolation onto members) so a member can only resolve through the
+  # stage-1 stack fallback.
+  defp put_stack_planning_default(%Stack{} = stack, agent_id) do
+    stack
+    |> Stack.changeset(%{
+      metadata:
+        Map.put(stack.metadata || %{}, "phase_assignees", %{
+          "planning" => %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+        })
+    })
+    |> Repo.update!()
+  end
+
+  defp planning_agent_pa do
+    %{"planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}}
+  end
+
   defp all_phases(agent_id) do
     %{
       "planning" => %{"assignee_id" => agent_id, "assignee_type" => "agent"},

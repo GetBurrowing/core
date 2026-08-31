@@ -64,6 +64,7 @@ defmodule Platform.Federation.ToolSurface do
     Validation
   }
 
+  alias Platform.Tasks.Stacks.CommencementGate
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
   alias Platform.Repo
@@ -2504,7 +2505,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The stack record (including `auto_plan` and `auto_accept_plan`) plus:\n• `planning` — the members moved from `backlog` to `planning`.\n• `mode` — `:manual` or `:auto`, derived from `stack.auto_plan`.\n• `waves_total` — total number of DAG waves (informational; drives progress UI).\n• `edges_authored` — number of dep-inference edges committed on this call (0 when a user override was already present).\n• `edges_skipped_reason` — when inference was skipped or terminally failed (`:user_override_present | :cycle | :parse_failed | :adapter_failed | :empty_response`). Omitted on the happy path.\n\nPer-member transition failures surface in a `cascade_errors` array. An empty stack — or one where a wave 0 dispatch found no `backlog` members — returns an empty `planning` list.\n\nIdempotency short-circuits return `%{stack_id, planning: [], errors: [], noop: true, noop_reason: :already_in_flight}` without the stack record shape. Cyclic DAGs return an error envelope with `cycle_path`; cross-stack deps return an error envelope with `from_task_id`/`to_task_id`.",
+          "The stack record (including `auto_plan` and `auto_accept_plan`) plus:\n• `planning` — the members moved from `backlog` to `planning`.\n• `unassigned` — the members this call transitioned NOWHERE because no agent-typed planning assignee resolves for them (nil per-phase planning entry, nil top-level assignee, and no stack-level planning default — or a human-typed assignee, which starts no router). They stay at `backlog` and are never listed under `planning`. ALWAYS present (`[]` when every considered member had a planner), so an absent key means an older server, not \"none unassigned\".\n• `mode` — `:manual` or `:auto`, derived from `stack.auto_plan`.\n• `waves_total` — total number of DAG waves (informational; drives progress UI).\n• `edges_authored` — number of dep-inference edges committed on this call (0 when a user override was already present).\n• `edges_skipped_reason` — when inference was skipped or terminally failed (`:user_override_present | :cycle | :parse_failed | :adapter_failed | :empty_response`). Omitted on the happy path.\n\nPer-member transition failures surface in a `cascade_errors` array. An empty stack — or one where a wave 0 dispatch found no `backlog` members — returns an empty `planning` list.\n\nIdempotency short-circuits return `%{stack_id, planning: [], errors: [], noop: true, noop_reason: :already_in_flight}` without the stack record shape. Cyclic DAGs return an error envelope with `cycle_path`; cross-stack deps return an error envelope with `from_task_id`/`to_task_id`.",
         limitations:
           "Wave gating is the default. Callers relying on the pre-Stack-v2 all-at-once cascade must set `auto_plan: true` on the stack. Members that fail the `planning` transition appear in `cascade_errors`; the stack-level status still recomputes from its members.",
         when_to_use:
@@ -5435,13 +5436,13 @@ defmodule Platform.Federation.ToolSurface do
 
           {:error, :stack_plans_pending, %{waiting_on: waiting_on}} ->
             # ADR 0042 Decision 4: refuse to start when any member is still
-            # missing an approved plan. Surface the blocking member ids so
-            # the caller can chase them down.
+            # missing an approved plan. Surface the blocking members — title,
+            # id, and WHY — so the caller can chase them down.
             {:error,
              %{
                error:
                  "Stack cannot start yet — the following members are missing an approved plan: " <>
-                   Enum.join(waiting_on, ", "),
+                   Enum.join(describe_waiting_on(stack.id, waiting_on), ", "),
                recoverable: true,
                suggestion:
                  "Approve the missing plans (via plan_approve) before calling stack_start again."
@@ -5559,6 +5560,7 @@ defmodule Platform.Federation.ToolSurface do
            %{
              stack: updated,
              planning: planning,
+             unassigned: unassigned,
              edges_authored: edges_authored,
              edges_skipped_reason: edges_skipped_reason,
              mode: mode,
@@ -5568,6 +5570,7 @@ defmodule Platform.Federation.ToolSurface do
              stack_start_planning_payload(
                updated,
                planning,
+               unassigned,
                [],
                edges_authored,
                edges_skipped_reason,
@@ -5579,6 +5582,7 @@ defmodule Platform.Federation.ToolSurface do
            %{
              stack: updated,
              planning: planning,
+             unassigned: unassigned,
              errors: errors,
              edges_authored: edges_authored,
              edges_skipped_reason: edges_skipped_reason,
@@ -5589,6 +5593,7 @@ defmodule Platform.Federation.ToolSurface do
              stack_start_planning_payload(
                updated,
                planning,
+               unassigned,
                errors,
                edges_authored,
                edges_skipped_reason,
@@ -7242,23 +7247,28 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
-  # Resolve blocking member ids to `"<title> (<id>)"` using the existing
-  # `Stacks.members/1` accessor — one query over the stack, no new
-  # context function. An id that isn't in the member list (deleted
-  # mid-flight) degrades to the bare id rather than dropping out.
+  # Resolve blocking member ids to `"<title> (<id>) — <reason>"` via
+  # `CommencementGate.waiting_detail/1`, which reads the same member set
+  # `waiting_on/1` did and attaches WHY each is still waiting. An id
+  # that isn't in the detail list (deleted mid-flight) degrades to the
+  # bare id rather than dropping out.
   defp describe_waiting_on(stack_id, waiting_on) do
-    titles =
+    details =
       stack_id
-      |> Stacks.members()
-      |> Map.new(fn member -> {member.id, member.title} end)
+      |> CommencementGate.waiting_detail()
+      |> Map.new(fn detail -> {detail.task_id, detail} end)
 
     Enum.map(waiting_on, fn id ->
-      case Map.get(titles, id) do
+      case Map.get(details, id) do
         nil -> id
-        title -> "#{title} (#{id})"
+        %{title: title, reason: reason} -> "#{title} (#{id}) — #{waiting_reason_text(reason)}"
       end
     end)
   end
+
+  defp waiting_reason_text(:no_planner_assigned), do: "no planner assigned"
+  defp waiting_reason_text(:plan_pending_review), do: "plan pending review"
+  defp waiting_reason_text(:no_plan), do: "no plan yet"
 
   defp auto_approve_precondition_envelope(phases) do
     %{
@@ -8143,9 +8153,13 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # `unassigned` (task 01a05394 stage 4) is ALWAYS emitted — `[]` when
+  # every considered member resolved a planner — so a caller can tell
+  # "none unassigned" from "old server that never reported the key".
   defp stack_start_planning_payload(
          %Stack{} = stack,
          planning,
+         unassigned,
          errors,
          edges_authored,
          edges_skipped_reason,
@@ -8155,6 +8169,7 @@ defmodule Platform.Federation.ToolSurface do
       stack
       |> serialize_stack()
       |> Map.put(:planning, Enum.map(planning, &serialize_stack_member/1))
+      |> Map.put(:unassigned, Enum.map(unassigned, &serialize_stack_member/1))
       |> Map.put(:edges_authored, edges_authored)
       |> maybe_put_edges_skipped_reason(edges_skipped_reason)
       |> maybe_put_mode(Keyword.get(opts, :mode))

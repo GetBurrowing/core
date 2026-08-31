@@ -4536,8 +4536,25 @@ defmodule Platform.Federation.ToolSurfaceTest do
           %{}
         )
 
-      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Member 1"})
-      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Member 2"})
+      # Manual mode refuses members with no dispatchable planning assignee
+      # (Stacks.dispatchable_planning_assignee?/2), so give each a planner.
+      {:ok, m1} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member 1",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, m2} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Member 2",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
 
       {:ok, _} =
         ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => m1.id}, %{})
@@ -4602,8 +4619,23 @@ defmodule Platform.Federation.ToolSurfaceTest do
           %{}
         )
 
-      {:ok, ok_member} = Tasks.create_task(%{project_id: project.id, title: "Healthy"})
-      {:ok, bad_member} = Tasks.create_task(%{project_id: project.id, title: "Will Fail"})
+      {:ok, ok_member} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Healthy",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, bad_member} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Will Fail",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
 
       {:ok, _} =
         ToolSurface.execute(

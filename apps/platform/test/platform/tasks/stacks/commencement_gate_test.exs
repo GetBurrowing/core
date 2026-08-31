@@ -279,7 +279,109 @@ defmodule Platform.Tasks.Stacks.CommencementGateTest do
     end
   end
 
+  # Task 01a05394 stage 5: `waiting_detail/1` attaches WHY each waiting
+  # member is waiting, so the MCP `stack_plans_pending` refusal can say
+  # `no_planner_assigned` / `plan_pending_review` / `no_plan` instead of
+  # only naming the member.
+  describe "waiting_detail/1" do
+    test "reports three DISTINCT reasons in stack_position order and omits the approved member" do
+      {stack, [orphan, pending, planless, approved]} = stack_with_members(4)
+
+      # Anti-vacuity: the orphan really has nothing to resolve a planner
+      # from — nil per-phase entry, nil top-level assignee, no stack-level
+      # planning default — so `:no_planner_assigned` is earned, not
+      # defaulted into.
+      assert get_in(orphan.phase_assignees || %{}, ["planning"]) == nil
+      assert orphan.assignee_id == nil
+      assert get_in(stack.metadata || %{}, ["phase_assignees", "planning"]) == nil
+      refute Stacks.dispatchable_planning_assignee?(orphan, stack)
+
+      pending = give_planner(pending)
+      planless = give_planner(planless)
+      approved = give_planner(approved)
+      assert Stacks.dispatchable_planning_assignee?(pending, stack)
+      assert Stacks.dispatchable_planning_assignee?(planless, stack)
+
+      set_plan_status(pending, "pending_review")
+      # planless: planner, but no plan row at all
+      set_plan_status(approved, "approved")
+
+      detail = CommencementGate.waiting_detail(stack)
+
+      assert detail == [
+               %{task_id: orphan.id, title: orphan.title, reason: :no_planner_assigned},
+               %{task_id: pending.id, title: pending.title, reason: :plan_pending_review},
+               %{task_id: planless.id, title: planless.title, reason: :no_plan}
+             ]
+
+      reasons = Enum.map(detail, & &1.reason)
+      assert length(Enum.uniq(reasons)) == 3
+      refute approved.id in Enum.map(detail, & &1.task_id)
+
+      # Same members, same order as the bare-id sibling.
+      assert Enum.map(detail, & &1.task_id) == CommencementGate.waiting_on(stack)
+      # The id form goes through `Stacks.get_stack/1` and agrees.
+      assert CommencementGate.waiting_detail(stack.id) == detail
+    end
+
+    test "planner check wins over a stale pending plan (precedence 1 before 2)" do
+      # A member whose planner was unassigned AFTER a plan was drafted:
+      # a plan row in `pending_review` exists, but nobody will ever carry
+      # it to approval. Reporting `:plan_pending_review` here is the
+      # quiet degradation the reason exists to remove.
+      {stack, [stale]} = stack_with_members(1)
+      refute Stacks.dispatchable_planning_assignee?(stale, stack)
+      set_plan_status(stale, "pending_review")
+
+      assert [%{task_id: id, reason: :no_planner_assigned}] =
+               CommencementGate.waiting_detail(stack)
+
+      assert id == stale.id
+    end
+
+    test "a draft plan reads as :plan_pending_review; rejected/superseded read as :no_plan" do
+      {stack, [drafted, rejected, superseded]} = stack_with_members(3)
+      drafted = give_planner(drafted)
+      rejected = give_planner(rejected)
+      superseded = give_planner(superseded)
+      set_plan_status(drafted, "draft")
+      set_plan_status(rejected, "rejected")
+      set_plan_status(superseded, "superseded")
+
+      assert Enum.map(CommencementGate.waiting_detail(stack), & &1.reason) ==
+               [:plan_pending_review, :no_plan, :no_plan]
+    end
+
+    test "a stack-level planning default resolves the planner (member is not :no_planner_assigned)" do
+      {stack, [member]} = stack_with_members(1)
+      assert get_in(member.phase_assignees || %{}, ["planning"]) == nil
+
+      {:ok, %{stack: stack}} =
+        Stacks.set_stack_phase_assignees(stack, %{
+          "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+        })
+
+      assert [%{reason: :no_plan}] = CommencementGate.waiting_detail(stack)
+    end
+
+    test "returns [] for an empty stack and for a missing stack id" do
+      assert CommencementGate.waiting_detail(empty_stack()) == []
+      assert CommencementGate.waiting_detail(Ecto.UUID.generate()) == []
+    end
+  end
+
   # ── helpers ──────────────────────────────────────────────────────────────
+
+  # Give a member an agent-typed planning assignee so
+  # `Stacks.dispatchable_planning_assignee?/2` is true for it.
+  defp give_planner(%Task{} = task) do
+    {:ok, task} =
+      Tasks.set_phase_assignees(task, %{
+        "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+      })
+
+    task
+  end
 
   # Build a stack + `count` members already attached in `stack_position`
   # order. Members carry no plan by default; individual tests seed plans

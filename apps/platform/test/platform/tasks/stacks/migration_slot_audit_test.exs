@@ -114,8 +114,27 @@ defmodule Platform.Tasks.Stacks.MigrationSlotAuditTest do
         rollup_branch: Stacks.rollup_branch_name(slug)
       })
 
-    {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A #{uniq()}"})
-    {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B #{uniq()}"})
+    # Manual-mode dispatch refuses members with no dispatchable planning
+    # assignee (Stacks.dispatchable_planning_assignee?/2), so give each a
+    # planner agent.
+    {:ok, a} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "A #{uniq()}",
+        phase_assignees: %{
+          "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+        }
+      })
+
+    {:ok, b} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "B #{uniq()}",
+        phase_assignees: %{
+          "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+        }
+      })
+
     {:ok, a} = Stacks.add_task(stack, a)
     {:ok, b} = Stacks.add_task(stack, b)
     {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
@@ -359,8 +378,24 @@ defmodule Platform.Tasks.Stacks.MigrationSlotAuditTest do
           rollup_branch: Stacks.rollup_branch_name(slug)
         })
 
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A #{uniq()}"})
-      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B #{uniq()}"})
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A #{uniq()}",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B #{uniq()}",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
       {:ok, a} = Stacks.add_task(stack, a)
       {:ok, b} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)

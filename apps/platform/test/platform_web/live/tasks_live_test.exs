@@ -7704,7 +7704,12 @@ defmodule PlatformWeb.TasksLiveTest do
               stack_position: pos,
               title: "Member #{pos}",
               status: status,
-              priority: "medium"
+              priority: "medium",
+              # Manual-mode dispatch refuses members with no dispatchable
+              # planning assignee, so seed each with a planner agent.
+              phase_assignees: %{
+                "planning" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+              }
             })
 
           t

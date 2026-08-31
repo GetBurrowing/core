@@ -142,6 +142,72 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
     end
   end
 
+  # ── should_run?/1 as the cascade invariant (01a05394 stage 6) ─────────
+  #
+  # `Stacks.dispatchable_planning_assignee?/2` (stage 1) mirrors this
+  # predicate: a stack member whose resolved planning assignee would NOT
+  # start a router is treated as unassigned by the planning cascade. These
+  # cases pin the exact shape the cascade mirrors — agent-typed AND non-nil
+  # id AND active status AND not soft-deleted — one clause per test, so a
+  # single dropped guard turns exactly one of them red.
+
+  describe "should_run?/1 — cascade invariant (01a05394)" do
+    @active_uuid "01a05394-3bbf-7001-bf10-4a3cc986990c"
+
+    test "agent-typed with a nil assignee_id is not runnable" do
+      task = %{assignee_type: "agent", assignee_id: nil, status: "planning"}
+      refute TaskRouterWatcher.should_run?(task)
+    end
+
+    test "human-typed with a real assignee_id is not runnable" do
+      task = %{assignee_type: "human", assignee_id: @active_uuid, status: "planning"}
+      refute TaskRouterWatcher.should_run?(task)
+    end
+
+    test "agent-typed with a real assignee_id in an active status is runnable" do
+      for status <- ["planning", "in_progress", "in_review"] do
+        task = %{assignee_type: "agent", assignee_id: @active_uuid, status: status}
+
+        assert TaskRouterWatcher.should_run?(task),
+               "expected should_run? to be true for active status #{inspect(status)}"
+      end
+    end
+
+    test "agent-typed with a real assignee_id in a non-active status is not runnable" do
+      for status <- ["backlog", "stack_pending", "blocked", "done", "cancelled"] do
+        task = %{assignee_type: "agent", assignee_id: @active_uuid, status: status}
+
+        refute TaskRouterWatcher.should_run?(task),
+               "expected should_run? to be false for non-active status #{inspect(status)}"
+      end
+    end
+
+    test "otherwise-runnable task with a deleted_at timestamp is not runnable" do
+      task = %{
+        assignee_type: "agent",
+        assignee_id: @active_uuid,
+        status: "planning",
+        deleted_at: ~U[2026-08-30 00:00:00Z]
+      }
+
+      refute TaskRouterWatcher.should_run?(task)
+    end
+
+    # The map-vs-struct case the function's own comment calls out: a
+    # `%Task{}` always carries `:deleted_at`, but the plain maps that some
+    # PubSub payloads and helpers use may omit the key entirely. Absent
+    # must read as "not deleted", exactly like an explicit nil.
+    test "otherwise-runnable map with NO deleted_at key is runnable" do
+      task = %{assignee_type: "agent", assignee_id: @active_uuid, status: "planning"}
+
+      refute Map.has_key?(task, :deleted_at)
+      assert TaskRouterWatcher.should_run?(task)
+
+      # The same map with the key present-but-nil must agree with key-absent.
+      assert TaskRouterWatcher.should_run?(Map.put(task, :deleted_at, nil))
+    end
+  end
+
   # ── router_running?/1 ─────────────────────────────────────────────────
 
   describe "router_running?/1" do
