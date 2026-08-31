@@ -190,16 +190,21 @@ defmodule Platform.Chat.Sidebar do
   channel keeps their section and cannot also appear in the destination.
 
   That second half holds only while the section they chose is still VISIBLE
-  to them. `place_channels/4` builds `explicitly_placed` from the whole
-  `chat_channel_order` map but walks `visible_sections` only, so a channel
-  placed into a section the user has hidden, or one whose org has since been
-  archived, renders nowhere: the destination skips it as explicitly placed,
-  and its own section is not in the list. For a hidden section that is the
-  intended contract (hidden takes its channels with it). For an archived org
-  it is a pre-existing gap that the old prune happened to paper over on this
-  one path, and `reset_to_default/1` is currently the only way out of it.
-  Deliberately NOT repaired here: a repair belongs with the archive cascade,
-  not behind an admin reassign.
+  to them. `place_channels/4` walks `visible_sections` only, so a channel
+  placed into a section the user has HIDDEN renders nowhere: the destination
+  skips it as explicitly placed, and its own section is not in the list. That
+  is the intended contract (hidden takes its channels with it), and it is what
+  stops an admin move from also un-hiding a channel.
+
+  An ARCHIVED org is a different case and no longer behaves that way. Since
+  task 019fd7f8, `place_channels/4` counts a `chat_channel_order` entry only
+  when its section id is present in `all_sections`, so a placement into an
+  archived org's section is inert in both directions: it neither keeps the
+  channel nor withholds it from its `org_id` default, and the channel resolves
+  to the destination section like any unplaced one. See the scoping rule on
+  `place_channels/4`. That repair is read-side in the resolver, so it mutates
+  no preference and touches no write path, which is why it did not have to
+  live behind an admin reassign.
 
   Emits `[:platform, :chat, :channel_reassigned]` after a successful write.
   `Platform.Chat.TelemetryHandler` bridges it to the audit store.
@@ -283,6 +288,14 @@ defmodule Platform.Chat.Sidebar do
   silently ignored so a poisoned preference can never crash the rail. A
   collapsed id naming a deleted section is simply a MapSet miss, so deleting or
   archiving an org never needs a cleanup pass over preferences.
+
+  Skip-unknown is SYMMETRIC for `chat_channel_order`. An entry filed under a
+  section id absent from `sections` is ignored in both directions: it neither
+  places its channels nor withholds them from their `org_id` default. Gating
+  only the placing let an entry that could never place a channel still hide it
+  from every section, which is the defect fixed in task 019fd7f8. The gate is
+  presence in `sections`, NOT visibility: a hidden section is still present,
+  so it goes on withholding its channels per decision (a) above.
   """
   @spec resolve([Section.t()], [Chat.Space.t()], map()) :: [resolved()]
   def resolve(sections, channels, prefs) when is_list(sections) and is_list(channels) do
@@ -595,12 +608,24 @@ defmodule Platform.Chat.Sidebar do
 
   # Distribute channels into the visible sections: user-placed channels (in
   # their saved order) first, then channels defaulting to that section by
-  # org_id (excluding any the user explicitly placed elsewhere).
+  # org_id (excluding any the user explicitly placed into a section that is
+  # still present in `all_sections`).
+  #
+  # `explicitly_placed` is scoped to `all_sections`, NOT `visible_sections`.
+  # A `chat_channel_order` entry does two things: it places a channel into
+  # section S, and it withholds that channel from its org default. Both have
+  # to be gated on the same condition, or a channel can be withheld by an
+  # entry that can never place it (task 019fd7f8). Placing is already
+  # visibility-gated by construction, since the walk below is over
+  # `visible_sections`; withholding is gated on presence. A HIDDEN section is
+  # still present, so it keeps withholding its channels, which is what makes
+  # hiding take its channels with it (design decision (a)).
   defp place_channels(visible_sections, all_sections, channels, channel_order) do
     by_id = Map.new(channels, &{&1.id, &1})
-    explicitly_placed = explicitly_placed_ids(channel_order)
     fallback_id = fallback_section_id(all_sections)
     org_to_section = Map.new(all_sections, &{&1.org_id, &1.id})
+    known_section_ids = MapSet.new(all_sections, & &1.id)
+    explicitly_placed = explicitly_placed_ids(channel_order, known_section_ids)
 
     Enum.map(visible_sections, fn section ->
       user_channels =
@@ -618,9 +643,13 @@ defmodule Platform.Chat.Sidebar do
     end)
   end
 
-  defp explicitly_placed_ids(channel_order) do
+  # Only entries naming a section that still exists count. An entry filed
+  # under a vanished section id places nothing, so it must withhold nothing.
+  defp explicitly_placed_ids(channel_order, known_section_ids) do
     channel_order
-    |> Enum.flat_map(fn {_sid, ids} -> if is_list(ids), do: ids, else: [] end)
+    |> Enum.flat_map(fn {sid, ids} ->
+      if MapSet.member?(known_section_ids, sid) and is_list(ids), do: ids, else: []
+    end)
     |> MapSet.new()
   end
 

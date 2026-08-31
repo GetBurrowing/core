@@ -184,6 +184,34 @@ defmodule Platform.Chat.SidebarTest do
       {:ok, _} = Tenancy.unarchive_org(admin, archived)
       assert Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == paragon.id))
     end
+
+    # Task 019fd7f8: the section row surviving the archive is exactly what
+    # breaks the channel. `chat_channel_order` keeps naming a section id that
+    # `list_active_default_sections/0` no longer returns, so the channel is
+    # counted as explicitly placed and then rendered by nobody.
+    test "a channel filed into an org's section survives that org being archived" do
+      admin = admin_user!()
+      user = create_user!()
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      sxi = Tenancy.get_org_by_slug!("sxi")
+
+      # Fabrikam-owned, so the SXI archive cascade never touches this channel row.
+      # NOT pinned: ChatLive partitions pinned spaces out before the resolver
+      # runs, so a pinned channel never reaches this path and proves nothing.
+      channel = channel!(%{org_id: fabrikam.id})
+      {:ok, _} = Sidebar.put_channel_order(user.id, section_for!(sxi).id, [channel.id])
+
+      {:ok, _} = Tenancy.archive_org(admin, sxi)
+
+      resolved = Sidebar.resolve_for_user(user.id, [channel])
+
+      assert section_channel_ids(resolved, section_for!(fabrikam).id) == [channel.id]
+
+      # The mobile pill strip renders flatten_sections/1, so the same defect
+      # blanks the channel there too.
+      flat_ids = resolved |> Sidebar.flatten_sections() |> Enum.map(& &1.id)
+      assert channel.id in flat_ids
+    end
   end
 
   # ── Admin-gated writes ───────────────────────────────────────────────────
@@ -323,6 +351,77 @@ defmodule Platform.Chat.SidebarTest do
 
       assert Enum.map(a, & &1.id) == ["c9"]
       assert b == []
+    end
+
+    # ── Task 019fd7f8: placement into a section that is no longer there ────
+
+    test "a channel filed into an absent section still renders in its default section" do
+      # sB is gone from the input because its org was archived, but the user's
+      # chat_channel_order still names it. The channel must come home to sA.
+      sections = [sec("sA", "oA", 0)]
+      channels = [chan("c1", "oA"), chan("c2", "oA")]
+      prefs = %{"chat_channel_order" => %{"sB" => ["c1"]}}
+
+      resolved = Sidebar.resolve(sections, channels, prefs)
+
+      assert section_channel_ids(resolved, "sA") == ["c1", "c2"]
+    end
+
+    test "POSITIVE CONTROL: a placement into a LIVE section is still honoured" do
+      # The test above is an absence assertion, and an absence assertion is
+      # green for an implementation that ignores chat_channel_order entirely.
+      # This one fails for that implementation, so the two together pin the
+      # fix to "re-home orphaned placements" and rule out "delete the feature".
+      {sections, channels} = resolve_fixture()
+      prefs = %{"chat_channel_order" => %{"sB" => ["c1", "c3"]}}
+
+      resolved = Sidebar.resolve(sections, channels, prefs)
+
+      assert section_channel_ids(resolved, "sA") == ["c2"]
+      assert section_channel_ids(resolved, "sB") == ["c1", "c3"]
+    end
+
+    test "HIDDEN CONTROL: a channel filed into a HIDDEN section stays hidden" do
+      # Absent-because-archived and absent-because-hidden are different: a
+      # hidden section takes its channels with it (design decision (a)), so c1
+      # must NOT re-home to sA. The existing hidden-section test carries no
+      # chat_channel_order and therefore passes under both candidate fixes.
+      {sections, channels} = resolve_fixture()
+      prefs = %{"chat_hidden_sections" => ["sB"], "chat_channel_order" => %{"sB" => ["c1"]}}
+
+      resolved = Sidebar.resolve(sections, channels, prefs)
+
+      assert length(resolved) == 1
+      assert section_channel_ids(resolved, "sA") == ["c2"]
+      assert section_channel_ids(resolved, "sB") == nil
+    end
+
+    test "own org archived too: the channel falls back to the lowest-position live section" do
+      # c3's own org oB is archived as well, so there is no oB section to come
+      # home to. It takes fallback_section_id/1, which is what an UNPLACED
+      # channel of an archived org already does today. Placed and unplaced agree.
+      sections = [sec("sA", "oA", 0)]
+      channels = [chan("c3", "oB")]
+      prefs = %{"chat_channel_order" => %{"sB" => ["c3"]}}
+
+      resolved = Sidebar.resolve(sections, channels, prefs)
+
+      assert section_channel_ids(resolved, "sA") == ["c3"]
+    end
+
+    test "single placement survives: a channel named by an absent AND a live section renders once" do
+      # sZ is absent, sB is live. The live placement wins and re-homing must
+      # not additionally deal c1 into sA as a duplicate row.
+      {sections, channels} = resolve_fixture()
+      prefs = %{"chat_channel_order" => %{"sZ" => ["c1"], "sB" => ["c1"]}}
+
+      resolved = Sidebar.resolve(sections, channels, prefs)
+
+      assert section_channel_ids(resolved, "sB") == ["c1", "c3"]
+      assert section_channel_ids(resolved, "sA") == ["c2"]
+
+      all_ids = resolved |> Sidebar.flatten_sections() |> Enum.map(& &1.id)
+      assert Enum.count(all_ids, &(&1 == "c1")) == 1
     end
   end
 
