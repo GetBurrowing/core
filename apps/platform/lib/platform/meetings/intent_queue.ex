@@ -215,6 +215,10 @@ defmodule Platform.Meetings.IntentQueue do
   @spec terminal_statuses() :: [status()]
   defdelegate terminal_statuses(), to: Server
 
+  @doc "Terminal statuses meaning the work did not happen. See `Server.failure_statuses/0`."
+  @spec failure_statuses() :: [status()]
+  defdelegate failure_statuses(), to: Server
+
   @doc "Statuses that release the serial dispatch cursor."
   @spec advancing_statuses() :: [status()]
   defdelegate advancing_statuses(), to: Server

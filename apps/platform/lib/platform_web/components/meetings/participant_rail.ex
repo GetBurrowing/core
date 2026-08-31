@@ -40,7 +40,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   use Phoenix.Component
 
   import PlatformWeb.AvatarComponents
+  import PlatformWeb.Components.Meetings.AgentActivityBadge
 
+  alias Platform.Meetings.AgentActivity
   alias PlatformWeb.MeetingLive
 
   attr(:participants, :list, required: true)
@@ -177,8 +179,29 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               </div>
             </div>
 
-            <%!-- Status dot --%>
+            <%!-- What this agent is doing, in ring + glyph + word.
+
+                 Was a single `size-2` dot coloured by
+                 `agent_status_dot_class/3`, which mapped every
+                 non-idle state to `bg-success` — so `:typing`,
+                 `:computing` and `:failed` were resolved apart in
+                 `AgentActivity` and rendered identically here. The dot
+                 is kept for the REACHABILITY fallback below, which is
+                 a different fact about an agent (is it connected) from
+                 what this badge shows (what is it doing).
+
+                 An agent doing nothing renders the dot alone, so the
+                 rail stays quiet until something is actually
+                 happening. --%>
+            <.agent_activity_badge
+              :if={AgentActivity.for_agent(@agent_activity, agent_id_of(p)) != :idle}
+              state={AgentActivity.for_agent(@agent_activity, agent_id_of(p))}
+              name={p.display_name || "Agent"}
+              class="flex-shrink-0"
+            />
+
             <span
+              :if={AgentActivity.for_agent(@agent_activity, agent_id_of(p)) == :idle}
               class={[
                 "size-2 flex-shrink-0 rounded-full",
                 MeetingLive.agent_status_dot_class(p, @agents_by_id, @agent_activity)
@@ -193,4 +216,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     </div>
     """
   end
+
+  # The agent id an activity signal is addressed to.
+  #
+  # `AgentActivity` keys on `agents.id`, which for an agent participant
+  # row is `participant_id` — the same field
+  # `MeetingLive.agent_status_dot_class/3` matches on. Anything that is
+  # not an agent participant returns nil and resolves `:idle`, so a
+  # human row can never pick up an agent's badge by coincidence.
+  defp agent_id_of(%{participant_type: "agent", participant_id: agent_id})
+       when is_binary(agent_id),
+       do: agent_id
+
+  defp agent_id_of(_participant), do: nil
 end

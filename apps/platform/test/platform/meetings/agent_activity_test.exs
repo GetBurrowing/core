@@ -323,6 +323,164 @@ defmodule Platform.Meetings.AgentActivityTest do
     end
   end
 
+  # ── :failed — the "Couldn't" cap (agent dock) ───────────────────────────
+
+  describe "a failure terminal" do
+    # The load-bearing test. Before `:failed` existed, `:timed_out` and
+    # `:completed` were the SAME event on this topic — both fall outside
+    # `in_flight_statuses/0`, so both cleared `:computing` and the agent
+    # went quietly idle. Asserting only "a timeout resolves :failed"
+    # would pass against a version that resolved :failed for every
+    # terminal, which would paint a red cap over completed work. So the
+    # two are driven side by side and asserted to DIFFER.
+    test "is told apart from a completion, which is the whole point",
+         %{meeting: meeting} do
+      failing = create_agent("Failing")
+      finishing = create_agent("Finishing")
+
+      MeetingsPubSub.subscribe_meeting(meeting.id)
+
+      # Sequentially: the serial cursor holds at most one in-flight row
+      # per meeting, so each has to reach a terminal before the next
+      # goes out. That is the real dispatch shape, not a test artefact.
+      failing_row = dispatch_intent(meeting, failing.id)
+      {:ok, _} = IntentQueue.transition(meeting.id, failing_row.id, :timed_out, %{})
+
+      finishing_row = dispatch_intent(meeting, finishing.id)
+      {:ok, _} = IntentQueue.transition(meeting.id, finishing_row.id, :completed, %{})
+
+      activity = drain_activity(AgentActivity.new())
+
+      assert AgentActivity.for_agent(activity, failing.id) == :failed
+      assert AgentActivity.for_agent(activity, finishing.id) == :idle
+    end
+
+    # A human pressing stop is the system obeying, not breaking. If
+    # cancellation raised the fault cap, people would learn to ignore it.
+    test "a cancellation is NOT a failure", %{meeting: meeting} do
+      agent = create_agent()
+      row = dispatch_intent(meeting, agent.id)
+
+      MeetingsPubSub.subscribe_meeting(meeting.id)
+      {:ok, _} = IntentQueue.transition(meeting.id, row.id, :cancelled, %{})
+
+      activity = drain_activity(AgentActivity.new())
+
+      assert AgentActivity.for_agent(activity, agent.id) == :idle
+      refute :cancelled in IntentQueue.failure_statuses()
+      refute :cancelled_late in IntentQueue.failure_statuses()
+      refute :completed in IntentQueue.failure_statuses()
+    end
+
+    # `:failed` outranks the working signals so a stale `:typing` cannot
+    # paint over the news. Without the precedence entry this is green
+    # only by luck of map ordering, so it is asserted directly.
+    test "outranks a concurrent typing signal", %{meeting: meeting} do
+      agent = create_agent()
+      row = dispatch_intent(meeting, agent.id)
+
+      MeetingsPubSub.subscribe_meeting(meeting.id)
+      {:ok, _} = IntentQueue.transition(meeting.id, row.id, :dispatch_failed, %{})
+
+      activity =
+        AgentActivity.new()
+        |> drain_activity()
+        |> AgentActivity.put(:typing, agent.id, true)
+
+      assert AgentActivity.for_agent(activity, agent.id) == :failed
+    end
+
+    # Without this the cap is permanent for the life of the socket:
+    # `:failed` outranks `:computing`, so an agent that failed once
+    # would read "Couldn't" while visibly working on the next request.
+    test "a NEW in-flight intent retires the previous failure", %{meeting: _meeting} do
+      agent = create_agent()
+
+      activity =
+        AgentActivity.new()
+        |> AgentActivity.put(:failed, agent.id, true)
+
+      assert AgentActivity.for_agent(activity, agent.id) == :failed
+
+      activity = AgentActivity.put(activity, :computing, agent.id, true)
+
+      assert AgentActivity.for_agent(activity, agent.id) == :computing
+    end
+
+    # The control for the test above: a chat typing signal must NOT
+    # erase a real failure, because it can fire for reasons unrelated
+    # to the intent that failed.
+    test "a typing signal does NOT retire the failure", %{meeting: _meeting} do
+      agent = create_agent()
+
+      activity =
+        AgentActivity.new()
+        |> AgentActivity.put(:failed, agent.id, true)
+        |> AgentActivity.put(:typing, agent.id, true)
+
+      assert AgentActivity.for_agent(activity, agent.id) == :failed
+    end
+  end
+
+  describe "hydrating a failure" do
+    # A remounting viewer must see what is true NOW. "Has failed at some
+    # point today" would give every agent a permanent red cap by
+    # mid-afternoon, so only the agent's LATEST row is consulted.
+    test "seeds from the latest row, not from any row", %{meeting: meeting} do
+      agent = create_agent()
+
+      first = dispatch_intent(meeting, agent.id)
+      {:ok, _} = IntentQueue.transition(meeting.id, first.id, :timed_out, %{})
+
+      assert meeting.id |> AgentActivity.hydrate() |> AgentActivity.for_agent(agent.id) ==
+               :failed
+
+      # A later, successful row supersedes it.
+      second = dispatch_intent(meeting, agent.id)
+      {:ok, _} = IntentQueue.transition(meeting.id, second.id, :completed, %{})
+
+      assert meeting.id |> AgentActivity.hydrate() |> AgentActivity.for_agent(agent.id) ==
+               :idle
+    end
+
+    # Hydration and the live path have to agree, or a remount silently
+    # changes the screen. In flight after a failure resolves :computing
+    # in both.
+    test "an in-flight row after a failure hydrates as computing, matching the live path",
+         %{meeting: meeting} do
+      agent = create_agent()
+
+      failed = dispatch_intent(meeting, agent.id)
+      {:ok, _} = IntentQueue.transition(meeting.id, failed.id, :no_ack_spawn_failed, %{})
+      _in_flight = dispatch_intent(meeting, agent.id)
+
+      hydrated = AgentActivity.hydrate(meeting.id)
+
+      live =
+        AgentActivity.new()
+        |> AgentActivity.put(:failed, agent.id, true)
+        |> AgentActivity.put(:computing, agent.id, true)
+
+      assert AgentActivity.for_agent(hydrated, agent.id) == :computing
+      assert AgentActivity.for_agent(live, agent.id) == :computing
+    end
+  end
+
+  # Fold every `{:agent_activity, _}` currently in the mailbox into an
+  # activity value, in arrival order — the same thing MeetingLive's
+  # handle_info does, so these tests exercise the real consumer path
+  # rather than a hand-built struct.
+  defp drain_activity(activity) do
+    receive do
+      {:agent_activity, %{signal: signal, agent_id: agent_id, active?: active?}} ->
+        activity
+        |> AgentActivity.put(signal, agent_id, active?)
+        |> drain_activity()
+    after
+      200 -> activity
+    end
+  end
+
   describe ":listening" do
     test "is a declared state with no producer, and stays unreachable", %{meeting: meeting} do
       # Recorded as an assertion rather than a comment so that adding a

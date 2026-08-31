@@ -71,24 +71,31 @@ defmodule Platform.Meetings.AgentActivity do
   alias Platform.Repo
 
   @typedoc "The activity states `PlatformWeb.Components.Meeting.AgentTile` renders."
-  @type state :: :idle | :typing | :computing | :listening
+  @type state :: :idle | :typing | :computing | :failed | :listening
 
   @typedoc "A raw signal name. `:listening` is absent — it has no producer."
-  @type signal :: :computing | :typing
+  @type signal :: :computing | :typing | :failed
 
-  @states [:idle, :typing, :computing, :listening]
-  @signals [:computing, :typing]
+  @states [:idle, :typing, :computing, :failed, :listening]
+  @signals [:computing, :typing, :failed]
 
   # Ordered by precedence, highest first. `resolve/1` walks this, so
   # adding a producer means adding its signal here rather than editing
   # a cond.
-  @precedence [:typing, :computing]
+  #
+  # `:failed` outranks the working signals, and that ordering is the
+  # point of the state rather than an incidental choice. The failure it
+  # reports is the last thing that happened to this agent; a `:typing`
+  # flag that outlived it would paint an agent busy over the top of the
+  # news that its work did not happen — which is the stuck-on-Thinking
+  # screen, restored one signal over.
+  @precedence [:failed, :typing, :computing]
 
-  defstruct computing: MapSet.new(), typing: MapSet.new()
+  defstruct computing: MapSet.new(), typing: MapSet.new(), failed: MapSet.new()
 
-  @type t :: %__MODULE__{computing: MapSet.t(), typing: MapSet.t()}
+  @type t :: %__MODULE__{computing: MapSet.t(), typing: MapSet.t(), failed: MapSet.t()}
 
-  @doc "The four states an agent tile can render."
+  @doc "The states an agent tile can render."
   @spec states() :: [state()]
   def states, do: @states
 
@@ -112,19 +119,43 @@ defmodule Platform.Meetings.AgentActivity do
   @spec hydrate(binary()) :: t()
   def hydrate(meeting_id) when is_binary(meeting_id) do
     in_flight = IntentQueue.in_flight_statuses()
+    failure = IntentQueue.failure_statuses()
 
-    computing =
+    rows =
       meeting_id
       |> IntentQueue.list()
-      |> Enum.filter(fn row ->
-        Map.get(row, :status) in in_flight and is_binary(Map.get(row, :target_agent_id))
-      end)
+      |> Enum.filter(&is_binary(Map.get(&1, :target_agent_id)))
+
+    computing =
+      rows
+      |> Enum.filter(&(Map.get(&1, :status) in in_flight))
       |> MapSet.new(& &1.target_agent_id)
 
-    %__MODULE__{computing: computing}
+    %__MODULE__{computing: computing, failed: hydrate_failed(rows, failure)}
   end
 
   def hydrate(_), do: new()
+
+  # `:failed` is seeded only from an agent's MOST RECENT row.
+  #
+  # A remounting viewer must see what is true now, and "this agent has
+  # failed at some point today" is not that — every agent would wear a
+  # permanent red cap by mid-afternoon and the state would stop meaning
+  # anything. `IntentQueue.list/1` is oldest-first, so the last row per
+  # agent wins the reduce, and only that row's status is consulted.
+  #
+  # An agent whose latest row is in flight is therefore NOT seeded as
+  # failed even if the row before it timed out, which matches
+  # `clear_stale_failure/4`'s live behaviour. Hydration and the live
+  # path have to agree, or a remount silently changes the screen.
+  defp hydrate_failed(rows, failure_statuses) do
+    rows
+    |> Enum.reduce(%{}, fn row, acc ->
+      Map.put(acc, row.target_agent_id, Map.get(row, :status))
+    end)
+    |> Enum.filter(fn {_agent_id, status} -> status in failure_statuses end)
+    |> MapSet.new(fn {agent_id, _status} -> agent_id end)
+  end
 
   @doc """
   Fold one signal into the activity value.
@@ -141,10 +172,30 @@ defmodule Platform.Meetings.AgentActivity do
     updated =
       if active?, do: MapSet.put(set, agent_id), else: MapSet.delete(set, agent_id)
 
-    Map.put(activity, signal, updated)
+    activity
+    |> Map.put(signal, updated)
+    |> clear_stale_failure(signal, agent_id, active?)
   end
 
   def put(%__MODULE__{} = activity, _signal, _agent_id, _active?), do: activity
+
+  # A new in-flight intent retires the previous failure for that agent.
+  #
+  # Without this the `:failed` cap is permanent for the life of the
+  # socket: `:failed` outranks `:computing`, so an agent that failed
+  # once would render "Couldn't" while visibly working on the next
+  # request. Retiring it on the START of new work — not on its
+  # completion — is what makes the dock track what the agent is doing
+  # NOW rather than the worst thing it has ever done.
+  #
+  # Deliberately keyed on `:computing` going ACTIVE. `:typing` is a
+  # chat signal that can fire for reasons unrelated to the intent that
+  # failed, so clearing on it would erase a real failure by coincidence.
+  defp clear_stale_failure(%__MODULE__{} = activity, :computing, agent_id, true) do
+    %{activity | failed: MapSet.delete(activity.failed, agent_id)}
+  end
+
+  defp clear_stale_failure(%__MODULE__{} = activity, _signal, _agent_id, _active?), do: activity
 
   @doc """
   The `%{agent_id => state}` map. Idle agents are ABSENT rather than
@@ -198,12 +249,34 @@ defmodule Platform.Meetings.AgentActivity do
   @spec mirror_intent_row(binary(), map()) :: :ok
   def mirror_intent_row(meeting_id, %{target_agent_id: agent_id} = row)
       when is_binary(meeting_id) and is_binary(agent_id) do
-    broadcast(
-      meeting_id,
-      :computing,
-      agent_id,
-      Map.get(row, :status) in IntentQueue.in_flight_statuses()
-    )
+    status = Map.get(row, :status)
+
+    broadcast(meeting_id, :computing, agent_id, status in IntentQueue.in_flight_statuses())
+
+    # A failure terminal is BROADCAST, not merely un-broadcast.
+    #
+    # Before this line, `:timed_out` and `:completed` were the same
+    # event on this topic: both fall outside `in_flight_statuses/0`, so
+    # both cleared `:computing` and the avatar went quietly back to
+    # idle. An agent that never answered and an agent that finished the
+    # job were indistinguishable on screen — the exact class of defect
+    # task 01a0554f removed from the invite control, in a second place.
+    #
+    # This is a REAL terminal transition, which is what makes it
+    # legitimate. This module's own moduledoc refuses to invent a
+    # terminal state the queue never reached ("a worse lie than a stale
+    # one"), and that still holds: nothing here fires on a timer or on
+    # an elapsed-time guess. The queue says `:timed_out`; the dock
+    # repeats it.
+    #
+    # Ordering matters. `:computing` is cleared FIRST so a consumer that
+    # applies both in arrival order never briefly holds an agent as
+    # both failed and computing.
+    if status in IntentQueue.failure_statuses() do
+      broadcast(meeting_id, :failed, agent_id, true)
+    else
+      :ok
+    end
   end
 
   def mirror_intent_row(_meeting_id, _row), do: :ok

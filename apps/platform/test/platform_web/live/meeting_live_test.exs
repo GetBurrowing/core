@@ -10865,6 +10865,30 @@ defmodule PlatformWeb.MeetingLiveTest do
     |> LazyHTML.attribute("data-activity-state")
   end
 
+  # The rail's activity BADGE for one participant row — ring + glyph +
+  # word, which replaced the single green dot for every non-idle state.
+  # An idle agent has no badge at all and keeps the dot below.
+  defp rail_activity_state(html, participant_row_id) do
+    html
+    |> frag()
+    |> LazyHTML.query(
+      ~s([data-component="participant-rail"] ) <>
+        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-badge"])
+    )
+    |> LazyHTML.attribute("data-activity-state")
+  end
+
+  defp rail_activity_word(html, participant_row_id) do
+    html
+    |> frag()
+    |> LazyHTML.query(
+      ~s([data-component="participant-rail"] ) <>
+        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-word"])
+    )
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
   defp rail_dot_class(html, participant_row_id) do
     html
     |> frag()
@@ -10972,17 +10996,24 @@ defmodule PlatformWeb.MeetingLiveTest do
       [idle_dot] = rail_dot_class(html, presence.id)
       refute idle_dot =~ "bg-success"
 
-      # ANTI-VACUITY. The dot is reachable and this meeting can turn it
-      # green — it just takes activity IN THIS MEETING to do it, which is
-      # the whole distinction. Without this the refute above is equally
-      # satisfied by a dot that is never green.
+      # An idle agent shows the reachability dot and NO activity badge —
+      # the rail stays quiet until something is actually happening.
+      assert rail_activity_state(html, presence.id) == []
+
+      # ANTI-VACUITY. The rail is reachable and this meeting can light it
+      # — it just takes activity IN THIS MEETING to do it, which is the
+      # whole distinction. Without this the refute above is equally
+      # satisfied by a rail that never lights at all.
       {:ok, row} = enqueue_intent(meeting, %{target_agent_id: agent_id})
       {:ok, _} = force_status(meeting, row, :dispatched)
       busy_html = render(view)
 
-      [busy_dot] = rail_dot_class(busy_html, presence.id)
-      assert busy_dot =~ "bg-success"
-      refute idle_dot == busy_dot
+      # The badge NAMES the state rather than turning one shared dot
+      # green. Before it, `agent_status_dot_class/3` mapped every
+      # non-idle state to `bg-success`, so this assertion could not tell
+      # `:computing` from `:typing` from `:failed`.
+      assert rail_activity_state(busy_html, presence.id) == ["computing"]
+      assert rail_activity_word(busy_html, presence.id) == "Thinking"
       assert tile_activity(busy_html, agent_id) == ["computing"]
     end
 

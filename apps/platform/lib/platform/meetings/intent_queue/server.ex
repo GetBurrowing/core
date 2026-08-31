@@ -314,6 +314,22 @@ defmodule Platform.Meetings.IntentQueue.Server do
   # set explicitly.
   @advancing_statuses @terminal_statuses
 
+  # The terminal statuses that mean the work did NOT happen.
+  #
+  # A third question, and again deliberately its own list: "is more
+  # expected?" and "did it succeed?" are different, and today every
+  # surface that asks the second one has to ask the first and then
+  # guess. `:cancelled` and `:cancelled_late` are NOT failures — a
+  # human pressed stop, which is the system obeying rather than
+  # breaking, and rendering that as a fault would teach people to
+  # ignore the fault indicator.
+  #
+  # Introduced for the agent dock's "Couldn't" state (task 01a0554f
+  # follow-on): before it, `:timed_out` and `:completed` both cleared
+  # the agent's `:computing` signal and the avatar returned to idle, so
+  # a failure and a success were the same three pixels.
+  @failure_statuses [:timed_out, :dispatch_failed, :no_ack_spawn_failed]
+
   # Ack window default. 90s is the plan's number: long enough that a
   # runtime cold-starting a subagent isn't punished, short enough that
   # a wedged target doesn't hold a meeting's queue for the whole
@@ -415,6 +431,15 @@ defmodule Platform.Meetings.IntentQueue.Server do
   @doc "Statuses that release the serial dispatch cursor."
   @spec advancing_statuses() :: [status()]
   def advancing_statuses, do: @advancing_statuses
+
+  @doc """
+  Terminal statuses meaning the work did not happen.
+
+  A strict subset of `terminal_statuses/0` that excludes `:completed`
+  and both cancellations — a human pressing stop is not a fault.
+  """
+  @spec failure_statuses() :: [status()]
+  def failure_statuses, do: @failure_statuses
 
   @doc "The four `intent_ack` statuses a runtime may report."
   @spec ack_statuses() :: [atom()]
