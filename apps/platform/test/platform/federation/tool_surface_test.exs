@@ -123,7 +123,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # were side effects (a validation_pass on an in_review task, or an
       # in_review -> in_progress -> in_review round trip) documented nowhere an
       # agent reads.
-      assert length(tools) == 100
+      # 101 as of task 01a05b32 stage 1, which added `plan_reject` to the
+      # `plan` bundle — a draft plan blocked every plan_create and had no
+      # reject affordance anywhere (the UI control only appears once the plan
+      # reaches pending_review), so a stuck draft cost a human round-trip.
+      # 102 as of task 01a05b32 stage 2, which added `plan_update` to the
+      # `plan` bundle — the planner's IN-PLACE draft correction: fix the
+      # wrong draft (stages, positions, validations) where it stands, id +
+      # version stable, then plan_submit. No new bundle.
+      assert length(tools) == 102
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -185,6 +193,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "plan_create" in tool_names
       assert "plan_get" in tool_names
       assert "plan_submit" in tool_names
+      # Task 01a05b32 stage 1 — the planner's self-service draft exit, in the
+      # existing `plan` bundle (no new bundle).
+      assert "plan_reject" in tool_names
+      # Task 01a05b32 stage 2 — the planner's in-place draft correction, in
+      # the same `plan` bundle (no new bundle).
+      assert "plan_update" in tool_names
       # ADR-0046 member 5 stage 4 — the architect's verdict surface. The
       # six-component rubric below is what this assertion buys; the
       # bundle placement and the refusal taxonomy are pinned in
@@ -284,6 +298,43 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert Enum.map(scoped, & &1.name) |> Enum.sort() ==
                Enum.map(full, & &1.name) |> Enum.sort()
+    end
+
+    # Task 01a05b32 stage 3 — the plan bundle's EXACT membership. The
+    # total-count gate above catches an addition anywhere; this pins the
+    # bundle itself: the pre-01a05b32 set PLUS the two draft-exit tools
+    # from stages 1–2 — and nothing moved in or out. The bundle is wider
+    # than the plan_* prefix: plan_tools/0 also carries the execution-side
+    # stage/validation surfaces (stage_start, validation_evaluate,
+    # report_blocker, prompt templates) because a plan's stages and
+    # validations ARE the plan surface. Deliberate, not incidental: a tool
+    # here is an agent-facing commitment.
+    test "plan bundle is exactly the previous set plus plan_reject and plan_update" do
+      tools = ToolSurface.list_tools(["plan"])
+      names = tools |> Enum.map(& &1.name) |> Enum.sort()
+
+      assert names ==
+               Enum.sort([
+                 "plan_approve",
+                 "plan_architecture_verdict",
+                 "plan_create",
+                 "plan_get",
+                 "plan_reject",
+                 "plan_submit",
+                 "plan_update",
+                 "prompt_template_list",
+                 "prompt_template_update",
+                 "report_blocker",
+                 "stage_architecture_audit",
+                 "stage_complete",
+                 "stage_list",
+                 "stage_start",
+                 "validation_evaluate",
+                 "validation_list",
+                 "validation_pass"
+               ])
+
+      assert Enum.all?(tools, &(&1.bundle == "plan"))
     end
   end
 
@@ -3445,6 +3496,701 @@ defmodule Platform.Federation.ToolSurfaceTest do
         ToolSurface.execute("plan_submit", %{"plan_id" => Ecto.UUID.generate()}, %{})
 
       assert error.error =~ "Plan not found"
+    end
+
+    # ── auto-approve invariant (task 01a05b32 stage 3) ──────────────────
+    #
+    # plan_reject and plan_update gave planners two new ways to rewrite a
+    # draft, but NOTHING in the approval path moved: tasks.ex's private
+    # `auto_approve_precondition/2` still demands a non-empty plan plus
+    # agent-typed execution AND review phase assignees, and a task lacking
+    # them still lands in pending_review for a human. Pinned end-to-end
+    # through the MCP `plan_submit` tool — the surface a planner actually
+    # calls — so tool + context tail are covered in one shot. The fixtures
+    # build via Tasks.create_task directly (as the architecture-gate tests
+    # do): the create-time hard-reject lives in TaskAttrs, the runtime
+    # skip under test lives in tasks.ex.
+
+    defp auto_approve_task(overrides \\ %{}) do
+      project = create_project()
+
+      {:ok, task} =
+        Tasks.create_task(
+          Map.merge(
+            %{
+              project_id: project.id,
+              title: "Auto-approve invariant #{System.unique_integer([:positive])}",
+              status: "planning",
+              auto_approve_plan: true,
+              phase_assignees: %{
+                "execution" => %{
+                  "assignee_id" => Ecto.UUID.generate(),
+                  "assignee_type" => "agent"
+                },
+                "review" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+              }
+            },
+            overrides
+          )
+        )
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, name: "S1", position: 1})
+      {task, plan}
+    end
+
+    test "plan_submit auto-approves with the flag plus agent execution and review assignees" do
+      {task, plan} = auto_approve_task()
+
+      {:ok, result} = ToolSurface.execute("plan_submit", %{"plan_id" => plan.id}, %{})
+      assert result.status == "approved"
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "approved"
+      assert reloaded.auto_approved_at != nil
+
+      # Approval moved the planning task to in_progress — the executor
+      # dispatch path opened, exactly as before stages 1–2.
+      assert Tasks.get_task_record(task.id).status == "in_progress"
+    end
+
+    test "plan_submit stays pending_review when the review phase assignee is missing" do
+      {task, plan} =
+        auto_approve_task(%{
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => Ecto.UUID.generate(), "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, result} = ToolSurface.execute("plan_submit", %{"plan_id" => plan.id}, %{})
+      assert result.status == "pending_review"
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "pending_review"
+      assert reloaded.auto_approved_at == nil
+
+      # The task stays in planning: a human (or architect gate) still owns
+      # the approval. auto_approve_precondition/2 skipped, silently, as
+      # designed.
+      assert Tasks.get_task_record(task.id).status == "planning"
+    end
+
+    # ── plan_reject (task 01a05b32 stage 1) ─────────────────────────────
+
+    defp draft_plan_task(title) do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: title})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      %{task: task, plan: plan}
+    end
+
+    test "plan_reject discards a draft and persists the reason" do
+      %{plan: plan} = draft_plan_task("Reject task")
+
+      {:ok, rejected} =
+        ToolSurface.execute(
+          "plan_reject",
+          %{"plan_id" => plan.id, "rejection_reason" => "  draft missed the migration step  "},
+          %{}
+        )
+
+      assert rejected.status == "rejected"
+      assert rejected.rejection_reason == "draft missed the migration step"
+      assert rejected.is_current == false
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "rejected"
+      assert reloaded.rejection_reason == "draft missed the migration step"
+    end
+
+    # THE acceptance criterion, end to end over the tool surface: after
+    # plan_reject on a draft, plan_create succeeds on the SAME task — no
+    # submit, no human round-trip, no admin/DB step.
+    test "plan_create works immediately after plan_reject; the task is untouched" do
+      %{task: task, plan: plan} = draft_plan_task("Self-service task")
+      {:ok, task} = Tasks.update_task(task, %{status: "planning"})
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "plan_reject",
+          %{"plan_id" => plan.id, "rejection_reason" => "obsolete scope"},
+          %{}
+        )
+
+      # NO task transition: the draft never moved the task past planning.
+      assert Tasks.get_task_record(task.id).status == "planning"
+
+      assert {:ok, fresh} =
+               ToolSurface.execute("plan_create", %{"task_id" => task.id, "stages" => []}, %{})
+
+      assert fresh.status == "draft"
+      assert fresh.version == plan.version + 1
+    end
+
+    test "plan_reject on a pending_review plan is refused and the row is unchanged" do
+      %{plan: plan} = draft_plan_task("Pending task")
+      {:ok, _} = Tasks.submit_plan_for_review(plan)
+
+      {:error, error} =
+        ToolSurface.execute(
+          "plan_reject",
+          %{"plan_id" => plan.id, "rejection_reason" => "not mine to withdraw"},
+          %{}
+        )
+
+      assert error.recoverable == false
+      assert error.error =~ "draft-status plans (current: pending_review)"
+      assert error.suggestion =~ "wait for the human reviewer"
+      assert error.suggestion =~ "cannot withdraw a submitted plan"
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "pending_review"
+      assert is_nil(reloaded.rejection_reason)
+    end
+
+    test "plan_reject on an approved plan is refused and the row is unchanged" do
+      %{plan: plan} = draft_plan_task("Approved task")
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      {:ok, _} = Tasks.approve_plan(plan, "system")
+
+      {:error, error} =
+        ToolSurface.execute(
+          "plan_reject",
+          %{"plan_id" => plan.id, "rejection_reason" => "nope"},
+          %{}
+        )
+
+      assert error.recoverable == false
+      assert error.error =~ "draft-status plans (current: approved)"
+      assert error.suggestion =~ "immutable to this tool"
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "approved"
+      assert is_nil(reloaded.rejection_reason)
+    end
+
+    test "plan_reject on an already-rejected plan is refused and the row is unchanged" do
+      %{plan: plan} = draft_plan_task("Already-rejected task")
+      {:ok, _} = Tasks.reject_plan(plan, "reviewer", "human rejection")
+
+      {:error, error} =
+        ToolSurface.execute(
+          "plan_reject",
+          %{"plan_id" => plan.id, "rejection_reason" => "again"},
+          %{}
+        )
+
+      assert error.recoverable == false
+      assert error.error =~ "draft-status plans (current: rejected)"
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "rejected"
+      assert reloaded.rejection_reason == "human rejection"
+    end
+
+    test "plan_reject with a blank or whitespace rejection_reason is a parameter error" do
+      %{plan: plan} = draft_plan_task("Blank reason task")
+
+      for reason <- ["", "   ", "\t\n"] do
+        {:error, error} =
+          ToolSurface.execute(
+            "plan_reject",
+            %{"plan_id" => plan.id, "rejection_reason" => reason},
+            %{}
+          )
+
+        assert error.recoverable == true
+        assert error.error =~ "rejection_reason"
+        assert error.error =~ "non-blank"
+      end
+
+      # Missing entirely is the same parameter error.
+      {:error, error} =
+        ToolSurface.execute("plan_reject", %{"plan_id" => plan.id}, %{})
+
+      assert error.error =~ "rejection_reason"
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "draft"
+      assert is_nil(reloaded.rejection_reason)
+    end
+
+    test "plan_create blocked by a DRAFT is self-service: recoverable, names the two exits" do
+      %{plan: plan} = draft_plan_task("Draft-locked task")
+
+      {:error, error} =
+        ToolSurface.execute("plan_create", %{"task_id" => plan.task_id, "stages" => []}, %{})
+
+      assert error.recoverable == true
+      assert error.error =~ "already draft"
+      assert error.suggestion =~ "plan_update"
+      assert error.suggestion =~ "plan_reject"
+    end
+
+    test "plan_create blocked by a pending_review plan keeps the wait-for-human wording" do
+      %{plan: plan} = draft_plan_task("Pending-locked task")
+      {:ok, _} = Tasks.submit_plan_for_review(plan)
+
+      {:error, error} =
+        ToolSurface.execute("plan_create", %{"task_id" => plan.task_id, "stages" => []}, %{})
+
+      assert error.recoverable == false
+      assert error.error =~ "already pending_review"
+      assert error.suggestion =~ "Wait for human approval"
+    end
+
+    test "plan_reject with an unknown plan_id returns the not-found envelope" do
+      {:error, error} =
+        ToolSurface.execute(
+          "plan_reject",
+          %{"plan_id" => Ecto.UUID.generate(), "rejection_reason" => "x"},
+          %{}
+        )
+
+      assert error.recoverable == false
+      assert error.error =~ "Plan not found"
+    end
+
+    test "plan_reject bridges an audit row with the actor and reason" do
+      # Attach the TelemetryHandler explicitly — in some test envs the
+      # Application-boot attach hasn't run and the audit bridge would be
+      # inert. Restored on exit, because it is VM-global (task 019f9d80).
+      Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.TelemetryHandler)
+
+      %{plan: plan} = draft_plan_task("Audit task")
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "plan_reject",
+          %{
+            "plan_id" => plan.id,
+            "rejection_reason" => "wrong stage split",
+            "rejected_by" => "planner-agent"
+          },
+          %{}
+        )
+
+      events = Platform.Audit.list(event_type: "platform.tasks.plan_rejected")
+
+      assert Enum.any?(events, fn e ->
+               e.resource_type == "plan" and e.resource_id == plan.id and
+                 e.action == "plan_rejected" and e.actor_type == "agent" and
+                 e.metadata["rejected_by"] == "planner-agent" and
+                 e.metadata["rejection_reason"] == "wrong stage split" and
+                 e.metadata["task_id"] == plan.task_id
+             end),
+             "expected an audit row for the plan_rejected event; got #{inspect(events)}"
+    end
+
+    test "plan_reject defaults rejected_by to system when no caller identity is present" do
+      Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.TelemetryHandler)
+
+      %{plan: plan} = draft_plan_task("System actor task")
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "plan_reject",
+          %{"plan_id" => plan.id, "rejection_reason" => "default actor"},
+          %{}
+        )
+
+      events = Platform.Audit.list(event_type: "platform.tasks.plan_rejected")
+
+      assert Enum.any?(events, fn e ->
+               e.resource_id == plan.id and e.actor_type == "system" and
+                 e.metadata["rejected_by"] == "system"
+             end)
+    end
+
+    # ── plan_update (task 01a05b32 stage 2) ─────────────────────────────
+
+    # A draft with a WRONG tree, created through the tool the way a planner
+    # creates one. The old stage's description is load-bearing in the
+    # byte-identity assertions below.
+    defp staged_draft_task(title) do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: title})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Wrong stage",
+                "description" => "The WRONG description",
+                "position" => 1,
+                "validations" => [%{"kind" => "lint_pass"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      %{task: task, plan: plan}
+    end
+
+    defp corrected_stages do
+      [
+        %{
+          "name" => "Build",
+          "description" => "Build the corrected thing",
+          "position" => 1,
+          "validations" => [%{"kind" => "test_pass"}, %{"kind" => "lint_pass"}]
+        },
+        %{
+          "name" => "Surface",
+          "description" => "Surface the corrected thing",
+          "position" => 2,
+          "validations" => [%{"kind" => "code_review"}]
+        }
+      ]
+    end
+
+    defp plan_tree(plan_id) do
+      plan_id |> Tasks.get_plan() |> Repo.preload(stages: :validations)
+    end
+
+    defp plan_validation_ids(plan_id) do
+      Repo.one(
+        from(v in Tasks.Validation,
+          join: s in Tasks.Stage,
+          on: v.stage_id == s.id,
+          where: s.plan_id == ^plan_id,
+          select: count(v.id)
+        )
+      )
+    end
+
+    test "plan_update swaps the draft's tree in place: id + version stable, no orphans" do
+      %{plan: plan} = staged_draft_task("Update task")
+
+      old_stage_ids = Enum.map(plan.stages, & &1.id)
+
+      old_validation_ids =
+        Enum.flat_map(plan.stages, fn s -> Enum.map(s.validations, & &1.id) end)
+
+      {:ok, updated} =
+        ToolSurface.execute(
+          "plan_update",
+          %{"plan_id" => plan.id, "stages" => corrected_stages()},
+          %{}
+        )
+
+      # The plan ROW is reused, not replaced: this is a correction, not a
+      # new version row.
+      assert updated.id == plan.id
+      assert updated.version == plan.version
+      assert updated.status == "draft"
+
+      # The corrected tree is visible in the RETURNED plan…
+      assert Enum.map(updated.stages, & &1.name) == ["Build", "Surface"]
+      assert Enum.map(updated.stages, & &1.position) == [1, 2]
+
+      build = Enum.find(updated.stages, &(&1.name == "Build"))
+      assert length(build.validations) == 2
+      assert Enum.any?(build.validations, &(&1.kind == "test_pass"))
+
+      # …and identical via Tasks.get_plan — persistence, not just the return.
+      reloaded = plan_tree(plan.id)
+      assert Enum.map(reloaded.stages, & &1.name) == ["Build", "Surface"]
+      assert Enum.map(reloaded.stages, & &1.position) == [1, 2]
+
+      # The old stages are GONE (recreated, not mutated), and no orphaned
+      # validation rows point at the deleted stages.
+      new_stage_ids = Enum.map(reloaded.stages, & &1.id)
+      assert old_stage_ids -- new_stage_ids == old_stage_ids
+
+      orphaned =
+        Repo.all(from(v in Tasks.Validation, where: v.stage_id in ^old_stage_ids))
+
+      assert orphaned == []
+      refute old_validation_ids == []
+
+      # Exactly the new validations exist for the plan: 2 on Build, 1 on
+      # Surface — no stragglers, no duplicates.
+      assert plan_validation_ids(plan.id) == 3
+    end
+
+    # THE acceptance criterion: a planner fixes its wrong draft over MCP and
+    # submits the CORRECTED plan, with the SAME plan id it held before the
+    # correction — and approval flows normally with the corrected stages.
+    test "plan_submit after plan_update submits the corrected tree and approval flows" do
+      %{task: task, plan: plan} = staged_draft_task("Submit-after-update task")
+
+      {:ok, updated} =
+        ToolSurface.execute(
+          "plan_update",
+          %{"plan_id" => plan.id, "stages" => corrected_stages()},
+          %{}
+        )
+
+      # The caller's OLD plan id submits — the correction did not mint a
+      # different handle.
+      {:ok, submitted} = ToolSurface.execute("plan_submit", %{"plan_id" => updated.id}, %{})
+      assert submitted.id == plan.id
+      assert submitted.version == plan.version
+      assert submitted.status == "pending_review"
+
+      # plan_submit preloads :stages without an ORDER BY, so assert by
+      # position, not list order.
+      assert Enum.map(Enum.sort_by(submitted.stages, & &1.position), & &1.name) ==
+               ["Build", "Surface"]
+
+      {:ok, _approved} = Tasks.approve_plan(Tasks.get_plan(plan.id), "system")
+
+      # current_plan/1 (what approved-plan consumers read) carries the
+      # CORRECTED tree.
+      current = Tasks.current_plan(task.id)
+      assert current.status == "approved"
+      assert current.id == plan.id
+
+      assert Enum.map(Enum.sort_by(current.stages, & &1.position), & &1.name) ==
+               ["Build", "Surface"]
+    end
+
+    test "plan_update on a pending_review plan is refused and the tree is byte-identical" do
+      %{plan: plan} = staged_draft_task("Locked draft task")
+      {:ok, _} = Tasks.submit_plan_for_review(Tasks.get_plan(plan.id))
+
+      before = plan_tree(plan.id)
+
+      {:error, error} =
+        ToolSurface.execute(
+          "plan_update",
+          %{"plan_id" => plan.id, "stages" => corrected_stages()},
+          %{}
+        )
+
+      assert error.recoverable == false
+      assert error.error =~ "draft-status plans (current: pending_review)"
+      assert error.suggestion =~ "wait for the human reviewer"
+      assert error.suggestion =~ "cannot withdraw or edit a submitted plan"
+
+      # BYTE-IDENTICAL: same stage rows (ids), same description, same
+      # validation rows. A refused update must not have touched anything.
+      after_tree = plan_tree(plan.id)
+      assert Enum.map(after_tree.stages, & &1.id) == Enum.map(before.stages, & &1.id)
+
+      wrong = Enum.find(after_tree.stages, &(&1.name == "Wrong stage"))
+      assert wrong.description == "The WRONG description"
+
+      assert Enum.map(after_tree.stages, fn s -> Enum.map(s.validations, & &1.id) end) ==
+               Enum.map(before.stages, fn s -> Enum.map(s.validations, & &1.id) end)
+    end
+
+    test "plan_update on an approved plan is refused and the tree is byte-identical" do
+      %{plan: plan} = staged_draft_task("Approved update task")
+      {:ok, _} = Tasks.submit_plan_for_review(Tasks.get_plan(plan.id))
+      {:ok, _} = Tasks.approve_plan(Tasks.get_plan(plan.id), "system")
+
+      before = plan_tree(plan.id)
+
+      {:error, error} =
+        ToolSurface.execute(
+          "plan_update",
+          %{"plan_id" => plan.id, "stages" => corrected_stages()},
+          %{}
+        )
+
+      assert error.recoverable == false
+      assert error.error =~ "draft-status plans (current: approved)"
+      assert error.suggestion =~ "immutable to this tool"
+
+      after_tree = plan_tree(plan.id)
+      assert Enum.map(after_tree.stages, & &1.id) == Enum.map(before.stages, & &1.id)
+
+      wrong = Enum.find(after_tree.stages, &(&1.name == "Wrong stage"))
+      assert wrong.description == "The WRONG description"
+
+      assert Enum.map(after_tree.stages, fn s -> Enum.map(s.validations, & &1.id) end) ==
+               Enum.map(before.stages, fn s -> Enum.map(s.validations, & &1.id) end)
+    end
+
+    test "plan_update lifts e2e cases into the task-level review stage identically to plan_create" do
+      %{plan: plan} = staged_draft_task("E2E update task")
+
+      {:ok, updated} =
+        ToolSurface.execute(
+          "plan_update",
+          %{
+            "plan_id" => plan.id,
+            "stages" => [
+              %{
+                "name" => "Add the guard",
+                "description" => "Add it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}, e2e_case("corrected plan")]
+              }
+            ]
+          },
+          %{}
+        )
+
+      names = Enum.map(updated.stages, & &1.name)
+      assert List.last(names) == "Task-level review"
+      assert Enum.take(names, 1) == ["Add the guard"]
+
+      host = List.last(updated.stages)
+      assert Enum.count(host.validations, &(&1.kind == "e2e_behavior")) == 1
+
+      # The authored stage KEEPS its non-e2e validation — routing lifts the
+      # e2e case, it does not move the rest.
+      authored = List.first(updated.stages)
+      assert Enum.count(authored.validations, &(&1.kind == "test_pass")) == 1
+
+      # No e2e case was left behind on the authored stage.
+      refute Enum.any?(authored.validations, &(&1.kind == "e2e_behavior"))
+    end
+
+    test "plan_update refuses a trigger-named stage carrying e2e cases and writes nothing" do
+      %{plan: plan} = staged_draft_task("Collision update task")
+
+      {:error, env} =
+        ToolSurface.execute(
+          "plan_update",
+          %{
+            "plan_id" => plan.id,
+            "stages" => [
+              %{
+                "name" => "Widen task_plan_review output class",
+                "description" => "Widen it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}, e2e_case("collide")]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert env.recoverable == true
+      assert env.error =~ "Widen task_plan_review output class"
+
+      # PERSISTENCE CONTROL — a refused update leaves the draft's CURRENT
+      # tree byte-identical, so the planner can fix and retry.
+      reloaded = plan_tree(plan.id)
+      assert Enum.map(reloaded.stages, & &1.name) == ["Wrong stage"]
+      assert plan_validation_ids(plan.id) == 1
+    end
+
+    test "plan_update refuses an empty stages array and leaves the draft untouched" do
+      %{plan: plan} = staged_draft_task("Empty stages task")
+
+      {:error, error} =
+        ToolSurface.execute("plan_update", %{"plan_id" => plan.id, "stages" => []}, %{})
+
+      assert error.recoverable == true
+      assert error.error =~ "`stages` must not be empty"
+      assert error.error =~ "at least one stage"
+      assert error.suggestion =~ "plan_reject"
+
+      reloaded = plan_tree(plan.id)
+      assert Enum.map(reloaded.stages, & &1.name) == ["Wrong stage"]
+      assert plan_validation_ids(plan.id) == 1
+    end
+
+    test "plan_update with missing or non-list stages is a parameter error" do
+      %{plan: plan} = staged_draft_task("Bad stages task")
+
+      {:error, error} = ToolSurface.execute("plan_update", %{"plan_id" => plan.id}, %{})
+      assert error.recoverable == true
+      assert error.error =~ "`stages` is required"
+
+      {:error, error} =
+        ToolSurface.execute("plan_update", %{"plan_id" => plan.id, "stages" => "nope"}, %{})
+
+      assert error.recoverable == true
+      assert error.error =~ "`stages` is required"
+
+      reloaded = plan_tree(plan.id)
+      assert Enum.map(reloaded.stages, & &1.name) == ["Wrong stage"]
+    end
+
+    test "plan_update with an unknown plan_id returns the not-found envelope" do
+      {:error, error} =
+        ToolSurface.execute(
+          "plan_update",
+          %{"plan_id" => Ecto.UUID.generate(), "stages" => corrected_stages()},
+          %{}
+        )
+
+      assert error.recoverable == false
+      assert error.error =~ "Plan not found"
+    end
+
+    test "plan_update bridges an audit row with the actor and a before/after summary" do
+      # Attach the TelemetryHandler explicitly — in some test envs the
+      # Application-boot attach hasn't run and the audit bridge would be
+      # inert. Restored on exit, because it is VM-global (task 019f9d80).
+      Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.TelemetryHandler)
+
+      %{plan: plan} = staged_draft_task("Audit update task")
+
+      {:ok, _updated} =
+        ToolSurface.execute(
+          "plan_update",
+          %{
+            "plan_id" => plan.id,
+            "stages" => corrected_stages(),
+            "updated_by" => "planner-agent"
+          },
+          %{}
+        )
+
+      events = Platform.Audit.list(event_type: "platform.tasks.plan_updated")
+
+      assert Enum.any?(
+               events,
+               fn e ->
+                 e.resource_type == "plan" and e.resource_id == plan.id and
+                   e.action == "plan_updated" and e.actor_type == "agent" and
+                   e.metadata["updated_by"] == "planner-agent" and
+                   e.metadata["task_id"] == plan.task_id and
+                   e.metadata["before"]["stage_count"] == 1 and
+                   e.metadata["before"]["stages"] == [
+                     %{
+                       "position" => 1,
+                       "name" => "Wrong stage",
+                       "validation_kinds" => ["lint_pass"]
+                     }
+                   ] and
+                   e.metadata["after"]["stage_count"] == 2 and
+                   e.metadata["after"]["stages"] == [
+                     %{
+                       "position" => 1,
+                       "name" => "Build",
+                       "validation_kinds" => ["test_pass", "lint_pass"]
+                     },
+                     %{
+                       "position" => 2,
+                       "name" => "Surface",
+                       "validation_kinds" => ["code_review"]
+                     }
+                   ]
+               end
+             ),
+             "expected an audit row for the plan_updated event; got #{inspect(events)}"
+    end
+
+    test "plan_update defaults updated_by to system when no caller identity is present" do
+      Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.TelemetryHandler)
+
+      %{plan: plan} = staged_draft_task("System actor update task")
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "plan_update",
+          %{"plan_id" => plan.id, "stages" => corrected_stages()},
+          %{}
+        )
+
+      events = Platform.Audit.list(event_type: "platform.tasks.plan_updated")
+
+      assert Enum.any?(events, fn e ->
+               e.resource_id == plan.id and e.actor_type == "system" and
+                 e.metadata["updated_by"] == "system"
+             end)
     end
 
     # ── Stage tools ─────────────────────────────────────────────────────

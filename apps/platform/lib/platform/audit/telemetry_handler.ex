@@ -82,6 +82,33 @@ defmodule Platform.Audit.TelemetryHandler do
     # `resource_type: "plan"` + `resource_id: plan_id` for audit correlation.
     [:platform, :plan, :auto_approved],
     [:platform, :plan, :auto_approve_skipped],
+    # Task 01a05b32 stage 1 — the planner's self-service draft rejection.
+    # Emitted by `Platform.Federation.ToolSurface.execute("plan_reject", ...)`
+    # after `Tasks.reject_plan/3` commits a DRAFT → rejected transition (the
+    # tool gates on draft; the human-review and reopen flows keep their
+    # existing paths). Metadata carries plan_id, task_id, rejected_by,
+    # rejection_reason, plus resource_type "plan" / resource_id / action /
+    # actor_type for the Audit.Event columns. Sync (default handle_event
+    # clause) so tests can assert the row immediately after the tool call.
+    # Registration here is load-bearing: an emit with no matching @events
+    # entry fails SILENTLY (nothing raises, the audit row simply never
+    # appears).
+    [:platform, :tasks, :plan_rejected],
+    # Task 01a05b32 stage 2 — the planner's IN-PLACE draft correction.
+    # Emitted by `Platform.Federation.ToolSurface.execute("plan_update", ...)`
+    # after `Tasks.replace_plan_stages/3` commits the replacement stage tree
+    # on a DRAFT (the tool gates on draft via :invalid_transition; a
+    # pending_review / approved / completed plan is refused upstream and
+    # emits nothing). Metadata carries plan_id, task_id, updated_by, plus a
+    # before/after summary (stage count, stage names+positions, validation
+    # kinds per stage) so the audit row answers "who changed what", plus
+    # resource_type "plan" / resource_id / action / actor_type for the
+    # Audit.Event columns. plan_id and version are STABLE across the
+    # rewrite — the audit row, not a new plan row, is the record that a
+    # correction happened. Sync (default handle_event clause) so tests can
+    # assert the row immediately after the tool call. Registration here is
+    # load-bearing: an emit with no matching @events entry fails SILENTLY.
+    [:platform, :tasks, :plan_updated],
     # Task 019e95ea — channel lifecycle. Emitted by `Platform.Chat.archive_space/1,2`
     # and `unarchive_space/2`; metadata carries actor_id (nil for system
     # callers), resource_type: "chat_space", space kind + name.

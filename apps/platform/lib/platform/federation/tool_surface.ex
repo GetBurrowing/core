@@ -2622,6 +2622,13 @@ defmodule Platform.Federation.ToolSurface do
     ]
   end
 
+  # Task 01a05b32 stage 2 — ONE copy of the planner-authored `stages`
+  # parameter description, shared verbatim by `plan_create` and
+  # `plan_update`. plan_update takes the same shape and contract as
+  # plan_create (same pre-persistence passes, same tree-building paths),
+  # so the two tool registrations must not be able to drift apart.
+  @plan_stages_param_description "Array of IMPLEMENTATION stage objects: {name, description, position, e2e_host?, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time). e2e HOST RULE: when the plan carries any e2e_behavior validations, they are all lifted onto ONE host stage. By default the engine synthesizes a task-level review stage at the end. A stage whose name CONTAINS \"review\" or \"validation\" (case-insensitive, anywhere in the name — e.g. \"task_plan_review\") would silently be adopted as that host instead, so such a plan is REFUSED with a recoverable error: rename the stage, or set the optional per-stage boolean \"e2e_host\": true on the stage that should genuinely host them, which is honoured over any name match. Stage names beginning \"deploy:\" are exempt and never adopted. manual_approval RULE: a manual_approval validation means \"here is the UI, does it fit the brief\" — nothing else. It REQUIRES an evaluation_payload map carrying a non-blank \"ui_surface\" string naming the screen or component the human will look at (e.g. \"ui_surface\": \"the task detail page's stage timeline at 375px\"); a manual_approval without it is REFUSED with a recoverable error and nothing is persisted. Test summaries, caveats, and run reports do NOT belong in a review item — those are what lint_pass / test_pass / e2e_behavior are for. If the stage has no rendered surface to show, drop the gate rather than naming one: a manual_approval that shows a human anything but UI is a notification, not a gate."
+
   defp plan_tools do
     [
       %{
@@ -2633,14 +2640,43 @@ defmodule Platform.Federation.ToolSurface do
           stages: %{
             type: "array",
             required: true,
-            description:
-              "Array of IMPLEMENTATION stage objects: {name, description, position, e2e_host?, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time). e2e HOST RULE: when the plan carries any e2e_behavior validations, they are all lifted onto ONE host stage. By default the engine synthesizes a task-level review stage at the end. A stage whose name CONTAINS \"review\" or \"validation\" (case-insensitive, anywhere in the name — e.g. \"task_plan_review\") would silently be adopted as that host instead, so such a plan is REFUSED with a recoverable error: rename the stage, or set the optional per-stage boolean \"e2e_host\": true on the stage that should genuinely host them, which is honoured over any name match. Stage names beginning \"deploy:\" are exempt and never adopted. manual_approval RULE: a manual_approval validation means \"here is the UI, does it fit the brief\" — nothing else. It REQUIRES an evaluation_payload map carrying a non-blank \"ui_surface\" string naming the screen or component the human will look at (e.g. \"ui_surface\": \"the task detail page's stage timeline at 375px\"); a manual_approval without it is REFUSED with a recoverable error and nothing is persisted. Test summaries, caveats, and run reports do NOT belong in a review item — those are what lint_pass / test_pass / e2e_behavior are for. If the stage has no rendered surface to show, drop the gate rather than naming one: a manual_approval that shows a human anything but UI is a notification, not a gate."
+            description: @plan_stages_param_description
           }
         },
         returns: "The created plan with stages and validations preloaded",
         limitations:
           "Requires a valid task_id. Stages must have unique positions. Do not include a deploy stage; the system auto-injects one from the resolved deploy strategy.",
         when_to_use: "When you need to define a multi-stage execution plan for a task"
+      },
+      %{
+        name: "plan_update",
+        description:
+          "Replace a DRAFT plan's entire stage/validation tree in place (plan_id and version " <>
+            "stay stable — this is a correction, not a new plan row), then submit the corrected " <>
+            "plan with plan_submit as usual. Stages run through the SAME pre-persistence passes " <>
+            "as plan_create (e2e_behavior routing, manual_approval heuristic), so an updated " <>
+            "draft cannot carry e2e cases plan_create would have lifted into the task-level " <>
+            "review stage. pending_review / approved / completed plans are NOT updatable here.",
+        parameters: %{
+          plan_id: %{
+            type: "string",
+            required: true,
+            description: "The draft plan ID to fix in place"
+          },
+          stages: %{
+            type: "array",
+            required: true,
+            description: @plan_stages_param_description
+          }
+        },
+        returns:
+          "The updated plan with stages and validations preloaded (same shape plan_create returns)",
+        limitations:
+          "Only draft-status plans, and `stages` must be a non-empty array — a draft keeps at " <>
+            "least one stage. The plan's existing stages and validations are deleted and " <>
+            "recreated; the plan row (id + version) is reused.",
+        when_to_use:
+          "When a plan you created is still draft and wrong (stage descriptions, positions, validations) — fix it without a human round-trip"
       },
       %{
         name: "plan_get",
@@ -2707,6 +2743,36 @@ defmodule Platform.Federation.ToolSurface do
           "Plan must be in pending_review status, and the architecture gate must not be open — an agent cannot approve past an architect who is still reviewing (ADR-0046).",
         when_to_use:
           "After plan_submit, when you want to approve a plan and kick off task execution without waiting for human review"
+      },
+      %{
+        name: "plan_reject",
+        description:
+          "Discard a DRAFT plan so a fresh plan_create can run on the same task immediately " <>
+            "(draft → rejected, no human round-trip). This is the planner's self-service exit " <>
+            "from the plan_create draft-lock: pass a non-blank rejection_reason saying why the " <>
+            "draft died — it is persisted on the plan row and surfaces to future planners. " <>
+            "pending_review / approved / completed plans are NOT rejectable here.",
+        parameters: %{
+          plan_id: %{type: "string", required: true, description: "The plan ID to discard"},
+          rejection_reason: %{
+            type: "string",
+            required: true,
+            description:
+              "Non-blank reason the draft is being discarded (persisted on the plan row)"
+          },
+          rejected_by: %{
+            type: "string",
+            required: false,
+            description: "Who is rejecting (agent slug or user ID). Defaults to system."
+          }
+        },
+        returns:
+          "The rejected plan object (status \"rejected\", rejection_reason persisted). The task's status is untouched.",
+        limitations:
+          "Only draft-status plans. A pending_review plan must wait for the human reviewer; " <>
+            "approved / completed plans are immutable to this tool.",
+        when_to_use:
+          "When your own draft plan is wrong or obsolete and you want to replace it with a fresh plan_create on the same task"
       },
       %{
         name: "plan_architecture_verdict",
@@ -6000,6 +6066,114 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # Task 01a05b32 stage 1 — the planner's self-service draft exit. A draft
+  # plan blocks every subsequent plan_create, and until this tool existed a
+  # stuck draft had NO reject affordance anywhere (the UI control only
+  # appears once the plan reaches pending_review), so the only exit was a
+  # human. The tool GATES ON DRAFT here, in the tool layer, even though
+  # `Tasks.reject_plan/3` now also accepts draft for this path: the
+  # pending_review / approved / completed statuses stay immutable to agents
+  # (the Plan-State Lock), and each refusal names the right path for the
+  # status the caller actually hit. The rejection must NOT transition the
+  # task — the draft never moved it past planning, so plan_create must work
+  # immediately after.
+  def execute("plan_reject", args, context) do
+    plan_id = Map.get(args, "plan_id")
+
+    with {:ok, rejection_reason} <-
+           require_non_blank_string(args, "rejection_reason", "plan_reject") do
+      case get_by_uuid(Plan, plan_id) do
+        nil ->
+          {:error,
+           %{
+             error: "Plan not found: #{plan_id}",
+             recoverable: false,
+             suggestion:
+               "Use plan_get with the task_id and status \"latest\" to find the plan ID for a task"
+           }}
+
+        %Plan{status: "draft"} = plan ->
+          {rejected_by, actor_type} = plan_reject_actor(args, context)
+
+          case Tasks.reject_plan(plan, rejected_by, rejection_reason) do
+            {:ok, rejected} ->
+              emit_plan_rejected(rejected, rejected_by, actor_type)
+
+              {:ok, serialize_plan(Repo.preload(rejected, :stages))}
+
+            {:error, reason} ->
+              {:error,
+               %{
+                 error: "Failed to reject plan: #{inspect(reason)}",
+                 recoverable: true,
+                 suggestion: "Check the plan status and retry"
+               }}
+          end
+
+        %Plan{status: status} = plan ->
+          {:error,
+           %{
+             error: "plan_reject only accepts draft-status plans (current: #{plan.status}).",
+             recoverable: false,
+             suggestion: plan_reject_suggestion(status)
+           }}
+      end
+    end
+  end
+
+  # ── Task 01a05b32 stage 2 — the planner's in-place draft correction ──────
+  #
+  # plan_reject (stage 1) is the DISCARD half of the draft exit: throw the
+  # wrong draft away and mint a new plan row with plan_create. plan_update is
+  # the CORRECT half: fix the wrong draft (stages, positions, validations,
+  # evaluation_payloads) where it stands and plan_submit it — plan_id and
+  # version stay stable, so a caller holding the old plan id keeps working.
+  #
+  # The tool GATES ON DRAFT through `Tasks.replace_plan_stages/3`'s
+  # :invalid_transition, the same error contract plan_reject uses: a
+  # pending_review plan is the Plan-State Lock itself (agents cannot withdraw
+  # a submitted plan), and approved/completed plans are immutable here. Each
+  # refusal names the path the caller should take INSTEAD.
+  #
+  # The pre-persistence passes are the SAME ones plan_create runs, in the
+  # same order (collision + unnamed-gate detectors, then the
+  # route/manual-approval/zero-validation rewrite pipe). Skipping them would
+  # let an updated draft carry e2e_behavior checks that never got lifted into
+  # the task-level review stage — an inconsistency plan_create cannot
+  # produce. They also run BEFORE anything is written, so a refusal leaves
+  # the draft's CURRENT tree byte-identical (recoverable: fix and retry).
+  def execute("plan_update", args, context) do
+    plan_id = Map.get(args, "plan_id")
+
+    with {:ok, stages_input} <- require_plan_update_stages(args) do
+      case get_by_uuid(Plan, plan_id) do
+        nil ->
+          {:error,
+           %{
+             error: "Plan not found: #{plan_id}",
+             recoverable: false,
+             suggestion:
+               "Use plan_get with the task_id and status \"draft\" (or \"latest\") to find the draft plan ID for a task"
+           }}
+
+        plan ->
+          case Platform.Tasks.PlanEngine.detect_e2e_host_collision(stages_input) do
+            {:error, info} ->
+              {:error, e2e_host_collision_envelope(info)}
+
+            :ok ->
+              case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(stages_input) do
+                {:error, info} ->
+                  {:error, unnamed_manual_gate_envelope(info)}
+
+                :ok ->
+                  do_plan_update(plan, stages_input, args, context)
+              end
+          end
+      end
+    end
+  end
+
   # ── ADR-0046 member 5 stage 4: the architect's verdict surface ────────
   #
   # ONE of the two ways a verdict gets in (the other is
@@ -6727,6 +6901,239 @@ defmodule Platform.Federation.ToolSurface do
        recoverable: false,
        suggestion: "Available tools: #{tool_names}"
      }}
+  end
+
+  # Task 01a05b32 stage 1 — the audit trail for the planner-rejected draft.
+  # Emitted through telemetry so Platform.Audit.TelemetryHandler bridges it
+  # into the append-only audit stream (the handler's documented preferred
+  # entry point); the event is registered in the handler's @events list.
+  # Metadata mirrors the existing plan emit sites (auto_approved /
+  # architecture_gate_opened): resource_type/resource_id/action/actor_type
+  # top-level for the Audit.Event columns, the event-specific fields
+  # alongside. Synchronous emit + sync handler clause, so the audit row
+  # exists by the time the tool response returns.
+  defp emit_plan_rejected(plan, rejected_by, actor_type) do
+    :telemetry.execute(
+      [:platform, :tasks, :plan_rejected],
+      %{count: 1},
+      %{
+        plan_id: plan.id,
+        task_id: plan.task_id,
+        rejected_by: rejected_by,
+        rejection_reason: plan.rejection_reason,
+        resource_type: "plan",
+        resource_id: plan.id,
+        action: "plan_rejected",
+        actor_type: actor_type
+      }
+    )
+  end
+
+  # WHO discarded the draft. An explicit `rejected_by` argument wins;
+  # otherwise the execute context's caller identity (the agent the runtime
+  # runs as), then "system" — mirroring plan_approve's approved_by
+  # convention. Returns {identity, audit actor_type}.
+  defp plan_reject_actor(args, context) do
+    case Map.get(args, "rejected_by") do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> context_caller_identity(context)
+          trimmed -> {trimmed, "agent"}
+        end
+
+      _ ->
+        context_caller_identity(context)
+    end
+  end
+
+  defp context_caller_identity(context) when is_map(context) do
+    case load_agent(context) do
+      %Agent{slug: slug} when is_binary(slug) and slug != "" ->
+        {slug, "agent"}
+
+      %Agent{id: id} ->
+        {id, "agent"}
+
+      _ ->
+        case Map.get(context, :agent_id) do
+          id when is_binary(id) and id != "" -> {id, "agent"}
+          _ -> {"system", "system"}
+        end
+    end
+  end
+
+  defp context_caller_identity(_context), do: {"system", "system"}
+
+  # The refusal must name the path the caller should take INSTEAD, per
+  # status. pending_review is the Plan-State Lock itself: agents cannot
+  # withdraw a submitted plan.
+  defp plan_reject_suggestion("pending_review"),
+    do:
+      "wait for the human reviewer; agents cannot withdraw a submitted plan (only a human can reject it)"
+
+  defp plan_reject_suggestion("rejected"),
+    do: "the plan is already rejected; there is nothing to discard"
+
+  defp plan_reject_suggestion(_status),
+    do: "the plan is immutable to this tool"
+
+  defp do_plan_update(plan, raw_stages_input, args, context) do
+    # BEFORE summary from the tree as it stands — this is the audit trail's
+    # "who changed what": what the draft looked like before the rewrite.
+    before_summary = plan_update_summary(Repo.preload(plan, stages: :validations))
+
+    stages_input =
+      raw_stages_input
+      |> Platform.Tasks.PlanEngine.route_e2e_behavior_validations()
+      |> Platform.Tasks.PlanEngine.check_manual_approval_heuristic()
+      |> Platform.Tasks.PlanEngine.check_zero_validation_stages()
+
+    case Tasks.replace_plan_stages(plan, stages_input) do
+      {:ok, updated} ->
+        {updated_by, actor_type} = plan_update_actor(args, context)
+        emit_plan_updated(updated, updated_by, actor_type, before_summary)
+
+        {:ok, serialize_plan(updated)}
+
+      {:error, :invalid_transition} ->
+        {:error,
+         %{
+           error: "plan_update only accepts draft-status plans (current: #{plan.status}).",
+           recoverable: false,
+           suggestion: plan_update_suggestion(plan.status)
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to update plan: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Check that stages have valid fields and retry"
+         }}
+    end
+  end
+
+  # The audit trail for the in-place correction, via the same telemetry →
+  # TelemetryHandler bridge plan_reject uses (the event is registered in the
+  # handler's @events list; an unregistered emit fails SILENTLY). Metadata
+  # carries plan_id, task_id, updated_by, and a before/after summary (stage
+  # count, stage names+positions, validation kinds per stage), plus
+  # resource_type/resource_id/action/actor_type for the Audit.Event columns.
+  # Sync (default handle_event clause) so the audit row exists by the time
+  # the tool response returns.
+  defp emit_plan_updated(plan, updated_by, actor_type, before_summary) do
+    :telemetry.execute(
+      [:platform, :tasks, :plan_updated],
+      %{count: 1},
+      %{
+        plan_id: plan.id,
+        task_id: plan.task_id,
+        updated_by: updated_by,
+        before: before_summary,
+        after: plan_update_summary(plan),
+        resource_type: "plan",
+        resource_id: plan.id,
+        action: "plan_updated",
+        actor_type: actor_type
+      }
+    )
+  end
+
+  # WHO corrected the draft. Same convention as plan_reject's rejected_by:
+  # an explicit `updated_by` argument wins, otherwise the execute context's
+  # caller identity, then "system".
+  defp plan_update_actor(args, context) do
+    case Map.get(args, "updated_by") do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> context_caller_identity(context)
+          trimmed -> {trimmed, "agent"}
+        end
+
+      _ ->
+        context_caller_identity(context)
+    end
+  end
+
+  # The refusal names the path the caller should take INSTEAD, per status —
+  # the same discipline as plan_reject_suggestion/1.
+  defp plan_update_suggestion("pending_review"),
+    do:
+      "wait for the human reviewer; agents cannot withdraw or edit a submitted plan (only a human can reject it, after which plan_create can start over)"
+
+  defp plan_update_suggestion("rejected"),
+    do:
+      "the plan is already rejected; there is nothing to update (call plan_create to start a fresh plan)"
+
+  defp plan_update_suggestion(_status),
+    do: "the plan is immutable to this tool"
+
+  # `stages` is REQUIRED and must be a non-empty list: the parameter contract
+  # mirrors plan_create's (same shape), but an EMPTY array is refused here —
+  # a draft keeps at least one stage (auto_approve_precondition/2 skips on
+  # empty_plan, so an empty draft would submit a plan the engine treats as
+  # unapprovable). Missing/non-list and empty are distinct envelopes so the
+  # caller knows which mistake they made. Both are parameter errors
+  # (recoverable: true — fix the argument and retry); nothing was written.
+  defp require_plan_update_stages(args) do
+    case Map.get(args, "stages") do
+      stages when is_list(stages) and stages != [] ->
+        {:ok, stages}
+
+      [] ->
+        {:error,
+         %{
+           error:
+             "plan_update: `stages` must not be empty — a draft plan keeps at least one stage",
+           recoverable: true,
+           suggestion:
+             "Pass the corrected stages (same shape as plan_create's `stages`), or discard the draft with plan_reject instead"
+         }}
+
+      _ ->
+        {:error,
+         %{
+           error:
+             "plan_update: `stages` is required and must be a non-empty array of stage objects",
+           recoverable: true,
+           suggestion:
+             "Provide the replacement stages — same shape and contract as plan_create's `stages` parameter"
+         }}
+    end
+  end
+
+  # The before/after summary for the audit event: stage count, stage
+  # names+positions, validation kinds per stage. Tolerates a non-preloaded
+  # association (summarises as empty) rather than raising.
+  defp plan_update_summary(plan) do
+    stages =
+      case plan.stages do
+        %Ecto.Association.NotLoaded{} ->
+          []
+
+        stages ->
+          stages |> Enum.sort_by(&(&1.position || 0))
+      end
+
+    %{
+      stage_count: length(stages),
+      stages:
+        Enum.map(stages, fn stage ->
+          %{
+            position: stage.position,
+            name: stage.name,
+            validation_kinds: plan_update_summary_validation_kinds(stage)
+          }
+        end)
+    }
+  end
+
+  defp plan_update_summary_validation_kinds(stage) do
+    case stage.validations do
+      %Ecto.Association.NotLoaded{} -> []
+      validations when is_list(validations) -> Enum.map(validations, & &1.kind)
+      _ -> []
+    end
   end
 
   defp normalize_send_media_attachments(args) do
@@ -9193,14 +9600,31 @@ defmodule Platform.Federation.ToolSurface do
       {:error, :plan_pending_review} ->
         existing = Tasks.latest_plan(task_id)
 
-        {:error,
-         %{
-           error:
-             "A plan for this task is already #{existing.status}; create a new plan only after the existing one is rejected.",
-           recoverable: false,
-           suggestion:
-             "Wait for human approval (or rejection) of plan v#{existing.version} (#{existing.id}). Use plan_get to read it; do not call plan_create again."
-         }}
+        # Task 01a05b32 stage 1 — a DRAFT blocker is self-service now: the
+        # planner can discard it with plan_reject (or — stage 2 — fix it in
+        # place with plan_update) and call plan_create again, no human
+        # round-trip. pending_review KEEPS the wait-for-human wording with
+        # recoverable: false: agents still cannot withdraw a submitted plan
+        # (Plan-State Lock; do not loosen it here).
+        if is_map(existing) and existing.status == "draft" do
+          {:error,
+           %{
+             error:
+               "A plan for this task is already draft (v#{existing.version}, #{existing.id}); it blocks plan_create until it is discarded.",
+             recoverable: true,
+             suggestion:
+               "Fix it in place with plan_update, or discard it with plan_reject, then call plan_create again."
+           }}
+        else
+          {:error,
+           %{
+             error:
+               "A plan for this task is already #{existing.status}; create a new plan only after the existing one is rejected.",
+             recoverable: false,
+             suggestion:
+               "Wait for human approval (or rejection) of plan v#{existing.version} (#{existing.id}). Use plan_get to read it; do not call plan_create again."
+           }}
+        end
 
       {:error, reason} ->
         {:error,
@@ -9626,6 +10050,32 @@ defmodule Platform.Federation.ToolSurface do
            suggestion: "Provide a non-empty `#{key}` argument."
          }}
     end
+  end
+
+  # Task 01a05b32 stage 1 — `require_string/3` plus the blank-after-trim
+  # case. A whitespace-only value is a PARAMETER error (recoverable: true,
+  # fix the argument and retry), never a nil-reason write: plan_reject's
+  # rejection_reason is the artifact future planners read to learn why the
+  # draft died, so an empty one must not reach the row.
+  defp require_non_blank_string(args, key, tool) do
+    case Map.get(args, key) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> {:error, non_blank_string_error(tool, key)}
+          trimmed -> {:ok, trimmed}
+        end
+
+      _ ->
+        {:error, non_blank_string_error(tool, key)}
+    end
+  end
+
+  defp non_blank_string_error(tool, key) do
+    %{
+      error: "#{tool}: `#{key}` is required and must be non-blank",
+      recoverable: true,
+      suggestion: "Provide a non-blank `#{key}` argument."
+    }
   end
 
   defp require_integer(args, key, tool) do

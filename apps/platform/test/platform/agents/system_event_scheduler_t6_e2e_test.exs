@@ -665,7 +665,17 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # rollup merge was paused as `rollup_diverged` had no named way to re-run
     # it. Not a T6 concern — it adds no schedule, no trigger and no historian
     # surface (+stack_retry_member_merge -> 100)
-    @t6_baseline_tool_count 100
+    # bumped by task 01a05b32 stage 1 — `plan_reject`, added to the existing
+    # `plan` bundle beside `plan_submit`. The planner's self-service draft
+    # exit (a stuck draft had no reject affordance anywhere). Not a T6
+    # concern — it adds no schedule, no trigger and no historian surface
+    # (+plan_reject -> 101)
+    # bumped by task 01a05b32 stage 2 — `plan_update`, added to the existing
+    # `plan` bundle beside `plan_create`. The planner's IN-PLACE draft
+    # correction (fix the wrong draft where it stands; id + version stable).
+    # Not a T6 concern — it adds no schedule, no trigger and no historian
+    # surface (+plan_update -> 102)
+    @t6_baseline_tool_count 102
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -5,6 +5,7 @@ defmodule Platform.Tasks.PlanTest do
 
   alias Platform.Tasks
   alias Platform.Tasks.Plan
+  alias Platform.Tasks.Validation
 
   setup do
     {:ok, project} = Tasks.create_project(%{name: "Plan Project"})
@@ -306,10 +307,191 @@ defmodule Platform.Tasks.PlanTest do
       assert rejected2.rejection_reason == "completed-but-bad"
     end
 
+    # Task 01a05b32 stage 1 — draft is rejectable now (planner self-service),
+    # so the only status left outside the guard is "rejected" itself.
     test "refuses plans in non-rejectable statuses", %{task: task} do
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
-      # status: "draft"
-      assert {:error, :invalid_transition} = Tasks.reject_plan(plan, "actor", "x")
+      {:ok, plan} = Tasks.reject_plan(plan, "actor", "first rejection")
+      assert plan.status == "rejected"
+
+      assert {:error, :invalid_transition} = Tasks.reject_plan(plan, "actor", "again")
+    end
+
+    # ── Task 01a05b32 stage 1 — the planner self-service draft path ───────
+
+    test "rejects a draft directly with the reason persisted on the row", %{task: task} do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      assert plan.status == "draft"
+
+      assert {:ok, rejected} =
+               Tasks.reject_plan(plan, "planner-agent", "wrong scope, missing the audit stage")
+
+      assert rejected.status == "rejected"
+      assert rejected.rejection_reason == "wrong scope, missing the audit stage"
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "rejected"
+      assert reloaded.rejection_reason == "wrong scope, missing the audit stage"
+    end
+
+    # THE acceptance criterion, asserted end to end: after reject_plan on a
+    # draft, create_plan/1 on the SAME task succeeds — no submit, no human
+    # round-trip, no admin/DB step. A draft rejection must also leave the
+    # task's status untouched so the fresh plan starts from the same state.
+    test "draft rejection leaves the task untouched so create_plan works immediately", %{
+      task: task
+    } do
+      {:ok, task} = Tasks.update_task(task, %{status: "planning"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+
+      assert {:ok, _rejected} = Tasks.reject_plan(plan, "planner-agent", "obsolete draft")
+
+      assert Tasks.get_task_record(task.id).status == "planning"
+
+      assert {:ok, plan2} = Tasks.create_plan(%{task_id: task.id})
+      assert plan2.version == 2
+      assert plan2.status == "draft"
+    end
+  end
+
+  describe "replace_plan_stages/3" do
+    defp stage_input(name, position, validations) do
+      %{
+        "name" => name,
+        "description" => "#{name} description",
+        "position" => position,
+        "validations" => validations
+      }
+    end
+
+    defp seed_old_tree(task) do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Old", position: 1})
+      {:ok, validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "lint_pass"})
+      %{plan: plan, stage: stage, validation: validation}
+    end
+
+    test "swaps the draft's tree in place: plan row, id and version stay stable", %{task: task} do
+      %{plan: plan, stage: old_stage} = seed_old_tree(task)
+
+      assert {:ok, updated} =
+               Tasks.replace_plan_stages(plan, [
+                 stage_input("Build", 1, [%{"kind" => "test_pass"}]),
+                 stage_input("Surface", 2, [])
+               ])
+
+      # The plan ROW is reused — id and version are stable, so a caller
+      # holding the old plan can plan_submit it afterward. No new version
+      # row means the unique (task_id, version) constraint stays satisfied.
+      assert updated.id == plan.id
+      assert updated.version == plan.version
+      assert updated.status == "draft"
+
+      assert Enum.map(updated.stages, & &1.name) == ["Build", "Surface"]
+      assert Enum.map(updated.stages, & &1.position) == [1, 2]
+
+      build = Enum.find(updated.stages, &(&1.name == "Build"))
+      assert [%Validation{} = v] = build.validations
+      assert v.kind == "test_pass"
+
+      # Same tree read back through get_plan — persisted, not just returned.
+      reloaded = Platform.Repo.preload(Tasks.get_plan(plan.id), stages: :validations)
+      assert Enum.map(reloaded.stages, & &1.name) == ["Build", "Surface"]
+      assert old_stage.id in Enum.map(reloaded.stages, & &1.id) == false
+
+      # No orphaned validation rows survive the swap.
+      orphans =
+        Platform.Repo.all(from(v in Validation, where: v.stage_id == ^old_stage.id))
+
+      assert orphans == []
+    end
+
+    test "accepts atom-keyed stage maps like the create paths do", %{task: task} do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+
+      assert {:ok, updated} =
+               Tasks.replace_plan_stages(plan, [
+                 %{
+                   name: "Build",
+                   description: "Build it",
+                   position: 1,
+                   validations: [%{kind: "test_pass", evaluation_payload: %{"x" => 1}}]
+                 }
+               ])
+
+      assert [stage] = updated.stages
+      assert stage.name == "Build"
+      assert [validation] = stage.validations
+      assert validation.evaluation_payload == %{"x" => 1}
+    end
+
+    test "refuses a pending_review or approved plan and leaves the tree byte-identical", %{
+      task: task
+    } do
+      %{plan: plan, stage: stage, validation: validation} = seed_old_tree(task)
+
+      assert {:ok, _pending} = Tasks.submit_plan_for_review(plan)
+
+      assert {:error, :invalid_transition} =
+               Tasks.replace_plan_stages(Tasks.get_plan(plan.id), [
+                 stage_input("New", 1, [])
+               ])
+
+      {:ok, approved} = Tasks.approve_plan(Tasks.get_plan(plan.id), "system")
+
+      assert {:error, :invalid_transition} =
+               Tasks.replace_plan_stages(approved, [stage_input("New", 1, [])])
+
+      # Byte-identical: same stage row, same validation row, same status.
+      reloaded = Platform.Repo.preload(Tasks.get_plan(plan.id), stages: :validations)
+      assert reloaded.status == "approved"
+      assert Enum.map(reloaded.stages, & &1.id) == [stage.id]
+
+      assert Enum.map(reloaded.stages, fn s -> Enum.map(s.validations, & &1.id) end) == [
+               [validation.id]
+             ]
+
+      assert Enum.find(reloaded.stages, &(&1.id == stage.id)).name == "Old"
+    end
+
+    # The status is re-checked against the PERSISTED row inside the
+    # transaction, so a caller whose struct went stale cannot rewrite a plan
+    # that was submitted in the meantime — the Plan-State Lock holds even
+    # against a stale read.
+    test "re-checks draft status inside the transaction: a stale draft struct cannot rewrite a submitted plan",
+         %{task: task} do
+      %{plan: plan, stage: stage} = seed_old_tree(task)
+
+      assert {:ok, _pending} = Tasks.submit_plan_for_review(plan)
+
+      # The caller's struct still says "draft"; the row says pending_review.
+      stale = %{plan | status: "draft"}
+
+      assert {:error, :invalid_transition} =
+               Tasks.replace_plan_stages(stale, [stage_input("New", 1, [])])
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "pending_review"
+      assert Enum.map(reloaded.stages, & &1.id) == [stage.id]
+    end
+
+    test "rolls back atomically on a schema-invalid child: the old tree survives", %{task: task} do
+      %{plan: plan, stage: stage, validation: validation} = seed_old_tree(task)
+
+      # "not_a_kind" fails Validation's kind inclusion check AFTER the old
+      # tree was already deleted inside the transaction — the whole swap
+      # must roll back, leaving the old stages and validations in place.
+      assert {:error, %Ecto.Changeset{}} =
+               Tasks.replace_plan_stages(plan, [
+                 stage_input("Build", 1, [%{"kind" => "not_a_kind"}])
+               ])
+
+      reloaded = Platform.Repo.preload(Tasks.get_plan(plan.id), stages: :validations)
+      assert Enum.map(reloaded.stages, & &1.id) == [stage.id]
+
+      assert Enum.map(reloaded.stages, fn s -> Enum.map(s.validations, & &1.id) end) == [
+               [validation.id]
+             ]
     end
   end
 
@@ -745,6 +927,91 @@ defmodule Platform.Tasks.PlanTest do
       # Whatever the caller passed is what we persist — no automatic trim
       # applied. Only nil/all-whitespace triggers :reason_required.
       assert Tasks.latest_plan(task.id).rejection_reason == "  outer spaces  fine  "
+    end
+  end
+
+  # ── task 01a05b32 stage 3: two writers on plan.version ─────────────────
+  #
+  # Approval's supersession mints a NEW plan row at version+1, while
+  # `replace_plan_stages/3` rewrites IN PLACE at a stable version. These
+  # tests pin the downstream version READERS against the same-row rewrite:
+  # each reader must resolve the rewritten row (same id, same version,
+  # corrected content), and the version counter must not collide with the
+  # in-place row. No reader's behavior is changed here — the architecture
+  # verdict on this plan asked for assertions, not patches.
+  describe "plan version readers after an in-place rewrite (task 01a05b32 stage 3)" do
+    defp rewrite_stage(name, position) do
+      %{
+        "name" => name,
+        "description" => "#{name} description",
+        "position" => position,
+        "validations" => []
+      }
+    end
+
+    test "create_plan/1 still refuses while the rewritten draft exists", %{task: task} do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Old", position: 1})
+
+      assert {:ok, _rewritten} =
+               Tasks.replace_plan_stages(plan, [rewrite_stage("Fixed", 1)])
+
+      # create_plan's draft-block reads latest_plan/1 (desc version,
+      # limit 1). The rewrite moved NO version, so the reader must still
+      # resolve the SAME row as a live draft — a reader that keyed on
+      # "different version ⇒ different row" would skip the rewritten
+      # draft and mint a colliding v1.
+      latest = Tasks.latest_plan(task.id)
+      assert latest.id == plan.id
+      assert latest.version == plan.version
+      assert latest.status == "draft"
+
+      assert {:error, :plan_pending_review} = Tasks.create_plan(%{task_id: task.id})
+    end
+
+    test "list_plans/1 sees exactly one row at the stable version", %{task: task} do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Old", position: 1})
+
+      assert {:ok, _rewritten} =
+               Tasks.replace_plan_stages(plan, [rewrite_stage("Fixed", 1)])
+
+      # One rewrite = still one version row: the history view must not
+      # show a phantom v2, and the surviving row carries the corrected
+      # tree at the SAME version. list_plans/1 preloads nothing, so the
+      # stage read is explicit.
+      plans = Tasks.list_plans(task.id)
+      assert length(plans) == 1
+      assert hd(plans).id == plan.id
+      assert hd(plans).version == plan.version
+
+      assert hd(plans)
+             |> Platform.Repo.preload(:stages)
+             |> Map.get(:stages)
+             |> Enum.map(& &1.name) ==
+               ["Fixed"]
+    end
+
+    test "the writers compose: a rewrite keeps v1, the next plan after a discard mints v2", %{
+      task: task
+    } do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Wrong", position: 1})
+      assert plan.version == 1
+
+      assert {:ok, rewritten} =
+               Tasks.replace_plan_stages(plan, [rewrite_stage("Fixed", 1)])
+
+      # In-place writer: version did NOT move.
+      assert rewritten.version == 1
+
+      # Discard writer (plan_reject on the draft), then the counter:
+      # next_plan_version is max(version)+1 over ROWS, and the rewritten
+      # row still IS v1 — so the next plan is v2, no collision with the
+      # in-place row.
+      assert {:ok, _} = Tasks.reject_plan(rewritten, Ecto.UUID.generate())
+      assert {:ok, v2} = Tasks.create_plan(%{task_id: task.id})
+      assert v2.version == 2
     end
   end
 end

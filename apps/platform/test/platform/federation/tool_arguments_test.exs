@@ -111,7 +111,22 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # deployer's id arity would otherwise be asked to merge `nil` — and this is
   # the MEMBER id, not the stack id, so the refusal is also the one place the
   # caller is told which id the tool wants.
-  @surveyed_required_count 138
+  # 140 with `plan_reject`'s `plan_id` + `rejection_reason` (task 01a05b32
+  # stage 1). Both HONEST. `plan_id` resolves through `get_by_uuid/2` — an
+  # absent or non-UUID id lands in the "Plan not found" envelope (same path
+  # as plan_submit / plan_approve), never a write; `rejection_reason` opens
+  # with `require_non_blank_string/3`, which refuses absence AND a blank or
+  # whitespace value, because the reason is the artifact future planners
+  # read to learn why the draft died.
+  # 142 with `plan_update`'s `plan_id` + `stages` (task 01a05b32 stage 2).
+  # Both HONEST. `plan_id` resolves through `get_by_uuid/2` exactly like
+  # plan_reject's — absent or non-UUID is the not-found envelope, never a
+  # write. `stages` is refused before any lookup by
+  # `require_plan_update_stages/1`: missing or non-list, AND an empty array
+  # (a draft keeps at least one stage — an empty draft would submit a plan
+  # the engine treats as unapprovable), both recoverable parameter errors
+  # with nothing written.
+  @surveyed_required_count 142
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

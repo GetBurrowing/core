@@ -2184,6 +2184,149 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  Replace a DRAFT plan's entire stage/validation tree in place, in one
+  transaction (task 01a05b32 stage 2).
+
+  This is the correction half of the planner's self-service draft exit — the
+  half stage 1's `plan_reject` deliberately is not: instead of discarding the
+  draft and minting a new plan row, the WRONG draft (stages, positions,
+  validations, evaluation_payloads) is fixed where it stands and then
+  submitted through the normal `submit_plan_for_review/1`. The plan row is
+  REUSED, so `id` and `version` both stay stable: a caller holding the old
+  plan id must be able to `plan_submit` it afterward, and the unique
+  `(task_id, version)` constraint stays satisfied because no new plan row is
+  written. This is what makes the rewrite distinguishable from supersession
+  by construction — supersession mints a row, update does not (architect
+  verdict, plan v2 review).
+
+  The existing stages are deleted WITH their validations (validations
+  explicitly first — the `Stage.has_many :validations` association carries no
+  `on_delete`, so no cascade is assumed), then the replacement tree is
+  recreated through the SAME `create_stage/1` / `create_validation/1` paths
+  the create flow uses, so schema-level enforcement (validation `kind`
+  inclusion, e2e payload shape) applies identically.
+
+  `stages_input` takes the same planner-authored stage maps the MCP
+  `plan_create` tool passes through (`name`, `description`, `position`,
+  `expected_artifacts`, `validations` with `kind`/`evaluation_payload`); keys
+  may be strings or atoms. An empty list is ACCEPTED here on purpose: the
+  tool layer (`plan_update`) refuses it, because a draft handed to the engine
+  must keep at least one stage — the context function's contract mirrors the
+  create paths, which are permissive.
+
+  Returns `{:ok, plan}` with the new `stages` and their `validations` loaded,
+  or `{:error, :invalid_transition}` for anything that is not a draft —
+  clause shape mirrors `submit_plan_for_review/1`. The status is RE-CHECKED
+  inside the transaction against the persisted row, so a draft that flips to
+  `pending_review` between the caller's read and this write cannot be
+  rewritten: a submitted plan is immutable to agents (the Plan-State Lock),
+  and the caller's stale struct cannot reopen it.
+  """
+  def replace_plan_stages(plan, stages_input, opts \\ [])
+
+  def replace_plan_stages(%Plan{status: "draft"} = plan, stages_input, _opts)
+      when is_list(stages_input) do
+    Repo.transaction(fn ->
+      # Status re-check INSIDE the transaction, against the persisted row —
+      # the caller's struct may be stale (see @doc).
+      fresh =
+        case Repo.get(Plan, plan.id) do
+          %Plan{status: "draft"} = current -> current
+          _other -> Repo.rollback(:invalid_transition)
+        end
+
+      delete_plan_stage_tree!(fresh)
+
+      stages =
+        Enum.map(stages_input, fn stage_input ->
+          stage_attrs = %{
+            plan_id: fresh.id,
+            name: plan_input_get(stage_input, "name", :name),
+            description: plan_input_get(stage_input, "description", :description),
+            position: plan_input_get(stage_input, "position", :position),
+            expected_artifacts:
+              plan_input_get(stage_input, "expected_artifacts", :expected_artifacts, [])
+          }
+
+          case create_stage(stage_attrs) do
+            {:ok, stage} ->
+              validations =
+                stage_input
+                |> plan_input_get("validations", :validations, [])
+                |> Enum.map(fn v_input ->
+                  attrs = plan_stage_validation_attrs(stage.id, v_input)
+
+                  case create_validation(attrs) do
+                    {:ok, validation} -> validation
+                    {:error, reason} -> Repo.rollback(reason)
+                  end
+                end)
+
+              Map.put(stage, :validations, validations)
+
+            {:error, reason} ->
+              Repo.rollback(reason)
+          end
+        end)
+
+      Map.put(fresh, :stages, stages)
+    end)
+  end
+
+  def replace_plan_stages(_plan, _stages_input, _opts), do: {:error, :invalid_transition}
+
+  # Delete a plan's stages and their validations. Validations go FIRST and
+  # explicitly: `Stage.has_many(:validations)` has no `:on_delete`, so no
+  # cascade may be assumed at the association level (the DB FK happens to
+  # cascade, but an explicit delete is the contract and is what the
+  # no-orphans test pins).
+  defp delete_plan_stage_tree!(plan) do
+    {_, _} =
+      Repo.delete_all(
+        from(v in Validation,
+          join: s in Stage,
+          on: v.stage_id == s.id,
+          where: s.plan_id == ^plan.id
+        )
+      )
+
+    {_, _} = Repo.delete_all(from(s in Stage, where: s.plan_id == ^plan.id))
+
+    :ok
+  end
+
+  # Planner stage/validation maps arrive string-keyed through MCP; in-process
+  # callers may use atoms. Mirrors the tool-side access
+  # (`ToolSurface.do_plan_create/2`'s `Map.get(stage_input, ...)`) so the
+  # context path accepts both shapes. The 3-arity form is `Map.get/2`'s
+  # nil default, so a missing `name`/`position` reaches the Stage changeset's
+  # `validate_required` exactly as it would through plan_create.
+  defp plan_input_get(map, string_key, atom_key) when is_map(map),
+    do: Map.get(map, string_key) || Map.get(map, atom_key)
+
+  defp plan_input_get(_map, _string_key, _atom_key), do: nil
+
+  defp plan_input_get(map, string_key, atom_key, default) when is_map(map),
+    do: Map.get(map, string_key) || Map.get(map, atom_key) || default
+
+  defp plan_input_get(_map, _string_key, _atom_key, default), do: default
+
+  # Same attrs `ToolSurface.maybe_put_evaluation_payload/2` builds for
+  # plan_create, restated here because that helper is private to the tool
+  # surface and the context path must not depend on it.
+  defp plan_stage_validation_attrs(stage_id, v_input) when is_map(v_input) do
+    attrs = %{stage_id: stage_id, kind: Map.get(v_input, "kind") || Map.get(v_input, :kind)}
+
+    case Map.get(v_input, "evaluation_payload") || Map.get(v_input, :evaluation_payload) do
+      nil -> attrs
+      payload -> Map.put(attrs, :evaluation_payload, payload)
+    end
+  end
+
+  defp plan_stage_validation_attrs(stage_id, _v_input),
+    do: %{stage_id: stage_id, kind: nil}
+
+  @doc """
   Whether `task_id` still has a plan sitting in `pending_review`.
 
   The staleness predicate behind the `task_plan_review` inbox row. That row's
@@ -4319,12 +4462,20 @@ defmodule Platform.Tasks do
   in task 019dfad1, where a done task gets reopened and its current active
   plan is retroactively marked rejected with the reviewer's feedback).
 
+  `draft` is accepted too (task 01a05b32 stage 1) — the planner self-service
+  path: an agent discarding its own draft over MCP via `plan_reject` so a
+  fresh `create_plan/1` can run on the same task immediately. A draft
+  rejection deliberately does NOT transition the task (the draft never moved
+  it past planning); the MCP tool layer gates on `draft` before calling here,
+  so the human-review and reopen flows remain the only callers for the other
+  statuses.
+
   The 2-arity form delegates with `reason: nil`.
   """
   def reject_plan(%Plan{} = plan, rejected_by), do: reject_plan(plan, rejected_by, nil)
 
   def reject_plan(%Plan{status: status} = plan, _rejected_by, reason)
-      when status in ["pending_review", "approved", "completed"] do
+      when status in ["draft", "pending_review", "approved", "completed"] do
     attrs =
       case reason do
         nil -> %{status: "rejected"}
