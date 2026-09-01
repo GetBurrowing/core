@@ -4324,10 +4324,12 @@ defmodule Platform.Meetings do
   Non-fatal by construction: a space with no meeting answers nil, and
   the caller decides what that means.
   """
-  @spec meeting_id_for_space(binary() | nil) :: binary() | nil
-  def meeting_id_for_space(nil), do: nil
+  @spec meeting_id_for_space(binary() | nil, DateTime.t() | nil) :: binary() | nil
+  def meeting_id_for_space(space_id, not_ended_before \\ nil)
 
-  def meeting_id_for_space(space_id) when is_binary(space_id) do
+  def meeting_id_for_space(nil, _not_ended_before), do: nil
+
+  def meeting_id_for_space(space_id, not_ended_before) when is_binary(space_id) do
     from(m in Meeting,
       where: m.chat_space_id == ^space_id,
       order_by: [
@@ -4338,8 +4340,43 @@ defmodule Platform.Meetings do
       limit: 1,
       select: m.id
     )
+    |> exclude_meetings_ended_before(not_ended_before)
     |> Repo.one()
   end
+
+  # The bound on the "still draining" fallback (task 01a04e9e).
+  #
+  # The fallback above is deliberate and stays: a chunk can legitimately
+  # arrive after its meeting was marked ended, because the transcript is
+  # still draining. What it lacked was any limit, so a space whose only
+  # meeting ended HOURS ago handed its id to a brand-new call.
+  #
+  # Measured on prod 2026-08-29, space `01a04e11-…`: a transcript that
+  # started at 22:34:49Z inherited a meeting that ended at 15:12:13Z, and
+  # four `brief_worthy` intents were dispatched carrying "the meeting is
+  # waiting on you" about a call that had been over since the afternoon.
+  # Every one was rejected, and each occupied a serial slot a real
+  # utterance had to queue behind.
+  #
+  # So the discriminator is not "is the meeting ended" but "did it end
+  # before this transcript began". A meeting that ended DURING the
+  # transcript is the drain case and still matches; one that ended before
+  # the transcript existed cannot possibly be what is being said now.
+  #
+  # `is_nil(m.ended_at)` is kept in the match on purpose: a live meeting
+  # has no `ended_at` and must not be filtered out by a comparison
+  # against NULL, which in SQL is neither true nor false.
+  #
+  # Passing nil for `not_ended_before` restores the old unbounded
+  # behaviour verbatim, so every existing caller that has no transcript
+  # start to offer is unchanged rather than silently tightened.
+  defp exclude_meetings_ended_before(query, nil), do: query
+
+  defp exclude_meetings_ended_before(query, %DateTime{} = started_at) do
+    from(m in query, where: is_nil(m.ended_at) or m.ended_at >= ^started_at)
+  end
+
+  defp exclude_meetings_ended_before(query, _other), do: query
 
   @doc """
   Append a segment map to the transcript's JSONB segments array.
@@ -4387,7 +4424,10 @@ defmodule Platform.Meetings do
                 transcript_id: updated.id,
                 space_id: updated.space_id,
                 segment: segment,
-                meeting_id: meeting_id_for_space(updated.space_id)
+                # Bounded by the transcript's own start (task 01a04e9e):
+                # a meeting that ended before this transcript began is
+                # not what anyone is talking about now.
+                meeting_id: meeting_id_for_space(updated.space_id, updated.started_at)
               }
             )
 
