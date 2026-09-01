@@ -161,6 +161,30 @@ defmodule Platform.Experiments.MetricsTest do
     plan
   end
 
+  # An in-place draft correction, as it lands in the audit stream.
+  #
+  # The row shape is copied from what production actually produces, not
+  # invented: `ToolSurface.emit_plan_updated/4` executes
+  # `[:platform, :tasks, :plan_updated]` with `task_id` and `plan_id` in the
+  # telemetry metadata, and `Audit.TelemetryHandler` joins the event name
+  # with dots into `event_type` and stringifies the metadata keys into the
+  # jsonb column (`build_attrs/3` + `ensure_json_safe/1`). `task_id` is NOT
+  # a top-level key, so it stays inside `metadata` — which is exactly where
+  # the metric reads it from.
+  defp plan_updated_audit(task_id, plan_id, event_type \\ "platform.tasks.plan_updated") do
+    {:ok, event} =
+      Platform.Audit.record(%{
+        event_type: event_type,
+        actor_type: "agent",
+        action: "plan_updated",
+        resource_type: "plan",
+        resource_id: plan_id,
+        metadata: %{"task_id" => task_id, "plan_id" => plan_id}
+      })
+
+    event
+  end
+
   describe "Metrics.subject_ids/2" do
     test "returns the variant's subjects and omits excluded ones", %{
       project: project,
@@ -344,6 +368,130 @@ defmodule Platform.Experiments.MetricsTest do
       # would give value 0.5 and n 2.
       assert {:ok, %Result{value: 1.0, n: 1}} =
                PlanRevisionCount.compute(experiment.id, "treatment")
+    end
+
+    # -- In-place draft corrections (task 01a05bef) --
+    #
+    # Every expectation below is a hardcoded LITERAL, never derived from the
+    # fixtures, from a second copy of the metric's query, or from
+    # `length(audit_rows)`. An expectation computed from the same inputs the
+    # metric reads cannot fail for any value the metric returns; it restates
+    # the implementation and calls that a check. Nor are these ranges — a
+    # `value > 1.0` would pass just as happily for a metric that counted the
+    # wrong thing twice.
+
+    test "an in-place draft correction is counted as a revision alongside the plan row", %{
+      project: project,
+      experiment: experiment
+    } do
+      user = user_fixture()
+      task = project |> task_fixture() |> assign(experiment, "treatment")
+      plan = plan_fixture(task, user, 1)
+
+      plan_updated_audit(task.id, plan.id)
+      plan_updated_audit(task.id, plan.id)
+
+      # One plan row plus two in-place corrections is three revisions of one
+      # task's plan. Counting rows alone — the pre-change behaviour — gives
+      # 1.0 here, because `replace_plan_stages/3` deliberately reuses the
+      # same plan row and never moves `version`.
+      assert {:ok, %Result{value: value, n: n, unit: :count}} =
+               PlanRevisionCount.compute(experiment.id, "treatment")
+
+      assert value == 3.0
+      assert n == 1
+    end
+
+    test "a planned subject with no corrections still scores exactly what it always did", %{
+      project: project,
+      experiment: experiment
+    } do
+      user = user_fixture()
+      task = project |> task_fixture() |> assign(experiment, "treatment")
+      plan_fixture(task, user, 1)
+
+      # The backward-compatibility guard. Every experiment number computed
+      # before `plan_update` existed was computed over subjects with zero
+      # `plan_updated` rows, so this case pins that the new source is purely
+      # ADDITIVE: with nothing to add, the answer must be bit-for-bit the
+      # old one. If this case ever moves, historical results have been
+      # silently restated.
+      assert {:ok, %Result{value: value, n: n}} =
+               PlanRevisionCount.compute(experiment.id, "treatment")
+
+      assert value == 1.0
+      assert n == 1
+    end
+
+    test "a correction for a task with no plan row cannot manufacture a unit", %{
+      project: project,
+      experiment: experiment
+    } do
+      user = user_fixture()
+
+      planned = project |> task_fixture() |> assign(experiment, "treatment")
+      unplanned = project |> task_fixture() |> assign(experiment, "treatment")
+
+      plan_fixture(planned, user, 1)
+      plan_updated_audit(unplanned.id, Ecto.UUID.generate())
+
+      # `n` counts TASKS THAT HAVE A PLAN, and the combine is keyed on the
+      # plan map for exactly this reason. Keying on the UNION of the plan
+      # and correction maps would admit `unplanned` as a unit worth 1, and
+      # this would read value 1.0 with n 2 — the same value, a different
+      # sample. That is why `n` is asserted as a literal here and not left
+      # implicit: the value alone does not distinguish the two behaviours.
+      assert {:ok, %Result{value: value, n: n}} =
+               PlanRevisionCount.compute(experiment.id, "treatment")
+
+      assert value == 1.0
+      assert n == 1
+    end
+
+    test "a correction on a task outside the variant does not contribute", %{
+      project: project,
+      experiment: experiment
+    } do
+      user = user_fixture()
+
+      subject = project |> task_fixture() |> assign(experiment, "treatment")
+      outsider = project |> task_fixture() |> assign(experiment, "control")
+
+      plan_fixture(subject, user, 1)
+      outsider_plan = plan_fixture(outsider, user, 1)
+
+      # A real, well-formed correction — on a task belonging to the OTHER
+      # arm. If the audit query were not filtered by subject id, the control
+      # arm's re-planning would be attributed to treatment.
+      plan_updated_audit(outsider.id, outsider_plan.id)
+
+      assert {:ok, %Result{value: value, n: n}} =
+               PlanRevisionCount.compute(experiment.id, "treatment")
+
+      assert value == 1.0
+      assert n == 1
+    end
+
+    test "a plan_rejected audit row is not counted as an in-place correction", %{
+      project: project,
+      experiment: experiment
+    } do
+      user = user_fixture()
+      task = project |> task_fixture() |> assign(experiment, "treatment")
+      plan = plan_fixture(task, user, 1)
+
+      # Same task, same plan, different event. A rejection is a DISCARD, and
+      # a discard is followed by a fresh plan ROW that `plan_counts/1`
+      # already counts. Counting the rejection event as well would charge one
+      # re-plan twice. Only `plan_updated` denotes the correction that leaves
+      # no row behind, so only `plan_updated` may be added.
+      plan_updated_audit(task.id, plan.id, "platform.tasks.plan_rejected")
+
+      assert {:ok, %Result{value: value, n: n}} =
+               PlanRevisionCount.compute(experiment.id, "treatment")
+
+      assert value == 1.0
+      assert n == 1
     end
   end
 

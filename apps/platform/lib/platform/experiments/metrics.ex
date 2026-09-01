@@ -87,7 +87,9 @@ defmodule Platform.Experiments.Metrics do
     "plan_revision_count" => %{
       module: Platform.Experiments.Metrics.PlanRevisionCount,
       label: "Plan revision count",
-      description: "Mean number of plan versions per task, over a variant's subjects.",
+      description:
+        "Mean number of plan revisions per task (plan rows plus in-place draft " <>
+          "corrections), over a variant's subjects.",
       direction: :lower_is_better
     },
     # `:neutral` here is a judgement, argued in the module's moduledoc: the

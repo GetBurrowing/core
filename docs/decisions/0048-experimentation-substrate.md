@@ -113,3 +113,105 @@ This ADR is **wrong**, not merely dated, if any of the following stops holding. 
 - The policy layer owns eligibility, traffic split, the project/epic exclusion filter, the cooldown value K, and the stop rule. Nothing else may decide these, or the exclusion filter of Decision 4 stops being a single lever.
 - Experiments will sometimes report "no effect yet" for a long time. That is the design working, and it will be uncomfortable.
 - Editing a template in `AdminPromptsLive` while an experiment targets its slug now has a defined meaning — it changes the live row and does not change the experiment — which must be shown in that UI, or the surprise merely moves.
+
+---
+
+## Addendum (2026-09-01, task 01a05bef): `plan_revision_count` counts in-place corrections
+
+This extends **Decision 6** — metric honesty rules are decisions, not UI polish
+— to what a metric *counts*, not only to what the dashboard is willing to
+print. A number that is displayed honestly but measures the wrong population is
+the same failure one layer down.
+
+### What `plan_revision_count` counts, as of this task
+
+A revision is any act of re-planning, and a planner can perform one two ways:
+
+- **Discard and re-plan** — a new `plans` row for the task.
+- **Correct the draft in place** — the MCP `plan_update` tool, which calls
+  `Tasks.replace_plan_stages/3` to swap the stage tree on the **same** plan row.
+
+The metric is the sum of both: plan rows per task, plus that task's
+`platform.tasks.plan_updated` rows read from the audit stream
+(`Platform.Audit`, ADR-0005). The two sources are **additive, not
+alternatives** — they are disjoint writers on disjoint tables, so a new plan row
+never emits `plan_updated` and an in-place correction never inserts a plan row.
+No revision is counted twice.
+
+The combine is keyed on the **plan** map and never on the union of the two. An
+audit row naming a task with no surviving plan row must not manufacture a unit:
+that would fabricate exactly the zero the "`n` counts tasks that have at least
+one plan" grouping exists to avoid, and it would move `n`.
+
+### Why rows alone was wrong
+
+`plan_revision_count` is registered `direction: :lower_is_better`. That is an
+assertion: **fewer re-plans is a better planner.** Counting plan rows alone made
+a draft corrected five times in place score `1.0` — identically to a plan
+written correctly the first time.
+
+**Failure mode prevented:** under Decision 5(d)'s multi-metric promotion gate, a
+planner prompt variant that favours `plan_update` over discard-and-replan wins
+on a metric that structurally cannot see its re-planning. The gate is designed
+to catch a secondary metric regressing while the primary wins; here the
+secondary metric could not regress, because the behaviour it exists to price was
+invisible to it. Nothing errors, no dashboard looks wrong, and the promotion is
+recorded (Decision 5(b)) as though the evidence were sound.
+
+### Rejected alternative: accept and document the undercount
+
+**Leave the query counting rows, and write down that in-place corrections are
+out of scope.** Rejected. That would have been the right call only if the metric
+were a *versioning-hygiene* measure — "how many plan versions does this task
+carry" — which is a fact about the data model, neither good nor bad.
+`direction: :neutral` is how this ADR's registry signals such a metric, and
+`stages_per_plan` carries it for exactly that reason: more stages per plan is
+neither a win nor a loss, and colouring it as either asserts a judgement the
+metric does not support. `plan_revision_count` does **not** carry `:neutral`. It
+carries `:lower_is_better`, and a directional metric is a claim about planner
+quality, so its population must be every act of re-planning or the direction is
+a lie. Documenting the gap in a moduledoc does not repair a number that
+promotion is gated on.
+
+### `replace_plan_stages/3` is endorsed, not changed
+
+`Tasks.replace_plan_stages/3` keeps a stable `plan_id` and a stable `version`
+across an in-place correction. That is deliberate and **correct**: a draft being
+corrected before approval is one plan, and minting a version per keystroke would
+make `version` meaningless. It was not changed by this work.
+
+The general rule, worth stating because the opposite is always the cheaper
+patch: **the metric was moved to the data, not the data to the metric.** A write
+path that is right for the domain does not get bent to make a measurement
+convenient; the measurement learns to read what the domain actually writes.
+
+### Residual gap, stated plainly
+
+The `plan_updated` audit row is written by the MCP tool path only —
+`Platform.Federation.ToolSurface.do_plan_update/4` in
+`apps/platform/lib/platform/federation/tool_surface.ex` — and **not** by
+`Tasks.replace_plan_stages/3` itself. A future in-process caller of the context
+function would therefore perform a revision this metric cannot see, silently
+reintroducing the undercount this addendum records fixing.
+
+This is tolerable today only because the tool is the sole non-test caller of
+`replace_plan_stages/3` in `lib/`. It is recorded here as a known thing to fix,
+not a surprise to rediscover. The fix is one of: move the emit into the context
+function, or count from a source the context function itself writes.
+
+### The anti-vacuity rule this pinned
+
+**Metric expectations are asserted against literals, never recomputed from the
+function under test.** `assert value == 3.0`, `assert n == 1` — never a value
+derived from the fixtures, from a second copy of the metric's query, or from
+`length(audit_rows)`. An expected value computed from the same inputs the metric
+reads cannot fail for any value the metric returns; it restates the
+implementation and calls that a check. Ranges are the same failure wearing a
+seatbelt: `value > 1.0` passes just as happily for a metric that counts the
+wrong thing twice.
+
+The literal `n` is load-bearing independently of the literal value. In the case
+where a correction names a task with no plan row, both the correct behaviour and
+the union-keyed bug yield `value == 1.0`; only `n` separates them (`1` versus
+`2`). Asserting the value alone would have been vacuous precisely where the
+grouping decision needed defending.
