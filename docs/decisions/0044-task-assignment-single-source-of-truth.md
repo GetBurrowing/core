@@ -138,6 +138,32 @@ survive the next phase transition.
 When both `phase_assignees` AND flat `assignee_id/type` are supplied
 by the caller, `phase_assignees` wins — the flat pair is dropped.
 
+**Conditional fan-out on create (task 01a05877).** On `:create` (the
+`task_create` surface) with `auto_approve_plan: true` and an
+agent-typed flat pair (`assignee_id` a non-empty binary; `assignee_type`
+absent or exactly `agent` — absent means agent), the builder instead
+fills every ABSENT one of the three slots — `planning`, `execution`,
+`review` — with the flat agent entry, then strips the flat pair exactly
+as above. Explicit `phase_assignees` entries win over the fill; an
+explicitly-nil slot stays nil and then trips the auto-approve
+precondition (the caller deliberately cleared a slot the flag
+requires). The fill does no DB access: agent liveness is the
+precondition's job, so an unknown agent id filled into `execution` or
+`review` still refuses with `:agent_not_found`. Without the flag the
+rule above is unchanged: planning-only.
+
+`task_update` deliberately does NOT fan out. It calls the same builder
+with `:update` mode, and its flat pair keeps routing to the
+current-phase slot: fanning there would clobber existing per-phase
+assignments on a live task. The `:create`-only mode gate is the
+mechanism; the `task_create` tool schema text states the same decision.
+
+The auto-approve refusal suggestion ("Flat assignee_id only sets
+planning per ADR 0044") predates the fan-out: on `task_create` with the
+flag and an agent-typed flat pair, a refusal now means the agent id did
+not resolve or an explicit slot is user-typed or nil — pass explicit
+`phase_assignees` or a resolvable agent id.
+
 ## Consequences
 
 **Positive**

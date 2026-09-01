@@ -31,6 +31,17 @@ defmodule Platform.Federation.TaskAttrs do
       `auto_route_flat_assignee_current_phase: true` AND supplies
       `current_phase: "<phase>"`. In that case they are REMOVED from
       `flat_attrs`.
+    * On `:create` with a truthy `auto_approve_plan` arg and an
+      agent-typed flat pair, the flat agent FANS OUT into every ABSENT
+      one of the three phase slots (`planning`, `execution`, `review`)
+      instead of only the current-phase slot — the auto-approve
+      precondition requires agent-resolved execution + review, which
+      planning-only routing can never satisfy. Explicit
+      `phase_assignees` entries (including an explicitly-nil slot) are
+      never overwritten. `:update` mode DELIBERATELY never fans out: its
+      flat pair keeps routing to the current-phase slot only, because
+      fanning there would clobber existing per-phase assignments on a
+      live task.
     * When BOTH structured `phase_assignees` AND flat `assignee_*` are
       supplied, structured wins — flat is dropped.
     * Every other field: `nil` means "untouched" and is dropped from
@@ -112,6 +123,18 @@ defmodule Platform.Federation.TaskAttrs do
         * `:current_phase` — the phase name to use as the slot. Required
           when `auto_route_flat_assignee_current_phase: true`.
 
+  ## Auto-approve fan-out (`:create` only, ADR 0044 §5)
+
+  When `mode` is `:create`, the auto-route opts are on, the args carry a
+  truthy `auto_approve_plan`, and the flat pair is agent-typed
+  (`assignee_id` a non-empty binary; `assignee_type` absent or exactly
+  `"agent"`), the emitted `phase_attrs` fills every ABSENT one of
+  `"planning"`, `"execution"`, `"review"` with the flat agent entry.
+  Explicit `phase_assignees` entries win over the fill; an explicitly-nil
+  slot is never filled (and then trips the auto-approve precondition).
+  The fill does no DB access — agent liveness stays the precondition's
+  job. `:update` never fans out.
+
   ## Returns
 
     * `{:ok, flat_attrs, phase_attrs}` where `phase_attrs` may be `nil`.
@@ -131,7 +154,8 @@ defmodule Platform.Federation.TaskAttrs do
          {:ok, flat_attrs, phase_attrs_from_flat} <-
            build_flat_attrs(args, mode, auto_route, current_phase, phase_attrs_from_struct) do
       merged_phase_attrs = merge_phase_attrs(phase_attrs_from_struct, phase_attrs_from_flat)
-      {:ok, flat_attrs, merged_phase_attrs}
+
+      {:ok, flat_attrs, maybe_fanout_auto_approve(merged_phase_attrs, args, mode, auto_route)}
     end
   end
 
@@ -277,28 +301,105 @@ defmodule Platform.Federation.TaskAttrs do
     struct
   end
 
+  # ── Auto-approve fan-out (ADR 0044 §5, task 01a05877) ───────────────────
+  #
+  # DELIBERATE ASYMMETRY, stated: on `:create` (the `task_create`
+  # surface) an agent-typed flat pair under `auto_approve_plan: true`
+  # fans out into every ABSENT one of the planning / execution / review
+  # slots, because the auto-approve precondition (below) requires
+  # agent-resolved execution AND review slots that planning-only
+  # auto-routing can never satisfy — task_create with the flag and a
+  # flat agent pair refused unconditionally before this fill existed.
+  # `:update` deliberately does NOT fan out: its flat pair keeps routing
+  # to the current-phase slot only, because fanning there would clobber
+  # existing per-phase assignments on a live task. The mode gate is the
+  # mechanism; the ADR amendment and the task_create tool schema text
+  # state the same decision.
+  #
+  # The fill does no DB access — agent liveness is the precondition's
+  # job, so an unknown agent id filled into `execution` or `review`
+  # still refuses with `:agent_not_found` there. Without the flag the
+  # routing is byte-for-byte unchanged (planning-only).
+
+  @auto_approve_fanout_phases ~w(planning execution review)
+
+  defp maybe_fanout_auto_approve(phase_attrs, args, mode, auto_route) do
+    if auto_approve_fanout?(args, mode, auto_route) do
+      fill_absent_fanout_slots(phase_attrs || %{}, flat_agent_entry(args))
+    else
+      phase_attrs
+    end
+  end
+
+  defp auto_approve_fanout?(args, mode, auto_route) do
+    mode == :create and auto_route == true and
+      auto_approve_flag_on?(args) and agent_typed_flat_pair?(args)
+  end
+
+  # Truthy means the key is present and neither nil nor false.
+  defp auto_approve_flag_on?(args) do
+    case Map.get(args, "auto_approve_plan") do
+      value when value in [nil, false] -> false
+      _ -> true
+    end
+  end
+
+  # Agent-typed flat pair: `assignee_id` a non-empty binary;
+  # `assignee_type` absent or exactly "agent" (absent means agent,
+  # mirroring `build_phase_entry_from_flat/1`). Any other value means no
+  # fan-out — a user-typed flat assignee never satisfies the
+  # auto-approve precondition.
+  defp agent_typed_flat_pair?(%{"assignee_id" => id} = args)
+       when is_binary(id) and id != "",
+       do: Map.get(args, "assignee_type") in [nil, "agent"]
+
+  defp agent_typed_flat_pair?(_args), do: false
+
+  defp flat_agent_entry(args),
+    do: %{"assignee_id" => args["assignee_id"], "assignee_type" => "agent"}
+
+  defp fill_absent_fanout_slots(phase_attrs, entry) do
+    Enum.reduce(@auto_approve_fanout_phases, phase_attrs, fn phase, acc ->
+      # A key the caller supplied is never overwritten — including an
+      # explicitly-nil slot, which stays nil and then trips the
+      # precondition (the caller deliberately cleared a slot the flag
+      # requires).
+      if Map.has_key?(acc, phase), do: acc, else: Map.put(acc, phase, entry)
+    end)
+  end
+
   # ── Auto-approve precondition ───────────────────────────────────────────
 
   @auto_approve_required_phases ~w(execution review)
 
   @typedoc """
-  Structured reject envelope emitted when the auto-approve precondition
+  Structured reject payload emitted when the auto-approve precondition
   fails. `missing_phases` keeps stable `[\"execution\", \"review\"]`
   ordering; `reasons` is a per-phase atom
-  (`:absent | :non_agent_type | :agent_not_found`).
+  (`:absent | :non_agent_type | :agent_not_found`);
+  `merged_phase_assignees` is the exact slot map the check read —
+  existing task slots overlaid with the build's routed slots — so the
+  caller can judge whether a mechanical correction (see
+  `auto_approve_corrected_args/3`) can repair the refusal.
   """
   @type auto_approve_precondition_error ::
           {:auto_approve_precondition_missing,
-           %{missing_phases: [String.t()], reasons: %{String.t() => atom()}}}
+           %{
+             missing_phases: [String.t()],
+             reasons: %{String.t() => atom()},
+             merged_phase_assignees: %{String.t() => map() | nil}
+           }}
 
   @doc """
   Hard-reject the write when `auto_approve_plan` is (or will be) `true`
   but the execution and/or review phases don't resolve to a live agent.
 
   Called by `Platform.Federation.ToolSurface` from both `task_create`
-  and `task_update` after `build_task_attrs/3` has auto-routed the flat
-  `assignee_id + assignee_type` pair into `phase_attrs[\"planning\"]`
-  per ADR 0044. The precondition inspects the execution + review slots
+  and `task_update` after `build_task_attrs/3` has routed the flat
+  `assignee_id + assignee_type` pair into `phase_attrs` per ADR 0044 —
+  planning-only without the flag, every absent one of the three slots
+  under the `:create` auto-approve fan-out. The precondition inspects
+  the execution + review slots
   (never planning) because auto-approve exists to save Rowan the click on
   the plan-review gate that runs immediately AFTER planning, and the
   execution + review agents are the ones actually dispatched.
@@ -366,7 +467,12 @@ defmodule Platform.Federation.TaskAttrs do
 
         phases ->
           {:error,
-           {:auto_approve_precondition_missing, %{missing_phases: phases, reasons: reasons}}}
+           {:auto_approve_precondition_missing,
+            %{
+              missing_phases: phases,
+              reasons: reasons,
+              merged_phase_assignees: merged
+            }}}
       end
     else
       :ok
@@ -423,6 +529,74 @@ defmodule Platform.Federation.TaskAttrs do
   end
 
   defp default_agent_resolver(id), do: Platform.Repo.get(Platform.Agents.Agent, id)
+
+  # ── Auto-approve corrected args (task 01a05877 stage 2) ─────────────────
+
+  @doc """
+  Mechanical `corrected_args` for a refused auto-approve precondition:
+  the submitted tool arguments with `phase_assignees` completed so a
+  resubmission satisfies the gate — or `nil` when no mechanical repair
+  exists and the caller must choose an agent id.
+
+  Called by `Platform.Federation.ToolSurface` from both the task_create
+  and task_update `auto_approve_precondition_missing` envelope sites, so
+  the two tools answer by one rule. The returned map travels in the
+  RESPONSE ENVELOPE ONLY — never a log line, never telemetry (the args
+  carry user content; docs/decisions/0005).
+
+  ## Rule (all must hold for a non-nil return)
+
+    * the submitted args carry a flat agent-typed assignee:
+      `assignee_id` a non-empty binary with `assignee_type` absent or
+      exactly `"agent"` (the same predicate the `:create` fan-out uses);
+    * `auto_approve_plan` is truthy in the submitted args;
+    * every failing phase is ABSENT in `merged_phase_assignees` — the
+      same merge the precondition read (existing task slots overlaid
+      with the build's routed slots). A failing slot that is
+      present-but-invalid (user-typed, unknown id) or present-but-nil
+      (explicitly cleared) cannot be repaired by filling, so the caller
+      must choose an agent id and `nil` comes back.
+
+  ## Completion
+
+    * starts from the submitted `phase_assignees` (string-keyed);
+    * fills every ABSENT one of `planning` / `execution` / `review`
+      with the flat agent entry — explicit submitted keys are never
+      overwritten (same posture as the `:create` fan-out);
+    * returns the submitted args with `phase_assignees` replaced by the
+      completed map, string-keyed.
+
+  After the `:create` fan-out landed (task 01a05877 stage 1), a
+  task_create refusal this repair could fix already succeeds, so in
+  practice the correction fires on the task_update path; both call sites
+  run the same rule regardless.
+  """
+  @spec auto_approve_corrected_args(map(), map() | nil, [String.t()]) ::
+          %{String.t() => term()} | nil
+  def auto_approve_corrected_args(args, merged_phase_assignees, missing_phases)
+      when is_map(args) and is_list(missing_phases) do
+    args = stringify_keys(args)
+    merged = merged_phase_assignees || %{}
+
+    mechanical_repair? =
+      agent_typed_flat_pair?(args) and
+        auto_approve_flag_on?(args) and
+        Enum.all?(missing_phases, fn phase -> not Map.has_key?(merged, phase) end)
+
+    if mechanical_repair? do
+      submitted_slots =
+        case Map.get(args, "phase_assignees") do
+          slots when is_map(slots) -> stringify_keys(slots)
+          _ -> %{}
+        end
+
+      completed = fill_absent_fanout_slots(submitted_slots, flat_agent_entry(args))
+
+      Map.put(args, "phase_assignees", completed)
+    else
+      nil
+    end
+  end
 
   # ── Utilities ───────────────────────────────────────────────────────────
 

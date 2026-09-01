@@ -347,6 +347,181 @@ defmodule Platform.Federation.TaskAttrsTest do
     end
   end
 
+  # ── Auto-approve fan-out on :create (task 01a05877, ADR 0044 §5) ────────
+  #
+  # task_create with auto_approve_plan: true and an agent-typed flat pair
+  # refused unconditionally before the fan-out: flat routing only ever
+  # filled `phase_attrs["planning"]`, but the auto-approve precondition
+  # requires agent-resolved execution + review slots. On :create with the
+  # flag, the flat agent now fills every ABSENT one of the three slots.
+  # All expectations below are LITERAL maps built from the fixture ids —
+  # never re-derived from the builder — so a mutant that over- or
+  # under-fills cannot pass by construction.
+  describe "build_task_attrs/3 — auto-approve fan-out on :create" do
+    @fanout_opts [auto_route_flat_assignee_current_phase: true, current_phase: "planning"]
+
+    test "flat agent (assignee_type absent) + flag fans out to the literal three-slot map" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "auto_approve_plan" => true
+      }
+
+      assert {:ok, flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      assert flat == %{title: "t", project_id: "p", auto_approve_plan: true}
+      refute Map.has_key?(flat, :assignee_id)
+      refute Map.has_key?(flat, :assignee_type)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "flat agent (assignee_type \"agent\") + flag fans out to the literal three-slot map" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent",
+        "auto_approve_plan" => true
+      }
+
+      assert {:ok, flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      refute Map.has_key?(flat, :assignee_id)
+      refute Map.has_key?(flat, :assignee_type)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "flag false routes planning-only (mutation probe: fan-out is flag-gated)" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent",
+        "auto_approve_plan" => false
+      }
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "flag absent routes planning-only (mutation probe: fan-out is flag-gated)" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent"
+      }
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "flat USER-typed pair + flag routes planning-only, no fan-out" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @user_id,
+        "assignee_type" => "user",
+        "auto_approve_plan" => true
+      }
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @user_id, "assignee_type" => "user"}
+             }
+    end
+
+    test "empty-string assignee_id + flag does not fan out (non-empty binary required)" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => "",
+        "auto_approve_plan" => true
+      }
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => "", "assignee_type" => "agent"}
+             }
+    end
+
+    test "explicit planning entry wins; execution + review fill from the flat agent (literal map)" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent",
+        "auto_approve_plan" => true,
+        "phase_assignees" => %{
+          "planning" => %{"assignee_id" => @sponsor_id, "assignee_type" => "agent"}
+        }
+      }
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @sponsor_id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "explicitly-nil slot is never filled and stays nil" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent",
+        "auto_approve_plan" => true,
+        "phase_assignees" => %{"execution" => nil}
+      }
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "execution" => nil,
+               "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "DELIBERATE ASYMMETRY PIN: :update mode with the same args + opts routes planning-only" do
+      # task_update never fans out — its flat pair keeps routing to the
+      # current-phase slot only, because fanning would clobber existing
+      # per-phase assignments on a live task.
+      args = %{
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent",
+        "auto_approve_plan" => true
+      }
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :update, @fanout_opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+  end
+
   # ── check_auto_approve_preconditions/4 (task 019f5145) ─────────────────
   #
   # Pure-function precondition on the auto_approve_plan flag: when the
@@ -558,6 +733,148 @@ defmodule Platform.Federation.TaskAttrsTest do
                  nil,
                  agent_resolver: raising_resolver
                )
+    end
+  end
+
+  # ── auto_approve_corrected_args/3 (task 01a05877 stage 2) ───────────────
+  #
+  # Mechanical corrected_args for a refused auto-approve precondition.
+  # All expectations are LITERAL maps built from the fixture ids — never
+  # re-derived from the function under test — so a mutant that over- or
+  # under-fills cannot pass by construction.
+  describe "auto_approve_corrected_args/3" do
+    @task_id "01900000-0000-7000-8000-000000000004"
+
+    test "flat agent + flag + every failing slot absent → corrected args with the literal three-slot map" do
+      args = %{
+        "task_id" => @task_id,
+        "auto_approve_plan" => true,
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent"
+      }
+
+      # The merged map the precondition read on a slotless task whose
+      # flat pair routed to the current (planning) phase slot.
+      merged = %{"planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}}
+
+      assert TaskAttrs.auto_approve_corrected_args(args, merged, ["execution", "review"]) == %{
+               "task_id" => @task_id,
+               "auto_approve_plan" => true,
+               "assignee_id" => @agent_id,
+               "assignee_type" => "agent",
+               "phase_assignees" => %{
+                 "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+                 "execution" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+                 "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+               }
+             }
+    end
+
+    test "user-typed flat pair → nil (caller must choose an agent id)" do
+      args = %{
+        "task_id" => @task_id,
+        "auto_approve_plan" => true,
+        "assignee_id" => @user_id,
+        "assignee_type" => "user"
+      }
+
+      assert TaskAttrs.auto_approve_corrected_args(args, %{}, ["execution", "review"]) == nil
+    end
+
+    test "absent flat pair → nil" do
+      args = %{"task_id" => @task_id, "auto_approve_plan" => true}
+
+      assert TaskAttrs.auto_approve_corrected_args(args, %{}, ["execution", "review"]) == nil
+    end
+
+    test "flag off → nil (mutation probe: the correction is flag-gated)" do
+      args = %{
+        "task_id" => @task_id,
+        "auto_approve_plan" => false,
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent"
+      }
+
+      assert TaskAttrs.auto_approve_corrected_args(args, %{}, ["execution", "review"]) == nil
+    end
+
+    test "empty-string assignee_id → nil (non-empty binary required)" do
+      args = %{
+        "task_id" => @task_id,
+        "auto_approve_plan" => true,
+        "assignee_id" => "",
+        "assignee_type" => "agent"
+      }
+
+      assert TaskAttrs.auto_approve_corrected_args(args, %{}, ["execution", "review"]) == nil
+    end
+
+    test "failing slot present-but-user-typed in merged → nil (fill cannot repair)" do
+      args = %{
+        "task_id" => @task_id,
+        "auto_approve_plan" => true,
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent"
+      }
+
+      merged = %{"execution" => %{"assignee_id" => @user_id, "assignee_type" => "user"}}
+
+      assert TaskAttrs.auto_approve_corrected_args(args, merged, ["execution", "review"]) == nil
+    end
+
+    test "failing slot present-but-nil in merged → nil (explicitly cleared slot is never filled)" do
+      args = %{
+        "task_id" => @task_id,
+        "auto_approve_plan" => true,
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent"
+      }
+
+      assert TaskAttrs.auto_approve_corrected_args(args, %{"execution" => nil}, [
+               "execution",
+               "review"
+             ]) == nil
+    end
+
+    test "failing slot present with an unknown agent id → nil (fill cannot repair)" do
+      args = %{
+        "task_id" => @task_id,
+        "auto_approve_plan" => true,
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent"
+      }
+
+      merged = %{"execution" => %{"assignee_id" => @unknown_agent, "assignee_type" => "agent"}}
+
+      assert TaskAttrs.auto_approve_corrected_args(args, merged, ["execution", "review"]) == nil
+    end
+
+    test "explicit submitted phase_assignees keys are kept; only absent slots are filled" do
+      args = %{
+        "task_id" => @task_id,
+        "auto_approve_plan" => true,
+        "assignee_id" => @agent_id,
+        "assignee_type" => "agent",
+        "phase_assignees" => %{
+          "execution" => %{"assignee_id" => @exec_agent, "assignee_type" => "agent"}
+        }
+      }
+
+      # The existing task already supplies the live execution slot, so
+      # only review is failing — the explicit execution key survives.
+      merged = %{"execution" => %{"assignee_id" => @exec_agent, "assignee_type" => "agent"}}
+
+      assert TaskAttrs.auto_approve_corrected_args(args, merged, ["review"]) == %{
+               "task_id" => @task_id,
+               "auto_approve_plan" => true,
+               "assignee_id" => @agent_id,
+               "assignee_type" => "agent",
+               "phase_assignees" => %{
+                 "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+                 "execution" => %{"assignee_id" => @exec_agent, "assignee_type" => "agent"},
+                 "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+               }
+             }
     end
   end
 end

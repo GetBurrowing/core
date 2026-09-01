@@ -2117,6 +2117,21 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert Map.has_key?(task_create.parameters, :auto_approve_plan)
       assert task_create.parameters.auto_approve_plan.type == "boolean"
       assert task_create.parameters.auto_approve_plan.required == false
+
+      # Task 01a05877: the schema text must tell the caller that a flat
+      # agent-typed assignee under the flag fans into all three phase
+      # slots, that explicit phase_assignees win over the fan-out, and
+      # that user-typed or missing assignees still need explicit
+      # phase_assignees. Pin both the parameter description and the tool
+      # description (the MCP transport forwards the latter).
+      param_description = task_create.parameters.auto_approve_plan.description
+      assert param_description =~ "fans that agent into all three phase slots"
+      assert param_description =~ "explicit phase_assignees entries win"
+      assert param_description =~ "still need explicit phase_assignees"
+
+      assert task_create.description =~ "fans into all three phase slots"
+      assert task_create.description =~ "explicit phase_assignees entries win"
+      assert task_create.description =~ "still need explicit phase_assignees"
     end
 
     test "task_get exposes auto_approve_plan on the read envelope (task 019f25f2 stage 5)" do
@@ -2232,19 +2247,205 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert reloaded.phase_assignees["review"]["assignee_id"] == reviewer.id
     end
 
-    test "task_create with flat assignee_id only + auto_approve_plan: true rejects" do
-      # Flat pair auto-routes into planning (per ADR 0044) — execution
-      # and review stay absent, so the precondition fires and nothing
-      # is written to the DB.
+    test "task_create with flat agent assignee + auto_approve_plan: true fans into all three phase slots" do
+      # Was the defect trap (task 01a05877): the flat pair auto-routed
+      # into planning ONLY (per ADR 0044), so the auto-approve
+      # precondition refused unconditionally — execution and review could
+      # never resolve from a flat agent. The canonical builder now fans
+      # the flat agent into every ABSENT slot on :create, and the
+      # persisted row carries the full three-slot map the
+      # TaskRouterWatcher needs for execution + review dispatch.
       project = create_project()
       agent = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Flat agent auto-approve",
+            "auto_approve_plan" => true,
+            "assignee_id" => agent.id,
+            "assignee_type" => "agent"
+          },
+          %{}
+        )
+
+      assert result.auto_approve_plan == true
+
+      reloaded = Tasks.get_task_record(result.id)
+      assert reloaded.auto_approve_plan == true
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "task_create with flat agent assignee and NO auto_approve_plan key routes planning-only (mutation probe)" do
+      # Mutation probe — fails if the fan-out is made unconditional.
+      # Without the flag the persisted map must stay the planning-only
+      # ADR 0044 shape.
+      project = create_project()
+      agent = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "No flag, planning only",
+            "assignee_id" => agent.id,
+            "assignee_type" => "agent"
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(result.id)
+      assert reloaded.auto_approve_plan == false
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "task_create flat agent + flag + explicit planning keeps the explicit planner and fans execution/review" do
+      project = create_project()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+      flat_agent = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Explicit planner, fanned exec/review",
+            "auto_approve_plan" => true,
+            "assignee_id" => flat_agent.id,
+            "assignee_type" => "agent",
+            "phase_assignees" => %{
+              "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"}
+            }
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(result.id)
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => flat_agent.id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => flat_agent.id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "task_create flat agent + flag + complete explicit phase_assignees wins verbatim" do
+      # Every slot explicitly supplied — the explicit map wins verbatim,
+      # no slot is overwritten by the flat agent.
+      project = create_project()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+      executor = create_agent(%{slug: "executor-#{System.unique_integer([:positive])}"})
+      reviewer = create_agent(%{slug: "reviewer-#{System.unique_integer([:positive])}"})
+      flat_agent = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Complete explicit map wins",
+            "auto_approve_plan" => true,
+            "assignee_id" => flat_agent.id,
+            "assignee_type" => "agent",
+            "phase_assignees" => %{
+              "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"},
+              "execution" => %{"assignee_id" => executor.id, "assignee_type" => "agent"},
+              "review" => %{"assignee_id" => reviewer.id, "assignee_type" => "agent"}
+            }
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(result.id)
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => executor.id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => reviewer.id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "task_create with flat USER assignee + auto_approve_plan: true refuses and writes nothing" do
+      # DO-NOT-REGRESS guard: the fan-out is agent-typed only. A user
+      # flat pair never satisfies the precondition, and nothing is
+      # persisted when it fires.
+      project = create_project()
+      user = insert_user_for_sponsor()
 
       assert {:error, envelope} =
                ToolSurface.execute(
                  "task_create",
                  %{
                    "project_id" => project.id,
-                   "title" => "Flat-only auto-approve",
+                   "title" => "User flat auto-approve",
+                   "auto_approve_plan" => true,
+                   "assignee_id" => user.id,
+                   "assignee_type" => "user"
+                 },
+                 %{}
+               )
+
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["execution", "review"]
+      assert envelope.recoverable == true
+
+      # DB unchanged — precondition fires before `Tasks.create_task/1`.
+      assert Tasks.list_tasks(project_id: project.id) == []
+    end
+
+    test "task_create with flat agent and assignee_type ABSENT + flag fans into all three agent-typed slots" do
+      # Absent assignee_type means agent (mirrors
+      # `build_phase_entry_from_flat/1`), so the fan-out fires the same
+      # as the explicit "agent" shape.
+      project = create_project()
+      agent = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Typeless flat agent fans out",
+            "auto_approve_plan" => true,
+            "assignee_id" => agent.id
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(result.id)
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "task_update with flat agent + auto_approve_plan: true still refuses (no fan-out on update)" do
+      # DELIBERATE ASYMMETRY at the MCP boundary: the fan-out is
+      # :create-only. On a live task the flat pair keeps routing to the
+      # current-phase slot, so a flag flip with a flat agent still hits
+      # the precondition instead of clobbering per-phase assignments.
+      project = create_project()
+      agent = create_agent()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Slotless task"})
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{
+                   "task_id" => task.id,
                    "auto_approve_plan" => true,
                    "assignee_id" => agent.id,
                    "assignee_type" => "agent"
@@ -2256,8 +2457,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert envelope.missing_phases == ["execution", "review"]
       assert envelope.recoverable == true
 
-      # DB unchanged — precondition fires before `Tasks.create_task/1`.
-      assert Tasks.list_tasks(project_id: project.id) == []
+      # Task unchanged — the changeset writer never ran.
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.auto_approve_plan == false
     end
 
     test "task_create with planning+execution but missing review rejects with review-only" do
@@ -2405,6 +2607,238 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert reloaded.auto_approve_plan == false
       # Phase_assignees preserved through the toggle.
       assert reloaded.phase_assignees["planning"]["assignee_id"] == planner.id
+    end
+
+    # ── Recoverable refusals echo submitted_args (task 01a05877 stage 2) ──
+    #
+    # Every recoverable refusal envelope from task_create / task_update
+    # carries the arguments as received at the tool boundary (post-defaults
+    # for task_create) so a retry is patch-one-field instead of
+    # rebuild-everything. The echo lives in the RESPONSE ENVELOPE ONLY —
+    # never a log line (the args carry user content; docs/decisions/0005).
+
+    test "task_create user-typed flat assignee + flag refusal echoes submitted_args, no corrected_args" do
+      project = create_project()
+      user = insert_user_for_sponsor()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_create",
+                 %{
+                   "project_id" => project.id,
+                   "title" => "Echo probe user flat",
+                   "auto_approve_plan" => true,
+                   "assignee_id" => user.id,
+                   "assignee_type" => "user"
+                 },
+                 %{}
+               )
+
+      assert envelope.code == :auto_approve_precondition_missing
+
+      # Verbatim echo of the submitted args, post-Map.put_new defaults
+      # (status/priority drop in when the keys are absent).
+      assert envelope.submitted_args == %{
+               "project_id" => project.id,
+               "title" => "Echo probe user flat",
+               "auto_approve_plan" => true,
+               "assignee_id" => user.id,
+               "assignee_type" => "user",
+               "status" => "backlog",
+               "priority" => "medium"
+             }
+
+      # A user-typed flat assignee cannot be repaired mechanically — the
+      # caller must choose an agent id.
+      refute Map.has_key?(envelope, :corrected_args)
+    end
+
+    test "task_create without project_id: changeset refusal echoes submitted_args (patch-one-field retry)" do
+      assignee_id = Ecto.UUID.generate()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_create",
+                 %{
+                   "title" => "No project echo",
+                   "assignee_id" => assignee_id,
+                   "assignee_type" => "agent"
+                 },
+                 %{}
+               )
+
+      assert envelope.recoverable == true
+      assert envelope.error =~ "Failed to create task"
+
+      # The absent project_id stays absent in the echo, and the
+      # Map.put_new defaults are part of it — the retry is literally
+      # "add project_id" to this map.
+      assert envelope.submitted_args == %{
+               "title" => "No project echo",
+               "assignee_id" => assignee_id,
+               "assignee_type" => "agent",
+               "status" => "backlog",
+               "priority" => "medium",
+               "auto_approve_plan" => false
+             }
+
+      refute Map.has_key?(envelope.submitted_args, "project_id")
+    end
+
+    test "task_update slotless task + flat agent + flag: corrected_args completes the three slots" do
+      project = create_project()
+      agent = create_agent()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Slotless echo"})
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{
+                   "task_id" => task.id,
+                   "auto_approve_plan" => true,
+                   "assignee_id" => agent.id,
+                   "assignee_type" => "agent"
+                 },
+                 %{}
+               )
+
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["execution", "review"]
+
+      assert envelope.submitted_args == %{
+               "task_id" => task.id,
+               "auto_approve_plan" => true,
+               "assignee_id" => agent.id,
+               "assignee_type" => "agent"
+             }
+
+      # LITERAL three-slot agent map built from the flat pair — the
+      # mechanical completion the caller can resubmit.
+      assert envelope.corrected_args == %{
+               "task_id" => task.id,
+               "auto_approve_plan" => true,
+               "assignee_id" => agent.id,
+               "assignee_type" => "agent",
+               "phase_assignees" => %{
+                 "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+                 "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+                 "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+               }
+             }
+
+      # The retry shape works end-to-end: resubmitting corrected_args
+      # verbatim satisfies the precondition and lands the update.
+      assert {:ok, result} = ToolSurface.execute("task_update", envelope.corrected_args, %{})
+      assert result.auto_approve_plan == true
+
+      reloaded = Tasks.get_task_record(task.id)
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "task_update with a present-but-user-typed execution slot: no corrected_args (fill cannot repair)" do
+      project = create_project()
+      agent = create_agent()
+      user = insert_user_for_sponsor()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "User executor echo",
+          status: "planning"
+        })
+
+      {:ok, task} =
+        Tasks.set_phase_assignees(task, %{
+          "execution" => %{"assignee_id" => user.id, "assignee_type" => "user"}
+        })
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{
+                   "task_id" => task.id,
+                   "auto_approve_plan" => true,
+                   "assignee_id" => agent.id,
+                   "assignee_type" => "agent"
+                 },
+                 %{}
+               )
+
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["execution", "review"]
+
+      # The failing execution slot is present (user-typed) in the merged
+      # map the precondition read — completion cannot repair it, so no
+      # corrected_args is offered.
+      refute Map.has_key?(envelope, :corrected_args)
+
+      assert envelope.submitted_args == %{
+               "task_id" => task.id,
+               "auto_approve_plan" => true,
+               "assignee_id" => agent.id,
+               "assignee_type" => "agent"
+             }
+    end
+
+    test "task_create invalid_phase_keys refusal echoes submitted_args" do
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_create",
+                 %{
+                   "project_id" => "unused-the-build-fails-first",
+                   "title" => "Bad phase keys",
+                   "phase_assignees" => %{"shipping" => %{}}
+                 },
+                 %{}
+               )
+
+      assert envelope.error =~ "Invalid phase_assignees keys"
+      assert envelope.recoverable == true
+
+      assert envelope.submitted_args == %{
+               "project_id" => "unused-the-build-fails-first",
+               "title" => "Bad phase keys",
+               "phase_assignees" => %{"shipping" => %{}},
+               "status" => "backlog",
+               "priority" => "medium",
+               "auto_approve_plan" => false
+             }
+    end
+
+    test "refusal echoes never reach a log line (response envelope only)" do
+      project = create_project()
+      unique = System.unique_integer([:positive])
+      title = "log-silence-probe-#{unique}"
+
+      {result, captured} =
+        ExUnit.CaptureLog.with_log([level: :debug], fn ->
+          ToolSurface.execute(
+            "task_create",
+            %{
+              "project_id" => project.id,
+              "title" => title,
+              "auto_approve_plan" => true,
+              "assignee_id" => "user-log-silence-#{unique}",
+              "assignee_type" => "user"
+            },
+            %{}
+          )
+        end)
+
+      assert {:error, envelope} = result
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.submitted_args["title"] == title
+
+      # The echo must never reach a log line — neither the user-content
+      # title nor any submitted_args payload fragment.
+      refute captured =~ title
+      refute captured =~ "user-log-silence-#{unique}"
+      refute captured =~ "submitted_args"
     end
 
     test "plan_get stamps auto_approved_at when the plan was auto-approved (task 019f25f2 stage 5)" do

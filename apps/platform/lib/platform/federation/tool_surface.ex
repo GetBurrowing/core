@@ -1615,7 +1615,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_create",
         description:
-          "Create a new task in a project. Tasks track work items on the kanban board. Optionally set a Sponsor (human shepherd, ADR 0042) distinct from the current-phase technical assignee. Set auto_approve_plan: true to skip human review when the plan is submitted (requires an assigned agent). Canonical shape is documented in ADR 0044 and shared with task_update via `Platform.Federation.TaskAttrs.build_task_attrs/3` — flat assignee_id + assignee_type writes auto-route into `phase_assignees[\"planning\"]` (new tasks start at planning phase), so the write survives future phase transitions.",
+          "Create a new task in a project. Tasks track work items on the kanban board. Optionally set a Sponsor (human shepherd, ADR 0042) distinct from the current-phase technical assignee. Set auto_approve_plan: true to skip human review when the plan is submitted (requires an assigned agent). Canonical shape is documented in ADR 0044 and shared with task_update via `Platform.Federation.TaskAttrs.build_task_attrs/3` — flat assignee_id + assignee_type writes auto-route into `phase_assignees[\"planning\"]` (new tasks start at planning phase), so the write survives future phase transitions. With auto_approve_plan: true and an agent-typed flat assignee, the flat agent instead fans into all three phase slots (planning, execution, review) wherever an entry is absent; explicit phase_assignees entries win over the fan-out. User-typed or missing assignees still need explicit phase_assignees covering execution and review for auto-approve.",
         parameters: %{
           project_id: %{
             type: "string",
@@ -1666,7 +1666,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "boolean",
             required: false,
             description:
-              "When true, auto-approve the plan the planner submits and skip the human review step. Precondition: both the execution-phase and review-phase assignees must resolve to an agent (via assignee_id + assignee_type OR phase_assignees). If either is missing, the auto-approve is silently skipped and the plan stays in pending_review for human review. Defaults to false."
+              "When true, auto-approve the plan the planner submits and skip the human review step. With an agent-typed flat assignee_id (assignee_type omitted or \"agent\"), the flag fans that agent into all three phase slots (planning, execution, review) wherever an entry is absent; explicit phase_assignees entries win over the fan-out. User-typed or missing assignees still need explicit phase_assignees covering execution and review. Precondition: both the execution-phase and review-phase assignees must resolve to an agent (via assignee_id + assignee_type OR phase_assignees); if either is missing or user-typed, the create is refused with code auto_approve_precondition_missing and nothing is written. Defaults to false."
           },
           deploy_target: %{
             type: "string",
@@ -4086,12 +4086,18 @@ defmodule Platform.Federation.ToolSurface do
           end
       end
     else
+      # Task 01a05877 stage 2: recoverable refusals echo the submitted
+      # arguments (post-defaults) back in the response envelope ONLY —
+      # never a log line, never telemetry, never an audit event (title/
+      # description are user content; docs/decisions/0005) — so a retry
+      # is patch-one-field instead of rebuild-everything.
       {:error, {:invalid_phase_keys, keys}} ->
         {:error,
          %{
            error: "Invalid phase_assignees keys: #{Enum.join(keys, ", ")}",
            recoverable: true,
-           suggestion: "Use 'planning', 'execution', or 'review'"
+           suggestion: "Use 'planning', 'execution', or 'review'",
+           submitted_args: args_with_defaults
          }}
 
       {:error, {:invalid_phase_assignees_shape, _}} ->
@@ -4100,11 +4106,17 @@ defmodule Platform.Federation.ToolSurface do
            error: "phase_assignees must be a map keyed by phase name",
            recoverable: true,
            suggestion:
-             "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}"
+             "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}",
+           submitted_args: args_with_defaults
          }}
 
-      {:error, {:auto_approve_precondition_missing, %{missing_phases: phases}}} ->
-        {:error, auto_approve_precondition_envelope(phases)}
+      {:error,
+       {:auto_approve_precondition_missing,
+        %{missing_phases: phases, merged_phase_assignees: merged}}} ->
+        corrected = TaskAttrs.auto_approve_corrected_args(args_with_defaults, merged, phases)
+
+        {:error,
+         auto_approve_precondition_envelope(phases, args_with_defaults, corrected, :create)}
 
       {:error, :project_archived} ->
         {:error, project_archived_envelope("create a task in")}
@@ -4114,7 +4126,8 @@ defmodule Platform.Federation.ToolSurface do
          %{
            error: "Failed to create task: #{inspect_errors(changeset)}",
            recoverable: true,
-           suggestion: "Check that project_id is valid and title is provided"
+           suggestion: "Check that project_id is valid and title is provided",
+           submitted_args: args_with_defaults
          }}
 
       {:error, other} ->
@@ -4122,7 +4135,8 @@ defmodule Platform.Federation.ToolSurface do
          %{
            error: "Failed to create task: #{inspect(other)}",
            recoverable: true,
-           suggestion: "Check the request shape"
+           suggestion: "Check the request shape",
+           submitted_args: args_with_defaults
          }}
     end
   end
@@ -4482,6 +4496,7 @@ defmodule Platform.Federation.ToolSurface do
                    "Invalid status transition from '#{task.status}' to '#{status_change}'. " <>
                      exits_sentence,
                  recoverable: true,
+                 submitted_args: args,
                  suggestion:
                    exits_sentence <>
                      " 'cancelled' is TERMINAL \u2014 it has no outbound edges and it means the " <>
@@ -4504,6 +4519,7 @@ defmodule Platform.Federation.ToolSurface do
                  error:
                    "Cannot transition to '#{status_change}': task has no approved plan and is not a sponsor-bypass candidate",
                  recoverable: true,
+                 submitted_args: args,
                  suggestion:
                    "Create a plan (plan_create) and approve it (plan_approve) before transitioning to an execution phase. " <>
                      "The sponsor-bypass exemption only applies to human-initiated moves on sponsor-only tasks with no agent involvement."
@@ -4520,6 +4536,7 @@ defmodule Platform.Federation.ToolSurface do
                %{
                  error: "unresolved_deploy_target",
                  recoverable: true,
+                 submitted_args: args,
                  suggestion:
                    "Set task.deploy_target explicitly (e.g. task_update(deploy_target: \"production\")) " <>
                      "or configure a project-level default via " <>
@@ -4532,17 +4549,33 @@ defmodule Platform.Federation.ToolSurface do
                %{
                  error: "Failed to update task: #{inspect_errors(changeset)}",
                  recoverable: true,
+                 submitted_args: args,
                  suggestion: "Check that the provided values are valid"
                }}
 
-            {:error, {:auto_approve_precondition_missing, %{missing_phases: phases}}} ->
-              {:error, auto_approve_precondition_envelope(phases)}
+            {:error,
+             {:auto_approve_precondition_missing,
+              %{missing_phases: phases, merged_phase_assignees: merged}}} ->
+              corrected = TaskAttrs.auto_approve_corrected_args(args, merged, phases)
+
+              {:error, auto_approve_precondition_envelope(phases, args, corrected, :update)}
 
             # The commencement gate's 3-tuple. Without this clause the
             # `with` has no matching `else` branch (every other clause is
             # a 2-tuple) and raises `WithClauseError` → 500.
             {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
-              {:error, stack_plans_pending_envelope(stack_id, waiting_on)}
+              # Recoverable refusal → echo the submitted arguments in the
+              # response envelope only (task 01a05877 stage 2). The
+              # delegating `waiting_on == []` envelope's recoverable flag
+              # depends on the observed stack status, so the echo is
+              # added only when the envelope is actually recoverable.
+              gate_envelope = stack_plans_pending_envelope(stack_id, waiting_on)
+
+              {:error,
+               if(Map.get(gate_envelope, :recoverable),
+                 do: Map.put(gate_envelope, :submitted_args, args),
+                 else: gate_envelope
+               )}
 
             # ADR 0045 decision 7 (task 01a05393 stage 3): a member of a
             # stack that already SHIPPED through its rollup cannot re-enter
@@ -4576,16 +4609,20 @@ defmodule Platform.Federation.ToolSurface do
                  suggestion:
                    "Put the task in a stack first with stack_add(stack_id, task_id) — a started stack " <>
                      "parks the newcomer at 'stack_pending' itself. To simply pause a stackless task, " <>
-                     "use 'blocked' instead."
+                     "use 'blocked' instead.",
+                 submitted_args: args
                }}
           end
         else
+          # Recoverable refusals echo the submitted arguments in the
+          # response envelope only (task 01a05877 stage 2).
           {:error, {:invalid_phase_keys, keys}} ->
             {:error,
              %{
                error: "Invalid phase_assignees keys: #{Enum.join(keys, ", ")}",
                recoverable: true,
-               suggestion: "Use 'planning', 'execution', or 'review'"
+               suggestion: "Use 'planning', 'execution', or 'review'",
+               submitted_args: args
              }}
 
           {:error, {:invalid_phase_assignees_shape, _}} ->
@@ -4594,7 +4631,8 @@ defmodule Platform.Federation.ToolSurface do
                error: "phase_assignees must be a map keyed by phase name",
                recoverable: true,
                suggestion:
-                 "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}"
+                 "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}",
+               submitted_args: args
              }}
         end
     end
@@ -7364,16 +7402,52 @@ defmodule Platform.Federation.ToolSurface do
   defp waiting_reason_text(:plan_pending_review), do: "plan pending review"
   defp waiting_reason_text(:no_plan), do: "no plan yet"
 
-  defp auto_approve_precondition_envelope(phases) do
-    %{
+  # Auto-approve precondition refusal (task_create + task_update). The
+  # echo fields live in the RESPONSE ENVELOPE ONLY — never a log line,
+  # never telemetry (args carry user content; docs/decisions/0005).
+  # `submitted_args` lets a retry be patch-one-field instead of
+  # rebuild-everything; `corrected_args`
+  # (`TaskAttrs.auto_approve_corrected_args/3`) appears only when the
+  # repair is mechanical. The suggestion is per-site because ADR 0044 §5
+  # changed what a flat assignee means on task_create (fan-out) while
+  # task_update keeps current-phase-only routing.
+  defp auto_approve_precondition_envelope(phases, submitted_args, corrected_args, site) do
+    suggestion =
+      case site do
+        :create ->
+          "Pass phase_assignees with agent-typed assignee_id + assignee_type for execution and review. " <>
+            "Since ADR 0044 §5, task_create fans a flat agent-typed assignee_id into every absent phase " <>
+            "slot when auto_approve_plan is true — so this refusal means the flat assignee was user-typed " <>
+            "or missing (or a slot was explicitly nil): supply explicit agent-typed phase_assignees."
+
+        :update ->
+          "Pass phase_assignees with agent-typed assignee_id + assignee_type for each of: planning, execution, review. " <>
+            "On task_update the flat assignee_id still routes to the current-phase slot only " <>
+            "(ADR 0044 §5 — no fan-out on update), so execution and review need explicit agent-typed phase_assignees."
+      end
+
+    suggestion =
+      if corrected_args do
+        suggestion <>
+          " corrected_args carries this call's arguments with the absent phase slots filled — resubmit it verbatim."
+      else
+        suggestion
+      end
+
+    envelope = %{
       error:
         "auto_approve_plan requires an agent assignee on both the execution and review phases.",
       code: :auto_approve_precondition_missing,
       missing_phases: phases,
-      suggestion:
-        "Pass phase_assignees with agent-typed assignee_id + assignee_type for each of: planning, execution, review. Flat assignee_id only sets planning per ADR 0044.",
-      recoverable: true
+      suggestion: suggestion,
+      recoverable: true,
+      submitted_args: submitted_args
     }
+
+    case corrected_args do
+      nil -> envelope
+      corrected -> Map.put(envelope, :corrected_args, corrected)
+    end
   end
 
   # Resolve the `attached_by` identity from the federated tool context.
