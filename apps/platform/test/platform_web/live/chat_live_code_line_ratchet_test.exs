@@ -353,9 +353,37 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # the external gate already occupies, so a denial stays one branch with one
   # outcome and the refusal remains indistinguishable from "did not resolve".
   #
-  # RE-DERIVED by running `code_line_count/1` on this tree (2,216), not by
+  # RE-MEASURED for task 01a01ccf (`:sidebar_changed` refreshes
+  # `@dm_conversations`, so a conversation the viewer is added to mid-session
+  # gets a rail row and a live badge). Eight more code lines, net, and the
+  # extraction that costs them is what the stage was for:
+  #
+  #     +14  `rail_dm_conversations/1` plus the three heads of
+  #          `dm_conversations_for/3` — the DM/group derivation lifted out
+  #          whole, as a third sibling of `rail_channels/1` and
+  #          `rail_archived_channels/1`.
+  #      -7  `do_mount/3`'s eight-line inline copy collapses to one call.
+  #      -1  `handle_params/3`'s two-line copy collapses to one call.
+  #      +1  the `:sidebar_changed` handler derives the fresh list.
+  #      +2  it assigns that list, ahead of `recompute_pinned/1`, and takes
+  #          the local binding the two channel lists above it already use.
+  #
+  # The handler needed a THIRD copy of one query-and-filter, and the two that
+  # existed had already drifted: only `do_mount/3` carried the embedded /
+  # nil-user short-circuit. Eight lines is the price of holding that rule in
+  # one place, and it is a price this ratchet is designed to let a stage pay —
+  # the guard pins growth so growth has to be argued for, and the argument
+  # here is a duplication the architecture gate rejects.
+  #
+  # No branch was added to any hot path. `dm_conversations_for/3`'s two guard
+  # heads are the short-circuit `do_mount/3` already applied, moved rather
+  # than introduced, and `handle_params/3` reaches them with `embedded` false
+  # and `user_id` non-nil in every case (`ChatLive.Embedded` is a nested
+  # LiveView, which Phoenix forbids from defining `handle_params/3` at all).
+  #
+  # RE-DERIVED by running `code_line_count/1` on this tree (2,224), not by
   # adding a remembered delta to a remembered pin.
-  @chat_live_code_line_count 2216
+  @chat_live_code_line_count 2224
 
   @doc """
   Count the CODE lines of a source file.

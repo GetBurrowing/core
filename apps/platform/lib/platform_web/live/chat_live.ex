@@ -249,11 +249,16 @@ defmodule PlatformWeb.ChatLive do
   # same cost is already accepted per navigation (see `rail_subscribe_space_ids/1`);
   # a cache of the answer is the shape of the bug being fixed.
   #
-  # KNOWN GAP, pre-existing and deliberately not widened here: the caller
-  # reloads `@channels` and `@archived_channels` but NOT `@dm_conversations` or
-  # `@pinned_task_spaces`, so those two arms of `rail_subscribe_space_ids/1` are
-  # read off assigns that this path never refreshes. A DM or group conversation
-  # a user is added to after mount is therefore still not reached from here.
+  # The caller reloads `@channels`, `@archived_channels` and — since task
+  # 01a01ccf — `@dm_conversations`, so three of the arms this reconcile reads
+  # are fresh. A DM or group conversation a user is added to mid-session is now
+  # reached from here.
+  #
+  # REMAINING GAP, pre-existing and deliberately not widened: `@pinned_task_spaces`
+  # is still read off an assign this path never refreshes. Left alone because it
+  # has its own live path — `:task_pin_added` / `:task_pin_removed` call
+  # `refresh_pinned_task_spaces/1`, which refreshes `@spaces` alongside it — so a
+  # redundant pin re-read on every sidebar change would close no defect.
   defp reconcile_rail_subscriptions(socket) do
     if connected?(socket) do
       socket
@@ -315,15 +320,10 @@ defmodule PlatformWeb.ChatLive do
         do: [],
         else: Chat.list_spaces(kind: "channel", archived: true)
 
-    dm_conversations =
-      if embedded? do
-        []
-      else
-        conversations =
-          if user_id, do: Chat.list_user_conversations(user_id, scope: external_scope), else: []
-
-        Enum.filter(conversations, fn s -> s.kind in ["dm", "group"] end)
-      end
+    # `dm_conversations_for/3` and not the socket-shaped `rail_dm_conversations/1`:
+    # none of these three values is in `socket.assigns` yet — they are assigned
+    # further down this function — so the wrapper would read three nils here.
+    dm_conversations = dm_conversations_for(user_id, external_scope, embedded?)
 
     # Pin-to-Chat stage 4 (task 019f62a1): a dedicated "Pinned" rail section
     # for task execution spaces the current user has pinned. Loaded via
@@ -990,8 +990,7 @@ defmodule PlatformWeb.ChatLive do
           do: [],
           else: Chat.list_spaces(kind: "channel", archived: true)
 
-      user_convos = Chat.list_user_conversations(socket.assigns.user_id, scope: scope)
-      dm_convos = Enum.filter(user_convos, fn s -> s.kind in ["dm", "group"] end)
+      dm_convos = rail_dm_conversations(socket)
 
       # `?message=<id>` deep link (task 019fabe8 stage 2). `Platform.Chat`
       # has always written this param into the inbox url and `InboxLive`
@@ -3049,6 +3048,51 @@ defmodule PlatformWeb.ChatLive do
       else: Chat.list_spaces(kind: "channel", archived: true)
   end
 
+  # The rail's DM and group conversation list, scoped to the acting user.
+  # Third sibling of `rail_channels/1` and `rail_archived_channels/1` above,
+  # and the single derivation behind every site that needs one: `do_mount/3`
+  # seeds the assign, `handle_params/3` re-reads it on each navigation, and
+  # `:sidebar_changed` re-reads it when someone is added to a conversation
+  # mid-session (task 01a01ccf).
+  #
+  # That third site is why this function exists. The same query-and-filter was
+  # already written out twice, and the two copies had drifted — only
+  # `do_mount/3` carried the embedded / nil-user short-circuit — so a third
+  # literal copy would have had to pick which of the two was the rule. One
+  # function, one answer, and a fourth caller inherits it.
+  #
+  # `Chat.list_user_conversations/2` returns every space the user holds a
+  # participant row in, which includes execution and meeting spaces. The `kind`
+  # filter is what narrows that to the two kinds the rail's "Direct Messages"
+  # section renders, and it belongs here rather than in the query: that
+  # function's other consumers want the unfiltered list.
+  #
+  # Split across two heads because `do_mount/3` derives this BEFORE any of the
+  # three inputs reaches `socket.assigns` — `:user_id`, `:external_scope` and
+  # `:embedded` are all assigned further down that same function — so the
+  # socket-shaped sibling cannot serve it. `dm_conversations_for/3` holds the
+  # rule; the socket wrapper is the post-mount door to it, which is what keeps
+  # mount and every later refresh reading the same one.
+  defp rail_dm_conversations(socket) do
+    dm_conversations_for(
+      socket.assigns[:user_id],
+      socket.assigns[:external_scope],
+      socket.assigns[:embedded]
+    )
+  end
+
+  # Embedded is the meeting chat pane: it paints ONE space and populates no
+  # sidebar, so it never pays for this query. The nil-user head covers the
+  # anonymous session, which holds no participant rows to find.
+  defp dm_conversations_for(_user_id, _scope, true), do: []
+  defp dm_conversations_for(nil, _scope, _embedded?), do: []
+
+  defp dm_conversations_for(user_id, scope, _embedded?) do
+    user_id
+    |> Chat.list_user_conversations(scope: scope)
+    |> Enum.filter(&(&1.kind in ["dm", "group"]))
+  end
+
   # Current ordered channel ids for a section, read from the already-resolved
   # `@sidebar_sections` (the live render state). Used by the keyboard move
   # handler to compute the new order without a DB round-trip.
@@ -3668,6 +3712,22 @@ defmodule PlatformWeb.ChatLive do
       channels = rail_channels(socket)
       archived_channels = rail_archived_channels(socket)
 
+      # Task 01a01ccf. Being ADDED to an existing DM or group conversation is a
+      # sidebar change like any other — `Chat.do_add_participant/2` already
+      # emits this event for it — but until now the handler re-read only the
+      # two channel lists, so `@dm_conversations` stayed frozen at its
+      # mount-time value. The conversation therefore had no rail row AND no
+      # subscription (`rail_subscribe_space_ids/1` unions this assign), so the
+      # messages arriving in it were missed with no badge, no row and no other
+      # signal until the viewer happened to reload.
+      #
+      # It is assigned BEFORE `recompute_pinned/1` below and that order is
+      # load-bearing: `recompute_pinned/1` builds `@channel_sections` off
+      # `socket.assigns.dm_conversations`, so assigning after it would
+      # subscribe the topic and still not draw the row — the same silent miss,
+      # one layer down.
+      dm_conversations = rail_dm_conversations(socket)
+
       # `recompute_pinned/1` covers the `@sidebar_sections` re-resolve this
       # handler used to do inline, and adds the pin refresh. The topic is
       # per-user (`chat:sidebar:<user_id>`) and the broadcast excludes the
@@ -3691,6 +3751,7 @@ defmodule PlatformWeb.ChatLive do
         socket
         |> assign(:channels, channels)
         |> assign(:archived_channels, archived_channels)
+        |> assign(:dm_conversations, dm_conversations)
         |> assign(:closed_dm_at, Accounts.get_closed_dm_at(socket.assigns.user_id))
         |> recompute_pinned()
 
