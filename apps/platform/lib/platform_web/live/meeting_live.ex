@@ -4381,8 +4381,30 @@ defmodule PlatformWeb.MeetingLive do
           "That agent has no connected runtime, so it cannot join the meeting."
         )
 
+      # Task 01a06686: the agent's voice worker has its own runtime row, and
+      # it is that row — not the brain — that is not connected. Named apart
+      # from `:no_runtime` because the remedy differs: the brain may be
+      # online and answering chat while the mouth is down.
+      {:error, :voice_runtime_offline} ->
+        put_flash(
+          socket,
+          :error,
+          "#{voice_offline_agent_name(socket, agent_id)}'s voice worker is offline, so it cannot join the meeting."
+        )
+
       _ ->
         put_flash(socket, :error, "That agent could not be invited.")
+    end
+  end
+
+  # The `with` above has already bound `agent` by the time `invite_agent/3`
+  # can answer `:voice_runtime_offline`, but an `else` clause cannot see the
+  # bindings of the `with` chain, so the name is looked up again from the
+  # same list the chain read.
+  defp voice_offline_agent_name(socket, agent_id) do
+    case Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)) do
+      %Agent{name: name} when is_binary(name) and name != "" -> name
+      _ -> "That agent"
     end
   end
 

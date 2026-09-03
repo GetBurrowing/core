@@ -212,6 +212,36 @@ defmodule Platform.Federation.ToolSurfaceMeetingSayTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "meeting_say"}, 200
     end
 
+    # Task 01a06686 stage 2: `Meetings.say/4` resolves through
+    # `resolve_voice_target/1`, so a declared-but-disconnected voice row is
+    # its own refusal, with its own code, rather than the catch-all.
+    test "a voice row that declared voice but is not connected is refused as offline" do
+      %{room: room} = room!()
+      %{agent: agent} = agent_with_runtime!()
+      seat!(room, agent)
+
+      owner = user!()
+      {:ok, voice, _token} = Federation.register_voice_runtime(owner.id, agent)
+
+      {:ok, _} =
+        Federation.update_metadata(voice, %{
+          "client_info" => %{"product" => "openclaw", "features" => ["meeting_voice"]}
+        })
+
+      :ok = PlatformWeb.Endpoint.subscribe("runtime:#{voice.runtime_id}")
+
+      assert {:error, env} =
+               dispatch(%{"room_name" => room.livekit_room_name, "text" => "hello?"}, agent)
+
+      assert env.code == :voice_runtime_offline
+      assert env.recoverable
+      assert env.error =~ "voice worker is offline"
+      assert env.suggestion =~ "not connected"
+
+      # Neither the brain nor the voice topic got the utterance.
+      refute_receive %Phoenix.Socket.Broadcast{event: "meeting_say"}, 200
+    end
+
     test "text over the cap names the cap" do
       %{room: room} = room!()
       %{agent: agent} = agent_with_runtime!()

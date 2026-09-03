@@ -713,6 +713,49 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
   end
 
+  # Task 01a06686 stage 2: a `meeting_join` is now routed to the agent's
+  # VOICE runtime row, so the ack comes back over that row's socket. The
+  # handler reads `socket.assigns.agent_id`, which `RuntimeSocket.connect/3`
+  # sets from `runtime.agent_id` — and `register_voice_runtime/3` binds the
+  # voice row by `agent_id` — so the receipt lands on the agent, not on the
+  # row. This pins that: a voice-row socket's failing ack reaches the room
+  # topic naming the agent, exactly as the brain's would.
+  describe "meeting_join_ack from a voice runtime row" do
+    test "is attributed to the agent the voice row belongs to", ctx do
+      {:ok, voice, voice_token} = Federation.register_voice_runtime(ctx.user.id, ctx.agent)
+      assert voice.id != ctx.runtime.id
+      assert voice.agent_id == ctx.agent.id
+
+      {:ok, room} = Platform.Meetings.ensure_room(ctx.space.id)
+      {:ok, room} = Platform.Meetings.activate_room(room)
+      :ok = Platform.Meetings.PubSub.subscribe_room(room.id)
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => voice.runtime_id,
+          "token" => voice_token
+        })
+
+      assert socket.assigns.agent_id == ctx.agent.id
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{voice.runtime_id}", %{
+          "client_info" => %{"product" => "openclaw", "features" => ["meeting_voice"]}
+        })
+
+      push(socket, "meeting_join_ack", %{
+        "room_name" => room.livekit_room_name,
+        "status" => "error"
+      })
+
+      assert_receive {:agent_join_failed, info}, 2_000
+      assert info.agent_id == ctx.agent.id
+      assert info.agent_name == ctx.agent.name
+      assert info.room_name == room.livekit_room_name
+      assert info.status == "error"
+    end
+  end
+
   describe "meeting_say_ack receipt" do
     # The ack is a receipt for `Meetings.say/4`'s rendezvous: whoever is
     # waiting on `"meetings:say:<utterance_id>"` must hear it, in the

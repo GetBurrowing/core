@@ -10135,6 +10135,18 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
+  # `Meetings.resolve_voice_target/1` (task 01a06686): a runtime for this
+  # agent declared `meeting_voice`, but none of those is connected right now.
+  defp meeting_say_error(:voice_runtime_offline, _room_name) do
+    %{
+      error: "meeting_say: your voice worker is offline, so nothing can speak for you",
+      code: :voice_runtime_offline,
+      recoverable: true,
+      suggestion:
+        "Your voice runtime (the process that declared `meeting_voice`) is not connected. Start or reconnect it, then retry."
+    }
+  end
+
   defp meeting_say_error(:livekit_not_configured, _room_name) do
     %{
       error: "meeting_say: LiveKit is not configured on this deployment",

@@ -865,6 +865,48 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
   # ── An agent nothing is listening for (task 01a04f31) ────────────────────
 
+  # Task 01a06686 stage 2: the voice worker is its own runtime row. When
+  # that row has declared `meeting_voice` but is not connected, the invite is
+  # refused with a sentence that names the WORKER — not the "no connected
+  # runtime" copy, which would send the operator to check a brain that is
+  # perfectly fine.
+  describe "an invitable agent whose voice worker is offline" do
+    test "is refused with a voice-worker flash and leaves no roster row",
+         %{conn: conn, space: space, meeting: meeting} do
+      %{agent: agent} = roster_agent!(space)
+      owner = user!("voice-owner")
+      {:ok, voice, _token} = Federation.register_voice_runtime(owner.id, agent)
+
+      # Declared voice, never connected: `RuntimePresence.online?/1` is
+      # false for a runtime id no channel has ever tracked.
+      {:ok, _} =
+        Federation.update_metadata(voice, %{
+          "client_info" => %{
+            "product" => "openclaw",
+            "version" => "0.1.0",
+            "features" => ["meeting_voice"]
+          }
+        })
+
+      {:ok, view, _html} =
+        conn |> login(user!("voice-offline-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
+      _ = render(view)
+
+      html =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{agent.id}"]))
+        |> render_click()
+
+      assert html =~ "voice worker is offline"
+      assert html =~ "#{agent.name}&#39;s voice worker is offline"
+      refute html =~ "no connected runtime"
+      refute html =~ "waiting for it to join"
+
+      assert agent_participant_rows(space.id, agent.id) == []
+    end
+  end
+
   describe "an invitable agent with no linked runtime" do
     test "is refused with a specific flash and leaves no roster row",
          %{conn: conn, space: space, meeting: meeting} do

@@ -110,6 +110,67 @@ defmodule Platform.Federation do
     |> Repo.update()
   end
 
+  @doc """
+  Register and activate a second runtime row for an agent that will carry
+  its voice — the "mouth" — without touching the row that carries its brain.
+
+  ## Why a separate row (task 01a06686)
+
+  An agent's brain (the OpenClaw / claude_channel bridge that answers
+  dispatches) and its voice worker (the LiveKit participant that joins a
+  meeting) are different processes with different lifecycles, and they
+  declare different `client_info.features`. Both used to share ONE
+  `agent_runtimes` row, so whichever connected last overwrote the other's
+  declaration, and `Meetings.join_capability/1` flipped to `:incapable` the
+  moment the brain reconnected after the voice worker. Giving the voice
+  worker its own row means each process declares only what it is, and the
+  capability question is answered over the set (`runtimes_for_agent/1`).
+
+  ## What this does and does not write
+
+  - Inserts an `AgentRuntime` via `register_runtime/2` with
+    `agent_id: agent.id`, `display_name: "<agent name> voice"` and
+    `metadata["role"] == "voice"`, then activates it so the returned raw
+    token authenticates `PlatformWeb.RuntimeSocket` immediately.
+  - Does NOT call `link_agent/2` and does NOT write `agent.runtime_id`.
+    `agent.runtime_id` is the brain pointer that every dispatch path reads
+    through `get_runtime_for_agent/1`; rebinding it to the voice row would
+    route the agent's work to a process that cannot do it.
+
+  `attrs` may override `runtime_id`, `display_name`, and add metadata keys;
+  `"role" => "voice"` always wins so the row is recognisable as a mouth.
+  Returns `{:ok, runtime, raw_token}` (the shape of `activate_runtime/1`)
+  or `{:error, changeset}`.
+  """
+  @spec register_voice_runtime(binary(), Agent.t(), map()) ::
+          {:ok, AgentRuntime.t(), String.t()} | {:error, Ecto.Changeset.t()}
+  def register_voice_runtime(owner_user_id, %Agent{} = agent, attrs \\ %{}) do
+    attrs = Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
+
+    metadata =
+      attrs
+      |> Map.get("metadata", %{})
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.put("role", "voice")
+
+    runtime_attrs = %{
+      runtime_id: Map.get(attrs, "runtime_id") || "#{agent.slug}-voice-#{short_suffix()}",
+      display_name: Map.get(attrs, "display_name") || "#{agent.name} voice",
+      agent_id: agent.id,
+      transport: "websocket",
+      status: "pending",
+      metadata: metadata
+    }
+
+    with {:ok, runtime} <- register_runtime(owner_user_id, runtime_attrs) do
+      activate_runtime(runtime)
+    end
+  end
+
+  defp short_suffix do
+    :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
+  end
+
   @doc "Generate a new auth token for a runtime, replacing any existing one."
   def generate_runtime_token(%AgentRuntime{} = runtime) do
     {raw_token, hash} = generate_token_pair()
@@ -226,6 +287,45 @@ defmodule Platform.Federation do
   @doc "Fetch the runtime linked to an agent (by the agent's runtime_id FK)."
   def get_runtime_for_agent(%Agent{runtime_id: nil}), do: nil
   def get_runtime_for_agent(%Agent{runtime_id: rid}), do: get_runtime(rid)
+
+  @doc """
+  Every runtime row bound to an agent — the brain row (`agent.runtime_id`)
+  first, then the rest (voice rows registered by `register_voice_runtime/3`)
+  in insertion order.
+
+  `agent_runtimes.agent_id` is a non-unique index, so an agent may own
+  several rows; `get_runtime_for_agent/1` only ever sees the one
+  `agent.runtime_id` points at. Use this when the question is about what
+  the agent as a whole can do (`Meetings.join_capability/1`), and
+  `get_runtime_for_agent/1` when the question is where to send its work.
+
+  Returns `[]` for an agent with nothing linked.
+  """
+  @spec runtimes_for_agent(Agent.t()) :: [AgentRuntime.t()]
+  def runtimes_for_agent(%Agent{id: agent_id, runtime_id: brain_id}) do
+    rows =
+      Repo.all(
+        from(r in AgentRuntime,
+          where: r.agent_id == ^agent_id,
+          order_by: [asc: r.inserted_at, asc: r.id]
+        )
+      )
+
+    {brain, rest} = Enum.split_with(rows, &(&1.id == brain_id))
+    brain ++ rest
+  end
+
+  @doc """
+  The agent's non-brain runtime rows — `runtimes_for_agent/1` minus the row
+  `agent.runtime_id` points at. `[]` when the agent has only a brain, or
+  nothing at all.
+  """
+  @spec voice_runtimes_for_agent(Agent.t()) :: [AgentRuntime.t()]
+  def voice_runtimes_for_agent(%Agent{runtime_id: brain_id} = agent) do
+    agent
+    |> runtimes_for_agent()
+    |> Enum.reject(&(&1.id == brain_id))
+  end
 
   @doc """
   Lookup `{agent, runtime}` for an external runtime_id string.

@@ -22,6 +22,7 @@ defmodule Platform.Meetings do
   alias Platform.Agents.AgentRuntime
   alias Platform.Agents.Voice
   alias Platform.Federation
+  alias Platform.Federation.RuntimePresence
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.SpaceAccess
@@ -5133,23 +5134,127 @@ defmodule Platform.Meetings do
   `IntentRuntimeAdapter.resolve_target/1`; see this module's
   `dispatch_meeting_join/3` docs for why it is not a local reimplementation.
   """
-  @spec meeting_join_topic(Agent.t()) :: {:ok, binary()} | {:error, :no_runtime}
+  @spec meeting_join_topic(Agent.t()) ::
+          {:ok, binary()} | {:error, :no_runtime | :voice_runtime_offline}
   def meeting_join_topic(%Agent{} = agent) do
     with {:ok, target} <- resolve_meeting_join_target(agent), do: {:ok, target.topic}
   end
 
-  # `resolve_target/1` distinguishes :no_target_agent / :agent_not_found /
-  # :no_runtime; reaching it from an `%Agent{}` struct in hand, only the
-  # last is possible, so the error is normalised to that one fact.
-  defp resolve_meeting_join_target(%Agent{} = agent) do
+  # Every meeting dispatch (`meeting_join`, `meeting_say`) routes through the
+  # voice resolver below, so the brain/mouth split of task 01a06686 is
+  # decided in exactly one place.
+  defp resolve_meeting_join_target(%Agent{} = agent), do: resolve_voice_target(agent)
+
+  @doc """
+  The runtime a voice-shaped dispatch (`meeting_join`, `meeting_say`) for
+  this agent should be broadcast to (task 01a06686 stage 2).
+
+  Returns the same `%{agent, runtime, runtime_id, topic}` shape as
+  `IntentRuntimeAdapter.resolve_target/1`, with the topic built by the same
+  `runtime_topic/1` helper, so a caller can swap one resolver for the other
+  without learning a new map.
+
+  ## Why a second resolver exists at all
+
+  `IntentRuntimeAdapter.resolve_target/1` answers *where does this agent's
+  WORK go* — it reads `agent.runtime_id`, the brain. Since
+  `Federation.register_voice_runtime/3` the voice worker that actually joins
+  a LiveKit room is a separate `agent_runtimes` row bound only by
+  `agent_id`, and a `meeting_join` pushed to the brain's socket is received
+  by a process that cannot join a room. This function answers the different
+  question — *where does this agent's VOICE go* — over
+  `Federation.runtimes_for_agent/1`.
+
+  ## Order of decision
+
+  1. Among the agent's rows, keep those whose persisted `client_info.features`
+     declares `meeting_voice` (`capability_from_metadata/1`, the same reading
+     `join_capability/1` uses). A legacy single row that declares voice
+     qualifies exactly as a dedicated voice row does.
+  2. Prefer a capable row that `Platform.Federation.RuntimePresence.online?/1`
+     reports connected. Rows come brain-first from `runtimes_for_agent/1`, so
+     a legacy row that carries both roles keeps winning when it is online.
+  3. Capable rows exist but none is connected → `{:error, :voice_runtime_offline}`.
+     This is the honest answer the old path could not give: the brain may be
+     online, `Phoenix.Endpoint.broadcast/3` would return `:ok` into the voice
+     row's empty topic, and the invite would be lost in silence.
+  4. NO capable row → fall back to `IntentRuntimeAdapter.resolve_target/1`
+     unchanged. A legacy single-socket deployment, or a client that has never
+     declared features, keeps today's behaviour; the resolver's own errors
+     are normalised to `{:error, :no_runtime}` because, from an `%Agent{}`
+     in hand, "no linked runtime" is the only one that can occur.
+
+  Presence, not the row's `status`, is what step 2 reads: the row stays
+  `"active"` while its socket is gone, and a socket is the only thing a
+  broadcast can reach.
+  """
+  @spec resolve_voice_target(Agent.t()) ::
+          {:ok,
+           %{
+             agent: Agent.t(),
+             runtime: AgentRuntime.t(),
+             runtime_id: String.t(),
+             topic: String.t()
+           }}
+          | {:error, :voice_runtime_offline | :no_runtime}
+  def resolve_voice_target(%Agent{} = agent) do
+    capable =
+      agent
+      |> Federation.runtimes_for_agent()
+      |> Enum.filter(fn %AgentRuntime{runtime_id: runtime_id, metadata: metadata} ->
+        is_binary(runtime_id) and capability_from_metadata(metadata) == :capable
+      end)
+
+    case capable do
+      [] ->
+        resolve_legacy_voice_target(agent)
+
+      rows ->
+        case Enum.find(rows, &RuntimePresence.online?(&1.runtime_id)) do
+          %AgentRuntime{runtime_id: runtime_id} = runtime ->
+            Logger.info(
+              "[Meetings] voice target for agent=#{agent.slug}: " <>
+                "voice-capable runtime=#{runtime_id} is online"
+            )
+
+            {:ok,
+             %{
+               agent: agent,
+               runtime: runtime,
+               runtime_id: runtime_id,
+               topic: IntentRuntimeAdapter.runtime_topic(runtime_id)
+             }}
+
+          nil ->
+            Logger.info(
+              "[Meetings] voice target for agent=#{agent.slug}: " <>
+                "#{length(rows)} voice-capable runtime(s) " <>
+                "[#{Enum.map_join(rows, ", ", & &1.runtime_id)}] but none is connected"
+            )
+
+            {:error, :voice_runtime_offline}
+        end
+    end
+  end
+
+  # Step 4 above. `resolve_target/1` distinguishes :no_target_agent /
+  # :agent_not_found / :no_runtime; reaching it from an `%Agent{}` struct in
+  # hand, only the last is possible, so the error is normalised to that one
+  # fact.
+  defp resolve_legacy_voice_target(%Agent{} = agent) do
     case IntentRuntimeAdapter.resolve_target(agent) do
       {:ok, target} ->
+        Logger.info(
+          "[Meetings] voice target for agent=#{agent.slug}: no runtime declares " <>
+            "#{voice_feature()}; legacy route to brain runtime=#{target.runtime_id}"
+        )
+
         {:ok, target}
 
       {:error, _reason} ->
         Logger.error(
-          "[Meetings] meeting_join NOT dispatched: agent=#{agent.slug} id=#{agent.id} " <>
-            "has no linked AgentRuntime, so no runtime can receive a join"
+          "[Meetings] meeting dispatch NOT possible: agent=#{agent.slug} id=#{agent.id} " <>
+            "has no linked AgentRuntime, so no runtime can receive it"
         )
 
         {:error, :no_runtime}
@@ -5232,7 +5337,9 @@ defmodule Platform.Meetings do
       when the runtime answered.
     * `{:ok, %{utterance_id, status: "no_ack", room_name}}` when it did not.
     * `{:error, :empty_text | {:text_too_long, max} | :room_not_found |
-      :not_in_room | :no_runtime | :livekit_not_configured | :broadcast_failed}`.
+      :not_in_room | :no_runtime | :voice_runtime_offline | :livekit_not_configured |
+      :broadcast_failed}`. `:voice_runtime_offline` is `resolve_voice_target/1`'s:
+      a runtime declared voice but none of those is connected.
   """
   @spec say(Agent.t(), String.t(), String.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -5516,6 +5623,13 @@ defmodule Platform.Meetings do
   — would remove the control that is the only way to try again. So
   `{:error, :no_runtime}` is returned before any row is written.
 
+  Since task 01a06686 the pre-flight goes through `resolve_voice_target/1`,
+  which can also answer `{:error, :voice_runtime_offline}` — a runtime
+  declared voice, but none of those is connected. That is returned AS IS,
+  not folded into `:no_runtime`: the two call for different remedies (start
+  the voice worker vs. link a runtime at all), and
+  `PlatformWeb.MeetingLive` shows a different sentence for each.
+
   The double resolution (here and again inside `dispatch_meeting_join/3`)
   is deliberate and follows the precedent
   `IntentRuntimeAdapter`'s moduledoc sets for the same shape of problem: it
@@ -5623,13 +5737,29 @@ defmodule Platform.Meetings do
 
   So this returns `:unknown` and the no-runtime path keeps its own, better
   error.
+
+  ## Why this is computed over a SET of runtimes (task 01a06686)
+
+  An agent's brain and its mouth are separate rows now. The bridge that
+  answers dispatches (`agent.runtime_id`) and the voice worker that joins a
+  LiveKit room are different processes, so `Federation.register_voice_runtime/3`
+  gives the voice worker its own `agent_runtimes` row. Each process declares
+  only its own `client_info.features`, which means the brain row honestly says
+  `[]` and the voice row honestly says `["meeting_voice"]`. Reading only the
+  brain row — which is what `Federation.get_runtime_for_agent/1` returns —
+  would report `:incapable` for an agent that can in fact join, and it would
+  do so precisely when the brain reconnected AFTER the voice worker. So the
+  answer is folded over `Federation.runtimes_for_agent/1`: `:capable` if any
+  row declares voice; else `:incapable` if any row declared a feature list
+  without it; else `:unknown`. A single legacy row that carries both roles
+  still reads exactly as before.
   """
   @spec join_capability(Agent.t()) :: :capable | :incapable | :unknown
   def join_capability(%Agent{} = agent) do
-    case Federation.get_runtime_for_agent(agent) do
-      %AgentRuntime{metadata: metadata} -> capability_from_metadata(metadata)
-      _ -> :unknown
-    end
+    agent
+    |> Federation.runtimes_for_agent()
+    |> Enum.map(fn %AgentRuntime{metadata: metadata} -> capability_from_metadata(metadata) end)
+    |> fold_capabilities()
   end
 
   def join_capability(_other), do: :unknown
@@ -5648,6 +5778,16 @@ defmodule Platform.Meetings do
   end
 
   defp capability_from_metadata(_), do: :unknown
+
+  # Positive evidence beats negative evidence beats no evidence: one row that
+  # can do it is enough, one row that declared it cannot outranks silence.
+  defp fold_capabilities(capabilities) do
+    cond do
+      :capable in capabilities -> :capable
+      :incapable in capabilities -> :incapable
+      true -> :unknown
+    end
+  end
 
   @doc """
   Record a runtime's answer to a `meeting_join` dispatch.
