@@ -675,7 +675,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # correction (fix the wrong draft where it stands; id + version stable).
     # Not a T6 concern — it adds no schedule, no trigger and no historian
     # surface (+plan_update -> 102)
-    @t6_baseline_tool_count 102
+    # bumped by task 01a06672 stage 2 — `meeting_say`, added to the existing
+    # `task` bundle beside `meeting_create`. An agent speaking arbitrary text
+    # into a meeting it was invited to, in its own voice. Not a T6 concern —
+    # it adds no schedule, no trigger and no historian surface
+    # (+meeting_say -> 103)
+    @t6_baseline_tool_count 103
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -217,7 +217,18 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # Phoenix.PubSub has no wildcard subscribe, so nothing ever subscribes to
     # this string; broadcast_meeting_finished/2 mirrors per-room to canonical
     # instead. Recorded because it reads exactly like a topic.
-    {"meeting:finished:*", :not_a_topic}
+    {"meeting:finished:*", :not_a_topic},
+    # The LiveKit participant identity `"agent:\#{agent.slug}"` in
+    # `Meetings.say/4`'s dispatch payload. It sits inside the scan window
+    # after the `PubSub.subscribe(` anchor for the ack rendezvous, so the
+    # scanner reads it as a topic. Nothing subscribes to or broadcasts on it;
+    # the same literal in `dispatch_meeting_join/3` is out of any window.
+    # The rendezvous topic itself, `"meetings:say:<utterance_id>"`, is built
+    # by `say_ack_topic/1` and reaches PubSub only through a variable, so the
+    # scanner never sees it: one subscriber (the calling process, for at
+    # most 15 s) and one publisher (`record_agent_say_ack/2`), payload is
+    # the ack status and duration, never the text.
+    {"agent:<id>", :not_a_topic}
   ]
 
   # Topics with NO string literal in lib, so `scan_topic_shapes/0` cannot see

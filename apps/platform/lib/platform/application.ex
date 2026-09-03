@@ -99,6 +99,10 @@ defmodule Platform.Application do
            # no PubSub and no DB, so its position here is only about
            # existing before the first meeting can open a window.
            Platform.Meetings.PressWindow,
+           # In-flight `meeting_say` utterances (task 01a06672 stage 1) —
+           # owns the :meeting_say_registry table. Same shape as PressWindow:
+           # ETS lifecycle owner plus a ttl sweep, no PubSub and no DB.
+           Platform.Meetings.SayRegistry,
            # Per-MEETING intent queues (task 019f70b8 stage 2) — one
            # on-demand GenServer per meeting, each owning an unnamed
            # ETS table that dies with it. No sweeper: cleanup is

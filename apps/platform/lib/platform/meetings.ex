@@ -32,6 +32,7 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.Invite
   alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.SayRegistry
   alias Platform.Repo
   alias Platform.Tenancy.ExternalGrants
   alias Platform.Tenancy.PendingExternalGrant
@@ -5153,6 +5154,326 @@ defmodule Platform.Meetings do
 
         {:error, :no_runtime}
     end
+  end
+
+  # ── Agent speech (01a06672) ──────────────────────────────────────
+
+  # Hard cap on one utterance. A `meeting_say` is a sentence or a paragraph
+  # spoken into a room, not a document read aloud; 2,000 characters is
+  # roughly two minutes of speech, and anything longer should be posted as
+  # text. Checked before any DB read so an oversized call costs nothing.
+  @meeting_say_max_chars 2_000
+
+  @doc "Maximum characters accepted by `say/4`."
+  @spec meeting_say_max_chars() :: pos_integer()
+  def meeting_say_max_chars, do: @meeting_say_max_chars
+
+  @say_ack_timeout_ms 15_000
+
+  @doc """
+  Speak `text` into `room_name` in `agent`'s own configured voice, and wait
+  for the runtime's receipt.
+
+  The shape is `dispatch_meeting_join/3`'s — same token minting, same topic
+  resolution through `meeting_join_topic/1`, same payload keys the voice
+  worker already knows — with three things the join does not have.
+
+  ## The participant guard is the security boundary
+
+  A join is dispatched by a human on the meeting page, through
+  `invite_agent/3`, which authorizes the INVITER as a space writer. A `say`
+  is initiated by the agent itself, from its tool surface, so the question
+  is not "may this actor write to the space" but "is this agent actually in
+  this call". The answer is the active `meeting_participants` row that
+  `invite_agent/3` wrote: `room_id` + `agent_id` + `left_at IS NULL`. An
+  agent that was never invited, or that was dismissed, has no such row and
+  is refused with `{:error, :not_in_room}` before any token is minted or
+  anything is broadcast.
+
+  This is deliberately NOT "the agent is a participant of the space". Space
+  membership is what lets an agent read and post chat; being in the call is
+  a separate grant a human makes per meeting, and it is the only thing that
+  should let an agent's voice come out of the room's speakers.
+
+  ## Subscribe, then send
+
+  The caller subscribes to `"meetings:say:<utterance_id>"` BEFORE the
+  broadcast goes out. The runtime can answer inside a millisecond on a warm
+  worker, and a subscribe placed after the broadcast would lose that ack
+  and report `no_ack` for an utterance that was in fact spoken. There is no
+  test that reliably catches the inverted order (it is a race), so the
+  order is asserted here in prose instead.
+
+  ## `no_ack` is a successful return, not an error
+
+  `Phoenix.Endpoint.broadcast/3` returns `:ok` into an empty topic. That is
+  the 01a0554f lesson: a green broadcast is not a delivery, and this
+  function has no way to tell a worker that is mid-utterance from a worker
+  that is not connected. So when nothing answers within `:ack_timeout_ms`,
+  the return is `{:ok, %{status: "no_ack"}}` — the dispatch itself did
+  succeed, and the honest thing to say about what happened next is that
+  core does not know. The tool description tells the agent what to do with
+  that. Nothing is posted to chat on `no_ack`; see `record_agent_say_ack/2`.
+
+  ## Why the text is parked in `SayRegistry` and not sent back in the ack
+
+  See `Platform.Meetings.SayRegistry`'s moduledoc. Short version: the chat
+  row must be written from what core sent, never from what a runtime echoed.
+
+  ## Options
+
+    * `:ack_timeout_ms` — how long to wait for the runtime's receipt
+      (default #{@say_ack_timeout_ms}, overridable for tests through the
+      `:meeting_say_ack_timeout_ms` app env key).
+
+  ## Returns
+
+    * `{:ok, %{utterance_id, status: "spoken" | "failed", duration_s, error, room_name}}`
+      when the runtime answered.
+    * `{:ok, %{utterance_id, status: "no_ack", room_name}}` when it did not.
+    * `{:error, :empty_text | {:text_too_long, max} | :room_not_found |
+      :not_in_room | :no_runtime | :livekit_not_configured | :broadcast_failed}`.
+  """
+  @spec say(Agent.t(), String.t(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def say(%Agent{} = agent, room_name, text, opts \\ [])
+      when is_binary(room_name) and is_binary(text) do
+    text = String.trim(text)
+
+    with :ok <- validate_say_text(text),
+         {:ok, %Room{} = room} <- fetch_say_room(room_name),
+         :ok <- ensure_agent_in_room(room, agent),
+         {:ok, token} <- generate_agent_token(agent, room_name),
+         {:ok, topic} <- meeting_join_topic(agent) do
+      utterance_id = Platform.Types.UUIDv7.generate()
+      ack_topic = say_ack_topic(utterance_id)
+      timeout = Keyword.get(opts, :ack_timeout_ms, default_say_ack_timeout_ms())
+
+      # Registered before the broadcast, for the same reason the subscribe
+      # is: an ack that beats the registration would find no text to post.
+      SayRegistry.put(utterance_id, %{
+        text: text,
+        room_id: room.id,
+        room_name: room_name,
+        space_id: room.space_id,
+        agent_id: agent.id
+      })
+
+      # Subscribe-then-send. See the "Subscribe, then send" note above.
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, ack_topic)
+
+      payload = %{
+        utterance_id: utterance_id,
+        room_name: room_name,
+        text: text,
+        token: token,
+        livekit_url: livekit_url(),
+        agent_identity: "agent:#{agent.slug}",
+        agent_name: agent.name || agent.slug,
+        voice: Voice.config_for(agent),
+        persona: Voice.personality_for(agent),
+        space_id: room.space_id
+      }
+
+      case PlatformWeb.Endpoint.broadcast(topic, "meeting_say", payload) do
+        :ok ->
+          Logger.info(
+            "[Meetings] dispatched meeting_say to agent=#{agent.slug} " <>
+              "room=#{room_name} utterance=#{utterance_id} chars=#{String.length(text)}"
+          )
+
+          await_say_ack(utterance_id, ack_topic, room_name, timeout)
+
+        {:error, reason} ->
+          Phoenix.PubSub.unsubscribe(Platform.PubSub, ack_topic)
+          SayRegistry.delete(utterance_id)
+          Logger.error("[Meetings] broadcast meeting_say failed to #{topic}: #{inspect(reason)}")
+
+          {:error, :broadcast_failed}
+      end
+    end
+  end
+
+  defp fetch_say_room(room_name) do
+    case get_room_by_name(room_name) do
+      %Room{} = room -> {:ok, room}
+      nil -> {:error, :room_not_found}
+    end
+  end
+
+  # Blank and oversized text are refused before the room is even looked up.
+  defp validate_say_text(""), do: {:error, :empty_text}
+
+  defp validate_say_text(text) do
+    if String.length(text) > @meeting_say_max_chars do
+      {:error, {:text_too_long, @meeting_say_max_chars}}
+    else
+      :ok
+    end
+  end
+
+  # The participant guard. `find_active_participant/3` is the same lookup
+  # `invite_participant_row/2` uses to decide whether a roster row already
+  # exists, so "invited and not yet dismissed" means the same thing on the
+  # way in and on the way out.
+  defp ensure_agent_in_room(%Room{} = room, %Agent{} = agent) do
+    case find_active_participant(room.id, %{agent_id: agent.id}, nil) do
+      %Participant{} -> :ok
+      nil -> {:error, :not_in_room}
+    end
+  end
+
+  defp say_ack_topic(utterance_id), do: "meetings:say:#{utterance_id}"
+
+  # The tool surface calls `say/4` without options, so the only way a test
+  # of the TOOL can avoid a real 15-second wait on `no_ack` is this app-env
+  # seam. Unset in every config file; production always gets the module
+  # default.
+  defp default_say_ack_timeout_ms do
+    Application.get_env(:platform, :meeting_say_ack_timeout_ms, @say_ack_timeout_ms)
+  end
+
+  # The rendezvous. Whichever branch fires, the subscription is dropped so a
+  # late ack does not land in the caller's mailbox as an unexpected message
+  # (the tool surface runs inside a channel process that would otherwise
+  # log it as unhandled). The registry entry is NOT deleted on `no_ack`: a
+  # late `"spoken"` inside the registry ttl can still post the text, which
+  # is more truthful than dropping a thing that was in fact said.
+  defp await_say_ack(utterance_id, ack_topic, room_name, timeout) do
+    receive do
+      {:meeting_say_ack, ^utterance_id, ack} ->
+        Phoenix.PubSub.unsubscribe(Platform.PubSub, ack_topic)
+        {:ok, Map.put(ack, :utterance_id, utterance_id)}
+    after
+      timeout ->
+        Phoenix.PubSub.unsubscribe(Platform.PubSub, ack_topic)
+
+        Logger.info(
+          "[Meetings] meeting_say no_ack after #{timeout}ms utterance=#{utterance_id} room=#{room_name}"
+        )
+
+        {:ok, %{utterance_id: utterance_id, status: "no_ack", room_name: room_name}}
+    end
+  end
+
+  @doc """
+  Record a runtime's receipt for a `meeting_say` dispatch.
+
+  Called from `PlatformWeb.RuntimeChannel.handle_in("meeting_say_ack", ...)`
+  with the raw string-keyed payload. `status` is `"spoken"` or `"failed"`
+  from a well-behaved worker; an absent or unrecognised status is relayed
+  verbatim (absent as `"unknown"`) and is treated as not-spoken. Three
+  things happen, in this order:
+
+  1. The ack is relayed to whoever is waiting in `say/4`, on
+     `"meetings:say:<utterance_id>"`. This is unconditional — a `"failed"`
+     receipt is exactly what the waiting caller needs to hear.
+  2. `[:platform, :meetings, :agent_say_ack]` telemetry, mirroring the join
+     ack's event.
+  3. On `"spoken"` ONLY, the text core dispatched is posted into the room's
+     chat space as the agent, so the transcript shows what was said.
+
+  ## What does NOT post
+
+  `"failed"` — nothing was said. A registry miss — the id was never
+  dispatched by this node, or has expired; a forged or replayed ack finds no
+  text and writes nothing. An `agent_id` mismatch — the acking runtime is
+  not the agent that spoke; another runtime cannot cause a post under a
+  different agent's name. And an agent that is in the call but is not a
+  chat participant of the space (`authorize_writer/2` refuses) — the voice
+  went out, but there is no participant row to post as, so the miss is
+  logged rather than forged. Each of those is logged at `info` with the id,
+  and none of them raises: an ack is a receipt, not a command.
+
+  Returns `:ok` always.
+  """
+  @spec record_agent_say_ack(binary() | nil, map()) :: :ok
+  def record_agent_say_ack(agent_id, %{"utterance_id" => utterance_id} = payload)
+      when is_binary(utterance_id) do
+    room_name = Map.get(payload, "room_name")
+
+    # No default to "spoken". The join ack defaults an absent status to its
+    # success token because the failure there is visible and retryable; here
+    # the success branch POSTS TEXT TO CHAT, so an ack that does not say
+    # "spoken" must not be read as one. Anything but the literal token is
+    # relayed to the caller as-is and posts nothing.
+    status = payload |> Map.get("status", "unknown") |> to_string() |> String.trim()
+
+    ack = %{
+      status: status,
+      duration_s: Map.get(payload, "duration_s"),
+      error: Map.get(payload, "error"),
+      room_name: room_name
+    }
+
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      say_ack_topic(utterance_id),
+      {:meeting_say_ack, utterance_id, ack}
+    )
+
+    :telemetry.execute(
+      [:platform, :meetings, :agent_say_ack],
+      %{system_time: System.system_time()},
+      %{agent_id: agent_id, room_name: room_name, status: status}
+    )
+
+    if status == "spoken" do
+      post_spoken_utterance(agent_id, utterance_id)
+    else
+      Logger.info(
+        "[Meetings] meeting_say_ack status=#{status} utterance=#{utterance_id} " <>
+          "agent=#{inspect(agent_id)} error=#{inspect(ack.error)} — not posted"
+      )
+    end
+
+    :ok
+  end
+
+  def record_agent_say_ack(_agent_id, _payload), do: :ok
+
+  defp post_spoken_utterance(agent_id, utterance_id) do
+    case SayRegistry.get(utterance_id) do
+      nil ->
+        Logger.info(
+          "[Meetings] meeting_say_ack spoken for unknown utterance=#{utterance_id} " <>
+            "agent=#{inspect(agent_id)} — not posted"
+        )
+
+      %{agent_id: owner} when owner != agent_id ->
+        Logger.info(
+          "[Meetings] meeting_say_ack spoken utterance=#{utterance_id} acked by " <>
+            "agent=#{inspect(agent_id)} but dispatched for agent=#{owner} — not posted"
+        )
+
+      %{text: text, space_id: space_id, room_name: room_name} ->
+        # Consumed on the first matching ack so a replay cannot post twice.
+        SayRegistry.delete(utterance_id)
+
+        with {:ok, participant} <- SpaceAccess.authorize_writer(space_id, {:agent, agent_id}),
+             {:ok, _msg} <-
+               Chat.post_message(%{
+                 space_id: space_id,
+                 participant_id: participant.id,
+                 content_type: "text",
+                 content: text,
+                 metadata: %{
+                   "source" => "meetings.say",
+                   "utterance_id" => utterance_id,
+                   "room_name" => room_name
+                 }
+               }) do
+          :ok
+        else
+          {:error, reason} ->
+            Logger.info(
+              "[Meetings] meeting_say spoken but not posted utterance=#{utterance_id} " <>
+                "agent=#{agent_id} space=#{space_id}: #{inspect(reason)}"
+            )
+        end
+    end
+
+    :ok
   end
 
   # ── Agent Meeting Participation ──────────────────────────────────

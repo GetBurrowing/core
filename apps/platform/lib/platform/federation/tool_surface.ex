@@ -2618,6 +2618,30 @@ defmodule Platform.Federation.ToolSurface do
           "Requires a valid project_id and name. If an explicit slug collides with an existing meeting in the project, a clean changeset error is returned (auto-generated slugs are de-duplicated instead). The intended-time pair is all-or-nothing: supply both scheduled_start_at and scheduled_end_at or neither, with the end strictly after the start; a malformed or half-supplied pair is refused rather than dropped, and creates no meeting.",
         when_to_use:
           "When you need to spin up a persistent meeting surface for a project — a kickoff, sync, design review, or retro."
+      },
+      %{
+        name: "meeting_say",
+        description:
+          "Speak text aloud into a meeting you have been invited into, in your own configured voice. The text is sent to your voice worker, which synthesises and plays it into the LiveKit room, then reports back. On `spoken` the text is also posted into the meeting's chat space under your name so the transcript shows what you said. Returns `status`: `spoken` (the worker played it; `duration_s` is how long it took), `failed` (the worker could not play it; see `error`), or `no_ack` (nothing answered within 15 seconds — your voice worker may not be connected, or may still be speaking; core cannot tell which, and nothing was posted to chat).",
+        parameters: %{
+          room_name: %{
+            type: "string",
+            required: true,
+            description:
+              "The `room_name` from your meeting_join payload (the LiveKit room name, e.g. `space-<uuid>`). NOT a meeting id."
+          },
+          text: %{
+            type: "string",
+            required: true,
+            description: "What to say. At most 2000 characters; blank is refused."
+          }
+        },
+        returns:
+          "%{utterance_id, status: \"spoken\" | \"failed\" | \"no_ack\", duration_s, room_name}. `duration_s` is nil unless the worker reported it.",
+        limitations:
+          "You must be a current participant of the room — invited by a human from the meeting page and not yet dismissed. Being a member of the meeting's chat space is not enough. Text over 2000 characters is refused, not truncated. `no_ack` is not a failure and not a success: the dispatch went out and nothing came back. Do not retry in a loop on `no_ack`; if it repeats, say so in chat instead.",
+        when_to_use:
+          "When you are in a meeting and want to say something specific out loud — an answer, a summary, a question — rather than waiting for the intent pipeline to prompt you."
       }
     ]
   end
@@ -4242,6 +4266,44 @@ defmodule Platform.Federation.ToolSurface do
         {:error, reason} ->
           {:error, %{error: "Failed to create meeting: #{inspect(reason)}", recoverable: true}}
       end
+    end
+  end
+
+  # ── meeting_say (task 01a06672 stage 2) ─────────────────────────────
+  # Everything that matters happens in `Meetings.say/4`: the participant
+  # guard, the text cap, the runtime broadcast and the ack rendezvous. This
+  # clause only names the caller and translates refusals into envelopes an
+  # agent can act on. It must NOT broadcast on its own — the guard lives
+  # behind `say/4`, and a direct `Endpoint.broadcast` here would put an
+  # uninvited agent's voice into a room.
+  def execute("meeting_say", args, context) do
+    room_name = Map.get(args, "room_name")
+    text = Map.get(args, "text")
+
+    case load_agent(context) do
+      nil ->
+        {:error,
+         %{
+           error: "meeting_say: no calling agent in context",
+           recoverable: false,
+           suggestion:
+             "This tool must be called from an agent runtime; the caller's agent could not be resolved."
+         }}
+
+      %Agent{} = agent ->
+        case Meetings.say(agent, to_string(room_name), to_string(text)) do
+          {:ok, ack} ->
+            {:ok,
+             %{
+               utterance_id: ack.utterance_id,
+               status: ack.status,
+               duration_s: Map.get(ack, :duration_s),
+               room_name: Map.get(ack, :room_name) || room_name
+             }}
+
+          {:error, reason} ->
+            {:error, meeting_say_error(reason, room_name)}
+        end
     end
   end
 
@@ -10020,6 +10082,74 @@ defmodule Platform.Federation.ToolSurface do
   # clears it and still raises inside `Repo`. Do not "simplify" this.
   defp get_by_uuid(schema, id) do
     if Platform.UUID.valid?(id), do: Repo.get(schema, id), else: nil
+  end
+
+  # Every refusal `Meetings.say/4` can return, as an envelope with a next
+  # step. All recoverable: each names something the agent (or a human it
+  # asks) can change.
+  defp meeting_say_error(:not_in_room, room_name) do
+    %{
+      error: "meeting_say: you are not a participant of room #{room_name}",
+      code: :not_in_room,
+      recoverable: true,
+      suggestion:
+        "You are not a participant of this room. A human must invite you from the meeting page first."
+    }
+  end
+
+  defp meeting_say_error(:room_not_found, room_name) do
+    %{
+      error: "meeting_say: no meeting room named #{inspect(room_name)}",
+      code: :room_not_found,
+      recoverable: true,
+      suggestion:
+        "Pass the `room_name` exactly as it appeared in your meeting_join payload (it looks like `space-<uuid>`), not a meeting id or a space name."
+    }
+  end
+
+  defp meeting_say_error(:empty_text, _room_name) do
+    %{
+      error: "meeting_say: text is blank",
+      code: :empty_text,
+      recoverable: true,
+      suggestion: "Pass the words you want spoken in `text`."
+    }
+  end
+
+  defp meeting_say_error({:text_too_long, max}, _room_name) do
+    %{
+      error: "meeting_say: text exceeds #{max} characters",
+      code: :text_too_long,
+      recoverable: true,
+      suggestion:
+        "Keep one utterance to #{max} characters or fewer. Split a long passage into several calls, or post it as a chat message instead."
+    }
+  end
+
+  defp meeting_say_error(:no_runtime, _room_name) do
+    %{
+      error: "meeting_say: your agent has no linked runtime to deliver to",
+      code: :no_runtime,
+      recoverable: true,
+      suggestion: "A runtime must be linked to this agent before a voice dispatch can reach it."
+    }
+  end
+
+  defp meeting_say_error(:livekit_not_configured, _room_name) do
+    %{
+      error: "meeting_say: LiveKit is not configured on this deployment",
+      code: :livekit_not_configured,
+      recoverable: false,
+      suggestion: "Meetings are disabled here; there is no room to speak into."
+    }
+  end
+
+  defp meeting_say_error(other, _room_name) do
+    %{
+      error: "meeting_say: #{inspect(other)}",
+      recoverable: true,
+      suggestion: "Retry once; if it repeats, report the error text in chat."
+    }
   end
 
   defp load_agent(context) when is_map(context) do

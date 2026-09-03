@@ -220,6 +220,33 @@ defmodule PlatformWeb.RuntimeChannel do
     {:noreply, socket}
   end
 
+  # The receipt for a `meeting_say` dispatch (task 01a06672 stage 2). Same
+  # shape as the join ack above, with one difference worth naming: the log
+  # line carries the utterance id and never the text. The text is already in
+  # core's hands (`Platform.Meetings.SayRegistry`), and a spoken sentence is
+  # not something to duplicate into the log stream.
+  #
+  # The whole payload is handed over rather than picked apart here, so the
+  # keys a worker may send (`status`, `duration_s`, `error`) are read in one
+  # place — `Meetings.record_agent_say_ack/2` — and the waiting caller in
+  # `Meetings.say/4` is what this receipt is for. Fire-and-forget, like the
+  # join ack: nothing is pushed back down the socket.
+  @impl true
+  def handle_in("meeting_say_ack", %{"utterance_id" => utterance_id} = payload, socket) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+    agent_id = socket.assigns[:agent_id]
+
+    Logger.info(
+      "[RuntimeChannel] meeting_say_ack: agent=#{inspect(agent_id)} " <>
+        "utterance=#{utterance_id} room=#{Map.get(payload, "room_name")} " <>
+        "status=#{Map.get(payload, "status", "unknown")}"
+    )
+
+    Meetings.record_agent_say_ack(agent_id, payload)
+
+    {:noreply, socket}
+  end
+
   # The delivery receipt for a meeting intent (task 019ff292 stage 2).
   #
   # Send this at the moment the intent is SURFACED TO THE AGENT'S LOOP,

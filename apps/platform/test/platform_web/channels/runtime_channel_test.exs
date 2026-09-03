@@ -713,6 +713,53 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
   end
 
+  describe "meeting_say_ack receipt" do
+    # The ack is a receipt for `Meetings.say/4`'s rendezvous: whoever is
+    # waiting on `"meetings:say:<utterance_id>"` must hear it, in the
+    # `{:meeting_say_ack, id, %{status: _}}` shape `say/4` receives on.
+    test "is relayed to the utterance's ack topic with the runtime's agent", ctx do
+      utterance_id = Platform.Types.UUIDv7.generate()
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "meetings:say:#{utterance_id}")
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "meeting_say_ack", %{
+        "utterance_id" => utterance_id,
+        "room_name" => "space-test",
+        "status" => "spoken",
+        "duration_s" => 2.5
+      })
+
+      assert_receive {:meeting_say_ack, ^utterance_id,
+                      %{status: "spoken", duration_s: 2.5, room_name: "space-test"}},
+                     2_000
+    end
+
+    test "an ack with no utterance_id is ignored, not a crash", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "meeting_say_ack", %{"status" => "spoken"})
+
+      ref = push(socket, "pong", %{})
+      assert is_reference(ref)
+      assert Process.alive?(socket.channel_pid)
+    end
+  end
+
   describe "execution_event" do
     test "records runtime execution events and acknowledges them", ctx do
       {:ok, socket} =

@@ -126,7 +126,14 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # (a draft keeps at least one stage — an empty draft would submit a plan
   # the engine treats as unapprovable), both recoverable parameter errors
   # with nothing written.
-  @surveyed_required_count 142
+  # 144 with `meeting_say`'s `room_name` + `text` (task 01a06672 stage 2).
+  # Both HONEST. The handler reads each under its declared key only, with no
+  # alias and no context fallback, and hands both to `Meetings.say/4`, which
+  # refuses a blank text (`:empty_text`) and an unknown room
+  # (`:room_not_found`) before anything is broadcast. Neither is tolerated
+  # absent: a say with no text has nothing to speak, and a say with no room
+  # has nowhere to speak it.
+  @surveyed_required_count 144
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

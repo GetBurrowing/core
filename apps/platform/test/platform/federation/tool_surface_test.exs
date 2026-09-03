@@ -131,7 +131,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # `plan` bundle — the planner's IN-PLACE draft correction: fix the
       # wrong draft (stages, positions, validations) where it stands, id +
       # version stable, then plan_submit. No new bundle.
-      assert length(tools) == 102
+      # 103 as of task 01a06672 stage 2, which added `meeting_say` to the
+      # `task` bundle beside `meeting_create` — an agent speaking arbitrary
+      # text into a meeting it was invited into, in its own voice, with the
+      # runtime's ack returned as `spoken` / `failed` / `no_ack`. No new bundle.
+      assert length(tools) == 103
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
