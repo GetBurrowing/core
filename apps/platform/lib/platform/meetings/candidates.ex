@@ -1509,6 +1509,163 @@ defmodule Platform.Meetings.Candidates do
     end
   end
 
+  # ── complete by ack (task 01a06638-e7c7) ──────────────────────────────────
+
+  @doc """
+  The recipient agent said `:completed` — mint the task anyway, already
+  `done`.
+
+  This is the ack mirror's `:completed` arm, moved here from
+  `Platform.Meetings.IntentQueue.Server.close_ack/4` because it now
+  WRITES a deliverable, and a deliverable is minted in exactly one
+  module. The decision it implements (Harper, 2026-09-03): an agent that
+  finishes an armed task-rail candidate before its 30-second countdown
+  fires does not cancel the task, it closes it. The task board is the
+  log of what the meeting decided, and a decision that got acted on
+  inside 30 seconds is still a decision. Before this, the ack recorded
+  `:accepted` / `:done` on the candidate and minted NOTHING — so the
+  faster the agent, the emptier the board. There is deliberately no
+  flag for this: the board either is the log or is not.
+
+  ## Ownership
+
+  The ack races the sweeper for the same row, exactly as `stop/2` does,
+  and it takes ownership the same way — one conditional `UPDATE` that
+  nils `acts_at`, so whoever commits first leaves the other's `WHERE`
+  unsatisfiable:
+
+      UPDATE meeting_candidates
+         SET acts_at = NULL, queue_status = 'completed'
+       WHERE id = $1
+         AND state <> 'closed'
+         AND acts_at IS NOT NULL
+         AND outcome_kind = 'task'
+         AND task_id IS NULL
+
+  Win the claim and this call mints. Lose it — or never have a claim to
+  win — and this call only records what the ack said, which is what
+  `close_ack/4` always did. A `SELECT` followed by `graduate/2` would
+  not do: `graduate/2` has no guard of its own, and the sweeper's
+  `claim_ids/2` is one statement away from minting the same card.
+
+  ## The minted task
+
+  `status: "done"` at INSERT. `Platform.Tasks.Task.changeset/2` casts
+  `:status` and validates it against the status list, and its
+  `prepare_changes(&record_status_transition/1)` hook skips inserts on
+  purpose — the parent `tasks` row does not exist yet when it runs — so
+  this writes no `task_phase_transitions` row and consults nothing in
+  `Platform.Tasks.valid_task_transitions/0`. That is the correct
+  reading, not a loophole: the task never WAS `backlog`, so there is no
+  transition to record. Its first interval is anchored at `inserted_at`
+  like every other task's.
+
+  The task's `metadata` keeps `provenance_metadata/1`'s three keys —
+  `Platform.Meetings.Triage` reads `"source"` — and adds how it got
+  here: `"completed_via" => "meeting_intent_ack"`, the ack time, and the
+  intent id. A `:task_attrs` `metadata` REPLACES the provenance map
+  rather than merging into it, which is why the merge is done here.
+
+  ## When the mint fails
+
+  `graduate/2` propagates `{:error, :project_archived}` from
+  `Platform.Tasks.create_task/2` and leaves the candidate open. That is
+  right for the sweeper (`fire/1` documents why) and wrong here: the
+  claim above already disarmed the row, the agent already said it is
+  finished, and a disarmed-and-open card is one nothing will ever close.
+  So a failed mint logs and falls through to the record-only close —
+  the same row the ack would have produced before this function existed.
+
+  Always `:ok`: this is a recording act reached from the mirror, and the
+  mirror's contract is that recording degrades, never propagates.
+  """
+  @spec complete_by_ack(MeetingCandidate.t()) :: :ok
+  def complete_by_ack(%MeetingCandidate{} = candidate) do
+    now = DateTime.utc_now()
+
+    claimed =
+      MeetingCandidate
+      |> where([c], c.id == ^candidate.id)
+      |> where([c], c.state != :closed)
+      # The exactly-once guard, and the same one `claim_ids/2` uses: the
+      # `set:` below nils `acts_at`, so the sweeper re-evaluating ITS
+      # `acts_at IS NOT NULL` under the row lock finds nothing — and if
+      # the sweeper got here first, this finds nothing. It also answers
+      # "was this ever going to fire?": a card that was never armed
+      # (muted meeting, `off_topic`, unroutable) has a nil `acts_at`,
+      # and an ack does not mint what the countdown would not have.
+      |> where([c], not is_nil(c.acts_at))
+      # The artifact rail's deliverable is a canvas, and nothing on the
+      # ack path creates one. See `graduate/2`.
+      |> where([c], c.outcome_kind == :task)
+      # Belt to the braces above: a card that already has its task must
+      # not get a second one, whatever `acts_at` says.
+      |> where([c], is_nil(c.task_id))
+      |> select([c], c.id)
+      # `queue_status` rides along because it is a fact already true of
+      # the queue row by the time the mirror runs, and `graduate/2` has
+      # no slot to record it — see `record_only_close/2` for the other
+      # branch, where `record_disposition/3` carries it instead.
+      |> Repo.update_all(set: [acts_at: nil, queue_status: "completed", updated_at: now])
+
+    case claimed do
+      {1, _} ->
+        task_attrs = %{
+          status: "done",
+          metadata:
+            Map.merge(provenance_metadata(candidate), %{
+              "completed_via" => "meeting_intent_ack",
+              "acked_at" => DateTime.to_iso8601(now),
+              "intent_id" => candidate.intent_id
+            })
+        }
+
+        # The ID, not the struct: `fetch/1`'s struct clause returns its
+        # argument untouched, and the struct the mirror handed in
+        # predates the claim above.
+        case graduate(candidate.id, task_attrs: task_attrs) do
+          {:ok, _graduated} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "meeting candidate complete-by-ack mint failed, closing without a task: " <>
+                "candidate=#{candidate.id} reason=#{inspect(reason)}"
+            )
+
+            record_only_close(candidate)
+        end
+
+      _ ->
+        # Nothing to claim. Every way here is one where the countdown
+        # would not have minted either, so the ack does not:
+        #
+        #   * the sweeper claimed it first (`acts_at` already nil, state
+        #     `:acting`) — it is minting, or has minted (`task_id` set);
+        #   * a human pressed stop (`acts_at` nil, then `:closed`);
+        #   * it was never armed — muted meeting, `off_topic`, unroutable
+        #     — and `put_armed_acts_at/1` left `acts_at` nil;
+        #   * it is an `:artifact` candidate;
+        #   * it already carries a `task_id`.
+        #
+        # What remains is what `close_ack/4` always recorded.
+        record_only_close(candidate)
+    end
+
+    :ok
+  end
+
+  # The pre-01a06638 shape of a `:completed` ack, kept as the fallback:
+  # `:accepted` with the queue status, then `:done`. By ID so both calls
+  # re-read the row — `close/2` is idempotent on a `:closed` row ONLY if
+  # it sees that the row is closed, and the struct we hold predates the
+  # claim. Neither call's error is the mirror's business.
+  defp record_only_close(%MeetingCandidate{id: id}) do
+    _ = record_disposition(id, :accepted, %{queue_status: "completed"})
+    _ = close(id, :done)
+    :ok
+  end
+
   # The one difference between the two kinds.
   defp mint(candidate, :task, opts) do
     meeting = meeting_for(candidate)
