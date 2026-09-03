@@ -25,6 +25,7 @@ import MeetingBar from "./meeting_bar"
 import MessageLift from "./message_lift"
 import MeetingCaptions, { MeetingCaptionsPersist } from "./meeting_captions"
 import MeetingClient from "./meeting_client"
+import MeetingPushToTalk from "./meeting_push_to_talk"
 import MeetingRoom from "./meeting_room"
 import MeetingScreenShare from "./meeting_screen_share"
 import MeetingShareButton from "./meeting_share_button"
@@ -77,6 +78,7 @@ export default {
   MeetingCaptions,
   MeetingCaptionsPersist,
   MeetingClient,
+  MeetingPushToTalk,
   MeetingRoom,
   MeetingScreenShare,
   MeetingShareButton,

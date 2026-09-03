@@ -245,6 +245,8 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
+  alias Platform.Meetings.PressCard
+  alias Platform.Meetings.PressWindow
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.Room
   alias Platform.Meetings.SenderSeed
@@ -3064,6 +3066,40 @@ defmodule PlatformWeb.MeetingLive do
     end)
   end
 
+  # Push-to-talk (task 01a03f4e stage 5). The key went down: open the
+  # press window and put this speaker's card on the board immediately.
+  #
+  # The IDENTITY is read off this socket and never from the click
+  # payload. It is minted the same way the LiveKit token mints it —
+  # `"user:<uuid>"`, the shape `Meetings.parse_identity/1` parses and the
+  # shape the transcriber stamps on every segment — so the window this
+  # opens is the window an arriving segment will match. A crafted
+  # `phx-value-` cannot open a window in somebody else's name.
+  def handle_event("push_to_talk_press", _params, socket) do
+    with %{id: meeting_id} <- socket.assigns[:meeting],
+         identity when is_binary(identity) <- press_identity(socket) do
+      PressCard.open(meeting_id, identity,
+        speaker: socket.assigns[:display_name],
+        room_id: socket.assigns[:meeting].chat_space_id
+      )
+    end
+
+    {:noreply, socket}
+  end
+
+  # The key came up. Closing the window is all that happens here: the
+  # words are still in the transcriber's buffer, and
+  # `PressWindow.release/3` leaves a grace period open for exactly that
+  # reason.
+  def handle_event("push_to_talk_release", _params, socket) do
+    with %{id: meeting_id} <- socket.assigns[:meeting],
+         identity when is_binary(identity) <- press_identity(socket) do
+      PressWindow.release(meeting_id, identity)
+    end
+
+    {:noreply, socket}
+  end
+
   # Stop this candidate's countdown (task 01a03fba stage 4).
   #
   # Deliberately NOT wrapped in `with_intents_gate/2`. That gate resolves
@@ -4596,6 +4632,16 @@ defmodule PlatformWeb.MeetingLive do
 
   # Run `fun` only when the viewer holds the producer role. A hidden bar
   # is a rendering decision; this is the authorization.
+  # The LiveKit participant identity for whoever owns this socket, or nil
+  # for a session with no user (a guest joins with a `guest:` identity
+  # minted elsewhere and does not get push-to-talk in this stage).
+  defp press_identity(socket) do
+    case socket.assigns[:current_user] do
+      %{id: id} when is_binary(id) -> "user:#{id}"
+      _ -> nil
+    end
+  end
+
   defp apply_candidate_stop(socket, candidate) do
     result =
       Candidates.stop(

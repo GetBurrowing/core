@@ -384,7 +384,16 @@ defmodule Platform.Meetings.IntentQueue.Server do
     :dispatch_failure_reason,
     :model_used,
     :elapsed_ms,
-    :dedupe_key
+    :dedupe_key,
+    # How the utterance reached the queue. `:push_to_talk` means the
+    # speaker was holding the direct-to-agent key when they said it
+    # (task 01a03f4e stage 2); `nil` means ordinary meeting speech that
+    # the classifier picked up on its own. Carried on the row rather
+    # than re-derived downstream because the press window it came from
+    # is per-meeting ETS that has already moved on by the time anything
+    # reads the queue — the verdict is only true at the instant the
+    # segment arrived, and nothing later can reconstruct it.
+    :source
   ]
 
   # Destination status -> the timestamp field stamped on arrival.
@@ -1752,7 +1761,8 @@ defmodule Platform.Meetings.IntentQueue.Server do
       dispatch_failure_reason: nil,
       model_used: nil,
       elapsed_ms: nil,
-      dedupe_key: nil
+      dedupe_key: nil,
+      source: nil
     }
   end
 

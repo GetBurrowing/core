@@ -94,6 +94,11 @@ defmodule Platform.Application do
            # (task 019ee06b). Owns :meeting_user_state table; must start
            # after PubSub so broadcast_* helpers always have a bus.
            Platform.Meetings.State,
+           # Push-to-talk press windows (task 01a03f4e stage 1) — owns
+           # the :meeting_press_windows table. Pure ETS lifecycle owner,
+           # no PubSub and no DB, so its position here is only about
+           # existing before the first meeting can open a window.
+           Platform.Meetings.PressWindow,
            # Per-MEETING intent queues (task 019f70b8 stage 2) — one
            # on-demand GenServer per meeting, each owning an unnamed
            # ETS table that dies with it. No sweeper: cleanup is

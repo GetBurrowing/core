@@ -224,7 +224,9 @@ defmodule Platform.Meetings.IntentClassifier do
   alias Platform.Meetings.IntentFrames
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.MeetingCandidate
+  alias Platform.Meetings.PressWindow
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.SpokenTarget
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Roles
 
@@ -411,6 +413,17 @@ defmodule Platform.Meetings.IntentClassifier do
   def handle_info({:transcript_chunk, payload}, state) when is_map(payload) do
     room_id = Map.get(payload, :room_id)
 
+    # Push-to-talk verdict is taken HERE, on arrival, and carried — not
+    # taken at enqueue time. Everything between this line and the queue
+    # write is slow and variable: the same-speaker debounce holds the
+    # chunk for up to `max_hold_ms`, then `classify_and_enqueue/4` runs
+    # a prompt render and a provider LLM call. Asking
+    # `PressWindow.claim/3` after all that would evaluate the window
+    # seconds after the words landed and would answer about a press that
+    # has long since been released. The window is only true at the
+    # instant the segment arrived, so that is the instant we ask.
+    payload = stamp_press_window_source(payload)
+
     cond do
       # Unkeyable: no room means no debounce slot and no context buffer.
       # Delivers straight through, exactly as it did before the debounce
@@ -528,7 +541,20 @@ defmodule Platform.Meetings.IntentClassifier do
   defp extend_hold(state, room_id, held, payload) do
     _ = Process.cancel_timer(held.timer)
 
-    held = %{held | texts: held.texts ++ [payload_text(payload)]}
+    held = %{
+      held
+      | texts: held.texts ++ [payload_text(payload)],
+        # `merged_payload/1` keeps the FIRST fragment's payload, so
+        # without this a speaker who starts talking and THEN presses
+        # would have the press silently dropped: the turn would carry
+        # fragment one's verdict and nothing else. The rule is "any
+        # fragment of this turn arrived inside the window marks the
+        # turn", which is what a person holding the key mid-sentence
+        # means by it. It only ever promotes — a later fragment landing
+        # outside the window cannot un-mark a turn that was pressed.
+        payload: promote_press_window_source(held.payload, payload)
+    }
+
     elapsed = System.monotonic_time(:millisecond) - held.held_since
 
     if elapsed >= state.max_hold_ms do
@@ -964,7 +990,10 @@ defmodule Platform.Meetings.IntentClassifier do
     # `nil` means this chunk got no row of its own (it threaded onto an
     # open candidate, or it had no meeting/chunk id to be keyed by), and
     # closing something we did not open is not ours to do.
-    skeleton = record_heard(meeting_id, room_id, chunk_id, chunk_text, speaker)
+    skeleton =
+      record_heard(meeting_id, room_id, chunk_id, chunk_text, speaker, %{
+        press_card_intent_id: Map.get(payload, :press_window_card_intent_id)
+      })
 
     prompt =
       resolve_prompt(
@@ -1014,7 +1043,11 @@ defmodule Platform.Meetings.IntentClassifier do
             # lines up — one derivation, so the attribution the model
             # was shown is the attribution the row records. Task
             # 01a03fb9 stage 1.
-            speaker: speaker
+            speaker: speaker,
+            # Stamped on arrival by `stamp_press_window_source/1`, not
+            # computed here — see the comment at the transcript_chunk
+            # handler for why the instant matters.
+            source: Map.get(payload, :press_window_source)
           })
 
         settle_skeleton(skeleton, enqueue_result)
@@ -1081,15 +1114,20 @@ defmodule Platform.Meetings.IntentClassifier do
   # `IntentQueue.Server`'s `mirror/1`: recording a card is a recording
   # act and must degrade to a log line, never take down the classifier's
   # transcript subscription.
-  defp record_heard(meeting_id, room_id, chunk_id, chunk_text, speaker) do
-    case Candidates.record_heard(%{
-           meeting_id: meeting_id,
-           room_id: room_id,
-           transcript_chunk_id: chunk_id,
-           evidence_quote: excerpt(chunk_text),
-           speaker: speaker,
-           heard_at: DateTime.utc_now()
-         }) do
+  defp record_heard(meeting_id, room_id, chunk_id, chunk_text, speaker, extra) do
+    case Candidates.record_heard(
+           Map.merge(
+             %{
+               meeting_id: meeting_id,
+               room_id: room_id,
+               transcript_chunk_id: chunk_id,
+               evidence_quote: excerpt(chunk_text),
+               speaker: speaker,
+               heard_at: DateTime.utc_now()
+             },
+             extra
+           )
+         ) do
       {:ok, %MeetingCandidate{} = skeleton} ->
         skeleton
 
@@ -1207,7 +1245,7 @@ defmodule Platform.Meetings.IntentClassifier do
   #     should be visible in the classifier's telemetry stream.
   #   * `:queue_unavailable` — the queue owner died or could not start.
   defp enqueue_meeting_intent(%{meeting_id: meeting_id} = args) when is_binary(meeting_id) do
-    {agent_id, agent_slug} = resolve_target_agent(args.target_role)
+    {agent_id, agent_slug} = resolve_agent_for(args)
 
     result =
       IntentQueue.enqueue(meeting_id, %{
@@ -1221,7 +1259,8 @@ defmodule Platform.Meetings.IntentClassifier do
         confidence: args.confidence,
         transcript_chunk_id: args.chunk_id,
         chunk_excerpt: excerpt(args.chunk_text),
-        speaker: args.speaker
+        speaker: args.speaker,
+        source: Map.get(args, :source)
       })
 
     case result do
@@ -1269,6 +1308,50 @@ defmodule Platform.Meetings.IntentClassifier do
   # as `:queued` with a nil target and fails visibly at dispatch as
   # `:dispatch_failed`. Silently dropping the intent would hide exactly
   # the tuning signal this queue exists to surface.
+  # Push-to-talk addresses an agent directly; ordinary meeting speech is
+  # routed by the role the classifier inferred (task 01a03f4e stage 4).
+  #
+  # The two are kept as separate branches rather than a fallback chain
+  # on purpose. A push-to-talk utterance that names nobody must take the
+  # CONFIGURED default and stop — sliding it into `target_role`'s
+  # role-assignment lookup would let a role the model happened to guess
+  # silently outrank the default the operator set, which is the opposite
+  # of what holding the key means.
+  defp resolve_agent_for(%{source: :push_to_talk} = args) do
+    case SpokenTarget.resolve(Map.get(args, :chunk_text)) do
+      {:ok, agent_id, agent_slug, _via} ->
+        {agent_id, agent_slug}
+
+      {:error, :no_default_target} ->
+        # LOUD. Nothing is guessed and nothing is attached: an operator
+        # has not said who hears an unaddressed push-to-talk utterance,
+        # and picking an agent to paper over that is how somebody's
+        # words end up in a stranger's queue.
+        Logger.warning(
+          "[IntentClassifier] push-to-talk utterance has no target: no agent is assigned " <>
+            "to responsibility #{SpokenTarget.default_responsibility_key()} " <>
+            "meeting_id=#{inspect(Map.get(args, :meeting_id))}"
+        )
+
+        :telemetry.execute(
+          [:platform, :meetings, :push_to_talk_unrouted],
+          %{count: 1},
+          %{
+            meeting_id: Map.get(args, :meeting_id),
+            responsibility_key: SpokenTarget.default_responsibility_key()
+          }
+        )
+
+        {nil, nil}
+    end
+  rescue
+    # Same posture as `resolve_target_agent/1` below: an off-sandbox
+    # lookup must not take down the classifier's subscription.
+    _ -> {nil, nil}
+  end
+
+  defp resolve_agent_for(args), do: resolve_target_agent(args.target_role)
+
   defp resolve_target_agent(nil), do: {nil, nil}
 
   defp resolve_target_agent(target_role) do
@@ -1836,6 +1919,60 @@ defmodule Platform.Meetings.IntentClassifier do
 
     if is_binary(identity) and Meetings.agent_identity?(identity), do: identity
   end
+
+  # ── Push-to-talk marker (task 01a03f4e stage 2) ───────────────────────────
+
+  # Ask `Platform.Meetings.PressWindow` whether this segment arrived
+  # while its own speaker was holding the direct-to-agent key, and
+  # record the answer on the payload under `:press_window_source`.
+  #
+  # The key is deliberately NOT `:source`. This payload is the
+  # `meeting:transcript_chunk` broadcast shape, which other subscribers
+  # and future producers also read; a bare `:source` there would be
+  # ambiguous about whose source it is. The queue row's field IS
+  # `:source`, and the rename happens at the enqueue boundary.
+  #
+  # Reads `participant_identity/1` and ONLY that — never
+  # `segment_speaker/2`, which falls back through display names. Two
+  # participants can share a display name, and routing one person's
+  # words to the agent because a namesake was holding the key is
+  # exactly the confusion the identity key exists to prevent.
+  #
+  # A chunk with no meeting_id or no identity is unmarkable, not
+  # marked-false: both leave the payload untouched.
+  defp stamp_press_window_source(payload) when is_map(payload) do
+    meeting_id = Map.get(payload, :meeting_id)
+    identity = participant_identity(payload)
+
+    if is_binary(meeting_id) and is_binary(identity) do
+      case PressWindow.claim(meeting_id, identity, DateTime.utc_now()) do
+        {:ok, window} ->
+          payload
+          |> Map.put(:press_window_source, :push_to_talk)
+          # The card this press already put on the board, so the
+          # pre-classification write below fills THAT row in instead of
+          # opening a second one next to it (task 01a03f4e stage 3).
+          |> Map.put(:press_window_card_intent_id, Map.get(window, :card_intent_id))
+
+        :none ->
+          payload
+      end
+    else
+      payload
+    end
+  end
+
+  defp stamp_press_window_source(payload), do: payload
+
+  # Fold a later fragment's verdict into the held turn's payload.
+  # Promote-only: see `extend_hold/4`.
+  defp promote_press_window_source(held_payload, %{press_window_source: :push_to_talk} = payload) do
+    held_payload
+    |> Map.put(:press_window_source, :push_to_talk)
+    |> Map.put_new(:press_window_card_intent_id, Map.get(payload, :press_window_card_intent_id))
+  end
+
+  defp promote_press_window_source(held_payload, _payload), do: held_payload
 
   # Key the same-speaker debounce merge on the participant IDENTITY when
   # the segment carries one, falling back to the display-name key for

@@ -329,10 +329,75 @@ defmodule Platform.Meetings.Candidates do
 
   defp do_record_heard(attrs, meeting_id, chunk_id) do
     case recorded_chunk(meeting_id, chunk_id) do
-      nil -> thread_or_open(attrs, meeting_id, chunk_id)
+      nil -> adopt_or_thread(attrs, meeting_id, chunk_id)
       %MeetingCandidate{transcript_chunk_id: owner} = row when owner == chunk_id -> {:ok, row}
       %MeetingCandidate{} = host -> {:attached, host}
     end
+  end
+
+  # A push-to-talk press opens its card BEFORE anything is said (task
+  # 01a03f4e stage 3), so by the time this utterance arrives there is
+  # already an empty row on the board waiting for it. Fill that row in
+  # rather than opening a second one beside it.
+  #
+  # This runs BEFORE `thread_or_open/3` and the order is load-bearing.
+  # `ThreadResolver` is a content matcher — same speaker, inside the
+  # window, then scored on topic overlap — and a press card has no
+  # content to overlap with, so the resolver answers `:new` for it every
+  # time. Measured on 2026-08-29: without this branch one press plus the
+  # presser's own sentence produced TWO `meeting_candidates` rows. The
+  # press window is the only join that can see the connection, which is
+  # why the intent id is threaded down here from
+  # `PressWindow.attach_card/3` rather than re-derived.
+  defp adopt_or_thread(attrs, meeting_id, chunk_id) do
+    case adoptable_press_card(attrs, meeting_id) do
+      nil -> thread_or_open(attrs, meeting_id, chunk_id)
+      %MeetingCandidate{} = card -> adopt_press_card(card, attrs, chunk_id)
+    end
+  end
+
+  # Only an OPEN, still-empty card of this meeting's is adoptable. Each
+  # condition refuses something real:
+  #
+  #   * `transcript_chunk_id: nil` — a press card that has already taken
+  #     an utterance belongs to that utterance. The second sentence of a
+  #     long press is a new card, exactly as it is without push-to-talk.
+  #   * `state in @open_states` — a card that already graduated or closed
+  #     is not a slot to write into.
+  #   * `meeting_id` — belt and braces. A window is per-meeting so this
+  #     cannot currently differ, but adopting across meetings would put
+  #     one meeting's words on another's board.
+  defp adoptable_press_card(attrs, meeting_id) do
+    with intent_id when is_binary(intent_id) <- Map.get(attrs, :press_card_intent_id),
+         %MeetingCandidate{} = card <- get_by_intent_id(intent_id),
+         true <- card.meeting_id == meeting_id,
+         true <- card.state in @open_states,
+         true <- is_nil(card.transcript_chunk_id) do
+      card
+    else
+      _ -> nil
+    end
+  end
+
+  defp adopt_press_card(card, attrs, chunk_id) do
+    at = Map.get(attrs, :heard_at) || Map.get(attrs, :last_utterance_at) || DateTime.utc_now()
+
+    card
+    |> MeetingCandidate.changeset(%{
+      transcript_chunk_id: chunk_id,
+      transcript_chunk_ids: [chunk_id],
+      evidence_quote: Map.get(attrs, :evidence_quote),
+      # The press only knew a display name to guess with; the transcript
+      # is the authority on attribution. Fall back to what the press
+      # recorded when the segment is unattributed.
+      speaker: speaker_or_nil(Map.get(attrs, :speaker)) || card.speaker,
+      # `heard_at` deliberately NOT moved: the card was first seen when
+      # the key went down, and that is the number the countdown ring has
+      # been rendering since. `last_utterance_at` moves, because
+      # something was finally said.
+      last_utterance_at: at
+    })
+    |> Repo.update()
   end
 
   defp thread_or_open(attrs, meeting_id, chunk_id) do
