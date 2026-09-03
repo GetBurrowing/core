@@ -135,6 +135,16 @@ defmodule Platform.Meetings.MeetingCandidate do
     field(:classifier_confidence, :float)
     field(:classifier_model, :string)
 
+    # The intent the evidence gate DOWNGRADED to `off_topic`, or nil
+    # when `classified_intent` is the model's own answer (task 01a06575).
+    #
+    # The demotion preserves the model's confidence, so without this
+    # column a demoted row and a genuine decline are byte-identical:
+    # same `classified_intent`, same `target_role`, same
+    # `classifier_confidence`. `demoted_from IS NULL` is therefore the
+    # ONLY thing that says "the model meant this".
+    field(:demoted_from, :string)
+
     field(:disposition, Ecto.Enum, values: @dispositions)
     field(:disposition_at, :utc_datetime_usec)
 
@@ -176,6 +186,7 @@ defmodule Platform.Meetings.MeetingCandidate do
                   assigned_agent_id assigned_agent_slug target_role task_id
                   canvas_id closed_reason closed_note closed_at
                   classified_intent classifier_confidence classifier_model
+                  demoted_from
                   disposition disposition_at queue_status speaker
                   last_utterance_at threading_events acts_at
                   closed_by_participant_id heard_at

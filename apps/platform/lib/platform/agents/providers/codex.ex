@@ -368,11 +368,32 @@ defmodule Platform.Agents.Providers.Codex do
     |> System.convert_time_unit(:native, :millisecond)
   end
 
+  # How long a single model call is allowed to take. DOUBLE
+  # `Platform.Meetings.Countdown.countdown_seconds/0`, and that inversion
+  # is load-bearing rather than accidental: a meeting-intent
+  # classification running on this provider may legitimately take 31 to
+  # 60 seconds, which is longer than the candidate countdown it is
+  # racing. `Platform.Meetings.Candidates.claim_due/2` is what makes that
+  # safe — an unclassified card is not due — and
+  # `countdown_test.exs` binds the two numbers so neither can move
+  # without the other being looked at. Do not raise the countdown to
+  # match this; it is a human review window (Harper, 2026-08-27).
+  @receive_timeout_ms 60_000
+
+  @doc """
+  The receive timeout this provider gives one model call, in ms.
+
+  Public so the countdown that races it can assert the relationship
+  rather than restate the number. See `@receive_timeout_ms`.
+  """
+  @spec receive_timeout_ms() :: pos_integer()
+  def receive_timeout_ms, do: @receive_timeout_ms
+
   defp req_client do
     Application.get_env(
       :platform,
       :codex_req_client,
-      Req.new(headers: [{"accept", "text/event-stream"}], receive_timeout: 60_000)
+      Req.new(headers: [{"accept", "text/event-stream"}], receive_timeout: @receive_timeout_ms)
     )
   end
 

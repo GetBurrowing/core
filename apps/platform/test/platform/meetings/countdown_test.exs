@@ -73,6 +73,39 @@ defmodule Platform.Meetings.CountdownTest do
 
   defp reload!(%MeetingCandidate{id: id}), do: Repo.get!(MeetingCandidate, id)
 
+  # The classification the mirror lands on a skeleton a second or two
+  # after `record_heard/1` writes it — `IntentQueue.Server.mirror_enqueue/3`'s
+  # exact call, and the state the live rail actually leaves a card in.
+  #
+  # Opt-in rather than folded into `heard!/2`, because most of this file
+  # is about the UNCLASSIFIED skeleton: it is armed at the moment
+  # somebody spoke, and that is the behaviour under test. It is needed
+  # wherever a test drives the SWEEPER, because a card the classifier has
+  # not answered for is not eligible to graduate — see
+  # `Candidates.claim_due/2`.
+  defp classify!(%MeetingCandidate{} = card, opts \\ []) do
+    card = reload!(card)
+
+    {:ok, _} =
+      Candidates.create_or_attach(%{
+        intent_id: Ecto.UUID.generate(),
+        meeting_id: card.meeting_id,
+        transcript_chunk_id: card.transcript_chunk_id,
+        transcript_chunk_ids: [card.transcript_chunk_id],
+        evidence_quote: card.evidence_quote,
+        speaker: card.speaker,
+        classified_intent: Keyword.get(opts, :intent, "action_items"),
+        target_role: Keyword.get(opts, :target_role, "meeting_scribe"),
+        state: :heard,
+        queue_status: "queued",
+        outcome_kind: card.outcome_kind,
+        heard_at: card.heard_at,
+        last_utterance_at: card.last_utterance_at
+      })
+
+    reload!(card)
+  end
+
   # ── The number ────────────────────────────────────────────────────────────
 
   describe "Countdown.countdown_seconds/0" do
@@ -84,6 +117,32 @@ defmodule Platform.Meetings.CountdownTest do
 
       from = ~U[2026-08-29 10:00:00.000000Z]
       assert Countdown.acts_at(from) == ~U[2026-08-29 10:00:30.000000Z]
+    end
+
+    test "sits INSIDE the timeout a model call is allowed, and the two are bound" do
+      # Task 01a06575 round 3, door 2, pinned as a number rather than a
+      # comment. Three providers give one model call 60 seconds; the
+      # countdown gives 30. So a classification taking 31 to 60 seconds
+      # is inside what the HTTP client permits and outside what the
+      # countdown tolerates, and the sweeper ticks every second.
+      #
+      # NEITHER NUMBER MOVES — 30s is Harper's review window, 60s is what
+      # a real model call needs. What must not happen is the relationship
+      # being re-created implicitly, so this reads both ends.
+      for provider <- [
+            Platform.Agents.Providers.Anthropic,
+            Platform.Agents.Providers.OpenAI,
+            Platform.Agents.Providers.Codex
+          ] do
+        assert provider.receive_timeout_ms() == Countdown.provider_receive_timeout_ms(),
+               "#{inspect(provider)} no longer agrees with the timeout " <>
+                 "Countdown documents itself against"
+      end
+
+      assert Countdown.provider_receive_timeout_ms() >
+               Countdown.countdown_seconds() * 1_000,
+             "the countdown now outlives a model call — the whole reason " <>
+               "claim_due/2 refuses an unclassified candidate has changed"
     end
 
     test "acts_at/1 answers nil for a nil utterance time rather than defaulting to now" do
@@ -214,6 +273,233 @@ defmodule Platform.Meetings.CountdownTest do
       # sweep, this card's deadline would be five minutes in the past and
       # it would fire the instant somebody turned automation back on.
       assert is_nil(reload!(card).acts_at)
+    end
+  end
+
+  # ── Arming is gated on having an audience (task 01a06575 stage 5) ─────────
+
+  describe "a classification that reaches nobody is not armed" do
+    setup do: %{meeting: meeting!()}
+
+    test "create/1 with an off_topic classification arms nothing, and the control arms",
+         %{meeting: meeting} do
+      at = DateTime.utc_now()
+
+      assert {:ok, small_talk} =
+               Candidates.create(%{
+                 meeting_id: meeting.id,
+                 transcript_chunk_id: Ecto.UUID.generate(),
+                 evidence_quote: "did you catch the game last night",
+                 speaker: "bruno",
+                 state: :heard,
+                 outcome_kind: :task,
+                 classified_intent: "off_topic",
+                 target_role: "null",
+                 heard_at: at,
+                 last_utterance_at: at
+               })
+
+      assert is_nil(reload!(small_talk).acts_at)
+
+      # The control, through the SAME function with the SAME shape and
+      # one field different. Without it an implementation that armed
+      # nothing at all would pass above.
+      assert {:ok, real} =
+               Candidates.create(%{
+                 meeting_id: meeting.id,
+                 transcript_chunk_id: Ecto.UUID.generate(),
+                 evidence_quote: "we should make the dashboard load faster",
+                 speaker: "alice",
+                 state: :heard,
+                 outcome_kind: :task,
+                 classified_intent: "action_items",
+                 target_role: "null",
+                 heard_at: at,
+                 last_utterance_at: at
+               })
+
+      assert %DateTime{} = reload!(real).acts_at
+    end
+
+    test "a skeleton with no classification yet IS armed", %{meeting: meeting} do
+      # Deliberate. `record_heard/1` writes a card before the model has
+      # answered, and the countdown is anchored to the moment somebody
+      # spoke. Withholding the arming until classification would move
+      # the deadline by the model's latency; the disarm below is what
+      # handles small talk instead.
+      assert {:ok, skeleton} = heard!(meeting, at: DateTime.utc_now())
+      assert %DateTime{} = reload!(skeleton).acts_at
+      assert is_nil(reload!(skeleton).classified_intent)
+    end
+
+    test "reconciling an off_topic classification onto an armed skeleton disarms it",
+         %{meeting: meeting} do
+      at = DateTime.utc_now()
+      chunk_id = Ecto.UUID.generate()
+
+      assert {:ok, skeleton} =
+               Candidates.record_heard(%{
+                 meeting_id: meeting.id,
+                 transcript_chunk_id: chunk_id,
+                 evidence_quote: "did you catch the game last night",
+                 speaker: "bruno",
+                 heard_at: at
+               })
+
+      # It counted down while the model was thinking.
+      assert %DateTime{} = reload!(skeleton).acts_at
+
+      # The classifier answers `off_topic`. This is the exact call
+      # `IntentQueue.Server.mirror_enqueue/3` makes.
+      assert {:ok, _} =
+               Candidates.create_or_attach(%{
+                 intent_id: Ecto.UUID.generate(),
+                 meeting_id: meeting.id,
+                 transcript_chunk_id: chunk_id,
+                 transcript_chunk_ids: [chunk_id],
+                 evidence_quote: "did you catch the game last night",
+                 speaker: "bruno",
+                 classified_intent: "off_topic",
+                 target_role: "null",
+                 state: :heard,
+                 queue_status: "queued",
+                 outcome_kind: :task,
+                 heard_at: at,
+                 last_utterance_at: at
+               })
+
+      reconciled = reload!(skeleton)
+
+      assert reconciled.classified_intent == "off_topic"
+
+      assert is_nil(reconciled.acts_at),
+             "an off_topic card kept its deadline through classification — it is " <>
+               "relying on the dispatcher to close it first, which is a race"
+
+      # And it is not merely disarmed by accident of being closed:
+      # `Candidates.close/2` does not nil `acts_at`, so a closed row
+      # would still be carrying one.
+      refute reconciled.state == :closed
+    end
+
+    test "an off_topic classification is disarmed even when it names a REAL role",
+         %{meeting: meeting} do
+      # `routable?/2` was `responsibility_key/1 != nil or routable_role?/1`,
+      # and only the first half knows what `off_topic` means. The response
+      # schema demands a `target_role` string on every answer, so an
+      # `off_topic` naming `meeting_scribe` is ordinary model noise — and
+      # it took the OR's second branch, armed the card, and minted this
+      # exact sentence into `tasks` (task 01a06575).
+      at = DateTime.utc_now()
+      chunk_id = Ecto.UUID.generate()
+      text = "did you catch the game last night, that last quarter was something"
+
+      refute Candidates.routable_attrs?(%{
+               classified_intent: "off_topic",
+               target_role: "meeting_scribe"
+             })
+
+      assert {:ok, skeleton} =
+               Candidates.record_heard(%{
+                 meeting_id: meeting.id,
+                 transcript_chunk_id: chunk_id,
+                 evidence_quote: text,
+                 speaker: "bruno",
+                 heard_at: at
+               })
+
+      assert %DateTime{} = reload!(skeleton).acts_at
+
+      assert {:ok, _} =
+               Candidates.create_or_attach(%{
+                 intent_id: Ecto.UUID.generate(),
+                 meeting_id: meeting.id,
+                 transcript_chunk_id: chunk_id,
+                 transcript_chunk_ids: [chunk_id],
+                 evidence_quote: text,
+                 speaker: "bruno",
+                 classified_intent: "off_topic",
+                 # The role the model named. A VALID one.
+                 target_role: "meeting_scribe",
+                 state: :heard,
+                 queue_status: "queued",
+                 outcome_kind: :task,
+                 heard_at: at,
+                 last_utterance_at: at
+               })
+
+      reconciled = reload!(skeleton)
+
+      assert reconciled.classified_intent == "off_topic"
+      assert reconciled.target_role == "meeting_scribe"
+
+      assert is_nil(reconciled.acts_at),
+             "an off_topic card naming a real role kept its deadline — the role " <>
+               "string on a decline is model noise, not routing"
+
+      # Not disarmed merely by being closed: `close/2` leaves `acts_at`
+      # standing, so a closed row would still carry one.
+      refute reconciled.state == :closed
+    end
+
+    test "reconciling a ROUTABLE classification leaves the deadline alone",
+         %{meeting: meeting} do
+      at = DateTime.utc_now()
+      chunk_id = Ecto.UUID.generate()
+
+      assert {:ok, skeleton} =
+               Candidates.record_heard(%{
+                 meeting_id: meeting.id,
+                 transcript_chunk_id: chunk_id,
+                 evidence_quote: "we should make the dashboard load faster",
+                 speaker: "alice",
+                 heard_at: at
+               })
+
+      armed_at = reload!(skeleton).acts_at
+      assert %DateTime{} = armed_at
+
+      assert {:ok, _} =
+               Candidates.create_or_attach(%{
+                 intent_id: Ecto.UUID.generate(),
+                 meeting_id: meeting.id,
+                 transcript_chunk_id: chunk_id,
+                 transcript_chunk_ids: [chunk_id],
+                 evidence_quote: "we should make the dashboard load faster",
+                 speaker: "alice",
+                 classified_intent: "action_items",
+                 # Unaddressed, which stage 3 made a correct answer. A
+                 # null target must NOT cost a routable intent its card.
+                 target_role: "null",
+                 state: :heard,
+                 queue_status: "queued",
+                 outcome_kind: :task,
+                 heard_at: at,
+                 last_utterance_at: at
+               })
+
+      assert reload!(skeleton).acts_at == armed_at
+    end
+
+    test "routable_attrs?/1 answers on attrs alone, in both key spellings" do
+      assert Candidates.routable_attrs?(%{})
+      assert Candidates.routable_attrs?(%{classified_intent: nil})
+      assert Candidates.routable_attrs?(%{classified_intent: "action_items"})
+      assert Candidates.routable_attrs?(%{"classified_intent" => "action_items"})
+
+      refute Candidates.routable_attrs?(%{classified_intent: "off_topic", target_role: "null"})
+      refute Candidates.routable_attrs?(%{"classified_intent" => "off_topic"})
+
+      # An intent with no responsibility row, routed by role instead.
+      assert Candidates.routable_attrs?(%{
+               classified_intent: "pull_numbers",
+               target_role: "historian"
+             })
+
+      refute Candidates.routable_attrs?(%{
+               classified_intent: "pull_numbers",
+               target_role: "null"
+             })
     end
   end
 
@@ -417,6 +703,11 @@ defmodule Platform.Meetings.CountdownTest do
       {:ok, live_card} =
         heard!(meeting, at: at, speaker: "bob", text: "somebody redo the pricing page please")
 
+      # Both have been through the classifier, as the live rail's cards
+      # have by the time a 60-second-overdue deadline comes round.
+      _ = classify!(stopped_card)
+      _ = classify!(live_card)
+
       # Both are armed and both are already overdue.
       assert %DateTime{} = reload!(stopped_card).acts_at
       assert %DateTime{} = reload!(live_card).acts_at
@@ -460,6 +751,7 @@ defmodule Platform.Meetings.CountdownTest do
          %{meeting: meeting} do
       at = DateTime.add(DateTime.utc_now(), -60, :second)
       {:ok, card} = heard!(meeting, at: at)
+      _ = classify!(card)
 
       assert [fired] = Platform.Meetings.CandidateSweeper.sweep(now: DateTime.utc_now())
       assert fired.id == card.id

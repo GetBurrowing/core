@@ -18,8 +18,10 @@ defmodule Platform.Meetings.IntentRoutingTest do
   """
   use Platform.DataCase, async: true
 
+  alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentRouting
   alias Platform.Responsibilities.Providers.Meetings, as: MeetingsProvider
+  alias Platform.Roles.Role
   alias Platform.Roles.Seeds
 
   describe "the routing table is internally consistent" do
@@ -209,6 +211,90 @@ defmodule Platform.Meetings.IntentRoutingTest do
       assert IntentRouting.topic("action_items") == "meeting:action_item_intent"
       assert IntentRouting.event("action_items") == :action_item_intent
       assert IntentRouting.responsibility_key("action_items") == "meetings.action_items"
+    end
+  end
+
+  describe "routable?/2 — does this classification reach anybody" do
+    test "a routable intent is routable however the target role came out" do
+      # The responsibility fork is taken BEFORE the role is looked at
+      # (`IntentDispatcher.dispatch_row/3`), so an unaddressed ask — the
+      # whole point of stage 3 — is still routable with a null target.
+      for %{intent: intent} <- IntentRouting.entries() do
+        assert IntentRouting.routable?(intent, nil)
+        assert IntentRouting.routable?(intent, "null")
+        assert IntentRouting.routable?(intent, "meeting_scribe")
+      end
+    end
+
+    test "off_topic reaches nobody, in every spelling of the null role" do
+      # The classifier writes the STRING "null"
+      # (`IntentClassifier.no_target_role/0`); Elixir's `nil` arrives
+      # from any other producer and means the same thing. Both are
+      # unroutable, and so is a role outside the roster.
+      refute IntentRouting.routable?("off_topic", IntentClassifier.no_target_role())
+      refute IntentRouting.routable?("off_topic", "null")
+      refute IntentRouting.routable?("off_topic", nil)
+      refute IntentRouting.routable?("off_topic", "")
+      refute IntentRouting.routable?("off_topic", "wizard")
+      refute IntentRouting.routable?(:off_topic, nil)
+    end
+
+    test "off_topic reaches nobody even when it names a role that DOES exist" do
+      # The corner the null-role test above cannot reach, and the only
+      # corner that mints. The response schema demands a `target_role`
+      # STRING on every answer, and the classifier is a cheap model that
+      # does not follow instructions reliably, so
+      # `{"intent": "off_topic", "target_role": "meeting_scribe"}` is an
+      # ordinary output rather than a contrived one. While `routable?/2`
+      # was a plain OR, that answer armed a card, the countdown fired it
+      # and small talk landed in `tasks` (task 01a06575).
+      #
+      # Asserted across the WHOLE roster rather than one role, so an
+      # implementation that special-cases a single key does not pass.
+      for role <- Role.valid_keys() do
+        refute IntentRouting.routable?("off_topic", role),
+               "off_topic named the real role #{role} and was still routable"
+      end
+
+      # Both spellings the predicate can be asked in.
+      refute IntentRouting.routable?(:off_topic, :meeting_scribe)
+
+      # The control that keeps the refutation from being vacuous: the
+      # SAME roles route an intent that is not `off_topic`. A predicate
+      # hardcoded to `false` fails here.
+      for role <- Role.valid_keys() do
+        assert IntentRouting.routable?("pull_numbers", role),
+               "pull_numbers named the real role #{role} and lost its route"
+      end
+    end
+
+    test "an intent with no responsibility row is routable only via a real role" do
+      # An intent served by a role's RUNTIME rather than by a
+      # responsibility is still routable — the countdown must not be
+      # taken away from one. This is why the predicate is two-sided and
+      # not `responsibility_key/1 != nil`.
+      refute IntentRouting.responsibility_key("pull_numbers")
+      assert IntentRouting.routable?("pull_numbers", "historian")
+      refute IntentRouting.routable?("pull_numbers", "null")
+    end
+
+    test "routable_role?/1 is the roster and nothing else" do
+      for key <- Role.valid_keys() do
+        assert IntentRouting.routable_role?(key)
+      end
+
+      # The atom spelling too — `target_role` reaches this predicate as
+      # a binary from the classifier and as an atom from an in-process
+      # caller. `:historian` is a literal here rather than interned from
+      # the roster: `String.to_existing_atom/1` on a key no module has
+      # ever written as an atom raises, which would be a test artefact
+      # and not a fact about the roster.
+      assert IntentRouting.routable_role?(:historian)
+
+      refute IntentRouting.routable_role?(IntentClassifier.no_target_role())
+      refute IntentRouting.routable_role?(nil)
+      refute IntentRouting.routable_role?("")
+      refute IntentRouting.routable_role?(42)
     end
   end
 

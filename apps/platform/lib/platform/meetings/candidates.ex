@@ -70,6 +70,7 @@ defmodule Platform.Meetings.Candidates do
   alias Platform.Meetings.CandidateEvents
   alias Platform.Meetings.Countdown
   alias Platform.Meetings.IntentCorrections
+  alias Platform.Meetings.IntentRouting
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.ThreadResolver
@@ -472,6 +473,18 @@ defmodule Platform.Meetings.Candidates do
   # arrival, not enqueue.
   @reconcile_drop ~w(transcript_chunk_ids threading_events last_utterance_at heard_at)a
 
+  # Classification is the moment a card's audience becomes known, so it
+  # is the moment a card with no audience loses its countdown. The
+  # skeleton was armed at arrival, on the correct assumption that most
+  # things said in a meeting are worth a card; this is where that
+  # assumption is checked against the model's answer.
+  #
+  # `nil` is written, not omitted: `reconcile/2` UPDATES a row that is
+  # already armed, so leaving the key out leaves the deadline standing.
+  defp put_disarm_if_unroutable(attrs) do
+    if routable_attrs?(attrs), do: attrs, else: Map.put(attrs, :acts_at, nil)
+  end
+
   # Only a SKELETON is reconcilable. A row that already carries a
   # classification, or one that has already closed, is returned
   # untouched: the card belongs to the classification that opened it,
@@ -486,7 +499,12 @@ defmodule Platform.Meetings.Candidates do
 
   defp reconcile(%MeetingCandidate{} = skeleton, attrs) do
     skeleton
-    |> MeetingCandidate.changeset(Map.drop(atomize(attrs), @reconcile_drop))
+    |> MeetingCandidate.changeset(
+      attrs
+      |> atomize()
+      |> Map.drop(@reconcile_drop)
+      |> put_disarm_if_unroutable()
+    )
     |> Repo.update()
     # Read off the RECONCILED row, not off `attrs`. The changeset is
     # what decided which of those fields actually landed, so echoing
@@ -916,9 +934,15 @@ defmodule Platform.Meetings.Candidates do
 
       UPDATE meeting_candidates
          SET acts_at = NULL, closed_by_participant_id = $2
-       WHERE id = $1 AND state NOT IN ('closed', 'acting')
+       WHERE id = $1
+         AND state <> 'closed'
+         AND (state <> 'acting' OR acts_at IS NOT NULL)
 
   Whoever commits first leaves the other's `WHERE` unsatisfiable.
+
+  The second predicate is the sweeper's claim written out as the pair it
+  is — `:acting` AND disarmed — rather than as `:acting` alone. See
+  `do_stop/3`.
 
   Returns:
 
@@ -984,7 +1008,20 @@ defmodule Platform.Meetings.Candidates do
     claimed =
       MeetingCandidate
       |> where([c], c.id == ^candidate.id)
-      |> where([c], c.state not in [:closed, :acting])
+      |> where([c], c.state != :closed)
+      # The sweeper's claim, spelled out as the PAIR it actually is:
+      # `:acting` AND disarmed. `:acting` alone is not it — the ack
+      # mirror in `Platform.Meetings.IntentQueue.Server` writes the same
+      # state when the recipient agent says it is working, on a card that
+      # is still counting down (task 01a06575 stage 2). Racing on
+      # `:acting` alone made every dispatched card unstoppable, and the
+      # human pressing stop was told `{:error, :already_fired}` about a
+      # task that did not exist and — until this stage — never would.
+      #
+      # Written as two facts rather than `not is_nil(acts_at)` because an
+      # UNARMED open card (a muted meeting never arms one) must still be
+      # dismissable, and it carries a nil `acts_at` too.
+      |> where([c], c.state != :acting or not is_nil(c.acts_at))
       |> select([c], c.id)
       |> Repo.update_all(
         set: [
@@ -1046,6 +1083,66 @@ defmodule Platform.Meetings.Candidates do
   meeting muted after its cards were armed must not fire them, and that
   is the requirement that cannot be traded away, so it is a join in the
   claim rather than a filter the caller could forget.
+
+  ## `:acting` is NOT an eligibility filter (task 01a06575 stage 2)
+
+  It used to be, and that is the whole reason production reached 280
+  candidates with ZERO `task_id`s — including the ones the classifier
+  had labelled correctly.
+
+  `:acting` has two authors that mean different things by it. This
+  module writes it as the sweeper's own claim marker in `claim_ids/2`.
+  `Platform.Meetings.IntentQueue.Server`'s ack mirror ALSO writes it,
+  from `apply_ack_status(candidate, :working)`, meaning "the agent this
+  was dispatched to has picked it up". The live rail always produces the
+  second one, and within a second or two: `IntentContext.ack_preamble/1`
+  is composed onto the front of the recipient's system turn precisely so
+  it acks immediately. So every correctly-classified, routable card was
+  `:acting` long before its 30-second deadline, and this filter then made
+  it permanently unclaimable. The countdown never fired for a single one
+  of them.
+
+  The filter was never what made the claim exactly-once. `acts_at IS NOT
+  NULL` on the UPDATE in `claim_ids/2` is — the claim nils it in the same
+  statement, and Postgres re-evaluates the predicate after taking the row
+  lock, so a second sweeper's UPDATE simply does not match. That is what
+  the paragraph above already says. `:closed` is the only STATE that is
+  an eligibility question, and it stays.
+
+  ## An unclassified card is not due (task 01a06575 round 3)
+
+  `classified_intent IS NOT NULL` is the other eligibility question, and
+  it is about vetting rather than about state.
+
+  A skeleton is armed at the moment somebody SPOKE, before the model has
+  answered — deliberately, so the deadline is not moved by the model's
+  latency (`put_armed_acts_at/1`). The answer normally lands a second or
+  two later and `reconcile/2` either keeps the deadline or takes it away.
+  But the answer can simply be SLOW: `Platform.Meetings.Countdown`
+  documents the inversion, and the short version is that the providers
+  allow a model call twice as long as this countdown while the sweeper
+  ticks every second. `routable_attrs?/1` cannot help — every other
+  outcome closes the skeleton through `IntentClassifier.close_skeleton/4`,
+  but slow is not an outcome, and the sweeper arrives before any outcome
+  exists. The card graduated carrying `classified_intent: nil`, into a
+  task titled with the raw utterance, vetted by nothing.
+
+  Note WHERE this sits. It is an eligibility filter and not a refusal
+  inside `fire/1`, and the difference is the whole behaviour:
+
+    * As eligibility, an unvetted card is passed over and keeps its
+      deadline, so the instant its classification lands it is claimed on
+      the next tick (routable) or disarmed by `reconcile/2` (not). A late
+      answer costs the card the model's latency and nothing else.
+    * As a refusal after the claim, the card would already have been
+      moved to `:acting` with `acts_at` nilled, and would never fire at
+      all. That is how a correctly-classified ask silently stops
+      producing anything — the 0-of-280 shape this task began with.
+
+  It is deliberately NOT in `graduate/2`. That function is also reached
+  from `PlatformWeb.MeetingLive`'s `Go ahead` button, where a human has
+  looked at the card and said yes; the rule here is about the rail that
+  acts with nobody watching.
   """
   @spec claim_due(DateTime.t(), keyword()) :: [MeetingCandidate.t()]
   def claim_due(now \\ DateTime.utc_now(), opts \\ []) do
@@ -1056,7 +1153,11 @@ defmodule Platform.Meetings.Candidates do
       |> join(:inner, [c], m in Meeting, on: m.id == c.meeting_id)
       |> where([c], not is_nil(c.acts_at))
       |> where([c], c.acts_at <= ^now)
-      |> where([c], c.state not in [:closed, :acting])
+      |> where([c], c.state != :closed)
+      # Unvetted cards are not due. See "An unclassified card is not due"
+      # above — this is what stops a model call slower than the countdown
+      # graduating a card nothing ever classified.
+      |> where([c], not is_nil(c.classified_intent))
       # `automation_mode == :off` is `intent_muted_at` being set — one
       # switch, not two. See `Platform.Meetings.automation_mode/1`.
       |> where([_c, m], is_nil(m.intent_muted_at))
@@ -1078,9 +1179,21 @@ defmodule Platform.Meetings.Candidates do
       # plain read and anything could have happened to those rows since
       # — a stop, another node's claim — so the predicate that actually
       # decides is the one on the UPDATE.
+      #
+      # `not is_nil(c.acts_at)` is the exactly-once guard, and it is the
+      # ONLY one: the `set:` below nils `acts_at`, so a concurrent
+      # sweeper re-evaluating this WHERE under the row lock finds nothing
+      # to update. See `claim_due/2` on why the state predicate is
+      # `:closed` alone.
       |> where([c], not is_nil(c.acts_at))
       |> where([c], c.acts_at <= ^now)
-      |> where([c], c.state not in [:closed, :acting])
+      |> where([c], c.state != :closed)
+      # Re-asserted here for the same reason as the predicates above it:
+      # the id list is a plain read and the row could have been
+      # reconciled since. A row that gained a classification in between
+      # is fine to claim; one that never had one must not be, and the
+      # statement that WRITES is the one that has to say so.
+      |> where([c], not is_nil(c.classified_intent))
       |> select([c], c)
       |> Repo.update_all(
         set: [acts_at: nil, state: :acting, updated_at: now],
@@ -1143,12 +1256,14 @@ defmodule Platform.Meetings.Candidates do
   end
 
   # The arming arithmetic, applied to the attrs a create is about to
-  # write. Three things have to be true before a card counts down, and
+  # write. Four things have to be true before a card counts down, and
   # each of them is a `nil` here rather than a raise:
   #
   #   * there is an utterance time to count from,
   #   * the row is not being created already closed,
-  #   * the meeting's automation is on.
+  #   * the meeting's automation is on,
+  #   * the classification the row carries, if it carries one at all,
+  #     names somebody it could reach (`routable_attrs?/1`).
   #
   # The automation check at ARMING time is what stops an "off" meeting
   # becoming a landmine: without it a muted meeting would accumulate
@@ -1156,6 +1271,9 @@ defmodule Platform.Meetings.Candidates do
   # somebody turned automation back on. Cards opened while it is off are
   # simply never armed, so switching on affects what happens next and
   # nothing that already happened.
+  #
+  # The routability check is there for the same reason in the same
+  # place. See `routable_attrs?/1`.
   defp put_armed_acts_at(attrs) do
     cond do
       Map.has_key?(attrs, :acts_at) or Map.has_key?(attrs, "acts_at") ->
@@ -1170,10 +1288,11 @@ defmodule Platform.Meetings.Candidates do
         meeting_id = fetch_meeting_id(attrs)
 
         armed =
-          if state in [:closed, "closed"] or not automated?(meeting_id) do
-            nil
-          else
-            Countdown.acts_at(from)
+          cond do
+            state in [:closed, "closed"] -> nil
+            not automated?(meeting_id) -> nil
+            not routable_attrs?(attrs) -> nil
+            true -> Countdown.acts_at(from)
           end
 
         if Map.has_key?(attrs, "meeting_id") do
@@ -1181,6 +1300,67 @@ defmodule Platform.Meetings.Candidates do
         else
           Map.put(attrs, :acts_at, armed)
         end
+    end
+  end
+
+  @doc """
+  Does a card carrying these attrs have an audience, and therefore a
+  reason to count down?
+
+  Public so the two writers of a candidate's classification —
+  `create/1`'s arming and `reconcile/2`'s disarm — cannot answer it
+  differently, and so a test can ask it without a database.
+
+  Three answers, and the middle one is the whole point:
+
+    * **no classification yet** — TRUE. A skeleton written by
+      `record_heard/1` has not been to the model, and its countdown is
+      anchored to the moment somebody spoke (task 01a04a7f). It is not
+      left un-armed on the chance it turns out to be small talk;
+      `reconcile/2` disarms it a second or two later if it does. Every
+      other outcome — a model error, a dedupe, an unqueued chunk —
+      closes the skeleton through `close_skeleton/4`, so an
+      un-reconciled card is not left counting down either.
+    * **a classification that reaches nobody** — FALSE. `off_topic` is
+      the standing case: no responsibility row, `target_role` the string
+      `"null"`, and `IntentDispatcher` lands it `:dispatch_failed`.
+    * **a classification that reaches somebody** — TRUE, whether that is
+      a responsibility or a role's runtime.
+
+  ## Why this is not the dispatcher's job
+
+  It was, in effect, and that was the defect. Nothing about being
+  `off_topic` prevented arming: the row was armed at MIRROR TIME, before
+  any dispatch decision for it existed, and the only thing that stopped
+  it graduating was the dispatcher reaching it first and closing it —
+  usually a second or two later. That is a race, not a rule. It loses
+  whenever the row ahead of it holds the meeting's serial cursor longer
+  than the remaining countdown, which `dispatch_to_responsibility/5`
+  does across its handler's model round-trip under a 90-second ack
+  window. One routable utterance and one piece of small talk behind it
+  is an ordinary meeting, and it was enough (task 01a06575).
+
+  Note what is NOT asked here. Whether the target role has an assignee,
+  whether that agent has a runtime, whether the broadcast lands: those
+  are dispatch outcomes, and a real ask whose agent is offline is still
+  real work whose card should count down. The question is only whether
+  the classification names an audience at all.
+  """
+  @spec routable_attrs?(map()) :: boolean()
+  def routable_attrs?(attrs) when is_map(attrs) do
+    intent = attr(attrs, :classified_intent)
+    target_role = attr(attrs, :target_role)
+
+    is_nil(intent) or IntentRouting.routable?(intent, target_role)
+  end
+
+  # Attrs reach this module in both spellings — `mirror_enqueue/3` writes
+  # atoms, `put_derived_org_id/1`'s callers can write strings — and the
+  # arming path runs BEFORE `atomize/1` would have normalised them.
+  defp attr(attrs, key) do
+    case Map.get(attrs, key) do
+      nil -> Map.get(attrs, Atom.to_string(key))
+      value -> value
     end
   end
 

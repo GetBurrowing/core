@@ -885,10 +885,40 @@ defmodule Platform.Meetings.ThreadResolverTest do
     distinct
   end
 
+  # CURATED rows only — the 72 positives these guards' floors were
+  # measured against on 2026-08-28.
+  #
+  # Task `01a06575` stage 4 added `unaddressed_meeting_speech_48`, a
+  # HAND-WRITTEN slice (`origin: "hand_written"`; there were no real
+  # transcript segments anywhere to sample from). Re-baselining another
+  # module's measured floors against a corpus written in the same change
+  # that widens them is a self-referential measurement, so the filter is
+  # on provenance and the guards keep measuring what they were
+  # calibrated on. A future slice with `origin: "curated"` or
+  # `"archive"` is picked up automatically and turns the pinned counts
+  # red, which is the intended workflow.
+  #
+  # The widened numbers WERE taken rather than avoided, 2026-09-02 over
+  # all 110 positives, and none of them would have moved a floor:
+  #
+  #   recall            98 distinct / 110 = 0.8909 (was 60/72 = 0.8333;
+  #                     floor 0.80, so it improved)
+  #   unrelated attach  18 / 440 = 0.0409 (was 14/288 = 0.0486; bound 0.10)
+  #   anaphoric reach   still 0 eligible corpus rows; token min 6 and
+  #                     median 14 unchanged, max 19 -> 28
+  #   leaning fragments 109 / 110 threaded on `:anaphoric_fragment`. The
+  #                     one exception is a COLLISION IN THE FRAGMENT
+  #                     CONSTRUCTOR, not a resolver defect: `leaning_fragment/1`
+  #                     builds "move that <token> tomorrow", and
+  #                     "i think chris said he'd he'd stand up the staging box
+  #                     tomorrow morning" contains both "box" and "tomorrow",
+  #                     so the fragment scores relatedness 1.0 and threads on
+  #                     `:topic_overlap` first. It still threads.
   defp corpus_positives do
     IntentEval.root()
     |> IntentEval.load_slice_rows()
     |> Map.values()
+    |> Enum.filter(&(&1["origin"] == "curated"))
     |> Enum.reject(&(&1["label"] == "off_topic"))
     |> Enum.sort_by(& &1["id"])
     |> Enum.map(& &1["text"])

@@ -60,6 +60,8 @@ defmodule Platform.Meetings.IntentRouting do
   the bundle records who does it.
   """
 
+  alias Platform.Roles.Role
+
   @typedoc "One routing row."
   @type entry :: %{
           intent: String.t(),
@@ -121,10 +123,32 @@ defmodule Platform.Meetings.IntentRouting do
     }
   ]
 
-  # `off_topic` is deliberately absent. The classifier emits it with
-  # `target_role: null` and the dispatcher lands the row
-  # `:dispatch_failed`/`:no_target_role` — which is the correct outcome
-  # for small talk, and the one intent that should reach nobody.
+  # `off_topic` is deliberately absent from `@entries`, and absence alone
+  # was not enough — see `@unroutable_intents` below.
+
+  # The intents that reach NOBODY, whatever else a classification says
+  # about them.
+  #
+  # Absence from `@entries` says "no responsibility serves this". It does
+  # NOT say "this reaches nobody", because `routable?/2` has a second
+  # branch: a role. The classifier is a cheap model answering a schema
+  # that demands a `target_role` STRING on every answer, so
+  # `{"intent": "off_topic", "target_role": "meeting_scribe"}` is an
+  # ordinary output — and through the second branch it armed a card and
+  # the countdown minted small talk into `tasks` (task 01a06575).
+  #
+  # A role named on a decline is model noise, not routing. It is the
+  # answer to "who would act IF anybody did", asked of a model that has
+  # just said nobody should. So the intent decides first and the role is
+  # never consulted for a member of this list.
+  #
+  # This is a list rather than a hardcoded `"off_topic"` so that the
+  # standing example is not the only thing the rule can express, but it
+  # is NOT a general escape hatch: an intent belongs here only when the
+  # correct audience for it is nobody. An intent that is merely unserved
+  # today (`pull_numbers`) is not unroutable — it goes to its role's
+  # runtime.
+  @unroutable_intents ["off_topic"]
 
   @by_intent Map.new(@entries, &{&1.intent, &1})
 
@@ -160,6 +184,105 @@ defmodule Platform.Meetings.IntentRouting do
     do: Map.get(@by_intent, Atom.to_string(intent))
 
   def entry(_), do: nil
+
+  @doc """
+  Can a row carrying this classification and this `target_role` reach
+  ANYBODY?
+
+  The two-arity boolean form of the fork `IntentDispatcher.dispatch_row/3`
+  takes, asked in three steps and NOT as an `or`:
+
+    1. An intent in `unroutable_intents/0` reaches nobody, whatever role
+       it names. `off_topic` is the standing case.
+    2. Otherwise an intent with a responsibility row here is routable,
+       whatever role it names — including the string `"null"`, which is
+       a correct answer for an unaddressed ask.
+    3. Otherwise it is routable exactly when the classifier named a role
+       that exists, because that role's runtime serves it.
+
+  Step 1 is not a special case of step 2. Absence from `@entries` only
+  says no RESPONSIBILITY serves the intent; step 3 would then route it
+  on the role string, and the prompt makes the model emit one on every
+  answer. That is how small talk reached `tasks` (task 01a06575).
+
+  ## Why this is not private to the dispatcher
+
+  Because the dispatcher is not the only thing that has to know. A
+  candidate's 30-second countdown (`Platform.Meetings.Candidates`) mints
+  a task through `graduate/2` WITHOUT consulting the queue at all — two
+  rails, one card. While an unroutable card carried a live countdown,
+  the only thing standing between small talk and a `tasks` row was the
+  dispatcher closing the row first, which is a race the dispatcher wins
+  by a second or two and loses whenever a responsibility handler holds
+  the meeting's serial cursor across a slow model call (task 01a06575).
+
+  So "who can this reach" is asked in two places and must have ONE
+  answer. The dispatcher keeps its own `cond` because it distinguishes
+  `:no_target_role` from `:unknown_role` for the failure REASON it
+  records; what it does not keep is a private notion of which role keys
+  exist — that is `routable_role?/1` below, and both callers read it.
+  """
+  @spec routable?(term(), term()) :: boolean()
+  def routable?(intent, target_role) do
+    cond do
+      # Asked FIRST, and it short-circuits both branches below. An
+      # `off_topic` naming a real role used to satisfy the role branch of
+      # what was a plain `or`, which is door 1 of task 01a06575: the
+      # answer that says "this reaches nobody" was routable because of a
+      # field the prompt forces the model to fill in anyway.
+      unroutable_intent?(intent) -> false
+      # The responsibility branch, unchanged: a routable intent keeps its
+      # route however the target role came out, including `"null"`.
+      not is_nil(responsibility_key(intent)) -> true
+      # And the OTHER half of the original `or`, also unchanged: an
+      # intent with no responsibility row is still routable when the
+      # classifier named a role that exists, because that role's runtime
+      # serves it. Closing this branch would take the countdown away from
+      # every runtime-served ask.
+      true -> routable_role?(target_role)
+    end
+  end
+
+  @doc """
+  Every intent whose correct audience is nobody.
+
+  Distinct from "absent from `entries/0`", which only means no
+  responsibility serves it — see `@unroutable_intents` for why the
+  difference mints tasks.
+  """
+  @spec unroutable_intents() :: [String.t()]
+  def unroutable_intents, do: @unroutable_intents
+
+  @doc """
+  Does this classification reach nobody REGARDLESS of the role it names?
+
+  True for `off_topic` in either spelling. The `target_role` is not a
+  parameter on purpose: for these intents it is not consulted, and a
+  two-arity form would invite a caller to think it might be.
+  """
+  @spec unroutable_intent?(term()) :: boolean()
+  def unroutable_intent?(intent) when is_binary(intent), do: intent in @unroutable_intents
+
+  def unroutable_intent?(intent) when is_atom(intent) and not is_nil(intent),
+    do: Atom.to_string(intent) in @unroutable_intents
+
+  def unroutable_intent?(_), do: false
+
+  @doc """
+  Is `role` a role key a dispatch can actually be resolved against?
+
+  False for `nil`, for `Platform.Meetings.IntentClassifier.no_target_role/0`
+  (the STRING `"null"` the classifier writes for "this reaches nobody",
+  which is not a member of the roster and so needs no special case here),
+  and for anything else outside `Platform.Roles.Role.valid_keys/0`.
+  """
+  @spec routable_role?(term()) :: boolean()
+  def routable_role?(role) when is_binary(role), do: role in Role.valid_keys()
+
+  def routable_role?(role) when is_atom(role) and not is_nil(role),
+    do: Atom.to_string(role) in Role.valid_keys()
+
+  def routable_role?(_), do: false
 
   @doc """
   The responsibility key serving a classified intent, or `nil`.

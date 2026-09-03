@@ -56,12 +56,19 @@ defmodule Platform.Meetings.IntentEval.Harness do
   """
 
   alias Platform.Meetings.IntentClassifier
+  alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentEval
   alias Platform.Meetings.IntentEval.Cassette
   alias Platform.Meetings.IntentEval.CassetteProvider
   alias Platform.Orchestration.PromptTemplates
 
   @error_classes ~w(parse_error empty_output model_error)
+
+  # What the harness rendered into `{{correction_exemplars}}` for every
+  # published run before task 01a06575 stage 4, and still the default for
+  # a config that names no source — so every existing config's prompt
+  # fingerprint is unchanged.
+  @sentinel_exemplars "(no prior corrections)"
 
   @doc "The outcome classes that are errors, not intents."
   def error_classes, do: @error_classes
@@ -91,6 +98,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
 
     validate_prompt_source!(config)
     validate_buffering!(config)
+    validate_exemplar_source!(config)
 
     Map.merge(config, %{
       "name" => name,
@@ -136,6 +144,152 @@ defmodule Platform.Meetings.IntentEval.Harness do
     end
 
     :ok
+  end
+
+  # Same single-key discipline as `prompt_source`, for the same reason.
+  defp validate_exemplar_source!(config) do
+    case Map.get(config, "correction_exemplars") do
+      nil ->
+        :ok
+
+      %{} = source when map_size(source) == 1 ->
+        key = source |> Map.keys() |> hd()
+
+        unless key in ~w(sentinel file db_recent) do
+          raise ArgumentError,
+                "correction_exemplars key #{inspect(key)} is not one of sentinel | file | db_recent"
+        end
+
+        :ok
+
+      other ->
+        raise ArgumentError,
+              "correction_exemplars must name exactly ONE source, got #{inspect(other)}"
+    end
+  end
+
+  # ── correction exemplars ──────────────────────────────────────────────
+
+  @doc """
+  Resolve a config's `{{correction_exemplars}}` block to
+  `{source_description, rendered_block}`.
+
+  ## Why this is a config knob and not a constant
+
+  Until task `01a06575` stage 4 the harness hardcoded
+  `"(no prior corrections)"` here. Production does not: the classifier
+  calls `IntentCorrections.exemplars_for_meeting/2`, which is an
+  UNFILTERED `ORDER BY inserted_at DESC LIMIT 10` over the org's
+  corrections — and corrections are, by that table's own invariant, a
+  record of the classifier being WRONG. An org with a used producer rail
+  therefore ships ten mostly-negative exemplars into every classification
+  that no published eval run has ever rendered.
+
+  So the sentinel is kept as a NAMED arm rather than deleted (it is what
+  every committed cassette was recorded against, and deleting it would
+  orphan them), and the production shape is a second named arm. The
+  delta between the two arms is the finding.
+
+  ## The three sources
+
+    * `{"sentinel": true}` — `(no prior corrections)`. The default when a
+      config names no source, so every pre-existing config's prompt
+      fingerprint is byte-unchanged.
+    * `{"file": "exemplars/<name>.jsonl"}` — committed correction rows,
+      rendered through `IntentClassifier.format_correction_exemplars/1`,
+      the same function the live classifier calls. Needs no database.
+    * `{"db_recent": {"org_slug": .., "limit": ..}}` — the live query, on
+      the live table. Raises when the org resolves to nothing or the
+      corpus is EMPTY, rather than degrading to the sentinel: production
+      degrades silently on purpose (a classification must not be dropped
+      because the corpus hiccuped), but an eval arm that claims to be
+      rendering production's exemplars while rendering the sentinel is
+      reporting a number about a prompt it did not use.
+  """
+  def resolve_exemplars!(config, opts \\ []) do
+    root = Keyword.get_lazy(opts, :root, fn -> IntentEval.root() end)
+
+    case Map.get(config, "correction_exemplars") do
+      nil ->
+        {%{"kind" => "sentinel", "default" => true, "count" => 0}, @sentinel_exemplars}
+
+      %{"sentinel" => _} ->
+        {%{"kind" => "sentinel", "default" => false, "count" => 0}, @sentinel_exemplars}
+
+      %{"file" => relative} ->
+        path = Path.join(root, relative)
+
+        unless File.exists?(path) do
+          raise ArgumentError, "correction_exemplars file #{relative} does not exist at #{path}"
+        end
+
+        {_header, rows} = IntentEval.read_jsonl(path)
+        exemplars = Enum.map(rows, &exemplar_from_row/1)
+
+        {%{
+           "kind" => "file",
+           "path" => relative,
+           "sha256" => IntentEval.digest(path),
+           "count" => length(exemplars)
+         }, IntentClassifier.format_correction_exemplars(exemplars)}
+
+      %{"db_recent" => %{} = spec} ->
+        resolve_db_exemplars!(spec)
+    end
+  end
+
+  # Committed rows are string-keyed JSON; the formatter reads atom keys.
+  # Only the six fields the format renders are carried across — an
+  # exemplar file cannot smuggle anything else into the prompt.
+  defp exemplar_from_row(row) do
+    %{
+      transcript_chunk_excerpt: row["transcript_chunk_excerpt"],
+      classified_intent: row["classified_intent"],
+      correction: row["correction"],
+      reason: row["reason"],
+      corrected_intent: row["corrected_intent"],
+      dispatch_outcome: row["dispatch_outcome"]
+    }
+  end
+
+  defp resolve_db_exemplars!(spec) do
+    limit = Map.get(spec, "limit") || IntentCorrections.default_exemplar_limit()
+    org_id = resolve_org_id!(spec)
+
+    case IntentCorrections.recent_exemplars(org_id, limit) do
+      [] ->
+        raise ArgumentError,
+              "correction_exemplars db_recent resolved org #{inspect(org_id)} to ZERO " <>
+                "corrections. Refusing to render the sentinel under a db_recent label — " <>
+                "that would publish a number about a prompt this run did not use."
+
+      exemplars ->
+        {%{
+           "kind" => "db_recent",
+           "org_id" => org_id,
+           "limit" => limit,
+           "count" => length(exemplars)
+         }, IntentClassifier.format_correction_exemplars(exemplars)}
+    end
+  end
+
+  defp resolve_org_id!(%{"org_id" => org_id}) when is_binary(org_id), do: org_id
+
+  defp resolve_org_id!(%{"org_slug" => slug}) when is_binary(slug) do
+    case Platform.Tenancy.get_org_by_slug(slug) do
+      %{id: id} ->
+        id
+
+      _ ->
+        raise ArgumentError,
+              "correction_exemplars db_recent org_slug #{inspect(slug)} resolves to no org " <>
+                "in this environment"
+    end
+  end
+
+  defp resolve_org_id!(spec) do
+    raise ArgumentError,
+          "correction_exemplars db_recent needs an org_id or org_slug, got #{inspect(spec)}"
   end
 
   # ── prompt resolution ─────────────────────────────────────────────────
@@ -235,7 +389,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
   own `resolve_prompt/6` so the harness renders the same variables
   production renders.
   """
-  def assigns_for(row) do
+  def assigns_for(row, exemplars \\ @sentinel_exemplars) do
     prior = row["prior"] || []
 
     %{
@@ -245,7 +399,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
       room_id: "intent-eval",
       context_lines: context_lines(prior),
       context_present: prior != [],
-      correction_exemplars: "(no prior corrections)"
+      correction_exemplars: exemplars
     }
   end
 
@@ -262,11 +416,49 @@ defmodule Platform.Meetings.IntentEval.Harness do
   Rendering the raw template would miss a change in how the harness fills
   it. So the fingerprint is the rendered shape with the row removed — it
   changes when the prompt changes and is stable across rows.
+
+  The exemplar block is part of the fingerprint, because it is part of the
+  prompt: two arms that differ only in `{{correction_exemplars}}` are two
+  different prompts and must not share a sha. `fingerprint/1` keeps the
+  sentinel, so every previously published fingerprint still reproduces.
   """
-  def fingerprint(template) do
+  def fingerprint(template, exemplars \\ @sentinel_exemplars) do
     template
-    |> interpolate(assigns_for(%{"text" => "", "prior" => []}))
+    |> interpolate(assigns_for(%{"text" => "", "prior" => []}, exemplars))
     |> sha256()
+  end
+
+  @doc """
+  The full prompt a config renders for one row, and the pieces that
+  produced it.
+
+  Offline and model-free on purpose. When there is no reachable endpoint —
+  which is the normal case for this eval — a prompt change cannot be
+  priced in f1, but it can still be READ. This is the function that lets
+  two arms be diffed as text.
+  """
+  def render_prompt(config_name, opts \\ []) do
+    root = Keyword.get_lazy(opts, :root, fn -> IntentEval.root() end)
+    repo_root = Keyword.get(opts, :repo_root, File.cwd!())
+    config = load_config!(root, config_name)
+
+    {prompt_source, template} = resolve_prompt!(config, repo_root: repo_root)
+    {exemplar_source, exemplars} = resolve_exemplars!(config, root: root)
+
+    row =
+      Keyword.get(opts, :row) ||
+        %{"text" => "(no utterance — fingerprint rendering)", "prior" => []}
+
+    %{
+      "config" => config_name,
+      "prompt_source" => prompt_source,
+      "exemplar_source" => exemplar_source,
+      "exemplar_block" => exemplars,
+      "exemplar_bytes" => byte_size(exemplars),
+      "template_sha256" => sha256(template),
+      "rendered_sha256" => fingerprint(template, exemplars),
+      "rendered" => interpolate(template, assigns_for(row, exemplars))
+    }
   end
 
   @doc "`{{key}}` substitution, same semantics as `PromptTemplates.interpolate/2`."
@@ -291,33 +483,83 @@ defmodule Platform.Meetings.IntentEval.Harness do
   # ── rows ──────────────────────────────────────────────────────────────
 
   @doc """
+  The slices a run covers.
+
+  With a `slice_filter`, exactly that slice — named explicitly, so a
+  slice with no recording anywhere is still reachable (it will fail the
+  replay pre-check, loudly, which is the correct outcome).
+
+  With no filter, the slices the manifest marks `scored_by_default`. A
+  slice can be in the set and out of the default run: task `01a06575`
+  stage 4 added `unaddressed_meeting_speech_48`, for which no cassette
+  exists against any config because there is no reachable classifier
+  endpoint to record one. Folding it into the default run would turn
+  every replay into a 48-row cassette miss and make the published numbers
+  unreproducible. It is EXCLUDED, never silently — `excluded_slices/2`
+  feeds the run manifest and `report/1` prints it by name and reason.
+
+  A slice with no `scored_by_default` key is scored, so a manifest
+  written before this key existed behaves exactly as it did.
+  """
+  def selected_slices(root, slice_filter \\ nil) do
+    slices = root |> IntentEval.read_manifest!() |> Map.fetch!("slices")
+
+    case slice_filter do
+      nil ->
+        Enum.filter(slices, &scored_by_default?/1)
+
+      name ->
+        case Enum.filter(slices, &(&1["name"] == name)) do
+          [] ->
+            raise ArgumentError,
+                  "no slice named #{inspect(name)} in #{IntentEval.manifest_path(root)}"
+
+          found ->
+            found
+        end
+    end
+  end
+
+  @doc """
+  Slices present in the manifest but NOT in this run, with the reason each
+  was left out. Empty whenever `--slice` named one explicitly.
+  """
+  def excluded_slices(root, slice_filter \\ nil)
+  def excluded_slices(_root, filter) when is_binary(filter), do: []
+
+  def excluded_slices(root, nil) do
+    root
+    |> IntentEval.read_manifest!()
+    |> Map.fetch!("slices")
+    |> Enum.reject(&scored_by_default?/1)
+    |> Enum.map(fn slice ->
+      %{
+        "name" => slice["name"],
+        "count" => slice["count"],
+        "reason" => slice["excluded_reason"] || "(no reason recorded in the manifest)"
+      }
+    end)
+  end
+
+  defp scored_by_default?(slice), do: Map.get(slice, "scored_by_default", true)
+
+  @doc """
   Every labelled row for a run, in manifest slice order. `--slice` narrows
   to one slice; the per-slice breakdown is reported either way.
   """
   def load_rows(root, slice_filter \\ nil) do
-    manifest = IntentEval.read_manifest!(root)
-
-    manifest["slices"]
-    |> Enum.filter(fn slice -> is_nil(slice_filter) or slice["name"] == slice_filter end)
-    |> case do
-      [] ->
-        raise ArgumentError,
-              "no slice named #{inspect(slice_filter)} in #{IntentEval.manifest_path(root)}"
-
-      slices ->
-        Enum.flat_map(slices, fn slice ->
-          {_header, rows} = IntentEval.read_jsonl(Path.join(root, slice["file"]))
-          Enum.map(rows, &Map.put(&1, "slice", &1["slice"] || slice["name"]))
-        end)
-    end
+    root
+    |> selected_slices(slice_filter)
+    |> Enum.flat_map(fn slice ->
+      {_header, rows} = IntentEval.read_jsonl(Path.join(root, slice["file"]))
+      Enum.map(rows, &Map.put(&1, "slice", &1["slice"] || slice["name"]))
+    end)
   end
 
   @doc "Slice inventory (name, file, sha256) for the run manifest."
   def slice_manifest(root, slice_filter \\ nil) do
     root
-    |> IntentEval.read_manifest!()
-    |> Map.fetch!("slices")
-    |> Enum.filter(fn slice -> is_nil(slice_filter) or slice["name"] == slice_filter end)
+    |> selected_slices(slice_filter)
     |> Enum.map(fn slice ->
       %{
         "name" => slice["name"],
@@ -352,6 +594,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
     config = load_config!(root, config_name)
 
     {source, template} = resolve_prompt!(config, repo_root: repo_root)
+    {exemplar_source, exemplars} = resolve_exemplars!(config, root: root)
     rows = load_rows(root, slice_filter)
 
     cassette_path = Cassette.path(root, config_name)
@@ -360,7 +603,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
 
     prepared =
       Enum.map(rows, fn row ->
-        prompt = interpolate(template, assigns_for(row))
+        prompt = interpolate(template, assigns_for(row, exemplars))
         Map.merge(row, %{"prompt" => prompt, "key" => Cassette.key(prompt, row["text"])})
       end)
 
@@ -389,7 +632,16 @@ defmodule Platform.Meetings.IntentEval.Harness do
       finished_at = DateTime.utc_now()
 
       manifest =
-        run_manifest(config, source, template, root, slice_filter, mode, started_at, finished_at)
+        run_manifest(
+          config,
+          {source, template},
+          {exemplar_source, exemplars},
+          root,
+          slice_filter,
+          mode,
+          started_at,
+          finished_at
+        )
 
       result = %{
         "manifest" => manifest,
@@ -624,7 +876,16 @@ defmodule Platform.Meetings.IntentEval.Harness do
 
   # ── manifest + output ─────────────────────────────────────────────────
 
-  defp run_manifest(config, source, template, root, slice_filter, mode, started_at, finished_at) do
+  defp run_manifest(
+         config,
+         {source, template},
+         {exemplar_source, exemplars},
+         root,
+         slice_filter,
+         mode,
+         started_at,
+         finished_at
+       ) do
     %{
       "config" => %{
         "name" => config["name"],
@@ -633,10 +894,19 @@ defmodule Platform.Meetings.IntentEval.Harness do
       },
       "prompt" => %{
         "source" => source,
-        "rendered_sha256" => fingerprint(template),
+        "rendered_sha256" => fingerprint(template, exemplars),
         "template_sha256" => sha256(template),
         "bytes" => byte_size(template)
       },
+      # Recorded separately from the prompt because it is the arm that
+      # was invisible: every run published before task 01a06575 stage 4
+      # rendered the sentinel here without saying so.
+      "correction_exemplars" => %{
+        "source" => exemplar_source,
+        "bytes" => byte_size(exemplars),
+        "sha256" => sha256(exemplars)
+      },
+      "excluded_slices" => excluded_slices(root, slice_filter),
       "model" => config["model"],
       "base_url_host" => base_url_host(config["base_url"]),
       "temperature" => config["temperature"],
@@ -698,11 +968,13 @@ defmodule Platform.Meetings.IntentEval.Harness do
       "INTENT_EVAL config=#{manifest["config"]["name"]} mode=#{manifest["mode"]} rows=#{summary["total"]}",
       "  prompt source : #{inspect(manifest["prompt"]["source"])}",
       "  prompt sha256 : #{manifest["prompt"]["rendered_sha256"]}",
+      "  exemplars     : #{exemplar_line(manifest)}",
       "  config sha256 : #{manifest["config"]["sha256"]}",
       "  model         : #{manifest["model"]} @ #{manifest["base_url_host"]}",
       "  harness sha   : #{manifest["harness_git_sha"]}",
       "  wall clock    : #{manifest["wall_clock_seconds"]}s",
       "",
+      excluded_lines(manifest["excluded_slices"]),
       "OUTCOME CLASSES (errors are NOT declines and are counted separately)",
       "  errors total  : #{summary["errors_total"]}",
       # NOT an error, so it is printed above the error list rather than in
@@ -739,6 +1011,32 @@ defmodule Platform.Meetings.IntentEval.Harness do
     ]
     |> List.flatten()
     |> Enum.join("\n")
+  end
+
+  # A run manifest written before task 01a06575 stage 4 has no exemplar
+  # block. Say that rather than printing a blank: those runs DID render
+  # the sentinel, they just did not record it.
+  defp exemplar_line(%{"correction_exemplars" => %{"source" => source, "bytes" => bytes}}) do
+    "#{inspect(source)} (#{bytes} bytes)"
+  end
+
+  defp exemplar_line(_manifest),
+    do: "(not recorded — a pre-stage-4 run; it rendered the sentinel)"
+
+  # Printed near the TOP of the report, not the bottom. A slice that is
+  # in the set but not in this run changes what every number below means,
+  # and a reader who stops after the headline must still have seen it.
+  defp excluded_lines([]), do: []
+  defp excluded_lines(nil), do: []
+
+  defp excluded_lines(excluded) do
+    [
+      "EXCLUDED SLICES — in the set, NOT in these numbers",
+      Enum.map(excluded, fn slice ->
+        "  #{slice["name"]} (#{slice["count"]} rows): #{slice["reason"]}"
+      end),
+      ""
+    ]
   end
 
   @doc "Render a cassette-miss failure. Loud by design: keys and count."

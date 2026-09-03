@@ -279,18 +279,37 @@ defmodule Platform.Meetings.IntentClassifier do
   # carry a verbatim `evidence_quote` from the current utterance. A
   # fallback that contradicts the row is how an earlier revision of this
   # work got written from the wrong source — keep the two in agreement.
+  #
+  # Task 01a06575 stage 3 UN-MERGES the two questions in both, and does
+  # NOT revert 01a03f57: `off_topic` stays the stated default and the
+  # verbatim `evidence_quote` requirement is untouched. What went is the
+  # claim that an unaddressed ask has no intent — it now keeps its intent
+  # and takes `target_role: null`, which is the answer the DB row's own
+  # "no role maps" rule always prescribed and which the merged framing
+  # made unreachable. The authoritative body is the `prompt_templates`
+  # row written by
+  # `20260902140000_force_update_intent_classify_prompt_unmerge_intent_and_target`;
+  # this attribute is only reached when that row is ABSENT.
   @fallback_intent_prompt """
   You are a meeting intent classifier. Given a transcript chunk, classify the intent and identify the target role.
 
   THE DEFAULT ANSWER IS `off_topic`. MOST MEETING SPEECH IS `off_topic` — that is the expected and correct outcome, not a failure to find something.
 
-  The one question you are answering: is an AGENT being asked to do something? Do NOT ask "is this actionable?". Meetings are full of genuine requests aimed at PEOPLE, and those are `off_topic` for this classifier. Detection and addressing are ONE question.
+  TWO questions, asked in this order. Do not merge them.
 
-  All of these are `off_topic`:
-    - "Nah, I'm gonna get Harper in here."
-    - "Try, can you try that link just to see what happened?"
-    - "But I would just say, like, send it to us."
+  Question 1 — INTENT: did one of the six routable things happen? Do NOT ask "is this actionable?". Answer this WITHOUT looking at who was addressed: whether the ask names an agent, a person, or nobody does not change WHAT KIND of thing was said.
+
+  Question 2 — TARGET: is an AGENT being asked to do something? Only once question 1 has an answer, ask who should act. If the ask is aimed at a PERSON, or at nobody in particular, the answer is `target_role: null` — a normal answer, and NOT a reason to erase question 1's answer.
+
+  An unaddressed ask KEEPS its intent and takes `target_role: null`:
+    - "Nah, I'm gonna get Harper in here."             -> `action_items`, `target_role: null`
+    - "Try, can you try that link just to see what happened?" -> `action_items`, `target_role: null`
+    - "But I would just say, like, send it to us."     -> `action_items`, `target_role: null`
+
+  These are genuinely `off_topic` — question 1 finds no intent at all:
     - "Promote to prod. Yeah, I know, me too. Okay, so let's go."
+    - "Anyway, how was the long weekend?"
+    - "Yeah. Right. Mm-hm, exactly."
 
   Respond ONLY with a JSON object matching this schema:
   {"intent": "<string>", "target_role": "<string>", "confidence": <float 0-1>, "evidence_quote": "<verbatim substring or empty string>"}
@@ -737,6 +756,23 @@ defmodule Platform.Meetings.IntentClassifier do
 
   def content_bearing?(_), do: false
 
+  @doc """
+  The one spelling of "this intent reaches nobody".
+
+  Public because `Platform.Meetings.IntentDispatcher` has to recognise
+  it: the classifier writes the STRING `"null"` (JSON `null` is mapped
+  onto it by `normalise_target_role/1`), never Elixir's `nil`, so a
+  dispatcher guarding on `is_nil/1` alone can never match and every
+  demoted decline is misrecorded as `:unknown_role` — "the model emitted
+  a role outside the enum", a defect that is not occurring.
+
+  Exported rather than duplicated so the two modules cannot drift onto
+  two spellings, which is the failure the attribute's own comment warns
+  about for the dedupe key.
+  """
+  @spec no_target_role() :: String.t()
+  def no_target_role, do: @no_target_role
+
   defp continuation_fragment?(tokens, stripped) do
     starts_with_continuation?(tokens) or starts_with_continuation?(stripped)
   end
@@ -950,8 +986,15 @@ defmodule Platform.Meetings.IntentClassifier do
       })
 
     case decision do
-      {:ok, %{intent: intent, target_role: target_role, confidence: confidence}} ->
+      {:ok, %{intent: intent, target_role: target_role, confidence: confidence} = decided} ->
         dedupe_key = build_dedupe_key(intent, target_role, chunk_text)
+
+        # `Map.get/3`, not a destructure: `decide/1` defaults the key to
+        # nil but `classify_and_enqueue/4` is also reachable from tests
+        # that hand it a bare three-key decision map. Non-nil ONLY on a
+        # demotion — and it is deliberately NOT part of `dedupe_key`,
+        # because the same utterance demoted twice is still one utterance.
+        demoted_from = Map.get(decided, :demoted_from)
 
         enqueue_result =
           enqueue_meeting_intent(%{
@@ -961,6 +1004,10 @@ defmodule Platform.Meetings.IntentClassifier do
             intent: intent,
             target_role: target_role,
             confidence: confidence,
+            # The ONE thing that separates "the model declined" from
+            # "the evidence gate destroyed a positive". Dropping it here
+            # is what made 268 production `off_topic` rows unreadable.
+            demoted_from: demoted_from,
             chunk_id: chunk_id,
             chunk_text: chunk_text,
             # SAME call the prompt renders `{{speaker}}` from, a few
@@ -1167,6 +1214,7 @@ defmodule Platform.Meetings.IntentClassifier do
         room_id: args.room_id,
         dedupe_key: args.dedupe_key,
         classified_intent: args.intent,
+        demoted_from: Map.get(args, :demoted_from),
         target_role: args.target_role,
         target_agent_id: agent_id,
         target_agent_slug: agent_slug,
@@ -1342,20 +1390,42 @@ defmodule Platform.Meetings.IntentClassifier do
   # MOST RECENT correction sits closest to the utterance being
   # classified — the strongest position in the prompt, and the one an
   # org's freshest vocabulary shift should occupy.
-  defp format_correction_exemplars([]), do: "(no prior corrections)"
+  @doc """
+  Render correction rows into the `{{correction_exemplars}}` block.
 
-  defp format_correction_exemplars(exemplars) when is_list(exemplars) do
+  **Public on purpose.** The offline eval harness
+  (`Platform.Meetings.IntentEval.Harness`) renders this slot too, and a
+  harness-side copy of this format is the same defect class as a
+  harness-side copy of `parse_content` — it would let the eval and the
+  live classifier disagree about what the prompt says while both look
+  correct. There is one formatter and both callers use it.
+
+  Takes anything with the six exemplar fields as struct or map keys, so
+  the harness can pass committed rows without building
+  `%IntentCorrection{}` structs.
+  """
+  @spec format_correction_exemplars([struct() | map()]) :: String.t()
+  def format_correction_exemplars([]), do: "(no prior corrections)"
+
+  def format_correction_exemplars(exemplars) when is_list(exemplars) do
     exemplars
     |> Enum.reverse()
     |> Enum.map_join("\n", &format_correction_exemplar/1)
   end
 
+  # Fields are read with `Map.get/2` rather than dot notation so a plain
+  # map (what the eval harness reads out of a committed exemplar file)
+  # renders byte-identically to an `%IntentCorrection{}` struct. Dot
+  # notation would raise `KeyError` on the map and split one format into
+  # two.
   defp format_correction_exemplar(exemplar) do
-    [~s(- utterance: "#{exemplar.transcript_chunk_excerpt || ""}")]
-    |> append_line("  classified as: #{exemplar.classified_intent}")
-    |> append_line("  producer verdict: #{exemplar.correction} (#{exemplar.reason})")
-    |> maybe_append_line(exemplar.corrected_intent, &"  should have been: #{&1}")
-    |> maybe_append_line(exemplar.dispatch_outcome, &"  outcome when corrected: #{&1}")
+    [~s(- utterance: "#{Map.get(exemplar, :transcript_chunk_excerpt) || ""}")]
+    |> append_line("  classified as: #{Map.get(exemplar, :classified_intent)}")
+    |> append_line(
+      "  producer verdict: #{Map.get(exemplar, :correction)} (#{Map.get(exemplar, :reason)})"
+    )
+    |> maybe_append_line(Map.get(exemplar, :corrected_intent), &"  should have been: #{&1}")
+    |> maybe_append_line(Map.get(exemplar, :dispatch_outcome), &"  outcome when corrected: #{&1}")
     |> Enum.join("\n")
   end
 

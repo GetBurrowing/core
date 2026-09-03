@@ -108,6 +108,10 @@ defmodule Platform.Meetings.TriageReconcileTest do
   end
 
   # Open a card that is already past its deadline, so one sweep fires it.
+  #
+  # It carries a classification because the sweeper will not graduate a
+  # card the classifier has not answered for (`Candidates.claim_due/2`),
+  # and these tests are about the RECONCILER, not about vetting.
   defp arm!(meeting, quote) do
     {:ok, candidate} =
       Candidates.create(%{
@@ -115,6 +119,8 @@ defmodule Platform.Meetings.TriageReconcileTest do
         evidence_quote: quote,
         state: :heard,
         outcome_kind: :task,
+        classified_intent: "action_items",
+        target_role: "meeting_scribe",
         acts_at: DateTime.add(DateTime.utc_now(), -60, :second)
       })
 

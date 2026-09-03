@@ -71,17 +71,68 @@ defmodule Platform.Meetings.Countdown do
        it is lossy because two numbers were chosen independently. Making
        them agree means moving one of them, and both belong to someone
        else: 30s is Harper's, 60s is the threading ticket's.
+
+  ## The THIRD clock, and the one that minted small talk
+
+  A model call is allowed 60 seconds and this countdown allows 30, so a
+  classification can arrive after the card it was for has already fired.
+  See `@provider_receive_timeout_ms` and
+  `Platform.Meetings.Candidates.claim_due/2`.
   """
 
   # 30 seconds, GLOBAL (Harper, 2026-08-27). One number, no per-type
   # override.
   @countdown_seconds 30
 
+  # The number this one is INVERTED against, stated here so the next
+  # person does not have to rediscover it (task 01a06575 round 3).
+  #
+  # `Platform.Agents.Providers.Anthropic`, `.OpenAI` and `.Codex` each
+  # give one model call `receive_timeout: 60_000` — double this
+  # countdown. So a meeting-intent classification taking 31 to 60 seconds
+  # is entirely inside what the HTTP client permits and entirely outside
+  # what this countdown tolerates, and `CandidateSweeper` ticks once a
+  # second, so the window is wide rather than a sliver.
+  #
+  # Neither number is wrong and NEITHER MOVES. 30 seconds is a human
+  # review window Harper pinned; 60 seconds is what a real model call
+  # needs. What the inversion means is that "the classifier has answered"
+  # cannot be assumed by anything downstream of the deadline — which is
+  # why `Platform.Meetings.Candidates.claim_due/2` refuses to claim a
+  # candidate whose `classified_intent` is still nil, and why that
+  # refusal is an eligibility rule that leaves the deadline standing
+  # rather than a claim-and-drop.
+  #
+  # `countdown_test.exs` asserts this attribute against each provider's
+  # `receive_timeout_ms/0`, so the two cannot drift apart silently.
+  @provider_receive_timeout_ms 60_000
+
+  # A compile-time assertion, not a comment. If somebody ever makes the
+  # countdown longer than a model call is allowed to take, the reasoning
+  # above stops being true and this file must be re-read.
+  if @provider_receive_timeout_ms <= @countdown_seconds * 1_000 do
+    raise "countdown (#{@countdown_seconds}s) no longer sits inside the provider " <>
+            "receive timeout (#{@provider_receive_timeout_ms}ms) — re-read the " <>
+            "@provider_receive_timeout_ms note in #{__MODULE__}"
+  end
+
   @doc """
   The countdown, in seconds. The single source of the number.
   """
   @spec countdown_seconds() :: pos_integer()
   def countdown_seconds, do: @countdown_seconds
+
+  @doc """
+  The per-call model receive timeout this countdown is inverted against,
+  in milliseconds.
+
+  Not configuration and not used to make a request — it is the provider
+  constant this module's own reasoning depends on, exposed so a test can
+  bind the two rather than trusting a comment. See
+  `@provider_receive_timeout_ms`.
+  """
+  @spec provider_receive_timeout_ms() :: pos_integer()
+  def provider_receive_timeout_ms, do: @provider_receive_timeout_ms
 
   @doc """
   The instant a card last spoken to at `from` should act.

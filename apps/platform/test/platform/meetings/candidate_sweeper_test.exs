@@ -67,19 +67,59 @@ defmodule Platform.Meetings.CandidateSweeperTest do
     |> Repo.update!()
   end
 
+  # A card in the state the live rail leaves one in: heard, then
+  # classified a second or two later by the mirror. The second half is
+  # `IntentQueue.Server.mirror_enqueue/3`'s exact call.
+  #
+  # It is part of the fixture rather than of the individual tests
+  # because a card the classifier has NOT answered for is not eligible
+  # to graduate — see "a candidate the classifier has not answered for
+  # yet" below — and every test in this file is about timing,
+  # exactly-once, automation or the stop button, none of which are
+  # questions about the model's answer. `classify: false` opts out, and
+  # is what that one describe block uses.
   defp heard!(meeting, at, opts \\ []) do
+    chunk_id = Ecto.UUID.generate()
+    text = Keyword.get(opts, :text, "we should build the CSV export")
+    speaker = Keyword.get(opts, :speaker, "alice")
+    outcome_kind = Keyword.get(opts, :outcome_kind, :task)
+
     {:ok, candidate} =
       Candidates.record_heard(%{
         meeting_id: meeting.id,
-        transcript_chunk_id: Ecto.UUID.generate(),
-        evidence_quote: Keyword.get(opts, :text, "we should build the CSV export"),
-        speaker: Keyword.get(opts, :speaker, "alice"),
+        transcript_chunk_id: chunk_id,
+        evidence_quote: text,
+        speaker: speaker,
         heard_at: at,
-        outcome_kind: Keyword.get(opts, :outcome_kind, :task)
+        outcome_kind: outcome_kind
       })
+
+    if Keyword.get(opts, :classify, true) do
+      {intent, role} = classification_for(outcome_kind)
+
+      {:ok, _} =
+        Candidates.create_or_attach(%{
+          intent_id: Ecto.UUID.generate(),
+          meeting_id: meeting.id,
+          transcript_chunk_id: chunk_id,
+          transcript_chunk_ids: [chunk_id],
+          evidence_quote: text,
+          speaker: speaker,
+          classified_intent: intent,
+          target_role: role,
+          state: :heard,
+          queue_status: "queued",
+          outcome_kind: outcome_kind,
+          heard_at: at,
+          last_utterance_at: at
+        })
+    end
 
     candidate
   end
+
+  defp classification_for(:artifact), do: {"visual_adjust", "designer"}
+  defp classification_for(_), do: {"action_items", "meeting_scribe"}
 
   defp reload!(%MeetingCandidate{id: id}), do: Repo.get!(MeetingCandidate, id)
 
@@ -329,6 +369,237 @@ defmodule Platform.Meetings.CandidateSweeperTest do
       # And it is not re-armed, so the next tick does not retry a
       # permanent error every second for the life of the meeting.
       assert CandidateSweeper.sweep(now: DateTime.utc_now()) == []
+    end
+  end
+
+  # ── The state the live rail actually leaves a card in ─────────────────────
+
+  describe "a card an agent has already picked up" do
+    # The 0/280 bug (task 01a06575 stage 2), pinned close to the guard.
+    #
+    # Every test above starts from `record_heard/1` and a card that
+    # stays `:heard` — a state the live pipeline leaves a card in for
+    # about one second. What it really produces is `:acting`, written by
+    # `IntentQueue.Server`'s ack mirror when the recipient agent answers
+    # `intent_ack(status: :working)`, and `claim_due/2` used to treat
+    # that as "already claimed by a sweeper" and skip it forever.
+    test "is still claimed at its deadline: :acting is not a disarm" do
+      meeting = meeting!()
+      overdue = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      acked = heard!(meeting, overdue, text: "Priya will write the migration")
+      # Exactly what `apply_ack_status(candidate, :working)` does.
+      {:ok, acked} = Candidates.advance(acked, :acting, %{queue_status: "acked"})
+
+      assert acked.state == :acting
+      # Still armed. The ack does not and must not disarm the countdown:
+      # the cursor gates dispatch, the countdown gates graduation.
+      assert acked.acts_at
+
+      fired_ids = CandidateSweeper.sweep(now: DateTime.utc_now()) |> Enum.map(& &1.id)
+
+      assert acked.id in fired_ids
+
+      row = reload!(acked)
+      assert row.task_id
+      assert [task] = tasks_for(meeting.project_id)
+      assert task.id == row.task_id
+    end
+
+    # The refutation that keeps the test above from passing for the
+    # wrong reason. `:acting` is not a blanket free pass — a row the
+    # SWEEPER claimed is `:acting` too, and it is disarmed, and it must
+    # stay unclaimable.
+    test "but a sweeper-claimed row (:acting AND disarmed) is not re-claimed" do
+      meeting = meeting!()
+      overdue = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      claimed = heard!(meeting, overdue, text: "somebody redo the onboarding email")
+      {:ok, claimed} = Candidates.advance(claimed, :acting, %{})
+
+      {1, _} =
+        Repo.update_all(
+          from(c in MeetingCandidate, where: c.id == ^claimed.id),
+          set: [acts_at: nil]
+        )
+
+      # A control on the same sweep, so a sweeper that fired nothing
+      # cannot pass this.
+      live = heard!(meeting, overdue, speaker: "bob", text: "and rewrite the FAQ copy")
+
+      fired_ids = CandidateSweeper.sweep(now: DateTime.utc_now()) |> Enum.map(& &1.id)
+
+      refute claimed.id in fired_ids
+      assert live.id in fired_ids
+      assert is_nil(reload!(claimed).task_id)
+    end
+
+    test "a human can still stop it — an ack is not the sweeper winning" do
+      meeting = meeting!()
+      card = heard!(meeting, DateTime.utc_now(), text: "we should ship the CSV export")
+      {:ok, card} = Candidates.advance(card, :acting, %{queue_status: "acked"})
+
+      # Before task 01a06575 stage 2 this answered `{:error, :already_fired}`
+      # — telling the human a task existed when none did.
+      assert {:ok, stopped} = Candidates.stop(card, Ecto.UUID.generate())
+      assert stopped.state == :closed
+      assert stopped.closed_reason == :dismissed
+      assert is_nil(reload!(card).acts_at)
+
+      # And the stop actually held: the deadline has passed and nothing
+      # fires.
+      assert CandidateSweeper.sweep(now: DateTime.add(DateTime.utc_now(), 60, :second)) == []
+      assert tasks_for(meeting.project_id) == []
+    end
+
+    test "stopping a row the sweeper claimed is still refused, even with no deliverable" do
+      # The half `stop/2`'s `disposition == :accepted` pre-check cannot
+      # answer: a claimed row whose mint FAILED carries no disposition,
+      # so the refusal has to come from `do_stop/3`'s WHERE.
+      meeting = meeting!()
+      card = heard!(meeting, DateTime.add(DateTime.utc_now(), -60, :second))
+
+      {1, _} =
+        Repo.update_all(
+          from(p in Platform.Tasks.Project, where: p.id == ^meeting.project_id),
+          set: [archived_at: DateTime.utc_now()]
+        )
+
+      assert CandidateSweeper.sweep(now: DateTime.utc_now()) == []
+
+      row = reload!(card)
+      assert row.state == :acting
+      assert is_nil(row.acts_at)
+      assert is_nil(row.disposition)
+
+      assert {:error, :already_fired} = Candidates.stop(card, Ecto.UUID.generate())
+    end
+  end
+
+  # ── An unvetted card never graduates ──────────────────────────────────────
+
+  describe "a candidate the classifier has not answered for yet" do
+    # Task 01a06575, round 3, door 2 — reproduced on a real clock with
+    # nothing killed.
+    #
+    # The skeleton is armed at the moment somebody SPOKE, deliberately:
+    # anchoring the deadline to the classification instead would move it
+    # by the model's latency. The answer normally lands a second or two
+    # later. But the providers set `receive_timeout: 60_000` —
+    # `Platform.Agents.Providers.Anthropic`, `.OpenAI` and `.Codex` — which
+    # is DOUBLE this countdown, so a classification taking 31 to 60
+    # seconds is inside what the HTTP client permits and outside what
+    # the countdown tolerates. The sweeper ticks every second, so the
+    # window is wide open.
+    #
+    # `routable_attrs?/1` cannot close it: every other outcome (a model
+    # error, a dedupe, an unqueued chunk) closes the skeleton through
+    # `IntentClassifier.close_skeleton/4`, but SLOW is not an outcome —
+    # the sweeper arrives before any outcome exists. The card then
+    # graduates carrying `classified_intent: nil`, titled with the raw
+    # utterance, having been vetted by nothing.
+    test "is not graduated at its deadline, and mints nothing" do
+      meeting = meeting!()
+      overdue = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      unvetted =
+        heard!(meeting, overdue,
+          classify: false,
+          text: "did you catch the game last night, that last quarter was something"
+        )
+
+      # The premise: armed, overdue, and nothing has classified it.
+      assert is_nil(reload!(unvetted).classified_intent)
+      assert %DateTime{} = reload!(unvetted).acts_at
+
+      assert CandidateSweeper.sweep(now: DateTime.utc_now()) == []
+      assert tasks_for(meeting.project_id) == []
+
+      row = reload!(unvetted)
+      assert is_nil(row.task_id)
+      refute row.state == :closed
+
+      # And it was not claimed-and-refused either. A card whose answer is
+      # merely LATE must still act on it when it arrives, so this has to
+      # be an eligibility rule; claiming nils `acts_at` and would strand
+      # every slow-but-real ask — which is the 0-of-280 failure the
+      # previous stage of this task was about, wearing different clothes.
+      assert %DateTime{} = row.acts_at
+      assert row.state == :heard
+    end
+
+    test "graduates on the very next sweep once the classification lands" do
+      # The positive control, on the SAME row and the same code path. A
+      # sweeper that refused everything, or one that permanently stranded
+      # the late card, fails here.
+      meeting = meeting!()
+      overdue = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      late =
+        heard!(meeting, overdue,
+          classify: false,
+          text: "somebody should write up the migration runbook"
+        )
+
+      assert CandidateSweeper.sweep(now: DateTime.utc_now()) == []
+
+      # The slow answer finally arrives — routable, and 60 seconds late.
+      {:ok, _} =
+        Candidates.create_or_attach(%{
+          intent_id: Ecto.UUID.generate(),
+          meeting_id: meeting.id,
+          transcript_chunk_id: reload!(late).transcript_chunk_id,
+          transcript_chunk_ids: [reload!(late).transcript_chunk_id],
+          evidence_quote: "somebody should write up the migration runbook",
+          speaker: "alice",
+          classified_intent: "action_items",
+          target_role: "meeting_scribe",
+          state: :heard,
+          queue_status: "queued",
+          outcome_kind: :task,
+          heard_at: overdue,
+          last_utterance_at: overdue
+        })
+
+      assert [fired] = CandidateSweeper.sweep(now: DateTime.utc_now())
+      assert fired.id == late.id
+      assert [task] = tasks_for(meeting.project_id)
+      assert task.id == reload!(late).task_id
+    end
+
+    test "a late answer of off_topic is disarmed instead, and still mints nothing" do
+      # The other half of the same window: the two doors compose. The
+      # unvetted card is ineligible while the model is thinking, and
+      # `routable_attrs?/1` disarms it for good when the answer turns out
+      # to be small talk.
+      meeting = meeting!()
+      overdue = DateTime.add(DateTime.utc_now(), -60, :second)
+      text = "did you catch the game last night, that last quarter was something"
+
+      small_talk = heard!(meeting, overdue, classify: false, text: text)
+
+      assert CandidateSweeper.sweep(now: DateTime.utc_now()) == []
+
+      {:ok, _} =
+        Candidates.create_or_attach(%{
+          intent_id: Ecto.UUID.generate(),
+          meeting_id: meeting.id,
+          transcript_chunk_id: reload!(small_talk).transcript_chunk_id,
+          transcript_chunk_ids: [reload!(small_talk).transcript_chunk_id],
+          evidence_quote: text,
+          speaker: "alice",
+          classified_intent: "off_topic",
+          target_role: "meeting_scribe",
+          state: :heard,
+          queue_status: "queued",
+          outcome_kind: :task,
+          heard_at: overdue,
+          last_utterance_at: overdue
+        })
+
+      assert is_nil(reload!(small_talk).acts_at)
+      assert CandidateSweeper.sweep(now: DateTime.utc_now()) == []
+      assert tasks_for(meeting.project_id) == []
     end
   end
 

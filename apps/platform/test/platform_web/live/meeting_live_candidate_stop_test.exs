@@ -94,13 +94,39 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
   # real `now`. The timing arithmetic itself is bracketed with a number
   # in `Platform.Meetings.CandidateSweeperTest`.
   defp overdue_candidate!(meeting, text) do
+    at = DateTime.add(DateTime.utc_now(), -60, :second)
+    chunk_id = Ecto.UUID.generate()
+
     {:ok, candidate} =
       Candidates.record_heard(%{
         meeting_id: meeting.id,
-        transcript_chunk_id: Ecto.UUID.generate(),
+        transcript_chunk_id: chunk_id,
         evidence_quote: text,
         speaker: "alice",
-        heard_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        heard_at: at
+      })
+
+    # And then classified, which is the state the live rail leaves a card
+    # in a second or two later — `IntentQueue.Server.mirror_enqueue/3`'s
+    # exact call. Required because the sweeper will not graduate a card
+    # the classifier has not answered for (`Candidates.claim_due/2`), and
+    # a card that never fires would make every stop assertion below pass
+    # for the wrong reason.
+    {:ok, _} =
+      Candidates.create_or_attach(%{
+        intent_id: Ecto.UUID.generate(),
+        meeting_id: meeting.id,
+        transcript_chunk_id: chunk_id,
+        transcript_chunk_ids: [chunk_id],
+        evidence_quote: text,
+        speaker: "alice",
+        classified_intent: "action_items",
+        target_role: "meeting_scribe",
+        state: :heard,
+        queue_status: "queued",
+        outcome_kind: :task,
+        heard_at: at,
+        last_utterance_at: at
       })
 
     candidate

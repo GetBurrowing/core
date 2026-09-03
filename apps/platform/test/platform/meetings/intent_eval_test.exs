@@ -44,8 +44,12 @@ defmodule Platform.Meetings.IntentEvalTest do
       root = IntentEval.root()
       manifest = IntentEval.read_manifest!(root)
 
-      assert ["control_60", "negatives_102", "unaddressed_probe_12"] =
-               manifest["slices"] |> Enum.map(& &1["name"]) |> Enum.sort()
+      assert [
+               "control_60",
+               "negatives_102",
+               "unaddressed_meeting_speech_48",
+               "unaddressed_probe_12"
+             ] = manifest["slices"] |> Enum.map(& &1["name"]) |> Enum.sort()
 
       rows = IntentEval.load_slice_rows(root)
       by_slice = rows |> Map.values() |> Enum.group_by(& &1["slice"])
@@ -53,6 +57,7 @@ defmodule Platform.Meetings.IntentEvalTest do
       assert length(by_slice["negatives_102"]) == 102
       assert length(by_slice["control_60"]) == 60
       assert length(by_slice["unaddressed_probe_12"]) == 12
+      assert length(by_slice["unaddressed_meeting_speech_48"]) == 48
 
       # Every negative is the same label — they are recorded
       # `removed_no_action` corrections, i.e. things the classifier should

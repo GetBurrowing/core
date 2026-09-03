@@ -368,6 +368,14 @@ defmodule Platform.Meetings.IntentQueue.Server do
     # cannot disambiguate a repeated line. Task 01a03fb9 stage 1.
     :speaker,
     :classified_intent,
+    # The intent the classifier's evidence gate downgraded to
+    # `off_topic`, or nil when the classification is the model's own
+    # answer. Carried on the row purely so `mirror_enqueue/3` can write
+    # it to the durable candidate — nothing in the queue routes on it.
+    # It is in THIS list deliberately: `writable/1` is `Map.take/2`, so
+    # a key absent from here is dropped in silence and the column would
+    # read back nil forever with no error (task 01a06575).
+    :demoted_from,
     :confidence,
     :target_role,
     :target_agent_id,
@@ -1354,6 +1362,11 @@ defmodule Platform.Meetings.IntentQueue.Server do
           evidence_quote: row.chunk_excerpt,
           speaker: speaker_or_nil(row.speaker),
           classified_intent: stringify(row.classified_intent),
+          # Non-nil ONLY on an evidence-gate demotion. Without it a
+          # demoted row is byte-identical to a genuine decline —
+          # `off_topic` at the model's own confidence — and the two
+          # populations cannot be separated in any query (task 01a06575).
+          demoted_from: stringify(row.demoted_from),
           classifier_confidence: row.confidence,
           classifier_model: row.model_used,
           target_role: stringify(row.target_role),
@@ -1731,6 +1744,7 @@ defmodule Platform.Meetings.IntentQueue.Server do
       chunk_excerpt: nil,
       speaker: nil,
       classified_intent: nil,
+      demoted_from: nil,
       confidence: nil,
       target_role: nil,
       target_agent_id: nil,

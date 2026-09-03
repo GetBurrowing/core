@@ -213,6 +213,7 @@ defmodule Platform.Meetings.IntentDispatcher do
 
   alias Platform.Agents.Agent
   alias Platform.Meetings
+  alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.IntentRouting
   alias Platform.Meetings.Meeting
@@ -220,7 +221,6 @@ defmodule Platform.Meetings.IntentDispatcher do
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
   alias Platform.Roles
-  alias Platform.Roles.Role
 
   # 30 s belt-and-braces tick — the PubSub notify path handles the hot
   # case, the tick just recovers dropped notifies + dispatcher restarts.
@@ -418,7 +418,7 @@ defmodule Platform.Meetings.IntentDispatcher do
           state
         )
 
-      is_nil(target_role) ->
+      no_target_role?(target_role) ->
         fail_dispatch(meeting_id, row, :no_target_role, state)
 
       not valid_role_key?(target_role) ->
@@ -744,15 +744,33 @@ defmodule Platform.Meetings.IntentDispatcher do
 
   # ── Role validation + resolution ───────────────────────────────────────────
 
-  defp valid_role_key?(role) when is_binary(role) do
-    role in Role.valid_keys()
-  end
+  # "The classifier produced no role", in both spellings it can arrive in.
+  #
+  # `is_nil/1` alone was DEAD CODE. The classifier never emits Elixir's
+  # `nil`: `normalise_target_role/1` maps the prompt's JSON `null` onto
+  # the STRING `"null"` (`IntentClassifier.no_target_role/0`) because
+  # `target_role` is hashed into the dedupe key and has to be a binary.
+  # So every `off_topic` row fell through to `not valid_role_key?/1` and
+  # was recorded `:unknown_role` — which reads as "the model emitted a
+  # role outside the enum", a model defect that is not occurring, and
+  # which also spent the once-per-key log line on the single most common
+  # value in the queue. `:no_target_role` is what this module's own
+  # reason table and `IntentRouting`'s `off_topic` comment already
+  # promise happens here (task 01a06575).
+  #
+  # `nil` stays in the set: `IntentQueue.enqueue/2` accepts a nil
+  # `target_role` from any caller that is not the classifier, and that
+  # row means the same thing.
+  defp no_target_role?(nil), do: true
+  defp no_target_role?(role) when is_binary(role), do: role == IntentClassifier.no_target_role()
+  defp no_target_role?(role) when is_atom(role), do: no_target_role?(Atom.to_string(role))
+  defp no_target_role?(_), do: false
 
-  defp valid_role_key?(role) when is_atom(role) do
-    Atom.to_string(role) in Role.valid_keys()
-  end
-
-  defp valid_role_key?(_), do: false
+  # Delegated to `IntentRouting.routable_role?/1` rather than asking
+  # `Role.valid_keys/0` here. The countdown rail has to ask the same
+  # question — see that function's docs — and a second copy of it in
+  # this module is exactly how the two rails drift back apart.
+  defp valid_role_key?(role), do: IntentRouting.routable_role?(role)
 
   defp log_unknown_role_once(role, meeting_id, state) do
     key = to_string(role)

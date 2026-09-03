@@ -789,4 +789,341 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       assert result["summary"]["errors_total"] == 0
     end
   end
+
+  # ── task 01a06575 stage 4 ─────────────────────────────────────────────
+
+  describe "a slice can be in the set and out of the default run" do
+    test "`scored_by_default: false` excludes it, and --slice still reaches it", %{root: root} do
+      write_two_slices!(root)
+
+      write_config!(root, "cfg", %{
+        "inline_file" => write_prompt!(root, "p.txt", "P {{meeting_transcript_chunk}}")
+      })
+
+      # The default run sees ONE slice, not both.
+      assert Harness.load_rows(root) |> Enum.map(& &1["slice"]) |> Enum.uniq() == ["included"]
+
+      # Naming it explicitly still reaches it — exclusion is a default,
+      # not a ban. Without this half, a harness that had simply LOST the
+      # slice would pass.
+      assert Harness.load_rows(root, "excluded") |> Enum.map(& &1["slice"]) == ["excluded"]
+
+      # And it is named, with its reason, rather than silently dropped.
+      assert [%{"name" => "excluded", "reason" => "no cassette anywhere"}] =
+               Harness.excluded_slices(root)
+
+      # Nothing is excluded when a slice was named explicitly: the
+      # reader asked for exactly this and the list would be noise.
+      assert Harness.excluded_slices(root, "excluded") == []
+    end
+
+    test "the exclusion is printed in the report, not just recorded", %{root: root} do
+      write_two_slices!(root)
+
+      write_config!(root, "cfg", %{
+        "inline_file" => write_prompt!(root, "p.txt", "P {{meeting_transcript_chunk}}")
+      })
+
+      Process.put(:stub_answers, %{})
+
+      {:ok, result} =
+        Harness.run("cfg", root: root, mode: :record, live_module: StubProvider, write: false)
+
+      report = Harness.report(result)
+      assert report =~ "EXCLUDED SLICES"
+      assert report =~ "excluded (1 rows): no cassette anywhere"
+    end
+  end
+
+  describe "correction exemplars: the variable the harness used to hardcode" do
+    test "the default is the sentinel, byte-for-byte, so published fingerprints still reproduce",
+         %{root: root} do
+      template = "P {{correction_exemplars}}"
+
+      # `fingerprint/1` is what every committed run manifest recorded.
+      assert Harness.fingerprint(template) ==
+               Harness.sha256("P (no prior corrections)")
+
+      write_config!(root, "implicit", %{"inline_file" => write_prompt!(root, "p.txt", template)})
+
+      write_config!(
+        root,
+        "explicit",
+        %{"inline_file" => Path.join([root, "prompts", "p.txt"])},
+        %{"correction_exemplars" => %{"sentinel" => true}}
+      )
+
+      {_source, implicit} =
+        Harness.resolve_exemplars!(Harness.load_config!(root, "implicit"), root: root)
+
+      {_source, explicit} =
+        Harness.resolve_exemplars!(Harness.load_config!(root, "explicit"), root: root)
+
+      assert implicit == "(no prior corrections)"
+      assert explicit == implicit
+    end
+
+    test "a file source renders through the LIVE classifier's formatter, not a copy", %{
+      root: root
+    } do
+      exemplars = [
+        %{
+          "transcript_chunk_excerpt" => "Promote to prod.",
+          "classified_intent" => "action_items",
+          "correction" => "removed_no_action",
+          "reason" => "wrong_target",
+          "corrected_intent" => nil,
+          "dispatch_outcome" => nil
+        }
+      ]
+
+      write_exemplars!(root, "corpus.jsonl", exemplars)
+
+      write_config!(
+        root,
+        "cfg",
+        %{"inline_file" => write_prompt!(root, "p.txt", "P {{correction_exemplars}}")},
+        %{"correction_exemplars" => %{"file" => "exemplars/corpus.jsonl"}}
+      )
+
+      {source, block} = Harness.resolve_exemplars!(Harness.load_config!(root, "cfg"), root: root)
+
+      assert source["kind"] == "file"
+      assert source["count"] == 1
+
+      # Byte equality with what the classifier itself would render for
+      # the same row. A harness-side re-implementation of this format is
+      # how the eval and production end up disagreeing about what the
+      # prompt says while both look correct.
+      assert block ==
+               Platform.Meetings.IntentClassifier.format_correction_exemplars([
+                 %{
+                   transcript_chunk_excerpt: "Promote to prod.",
+                   classified_intent: "action_items",
+                   correction: "removed_no_action",
+                   reason: "wrong_target",
+                   corrected_intent: nil,
+                   dispatch_outcome: nil
+                 }
+               ])
+
+      assert block =~ "producer verdict: removed_no_action (wrong_target)"
+      refute block == "(no prior corrections)"
+    end
+
+    test "the two exemplar arms are NOT interchangeable — one's cassette misses the other", %{
+      root: root
+    } do
+      write_slice!(root, rows())
+
+      write_exemplars!(root, "corpus.jsonl", [
+        %{
+          "transcript_chunk_excerpt" => "Promote to prod.",
+          "classified_intent" => "action_items",
+          "correction" => "removed_no_action",
+          "reason" => "wrong_target",
+          "corrected_intent" => nil,
+          "dispatch_outcome" => nil
+        }
+      ])
+
+      prompt =
+        write_prompt!(root, "p.txt", "P {{correction_exemplars}} {{meeting_transcript_chunk}}")
+
+      write_config!(root, "sentinel", %{"inline_file" => prompt})
+
+      write_config!(root, "withex", %{"inline_file" => prompt}, %{
+        "correction_exemplars" => %{"file" => "exemplars/corpus.jsonl"}
+      })
+
+      Process.put(:stub_answers, %{})
+
+      # Record against the sentinel arm ...
+      assert {:ok, _} =
+               Harness.run("sentinel",
+                 root: root,
+                 mode: :record,
+                 live_module: StubProvider,
+                 write: false
+               )
+
+      File.cp!(Cassette.path(root, "sentinel"), Cassette.path(root, "withex"))
+
+      # ... and the exemplar arm cannot replay it. THIS is the guard that
+      # stops the single worst thing this eval could do: score a
+      # cassette recorded against one prompt body under a different one,
+      # and publish the number as an answer.
+      assert {:error, {:cassette_miss, %{count: 2, total: 2}}} =
+               Harness.run("withex",
+                 root: root,
+                 mode: :replay,
+                 live_module: ForbiddenProvider,
+                 write: false
+               )
+
+      # The control: the arm it WAS recorded against replays clean, so
+      # the miss above is about the prompt and not about a broken copy.
+      File.cp!(Cassette.path(root, "sentinel"), Cassette.path(root, "sentinel2"))
+      write_config!(root, "sentinel2", %{"inline_file" => prompt})
+
+      assert {:ok, result} =
+               Harness.run("sentinel2",
+                 root: root,
+                 mode: :replay,
+                 live_module: ForbiddenProvider,
+                 write: false
+               )
+
+      assert result["summary"]["total"] == 2
+    end
+
+    test "db_recent RAISES on an empty corpus rather than quietly rendering the sentinel", %{
+      root: root
+    } do
+      write_config!(
+        root,
+        "cfg",
+        %{"inline_file" => write_prompt!(root, "p.txt", "P {{correction_exemplars}}")},
+        %{"correction_exemplars" => %{"db_recent" => %{"org_slug" => "fabrikam"}}}
+      )
+
+      config = Harness.load_config!(root, "cfg")
+
+      # Production degrades to the sentinel on purpose — a classification
+      # must not be dropped because the corpus hiccuped. An EVAL that did
+      # the same would publish a number about a prompt it did not send.
+      assert_raise ArgumentError, ~r/ZERO corrections/, fn ->
+        Harness.resolve_exemplars!(config, root: root)
+      end
+    end
+
+    test "an ambiguous or unknown exemplar source is refused at load", %{root: root} do
+      prompt = write_prompt!(root, "p.txt", "P")
+
+      write_config!(root, "two", %{"inline_file" => prompt}, %{
+        "correction_exemplars" => %{"file" => "a", "sentinel" => true}
+      })
+
+      assert_raise ArgumentError, ~r/exactly ONE source/, fn ->
+        Harness.load_config!(root, "two")
+      end
+
+      write_config!(root, "bogus", %{"inline_file" => prompt}, %{
+        "correction_exemplars" => %{"whatever" => true}
+      })
+
+      assert_raise ArgumentError, ~r/not one of sentinel \| file \| db_recent/, fn ->
+        Harness.load_config!(root, "bogus")
+      end
+    end
+  end
+
+  describe "the committed stage-4 additions" do
+    test "the new slice is registered, excluded by default, and reachable by name" do
+      root = Platform.Meetings.IntentEval.root()
+
+      assert [%{"name" => "unaddressed_meeting_speech_48", "count" => 48}] =
+               Harness.excluded_slices(root)
+
+      rows = Harness.load_rows(root, "unaddressed_meeting_speech_48")
+      assert length(rows) == 48
+
+      # Harper's utterance, verbatim, is IN the set. It is the one row
+      # with real-speech provenance and the ticket's stated acceptance
+      # example.
+      assert Enum.any?(rows, fn row ->
+               row["text"] ==
+                 "is working um so marlowe is going to be creating some new tasks we need to to " <>
+                   "create some documents it'd be also great if we could um"
+             end)
+
+      # And it is not quietly folded into the default run, which would
+      # turn every committed replay into a 48-row miss.
+      refute Enum.any?(Harness.load_rows(root), &(&1["slice"] == "unaddressed_meeting_speech_48"))
+    end
+
+    test "the production-exemplar arm carries eight real removals and a different prompt sha" do
+      root = Platform.Meetings.IntentEval.root()
+
+      sentinel =
+        Harness.render_prompt("off_topic_default",
+          root: root,
+          repo_root: Path.expand("../../../..", __DIR__)
+        )
+
+      prod =
+        Harness.render_prompt("off_topic_default_prod_exemplars",
+          root: root,
+          repo_root: Path.expand("../../../..", __DIR__)
+        )
+
+      # Same prompt BODY — the arms differ in exactly one variable ...
+      assert sentinel["template_sha256"] == prod["template_sha256"]
+      # ... and that is enough to make them different prompts.
+      refute sentinel["rendered_sha256"] == prod["rendered_sha256"]
+
+      assert prod["exemplar_source"]["count"] == 8
+      assert prod["exemplar_bytes"] > sentinel["exemplar_bytes"]
+
+      # Every exemplar the live prompt would carry is a REMOVAL. That is
+      # the finding: the slot the prompt introduces as "ground truth for
+      # this org's vocabulary" is, in practice, eight examples of firing
+      # being wrong — pressure toward off_topic that no published run
+      # has ever rendered.
+      assert prod["exemplar_block"] =~ "removed_no_action"
+      refute prod["exemplar_block"] =~ "should have been:"
+    end
+  end
+
+  # ── stage-4 fixtures ──────────────────────────────────────────────────
+
+  defp write_two_slices!(root) do
+    File.mkdir_p!(Path.join(root, "slices"))
+
+    for {name, text} <- [
+          {"included", "Designer, make the button teal."},
+          {"excluded", "um so marlowe is going to"}
+        ] do
+      body =
+        Jason.encode!(%{"id" => name, "text" => text, "label" => "off_topic", "slice" => name}) <>
+          "\n"
+
+      File.write!(Path.join([root, "slices", "#{name}.jsonl"]), body)
+    end
+
+    File.write!(
+      Path.join(root, "manifest.json"),
+      Jason.encode!(%{
+        "slices" => [
+          %{
+            "name" => "included",
+            "file" => "slices/included.jsonl",
+            "count" => 1,
+            "scored_by_default" => true
+          },
+          %{
+            "name" => "excluded",
+            "file" => "slices/excluded.jsonl",
+            "count" => 1,
+            "scored_by_default" => false,
+            "excluded_reason" => "no cassette anywhere"
+          }
+        ]
+      })
+    )
+
+    :ok
+  end
+
+  defp write_exemplars!(root, file, rows) do
+    File.mkdir_p!(Path.join(root, "exemplars"))
+
+    body =
+      rows
+      |> Enum.map(&[Jason.encode!(&1), "\n"])
+      |> IO.iodata_to_binary()
+
+    File.write!(Path.join([root, "exemplars", file]), body)
+    :ok
+  end
 end

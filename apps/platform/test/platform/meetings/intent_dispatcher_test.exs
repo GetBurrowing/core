@@ -52,6 +52,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
   alias Platform.Chat
   alias Platform.Federation
   alias Platform.Meetings
+  alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentDispatcher
@@ -1643,6 +1644,55 @@ defmodule Platform.Meetings.IntentDispatcherTest do
       # X it, and correct it. The pre-019f70b8 queue deleted this row.
       assert [^failed] = IntentQueue.list(meeting_id)
       assert IntentQueue.cursor(meeting_id) == nil
+    end
+
+    # The classifier's "nobody" is the STRING "null", never Elixir's
+    # `nil` — `normalise_target_role/1` maps the prompt's JSON null onto
+    # it because `target_role` is hashed into the dedupe key and has to
+    # be a binary. So the `is_nil/1` guard above could never match a row
+    # this pipeline actually produces, and EVERY off_topic row was
+    # recorded `:unknown_role`: "the model emitted a role outside the
+    # enum", a model defect that is not occurring, on the single most
+    # common value in the queue.
+    #
+    # The row shape below is the one the classifier writes for small
+    # talk, not an invented one: `classified_intent: "off_topic"` (absent
+    # from `IntentRouting`, so the responsibility fork above does not
+    # claim it) plus `IntentClassifier.no_target_role/0`.
+    test "the classifier's \"null\" target_role fails as :no_target_role, not :unknown_role" do
+      meeting_id = new_meeting!()
+      {_pid, _name} = start_dispatcher!()
+
+      log =
+        capture_log(fn ->
+          row =
+            enqueue!(meeting_id, %{
+              classified_intent: "off_topic",
+              target_role: IntentClassifier.no_target_role()
+            })
+
+          failed = await_status(meeting_id, row.id, :dispatch_failed)
+
+          assert failed.dispatch_failure_reason == :no_target_role,
+                 "an off_topic row carries the classifier's no-role sentinel; " <>
+                   "recording it as :unknown_role blames the model for a defect it did not commit"
+        end)
+
+      # And it does not burn the once-per-key unknown-role log line on
+      # the most common value in the queue.
+      refute log =~ "unknown target_role"
+
+      # POSITIVE CONTROL, same run: the sentinel is not simply being
+      # treated as valid. A genuinely bogus role still fails, and still
+      # fails DIFFERENTLY.
+      bogus_log =
+        capture_log(fn ->
+          bogus = enqueue!(meeting_id, %{target_role: "not-a-real-role-either"})
+          bogus_failed = await_status(meeting_id, bogus.id, :dispatch_failed)
+          assert bogus_failed.dispatch_failure_reason == :unknown_role
+        end)
+
+      assert bogus_log =~ "unknown target_role"
     end
 
     test "unknown role fails as :unknown_role and logs once per key" do
