@@ -201,4 +201,66 @@ defmodule PlatformWeb.MeetingAgentControllerTest do
       assert %{"status" => "bad_request"} = json_response(conn, 400)
     end
   end
+
+  describe "POST #{@path} — transcript delivery (task 01a06672)" do
+    test "POST segments delivers a final segment to a seated agent's brain topic",
+         %{conn: conn} do
+      # The same space `app_room_name/0` derives its name from, so the
+      # Room row `Meetings.get_room_by_name/1` resolves is the one the
+      # agent is seated in.
+      room_name = app_room_name()
+      "space-" <> space_id = room_name
+      {:ok, room} = Meetings.ensure_room(space_id)
+      {:ok, room} = Meetings.activate_room(room)
+      assert room.livekit_room_name == room_name
+
+      n = System.unique_integer([:positive])
+
+      owner =
+        Platform.Repo.insert!(%Platform.Accounts.User{
+          email: "mac-owner-#{n}@example.com",
+          name: "MAC Owner #{n}",
+          oidc_sub: "oidc-mac-owner-#{n}"
+        })
+
+      agent =
+        Platform.Repo.insert!(%Platform.Agents.Agent{
+          slug: "mac-agent-#{n}",
+          name: "MAC Agent #{n}",
+          status: "active"
+        })
+
+      {:ok, runtime} =
+        Platform.Federation.register_runtime(owner.id, %{runtime_id: "mac-brain-#{n}"})
+
+      {:ok, activated, _raw_token} = Platform.Federation.activate_runtime(runtime)
+      {:ok, agent} = Platform.Federation.link_agent(activated, agent)
+      brain_topic = Platform.Meetings.IntentRuntimeAdapter.runtime_topic(activated.runtime_id)
+
+      {:ok, _row} = Platform.Chat.add_agent_participant(space_id, agent)
+
+      {:ok, _participant} =
+        Meetings.participant_joined(room, %{display_name: agent.name, agent_id: agent.id})
+
+      :ok = PlatformWeb.Endpoint.subscribe(brain_topic)
+
+      conn =
+        conn
+        |> with_bearer()
+        |> post(@path, %{
+          "room_sid" => "RM_deliver_#{n}",
+          "room_name" => room_name,
+          "segments" => [sample_segment(%{"text" => "heard by the brain"})]
+        })
+
+      assert %{"status" => "appended", "count" => 1} = json_response(conn, 200)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^brain_topic,
+                       event: "meeting_transcript",
+                       payload: %{text: "heard by the brain", room_name: ^room_name}
+                     },
+                     500
+    end
+  end
 end

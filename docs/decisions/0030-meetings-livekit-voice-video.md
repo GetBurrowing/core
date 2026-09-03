@@ -128,6 +128,8 @@ Persistent audio across navigation via a root-level `MeetingBarLive` component i
 
 Agents join via the existing LiveKit Agents SDK (Python). Suite generates an agent token and dispatches a `meeting_join` signal to the agent runtime. The agent connects, listens via STT, responds via TTS.
 
+How a seated agent hears the room is specified in [docs/contracts/meeting-transcript-frame.md](../contracts/meeting-transcript-frame.md): every final transcript segment is pushed to the agent's brain runtime as a `meeting_transcript` frame, never to the voice worker. The same document covers the reply budget that `Platform.Meetings.say/4` enforces before any `meeting_say` reaches a voice worker.
+
 ## Implementation phases
 
 ### Phase 1 — Voice & Video MVP

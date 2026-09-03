@@ -72,6 +72,13 @@ defmodule Platform.Meetings.PubSub do
   | `meeting:{meeting_id}:intents`            | `{:intent_no_ack_spawn_failed, row}`     | intent-queue row map                                                        |
   | `meeting:{meeting_id}`                    | `{:intent_mute_changed, payload}`        | `%{meeting_id: id, muted_at: DateTime.t() \\| nil}`                         |
   | `meeting:{meeting_id}`                    | `{:whiteboard_scene_saved, payload}`     | `%{meeting_id: id, scene_version: integer(), by_user_id: id \\| nil}`       |
+
+  Not a `Phoenix.PubSub` topic, listed here only as a pointer: a FINAL
+  transcript segment is also delivered as the `"meeting_transcript"` event
+  by `PlatformWeb.Endpoint.broadcast/3` on `runtime:<runtime_id>` for every
+  seated agent's brain runtime (task 01a06672,
+  `Platform.Meetings.deliver_transcript_segment/2`) — see
+  docs/contracts/meeting-transcript-frame.md.
   """
 
   alias Platform.Meetings.IntentRouting

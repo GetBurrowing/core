@@ -2639,7 +2639,7 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{utterance_id, status: \"spoken\" | \"failed\" | \"no_ack\", duration_s, room_name}. `duration_s` is nil unless the worker reported it.",
         limitations:
-          "You must be a current participant of the room — invited by a human from the meeting page and not yet dismissed. Being a member of the meeting's chat space is not enough. Text over 2000 characters is refused, not truncated. `no_ack` is not a failure and not a success: the dispatch went out and nothing came back. Do not retry in a loop on `no_ack`; if it repeats, say so in chat instead.",
+          "You must be a current participant of the room — invited by a human from the meeting page and not yet dismissed. Being a member of the meeting's chat space is not enough. Text over 2000 characters is refused, not truncated. A reply budget applies: at most 6 says per minute per room (`reply_budget_exhausted`), and no say at all while the last 3 utterances in the room were agents — a human must speak before you may reply again (`agent_chain_too_deep`). `no_ack` is not a failure and not a success: the dispatch went out and nothing came back, and it still spends budget. Do not retry in a loop on `no_ack`; if it repeats, say so in chat instead.",
         when_to_use:
           "When you are in a meeting and want to say something specific out loud — an answer, a summary, a question — rather than waiting for the intent pipeline to prompt you."
       }
@@ -10153,6 +10153,28 @@ defmodule Platform.Federation.ToolSurface do
       code: :livekit_not_configured,
       recoverable: false,
       suggestion: "Meetings are disabled here; there is no room to speak into."
+    }
+  end
+
+  # The reply budget (task 01a06672 stage 2). Both recoverable: time, or a
+  # human speaking, clears them.
+  defp meeting_say_error(:reply_budget_exhausted, _room_name) do
+    %{
+      error: "meeting_say: reply budget exhausted for this room",
+      code: :reply_budget_exhausted,
+      recoverable: true,
+      suggestion:
+        "You have spoken 6 times in this room in the last minute. Wait, or post the rest in chat."
+    }
+  end
+
+  defp meeting_say_error(:agent_chain_too_deep, _room_name) do
+    %{
+      error: "meeting_say: the last three utterances in this room were all agents",
+      code: :agent_chain_too_deep,
+      recoverable: true,
+      suggestion:
+        "The last three utterances in this room were all agents. Wait for a human to speak before replying again."
     }
   end
 

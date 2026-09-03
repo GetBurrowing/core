@@ -276,6 +276,58 @@ defmodule Platform.Federation.ToolSurfaceMeetingSayTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "meeting_say"}, 100
     end
 
+    # Task 01a06672 stage 2: the reply budget lives in `Meetings.say/4`;
+    # the tool only has to give each refusal its own code. Seeded straight
+    # into the ledger, so no runtime and no ack wait is involved.
+    test "a budget refusal is an envelope with code :reply_budget_exhausted" do
+      %{room: room} = room!()
+      %{agent: agent} = agent_with_runtime!()
+      seat!(room, agent)
+
+      for _ <- 1..6 do
+        Meetings.SayRegistry.ledger_put(Platform.Types.UUIDv7.generate(), %{
+          room_id: room.id,
+          room_name: room.livekit_room_name,
+          agent_id: agent.id,
+          at_ms: System.monotonic_time(:millisecond)
+        })
+      end
+
+      assert {:error, env} =
+               dispatch(%{"room_name" => room.livekit_room_name, "text" => "one more"}, agent)
+
+      assert env.code == :reply_budget_exhausted
+      assert env.recoverable
+      assert env.suggestion =~ "6 times"
+      refute_receive %Phoenix.Socket.Broadcast{event: "meeting_say"}, 100
+    end
+
+    test "a chain refusal is an envelope with code :agent_chain_too_deep" do
+      %{room: room} = room!()
+      %{agent: agent} = agent_with_runtime!()
+      %{agent: other} = agent_with_runtime!()
+      seat!(room, agent)
+      seat!(room, other)
+
+      # Three accepted says in the room, by two agents, and no human since.
+      for speaker <- [agent, other, agent] do
+        Meetings.SayRegistry.ledger_put(Platform.Types.UUIDv7.generate(), %{
+          room_id: room.id,
+          room_name: room.livekit_room_name,
+          agent_id: speaker.id,
+          at_ms: System.monotonic_time(:millisecond)
+        })
+      end
+
+      assert {:error, env} =
+               dispatch(%{"room_name" => room.livekit_room_name, "text" => "me again"}, agent)
+
+      assert env.code == :agent_chain_too_deep
+      assert env.recoverable
+      assert env.suggestion =~ "Wait for a human"
+      refute_receive %Phoenix.Socket.Broadcast{event: "meeting_say"}, 100
+    end
+
     test "no calling agent in context is refused" do
       assert {:error, env} =
                ToolArguments.dispatch(

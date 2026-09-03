@@ -4400,6 +4400,18 @@ defmodule Platform.Meetings do
         {:error, :not_found}
 
       transcript ->
+        # Mint the segment id and the append instant BEFORE persisting, so
+        # the stored JSONB map, the `transcript_chunk` broadcast and the
+        # `meeting_transcript` frame below all name the same segment
+        # (task 01a06672). Additive keys on a string-keyed map: the
+        # classifier, summarizer, archive and press card read `text` /
+        # `participant_identity` and ignore what they do not know, and
+        # `search_vector` reads only the text.
+        segment =
+          segment
+          |> Map.put_new("id", Platform.Types.UUIDv7.generate())
+          |> Map.put_new("spoken_at", DateTime.to_iso8601(DateTime.utc_now()))
+
         updated_segments = (transcript.segments || []) ++ [segment]
 
         transcript
@@ -4432,6 +4444,17 @@ defmodule Platform.Meetings do
                 meeting_id: meeting_id_for_space(updated.space_id, updated.started_at)
               }
             )
+
+            # Task 01a06672: hand the FINAL segment to the brain runtime of
+            # every agent currently seated in the room. A direct call from
+            # the one persist point, so both callers (the meeting-agent
+            # controller and the LiveKit webhook) are covered; not a
+            # `meeting:transcript_chunk` subscriber. Nothing here touches
+            # the intent pipeline: agent-authored segments already stay
+            # out of the classifier via `IntentClassifier` guard 1
+            # (`%{reason: :agent_speaker}`, see that module's moduledoc),
+            # and this delivery is history, not classification.
+            _ = deliver_transcript_segment(updated, segment)
 
           _error ->
             :ok
@@ -5275,6 +5298,30 @@ defmodule Platform.Meetings do
 
   @say_ack_timeout_ms 15_000
 
+  # The reply budget (task 01a06672 stage 2). Deterministic, no LLM call,
+  # and checked inside `say/4` so every caller — the tool surface, the
+  # intent pipeline, anything written later — is covered.
+  #
+  # R1, rate: at most this many ACCEPTED says per (room, agent) in any
+  # trailing window. Six a minute is one every ten seconds, which is
+  # already a monologue; more is a runaway loop.
+  @meeting_say_budget_per_minute 6
+  @meeting_say_window_ms 60_000
+
+  # R2, chain: no agent-to-agent chain deeper than this without a human
+  # segment between. Three agents answering each other with no human
+  # anywhere in the last three turns is a conversation the humans have
+  # stopped being part of.
+  @meeting_say_max_agent_chain 3
+
+  @doc "Accepted `say/4` calls allowed per (room, agent) per minute."
+  @spec meeting_say_budget_per_minute() :: pos_integer()
+  def meeting_say_budget_per_minute, do: @meeting_say_budget_per_minute
+
+  @doc "Longest agent-only run of utterances `say/4` will extend."
+  @spec meeting_say_max_agent_chain() :: pos_integer()
+  def meeting_say_max_agent_chain, do: @meeting_say_max_agent_chain
+
   @doc """
   Speak `text` into `room_name` in `agent`'s own configured voice, and wait
   for the runtime's receipt.
@@ -5325,6 +5372,29 @@ defmodule Platform.Meetings do
   See `Platform.Meetings.SayRegistry`'s moduledoc. Short version: the chat
   row must be written from what core sent, never from what a runtime echoed.
 
+  ## The reply budget
+
+  Two deterministic rules, checked by `check_reply_budget/2` AFTER the
+  participant guard (an uninvited agent is still `:not_in_room`) and BEFORE
+  any token is minted or runtime resolved (a refused agent costs nothing
+  and learns nothing about its runtime). In order, so a test can target
+  each:
+
+    * **Rate** — at most #{@meeting_say_budget_per_minute} accepted says per
+      (room, agent) in any trailing #{@meeting_say_window_ms} ms:
+      `{:error, :reply_budget_exhausted}`.
+    * **Chain** — no agent-to-agent chain deeper than
+      #{@meeting_say_max_agent_chain} without a human segment between:
+      `{:error, :agent_chain_too_deep}`. Refused when EITHER the room's
+      recording transcript ends in that many final agent segments, OR the
+      say ledger holds that many accepted says (by any agent) since the
+      room's last final human segment. The second side exists because agent
+      audio IS transcribed but lands seconds after the say went out; two
+      agents firing `say/4` at each other would otherwise outrun the
+      transcript. Both are counted from `Platform.Meetings.SayRegistry`'s
+      ledger, which records every ACCEPTED say regardless of what the ack
+      later said.
+
   ## Options
 
     * `:ack_timeout_ms` — how long to wait for the runtime's receipt
@@ -5337,7 +5407,8 @@ defmodule Platform.Meetings do
       when the runtime answered.
     * `{:ok, %{utterance_id, status: "no_ack", room_name}}` when it did not.
     * `{:error, :empty_text | {:text_too_long, max} | :room_not_found |
-      :not_in_room | :no_runtime | :voice_runtime_offline | :livekit_not_configured |
+      :not_in_room | :reply_budget_exhausted | :agent_chain_too_deep |
+      :no_runtime | :voice_runtime_offline | :livekit_not_configured |
       :broadcast_failed}`. `:voice_runtime_offline` is `resolve_voice_target/1`'s:
       a runtime declared voice but none of those is connected.
   """
@@ -5350,6 +5421,7 @@ defmodule Platform.Meetings do
     with :ok <- validate_say_text(text),
          {:ok, %Room{} = room} <- fetch_say_room(room_name),
          :ok <- ensure_agent_in_room(room, agent),
+         :ok <- check_reply_budget(room, agent),
          {:ok, token} <- generate_agent_token(agent, room_name),
          {:ok, topic} <- meeting_join_topic(agent) do
       utterance_id = Platform.Types.UUIDv7.generate()
@@ -5364,6 +5436,16 @@ defmodule Platform.Meetings do
         room_name: room_name,
         space_id: room.space_id,
         agent_id: agent.id
+      })
+
+      # The budget ledger. Written once the budget has passed and before
+      # the broadcast; removed only if the broadcast itself fails, never on
+      # ack, so a `no_ack` say still spends budget.
+      SayRegistry.ledger_put(utterance_id, %{
+        room_id: room.id,
+        room_name: room_name,
+        agent_id: agent.id,
+        at_ms: System.monotonic_time(:millisecond)
       })
 
       # Subscribe-then-send. See the "Subscribe, then send" note above.
@@ -5394,6 +5476,7 @@ defmodule Platform.Meetings do
         {:error, reason} ->
           Phoenix.PubSub.unsubscribe(Platform.PubSub, ack_topic)
           SayRegistry.delete(utterance_id)
+          SayRegistry.ledger_delete(utterance_id)
           Logger.error("[Meetings] broadcast meeting_say failed to #{topic}: #{inspect(reason)}")
 
           {:error, :broadcast_failed}
@@ -5428,6 +5511,58 @@ defmodule Platform.Meetings do
       %Participant{} -> :ok
       nil -> {:error, :not_in_room}
     end
+  end
+
+  # The reply budget. Rate first, then chain, so each refusal is reachable
+  # on its own. See the "The reply budget" section of `say/4`'s @doc.
+  defp check_reply_budget(%Room{} = room, %Agent{} = agent) do
+    with :ok <- check_say_rate(room, agent) do
+      check_agent_chain(room)
+    end
+  end
+
+  defp check_say_rate(%Room{} = room, %Agent{} = agent) do
+    since = System.monotonic_time(:millisecond) - @meeting_say_window_ms
+
+    if SayRegistry.ledger_count_since(room.id, agent.id, since) >= @meeting_say_budget_per_minute do
+      {:error, :reply_budget_exhausted}
+    else
+      :ok
+    end
+  end
+
+  defp check_agent_chain(%Room{livekit_room_name: room_name}) do
+    if transcript_tail_all_agents?(room_name) or ledger_chain_too_deep?(room_name) do
+      {:error, :agent_chain_too_deep}
+    else
+      :ok
+    end
+  end
+
+  # R2(a): the recording transcript's last N FINAL segments are all agents.
+  # Fewer than N final segments is never a chain.
+  defp transcript_tail_all_agents?(room_name) do
+    case get_transcript_for_room(room_name) do
+      nil ->
+        false
+
+      %Transcript{segments: segments} ->
+        tail =
+          (segments || [])
+          |> Enum.filter(&(&1["final"] == true))
+          |> Enum.take(-@meeting_say_max_agent_chain)
+
+        length(tail) == @meeting_say_max_agent_chain and
+          Enum.all?(tail, &agent_identity?(&1["participant_identity"]))
+    end
+  end
+
+  # R2(b): N accepted says in the room, by any agent, since the last final
+  # human segment. No human segment on record (`nil`) means every ledger say
+  # counts — NOT "the human spoke just now".
+  defp ledger_chain_too_deep?(room_name) do
+    since = SayRegistry.last_human_at(room_name)
+    SayRegistry.ledger_count_room_since(room_name, since) >= @meeting_say_max_agent_chain
   end
 
   defp say_ack_topic(utterance_id), do: "meetings:say:#{utterance_id}"
@@ -5581,6 +5716,134 @@ defmodule Platform.Meetings do
     end
 
     :ok
+  end
+
+  @doc """
+  Deliver one persisted transcript segment to the BRAIN runtime of every
+  agent currently seated in the transcript's room (task 01a06672 stage 1).
+
+  Called from `append_segment/2`'s success branch — the single persist
+  point, so both the meeting-agent controller and the LiveKit webhook are
+  covered without either knowing about it. Only segments with
+  `segment["final"] == true` are delivered; interim segments are persisted
+  as before and never leave the database. The frame is an
+  `Endpoint.broadcast/3` of event `"meeting_transcript"` on the agent's
+  runtime topic, the same channel `meeting_join` and intents ride, so a
+  brain that is connected receives it with nothing new to subscribe to.
+
+  ## Which runtime
+
+  `IntentRuntimeAdapter.resolve_target/1` — `agent.runtime_id`, the brain.
+  Deliberately NOT `resolve_voice_target/1` / `meeting_join_topic/1`: those
+  pick the voice worker row, which speaks and must receive nothing here.
+  A hearing brain and a speaking mouth are different rows since 01a06686.
+
+  ## Who is excluded
+
+    * The speaker itself: a segment whose `participant_identity` is
+      `"agent:<slug>"` for the agent in question (the identity the voice
+      worker publishes under). String compare on purpose — `parse_identity/1`
+      casts the suffix as a UUID and answers `:unknown` for a slug.
+    * Participants with `left_at` set (`active_participants/1`).
+    * Human participants — only rows with an `agent_id` are recipients.
+
+  ## Never fails the append
+
+  Returns `{:ok, %{delivered: [agent_id], skipped: [{agent_id, reason}]}}`
+  in every case. An agent without a linked runtime is
+  `{agent_id, :no_runtime}` in `skipped` and logged at `:info`; a room the
+  transcript's `room_id` no longer names yields empty lists. Any exception
+  is caught, logged, and reported as empty lists: the segment is already
+  on disk and an unreachable brain must not turn that into a 500 for the
+  transcriber.
+
+  Payload keys (all present; string or nil): `room_name`, `meeting_id`,
+  `segment_id`, `text`, `participant_identity`, `speaker_name`,
+  `speaker_kind` (`"agent"` | `"human"`, guests are human), `spoken_at`
+  (ISO8601 UTC of the append). See docs/contracts/meeting-transcript-frame.md.
+  """
+  @spec deliver_transcript_segment(Transcript.t(), map()) ::
+          {:ok, %{delivered: [binary()], skipped: [{binary(), atom()}]}}
+  def deliver_transcript_segment(%Transcript{} = transcript, segment) when is_map(segment) do
+    if segment["final"] == true do
+      # Stage 2: a final human segment is the room's `last_human_segment_at`
+      # for `say/4`'s agent-chain rule. Noted before the fan-out and
+      # regardless of whether the room row still resolves, so a human
+      # speaking always re-opens the floor.
+      unless agent_identity?(segment["participant_identity"]) do
+        SayRegistry.note_human_segment(transcript.room_id, System.monotonic_time(:millisecond))
+      end
+
+      do_deliver_transcript_segment(transcript, segment)
+    else
+      {:ok, %{delivered: [], skipped: []}}
+    end
+  rescue
+    error ->
+      Logger.error(
+        "[Meetings] meeting_transcript delivery crashed room=#{transcript.room_id} " <>
+          "segment=#{inspect(segment["id"])}: #{Exception.message(error)}"
+      )
+
+      {:ok, %{delivered: [], skipped: []}}
+  end
+
+  defp do_deliver_transcript_segment(%Transcript{} = transcript, segment) do
+    # `Transcript.room_id` is the LiveKit room NAME; `Participant.room_id`
+    # is the Room UUID. Resolve the row first, then read its roster.
+    case get_room_by_name(transcript.room_id) do
+      nil ->
+        {:ok, %{delivered: [], skipped: []}}
+
+      %Room{} = room ->
+        payload = transcript_frame_payload(transcript, segment)
+        speaker_identity = segment["participant_identity"]
+
+        {delivered, skipped} =
+          room.id
+          |> active_participants()
+          |> Enum.filter(&(not is_nil(&1.agent_id) and match?(%Agent{}, &1.agent)))
+          |> Enum.uniq_by(& &1.agent_id)
+          |> Enum.reduce({[], []}, fn %Participant{agent: %Agent{} = agent}, {ok, skip} ->
+            cond do
+              # Self-exclusion (string compare, see the @doc).
+              speaker_identity == "agent:#{agent.slug}" ->
+                {ok, [{agent.id, :own_speech} | skip]}
+
+              true ->
+                case IntentRuntimeAdapter.resolve_target(agent) do
+                  {:ok, %{topic: topic}} ->
+                    :ok = PlatformWeb.Endpoint.broadcast(topic, "meeting_transcript", payload)
+                    {[agent.id | ok], skip}
+
+                  {:error, reason} ->
+                    Logger.info(
+                      "[Meetings] meeting_transcript skipped agent=#{agent.slug} " <>
+                        "room=#{transcript.room_id}: #{inspect(reason)}"
+                    )
+
+                    {ok, [{agent.id, reason} | skip]}
+                end
+            end
+          end)
+
+        {:ok, %{delivered: Enum.reverse(delivered), skipped: Enum.reverse(skipped)}}
+    end
+  end
+
+  defp transcript_frame_payload(%Transcript{} = transcript, segment) do
+    identity = segment["participant_identity"]
+
+    %{
+      room_name: transcript.room_id,
+      meeting_id: meeting_id_for_space(transcript.space_id, transcript.started_at),
+      segment_id: segment["id"],
+      text: segment["text"],
+      participant_identity: identity,
+      speaker_name: segment["speaker_name"],
+      speaker_kind: if(agent_identity?(identity), do: "agent", else: "human"),
+      spoken_at: segment["spoken_at"] || DateTime.to_iso8601(DateTime.utc_now())
+    }
   end
 
   # ── Agent Meeting Participation ──────────────────────────────────

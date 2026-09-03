@@ -624,10 +624,14 @@ defmodule Platform.MeetingsTest do
                       %{
                         room_id: ^room_id,
                         transcript_id: ^transcript_id,
-                        segment: ^segment,
+                        segment: %{"id" => <<_::binary>>} = delivered,
                         meeting_id: nil
                       }},
                      200
+
+      # Task 01a06672: `append_segment/2` mints `"id"` / `"spoken_at"` before
+      # persisting, so the broadcast segment is the caller's map plus those.
+      assert Map.drop(delivered, ["id", "spoken_at"]) == segment
 
       MeetingsPubSub.unsubscribe_transcript_chunk()
     end
@@ -646,10 +650,14 @@ defmodule Platform.MeetingsTest do
                       %{
                         room_id: ^room_id,
                         transcript_id: ^transcript_id,
-                        segment: ^segment,
+                        segment: %{"id" => <<_::binary>>} = delivered,
                         meeting_id: nil
                       }},
                      200
+
+      # Task 01a06672: `append_segment/2` mints `"id"` / `"spoken_at"` before
+      # persisting, so the broadcast segment is the caller's map plus those.
+      assert Map.drop(delivered, ["id", "spoken_at"]) == segment
 
       MeetingsPubSub.unsubscribe_transcript_chunk(room_id)
     end
@@ -700,19 +708,27 @@ defmodule Platform.MeetingsTest do
                       %{
                         room_id: ^room_id,
                         transcript_id: ^transcript_id,
-                        segment: ^segment,
+                        segment: %{"id" => <<_::binary>>} = delivered,
                         meeting_id: nil
                       }},
                      200
+
+      # Task 01a06672: `append_segment/2` mints `"id"` / `"spoken_at"` before
+      # persisting, so the broadcast segment is the caller's map plus those.
+      assert Map.drop(delivered, ["id", "spoken_at"]) == segment
 
       assert_receive {:transcript_chunk,
                       %{
                         room_id: ^room_id,
                         transcript_id: ^transcript_id,
-                        segment: ^segment,
+                        segment: %{"id" => <<_::binary>>} = delivered,
                         meeting_id: nil
                       }},
                      200
+
+      # Task 01a06672: `append_segment/2` mints `"id"` / `"spoken_at"` before
+      # persisting, so the broadcast segment is the caller's map plus those.
+      assert Map.drop(delivered, ["id", "spoken_at"]) == segment
 
       MeetingsPubSub.unsubscribe_transcript_chunk()
       MeetingsPubSub.unsubscribe_transcript_chunk(room_id)
