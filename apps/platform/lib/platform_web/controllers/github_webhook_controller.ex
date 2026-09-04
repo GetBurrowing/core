@@ -850,16 +850,99 @@ defmodule PlatformWeb.GithubWebhookController do
             "hang. See task 019f9b34."
         )
 
-        :ok
+        # Task 01a0665e stage 1: the merge landed on nothing. Leave a durable
+        # mark on the task row so the board and the router both know, instead
+        # of a log line nobody reads until the router has re-dispatched the
+        # shipped work five times (01a0554f).
+        maybe_stamp_delivered_but_open(task_id, pr, merged_at, delivering_repo)
 
       candidates ->
-        case select_validation_for_repo(candidates, task_id, delivering_repo) do
-          {:ok, validation} ->
-            pass_pr_merged_validation(validation, task_id, pr, merged_at)
+        # Task 01a0665e stage 1 — THE 01a046a6-5761 TRAP. `candidates` is
+        # every pending gate on a running stage across EVERY plan version
+        # (the query is deliberately plan-status-blind, see the note on it).
+        # A gate on a superseded plan is still a pending gate on a running
+        # stage, and passing it drove the engine's completion path for a
+        # plan that is no longer the plan. Branch names cannot tell versions
+        # apart (`task/<slug>` is shared across them); plan identity can, so
+        # only gates whose stage belongs to `Tasks.current_plan/1` may pass.
+        # `current_plan/1` includes `completed`, which is what keeps the
+        # drifted-plan shape of 019f9b34 (plan completed, stage still
+        # running) passable.
+        {on_current_plan, stale} = split_by_current_plan(candidates, task_id)
 
-          {:unmatched, repo} ->
-            record_unmatched_repo_delivery(candidates, task_id, repo, pr)
+        if stale != [] do
+          Logger.warning(
+            "[Webhook] Merged PR #{pr["html_url"]} matched #{length(stale)} pending pr_merged " <>
+              "gate(s) on a NON-current plan version for task #{task_id} " <>
+              "(validation ids #{inspect(Enum.map(stale, & &1.id))}). Not passed: a stale " <>
+              "plan's gate must not drive completion. See task 01a0665e."
+          )
         end
+
+        case on_current_plan do
+          [] ->
+            maybe_stamp_delivered_but_open(task_id, pr, merged_at, delivering_repo)
+
+          on_current_plan ->
+            case select_validation_for_repo(on_current_plan, task_id, delivering_repo) do
+              {:ok, validation} ->
+                pass_pr_merged_validation(validation, task_id, pr, merged_at)
+
+              {:unmatched, repo} ->
+                record_unmatched_repo_delivery(on_current_plan, task_id, repo, pr)
+            end
+        end
+    end
+  end
+
+  # Partition by PLAN IDENTITY: a candidate is current when its stage is one
+  # of the current plan's stages. With no current plan at all, every
+  # candidate is stale by definition.
+  defp split_by_current_plan(candidates, task_id) do
+    case Tasks.current_plan(task_id) do
+      nil ->
+        {[], candidates}
+
+      %{stages: stages} ->
+        stage_ids = MapSet.new(stages, & &1.id)
+        Enum.split_with(candidates, &MapSet.member?(stage_ids, &1.stage_id))
+    end
+  end
+
+  # Stamp `delivered_but_open` on a task that is still open. `done` and
+  # `cancelled` are left alone (a redelivery for a finished task is noise,
+  # not a finding), and a task that no longer exists cannot be stamped.
+  # Returns `:ok` either way: the changelog row is already written and the
+  # webhook must acknowledge the delivery.
+  defp maybe_stamp_delivered_but_open(task_id, pr, merged_at, delivering_repo) do
+    case Tasks.get_task_record(task_id) do
+      %Task{status: status} = task when status not in ["done", "cancelled"] ->
+        delivery = %{
+          "pr_url" => pr["html_url"],
+          "pr_number" => pr["number"],
+          "merge_commit_sha" => pr["merge_commit_sha"],
+          "merged_at" => format_merged_at(merged_at),
+          "head_branch" => get_in(pr, ["head", "ref"]),
+          "delivering_repo" => delivering_repo
+        }
+
+        case Tasks.stamp_delivered_but_open(task, delivery) do
+          {:ok, _stamped} ->
+            Logger.warning(
+              "[Webhook] Stamped task #{task_id} (#{status}) delivered_but_open for merged PR " <>
+                "#{pr["html_url"]}; a person must close it (task 01a0665e)."
+            )
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Webhook] Could not stamp task #{task_id} delivered_but_open: #{inspect(reason)}"
+            )
+        end
+
+        :ok
+
+      _ ->
+        :ok
     end
   end
 

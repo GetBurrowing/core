@@ -82,6 +82,13 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
     {"needs merge", @needs_merge_chip_class}
   end
 
+  # Task 01a0665e stage 1: a merged PR on a task that is still open. Any
+  # status — the resolver ranks it first — and the same chip pair as the
+  # merge gate, for the same reason: a person has to act, not an agent.
+  def task_display_status(%Task{} = _task, :delivered_but_open) do
+    {"delivered, close it", @needs_merge_chip_class}
+  end
+
   def task_display_status(%Task{status: "planning", plans: plans} = _task, _action_reason)
       when is_list(plans) do
     if Enum.any?(plans, &(&1.status == "pending_review")) do

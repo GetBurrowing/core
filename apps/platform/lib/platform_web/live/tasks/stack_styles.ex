@@ -199,6 +199,14 @@ defmodule PlatformWeb.Tasks.StackStyles do
   def stack_member_action_label(:awaiting_human_merge),
     do: {"needs merge", "awaiting_human_merge"}
 
+  # Task 01a0665e stage 1. Stack members return from the webhook before the
+  # stamp is ever written (`stack_ships_atomically`), so this is reached
+  # only by a member stamped while stackless and stacked afterwards — but
+  # this function has no catch-all, and a new resolver atom without a
+  # clause here is a `FunctionClauseError` on the stack detail page.
+  def stack_member_action_label(:delivered_but_open),
+    do: {"delivered, close it", "delivered_but_open"}
+
   def stack_member_action_label(:validation_failed), do: {"Needs review", "validation_failed"}
   def stack_member_action_label(nil), do: {nil, nil}
 end

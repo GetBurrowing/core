@@ -115,7 +115,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
     ExecutionLease
     |> where([l], l.task_id == ^task_id and l.status in ^@active_statuses)
-    |> where([l], l.expires_at > ^DateTime.utc_now())
+    |> live_lease(DateTime.utc_now())
     |> order_by([l], desc: l.inserted_at)
     |> limit(1)
     |> Repo.one()
@@ -134,7 +134,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
     ExecutionLease
     |> where([l], l.task_id == ^task_id and l.status in ^@active_statuses)
-    |> where([l], l.expires_at > ^DateTime.utc_now())
+    |> live_lease(DateTime.utc_now())
     |> filter_by_stage(stage_id)
     |> order_by([l], desc: l.inserted_at)
     |> limit(1)
@@ -181,7 +181,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
     ExecutionLease
     |> where([l], l.task_id == ^task_id and l.status in ^@active_statuses)
-    |> where([l], l.expires_at > ^DateTime.utc_now())
+    |> live_lease(DateTime.utc_now())
     |> order_by([l], desc: l.inserted_at)
     |> Repo.all()
   end
@@ -206,7 +206,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       [l],
       l.task_id == ^task_id and l.runtime_id == ^runtime_id and l.status in ^@active_statuses
     )
-    |> where([l], l.expires_at > ^DateTime.utc_now())
+    |> live_lease(DateTime.utc_now())
     |> order_by([l], desc: l.inserted_at)
     |> limit(1)
     |> Repo.one()
@@ -223,9 +223,9 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
     {count, _} =
       from(l in ExecutionLease,
-        where: l.task_id == ^task_id and l.phase == ^phase and l.status in ^@active_statuses,
-        where: l.expires_at > ^now
+        where: l.task_id == ^task_id and l.phase == ^phase and l.status in ^@active_statuses
       )
+      |> live_lease(now)
       |> Repo.update_all(
         set: [
           status: "abandoned",
@@ -380,7 +380,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     ExecutionLease
     |> where([l], l.task_id == ^task_id and l.phase == ^phase and l.runtime_id == ^runtime_id)
     |> where([l], l.status in ^@active_statuses)
-    |> where([l], l.expires_at > ^DateTime.utc_now())
+    |> live_lease(DateTime.utc_now())
     |> filter_by_stage(stage_id)
     |> order_by([l], desc: l.inserted_at)
     |> limit(1)
@@ -462,30 +462,35 @@ defmodule Platform.Orchestration.RuntimeSupervision do
   # re-sent the whole dispatch payload as though the refusal had never been
   # filed. Observed live on 2026-08-28: three blockers, ~6 hours, one loop.
   #
-  # The hold is BOUNDED, not infinite. A `needs_human` lease that never
-  # expired would recreate the defect the safety net exists to prevent — a
-  # task in a running state with nobody working it and nothing saying so
-  # (task 01a04333). `@needs_human_ttl_ms` is a horizon measured in hours,
-  # long enough to cover an overnight wait and short enough that a forgotten
-  # hold self-heals inside a day. `Platform.Orchestration.TaskRouter` posts an
-  # escalating reminder for the whole time it is held, so the wait is loud
-  # rather than merely long.
+  # REVERSED (task 01a0665e stage 2). Task 01a04a8c made the hold BOUNDED —
+  # a 12-hour `expires_at` after which the sweep flipped the lease to
+  # `expired` and dispatch resumed — on the reasoning that an unbounded hold
+  # would recreate task 01a04333's silent park. Measured on 01a04fbc-1e71
+  # and 01a03f4e-78b1, the horizon's only effect was: a re-dispatch of a stage
+  # the executor had already refused, which it refused again within 70 s
+  # (no ack), then `fire_no_ack_alert/2` transitioning the task to `blocked`
+  # with the sentence "Executor never acked" — i.e. the silent park 01a04333
+  # wanted to prevent, plus an untruth on top. The clock never was the
+  # anti-silence mechanism; `TaskRouter`'s hourly reminder is.
+  #
+  # So a `needs_human` lease that names a stage is NEVER expired by the sweep
+  # (`expire_stale_leases/2`) and reads as live in every lease query here
+  # (`live_lease/2`), whatever its `expires_at` says. It ends only when a
+  # person or the runtime says so: `execution.unblocked` (status -> `active`),
+  # the stage moving on (`drop_leases_for_stage/2`), or a human transition
+  # (`release_needs_human_holds/2`, called from `Platform.Tasks`).
+  #
+  # `@needs_human_ttl_ms` survives ONLY as the value written into the row's
+  # `expires_at` column, which the schema requires. It is informational —
+  # nothing reads it as a deadline for a `needs_human` hold — and it is
+  # deliberately not configurable: the former `:needs_human_lease_ttl_ms`
+  # knob changed nothing once the sweep stopped honouring it, and a knob
+  # that changes nothing is a lie.
   @needs_human_ttl_ms 12 * 60 * 60_000
-
-  @doc """
-  TTL applied to a `blocked` lease whose blocker set `needs_human: true`.
-
-  Overridable via `config :platform, :needs_human_lease_ttl_ms` so an
-  operator can shorten or lengthen the hold horizon without a deploy.
-  """
-  @spec needs_human_ttl_ms() :: pos_integer()
-  def needs_human_ttl_ms do
-    Application.get_env(:platform, :needs_human_lease_ttl_ms, @needs_human_ttl_ms)
-  end
 
   defp expires_at(attrs, "blocked") do
     if needs_human_payload?(attrs.payload) and not is_nil(attrs.stage_id) do
-      DateTime.add(attrs.occurred_at, needs_human_ttl_ms(), :millisecond)
+      DateTime.add(attrs.occurred_at, @needs_human_ttl_ms, :millisecond)
     else
       DateTime.add(attrs.occurred_at, liveness_ttl_ms(attrs.phase), :millisecond)
     end
@@ -542,10 +547,13 @@ defmodule Platform.Orchestration.RuntimeSupervision do
         stage_id: stage_id
       )
 
+      # No `expires_at` clause, on purpose (task 01a0665e stage 2): the hold
+      # is `status == "blocked"` on a stage-scoped `needs_human` row, and the
+      # sweep above never expires such a row. A clock here would be the
+      # bounded horizon this stage removed, re-entering through a side door.
       ExecutionLease
       |> where([l], l.task_id == ^task_id and l.runtime_id == ^runtime_id)
       |> where([l], l.status == "blocked")
-      |> where([l], l.expires_at > ^DateTime.utc_now())
       |> filter_by_stage(stage_id)
       |> order_by([l], desc: l.inserted_at)
       |> limit(1)
@@ -574,6 +582,101 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
   defp needs_human_payload?(_payload), do: false
 
+  # A `needs_human` HOLD row, as a query condition: `blocked`, names a stage,
+  # and the merged blocker payload says `needs_human`. Mirrors
+  # `needs_human_hold?/1` exactly — the JSONB value is `true` or the string
+  # `"true"` (see `needs_human_payload?/1`), and `->>` renders both as the
+  # text `'true'`; a NULL `metadata` coalesces to `'false'`, so this fails
+  # CLOSED the same way the Elixir predicate does.
+  defp needs_human_hold_row do
+    dynamic(
+      [l],
+      l.status == "blocked" and not is_nil(l.stage_id) and
+        fragment("coalesce(? ->> 'needs_human', 'false') = 'true'", l.metadata)
+    )
+  end
+
+  # "Live" for every reader in this module: unexpired, OR a `needs_human`
+  # hold, whose `expires_at` is informational (task 01a0665e stage 2). One
+  # predicate rather than one per query, because the readers that drifted —
+  # `current_active_lease/5` (what `execution.unblocked` must FIND to flip),
+  # `current_lease_for_task_runtime/2` (the watcher's reconnect filter),
+  # `current_lease_for_stage/2` (the router's `stage_has_live_blocker?`) —
+  # each carried their own copy of the clock, and each was a re-dispatch.
+  defp live_lease(query, %DateTime{} = now) do
+    where(query, ^dynamic([l], l.expires_at > ^now or ^needs_human_hold_row()))
+  end
+
+  @doc """
+  End every open `needs_human` hold on `task_id` because a PERSON moved the
+  task (task 01a0665e stage 2). Sets the leases to `expired` — the closed
+  lease vocabulary has no "released" — and stamps
+  `metadata["released_by_user_id"]` / `"released_at"` so the row says who
+  ended it and when. Returns the number of leases released.
+
+  This is one of exactly three ways such a hold ends; the others are the
+  runtime's own `execution.unblocked` and the stage moving on. `:system` and
+  agent actors never call this — `Platform.Tasks.transition_task/3` and
+  `drop_task_to_column/3` gate it on the actor being a user.
+  """
+  @spec release_needs_human_holds(String.t(), released_by_user_id: String.t()) ::
+          non_neg_integer()
+  def release_needs_human_holds(task_id, opts) when is_binary(task_id) and is_list(opts) do
+    user_id = Keyword.fetch!(opts, :released_by_user_id)
+    now = DateTime.utc_now()
+
+    stamp = %{"released_by_user_id" => user_id, "released_at" => DateTime.to_iso8601(now)}
+
+    {count, _} =
+      ExecutionLease
+      |> where([l], l.task_id == ^task_id)
+      |> where(^needs_human_hold_row())
+      |> update([l],
+        set: [
+          status: "expired",
+          updated_at: ^now,
+          metadata: fragment("coalesce(?, '{}'::jsonb) || ?", l.metadata, type(^stamp, :map))
+        ]
+      )
+      |> Repo.update_all([])
+
+    count
+  end
+
+  @doc """
+  When a PERSON last released a `needs_human` hold on `(task_id, stage_id)`,
+  or `nil` if nobody ever has (task 01a0665e stage 4).
+
+  Reads the row `release_needs_human_holds/2` leaves behind: `expired`,
+  `needs_human`, stamped `released_by_user_id`. Its `updated_at` is the
+  release instant — the same write sets both, so the two cannot drift.
+
+  Exists for `TaskRouter`'s live-acked-executor guard. An executor acks the
+  stage, then files `report_blocker(needs_human: true)`, and its ack is
+  still inside the stage's safety net when the person rules. Without this
+  the guard read that ack as "someone is on it" and withheld the very
+  dispatch the release was for (measured on 01a06b2b-8185, 2026-09-04: the
+  drag released the lease, `force_dispatch/1` two minutes later was
+  withheld with "already has an acked executor inside its safety net").
+  A release newer than the ack says the ack belongs to an executor that
+  parked itself on a human; it is a record of the past, like an
+  `execution.finished`.
+  """
+  @spec last_human_release_at(String.t(), String.t() | nil) :: DateTime.t() | nil
+  def last_human_release_at(task_id, stage_id) when is_binary(task_id) and is_binary(stage_id) do
+    ExecutionLease
+    |> where([l], l.task_id == ^task_id and l.status == "expired")
+    |> filter_by_stage(stage_id)
+    |> where([l], fragment("coalesce(? ->> 'needs_human', 'false') = 'true'", l.metadata))
+    |> where([l], fragment("? ->> 'released_by_user_id' IS NOT NULL", l.metadata))
+    |> order_by([l], desc: l.updated_at)
+    |> limit(1)
+    |> select([l], l.updated_at)
+    |> Repo.one()
+  end
+
+  def last_human_release_at(_task_id, _stage_id), do: nil
+
   defp expire_stale_leases(repo, filters) do
     now = DateTime.utc_now()
     task_id = Keyword.get(filters, :task_id)
@@ -583,10 +686,13 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     # = filter WHERE stage_id IS NULL (legacy leases). See task 019f6791.
     stage_id = Keyword.get(filters, :stage_id, :any)
 
+    # A `needs_human` hold is never swept (task 01a0665e stage 2) — see the
+    # note on `@needs_human_ttl_ms`. Everything else expires on its clock.
     query =
       ExecutionLease
       |> where([l], l.status in ^@active_statuses)
       |> where([l], l.expires_at <= ^now)
+      |> where(^dynamic([l], not (^needs_human_hold_row())))
       |> maybe_filter(:task_id, task_id)
       |> maybe_filter(:runtime_id, runtime_id)
       |> maybe_filter(:phase, phase)

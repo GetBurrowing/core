@@ -6,7 +6,15 @@ defmodule Platform.Tasks.Validation do
   @foreign_key_type :binary_id
 
   @kinds ~w(ci_check ci_passed pr_merged lint_pass type_check test_pass code_review manual_approval e2e_behavior)
-  @statuses ~w(pending running passed failed)
+  # `skipped` (task 01a0665e stage 3) is written by exactly one seam:
+  # `PlanEngine` moving a `failed` `e2e_behavior` row whose evidence carries
+  # the `could_not_evaluate` marker out of the way once its host stage has at
+  # least one genuinely passed sibling. It is NOT accepted by
+  # `evaluate_validation` (still `passed | failed` only) — a reviewer cannot
+  # skip a case, only report that it could not be run. Evidence is retained.
+  # A skipped row is terminal and MET (absent from `@unmet_statuses`), so
+  # every "still owed" reader treats it like `passed`.
+  @statuses ~w(pending running passed failed skipped)
   @unmet_statuses ~w(pending running failed)
   @e2e_payload_required_keys ~w(setup actions expected)
 

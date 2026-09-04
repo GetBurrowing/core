@@ -91,13 +91,34 @@ defmodule Platform.Orchestration.TaskRouter do
   the next move belongs to a PERSON. Such a blocker parks the router the way
   the two review gates do, and the stage is NOT re-dispatched while it
   stands. The hold is level-triggered off the durable `execution_leases` row
-  (`RuntimeSupervision.needs_human_hold/3`), so it survives a router restart,
-  and it is BOUNDED: the lease carries an hours-scale horizon, after which
-  dispatch resumes. A `{:awaiting_human_reminder, lease_id}` tick re-announces
-  the wait on an hourly cadence with escalating wording, so a held stage is
-  loud rather than merely quiet — a silent hold is task 01a04333's defect, not
-  a fix for this one. `needs_human: false` is untouched: it stays a liveness
-  statement, expires on the phase TTL, and re-dispatches.
+  (`RuntimeSupervision.needs_human_hold/3`), so it survives a router restart.
+  A `{:awaiting_human_reminder, lease_id}` tick re-announces the wait on an
+  hourly cadence with escalating wording, so a held stage is loud rather than
+  merely quiet — a silent hold is task 01a04333's defect, not a fix for this
+  one. `needs_human: false` is untouched: it stays a liveness statement,
+  expires on the phase TTL, and re-dispatches.
+
+  The hold is NOT bounded by a clock (task 01a0665e stage 2, REVERSING the
+  bounded-horizon decision of 01a04a8c/01a04333). 01a04a8c gave the lease a
+  12-hour `expires_at` so a forgotten hold would "self-heal"; what the
+  horizon measurably did (01a04fbc-1e71, 01a03f4e-78b1) was re-dispatch a
+  stage the executor had already refused, which it refused again within
+  70 s, after which `:check_no_ack` transitioned the task to `blocked`
+  carrying the false sentence "Executor never acked" — the silent park
+  01a04333 wanted to prevent, with an untruth on top. The hourly reminder is
+  the anti-silence mechanism; the clock never was. A stage-scoped
+  `needs_human` lease now ends in exactly three ways: the runtime reports
+  `execution.unblocked`, the stage moves on, or a PERSON transitions the task
+  (`Platform.Tasks.transition_task/3` / `drop_task_to_column/3` ->
+  `RuntimeSupervision.release_needs_human_holds/2`). `:system` and agent
+  transitions never release it. The human release is also what WAKES this
+  router (task 01a0665e stage 4): `Tasks.maybe_release_needs_human_holds/3`
+  calls `TaskRouterWatcher.force_dispatch/1` when it actually released a
+  row, because nothing else does — `{:task_updated, _}` records a status,
+  the reminder is hourly, and a reconnect is somebody else's event. The
+  re-dispatch then has to get past the live-acked-executor guard, which
+  treats a release newer than the ack like an `execution.finished`
+  (`human_released_since?/3`).
 
   manual_approval stages get NO liveness timers (both `ack_ms` and
   `safety_net_ms` are `nil` in `LeaseManager.stage_kind_timeouts/0`); a daily
@@ -244,6 +265,13 @@ defmodule Platform.Orchestration.TaskRouter do
       # previous hold is discarded instead of narrating a hold that is over.
       :awaiting_human_timer,
       :awaiting_human_key,
+      # Task 01a0665e stage 1 — narration key for the delivered-but-open
+      # hold: the stamp's `delivered_but_open_at` value the router last
+      # announced, or `nil`. Same contract as `awaiting_human_key`: the hold
+      # itself is the durable `metadata["delivered_but_open"]` stamp and is
+      # re-read on every dispatch; the key only keeps N injectors from
+      # producing N identical notices. A re-stamp (new `_at`) re-arms it.
+      :delivered_but_open_key,
       status: :dispatching,
       # Task 019fe1b7 stage 2 — see `maybe_run_design_edge/2`. One designer
       # edge run per router process, whatever the run's fate.
@@ -568,11 +596,12 @@ defmodule Platform.Orchestration.TaskRouter do
     # different answer than the one the cond below acted on.
     human_hold = task && needs_human_blocker_hold(state)
 
-    # Release is level-triggered on the SAME read. The hold ends when a
-    # person acts (the runtime resumes and its next event flips the lease
-    # back to `active`), when the stage moves on, or when the 12-hour horizon
-    # lapses; none of those notify this router, so "is it still held?" has to
-    # be re-asked, never remembered.
+    # Release is level-triggered on the SAME read. The hold ends when the
+    # runtime reports `execution.unblocked` (the lease flips back to
+    # `active`), when the stage moves on, or when a PERSON transitions the
+    # task (`RuntimeSupervision.release_needs_human_holds/2`); there is no
+    # clock (task 01a0665e stage 2). None of those notify this router, so
+    # "is it still held?" has to be re-asked, never remembered.
     state = if is_nil(human_hold), do: release_awaiting_human(state), else: state
 
     cond do
@@ -705,6 +734,16 @@ defmodule Platform.Orchestration.TaskRouter do
         # `design_hold?/2` for the reason those two are ordered as they are: a
         # gate held by a HUMAN outranks every machine gate below it.
         hold_for_needs_human_blocker(state, task, human_hold)
+
+      delivered_but_open?(task) ->
+        # Pre-dispatch guard, DELIVERED level (task 01a0665e stage 1). A PR
+        # for this task has MERGED and no plan gate absorbed it — the task is
+        # shipped but still open. Any prompt sent now is a request to do
+        # again work that is already on main (01a0554f took five planning
+        # dispatches for PR #883, merged three days earlier). Only a person
+        # can close the record, so this is a human hold and sits directly
+        # after the blocker hold, ahead of every machine gate below.
+        hold_for_delivered_but_open(state, task)
 
       design_hold?(state, task) ->
         # Pre-dispatch guard, DESIGN level (ADR-0046 member 7 stage 5).
@@ -997,11 +1036,12 @@ defmodule Platform.Orchestration.TaskRouter do
   # still stands", the same distinction `:check_no_ack` documents.
   #
   # This handler is the ONLY thing that turns a suppressed dispatch back into
-  # a live one without a person doing something. It fires `:dispatch` the
-  # moment the hold is gone — released by the human acting, by the stage
-  # moving on, or by the 12-hour horizon in
-  # `RuntimeSupervision.needs_human_ttl_ms/0` lapsing — so the suppression can
-  # never outlive its cause.
+  # a live one without a fresh injector. It fires `:dispatch` the moment the
+  # hold is gone — released by a person transitioning the task, by the
+  # runtime's `execution.unblocked`, or by the stage moving on — so the
+  # suppression can never outlive its cause. It does NOT release on a clock:
+  # the 12-hour horizon of 01a04a8c is gone (task 01a0665e stage 2), and a
+  # hold whose lease still reads `blocked` is re-narrated, however old.
   def handle_info(
         {:awaiting_human_reminder, lease_id},
         %State{awaiting_human_key: {_stage_id, lease_id}} = state
@@ -2429,7 +2469,8 @@ defmodule Platform.Orchestration.TaskRouter do
           Platform.Orchestration.last_stage_ack_at(state.task_id, stage.id)} do
       {safety_net_ms, %DateTime{} = acked_at} when is_integer(safety_net_ms) ->
         DateTime.diff(DateTime.utc_now(), acked_at, :millisecond) < safety_net_ms and
-          not finished_since?(state.task_id, stage.id, acked_at)
+          not finished_since?(state.task_id, stage.id, acked_at) and
+          not human_released_since?(state.task_id, stage.id, acked_at)
 
       _ ->
         false
@@ -2474,6 +2515,27 @@ defmodule Platform.Orchestration.TaskRouter do
   defp finished_since?(task_id, stage_id, %DateTime{} = acked_at) do
     case Platform.Orchestration.last_stage_event_at(task_id, stage_id, "execution.finished") do
       %DateTime{} = finished_at -> DateTime.compare(finished_at, acked_at) != :lt
+      _ -> false
+    end
+  end
+
+  # A `needs_human` hold released by a PERSON after the ack is the same shape
+  # (task 01a0665e stage 4). The dispatch text tells every runtime to ack
+  # first, so an executor that then files `report_blocker(needs_human: true)`
+  # leaves an ack inside the safety net with nobody working the stage; the
+  # hold clause in `handle_info(:dispatch_now)` parks the router on it. When
+  # the person rules (`Tasks.transition_task/3` / `drop_task_to_column/3` ->
+  # `RuntimeSupervision.release_needs_human_holds/2`) that hold is gone and
+  # control reaches this guard — which, reading only the ack, withheld the
+  # one dispatch the release existed to produce (01a06b2b-8185, 2026-09-04).
+  # The release instant is compared to the ack the way `finished_since?/3`
+  # compares the exit: an ack OLDER than the release protects nobody; an ack
+  # NEWER than it (the executor took the re-dispatch) protects the stage as
+  # before, which is what keeps a reconnect after the re-dispatch from
+  # prompting twice.
+  defp human_released_since?(task_id, stage_id, %DateTime{} = acked_at) do
+    case RuntimeSupervision.last_human_release_at(task_id, stage_id) do
+      %DateTime{} = released_at -> DateTime.compare(released_at, acked_at) != :lt
       _ -> false
     end
   end
@@ -4043,8 +4105,11 @@ defmodule Platform.Orchestration.TaskRouter do
   #
   # Two halves, and BOTH are needed:
   #
-  #   * `RuntimeSupervision.expires_at/2` gives the blocked lease a horizon
-  #     measured in hours, which is what stops
+  #   * `RuntimeSupervision.expire_stale_leases/2` never sweeps a
+  #     stage-scoped `needs_human` lease and every lease reader treats it as
+  #     live whatever its `expires_at` says (task 01a0665e stage 2 — it used
+  #     to be a 12-hour horizon, which measurably re-dispatched refused
+  #     work), which is what stops
   #     `TaskRouterWatcher.active_lease_present?/2` from waving the reconnect
   #     path through.
   #   * This guard stops every OTHER `:dispatch` injector —
@@ -4090,6 +4155,55 @@ defmodule Platform.Orchestration.TaskRouter do
       |> enter_awaiting_human(hold)
 
     {:noreply, state}
+  end
+
+  # Task 01a0665e stage 1. Reads the already-loaded `task.metadata` — no
+  # query — so the check is free on every one of the ~10 dispatch injectors
+  # that land in `do_dispatch/3`.
+  defp delivered_but_open?(task), do: Tasks.delivered_but_open?(task)
+
+  defp hold_for_delivered_but_open(%State{} = state, task) do
+    emit_dispatch_suppressed_telemetry(state.task_id, :delivered_but_open)
+
+    state =
+      state
+      |> Map.put(:task_status, task.status)
+      |> clear_liveness()
+      |> Map.put(:status, :waiting_human)
+      |> note_delivered_but_open(task)
+
+    {:noreply, state}
+  end
+
+  # Edge-triggered on the stamp's `_at`, mirroring `enter_awaiting_human/2`:
+  # one hold, one notice, however many injectors re-enter it. No prompt is
+  # sent and no lease is minted — the human exits are named in the notice.
+  defp note_delivered_but_open(%State{} = state, task) do
+    metadata = task.metadata || %{}
+    key = Map.get(metadata, "delivered_but_open_at") || :unstamped_at
+
+    if state.delivered_but_open_key == key do
+      state
+    else
+      stamp = Map.get(metadata, "delivered_but_open") || %{}
+      pr_url = Map.get(stamp, "pr_url") || "a PR"
+
+      post_router_notice(
+        state,
+        "Delivered but open: #{pr_url} merged while this task is `#{task.status}` and no " <>
+          "plan gate could absorb it. Dispatch is parked — the work is already on main. " <>
+          "Two human exits: an admin runs `close_as_delivered`, or drag the task to " <>
+          "in_progress and then to done.",
+        %{
+          "reason" => "task.delivered_but_open",
+          "pr_url" => Map.get(stamp, "pr_url"),
+          "merge_commit_sha" => Map.get(stamp, "merge_commit_sha"),
+          "task_status" => task.status
+        }
+      )
+
+      %{state | delivered_but_open_key: key}
+    end
   end
 
   # Edge-triggered on `{stage_id, lease_id}`. Re-entering the SAME hold is a
@@ -4181,8 +4295,9 @@ defmodule Platform.Orchestration.TaskRouter do
 
     "#{prefix} (#{minutes}m). The executor filed a needs_human blocker on stage " <>
       "#{hold.stage_id}; this stage will NOT be re-dispatched while it stands. " <>
-      "Reason: #{truncate_reason(hold.block_reason)} | The hold lapses at " <>
-      "#{DateTime.to_iso8601(hold.expires_at)}, after which dispatch resumes."
+      "Reason: #{truncate_reason(hold.block_reason)} | This stage will not be " <>
+      "re-dispatched until a person moves the task or the executor reports " <>
+      "execution.unblocked."
   end
 
   defp truncate_reason(nil), do: "no reason recorded"

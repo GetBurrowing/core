@@ -1440,6 +1440,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # always. The reason atom stays intact for every other consumer.
   defp mobile_stack_member_action_label(:awaiting_human_merge), do: {nil, nil}
 
+  # Task 01a0665e stage 1: same one-chip rule. `task_display_status/2`
+  # already renders "delivered, close it" as the status chip.
+  defp mobile_stack_member_action_label(:delivered_but_open), do: {nil, nil}
+
   # Post-rejection fix (task 01a00578 stage 1 rework). The
   # `:validation_failed` branch of `Tasks.needs_human_action_reason/2` is
   # purely status-driven (`task.status == "in_review"`), so EVERY task parked

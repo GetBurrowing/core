@@ -29,6 +29,8 @@ defmodule Platform.Tasks.PlanEngine do
   alias Platform.Tasks.EvidenceCarry
   alias Platform.Tasks.MemberReviewEntry
   alias Platform.Tasks.PlanCompletion
+  alias Platform.Tasks.ReviewDisposition
+  alias Platform.Orchestration.ExecutionSpace
 
   alias Platform.Tasks.{DeployStageBuilder, Plan, Stacks, Stage, StackDeployer, Task, Validation}
 
@@ -630,6 +632,11 @@ defmodule Platform.Tasks.PlanEngine do
           stage ->
             case stage_verdict(stage) do
               :all_passed ->
+                {:ok, _passed_stage} = transition_stage(stage, "passed", completed_by)
+                maybe_advance_next(plan, stages, stage.position)
+
+              {:passed_with_unevaluated, rows} ->
+                skip_unevaluated_validations(stage, rows)
                 {:ok, _passed_stage} = transition_stage(stage, "passed", completed_by)
                 maybe_advance_next(plan, stages, stage.position)
 
@@ -1326,15 +1333,235 @@ defmodule Platform.Tasks.PlanEngine do
       Enum.find(stages, &(&1.status == "pending"))
   end
 
+  # A stage's verdict from its validation rows.
+  #
+  #   * `:all_passed`     — every row is `passed` or `skipped` (or there are
+  #                         none). `skipped` is terminal here for the same
+  #                         reason it is terminal in `maybe_advance_next/3`'s
+  #                         stage sweep.
+  #   * `:has_failures`   — at least one row is a real failure.
+  #   * `:pending`        — nothing failed for real and a row is still owed.
+  #   * `{:passed_with_unevaluated, rows}` — ONLY for a stage hosting
+  #                         `e2e_behavior` rows (task 01a0665e stage 3): every
+  #                         failed row is an `e2e_behavior` case whose evidence
+  #                         says `could_not_evaluate` with a reason, nothing is
+  #                         owed, and at least one `e2e_behavior` row passed.
+  #                         `rows` are the `{validation, reason}` pairs to skip.
+  #
+  # Why the e2e host gets its own arm. A review verdict has two statuses, and
+  # `could_not_evaluate` rides as a marker on a `failed` row
+  # (`ReviewDisposition`). The router's bounce path treats an all-unevaluated
+  # gate as "fix the environment and retry", which is right when the gate
+  # could not run at all — but a case that is structurally un-runnable (needs
+  # a real media device; the branch the case was written for did not occur)
+  # never becomes runnable, so the retry loop has no exit: the task bounces,
+  # the router withholds, and the stage sits `failed` forever (01a03f4e,
+  # 01a0666d). When the reviewer DID run the gate and passed at least one case,
+  # the unevaluated remainder is a list for a human, not a verdict about the
+  # feature; the stage passes, the rows are `skipped` with their evidence
+  # retained, and the task carries the list in
+  # `metadata["unevaluated_review_cases"]`.
+  #
+  # What stays exactly as it was: a `:genuine` or `:malformed` failure fails
+  # the stage on sight (the marker without a reason is a free "don't count
+  # this" switch — `ReviewDisposition` explains why that must read as
+  # genuine); a gate whose EVERY case is unevaluated and NONE passed still
+  # fails, so the router's 3-strikes bookkeeping and blocker path
+  # (`task_router_review_round_bound_test.exs`) are untouched; and a stage
+  # with no `e2e_behavior` row never reaches the new arm.
   defp stage_verdict(stage) do
     validations = Repo.all(from(v in Validation, where: v.stage_id == ^stage.id))
 
     cond do
       validations == [] -> :all_passed
+      Enum.any?(validations, &(&1.kind == "e2e_behavior")) -> e2e_host_verdict(validations)
       Enum.any?(validations, &(&1.status == "failed")) -> :has_failures
-      Enum.all?(validations, &(&1.status == "passed")) -> :all_passed
+      Enum.all?(validations, &(&1.status in ~w(passed skipped))) -> :all_passed
       true -> :pending
     end
+  end
+
+  defp e2e_host_verdict(validations) do
+    classified =
+      validations
+      |> Enum.filter(&(&1.status == "failed"))
+      |> Enum.map(fn v -> {v, classify_failed_row(v)} end)
+
+    cond do
+      # A real verdict about the feature fails the stage immediately, even
+      # with siblings still owed — today's `:has_failures` path, verbatim.
+      Enum.any?(classified, fn {_v, disposition} -> disposition in [:genuine, :malformed] end) ->
+        :has_failures
+
+      # A could_not_evaluate recorded FIRST must not fail the stage while its
+      # siblings are still pending: the verdict is not in yet.
+      Enum.any?(validations, &(&1.status in ~w(pending running))) ->
+        :pending
+
+      classified == [] ->
+        :all_passed
+
+      Enum.any?(validations, &(&1.kind == "e2e_behavior" and &1.status == "passed")) ->
+        {:passed_with_unevaluated,
+         Enum.map(classified, fn {v, {:could_not_evaluate, reason}} -> {v, reason} end)}
+
+      # Every case unevaluated and nothing passed: the gate did not run.
+      # Unchanged — this is the router's "fix the environment" bounce.
+      true ->
+        :has_failures
+    end
+  end
+
+  # Only an `e2e_behavior` row may claim `could_not_evaluate`; any other kind
+  # failing on an e2e host stage is a genuine failure whatever its evidence.
+  defp classify_failed_row(%Validation{kind: "e2e_behavior", evidence: evidence}),
+    do: ReviewDisposition.classify(evidence)
+
+  defp classify_failed_row(_validation), do: :genuine
+
+  # ── Unevaluated review cases (task 01a0665e stage 3) ──────────────────────
+
+  # Move each could_not_evaluate row `failed -> skipped` (evidence retained),
+  # stamp the task with the list, and tell the execution space once. Runs
+  # inside the caller's transaction, before the stage flips to `passed`, so
+  # nothing observes a passed stage that still holds a failed row.
+  defp skip_unevaluated_validations(%Stage{} = stage, rows) when is_list(rows) do
+    skipped_at = DateTime.utc_now()
+
+    entries =
+      Enum.map(rows, fn {%Validation{} = validation, reason} ->
+        {:ok, skipped} =
+          validation
+          |> Validation.changeset(%{status: "skipped"})
+          |> Repo.update()
+
+        emit_validation_telemetry(skipped)
+
+        %{
+          "validation_id" => skipped.id,
+          "reason" => reason,
+          "skipped_at" => DateTime.to_iso8601(skipped_at)
+        }
+      end)
+
+    plan = Repo.get!(Plan, stage.plan_id)
+    task = Repo.get!(Task, plan.task_id)
+
+    {:ok, stamped} = stamp_unevaluated_review_cases(task, entries)
+    post_unevaluated_engagement(stamped, stage, entries)
+    :ok
+  end
+
+  # Appends to any earlier list (a re-run review can leave a second batch)
+  # rather than overwriting it, keyed by validation id so a re-skip of the
+  # same row does not duplicate.
+  defp stamp_unevaluated_review_cases(%Task{} = task, entries) do
+    existing =
+      case Map.get(task.metadata || %{}, "unevaluated_review_cases") do
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    new_ids = MapSet.new(entries, & &1["validation_id"])
+    kept = Enum.reject(existing, &(is_map(&1) and MapSet.member?(new_ids, &1["validation_id"])))
+
+    merged_metadata =
+      (task.metadata || %{})
+      |> Map.put("unevaluated_review_cases", kept ++ entries)
+
+    Tasks.update_task(task, %{metadata: merged_metadata})
+  end
+
+  # Best-effort narration, same posture as `Tasks.stamp_delivered_but_open/2`:
+  # a chat failure must never roll back the verdict that was just recorded.
+  defp post_unevaluated_engagement(%Task{id: task_id}, %Stage{} = stage, entries) do
+    case ExecutionSpace.find_by_task_id(task_id) do
+      nil ->
+        :ok
+
+      space ->
+        lines =
+          Enum.map(entries, fn entry ->
+            "- `#{entry["validation_id"]}`: #{entry["reason"]}"
+          end)
+
+        ExecutionSpace.post_engagement(
+          space.id,
+          "Review gate \"#{stage.name}\" passed with #{length(entries)} " <>
+            "case(s) the reviewer could not evaluate. Nothing about the feature was " <>
+            "found wrong; these cases were skipped (evidence retained) and are " <>
+            "listed on the task as `unevaluated_review_cases` for a person to " <>
+            "judge or follow up:\n" <> Enum.join(lines, "\n"),
+          metadata: %{
+            "reason" => "review.unevaluated_cases",
+            "stage_id" => stage.id,
+            "validation_ids" => Enum.map(entries, & &1["validation_id"])
+          }
+        )
+
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[PlanEngine] task #{task_id} — unevaluated-cases engagement failed: " <>
+          Exception.message(error)
+      )
+
+      :ok
+  end
+
+  # FIX (b) of task 01a0665e stage 3. `@deployable_statuses` is `~w(in_review)`
+  # (019ff788) so that a plan completing at `in_progress` — meaning the review
+  # never ran — does not ship. But the no-ack watchdog stamps a task `blocked`
+  # and a human drags it back to `in_progress` regardless of what the review
+  # gate says; when that gate is `passed`, refusing to deploy leaves a
+  # reviewed task with no route to `deploying` (01a03f4e). The lift is scoped
+  # to exactly that shape: the task is `in_progress` or `blocked` AND a stage
+  # hosting `e2e_behavior` rows is `passed`. A plan with no e2e host stage
+  # still completes without a deploy stage — the 019ff788 guard and its
+  # warning are untouched.
+  #
+  # Actor is `:system` (`Tasks.transition_task/2`), so this lift does NOT
+  # release a `needs_human` hold (stage 2's release is user-actor only) and
+  # does not clear a `delivered_but_open` stamp (stage 1 clears on
+  # done/cancelled only).
+  defp maybe_lift_to_in_review_for_deploy(%Task{status: status} = task, stages)
+       when status in ~w(in_progress blocked) do
+    if e2e_host_stage_passed?(stages) do
+      case Tasks.transition_task(task, "in_review") do
+        {:ok, _lifted} ->
+          Logger.info(
+            "[PlanEngine] lifted task #{task.id} #{status} -> in_review: its e2e review " <>
+              "gate passed, so the deploy edge may fire"
+          )
+
+          Task |> Repo.get!(task.id) |> Repo.preload(:project)
+
+        {:error, reason} ->
+          Logger.warning(
+            "[PlanEngine] could not lift task #{task.id} #{status} -> in_review for " <>
+              "deploy: #{inspect(reason)}"
+          )
+
+          task
+      end
+    else
+      task
+    end
+  end
+
+  defp maybe_lift_to_in_review_for_deploy(%Task{} = task, _stages), do: task
+
+  defp e2e_host_stage_passed?(stages) do
+    passed_ids = for %Stage{status: "passed", id: id} <- stages, do: id
+
+    passed_ids != [] and
+      Repo.exists?(
+        from(v in Validation,
+          where: v.stage_id in ^passed_ids and v.kind == "e2e_behavior"
+        )
+      )
   end
 
   defp all_validations_resolved?(stage_id) do
@@ -1357,6 +1584,10 @@ defmodule Platform.Tasks.PlanEngine do
             {:ok, reopened_stage} = transition_stage(stage, "running")
             advance_stage(reopened_stage)
 
+          {:passed_with_unevaluated, _rows} ->
+            {:ok, reopened_stage} = transition_stage(stage, "running")
+            advance_stage(reopened_stage)
+
           :has_failures ->
             :ok
 
@@ -1372,6 +1603,13 @@ defmodule Platform.Tasks.PlanEngine do
   defp advance_stage(stage) do
     case stage_verdict(stage) do
       :all_passed ->
+        {:ok, _} = transition_stage(stage, "passed")
+        plan = Repo.get!(Plan, stage.plan_id)
+        stages = ordered_stages(plan.id)
+        maybe_advance_next(plan, stages, stage.position)
+
+      {:passed_with_unevaluated, rows} ->
+        skip_unevaluated_validations(stage, rows)
         {:ok, _} = transition_stage(stage, "passed")
         plan = Repo.get!(Plan, stage.plan_id)
         stages = ordered_stages(plan.id)
@@ -1589,6 +1827,13 @@ defmodule Platform.Tasks.PlanEngine do
               Repo.preload(completed, stages_query())
 
             stage_def ->
+              # Task 01a0665e stage 3: a task the no-ack watchdog knocked to
+              # `blocked` (or a bounce returned to `in_progress`) whose review
+              # gate has since PASSED is a reviewed task. Lift it back to
+              # `in_review` so the guard below sees what the review actually
+              # says; the guard itself is unchanged.
+              task = maybe_lift_to_in_review_for_deploy(task, stages)
+
               if task.status in @deployable_statuses do
                 inject_deploy_stage(plan, task, stage_def, strategy)
               else

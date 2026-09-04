@@ -430,6 +430,111 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
     end
   end
 
+  # ── A needs_human hold has no clock (task 01a0665e stage 2) ────────────
+  #
+  # `redispatch_for_runtime/1` filters on `active_lease_present?/2`. Under
+  # 01a04a8c that read `expires_at`, so once the 12-hour horizon passed a
+  # `needs_human` hold read as "no lease" and a runtime reconnect re-sent the
+  # whole dispatch the executor had already refused (01a04fbc-1e71).
+  describe "runtime_reconnected against a needs_human hold (01a0665e)" do
+    test "a reconnect does not re-dispatch a task whose needs_human lease is 13 hours old",
+         %{task: task} do
+      {agent, runtime} = create_linked_agent_runtime()
+
+      task =
+        task
+        |> Ecto.Changeset.change(%{
+          status: "in_progress",
+          assignee_id: agent.id,
+          assignee_type: "agent",
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+          }
+        })
+        |> Repo.update!()
+
+      # The hold keys on the RUNNING stage.
+      stage =
+        Repo.one!(
+          from(s in Platform.Tasks.Stage, where: s.plan_id in subquery(plan_ids(task.id)))
+        )
+        |> Ecto.Changeset.change(status: "running", started_at: DateTime.utc_now())
+        |> Repo.update!()
+
+      {:ok, _pid} =
+        TaskRouterSupervisor.start_assignment(task.id, %{type: :federated, id: runtime})
+
+      :ok = sync_router(task.id)
+      assert %{task_id: _} = TaskRouter.current_status(task.id)
+
+      {:ok, event} =
+        Platform.Orchestration.record_runtime_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => runtime,
+          "event_type" => "execution.blocked",
+          "occurred_at" => DateTime.add(DateTime.utc_now(), -13 * 60 * 60, :second),
+          "payload" => %{
+            "stage_id" => stage.id,
+            "description" => "Needs a human to decide how this task deploys.",
+            "needs_human" => true,
+            "reported_by" => "agent"
+          }
+        })
+
+      lease = Repo.get!(Platform.Orchestration.ExecutionLease, event.lease_id)
+      assert lease.status == "blocked"
+      assert DateTime.compare(lease.expires_at, DateTime.utc_now()) == :lt
+
+      # Drain the router's reaction to the event before subscribing, so
+      # every broadcast below is attributable to a reconnect.
+      :ok = sync_router(task.id)
+      PlatformWeb.Endpoint.subscribe("runtime:#{runtime}")
+      watcher = Process.whereis(TaskRouterWatcher)
+
+      # The watcher's OWN verdict, not the router's: the router carries its
+      # own needs_human guard in `do_dispatch/3`, which would absorb a
+      # `:dispatch` the watcher wrongly sent and leave `refute_received`
+      # green against a broken filter. The "re-dispatched N task(s)" line is
+      # written by `redispatch_for_runtime/1` alone.
+      log =
+        with_info_logging(fn ->
+          send(watcher, {:runtime_reconnected, runtime})
+          TaskRouterWatcher.sync()
+          :ok = sync_router(task.id)
+          assert %{task_id: _} = TaskRouter.current_status(task.id)
+        end)
+
+      refute log =~ "re-dispatched",
+             "the watcher re-poked a router whose executor filed a needs_human blocker 13h ago"
+
+      refute_received %Phoenix.Socket.Broadcast{event: "attention"}
+      assert Repo.get!(Platform.Orchestration.ExecutionLease, lease.id).status == "blocked"
+
+      # CONTROL on the injector: with the stage's leases dropped (what a
+      # stage transition does) the SAME reconnect DOES re-dispatch.
+      1 = Platform.Orchestration.RuntimeSupervision.drop_leases_for_stage(task.id, stage.id)
+
+      log =
+        with_info_logging(fn ->
+          send(watcher, {:runtime_reconnected, runtime})
+          TaskRouterWatcher.sync()
+          :ok = sync_router(task.id)
+          assert %{task_id: _} = TaskRouter.current_status(task.id)
+        end)
+
+      assert log =~ "re-dispatched 1 task(s)"
+
+      assert_received %Phoenix.Socket.Broadcast{
+                        event: "attention",
+                        topic: "runtime:" <> ^runtime
+                      },
+                      "the hold was dropped and the reconnect still did not re-dispatch"
+
+      TaskRouterSupervisor.stop_assignment(task.id)
+    end
+  end
+
   # ── Reconciliation ─────────────────────────────────────────────────────
 
   describe "reconciliation" do
@@ -675,6 +780,23 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
   end
 
   # ── Private helpers ────────────────────────────────────────────────────
+
+  defp plan_ids(task_id) do
+    from(p in Platform.Tasks.Plan, where: p.task_id == ^task_id, select: p.id)
+  end
+
+  # `config :logger, level: :warning` in test drops the info line
+  # `redispatch_for_runtime/1` writes before `capture_log/2` can see it.
+  defp with_info_logging(fun) do
+    previous = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      ExUnit.CaptureLog.capture_log(fun)
+    after
+      Logger.configure(level: previous)
+    end
+  end
 
   defp create_user do
     Repo.insert!(%User{

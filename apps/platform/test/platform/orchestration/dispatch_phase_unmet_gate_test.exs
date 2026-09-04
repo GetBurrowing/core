@@ -85,7 +85,7 @@ defmodule Platform.Orchestration.DispatchPhaseUnmetGateTest do
   end
 
   describe "the status vocabulary this defect turns on" do
-    test "Validation declares four statuses, of which three are still owed" do
+    test "Validation declares five statuses, of which three are still owed" do
       # Anti-vacuity floor for the whole file: every red case below rests on
       # `failed` and `running` being REAL, declared statuses rather than typos
       # that no production row could ever hold. If this assertion ever fails,
@@ -94,7 +94,13 @@ defmodule Platform.Orchestration.DispatchPhaseUnmetGateTest do
       assert "running" in Validation.statuses()
       assert "pending" in Validation.statuses()
       assert "passed" in Validation.statuses()
-      assert length(Validation.statuses()) == 4
+      # `skipped` (task 01a0665e stage 3): a could_not_evaluate e2e case the
+      # engine moved out of the way once its host stage passed. Terminal and
+      # MET — it must never read as still owed.
+      assert "skipped" in Validation.statuses()
+      refute "skipped" in Validation.unmet_statuses()
+      assert length(Validation.statuses()) == 5
+      assert length(Validation.unmet_statuses()) == 3
     end
   end
 

@@ -1018,8 +1018,14 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   defp active_lease_present?(task_id, runtime_id) do
     case RuntimeSupervision.current_lease_for_task_runtime(task_id, runtime_id) do
-      %{expires_at: %DateTime{} = expires_at} ->
-        DateTime.compare(expires_at, DateTime.utc_now()) == :gt
+      %{expires_at: %DateTime{} = expires_at} = lease ->
+        # A `needs_human` hold is present however old its `expires_at` is —
+        # that column is informational for such a lease (task 01a0665e
+        # stage 2). Checked FIRST: the clock clause below used to win for
+        # every lease, so a 13-hour-old hold read as "no lease" and this
+        # reconnect re-sent the whole dispatch the executor had refused.
+        RuntimeSupervision.needs_human_hold?(lease) or
+          DateTime.compare(expires_at, DateTime.utc_now()) == :gt
 
       %{status: status} when status in ["active", "blocked"] ->
         true

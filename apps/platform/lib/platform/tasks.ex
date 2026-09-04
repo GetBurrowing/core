@@ -1567,7 +1567,16 @@ defmodule Platform.Tasks do
         # reached from `deploying`, so this key is cleared at the status
         # choke point instead — every caller, `transition_task/3` included,
         # funnels through here.
-        clear_attrs = awaiting_human_action_clear_attrs(task, new_status)
+        #
+        # Task 01a0665e stage 1: the delivered-but-open stamp clears on the
+        # SAME changeset, but only on `done` / `cancelled`. Both clears write
+        # `:metadata`, so the second is folded onto the first's output rather
+        # than `Map.merge`d beside it — a merge of two `%{metadata: ...}` maps
+        # keeps one and silently drops the other.
+        clear_attrs =
+          task
+          |> awaiting_human_action_clear_attrs(new_status)
+          |> delivered_but_open_clear_attrs(task, new_status)
 
         task
         |> Task.changeset(pointer_attrs |> Map.merge(clear_attrs) |> Map.put(:status, new_status))
@@ -1713,6 +1722,38 @@ defmodule Platform.Tasks do
   end
 
   defp awaiting_human_action_clear_attrs(_task, _new_status), do: %{}
+
+  # Task 01a0665e stage 1. The delivered-but-open stamp says "a PR for this
+  # task merged while no plan gate could absorb it; a person has to close
+  # the record". Only `done` / `cancelled` make that sentence false, so ONLY
+  # those two clear it. Every other transition keeps the stamp on purpose:
+  # the ratified workaround for a shipped-but-open task is to drag it to
+  # `in_progress` and then to `done`, and the intermediate `in_progress`
+  # stop must still hold the router (it dispatched fresh work from that
+  # stop on 01a0554f, 2026-09-03). Takes the attrs accumulated so far and
+  # reads `:metadata` off THEM when present, so it composes with
+  # `awaiting_human_action_clear_attrs/2` instead of overwriting it.
+  defp delivered_but_open_clear_attrs(attrs, %Task{} = task, new_status)
+       when new_status in ["done", "cancelled"] do
+    metadata = Map.get(attrs, :metadata, task.metadata || %{})
+
+    if delivered_but_open?(%{metadata: metadata}) or
+         Map.has_key?(metadata, "delivered_but_open_at") do
+      Map.put(attrs, :metadata, drop_delivered_but_open_keys(metadata))
+    else
+      attrs
+    end
+  end
+
+  defp delivered_but_open_clear_attrs(attrs, _task, _new_status), do: attrs
+
+  defp drop_delivered_but_open_keys(metadata) when is_map(metadata) do
+    metadata
+    |> Map.delete("delivered_but_open")
+    |> Map.delete("delivered_but_open_at")
+  end
+
+  defp drop_delivered_but_open_keys(_), do: %{}
 
   defp maybe_dispatch_teardown(%Task{} = task, "done") do
     Platform.Tasks.ChatPins.unpin_all_for_task(task.id)
@@ -4425,6 +4466,114 @@ defmodule Platform.Tasks do
     update_task(task, %{metadata: merged_metadata})
   end
 
+  # The delivery facts the webhook hands over. Anything else in the map is
+  # dropped rather than written into shared JSONB.
+  @delivered_but_open_fields ~w(pr_url pr_number merge_commit_sha merged_at head_branch delivering_repo)
+
+  @doc """
+  Stamp `metadata["delivered_but_open"]` (plus an ISO-8601
+  `"delivered_but_open_at"`) WITHOUT transitioning the task's status.
+
+  Task 01a0665e stage 1. Written by the GitHub webhook when a merged PR
+  names a task whose current plan has no pending `pr_merged` gate to absorb
+  it — a task in `backlog` / `planning` / `blocked` / `stack_pending`, or one
+  whose only matching gate sits on a superseded plan version. The merge is
+  real, but `done` is reachable in `valid_task_transitions/0` only from
+  `in_progress` / `in_review` / `deploying`, and `close_as_delivered/3` is
+  admin-only by design (ADR 0029). So this function NEVER moves the status:
+  it surfaces the task for a person and lets `TaskRouter` park instead of
+  re-dispatching shipped work (the 01a0554f loop: five planning dispatches
+  against a task whose PR #883 had merged three days earlier).
+
+  Same shape as `stamp_awaiting_human_action/2` directly above: merges onto
+  the LOADED metadata, goes through `update_task/2` so the board sees one
+  `{:task_updated, task}`, and additionally emits
+  `[:platform, :tasks, :delivered_but_open]` and posts ONE engagement to the
+  task's execution space when it has one. Deliberately NOT a `RuntimeEvent`:
+  `RuntimeSupervision`'s `@event_statuses` is a closed vocabulary that mints
+  leases, and a merge is not a runtime saying anything.
+
+  Cleared only by `done` / `cancelled` (`transition_task_status/2`) or by
+  `close_as_delivered/3`.
+  """
+  @spec stamp_delivered_but_open(Task.t() | String.t(), map()) ::
+          {:ok, Task.t()} | {:error, term()}
+  def stamp_delivered_but_open(id, delivery) when is_binary(id) and is_map(delivery) do
+    case get_task_record(id) do
+      %Task{} = task -> stamp_delivered_but_open(task, delivery)
+      nil -> {:error, :not_found}
+    end
+  end
+
+  def stamp_delivered_but_open(%Task{} = task, delivery) when is_map(delivery) do
+    stamp =
+      delivery
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.take(@delivered_but_open_fields)
+
+    merged_metadata =
+      (task.metadata || %{})
+      |> Map.put("delivered_but_open", stamp)
+      |> Map.put("delivered_but_open_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+    with {:ok, updated} <- update_task(task, %{metadata: merged_metadata}) do
+      :telemetry.execute(
+        [:platform, :tasks, :delivered_but_open],
+        %{count: 1},
+        %{task_id: updated.id, status: updated.status, pr_url: stamp["pr_url"]}
+      )
+
+      post_delivered_but_open_engagement(updated, stamp)
+      {:ok, updated}
+    end
+  end
+
+  @doc """
+  True when the task carries the `delivered_but_open` stamp. Read off the
+  already-loaded `metadata` map — zero queries, so a board of N cards and a
+  router's per-dispatch check both stay free. Accepts any map with a
+  `:metadata` key so the clear path can ask about a not-yet-written map.
+  """
+  @spec delivered_but_open?(Task.t() | map()) :: boolean()
+  def delivered_but_open?(%{metadata: metadata}) when is_map(metadata),
+    do: Map.has_key?(metadata, "delivered_but_open")
+
+  def delivered_but_open?(_), do: false
+
+  # Best-effort narration into the execution space. A chat failure must
+  # never fail the webhook that already wrote the stamp — same posture as
+  # `TaskRouter`'s own stamp helpers.
+  defp post_delivered_but_open_engagement(%Task{id: task_id, status: status}, stamp) do
+    case ExecutionSpace.find_by_task_id(task_id) do
+      nil ->
+        :ok
+
+      space ->
+        ExecutionSpace.post_engagement(
+          space.id,
+          "Delivered but open: #{stamp["pr_url"] || "a PR"} merged " <>
+            "(#{stamp["merge_commit_sha"] || "sha unknown"}) while this task is `#{status}` " <>
+            "with no plan gate to absorb it. The router will not dispatch it again. " <>
+            "A person closes it: an admin runs `close_as_delivered`, or drag it to " <>
+            "in_progress and then to done.",
+          metadata: %{
+            "reason" => "task.delivered_but_open",
+            "pr_url" => stamp["pr_url"],
+            "merge_commit_sha" => stamp["merge_commit_sha"]
+          }
+        )
+
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[Tasks] task #{task_id} — delivered_but_open engagement failed: #{Exception.message(error)}"
+      )
+
+      :ok
+  end
+
   @doc """
   Drop the awaiting-human-action stamp, leaving every other `metadata` key
   untouched. A stamp that never clears turns every finished task into a
@@ -4901,14 +5050,19 @@ defmodule Platform.Tasks do
           admin,
           "close_as_delivered",
           fn task ->
+            # This path bypasses `transition_task_status/2` (and so its
+            # `delivered_but_open_clear_attrs/3`), so the stamp that most
+            # likely brought the admin here is dropped inline.
             %{
               status: "done",
               metadata:
-                stamp_metadata(task, "closed_as_delivered", %{
+                task
+                |> stamp_metadata("closed_as_delivered", %{
                   "reference" => String.trim(delivery_reference),
                   "by_user_id" => admin.id,
                   "from_status" => task.status
                 })
+                |> drop_delivered_but_open_keys()
             }
           end
         )
@@ -5059,6 +5213,10 @@ defmodule Platform.Tasks do
 
   Possible reasons (precedence order):
 
+    * `:delivered_but_open` — a PR for the task merged while no plan gate
+      could absorb it (`metadata["delivered_but_open"]`, task 01a0665e).
+      Ranked first: the work is on main and only a person can close the
+      record, so every other "needs you" signal is moot until they do.
     * `:review_request_pending` — there is at least one open review_request
       for the task. **Ranked above `:plan_pending_review`** because a live
       review request is the more actionable / urgent signal: it represents
@@ -5086,7 +5244,8 @@ defmodule Platform.Tasks do
   `:plans` is not loaded.
   """
   @spec needs_human_action_reason(Task.t(), non_neg_integer() | nil) ::
-          :plan_pending_review
+          :delivered_but_open
+          | :plan_pending_review
           | :review_request_pending
           | :awaiting_human_merge
           | :validation_failed
@@ -5098,6 +5257,10 @@ defmodule Platform.Tasks do
   def needs_human_action_reason(%Task{} = task, pending_review_count)
       when is_integer(pending_review_count) and pending_review_count >= 0 do
     cond do
+      # Task 01a0665e stage 1: a merged PR outranks everything below — a
+      # pending plan review on a task whose work has already shipped is
+      # exactly the review nobody should be doing.
+      delivered_but_open?(task) -> :delivered_but_open
       pending_review_count > 0 -> :review_request_pending
       plan_pending_review?(task) -> :plan_pending_review
       awaiting_human_merge?(task) -> :awaiting_human_merge
@@ -5816,9 +5979,29 @@ defmodule Platform.Tasks do
       sponsor_bypasses_plan_gate?(task, actor) ->
         :ok
 
+      delivered_but_open_bypasses_plan_gate?(task, actor) ->
+        :ok
+
       true ->
         {:error, :no_approved_plan}
     end
+  end
+
+  # Task 01a0665e stage 4. A task stamped `delivered_but_open` has its work
+  # on main already; the only thing left is for a person to close the
+  # record, and the router's own notice prescribes "drag the task to
+  # in_progress and then to done". That drag was refused: a `planning` task
+  # with an agent assignee and no plan (the 01a0554f shape the stamp exists
+  # for) fails `current_plan/1` and fails `sponsor_bypasses_plan_gate?/2` on
+  # `non_agent_assignment?/1`, so the notice named an exit that did not
+  # exist (01a06b25-3ac3, 2026-09-04: `drop_task_to_column/3` ->
+  # `{:error, :no_approved_plan}`). The stamp is the proof the plan is
+  # moot. Human actors only — the gate's purpose (ADR 0029, task 019f6380)
+  # is that an agent cannot mark its own work complete, and that stays.
+  # Unstamped tasks are refused exactly as before.
+  defp delivered_but_open_bypasses_plan_gate?(%Task{} = task, actor) do
+    delivered_but_open?(task) and
+      match?({"user", id} when is_binary(id), TransitionActor.normalize(actor))
   end
 
   @doc """
@@ -6030,6 +6213,10 @@ defmodule Platform.Tasks do
            :ok <- maybe_prepare_transition(task, new_status),
            {:ok, %{updated: updated, frozen: frozen}} <-
              transition_with_policy2_freeze(task, new_status) do
+        # BEFORE the broadcast: `TaskRouter` reacts to `{:task_updated, _}`
+        # by re-reading the lease, and it must see the hold already gone.
+        maybe_release_needs_human_holds(task, new_status, actor)
+
         updated = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
         broadcast_board({:task_updated, updated})
         maybe_finalize_transition(task, updated, new_status)
@@ -6185,8 +6372,25 @@ defmodule Platform.Tasks do
             require_stack_not_shipped_for(task, target_status)
 
           true ->
-            case task |> Task.changeset(%{status: target_status}) |> Repo.update() do
+            # Task 01a0665e stage 4. The board's drag to Done is the exit the
+            # delivered-but-open notice prescribes, and this path writes its
+            # own changeset, so the stamp clear `transition_task_status/2`
+            # folds in is mirrored here — on the SAME changeset as the status
+            # flip, for the reason documented there.
+            attrs =
+              %{}
+              |> delivered_but_open_clear_attrs(task, target_status)
+              |> Map.put(:status, target_status)
+
+            case task |> Task.changeset(attrs) |> Repo.update() do
               {:ok, updated} ->
+                # The board drag is the human release the router's
+                # `needs_human` hold waits for (task 01a0665e stage 2). This
+                # path writes its own changeset instead of calling
+                # `transition_task/3`, so the release is mirrored here — the
+                # same inline-mirror shape as the two stack guards above.
+                maybe_release_needs_human_holds(task, target_status, actor)
+
                 updated = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
                 broadcast_board({:task_updated, updated})
                 {:ok, updated}
@@ -6195,6 +6399,54 @@ defmodule Platform.Tasks do
                 {:error, changeset}
             end
         end
+    end
+  end
+
+  # Task 01a0665e stage 2. A `report_blocker(needs_human: true)` lease holds
+  # the router until a PERSON acts (`RuntimeSupervision.needs_human_hold/3`
+  # has no clock any more). "A person acts" on the task record means: a
+  # user actor moves the task out of `blocked`, or into a working status —
+  # in_progress / in_review / deploying. `:system` and agent actors never
+  # release: the router's own `stamp_blocked_reason/2` -> `ensure_blocked/1`
+  # path is `:system`, and an agent's `task_update` is exactly the automated
+  # re-dispatch this hold exists to refuse. Actor shapes follow
+  # `TransitionActor.normalize/1`, so the UI's `{:user, id}` and a bare
+  # `%Platform.Accounts.User{}` both count; `:unknown` does not.
+  #
+  # Runs AFTER the status write succeeded and BEFORE `{:task_updated, _}` is
+  # broadcast, so a router re-reading the lease on that broadcast sees the
+  # hold already gone. A release that failed the transition would be a hold
+  # ended by a move that never happened.
+  #
+  # AND WAKES THE ROUTER (task 01a0665e stage 4). Ending the hold row is
+  # necessary and was not sufficient: the router only re-reads the hold
+  # inside `handle_info(:dispatch_now)`, and nothing scheduled one — its
+  # `{:task_updated, _}` handler records the status, the awaiting-human
+  # reminder is hourly, and a reconnect is the runtime's event, not the
+  # person's. Measured on 01a06b2b-8185 (2026-09-04): the drag flipped the
+  # lease to `expired` with `released_by_user_id` set and the runtime
+  # received nothing; the router sat at `:waiting_human` two minutes later.
+  # The wake lives HERE, with the release, rather than in the router's
+  # `{:task_updated}` handler, because that handler cannot tell a release
+  # from any other write (the broadcast carries no actor) and a router that
+  # never ran a dispatch between the blocker and the drag has no in-memory
+  # hold to key off. One producer: the call that ends the hold is the call
+  # that asks for the dispatch; `:system` releases nothing and so wakes
+  # nothing. `force_dispatch/1` is a `send(:dispatch)` when a router is up
+  # and a router start when the task just left `blocked` and has none.
+  @needs_human_release_statuses ~w(in_progress in_review deploying)
+
+  defp maybe_release_needs_human_holds(%Task{} = task, new_status, actor) do
+    with {"user", user_id} when is_binary(user_id) <- TransitionActor.normalize(actor),
+         true <- task.status == "blocked" or new_status in @needs_human_release_statuses do
+      released =
+        RuntimeSupervision.release_needs_human_holds(task.id, released_by_user_id: user_id)
+
+      if released > 0, do: TaskRouterWatcher.force_dispatch(task.id)
+
+      released
+    else
+      _ -> 0
     end
   end
 

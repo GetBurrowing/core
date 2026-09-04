@@ -500,12 +500,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      "fetch_stage/1 checks Platform.UUID.valid?/1 on the agent-supplied stage_id from stage_start / stage_complete, folding a malformed id into {:error, :not_found}. 1 -> 2 for task 01a006e7 stage 3's open_remediation_stage/2, which is the SAME class: the gate stage_id reaches it from the router, is guarded by the same Platform.UUID.valid?/1 check, and a miss rolls the transaction back as {:error, :stage_not_found}"},
     {"platform/tasks/plan_engine.ex", :get, "Task", 2, :safe_internal,
      "`plan.task_id` off a loaded `%Plan{}` in both cases"},
-    {"platform/tasks/plan_engine.ex", :get!, "Plan", 9, :safe_internal,
+    {"platform/tasks/plan_engine.ex", :get!, "Plan", 11, :safe_internal,
      "every call reloads a `plan.id` / `stage.plan_id` the engine holds as a loaded struct; the bang form is deliberate because a missing row here is a broken invariant"},
     {"platform/tasks/plan_engine.ex", :get!, "Stage", 2, :safe_internal,
      "`validation.stage_id` / `updated.stage_id` off a loaded `%Validation{}`"},
-    {"platform/tasks/plan_engine.ex", :get!, "Task", 1, :safe_internal,
-     "`maybe_inject_deploy_or_complete/1` reads `plan.task_id` off the `%Plan{}` already loaded in the same function, so the id round-trips a value Ecto cast on the way out of the DB"},
+    {"platform/tasks/plan_engine.ex", :get!, "Task", 3, :safe_internal,
+     "`maybe_inject_deploy_or_complete/1` reads `plan.task_id` off the `%Plan{}` already loaded in the same function, so the id round-trips a value Ecto cast on the way out of the DB. 1 -> 3 for task 01a0665e stage 3: `skip_unevaluated_validations/2` reads `plan.task_id` off a `%Plan{}` it just loaded, and `maybe_lift_to_in_review_for_deploy/2` reloads `task.id` off the `%Task{}` it was handed — same class"},
     {"platform/tasks/plan_engine.ex", :get!, "Validation", 2, :safe_internal,
      "reopen_manual_approval/1 and evaluate_validation/3 both assert Platform.UUID.valid?/1 and raise Ecto.NoResultsError — the bang form's DOCUMENTED miss exception — so one lookup no longer raises two different ways depending on the typo"},
     {"platform/tasks/review_requests.ex", :get, "Agent", 1, :safe_internal,
@@ -901,7 +901,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `PhaseRuntime`, and a `stage_id` read off a `%Stage{}` already loaded
     # from the plan. No boundary caller exists, and the router's call site
     # rescues anyway. A boundary caller would need `Platform.UUID.valid?/1`.
-    "platform/orchestration/runtime_supervision.ex" => 5,
+    # 5 → 6 for task 01a0665e stage 4's `last_human_release_at/2`, which the
+    # same live-acked-executor guard reads through `human_released_since?/3`.
+    # HAND TRIAGE: its `where:` pins `task_id` and `stage_id` as uuids, and
+    # both arrive the same way `needs_human_hold/3`'s do — `state.task_id`
+    # and a `stage.id` off a `%Stage{}` loaded from the plan — inside a guard
+    # that rescues and fails open. No boundary caller exists; one would need
+    # `Platform.UUID.valid?/1`.
+    "platform/orchestration/runtime_supervision.ex" => 6,
     "platform/org/context.ex" => 4,
     "platform/org/preamble_builder.ex" => 3,
     "platform/org/tenants_summary.ex" => 2,
