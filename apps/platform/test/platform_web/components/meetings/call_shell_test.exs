@@ -308,7 +308,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       assert Enum.count(empty) == 1
 
       assert squish(LazyHTML.text(empty)) ==
-               "No agents in this space yet. Add one to the space and it appears here, without a reload."
+               "No active agents yet. Every active agent appears here, whether or not it is already in this space."
 
       refute html =~ ~s(data-role="meeting-agent-invite-row")
     end
@@ -347,6 +347,48 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
 
       # Rows present: the empty line is not.
       refute html =~ ~s(data-role="meeting-agent-invite-empty")
+    end
+
+    # Task 01a05553 — the rows are the active roster now, so membership of
+    # the meeting's space is a fact ON the row instead of the filter that
+    # decided whether the row existed. It is drawn as INFORMATION beside the
+    # name: the button on a non-member row still works, and nothing about it
+    # reads as a permissions rule.
+    test "a non-member row is marked beside the name and still gets its button" do
+      html =
+        invite_rail([
+          Map.put(invite_row("a-out", :invitable), :in_space?, false),
+          Map.put(invite_row("a-in", :invitable), :in_space?, true)
+        ])
+
+      out_row = invite_row_html(html, "a-out")
+      in_row = invite_row_html(html, "a-in")
+
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(
+               ~s([data-role="meeting-agent-invite-row"][data-agent-id="a-out"] ) <>
+                 ~s([data-role="meeting-agent-invite-membership"])
+             )
+             |> LazyHTML.text()
+             |> squish() == "not in space"
+
+      # Marked, not blocked.
+      assert out_row =~ "zzz_fake_invite"
+      assert out_row =~ ~s(phx-value-agent-id="a-out")
+
+      # And the member row carries no marker at all, so the assertion above
+      # cannot be passing against a build that stamps every row.
+      refute in_row =~ "meeting-agent-invite-membership"
+    end
+
+    # The flag arrived after this component did. A caller still passing the
+    # old three-key row must render the row it always rendered rather than
+    # sprout a label about a space it never said anything about.
+    test "a row with no membership key draws no marker" do
+      html = invite_rail([invite_row("a-legacy", :invitable)])
+
+      refute invite_row_html(html, "a-legacy") =~ "meeting-agent-invite-membership"
     end
 
     test "blocked rows are plain items: no button, no phx-click" do

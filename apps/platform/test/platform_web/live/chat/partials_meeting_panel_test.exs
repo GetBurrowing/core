@@ -785,7 +785,7 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       assert text(html, ~s(#quickmeet-call-rail [data-role="meeting-agent-invite-empty"]))
              |> String.replace(~r/\s+/, " ")
              |> String.trim() ==
-               "No agents in this space yet. Add one to the space and it appears here, without a reload."
+               "No active agents yet. Every active agent appears here, whether or not it is already in this space."
 
       refute html =~ ~s(data-role="meeting-agent-invite-row")
     end

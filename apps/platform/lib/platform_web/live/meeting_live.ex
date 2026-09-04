@@ -4473,31 +4473,88 @@ defmodule PlatformWeb.MeetingLive do
   # template can decide what the second line says without re-running the
   # predicate.
   #
+  # ## The list is the ACTIVE AGENT ROSTER, not the space (task 01a05553)
+  #
+  # It was the space, and that is the whole reason inviting an agent to a
+  # meeting took six screens. Every meeting mints a FRESH chat space, so
+  # `Chat.list_space_agents/1` on it answers `[]` on the first render of every
+  # meeting that has ever been created. The rail could therefore only ever
+  # offer an agent that somebody had already put in that space by hand — which
+  # meant leaving the call, finding the space, adding the agent, coming back.
+  # The founder walked that path live and gave up. A control whose list is
+  # empty by construction is not a control.
+  #
+  # So the source is `Chat.list_agents_for_picker/0` — `status == "active"`,
+  # ordered by name, the same roster the conversation picker offers — and
+  # membership of THIS meeting's space becomes a fact carried ON the row
+  # (`:in_space?`) rather than the filter that decides whether the row exists.
+  # That is the smallest change that makes the list non-empty without
+  # inventing a new notion of who may be invited: "active agent" is a status
+  # the product already maintains and already exposes elsewhere.
+  #
+  # The space roster is still read, for two reasons, and they are not the same
+  # reason:
+  #
+  #   1. It answers `:in_space?`.
+  #   2. It is UNIONED IN, so widening this list can never narrow it. An agent
+  #      whose status is no longer `"active"` but which is in the space — or
+  #      standing in the call right now — keeps its row and its `:in_call`
+  #      state. Without the union, "source from the roster instead" would
+  #      quietly delete a participant from the People tab mid-call, which is
+  #      the same class of vanishing-row defect as 01a0554f.
+  #
+  # Removing an agent from the space therefore no longer removes its row; it
+  # flips `:in_space?`. Deactivating an agent is what removes it.
+  #
   # ORDER: invitable, pending, incapable, in_call — the canvas's "one ordered
-  # list, invitable first, then blocked". Within a state the roster order
-  # (`Chat.list_space_agents/1`, ascending `joined_at`) is preserved:
-  # `Enum.sort_by/2` is stable.
+  # list, invitable first, then blocked". Within a state, space members come
+  # first in their roster order (`Chat.list_space_agents/1`, ascending
+  # `joined_at`) and then the rest of the active roster by name:
+  # `Enum.sort_by/2` is stable, so the concatenation order below survives it.
   @invite_state_order %{invitable: 0, pending: 1, incapable: 2, in_call: 3}
 
   @doc false
   def invite_rows(space_id, participants) when is_binary(space_id) do
     pending_ids = pending_invite_agent_ids(participants)
+    {agents, member_ids} = invitable_roster(space_id)
 
-    space_id
-    |> Chat.list_space_agents()
-    |> Enum.flat_map(fn
-      %{agent: %Agent{} = agent} -> [agent]
-      _ -> []
-    end)
-    |> Enum.map(&agent_invite_row(&1, participants, pending_ids))
+    agents
+    |> Enum.map(&agent_invite_row(&1, participants, pending_ids, member_ids))
     |> Enum.sort_by(&Map.fetch!(@invite_state_order, &1.state))
   end
 
   def invite_rows(_space_id, _participants), do: []
 
+  # Every agent the rail should LIST, plus the ids of the ones that hold a
+  # roster row on this meeting's space. Members first (see the ORDER note
+  # above), then every other active agent, each exactly once.
+  defp invitable_roster(space_id) do
+    members =
+      space_id
+      |> Chat.list_space_agents()
+      |> Enum.flat_map(fn
+        %{agent: %Agent{} = agent} -> [agent]
+        _ -> []
+      end)
+
+    member_ids = MapSet.new(members, & &1.id)
+
+    outsiders =
+      Chat.list_agents_for_picker()
+      |> Enum.reject(&MapSet.member?(member_ids, &1.id))
+
+    {members ++ outsiders, member_ids}
+  end
+
   # `agent_invite_row`, not `invite_row`: the calendar detail surface above
   # already owns `invite_row/3` for its human-invite rows.
-  defp agent_invite_row(%Agent{} = agent, participants, pending_ids) do
+  #
+  # `:in_space?` is a fact about the agent, deliberately NOT folded into
+  # `:state`. The four states answer "can this be clicked, and if not why" —
+  # membership answers neither. An agent that is not in the space is fully
+  # invitable (that is this task's whole point), so making it a fifth state
+  # would have taken the button away again.
+  defp agent_invite_row(%Agent{} = agent, participants, pending_ids, member_ids) do
     capability = Meetings.join_capability(agent)
 
     state =
@@ -4508,7 +4565,12 @@ defmodule PlatformWeb.MeetingLive do
         true -> :invitable
       end
 
-    %{agent: agent, state: state, capability: capability}
+    %{
+      agent: agent,
+      state: state,
+      capability: capability,
+      in_space?: MapSet.member?(member_ids, agent.id)
+    }
   end
 
   # Public so the exclusion can be exercised against hand-built participant

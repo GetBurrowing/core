@@ -684,10 +684,13 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
              )
     end
 
-    test "a space with no agents shows the empty line under the heading", %{conn: conn} do
-      # A fresh space, so the setup agent's auto-roster (which ran at link
-      # time) cannot reach it. Anything that DID land is removed, and the
-      # emptiness is asserted rather than assumed.
+    # Since task 01a05553 the empty state means something narrower and much
+    # rarer: not "this space has no agents" but "there is no ACTIVE agent
+    # anywhere". Both halves have to be arranged, and both are asserted rather
+    # than assumed — the point of the case is that the section survives an
+    # empty list, and it would be worthless if the list were not actually
+    # empty.
+    test "an org with no active agents shows the empty line under the heading", %{conn: conn} do
       space = space!()
       meeting = meeting!(space)
       viewer = user!("empty-roster")
@@ -703,7 +706,12 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
         {:ok, _} = Chat.remove_space_agent({:user, viewer.id}, space.id, entry.agent_id)
       end
 
+      # The setup agent lives on ANOTHER space and is still `"active"`, so it
+      # would be offered here on its roster row alone. Park every agent.
+      Repo.update_all(Agent, set: [status: "paused"])
+
       assert Chat.list_space_agents(space.id) == []
+      assert Chat.list_agents_for_picker() == []
 
       {:ok, view, html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
 
@@ -714,7 +722,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
              |> LazyHTML.query(~s([data-role="meeting-agent-invite-empty"]))
              |> LazyHTML.text()
              |> squish() ==
-               "No agents in this space yet. Add one to the space and it appears here, without a reload."
+               "No active agents yet. Every active agent appears here, whether or not it is already in this space."
 
       refute html =~ ~s(data-role="meeting-agent-invite-row")
     end
@@ -800,6 +808,365 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   defp any_row_selector(agent_id),
     do: ~s([data-role="meeting-agent-invite-row"][data-agent-id="#{agent_id}"])
 
+  # The "not in space" marker INSIDE a given agent's row. A descendant
+  # selector, because the marker is nested two elements deep — the same reason
+  # every LazyHTML read in this file uses `query/2` and not `filter/2`.
+  defp membership_selector(agent_id),
+    do: any_row_selector(agent_id) <> ~s( [data-role="meeting-agent-invite-membership"])
+
+  # An ACTIVE agent that is deliberately NOT on this meeting's space roster —
+  # the state task 01a05553 exists for. Built by rostering and then removing,
+  # rather than by simply not adding: `Federation.link_agent/2` auto-rosters a
+  # federated agent into every non-archived CHANNEL space, `space!/0` makes a
+  # channel, and `declaring_roster_agent!/2` needs a linked runtime to have a
+  # declared capability at all. "Just don't add it" would therefore be undone
+  # by the link, and the test would pass for the wrong reason.
+  #
+  # Production reaches this state without any removal: a real meeting's
+  # backing space is `kind: "meeting"` (`Meetings.create_meeting/1`) and
+  # `auto_roster_federated_agent/1` only rosters into channels, so NO agent is
+  # ever auto-added to a meeting's space. That is why the pre-01a05553 rail
+  # was empty on every meeting ever created.
+  defp off_space_agent!(space, features) do
+    remover = seat!(space, user!("off-space-remover"))
+    ctx = declaring_roster_agent!(space, features)
+
+    :ok = Chat.remove_space_agent({:user, remover.id}, space.id, ctx.agent.id)
+
+    refute ctx.agent.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id),
+           "the fixture did not actually take the agent off the space roster"
+
+    ctx
+  end
+
+  defp row_state_and_membership(rows, agent_id) do
+    case Enum.find(rows, &(&1.agent.id == agent_id)) do
+      nil -> :no_row
+      row -> {row.state, row.in_space?}
+    end
+  end
+
+  # ── The list is the roster, not the space (task 01a05553) ────────────────
+  #
+  # The defect the sponsor hit live: inviting an agent to a meeting took six
+  # screens. `invite_rows/2` read `Chat.list_space_agents/1` on the meeting's
+  # OWN chat space, every meeting mints a fresh one, and nothing ever rosters
+  # an agent into a `kind: "meeting"` space — so the list was empty on the
+  # first render of every meeting, and the only way to get a clickable row was
+  # to leave the call and add the agent to the space by hand.
+  describe "an agent that is not in the meeting's space" do
+    # THE DISCRIMINATING CASE. "The list is non-empty" would be vacuous here:
+    # it is green against a build that returns every agent unconditionally,
+    # which is the obvious wrong way to fix this. So this pins BOTH edges of
+    # the widening in one test — the outsider is listed AND marked as a
+    # non-member, and the agent that has actually arrived keeps `:in_call`
+    # and stays out of the clickable list.
+    #
+    # `refute arrived.id in offered` cannot pass on an empty list, because
+    # `assert outsider.id in offered` above it fails first.
+    test "is listed and marked, while an arrived agent stays :in_call and unoffered",
+         %{space: space} do
+      %{agent: outsider} = off_space_agent!(space, ["meeting_voice"])
+      %{agent: arrived} = declaring_roster_agent!(space, ["meeting_voice"])
+
+      participants = [
+        %{
+          participant_type: "agent",
+          participant_id: arrived.id,
+          identity: "agent:#{arrived.slug}",
+          display_name: arrived.name
+        }
+      ]
+
+      rows = PlatformWeb.MeetingLive.invite_rows(space.id, participants)
+
+      assert row_state_and_membership(rows, outsider.id) == {:invitable, false}
+      assert row_state_and_membership(rows, arrived.id) == {:in_call, true}
+
+      offered =
+        space.id
+        |> PlatformWeb.MeetingLive.invitable_agents(participants)
+        |> Enum.map(& &1.id)
+
+      assert outsider.id in offered
+      refute arrived.id in offered
+    end
+
+    # `MeetingHooks.invite_agent_into_call/3` resolves the clicked id with
+    # `Enum.find(socket.assigns[:invitable_agents], ...)`. If the outsider is
+    # not in THAT list the click falls to the catch-all error branch and the
+    # feature does nothing while looking finished — the single most likely way
+    # to get this stage wrong. Asserted on the assign the running LiveView
+    # actually holds, not on the function in isolation.
+    test "is in the :invitable_agents assign, and its click is not the catch-all miss",
+         %{conn: conn, space: space, meeting: meeting} do
+      ctx = off_space_agent!(space, ["meeting_voice"])
+      outsider = ctx.agent
+      _channel = join_runtime_client!(ctx)
+
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, _room} = Meetings.activate_room(room)
+
+      viewer = seat!(space, user!("outsider-assign"))
+      {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
+      _ = render(view)
+
+      offered =
+        view.pid
+        |> :sys.get_state()
+        |> get_in([Access.key!(:socket), Access.key!(:assigns), :invitable_agents])
+        |> Enum.map(& &1.id)
+
+      assert outsider.id in offered
+
+      # The assign is only half the claim. `invite_agent_into_call/3` resolves
+      # the clicked id against exactly that list, and a miss is SILENT — it
+      # falls to the catch-all flash and the feature does nothing while
+      # looking finished. So the click is driven for real and the catch-all is
+      # refuted by its exact copy.
+      html =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{outsider.id}"]))
+        |> render_click()
+
+      refute html =~ "That agent could not be invited."
+    end
+
+    test "renders with the marker and a clickable invite button",
+         %{conn: conn, space: space, meeting: meeting, agent: member} do
+      %{agent: outsider} = off_space_agent!(space, ["meeting_voice"])
+
+      {:ok, view, html} =
+        conn |> login(user!("outsider-row")) |> live(~p"/meetings/#{meeting.slug}")
+
+      row = invite_row(html, outsider.id)
+      assert Enum.count(row) == 1
+      assert LazyHTML.attribute(row, "data-invite-state") == ["invitable"]
+
+      assert row
+             |> LazyHTML.query(~s([data-role="meeting-agent-invite-membership"]))
+             |> LazyHTML.text()
+             |> squish() == "not in space"
+
+      # Marked, not blocked: the button is there and carries the id.
+      assert row
+             |> LazyHTML.query(~s([data-role="meeting-agent-invite-button"]))
+             |> LazyHTML.attribute("phx-value-agent-id") == [outsider.id]
+
+      # The negative half of the marker: an agent that IS in the space has no
+      # marker at all. Without this the assertion above would pass against a
+      # build that stamps every row.
+      assert has_element?(view, any_row_selector(member.id))
+      refute has_element?(view, membership_selector(member.id))
+    end
+
+    # An agent that is neither in the space nor `active` is not a candidate:
+    # widening the list to the roster must not widen it to every row in the
+    # `agents` table.
+    test "a paused agent outside the space is not listed at all", %{space: space} do
+      %{agent: outsider} = off_space_agent!(space, ["meeting_voice"])
+
+      {:ok, _} =
+        outsider
+        |> Agent.changeset(%{status: "paused"})
+        |> Repo.update()
+
+      rows = PlatformWeb.MeetingLive.invite_rows(space.id, [])
+
+      assert row_state_and_membership(rows, outsider.id) == :no_row
+    end
+
+    # The union half of `invitable_roster/1`. A space member whose status has
+    # left `"active"` keeps its row: sourcing from the roster must never
+    # DELETE a row that the space source produced, least of all one for an
+    # agent standing in the call.
+    test "a paused agent that is still in the space keeps its row",
+         %{space: space, agent: member} do
+      {:ok, _} = member |> Agent.changeset(%{status: "paused"}) |> Repo.update()
+
+      rows = PlatformWeb.MeetingLive.invite_rows(space.id, [])
+
+      assert row_state_and_membership(rows, member.id) == {:invitable, true}
+    end
+  end
+
+  # Every `chat_participants` row for this agent on this space. A COUNT, not
+  # a presence check: the duplicate-membership case below turns on there
+  # being exactly one, and `Chat.get_agent_participant/2` would answer the
+  # same for one row as for two.
+  defp space_agent_rows(space_id, agent_id) do
+    Repo.all(
+      from(p in Chat.Participant,
+        where:
+          p.space_id == ^space_id and p.participant_type == "agent" and
+            p.participant_id == ^agent_id
+      )
+    )
+  end
+
+  # ── Task 01a05553 stage 2: the click does the whole job ──────────────────
+
+  describe "clicking an agent that is not in the meeting's space" do
+    # Stage 1 made the outsider VISIBLE and clickable. This is the claim that
+    # the click FINISHES: the space row and the meeting row, both, from one
+    # click. Neither half alone is the feature — a space row with no invite is
+    # the old manual detour done for you, and an invite with no space row is
+    # what `invite_agent/3` refuses to resolve.
+    #
+    # The dispatch is asserted on a REAL joined runtime client, so
+    # "was invited" means a frame this worker could actually receive.
+    test "adds it to the space AND invites it into the room",
+         %{conn: conn, space: space, meeting: meeting} do
+      ctx = off_space_agent!(space, ["meeting_voice"])
+      outsider = ctx.agent
+      _channel = join_runtime_client!(ctx)
+
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, _room} = Meetings.activate_room(room)
+
+      # The premise, asserted rather than assumed: no space row, no meeting
+      # row. Without this the assertions below would be green against a
+      # fixture that never removed the agent.
+      assert space_agent_rows(space.id, outsider.id) == []
+      assert agent_participant_rows(space.id, outsider.id) == []
+
+      viewer = seat!(space, user!("stage2-adder"))
+      {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{outsider.id}"]))
+        |> render_click()
+
+      # 1. The space roster, read back from the context rather than from the
+      #    return value of the thing under test.
+      assert [%Chat.Participant{}] = space_agent_rows(space.id, outsider.id)
+
+      assert outsider.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id)
+
+      # 2. The meeting. A row AND a frame the worker could receive — the row
+      #    alone is exactly the 01a04e0f lying-success shape.
+      assert [%MeetingParticipant{}] = agent_participant_rows(space.id, outsider.id)
+      assert_push "meeting_join", _payload, 500
+
+      assert html =~ "waiting for it to join"
+      refute html =~ "could not be invited"
+      refute html =~ "do not have permission"
+    end
+
+    # ORDER. `Meetings.invite_agent/3` resolves the agent through the space
+    # roster, so a build that invited first and added second would fail here
+    # even though both writes eventually happen.
+    test "the space row is what makes the invite resolvable at all",
+         %{space: space} do
+      ctx = off_space_agent!(space, ["meeting_voice"])
+      outsider = ctx.agent
+      _channel = join_runtime_client!(ctx)
+
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, room} = Meetings.activate_room(room)
+
+      inviter = seat!(space, user!("stage2-order"))
+
+      # Invite BEFORE the add — the reversed order — and the roster row is
+      # still not written by it. This is the fact the ordering rests on, and
+      # it is asserted against the context, not inferred from the handler.
+      {:ok, %MeetingParticipant{}} = Meetings.invite_agent(room, outsider, inviter)
+      assert space_agent_rows(space.id, outsider.id) == []
+    end
+  end
+
+  describe "clicking an agent that is already in the meeting's space" do
+    # The unchanged path. `Chat.add_space_agent/3` is idempotent, but the
+    # handler must not reach it at all here — so the assertion is on the row
+    # COUNT staying at one, which a second insert (or a changed uniqueness
+    # story) would break.
+    test "still invites, and writes no second membership row",
+         %{conn: conn, space: space, meeting: meeting, runtime_agent: runtime_agent} do
+      member = runtime_agent.agent
+      _channel = join_runtime_client!(runtime_agent)
+
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, _room} = Meetings.activate_room(room)
+
+      assert [%Chat.Participant{} = before] = space_agent_rows(space.id, member.id)
+
+      viewer = seat!(space, user!("stage2-member"))
+      {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{member.id}"]))
+        |> render_click()
+
+      assert [%Chat.Participant{} = unchanged] = space_agent_rows(space.id, member.id)
+      assert unchanged.id == before.id
+      assert unchanged.joined_at == before.joined_at
+
+      assert [%MeetingParticipant{}] = agent_participant_rows(space.id, member.id)
+      assert_push "meeting_join", _payload, 500
+      assert html =~ "waiting for it to join"
+    end
+  end
+
+  describe "a viewer who may not invite, clicking an agent that is not in the space" do
+    # THE SECURITY CASE, and the reason it is written on the ABSENCE of the
+    # membership row rather than on the flash: adding an agent to a space is
+    # a real mutation, and `Chat.add_space_agent/3` authorizes nothing of its
+    # own. A build that added first and authorized second returns
+    # `{:error, :forbidden}` and flashes exactly the same sentence — every
+    # return-value assertion stays green while the space has silently gained
+    # an agent. Only `space_agent_rows(...) == []` can tell the two apart.
+    #
+    # The positive control is the first test in
+    # "clicking an agent that is not in the meeting's space": the identical
+    # click, by a seated viewer, on an identical fixture, DOES write the row.
+    # So a green result here is about the actor and not about the room, the
+    # agent, or the fact that nothing was ever going to be added.
+    test "gets the permission error and the agent is NOT added to the space",
+         %{conn: conn, space: space, meeting: meeting} do
+      ctx = off_space_agent!(space, ["meeting_voice"])
+      outsider = ctx.agent
+      _channel = join_runtime_client!(ctx)
+
+      # The room is live, so the `with` reaches the membership step rather
+      # than dying earlier at `get_active_room/1` — otherwise this passes
+      # without ever exercising the guard.
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, _room} = Meetings.activate_room(room)
+
+      assert space_agent_rows(space.id, outsider.id) == []
+
+      # `no_autojoin=true`: auto-join calls `ensure_chat_space_participant/3`
+      # and would hand this viewer the very membership the check looks for.
+      denied = user!("stage2-denied")
+
+      {:ok, view, _html} =
+        conn |> login(denied) |> live(~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      refute Repo.get_by(Chat.Participant,
+               space_id: space.id,
+               participant_type: "user",
+               participant_id: denied.id
+             )
+
+      html =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{outsider.id}"]))
+        |> render_click()
+
+      assert html =~ "do not have permission"
+
+      # The discriminating assertion.
+      assert space_agent_rows(space.id, outsider.id) == []
+      refute outsider.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id)
+
+      # And nothing reached the meeting either.
+      assert agent_participant_rows(space.id, outsider.id) == []
+      refute_push "meeting_join", _payload, 200
+    end
+  end
+
   describe "the People tab follows the space roster" do
     # T3.1 — an agent ADDED while the page is open appears, with the state its
     # runtime earns (declared voice -> invitable + capable).
@@ -831,11 +1198,18 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
       _ = render(view)
 
-      refute has_element?(view, any_row_selector(capable.id))
+      # Since task 01a05553 the row is there BEFORE the add — the list is the
+      # active roster, not the space — so what the add changes is the marker,
+      # not the row's existence. The claim this case still carries is that the
+      # rail follows the roster live; the membership marker is what it now
+      # follows with.
+      assert has_element?(view, row_selector(capable.id, "invitable"))
+      assert has_element?(view, membership_selector(capable.id))
 
       {:ok, _} = Chat.add_space_agent(space.id, capable.id, role: "member")
 
       assert has_element?(view, row_selector(capable.id, "invitable"))
+      refute has_element?(view, membership_selector(capable.id))
 
       assert has_element?(
                view,
@@ -845,8 +1219,18 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       assert Process.alive?(view.pid)
     end
 
-    # T3.2 — and one REMOVED disappears.
-    test "an agent removed from the space disappears without a reload",
+    # T3.2 — and one REMOVED is MARKED, not removed (task 01a05553).
+    #
+    # This is the case that carries the surface: `remove_space_agent/3`
+    # deletes the row with a bare `Repo.delete` and broadcasts ONLY
+    # `{:roster_changed, _}`, so it genuinely rides the roster subscription
+    # rather than the `{:participant_joined, _}` the add also emits.
+    #
+    # Its assertion inverted with this task. An agent that leaves the space is
+    # still an active agent and still invitable, so taking its row away would
+    # reintroduce exactly the vanishing-row mystery 01a0554f was filed for.
+    # What must change is the marker.
+    test "an agent removed from the space is marked, not dropped, without a reload",
          %{conn: conn, space: space, meeting: meeting, agent: agent} do
       viewer = seat!(space, user!("roster-remove"))
       _decoy = decoy_shell_space!(viewer)
@@ -854,17 +1238,24 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
       _ = render(view)
       assert has_element?(view, any_row_selector(agent.id))
+      refute has_element?(view, membership_selector(agent.id))
 
       :ok = Chat.remove_space_agent({:user, viewer.id}, space.id, agent.id)
 
-      refute has_element?(view, any_row_selector(agent.id))
+      assert has_element?(view, any_row_selector(agent.id))
+      assert has_element?(view, membership_selector(agent.id))
       assert Process.alive?(view.pid)
     end
 
-    # T3.3 — negative control: a roster change on a DIFFERENT space adds no
-    # row. On this surface the refetch is keyed on the meeting's own space, so
-    # this holds by construction; it is here to pin that it stays so.
-    test "a roster change on another space adds no row",
+    # T3.3 — negative control: membership is THIS space's, not any space's.
+    #
+    # Restated for task 01a05553. The stranger is now listed here from the
+    # first render, because it is an active agent — that is the point of the
+    # task. What must NOT happen is its marker flipping to "member" because
+    # somebody added it to a DIFFERENT space. That is the assertion a build
+    # which answered `:in_space?` from "is in any space" would fail, and it is
+    # reachable in a way the old refutation no longer is.
+    test "membership follows this space only, not a roster change elsewhere",
          %{conn: conn, space: space, meeting: meeting, agent: agent} do
       viewer = seat!(space, user!("roster-other"))
       other_space = space!()
@@ -879,12 +1270,17 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
       _ = render(view)
 
+      assert has_element?(view, any_row_selector(stranger.id))
+      assert has_element?(view, membership_selector(stranger.id))
+
       {:ok, _} = Chat.add_space_agent(other_space.id, stranger.id, role: "member")
 
-      refute has_element?(view, any_row_selector(stranger.id))
+      assert has_element?(view, membership_selector(stranger.id)),
+             "another space's roster row was read as membership of this meeting's space"
 
-      # The page is still alive and still lists its own roster.
+      # The page is still alive, and its own member is still unmarked.
       assert has_element?(view, any_row_selector(agent.id))
+      refute has_element?(view, membership_selector(agent.id))
     end
 
     # T3.7 — an invited agent's ARRIVAL reaches the rail. The worker's own

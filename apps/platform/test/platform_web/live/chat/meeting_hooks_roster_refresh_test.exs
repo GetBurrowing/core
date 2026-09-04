@@ -169,6 +169,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
     ~s([data-role="meeting-agent-invite-row"][data-agent-id="#{agent_id}"])
   end
 
+  # The "not in space" marker inside a given agent's row (task 01a05553).
+  defp membership_selector(agent_id) do
+    any_row_selector(agent_id) <> ~s( [data-role="meeting-agent-invite-membership"])
+  end
+
   describe "the quickmeet People tab follows the space roster" do
     # T3.4 — an agent added to the space while the viewer is in the call
     # appears in the rail.
@@ -179,11 +184,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
       refute capable.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id)
 
       view = join(conn, space)
-      refute has_element?(view, any_row_selector(capable.id))
+
+      # Since task 01a05553 the row is present before the add — the list is
+      # the active roster, not the space — so the add flips the MARKER. The
+      # claim kept here is that the rail follows the roster live.
+      assert has_element?(view, row_selector(capable.id, "invitable"))
+      assert has_element?(view, membership_selector(capable.id))
 
       {:ok, _} = Chat.add_space_agent(space.id, capable.id, role: "member")
 
       assert has_element?(view, row_selector(capable.id, "invitable"))
+      refute has_element?(view, membership_selector(capable.id))
 
       assert has_element?(
                view,
@@ -193,16 +204,22 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
       assert Process.alive?(view.pid)
     end
 
-    test "an agent removed from the space disappears without a reload",
+    # Inverted by task 01a05553: an agent that leaves the space is still an
+    # active agent and still invitable, so its row is MARKED rather than
+    # dropped. The removal is still the case that carries this stage's
+    # surface — `remove_space_agent/3` broadcasts only `{:roster_changed, _}`.
+    test "an agent removed from the space is marked, not dropped, without a reload",
          %{conn: conn, space: space, user: user} do
       capable = declaring_roster_agent!(space, ["meeting_voice"])
 
       view = join(conn, space)
       assert has_element?(view, row_selector(capable.id, "invitable"))
+      refute has_element?(view, membership_selector(capable.id))
 
       :ok = Chat.remove_space_agent({:user, user.id}, space.id, capable.id)
 
-      refute has_element?(view, any_row_selector(capable.id))
+      assert has_element?(view, row_selector(capable.id, "invitable"))
+      assert has_element?(view, membership_selector(capable.id))
       assert Process.alive?(view.pid)
     end
 
@@ -240,12 +257,22 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
              "the message below cannot even reach this pid, so the guard under test is " <>
                "never consulted and this case would be green against any build"
 
+      assert has_element?(view, membership_selector(stranger.id)),
+             "the stranger should already be listed, as a non-member of this space"
+
       {:ok, _} = Chat.add_space_agent(other_space.id, stranger.id, role: "member")
 
-      refute has_element?(view, any_row_selector(stranger.id)),
-             "another space's roster was folded into this call's People tab"
+      # Restated for task 01a05553. The stranger is now LISTED from the first
+      # render — it is an active agent, which is the task's whole point — so
+      # "no row appears" is no longer the thing to refute. What must not
+      # happen is its membership marker clearing because it was added to a
+      # DIFFERENT space, which is what a build answering `:in_space?` from
+      # "is in any space" would do.
+      assert has_element?(view, membership_selector(stranger.id)),
+             "another space's roster row was read as membership of this call's space"
 
       assert has_element?(view, row_selector(own.id, "invitable"))
+      refute has_element?(view, membership_selector(own.id))
     end
   end
 

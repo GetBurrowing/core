@@ -152,9 +152,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooksInviteTest do
   end
 
   describe "the invite section on the quickmeet rail" do
-    test "is present with the heading even when the space has no agents",
+    test "is present with the heading even when there are no agents at all",
          %{conn: conn, space: space} do
+      # Since task 01a05553 the list is the ACTIVE AGENT ROSTER, so an empty
+      # space is no longer enough to empty the section. Both are asserted.
       assert Chat.list_space_agents(space.id) == []
+      assert Chat.list_agents_for_picker() == []
 
       view = join(conn, space)
 
@@ -163,7 +166,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksInviteTest do
       assert has_element?(
                view,
                ~s(#quickmeet-call-rail [data-role="meeting-agent-invite-empty"]),
-               "No agents in this space yet"
+               "No active agents yet"
              )
 
       refute has_element?(view, ~s([data-role="meeting-agent-invite-row"]))

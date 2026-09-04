@@ -370,6 +370,17 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     * `:in_call` — "Already in the call", no control; the agent is listed
       above under In this call too.
 
+  Since task 01a05553 the rows are the whole ACTIVE AGENT ROSTER, not the
+  meeting's chat space, because a meeting's space starts empty and so the
+  list did too. A row for an agent that is not in that space carries
+  `in_space?: false` and is marked "not in space" beside the name — as
+  INFORMATION, in the muted token, next to a button that still works.
+  Membership is not a permission here and must not be drawn as one; the
+  founder read the previous screen's disabled rows as a permissions rule and
+  went looking for a setting that does not exist. Capability keeps the
+  second line; membership is a marker on the first, so a row can say both
+  without either being mistaken for the other.
+
   Blocked rows are plain `<li>`s: no `<button>`, no `phx-click`, no hover
   fill (`base-300` is a raised surface, not a hover colour). Muted, never
   `warning`: warning on this rail means something is asking a human for a
@@ -408,17 +419,26 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
           data-agent-id={row.agent.id}
         >
           <span class="min-w-0 flex-1">
-            <span
-              class={[
-                "block truncate text-[13px] leading-tight",
-                if(row.state in [:incapable, :in_call],
-                  do: "text-base-content/50",
-                  else: "text-base-content"
-                )
-              ]}
-              data-role="meeting-agent-invite-name"
-            >
-              {row.agent.name || row.agent.slug}
+            <span class="flex min-w-0 items-baseline gap-1.5">
+              <span
+                class={[
+                  "min-w-0 truncate text-[13px] leading-tight",
+                  if(row.state in [:incapable, :in_call],
+                    do: "text-base-content/50",
+                    else: "text-base-content"
+                  )
+                ]}
+                data-role="meeting-agent-invite-name"
+              >
+                {row.agent.name || row.agent.slug}
+              </span>
+              <span
+                :if={not in_space?(row)}
+                class="shrink-0 text-[10px] uppercase tracking-wide text-base-content/40"
+                data-role="meeting-agent-invite-membership"
+              >
+                not in space
+              </span>
             </span>
             <span
               :if={invite_reason(row)}
@@ -456,12 +476,20 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
           class="rounded-box border border-dashed border-base-300 px-3 py-2.5 text-[11px] leading-relaxed text-base-content/50"
           data-role="meeting-agent-invite-empty"
         >
-          No agents in this space yet. Add one to the space and it appears here, without a reload.
+          No active agents yet. Every active agent appears here, whether or not it is already in
+          this space.
         </li>
       </ul>
     </section>
     """
   end
+
+  # Membership of the meeting's chat space (task 01a05553). Absent key reads
+  # as "a member", i.e. draws NO marker: the flag arrived after this component
+  # did, and a caller still passing the old three-key row should render the
+  # row it always rendered rather than sprout a label about a space it never
+  # said anything about.
+  defp in_space?(row), do: Map.get(row, :in_space?, true)
 
   # The second line per state — the canvas's "exact line each shows". nil
   # is a real answer: an `:invitable` row of `:unknown` capability draws no

@@ -84,6 +84,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   alias Platform.Accounts
   alias Platform.Agents.Agent
+  alias Platform.Chat
+  alias Platform.Chat.SpaceAccess
   alias Platform.Meetings
   alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.Membership, as: MeetingsMembership
@@ -1037,6 +1039,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   its roster afterwards: `MeetingLive` runs `refresh_participants/1`, which
   reads its own `:meeting` assign and so cannot live here.
 
+  Since task 01a05553 stage 2 the click also ADDS the agent to that space
+  when it is not already a member — see `ensure_agent_in_space/3` for the
+  ordering and the authorization it is gated on. An agent that is already a
+  member takes the identical path it took before.
+
   The success flash says "Invited", not "is joining" (task 01a0554f). A
   successful return from `invite_agent/3` means the join was BROADCAST, and
   `Phoenix.Endpoint.broadcast/3` returns `:ok` into a topic with no
@@ -1052,6 +1059,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
          %Agent{} = agent <-
            Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)),
          %Room{} = room <- Meetings.get_active_room(space_id),
+         :ok <- ensure_agent_in_space(room, agent, socket.assigns[:current_user_record]),
          {:ok, _participant} <-
            Meetings.invite_agent(room, agent, socket.assigns[:current_user_record]) do
       put_flash(socket, :info, invite_flash(agent, room, socket.assigns[:user_id]))
@@ -1084,6 +1092,42 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
       _ ->
         put_flash(socket, :error, "That agent could not be invited.")
+    end
+  end
+
+  # Task 01a05553 stage 2: the click is the whole intention. Before this, an
+  # agent the list offered but that held no `chat_participants` row on the
+  # meeting's space could not be invited at all —
+  # `Meetings.invite_agent/3` resolves the agent through that space, so the
+  # click died in the catch-all flash and the human was sent off to add the
+  # agent by hand. Stage 1 made those agents VISIBLE (`:in_space?` on the
+  # row); this makes the button finish the job.
+  #
+  # ORDER IS LOAD-BEARING and cannot be reversed: the space row must exist
+  # before `invite_agent/3` runs, because that is what it resolves against.
+  #
+  # AUTHORIZATION. `Chat.add_space_agent/3` authorizes NOTHING — it is a
+  # bare idempotent insert (`Platform.Chat`, `add_space_agent/3`), unlike its
+  # sibling `Chat.remove_space_agent/3` which is actor-first. Adding an agent
+  # to a space is a real mutation, so it is gated HERE on
+  # `SpaceAccess.authorize_writer/2` — the exact check, on the exact space,
+  # that `Meetings.invite_agent/3` itself runs as the first step of its own
+  # `with`. A viewer who may not invite therefore may not add either, and
+  # `{:error, :forbidden}` reaches the same permission flash it always did.
+  # The check runs BEFORE the insert; swapping those two lines is a
+  # privilege escalation, not a refactor.
+  #
+  # A membership read first, so an agent that is already in the space takes
+  # exactly the path it took before this task: no insert, no
+  # `broadcast_roster_changed/3`, no extra authorization round-trip.
+  defp ensure_agent_in_space(%Room{} = room, %Agent{} = agent, actor) do
+    if Chat.get_agent_participant(room.space_id, agent.id) do
+      :ok
+    else
+      with {:ok, _writer} <- SpaceAccess.authorize_writer(room.space_id, actor),
+           {:ok, _entry} <- Chat.add_space_agent(room.space_id, agent.id) do
+        :ok
+      end
     end
   end
 
