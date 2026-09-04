@@ -22,9 +22,20 @@ defmodule PlatformWeb.Components.Meetings.TranscriptPane do
       and because morphdom keys the ignored subtree on it.
 
   Under `phx-update="ignore"` the element's non-`data-*` attributes are
-  PRESERVED across renders, so no class or `hidden` flip may live on this
-  element. `CallShell` wraps it in an outer div it owns for exactly that
-  purpose (`data-role="meeting-transcript-wrap"`).
+  PRESERVED across renders, so no server-driven class or `hidden` flip
+  may live on this element. `CallShell` wraps it in an outer div it owns
+  for exactly that purpose (`data-role="meeting-transcript-wrap"`).
+
+  The empty state is rendered OUTSIDE the host, as a sibling `<p>` before
+  it, for the mirror-image reason (task 01a0693d): anything inside the
+  ignored host is frozen at first render, so a `captions_available` that
+  changes on a later patch never reached the copy. As a sibling it lands
+  in the LiveView-owned wrap and re-renders like any other assign. The
+  hook hides it once lines exist by toggling `transcript-has-lines` on
+  its OWN host (a client-added class on an ignored element survives, a
+  client-added attribute on the LiveView-owned `<p>` would not: morphdom
+  re-syncs attributes on every patch and `/meetings` patches constantly),
+  and one `:has()` rule in `app.css` does the hiding.
 
   Design direction: Saru's canvas `01a068fc-991d-7001-a3fd-a1845732477b`.
   The pane is the tab, not a card inside it; the only rule is a hairline
@@ -47,6 +58,28 @@ defmodule PlatformWeb.Components.Meetings.TranscriptPane do
 
   def transcript_pane(assigns) do
     ~H"""
+    <%!-- Honest empty state, a SIBLING of the hook host on purpose — see
+         the moduledoc. It must never read as "transcription is running":
+         if the room has no transcriber attached, nothing is being
+         captured, and a spinner or a "Listening…" line would be the
+         always-on lie the `Listening` refusal exists to prevent. The word
+         "listening" is also spoken for on `/meetings` by the intents bar
+         (Saru's canvas, "Three calls"), so it is refuted by test. --%>
+    <p
+      :if={@captions_available}
+      class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
+      data-role="transcript-empty"
+    >
+      No speech yet. Lines appear here as people talk.
+    </p>
+    <p
+      :if={!@captions_available}
+      class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
+      data-role="transcript-empty"
+    >
+      Captions are unavailable for this meeting, so no transcript lines will
+      appear here.
+    </p>
     <div
       id={@id}
       phx-hook="MeetingTranscript"
@@ -54,29 +87,6 @@ defmodule PlatformWeb.Components.Meetings.TranscriptPane do
       data-role="meeting-transcript"
       class="relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2"
     >
-      <%!-- Honest empty state. The hook keeps this markup verbatim
-           (`_emptyHtml`) and restores it if the buffer empties, so the
-           wording lives in ONE place. It must never read as "transcription
-           is running": if the room has no transcriber attached, nothing is
-           being captured, and a spinner or a "Listening…" line would be
-           the always-on lie the `Listening` refusal exists to prevent. The
-           word "listening" is also spoken for on `/meetings` by the intents
-           bar (Saru's canvas, "Three calls"), so it is refuted by test. --%>
-      <p
-        :if={@captions_available}
-        class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
-        data-role="transcript-empty"
-      >
-        No speech yet. Lines appear here as people talk.
-      </p>
-      <p
-        :if={!@captions_available}
-        class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
-        data-role="transcript-empty"
-      >
-        Captions are unavailable for this meeting, so no transcript lines will
-        appear here.
-      </p>
     </div>
     """
   end

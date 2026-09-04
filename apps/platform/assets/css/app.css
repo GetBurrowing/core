@@ -2440,6 +2440,20 @@ body, .font-fabrikam {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* Transcript pane empty state (task 01a0693d).
+
+   The empty-state `<p data-role="transcript-empty">` is a LiveView-owned
+   SIBLING of the `phx-update="ignore"` hook host, not a child of it, so a
+   server re-render can still reach its wording. The hook cannot set
+   `hidden` on that sibling — morphdom re-syncs attributes on every patch
+   and `/meetings` patches constantly — so it flags its OWN host with
+   `transcript-has-lines` (client-added classes on an ignored element are
+   preserved) and this rule hides the copy. Same shape as the participant
+   grid above: the server does not know what JS put in the host. */
+[data-role="meeting-transcript-wrap"]:has(> .transcript-has-lines) > [data-role="transcript-empty"] {
+  display: none;
+}
+
 .meeting-tile {
   position: relative;
   border-radius: 0.75rem;

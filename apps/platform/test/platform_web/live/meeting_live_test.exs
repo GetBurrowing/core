@@ -6413,6 +6413,38 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(phx-hook="MeetingRoom")
     end
 
+    test "the Transcript tab's empty state says 'No speech yet' when LiveKit is configured — decided at mount, not at join",
+         %{conn: conn, meeting: meeting} do
+      # Task 01a0693d. `captions_available` on `/meetings` used to derive
+      # from `@livekit_url`, which is assigned ONLY on the guest bundle
+      # path (`MeetingHooks.do_join` puts the url in the join push_event
+      # payload, never in an assign), so every signed-in viewer read
+      # "unavailable" before, during and after a join even with captions
+      # flowing. It now reads `@meetings_enabled`, the same mount-time
+      # `Platform.Meetings.enabled?/0` the quickmeet passes, which is true
+      # under this describe's LiveKit triple. No join round-trip is needed
+      # to prove it: the first render is the whole claim.
+      #
+      # NAMED MUTATION: restore `(assigns[:livekit_url] || "") != ""` in
+      # `meeting_live.html.heex` and the positive assertion goes red. The
+      # unconfigured-env twin lives under "right rail: the shared
+      # CallShell on /meetings" and pins the other branch.
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=transcript")
+
+      assert html =~ "No speech yet. Lines appear here as people talk."
+      refute html =~ "Captions are unavailable"
+
+      # And the copy sits where a later patch can still reach it: in the
+      # LiveView-owned wrap, NOT inside the `phx-update="ignore"` host.
+      assert count(
+               html,
+               ~s([data-role="meeting-transcript-wrap"] > [data-role="transcript-empty"])
+             ) ==
+               1
+
+      assert count(html, ~s([data-role="meeting-transcript"] [data-role="transcript-empty"])) == 0
+    end
+
     test "auto-joins on connected mount and push_events join-meeting with token + url + room_name",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
@@ -6924,14 +6956,21 @@ defmodule PlatformWeb.MeetingLiveTest do
                ~s([data-role="meeting-transcript"][phx-hook="MeetingTranscript"][phx-update="ignore"])
              ) == 1
 
-      # Honest empty state. The test env has no LiveKit configured — the
-      # media plane that emits `TranscriptionReceived` is absent — so the
-      # pane must SAY captions are unavailable rather than showing the
-      # "none yet" line, which would imply a transcriber is attached and
-      # merely quiet. Both wordings are covered in CallShellTest; what
-      # this asserts is that MeetingLive wires the real condition through
-      # rather than hardcoding the optimistic branch.
-      assert html =~ "Captions are unavailable for this meeting"
+      # The empty-state WORDING is not asserted here any more. This describe's
+      # setup stashes a LiveKit triple, so under the mount-time
+      # `@meetings_enabled` (task 01a0693d) the pane reads "No speech yet…"
+      # here — the positive case is pinned under "LiveKit wiring (stage 2)"
+      # and the unconfigured NEGATIVE CONTROL lives in
+      # `meeting_live_captions_unconfigured_test.exs`, an `async: false`
+      # module, because REMOVING the triple from this async module would
+      # race every concurrent meeting join.
+      #
+      # HISTORY, so nobody trusts the old comment: this test used to assert
+      # "Captions are unavailable" with a comment claiming the env was
+      # unconfigured while sitting in a describe that configures it. It was
+      # green anyway, because the value came from `@livekit_url`, which the
+      # signed-in path never assigns — the very defect 01a0693d fixed.
+      assert count(html, ~s([data-role="transcript-empty"])) == 1
       refute html =~ "Listening"
     end
 

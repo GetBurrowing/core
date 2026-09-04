@@ -8,8 +8,10 @@ defmodule PlatformWeb.Components.Meetings.TranscriptPaneTest do
   the server — and are covered by `assets/test/hooks/meeting_transcript.test.js`
   against a stubbed element, and by the e2e stage in a real DOM under
   morphdom patches. This file proves the contract the server side owns:
-  the host's id, hook name, `phx-update="ignore"`, its `data-role`, and
-  the empty-state wording. Nothing here pretends to see a line.
+  the host's id, hook name, `phx-update="ignore"`, its `data-role`, the
+  empty-state wording, and (task 01a0693d) that the empty state is a
+  SIBLING of the host rather than a child — inside the ignored host it
+  would be frozen at first render. Nothing here pretends to see a line.
   """
   use ExUnit.Case, async: true
 
@@ -66,6 +68,23 @@ defmodule PlatformWeb.Components.Meetings.TranscriptPaneTest do
       assert html =~ "Captions are unavailable for this meeting"
       refute html =~ "No speech yet."
       assert count(html, ~s([data-role="transcript-empty"])) == 1
+    end
+
+    test "lives OUTSIDE the phx-update=ignore host, in either branch" do
+      # Task 01a0693d. Under `phx-update="ignore"` the host's children are
+      # whatever the FIRST render put there, forever: a `captions_available`
+      # that changes on a later patch never reaches copy inside it. So the
+      # empty state is a sibling the LiveView-owned wrap re-renders freely.
+      # NAMED MUTATION: move either `<p>` back inside the host div in
+      # `transcript_pane.ex` and the descendant count below goes to 1.
+      for available <- [true, false] do
+        html = pane(captions_available: available)
+
+        assert count(html, ~s([data-role="transcript-empty"])) == 1
+
+        assert count(html, ~s([data-role="meeting-transcript"] [data-role="transcript-empty"])) ==
+                 0
+      end
     end
 
     test "never uses the word listening, in either branch" do

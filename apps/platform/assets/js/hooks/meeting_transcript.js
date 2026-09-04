@@ -97,6 +97,11 @@ const PIN_SLACK_PX = 24
 const AGENT_IDENTITY_PREFIX = "agent:"
 const GUEST_IDENTITY_PREFIX = "guest:"
 
+// Set on the host while it holds at least one line. `app.css` hides the
+// wrap's sibling `[data-role="transcript-empty"]` when its host carries
+// it; the string must match that rule.
+const HAS_LINES_CLASS = "transcript-has-lines"
+
 const MeetingTranscript = {
   mounted() {
     /** @type {{ id: string, speaker: string, identity: string, text: string, final: boolean, at: number }[]} */
@@ -119,10 +124,15 @@ const MeetingTranscript = {
     // unpinned; null once they return. Drives the jump-to-live pill.
     this._pendingSpeaker = null
 
-    // Server-rendered empty-state markup. Kept verbatim so the pane can
-    // fall back to the SAME honest wording the LiveView emitted rather
-    // than this hook keeping a second copy that could drift.
-    this._emptyHtml = this.el.innerHTML
+    // The empty state is NOT inside this host. It is a LiveView-owned
+    // sibling `<p data-role="transcript-empty">` in the wrap (task
+    // 01a0693d), so a server re-render can still change its wording. This
+    // hook hides it by toggling `transcript-has-lines` on ITS OWN host —
+    // a class added client-side on a `phx-update="ignore"` element is
+    // preserved across patches, whereas an attribute set on the sibling
+    // would be stripped by morphdom on the next patch — and one `:has()`
+    // rule in app.css does the rest. Nothing is added at mount: the copy
+    // stays visible until the first line, see `_render`.
 
     this._boundOnCaption = this._onCaption.bind(this)
     this._boundOnScroll = this._onScroll.bind(this)
@@ -285,10 +295,16 @@ const MeetingTranscript = {
     const displayLines = [...this._lines]
     if (this._interimLine) displayLines.push(this._interimLine)
 
+    // Reached with no lines by `_onScroll` (a reader dragging an empty
+    // pane) before any caption. The buffer never empties once a line has
+    // landed, but the remove keeps the branch honest either way: the
+    // sibling copy is visible exactly while the host has nothing to show.
     if (displayLines.length === 0) {
-      this.el.innerHTML = this._emptyHtml
+      this.el.classList.remove(HAS_LINES_CLASS)
       return
     }
+
+    this.el.classList.add(HAS_LINES_CLASS)
 
     const parts = []
 
@@ -372,4 +388,4 @@ const MeetingTranscript = {
 }
 
 export default MeetingTranscript
-export { MAX_LINES, PIN_SLACK_PX }
+export { MAX_LINES, PIN_SLACK_PX, HAS_LINES_CLASS }

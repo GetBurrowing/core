@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import MeetingTranscript, { MAX_LINES, PIN_SLACK_PX } from "../../js/hooks/meeting_transcript.js"
+import MeetingTranscript, { MAX_LINES, PIN_SLACK_PX, HAS_LINES_CLASS } from "../../js/hooks/meeting_transcript.js"
 
 /**
  * Tests for the Transcript-tab hook (task 01a05b14 stage 5).
@@ -28,18 +28,26 @@ import MeetingTranscript, { MAX_LINES, PIN_SLACK_PX } from "../../js/hooks/meeti
  *   6. the pane SAYS when the cap has dropped the top of the record
  *   7. interim text is muted, not italic, and finals are full strength
  *
+ * Task 01a0693d moved the empty state OUT of the host. It is now a
+ * LiveView-owned sibling `<p data-role="transcript-empty">` that this hook
+ * never touches; it hides it by toggling `HAS_LINES_CLASS` on its own
+ * host, which `app.css` turns into `display: none` on the sibling. So:
+ *   8. the host carries NO class at mount and after a lineless scroll,
+ *      and carries it after the first final OR interim line (the copy
+ *      would otherwise sit on top of the transcript — or, if the hook set
+ *      `hidden` on the sibling instead, morphdom would strip it on the
+ *      next patch and the copy would pop back)
+ *
  * No jsdom is installed for the assets workspace (see
  * `meeting_captions.test.js`), so the two DOM surfaces the hook touches
- * are stubbed the same way: the host element's `innerHTML` / scroll
- * geometry / listeners, and the throwaway `document.createElement("div")`
- * that `_escapeHtml` uses. `document.addEventListener` is stubbed to
+ * are stubbed the same way: the host element's `innerHTML` / `classList`
+ * / scroll geometry / listeners, and the throwaway
+ * `document.createElement("div")` that `_escapeHtml` uses. `document.addEventListener` is stubbed to
  * capture the listener so the tests can drive it directly, and the host
  * stub captures its own `scroll` / `click` listeners the same way — the
  * follow-live flag is set ONLY by the scroll listener, so a test that
  * moves `scrollTop` must also fire `scroll`, exactly as a browser would.
  */
-
-const EMPTY_HTML = '<p data-role="transcript-empty">No captions have been received</p>'
 
 function installDocumentStub() {
   const listeners = {}
@@ -68,13 +76,22 @@ function installDocumentStub() {
   return listeners
 }
 
-// Host element stub. The scroll geometry defaults to a pane taller than
-// its content, i.e. trivially at the live edge — the tests that care
-// about pinning override these three numbers explicitly and then fire
-// `scroll` through `el.listeners`.
+// Host element stub. The server renders the host EMPTY (the empty-state
+// copy is a sibling outside it, task 01a0693d), so `innerHTML` starts as
+// "". The scroll geometry defaults to a pane taller than its content,
+// i.e. trivially at the live edge — the tests that care about pinning
+// override these three numbers explicitly and then fire `scroll` through
+// `el.listeners`. `classList` is a Set-backed stub of the three methods
+// the hook may call.
 function fakeHostEl() {
+  const classes = new Set()
   const el = {
-    innerHTML: EMPTY_HTML,
+    innerHTML: "",
+    classList: {
+      add: (c) => classes.add(c),
+      remove: (c) => classes.delete(c),
+      contains: (c) => classes.has(c),
+    },
     scrollTop: 0,
     clientHeight: 500,
     scrollHeight: 100,
@@ -168,16 +185,41 @@ describe("MeetingTranscript", () => {
     delete globalThis.document
   })
 
-  it("shows the server-rendered empty state until a caption arrives", () => {
-    // DIRECTION CONTROL: the empty state is present BEFORE any caption, so
-    // the assertion after the dispatch is about the caption and not about
-    // markup that was never there.
-    expect(hook.el.innerHTML).toContain("transcript-empty")
+  it("leaves the host empty and unflagged until a caption arrives, then flags it", () => {
+    // The empty-state copy is NOT in the host (task 01a0693d) — it is a
+    // LiveView-owned sibling this hook never writes. What the hook owns
+    // is the flag that hides it. DIRECTION CONTROL: no flag at mount, so
+    // its presence after the dispatch is the caption's doing.
+    expect(hook.el.innerHTML).toBe("")
+    expect(hook.el.innerHTML).not.toContain("transcript-empty")
+    expect(hook.el.classList.contains(HAS_LINES_CLASS)).toBe(false)
 
     caption(listeners, { id: "a", speaker: "Rowan", text: "hello" })
 
-    expect(hook.el.innerHTML).not.toContain("transcript-empty")
+    expect(hook.el.classList.contains(HAS_LINES_CLASS)).toBe(true)
     expect(renderedLines(hook)).toEqual(["Rowan hello"])
+    // Still nothing of the empty state in the host: it is hidden by CSS
+    // on the sibling, not by this hook rewriting copy.
+    expect(hook.el.innerHTML).not.toContain("transcript-empty")
+  })
+
+  it("keeps the flag off after a scroll with no lines, and sets it for an interim-only caption", () => {
+    // `_onScroll` reaches the empty render branch before any caption
+    // (the reader drags an empty pane). The branch must NOT flag the
+    // host, or the sibling copy would vanish over an empty transcript.
+    hook.el.clientHeight = 200
+    hook.el.scrollHeight = 1000
+    scrollTo(hook, 100)
+    expect(hook.el.classList.contains(HAS_LINES_CLASS)).toBe(false)
+    expect(renderedLines(hook)).toEqual([])
+
+    // An interim line is a line the reader can see, so it flags too —
+    // NAMED MUTATION: delete the `classList.add` in `_render` and both
+    // this and the final-caption case above go red.
+    caption(listeners, { id: "i1", speaker: "Rowan", text: "hello th", final: false })
+
+    expect(hook.el.classList.contains(HAS_LINES_CLASS)).toBe(true)
+    expect(interimCount(hook)).toBe(1)
   })
 
   it("renders finalized lines in arrival order", () => {
@@ -248,7 +290,9 @@ describe("MeetingTranscript", () => {
     caption(listeners, { id: "a", speaker: "Rowan", text: "   " })
 
     expect(renderedLines(hook)).toEqual([])
-    expect(hook.el.innerHTML).toContain("transcript-empty")
+    // Nothing rendered, nothing flagged: the sibling empty state stays.
+    expect(hook.el.innerHTML).toBe("")
+    expect(hook.el.classList.contains(HAS_LINES_CLASS)).toBe(false)
   })
 
   it("auto-scrolls only when the reader is already pinned to the bottom", () => {

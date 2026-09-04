@@ -1686,6 +1686,12 @@
             </button>
           </div>
 
+          <%!-- `captions_available` is mount-time, like the quickmeet
+               (chat_live.html.heex): the LiveKit triple is deployment
+               config, not join state. `@livekit_url` is only ever
+               assigned on the GUEST bundle path, so deriving it from that
+               read "unavailable" for every signed-in viewer, before,
+               during and after a join (task 01a0693d). --%>
           <CallShell.call_rail
             id="meeting-call-rail"
             class="min-h-0 flex-1"
@@ -1703,7 +1709,7 @@
             candidates_closed={@meeting_candidates_closed}
             candidate_events={@meeting_candidate_events}
             candidate_error={@candidate_error}
-            captions_available={(assigns[:livekit_url] || "") != ""}
+            captions_available={@meetings_enabled}
           >
             <:canvas_extra>
               <.intents_collapse
