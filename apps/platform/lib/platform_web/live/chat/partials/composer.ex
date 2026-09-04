@@ -516,7 +516,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
             placeholder={"Message ##{masked_space_name(assigns, (@active_space && @active_space.name) || "")}"}
             autocomplete="off"
             rows="1"
-            class="min-w-0 flex-1 text-sm resize-none"
+            class="flex-1 text-sm resize-none"
             style="line-height:1.5;padding:4px 0;min-height:28px;max-height:200px;overflow-y:auto;field-sizing:content"
             phx-hook="ComposeInput"
           >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>

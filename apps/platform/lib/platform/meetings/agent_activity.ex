@@ -179,6 +179,36 @@ defmodule Platform.Meetings.AgentActivity do
 
   def put(%__MODULE__{} = activity, _signal, _agent_id, _active?), do: activity
 
+  @doc """
+  Fold one `{:agent_typing, …}` broadcast into the value.
+
+  THE one implementation of the typing fold, for both surfaces. Task
+  `01a05b14` stage 5 (round 2) found `/meetings` folding this signal in
+  `PlatformWeb.MeetingLive.handle_info/2` while the quickmeet had no
+  fold at all — so "Writing" was unreachable on the chat surface while
+  the composer on the same page showed "X is thinking…" from the same
+  broadcast. Both surfaces now call this.
+
+  `chat_participant_id` is a `Platform.Chat.Participant` id and is
+  bridged through `agent_id_for_chat_participant/1`: a human
+  participant, an unknown id or a malformed one resolves to `nil` and
+  leaves the value untouched, so a person typing in the meeting chat
+  cannot light an agent row. `typing` is compared to `true` rather than
+  pattern-matched, so a payload carrying anything else reads as
+  "stopped" instead of raising inside a `handle_info`.
+  """
+  @spec put_typing(t(), term(), term()) :: t()
+  def put_typing(%__MODULE__{} = activity, chat_participant_id, typing) do
+    case agent_id_for_chat_participant(chat_participant_id) do
+      agent_id when is_binary(agent_id) -> put(activity, :typing, agent_id, typing == true)
+      nil -> activity
+    end
+  end
+
+  # A socket that never hydrated the struct (nil) folds nothing rather
+  # than crashing the LiveView that received a broadcast.
+  def put_typing(activity, _chat_participant_id, _typing), do: activity
+
   # A new in-flight intent retires the previous failure for that agent.
   #
   # Without this the `:failed` cap is permanent for the life of the

@@ -342,7 +342,12 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
   attr(:intents, :list, required: true)
   attr(:open, :boolean, default: true)
   attr(:expanded, :boolean, default: false)
-  attr(:pending_cancels, :any, default: nil)
+  # Default is a real MapSet, not nil. `assign_new/3` cannot supply it:
+  # an attr default makes the key PRESENT-and-nil, so the assign_new that
+  # used to sit in `intents_collapse/1` never fired and the
+  # `MapSet.member?/2` at the `intent_row` loop below raised
+  # FunctionClauseError for any caller that omitted the attr.
+  attr(:pending_cancels, :any, default: MapSet.new())
   attr(:reason_picker_id, :string, default: nil)
   attr(:error, :string, default: nil)
   attr(:muted, :boolean, default: false)
@@ -350,7 +355,6 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
   def intents_collapse(assigns) do
     assigns =
       assigns
-      |> assign_new(:pending_cancels, fn -> MapSet.new() end)
       |> assign(:summary, summary(assigns.intents))
       |> assign(:summary_parts, summary_parts(assigns.intents))
 

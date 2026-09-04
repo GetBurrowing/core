@@ -17,6 +17,7 @@ defmodule PlatformWeb.MeetingLiveTest do
   use PlatformWeb.ConnCase, async: true
 
   import Phoenix.LiveViewTest
+  import Ecto.Query, only: [from: 2]
 
   alias Platform.{Chat, Meetings, Repo}
   alias Platform.Accounts.User
@@ -371,7 +372,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # *can* render, not that it's always present.
       {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(data-pane="left-rail")
+      assert html =~ ~s(data-pane="call-rail")
       assert html =~ ~s(data-pane="center-stage")
       assert html =~ ~s(data-pane="chat-panel")
       # On default-gallery mount, the strip is intentionally hidden.
@@ -822,17 +823,19 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
     end
 
-    test "drawer aside has lg:static and translate-x classes (responsive shape)", %{
+    test "drawer aside keeps its slide-in shape and is drawer-only at lg", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       # On `<lg`: fixed slide-in (translate-x-full closed).
-      # On `>=lg`: static, in-flow column, ignores assign (lg:translate-x-0).
-      assert html =~ "lg:static"
+      # On `>=lg`: hidden outright (task 01a05b14 stage 3) — the desktop
+      # right column belongs to the shared call rail, and the embedded
+      # `live_render` must stay in EXACTLY ONE DOM node, so the pane is
+      # hidden rather than duplicated.
       assert html =~ "translate-x-full"
-      assert html =~ "lg:translate-x-0"
+      assert html =~ "lg:!hidden"
     end
 
     test "toggle button has aria-expanded reflecting :chat_panel_open", %{
@@ -1088,9 +1091,9 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> element(~s([data-stage-mode-button="canvas"]))
         |> render_click()
 
-      # Left rail + bottom strip are presentation-independent of the
+      # Call rail + bottom strip are presentation-independent of the
       # non-gallery stage modes — they must survive a mode switch.
-      assert html =~ ~s(data-pane="left-rail")
+      assert html =~ ~s(data-pane="call-rail")
       assert html =~ ~s(data-pane="bottom-strip")
     end
 
@@ -1133,8 +1136,8 @@ defmodule PlatformWeb.MeetingLiveTest do
 
         # …and the mode-independent panes (left rail, participant rail
         # placeholder) remain mounted on every click.
-        assert html =~ ~s(data-pane="left-rail"),
-               "left rail unmounted after switching to #{mode}"
+        assert html =~ ~s(data-pane="call-rail"),
+               "call rail unmounted after switching to #{mode}"
 
         assert html =~ ~s(data-component="participant-rail"),
                "participant rail unmounted after switching to #{mode}"
@@ -1955,12 +1958,14 @@ defmodule PlatformWeb.MeetingLiveTest do
       # omitted from the gallery grid.
       assert html =~ ~s(data-gallery-tile-count="2")
       assert html =~ ~s(data-gallery-grid)
-      # Task 019e412a: the grid shape is participant-count-driven, and
-      # 2 humans yields a vertical stack (1 col × 2 rows) so each tile
-      # gets a wide-short cell where a 16:9 tile fits at near-full
-      # width — much bigger than what a 2x1 horizontal split would
-      # produce in a portrait gallery interior.
-      assert html =~ ~s(data-gallery-grid-shape="grid-cols-1 grid-rows-2")
+      # Task 01a05b14 stage 3: the grid shape is participant-count-driven
+      # and 2 humans yields TWO COLUMNS. The cells stretch and the tile
+      # fills the cell, so the pair sits side by side filling the stage
+      # instead of stacking as a centred 520px column inside a 744px
+      # stage (the 224px dead-margin defect the sponsor rejected).
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-2")
+      # Two cells is already a rectangle — no ghost.
+      refute html =~ ~s(data-gallery-ghost-cell)
 
       # Two video tiles, one per human; agent is omitted from the
       # gallery grid. Scope the count to the gallery section: the
@@ -1999,21 +2004,27 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # The grid container itself must still own the full center-stage
       # area. Pull it out of the full html with a class regex (it's a
-      # unique element keyed by data-gallery-grid). The grid is
-      # `grid h-full w-full auto-rows-fr ... place-items-center` so
-      # cells partition the visible interior with no left-over space
-      # AND wrappers center in their cells (the wrapper itself fills
-      # the cell as a size container for the inner tile's container
-      # query).
+      # unique element keyed by data-gallery-grid).
+      #
+      # Task 01a05b14 stage 3 changed HOW it owns that area. It used to
+      # be `h-full ... place-items-center`: full height, but every cell
+      # centring a 16:9 tile inside itself, which measured 520px of grid
+      # in a 744px stage. It is now `flex-1` (it is the growing child of
+      # the stage column, which the control bar shares) with the cells
+      # STRETCHED -- `place-items-center` is asserted GONE, because
+      # re-adding it silently restores the floating-card layout with
+      # nothing else failing.
       [_, grid_class] =
         Regex.run(~r/class="([^"]*)"\s+data-gallery-grid(?![-\w])/, html)
 
       grid_tokens = String.split(grid_class)
 
-      assert "h-full" in grid_tokens
+      assert "flex-1" in grid_tokens
+      assert "min-h-0" in grid_tokens
       assert "w-full" in grid_tokens
       assert "auto-rows-fr" in grid_tokens
-      assert "place-items-center" in grid_tokens
+      assert "gap-2.5" in grid_tokens
+      refute "place-items-center" in grid_tokens
     end
 
     test "Screen → Gallery → Canvas preserves the canvas state in the LV assigns", %{
@@ -2138,10 +2149,11 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(data-stage-mode="gallery")
       assert html =~ ~s(data-gallery-tile-count="3")
       assert html =~ ~s(data-gallery-grid)
-      # Task 019e412a (v3): 3 humans → 1x3 vertical stack, so the
-      # tall portrait gallery interior yields wide-short cells where
-      # 16:9 tiles fit at ~462×260 instead of ~200×113.
-      assert html =~ ~s(data-gallery-grid-shape="grid-cols-1 grid-rows-3")
+      # Task 01a05b14 stage 3: 3 humans → 2 columns, and the odd cell
+      # out is completed by a GHOST cell so the block reads as a 2x2
+      # with one free seat.
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-2")
+      assert html =~ ~s(data-gallery-ghost-cell)
 
       # Scope the count to the gallery grid block. There is no bottom
       # strip in gallery mode, so the entire suffix after [data-gallery-grid]
@@ -2168,10 +2180,11 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       assert html =~ ~s(data-gallery-tile-count="1")
-      assert html =~ ~s(data-gallery-grid-shape="grid-cols-1 grid-rows-1")
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-1")
+      refute html =~ ~s(data-gallery-ghost-cell)
     end
 
-    test "with 6 human participants, gallery uses the responsive 1x6 / sm:3x2 grid shape",
+    test "with 6 human participants, gallery uses the 3-column grid shape",
          %{conn: conn, meeting: meeting, space: space} do
       for name <- ~w(Ada Grace Hedy Edith Karen Sophie) do
         seed_meeting_presence(space, "user", name)
@@ -2181,8 +2194,98 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert html =~ ~s(data-gallery-tile-count="6")
 
-      assert html =~
-               ~s(data-gallery-grid-shape="grid-cols-1 grid-rows-6 sm:grid-cols-3 sm:grid-rows-2")
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-3")
+      refute html =~ ~s(data-gallery-ghost-cell)
+    end
+
+    # ── Task 01a05b14 stage 3: a filling grid, and the ghost cell ───────
+    #
+    # WHAT THESE TESTS CAN AND CANNOT SEE, stated rather than implied: a
+    # LiveViewTest render has no layout engine, so it can pin the column
+    # class and the ghost cell's PRESENCE, and it CANNOT pin that the
+    # grid actually fills the stage. The 224px -> ~32px deficit closing
+    # is measured by DOM probe at capture time and lives in the stage
+    # evidence, not here.
+    # REGRESSION, found while capturing this stage's evidence (not by any
+    # test): commit 6ecb0d5b -- stage 2 of this same task -- committed four
+    # lines of erl stderr ("=WARNING REPORT==== ... Multiple -sname given to
+    # erl") to the TOP of `meeting_live.html.heex`, where they rendered as
+    # visible body text above the meeting shell on every /meetings request.
+    #
+    # Nothing caught it. Every assertion in this file is `html =~ needle`
+    # or a selector count, and stray text at the top of the template
+    # changes neither. Only a screenshot showed it. This is the assertion
+    # that would have.
+    test "the page renders no stray BEAM/erl diagnostic text", %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      body = html |> frag() |> LazyHTML.query("main") |> LazyHTML.text()
+
+      for needle <- ["WARNING REPORT", "=ERROR REPORT", "Multiple -sname given"] do
+        refute body =~ needle,
+               "BEAM diagnostic output leaked into the rendered page: #{needle}"
+      end
+    end
+
+    test "the column count tracks the participant count at 1, 2, 4 and 9",
+         %{conn: conn, meeting: meeting, space: space} do
+      names = ~w(Ada Grace Hedy Edith Karen Sophie Joan Radia Barbara)
+      expected = %{1 => "grid-cols-1", 2 => "grid-cols-2", 4 => "grid-cols-2", 9 => "grid-cols-3"}
+
+      for {n, shape} <- Enum.sort(expected) do
+        _ = space_with_humans(space, names, n)
+
+        {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+        assert html =~ ~s(data-gallery-tile-count="#{n}"),
+               "seeding #{n} humans did not produce #{n} tiles"
+
+        assert html =~ ~s(data-gallery-grid-shape="#{shape}"),
+               "#{n} participants should render #{shape}"
+      end
+    end
+
+    # ONE TEST PER COUNT, ON PURPOSE. A single test looping 1..5 aborts at
+    # the first failing count and reports ONE failure for FIVE breakages,
+    # which is exactly the arithmetic the mutation-count guard exists to
+    # detect. Loosening the `:if` to always-true must go red at 1, 2, 4
+    # AND 5 independently -- and stay green at 3.
+    for n <- [1, 2, 4, 5] do
+      test "no ghost cell at #{n} participants", %{
+        conn: conn,
+        meeting: meeting,
+        space: space
+      } do
+        n = unquote(n)
+        _ = space_with_humans(space, ~w(Ada Grace Hedy Edith Karen), n)
+
+        {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+        assert html =~ ~s(data-gallery-tile-count="#{n}")
+
+        assert count(html, ~s([data-gallery-ghost-cell])) == 0,
+               "a ghost cell leaked at #{n} participants"
+      end
+    end
+
+    test "exactly one ghost cell completes the 2x2 at three participants",
+         %{conn: conn, meeting: meeting, space: space} do
+      _ = space_with_humans(space, ~w(Ada Grace Hedy), 3)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-gallery-tile-count="3")
+
+      assert count(html, ~s([data-gallery-ghost-cell])) == 1,
+             "three participants should be completed to a 2x2 by ONE ghost cell"
+
+      # It is decoration, not a seat: no tile binds against it, so it must
+      # not claim to be a gallery cell, and it must not be announced.
+      ghost = within(html, ~s([data-gallery-ghost-cell]))
+      assert LazyHTML.attribute(ghost, "aria-hidden") == ["true"]
+      [class] = LazyHTML.attribute(ghost, "class")
+      assert class =~ "opacity-30"
+      assert count(html, ~s([data-gallery-ghost-cell][data-gallery-cell])) == 0
     end
 
     test "identity alignment: gallery and strip use the same `\"user:\" <> pid` format",
@@ -2243,134 +2346,88 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
-  # ── gallery_grid_class/1 (task 019e412a) ────────────────────────────────
+  # ── gallery_grid_class/1 + gallery_ghost_cell?/1 ─────────────────────────
   #
-  # Drives the responsive grid shape of the gallery wrapper based on the
-  # participant count. The function returns a Tailwind class STRING (not
-  # a list) so the .heex caller can splice it into a class= list literal
-  # without `Enum.join`. Every literal class string MUST be statically
-  # discoverable by Tailwind v4's content scanner — that's why the
-  # function body avoids `"grid-cols-#{n}"` style interpolation.
+  # Task 01a05b14 stage 3 replaced the 019e412a shape table. The old table
+  # emitted `grid-cols-N grid-rows-M` with a mobile/desktop `sm:` split and
+  # paired it with a per-TILE 16:9 binding plus `place-items-center`. That
+  # combination is what the sponsor rejected: measured on `/meetings` at
+  # 1280x800 with two participants, the stage was 744px wide and the grid
+  # 520px — a 224px horizontal deficit against a stage padding of only
+  # 32px, so the call read as two floating cards.
   #
-  # Mobile/desktop split: at <sm (<640px viewport) the layout collapses
-  # to a vertical stack (or 2 cols for very high counts) so each tile
-  # keeps a legible width. At sm+ the prior desktop-optimized shape is
-  # restored via the `sm:` prefix. The 80px legibility floor was the
-  # specific failure on the case-3 (6 participants × 390px) e2e review.
+  # The cells now STRETCH and the tile fills the cell (`object-cover` on the
+  # injected <video>), so the shape only has to say how many columns. Rows
+  # come from `auto-rows-fr`. Those old row classes and `sm:` prefixes are
+  # asserted GONE below, not merely un-asserted, so a revert goes red.
+  #
+  # Every literal class string MUST stay statically discoverable by Tailwind
+  # v4's content scanner — that is why the function body avoids
+  # `"grid-cols-\#{n}"` style interpolation.
   describe "gallery_grid_class/1" do
     alias PlatformWeb.MeetingLive
 
-    test "returns 1x1 for 0 or 1 participants (the gallery container is single-tile)" do
-      assert MeetingLive.gallery_grid_class(0) == "grid-cols-1 grid-rows-1"
-      assert MeetingLive.gallery_grid_class(1) == "grid-cols-1 grid-rows-1"
+    test "0 or 1 participants get a single column" do
+      assert MeetingLive.gallery_grid_class(0) == "grid-cols-1"
+      assert MeetingLive.gallery_grid_class(1) == "grid-cols-1"
     end
 
-    test "2 participants stack vertically (1x2) so each tile is wide, not narrow" do
-      # The desktop gallery interior is roughly portrait (~624×780). A
-      # 2-cols-1-row split yields 312×780 cells where a 16:9 tile is
-      # width-bounded at 312×175 — tiny and surrounded by vertical
-      # letterbox. Stacking 1x2 yields 624×390 cells where the tile
-      # fits at 624×351 — ~4× the per-tile area. This was Rowan's
-      # explicit feedback after the f1e16f1 fix. Already vertical on
-      # mobile too, so no sm: override needed.
-      assert MeetingLive.gallery_grid_class(2) == "grid-cols-1 grid-rows-2"
+    test "2..4 participants get two columns (the canvas's 2x2 block)" do
+      for n <- 2..4 do
+        assert MeetingLive.gallery_grid_class(n) == "grid-cols-2"
+      end
     end
 
-    test "3 participants stack vertically (1x3) for the same reason as 2" do
-      # 1x3 in a 624×780 container gives 624×260 cells where the 16:9
-      # tile fits at 462×260 — much bigger than the 200×113 a 3x1
-      # split would have produced. Already vertical on mobile too.
-      assert MeetingLive.gallery_grid_class(3) == "grid-cols-1 grid-rows-3"
+    test "5..9 participants get three columns" do
+      for n <- 5..9 do
+        assert MeetingLive.gallery_grid_class(n) == "grid-cols-3"
+      end
     end
 
-    test "arity-2 :shell mode preserves the vertical-stack layout at count 2 and 3" do
-      # The default guest-carve-out only kicks in for chrome_mode == :none.
-      # Shell (the auth surface) keeps the layout Rowan validated after
-      # f1e16f1: 1x2 / 1x3 for 2 or 3 participants respectively.
-      assert MeetingLive.gallery_grid_class(2, :shell) == "grid-cols-1 grid-rows-2"
-      assert MeetingLive.gallery_grid_class(3, :shell) == "grid-cols-1 grid-rows-3"
+    test "10 and beyond get four columns" do
+      assert MeetingLive.gallery_grid_class(10) == "grid-cols-4"
+      assert MeetingLive.gallery_grid_class(17) == "grid-cols-4"
+      assert MeetingLive.gallery_grid_class(100) == "grid-cols-4"
     end
 
-    test "arity-2 :none mode goes side-by-side on sm+ for count 2 and 3" do
-      # Guest surface has no chat panel — the stage owns the full
-      # viewport. Stacking 2/3 tiles vertically there wastes horizontal
-      # width; each tile becomes a narrow letterbox. On sm+ we switch
-      # to side-by-side (2x1 for 2 participants, 3x1 for 3) so each
-      # tile fills ~½ or ⅓ of the wide guest viewport instead. Mobile
-      # (< sm) keeps the readable vertical stack.
-      assert MeetingLive.gallery_grid_class(2, :none) ==
-               "grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1"
-
-      assert MeetingLive.gallery_grid_class(3, :none) ==
-               "grid-cols-1 grid-rows-3 sm:grid-cols-3 sm:grid-rows-1"
+    test "no shape carries a row class or an sm: breakpoint any more" do
+      # The reverted-to-019e412a failure mode is a shape string that
+      # re-introduces `grid-rows-*` (which fights `auto-rows-fr`) or a
+      # `sm:` prefix (which reinstates the mobile vertical stack the
+      # canvas does not draw). Pin it across the whole domain rather
+      # than at the few counts the render tests happen to exercise.
+      for n <- 0..20 do
+        shape = MeetingLive.gallery_grid_class(n)
+        refute shape =~ "grid-rows-", "count #{n} still emits a row class: #{shape}"
+        refute shape =~ "sm:", "count #{n} still emits an sm: breakpoint: #{shape}"
+      end
     end
 
-    test "arity-2 delegates to arity-1 for every other count regardless of chrome" do
-      # Only 2 and 3 differ across surfaces; 0, 1, and >=4 already have
-      # sensible layouts that work in both. Sanity-check a couple.
-      assert MeetingLive.gallery_grid_class(1, :none) == MeetingLive.gallery_grid_class(1)
-      assert MeetingLive.gallery_grid_class(4, :none) == MeetingLive.gallery_grid_class(4)
-      assert MeetingLive.gallery_grid_class(9, :shell) == MeetingLive.gallery_grid_class(9)
+    test "arity-2 delegates to arity-1 for every chrome mode and count" do
+      # The guest surface's old side-by-side carve-out for 2 and 3 existed
+      # only to reclaim width the stacked shell layout wasted. Stretched
+      # cells do that on both surfaces, so the shapes no longer diverge —
+      # asserted across the full domain so a re-introduced carve-out for
+      # any single count goes red.
+      for n <- 0..20, chrome <- [:shell, :none] do
+        assert MeetingLive.gallery_grid_class(n, chrome) == MeetingLive.gallery_grid_class(n)
+      end
     end
+  end
 
-    test "4 participants stack on mobile (1x4) and form a 2x2 square at sm+" do
-      assert MeetingLive.gallery_grid_class(4) ==
-               "grid-cols-1 grid-rows-4 sm:grid-cols-2 sm:grid-rows-2"
-    end
+  describe "gallery_ghost_cell?/1" do
+    alias PlatformWeb.MeetingLive
 
-    test "5..6 stack on mobile (1xN) and fit a 3x2 rectangle at sm+" do
-      # Case-3 of the original e2e (6 participants × 390px viewport)
-      # failed when the desktop 3x2 shape was applied on mobile —
-      # tiles came out 111×63, below the 80px legibility floor. The
-      # mobile 1x6 layout gives 6 × ~210px tall tiles in a scrollable
-      # container.
-      assert MeetingLive.gallery_grid_class(5) ==
-               "grid-cols-1 grid-rows-5 sm:grid-cols-3 sm:grid-rows-2"
+    test "true at exactly three cells and false at every other count" do
+      # Three cells in a two-column grid leaves one ragged hole, which the
+      # canvas fills with a dimmed outline. Every other count is either
+      # already rectangular or lives in a wider grid where one ghost per
+      # empty slot would paint up to six dead boxes.
+      assert MeetingLive.gallery_ghost_cell?(3)
 
-      assert MeetingLive.gallery_grid_class(6) ==
-               "grid-cols-1 grid-rows-6 sm:grid-cols-3 sm:grid-rows-2"
-    end
-
-    test "7..9 stack on mobile (1xN) and fit a 3x3 square at sm+" do
-      assert MeetingLive.gallery_grid_class(7) ==
-               "grid-cols-1 grid-rows-7 sm:grid-cols-3 sm:grid-rows-3"
-
-      assert MeetingLive.gallery_grid_class(8) ==
-               "grid-cols-1 grid-rows-8 sm:grid-cols-3 sm:grid-rows-3"
-
-      assert MeetingLive.gallery_grid_class(9) ==
-               "grid-cols-1 grid-rows-9 sm:grid-cols-3 sm:grid-rows-3"
-    end
-
-    test "10..12 use 2 cols on mobile and fit a 4x3 rectangle at sm+" do
-      # At 10+ participants, single-column stacking gets unwieldy on
-      # mobile (10+ tiles × ~210px = 2100+ px of scroll). Switching to
-      # 2 cols keeps tile width ~180px (above the 80px floor) and
-      # halves the scroll distance.
-      assert MeetingLive.gallery_grid_class(10) ==
-               "grid-cols-2 grid-rows-5 sm:grid-cols-4 sm:grid-rows-3"
-
-      assert MeetingLive.gallery_grid_class(11) ==
-               "grid-cols-2 grid-rows-6 sm:grid-cols-4 sm:grid-rows-3"
-
-      assert MeetingLive.gallery_grid_class(12) ==
-               "grid-cols-2 grid-rows-6 sm:grid-cols-4 sm:grid-rows-3"
-    end
-
-    test "13..16 use 2 cols on mobile and fit a 4x4 square at sm+" do
-      assert MeetingLive.gallery_grid_class(13) ==
-               "grid-cols-2 grid-rows-7 sm:grid-cols-4 sm:grid-rows-4"
-
-      assert MeetingLive.gallery_grid_class(16) ==
-               "grid-cols-2 grid-rows-8 sm:grid-cols-4 sm:grid-rows-4"
-    end
-
-    test "17+ use 2 cols on mobile (bounded scroll) and 5x4 at sm+ with overflow" do
-      assert MeetingLive.gallery_grid_class(17) ==
-               "grid-cols-2 grid-rows-8 sm:grid-cols-5 sm:grid-rows-4"
-
-      assert MeetingLive.gallery_grid_class(100) ==
-               "grid-cols-2 grid-rows-8 sm:grid-cols-5 sm:grid-rows-4"
+      for n <- Enum.reject(0..20, &(&1 == 3)) do
+        refute MeetingLive.gallery_ghost_cell?(n), "ghost cell leaked at count #{n}"
+      end
     end
   end
 
@@ -6505,13 +6562,17 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Stage 2 contract: client-side click handler. The top-bar share
       # button MUST use `phx-hook="MeetingShareButton"` so the gesture
       # reaches `getDisplayMedia()` without yielding to the WebSocket.
-      assert html =~ ~s(id="meeting-share-btn-topbar")
+      assert html =~ ~s(id="meeting-share-btn-desktop")
       assert html =~ ~s(phx-hook="MeetingShareButton")
 
       # Belt-and-suspenders: the legacy phx-click that used to be on
       # this button must NOT be present anymore (it would race the hook).
-      refute html =~
-               ~r/id="meeting-share-btn-topbar"[^>]*phx-click="meeting_toggle_screen_share"/
+      # `phx-click` IS still on the button, deliberately: the hook calls
+      # `preventDefault`/`stopPropagation` and only falls back to the
+      # server event when there is no LiveKit room to drive. What must
+      # not happen is the hook going missing, which is asserted above and
+      # again in the CallShell mount tests.
+      assert html =~ ~s(data-role="meeting-screen-share")
     end
 
     test "screen-mode CTA uses the MeetingShareButton hook (stage 2)", %{
@@ -6588,35 +6649,35 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "mounts with both collapse assigns false (expanded by default)", %{
+    test "mounts expanded, with no left rail to collapse", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # The wide left rail renders (no `data-pane-collapsed` attr).
-      assert html =~ ~s(data-pane="left-rail")
-      refute html =~ ~s(data-pane="left-rail" data-pane-collapsed)
-      # The wide chat aside renders, no slim chat rail in DOM.
-      assert html =~ ~s(data-pane="chat-panel")
+      # The call rail renders wide (no `data-pane-collapsed` attr).
+      assert html =~ ~s(data-pane="call-rail")
       refute html =~ ~s(data-pane-collapsed="true")
     end
 
-    test "toggle_participant_rail flips the participant_rail_collapsed assign", %{
+    # THE GUARD (task 01a05b14 stage 3). The left rail is gone, and so is
+    # everything that drove it. This is asserted as ABSENCE because the
+    # failure mode it protects against is a partial removal: an assign
+    # deleted while its `SidebarCollapse` host survives leaves a live hook
+    # pushing `meeting_participant_rail_hydrate` at a handler that no
+    # longer exists, which no server-side test can otherwise see.
+    test "the left participant rail and its persistence host are gone", %{
       conn: conn,
       meeting: meeting
     } do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Drive the event directly to decouple from heex selector specifics
-      # — the click-through path is covered by the next test.
-      after_collapse = render_hook(view, "toggle_participant_rail", %{})
-      assert after_collapse =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
-      assert_push_event(view, "meeting_participant_rail_collapsed_changed", %{collapsed: true})
-
-      after_expand = render_hook(view, "toggle_participant_rail", %{})
-      refute after_expand =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
-      assert_push_event(view, "meeting_participant_rail_collapsed_changed", %{collapsed: false})
+      refute html =~ ~s(data-pane="left-rail")
+      refute html =~ ~s(data-role="participant-rail-toggle")
+      refute html =~ ~s(id="meeting-participant-rail-collapse-hook")
+      refute html =~ ~s(data-storage-key="suite.meeting.participant_rail.collapsed")
+      refute html =~ ~s(data-hydrate-event="meeting_participant_rail_hydrate")
+      refute html =~ ~s(data-change-event="meeting_participant_rail_collapsed_changed")
     end
 
     test "toggle_meeting_chat_pane flips the chat_panel_collapsed assign", %{
@@ -6626,29 +6687,22 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       after_collapse = render_hook(view, "toggle_meeting_chat_pane", %{})
-      # Slim chat rail now present with `data-pane="chat-panel"
-      # data-pane-collapsed="true"`.
-      assert after_collapse =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
-      # The wide aside hides on `>=lg` via the lg:!hidden class.
+      # The slim rail replaces the wide call rail on `>=lg`.
+      assert after_collapse =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+      # CHANGED BY task 01a05b14 stage 6. `@chat_panel_collapsed` used to
+      # remove the rail from the document outright; it now hides it at
+      # `lg` ONLY (`lg:!hidden`), because the rail is also the `<lg`
+      # drawer and this collapse is a DESKTOP affordance driven by a
+      # `lg:`-only chevron. Letting a preference set on a laptop silently
+      # break the rail toggle on a phone was the alternative.
+      assert after_collapse =~ ~s(data-component="call-rail")
       assert after_collapse =~ "lg:!hidden"
       assert_push_event(view, "meeting_chat_pane_collapsed_changed", %{collapsed: true})
 
       after_expand = render_hook(view, "toggle_meeting_chat_pane", %{})
-      refute after_expand =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
-      refute after_expand =~ "lg:!hidden"
+      refute after_expand =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+      assert after_expand =~ ~s(data-component="call-rail")
       assert_push_event(view, "meeting_chat_pane_collapsed_changed", %{collapsed: false})
-    end
-
-    test "meeting_participant_rail_hydrate adopts a stored value when different", %{
-      conn: conn,
-      meeting: meeting
-    } do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      after_hydrate =
-        render_hook(view, "meeting_participant_rail_hydrate", %{"collapsed" => true})
-
-      assert after_hydrate =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
     end
 
     test "meeting_chat_pane_hydrate adopts a stored value when different", %{
@@ -6660,7 +6714,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       after_hydrate =
         render_hook(view, "meeting_chat_pane_hydrate", %{"collapsed" => true})
 
-      assert after_hydrate =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+      assert after_hydrate =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
     end
 
     test "hydrate is idempotent when the value matches the current assign", %{
@@ -6669,93 +6723,49 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Both default to false; a hydrate with false should be a no-op
-      # but must NOT crash.
-      _ = render_hook(view, "meeting_participant_rail_hydrate", %{"collapsed" => false})
       _ = render_hook(view, "meeting_chat_pane_hydrate", %{"collapsed" => false})
 
       html = render(view)
       refute html =~ ~s(data-pane-collapsed="true")
     end
 
-    test "clicking participant-rail-toggle in the expanded rail header collapses to slim rail",
-         %{conn: conn, meeting: meeting} do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # Starts expanded — the chevron-double-left header button is
-      # present, the slim rail is absent.
-      assert html =~ ~s(data-role="participant-rail-toggle")
-      assert html =~ "hero-chevron-double-left"
-      refute html =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
-
-      # There's exactly one rendered participant-rail-toggle on the
-      # expanded view (the slim collapsed rail isn't in the DOM until
-      # after the toggle). Click it directly.
-      after_collapse =
-        view
-        |> element(~s([data-role="participant-rail-toggle"]))
-        |> render_click()
-
-      assert after_collapse =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
-      # Slim rail header carries the mirrored chevron-double-right + a
-      # second user-group icon for the icon-only state.
-      assert after_collapse =~ "hero-chevron-double-right"
-    end
-
-    test "clicking chat-pane-toggle in the expanded chat pane header collapses to slim rail",
+    test "clicking chat-pane-toggle collapses the call rail to the slim strip",
          %{conn: conn, meeting: meeting} do
       {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       assert html =~ ~s(data-role="chat-pane-toggle")
-      refute html =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+      refute html =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
 
-      # Exactly one chat-pane-toggle on the expanded view (in the chat
-      # pane header). The slim chat rail's toggle only appears after.
       after_collapse =
         view
         |> element(~s([data-role="chat-pane-toggle"]))
         |> render_click()
 
-      assert after_collapse =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
-      assert after_collapse =~ "lg:!hidden"
+      assert after_collapse =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+      assert after_collapse =~ "hero-chevron-double-left"
     end
 
-    test "collapse toggle buttons carry `hidden lg:inline-flex` so they're invisible on mobile",
+    test "the collapse toggle carries `hidden lg:inline-flex` so it's invisible on mobile",
          %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # Both toggle buttons must hide on `<lg` and render on `>=lg`.
-      # The participant-rail-toggle in the expanded header AND the
-      # chat-pane-toggle in the expanded chat header both carry
-      # `hidden lg:inline-flex`.
-      assert html =~
-               ~r/data-role="participant-rail-toggle"[^>]*hidden lg:inline-flex|hidden lg:inline-flex[^>]*data-role="participant-rail-toggle"/
 
       assert html =~
                ~r/data-role="chat-pane-toggle"[^>]*hidden lg:inline-flex|hidden lg:inline-flex[^>]*data-role="chat-pane-toggle"/
     end
 
-    test "SidebarCollapse hook hosts are mounted with namespaced storage keys + event names",
+    test "the surviving SidebarCollapse host is the chat-pane one",
          %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # Two hidden hook hosts (one per pane), parameterized via
-      # `data-storage-key`, `data-hydrate-event`, `data-change-event`.
-      # Storage keys are namespaced under `suite.meeting.*` so they
-      # never collide with the shell sidebar key.
-      assert html =~ ~s(id="meeting-participant-rail-collapse-hook")
-      assert html =~ ~s(data-storage-key="suite.meeting.participant_rail.collapsed")
-      assert html =~ ~s(data-hydrate-event="meeting_participant_rail_hydrate")
-      assert html =~ ~s(data-change-event="meeting_participant_rail_collapsed_changed")
 
       assert html =~ ~s(id="meeting-chat-pane-collapse-hook")
       assert html =~ ~s(data-storage-key="suite.meeting.chat_pane.collapsed")
       assert html =~ ~s(data-hydrate-event="meeting_chat_pane_hydrate")
       assert html =~ ~s(data-change-event="meeting_chat_pane_collapsed_changed")
 
-      # Both hook hosts attach the SAME hook module (parameterized via
-      # the data-attrs above).
-      assert length(String.split(html, ~s(phx-hook="SidebarCollapse"))) - 1 >= 2
+      # Exactly one meeting-scoped host now that the participant-rail one
+      # went with the rail. (The shell's own sidebar host is a different
+      # storage key and is counted out by the `suite.meeting.` prefix.)
+      assert length(String.split(html, ~s(data-storage-key="suite.meeting.))) - 1 == 1
     end
 
     test "mobile drawer path is byte-identical — `:chat_panel_open` is orthogonal", %{
@@ -6781,7 +6791,277 @@ defmodule PlatformWeb.MeetingLiveTest do
       _ = render_hook(view, "toggle_meeting_chat_pane", %{})
       html_collapsed = render(view)
       assert html_collapsed =~ ~s(data-chat-panel-open="true")
-      assert html_collapsed =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+      assert html_collapsed =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+    end
+  end
+
+  # The shared call shell, mounted (task 01a05b14 stage 3). `call_shell_test.exs`
+  # covers the component in isolation; these cover what the component test
+  # structurally cannot — that `/meetings` is what mounts it, with real
+  # assigns, and that the panes it now owns are rendered in exactly one place.
+  describe "right rail: the shared CallShell on /meetings" do
+    setup %{conn: conn} do
+      # Three tests in this block render the JOINED state through
+      # `meeting_join`, which needs LiveKit creds to be present or the
+      # join fails with `:livekit_not_configured` and `@in_meeting` stays
+      # false. The test runtime config sets none (same reason as the
+      # "LiveKit wiring" block above), so stash a fake triple for this
+      # block and restore on exit. Without this the block only passed on
+      # a host that happened to export LIVEKIT_* (stage 5 finding).
+      original = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
+
+      {meeting, space} =
+        create_meeting(%{
+          slug: "call-shell-#{System.unique_integer([:positive])}",
+          name: "Call Shell"
+        })
+
+      {conn, user} = authenticated_conn(conn)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "renders the three tabs with exactly one active", %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert count(html, ~s([data-role="call-rail-tab"])) == 3
+
+      for tab <- ~w(people canvas transcript) do
+        assert count(html, ~s([data-role="call-rail-tab"][data-tab="#{tab}"])) == 1
+      end
+
+      assert count(html, ~s([data-role="call-rail-tab"][data-active="true"])) == 1
+
+      assert count(html, ~s([data-role="call-rail-tab"][data-tab="people"][data-active="true"])) ==
+               1
+    end
+
+    # SCOPED DELIBERATELY. `[data-section="agents"]` is NOT unique on this
+    # page — `participant_rail.ex` renders one and the bottom strip has its
+    # own sections — so an unscoped assertion would pass or fail for the
+    # wrong reason. Every selector here is anchored on the rail.
+    test "the People pane holds humans AND agents, inside the rail", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      seed_meeting_presence(space, "agent", "Rail Agent")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      rail = ~s([data-component="call-rail"] )
+
+      assert count(html, rail <> ~s([data-role="call-rail-pane"][data-pane-tab="people"])) == 1
+      assert count(html, rail <> ~s([data-component="participant-rail"])) == 1
+      assert count(html, rail <> ~s([data-section="humans"])) == 1
+      assert count(html, rail <> ~s([data-section="agents"])) == 1
+      assert html =~ "Rail Agent"
+    end
+
+    test "the agent invite picker is rendered at most once, and only in the rail", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert count(html, ~s([data-role="meeting-agent-invite"])) <= 1
+
+      assert count(html, ~s([data-role="meeting-agent-invite"])) ==
+               count(
+                 html,
+                 ~s([data-component="call-rail"] [data-role="meeting-agent-invite"])
+               )
+    end
+
+    test "meeting_tab_select swaps the pane", %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert count(html, ~s([data-role="call-rail-pane"][data-pane-tab="people"])) == 1
+
+      canvas =
+        view
+        |> element(~s([data-role="call-rail-tab"][data-tab="canvas"]))
+        |> render_click()
+
+      assert count(canvas, ~s([data-role="call-rail-pane"][data-pane-tab="canvas"])) == 1
+      assert count(canvas, ~s([data-role="call-rail-pane"][data-pane-tab="people"])) == 0
+
+      assert count(canvas, ~s([data-role="call-rail-tab"][data-tab="canvas"][data-active="true"])) ==
+               1
+
+      transcript = render_click(view, "meeting_tab_select", %{"tab" => "transcript"})
+      assert count(transcript, ~s([data-role="call-rail-pane"][data-pane-tab="transcript"])) == 1
+
+      # An unrecognised tab costs the tab, not the pane.
+      fallback = render_click(view, "meeting_tab_select", %{"tab" => "nope"})
+      assert count(fallback, ~s([data-role="call-rail-pane"][data-pane-tab="people"])) == 1
+    end
+
+    test "the Transcript tab renders the JS-owned log and an honest empty state", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # `?tab=` deep-link (stage 3) names the pane directly rather than
+      # clicking through from the default mount.
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=transcript")
+
+      assert count(html, ~s([data-role="call-rail-transcript-log"])) == 1
+
+      # The container is hook-owned and morphdom-exempt: `meeting:caption`
+      # is a client-side DOM CustomEvent that never reaches the server, so
+      # the lines exist ONLY in the DOM the hook writes. A LiveView patch
+      # without `phx-update="ignore"` would erase the transcript mid-call.
+      assert count(
+               html,
+               ~s([data-role="call-rail-transcript-log"][phx-hook="MeetingTranscript"][phx-update="ignore"])
+             ) == 1
+
+      # Honest empty state. The test env has no LiveKit configured — the
+      # media plane that emits `TranscriptionReceived` is absent — so the
+      # pane must SAY captions are unavailable rather than showing the
+      # "none yet" line, which would imply a transcriber is attached and
+      # merely quiet. Both wordings are covered in CallShellTest; what
+      # this asserts is that MeetingLive wires the real condition through
+      # rather than hardcoding the optimistic branch.
+      assert html =~ "Captions are unavailable for this meeting"
+      refute html =~ "Listening"
+    end
+
+    test "the candidate rail lives in the Canvas pane, once", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Not in the People pane at all — it MOVED, it was not copied.
+      assert count(html, ~s([data-component="candidate-rail"])) == 0
+
+      canvas = render_click(view, "meeting_tab_select", %{"tab" => "canvas"})
+
+      assert count(canvas, ~s([data-component="candidate-rail"])) ==
+               count(
+                 canvas,
+                 ~s([data-component="call-rail"] [data-component="candidate-rail"])
+               )
+    end
+
+    test "the controls are CallShell's, and Share keeps its hook", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert count(html, ~s([data-component="call-controls"])) == 1
+      assert count(html, ~s([data-role="meeting-mic"])) == 1
+      assert count(html, ~s([data-role="meeting-camera"])) == 1
+
+      # THE ONE `mix test` OTHERWISE CANNOT SEE. `meeting_share_button.js`
+      # binds the click on its own element and pushes straight at this
+      # LiveView; losing `phx-hook` in the move would leave a Share button
+      # that silently never reaches `getDisplayMedia()` inside the gesture.
+      share = ~s([data-role="meeting-screen-share"])
+      assert count(html, share) == 1
+
+      share_el = html |> frag() |> LazyHTML.query(share)
+      assert LazyHTML.attribute(share_el, "phx-hook") == ["MeetingShareButton"]
+      assert LazyHTML.attribute(share_el, "id") == ["meeting-share-btn-desktop"]
+      assert LazyHTML.attribute(share_el, "phx-click") == ["meeting_toggle_screen_share"]
+    end
+
+    # ── Task 01a05b14 stage 2: the controls are UNDER the stage ────────
+    #
+    # These four tests exist because the previous stage's gates all
+    # passed on a screen the sponsor rejected: every control was
+    # present and every token correct, but they were wired into the
+    # wrong parent. "It renders" is therefore not the assertion; WHERE
+    # it renders is.
+    test "all four controls render inside the stage column, not in the header", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for role <- ~w(meeting-mic meeting-camera meeting-screen-share) do
+        sel = ~s([data-role="#{role}"])
+
+        assert count(html, ~s([data-pane="center-stage"] #{sel})) == 1,
+               "#{role} is not inside the stage column"
+
+        assert count(html, ~s(header #{sel})) == 0,
+               "#{role} is still in the top bar"
+      end
+
+      # The bar itself is the canvas's `.ctrls`: a centred 46px row,
+      # a direct child of the stage column and NOT of the tile area.
+      bar = ~s([data-role="meeting-stage-controls"])
+      assert count(html, ~s([data-pane="center-stage"] #{bar})) == 1
+      assert count(html, ~s([data-role="meeting-stage-body"] #{bar})) == 0
+
+      bar_el = html |> frag() |> LazyHTML.query(bar)
+      [class] = LazyHTML.attribute(bar_el, "class")
+      assert class =~ "h-[46px]"
+      assert class =~ "justify-center"
+    end
+
+    test "Leave is in the stage bar too, once the viewer has joined", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      joined = render_click(view, "meeting_join", %{})
+
+      assert count(joined, ~s([data-pane="center-stage"] [data-role="meeting-leave"])) == 1
+      assert count(joined, ~s(header [data-role="meeting-leave"])) == 0
+    end
+
+    # The controls LEFT the header; the header's OTHER controls did
+    # not. A static mockup omitting them is not evidence they should
+    # be deleted, and each of these has a live handler behind it.
+    test "the header keeps the controls the mockup does not depict", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = render_click(view, "meeting_join", %{})
+
+      for role <- ~w(chat-panel-toggle call-rail-toggle meeting-captions-toggle) do
+        assert count(html, ~s(header [data-role="#{role}"])) == 1,
+               "#{role} was collateral damage of the move"
+      end
+
+      assert count(html, ~s(header [data-stage-mode-button])) > 0 or
+               count(html, ~s(header [phx-click="set_stage_mode"])) > 0,
+             "the stage-mode segmented control left the header"
+    end
+
+    # MUTATION-COUNT GUARD SUBJECT, part 1 of 7. Seven
+    # `phx-update="ignore"` ids carry JS-owned subtrees;
+    # `meeting_client.js` reparents the single persistent local <video>
+    # between docks chosen by `matchMedia`, so a rename is invisible to
+    # every server-side assertion but fatal in a browser.
+    #
+    # ONE TEST PER ID, ON PURPOSE. A `for` loop over the seven would
+    # abort at the first failing id and report ONE failure for SEVEN
+    # breakages, which is precisely the arithmetic the mutation-count
+    # guard exists to detect. Six of the seven live on the quickmeet
+    # and are pinned the same way in
+    # `chat/partials_meeting_panel_test.exs`.
+    test "phx-update=ignore id meeting-media survives the move", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = render_click(view, "meeting_join", %{})
+
+      assert count(html, ~s(#meeting-media)) == 1
     end
   end
 
@@ -8245,7 +8525,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     # REMOUNT is exercised separately (see the mode-swap test below).
     {"set_stage_mode", %{"mode" => "gallery"}},
     {"toggle_chat_panel", %{}},
-    {"toggle_participant_rail", %{}},
+    {"meeting_tab_select", %{"tab" => "canvas"}},
     {"toggle_meeting_chat_pane", %{}}
   ]
 
@@ -8401,7 +8681,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # names.
       refute Platform.Roles.agent_id_for_role("meeting_producer")
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       refute html =~ ~s(data-role="intents-collapse")
       refute html =~ "intents-collapse"
@@ -8412,7 +8692,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "assigned meeting_producer renders the strip", %{conn: conn, meeting: meeting} do
       assign_producer!()
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert html =~ ~s(data-role="intents-collapse")
       assert html =~ "intents-collapse"
@@ -8426,7 +8706,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The bar shares the right rail with it; it does not displace it.
       assign_producer!()
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert html =~ ~s(data-role="intents-collapse")
       assert html =~ ~s(data-intent-panel-host="true")
@@ -8442,7 +8722,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       refute html =~ ~s(data-role="intents-collapse")
 
       # Seed a row while the panel is invisible — the appointed producer
@@ -8464,7 +8744,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       assign_producer!()
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       assert html =~ ~s(data-intent-id="#{row.id}")
 
       :ok = Platform.Roles.unassign_role("meeting_producer")
@@ -8482,7 +8762,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # of reach: a phx-click is a client-supplied message.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       render_click(view, "intent_remove", %{
         "intent_id" => row.id,
@@ -8512,7 +8792,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # are indistinguishable, and both are an empty strip.
       refute IntentQueue.running?(meeting.id)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert html =~ ~s(data-role="intents-empty")
       assert html =~ "Listening for intents"
@@ -8540,7 +8820,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           dedupe_key: "stranger-#{System.unique_integer([:positive])}"
         })
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert html =~ ~s(data-intent-id="#{first.id}")
       assert html =~ ~s(data-intent-id="#{second.id}")
@@ -8556,7 +8836,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, first} = enqueue_intent(meeting, %{classified_intent: "alpha_intent"})
       {:ok, second} = enqueue_intent(meeting, %{classified_intent: "beta_intent"})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert :binary.match(html, ~s(data-intent-id="#{first.id}")) |> elem(0) <
                :binary.match(html, ~s(data-intent-id="#{second.id}")) |> elem(0)
@@ -8576,7 +8856,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           {status, row}
         end
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       for {status, row} <- rows do
         assert html =~ ~s(data-intent-id="#{row.id}")
@@ -8609,7 +8889,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, spawn_failed} = enqueue_intent(meeting, %{classified_intent: "spawn_failed_intent"})
       {:ok, spawn_failed} = force_status(meeting, spawn_failed, :no_ack_spawn_failed)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert IntentsCollapse.status_tone(:timed_out) == "warning"
       assert IntentsCollapse.status_tone(:dispatch_failed) == "error"
@@ -8641,7 +8921,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "grouped_intent"})
       {:ok, row} = force_status(meeting, row, :timed_out)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert html =~ ~s(data-intent-group="error")
       assert html =~ ~s(data-intent-id="#{row.id}")
@@ -8661,7 +8941,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       assert html =~ ~s(data-intent-count="0")
 
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "late_arrival"})
@@ -8690,7 +8970,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           ] do
         {:ok, row} = enqueue_intent(meeting, %{classified_intent: "evented_#{status}"})
 
-        {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+        {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
         assert html =~ ~s(data-intent-status="queued")
 
         {:ok, _} = force_status(meeting, row, status)
@@ -8715,7 +8995,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # it rather than assume.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "raced_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       {:ok, _} = force_status(meeting, row, :cancelled_late)
 
@@ -8725,7 +9005,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "an event for a different meeting is ignored", %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       # Same topic shape, different meeting — the LV is only subscribed
       # to its own, but the guard is the thing that makes that safe when
@@ -8757,7 +9037,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           subagent_id: "higgins.moon"
         })
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       refute html =~ ~s(data-role="intents-expanded")
 
       html = render_click(view, "toggle_intents_expanded", %{})
@@ -8780,7 +9060,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # after the rail's closing markup, not nested inside it.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "overlay_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       html = render_click(view, "toggle_intents_expanded", %{})
       assert overlay_outside_rail?(html, "intents-expanded")
@@ -8796,7 +9076,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "toggled_intent"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       assert html =~ ~s(data-role="intents-collapse-body")
 
       html = render_click(view, "toggle_intents_collapse", %{})
@@ -8839,7 +9119,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         {:ok, row} = enqueue_intent(meeting, %{classified_intent: "control_#{status}"})
         {:ok, _} = force_status(meeting, row, status)
 
-        {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+        {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
         assert html =~ ~s(data-role="intent-remove" data-intent-id="#{row.id}") == removable,
                "#{status}: expected remove control presence #{removable}"
@@ -8859,7 +9139,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Tailwind `11` = 44px.
       {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "tappable_intent"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       for role <- ~w(intents-collapse-toggle intents-expand-toggle intent-remove intent-edit) do
         assert html =~ ~s(data-role="#{role}")
@@ -8889,7 +9169,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # line on the WIDEST viewport, truncating `visual_adjust` to "v.".
       {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "narrow_intent"})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       [row_tag] = Regex.run(~r/<li[^>]*data-role="intent-row"[^>]*>/, html)
       assert row_tag =~ "flex-col"
@@ -8904,7 +9184,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # control a phone user does not have.
       {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "persistent_intent"})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       for tag <- strip_button_tags(html) do
         refute tag =~ "group-hover:", "hover-revealed control: #{tag}"
@@ -8934,7 +9214,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         if n <= 3, do: {:ok, _} = force_status(meeting, row, :dispatch_failed)
       end
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       [severity_tag] =
         Regex.run(~r/<span[^>]*data-role="intents-summary-severity"[^>]*>/, html)
@@ -8968,7 +9248,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "chip_yield_intent"})
       {:ok, _} = force_status(meeting, row, :timed_out)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       [chip_tag] = Regex.run(~r/<span[^>]*class="[^"]*chip-primary[^"]*"[^>]*>/, html)
 
@@ -8984,7 +9264,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "benign_intent"})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       refute html =~ ~s(data-role="intents-summary-severity")
       assert html =~ ~s(data-role="intents-summary-tail")
@@ -9013,7 +9293,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, high} =
         enqueue_intent(meeting, %{classified_intent: "certain_intent", confidence: 0.96})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       low_readout = confidence_span(html, low.id)
       high_readout = confidence_span(html, high.id)
@@ -9045,7 +9325,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, under} =
         enqueue_intent(meeting, %{classified_intent: "under_threshold", confidence: 0.69})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert confidence_span(html, at.id) =~ ~s(data-low-confidence="false")
       assert confidence_span(html, under.id) =~ ~s(data-low-confidence="true")
@@ -9058,7 +9338,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, none} =
         enqueue_intent(meeting, %{classified_intent: "silent_intent", confidence: nil})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       readout = confidence_span(html, none.id)
 
@@ -9076,7 +9356,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # would read as two different numbers.
       {:ok, low} = enqueue_intent(meeting, %{classified_intent: "shaky_row", confidence: 0.55})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       html = render_click(view, "toggle_intents_expanded", %{})
 
       assert html =~ ~s(data-role="intents-expanded-table")
@@ -9114,7 +9394,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # BEFORE the mutation, not invented after it.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "picked_intent"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       refute html =~ ~s(data-role="intent-reason-picker")
 
       html = render_click(view, "intent_reason_picker_toggle", %{"intent_id" => row.id})
@@ -9149,7 +9429,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       participant = join_space!(space, user)
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "pulled_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       html =
         render_click(view, "intent_remove", %{
@@ -9180,7 +9460,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "inflight_intent"})
       {:ok, _} = force_status(meeting, row, :dispatched)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       render_click(view, "intent_remove", %{
         "intent_id" => row.id,
@@ -9205,7 +9485,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _} = force_status(meeting, row, :dispatched, %{target_agent_id: agent.id})
       {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :working)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       html =
         render_click(view, "intent_remove", %{
@@ -9242,7 +9522,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "orphan_intent"})
       {:ok, _} = force_status(meeting, row, :dispatched)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       html =
         render_click(view, "intent_remove", %{"intent_id" => row.id, "reason" => "other"})
@@ -9260,7 +9540,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # which would let a crafted click leak atoms into the VM.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "safe_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       html =
         render_click(view, "intent_remove", %{
@@ -9289,7 +9569,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "mislabelled_intent"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       refute html =~ ~s(data-role="intent-edit-modal")
 
       html = render_click(view, "intent_edit_open", %{"intent_id" => row.id})
@@ -9310,7 +9590,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       target = create_agent!()
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "wrong_label"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       render_click(view, "intent_edit_open", %{"intent_id" => row.id})
 
       html =
@@ -9346,7 +9626,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _} = force_status(meeting, row, :dispatched, %{target_agent_id: agent.id})
       {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :working)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       render_click(view, "intent_edit_open", %{"intent_id" => row.id})
 
       html =
@@ -9392,7 +9672,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # to learn from.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "vague_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       render_click(view, "intent_edit_open", %{"intent_id" => row.id})
 
       html =
@@ -9414,7 +9694,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "closing the modal mutates nothing", %{conn: conn, meeting: meeting} do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "abandoned_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       render_click(view, "intent_edit_open", %{"intent_id" => row.id})
       html = render_click(view, "intent_edit_close", %{})
 
@@ -9437,7 +9717,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert html =~ ~s(data-role="meeting-intent-mute-toggle")
       assert html =~ ~s(data-muted="false")
@@ -9446,7 +9726,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "clicking the toggle mutes: the toggle flips, the badge appears, the ROW changes",
          %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
 
@@ -9470,7 +9750,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "clicking again unmutes: the toggle flips back, the badge goes, the ROW clears",
          %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       # Mute first, and assert it took — otherwise the unmute half below
       # is satisfiable by a toggle that never did anything at all.
@@ -9494,7 +9774,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, _} = Meetings.set_intent_muted(meeting.id, true)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       assert html =~ ~s(data-role="meeting-intent-mute-badge")
       assert html =~ ~s(data-muted="true")
@@ -9514,10 +9794,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       # now and we want it to stop". A control that needs a page reload
       # does not solve it, so this test never reloads or re-mounts the
       # observing view — it only re-renders the one it already has.
-      {:ok, view_a, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view_a, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       {conn_b, _user_b} = authenticated_conn(build_conn())
-      {:ok, view_b, html_b} = live(conn_b, ~p"/meetings/#{meeting.slug}")
+      {:ok, view_b, html_b} = live(conn_b, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       refute html_b =~ ~s(data-role="meeting-intent-mute-badge")
       pid_b = view_b.pid
@@ -9547,7 +9827,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {other, _space} = create_meeting(%{slug: "intent-mute-other", name: "Other"})
       on_exit(fn -> IntentQueue.stop(other.id) end)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       # Presence half first: prove the view DOES react to its own
       # meeting, so the absence below is about the id guard and not
@@ -9567,7 +9847,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       :ok = Platform.Roles.unassign_role("meeting_producer")
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       render_click(view, "toggle_intent_mute", %{})
 
       refute Meetings.intent_muted?(meeting.id)
@@ -9589,7 +9869,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # its siblings and makes the `overflow-x-auto` beside it inert, so
       # this asserts its absence the same way the Producer-chip test above
       # asserts the chip can yield.
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       [control_tag] = Regex.run(~r/<div[^>]*data-stage-mode-control="active"[^>]*>/, html)
 
@@ -9806,6 +10086,24 @@ defmodule PlatformWeb.MeetingLiveTest do
   defp frag(html), do: LazyHTML.from_fragment(html)
 
   defp count(html, selector), do: html |> frag() |> LazyHTML.query(selector) |> Enum.count()
+
+  defp within(html, selector), do: html |> frag() |> LazyHTML.query(selector)
+
+  # Reset `space`'s LIVE meeting presence to EXACTLY `n` humans, drawn in
+  # order from `names`. Task 01a05b14 stage 3's grid tests sweep a range of
+  # counts, and seeding cumulatively would make count N depend on the
+  # iteration order (and quietly test N+M). Deleting first makes each
+  # iteration an independent statement about that count.
+  defp space_with_humans(space, names, n) do
+    {:ok, room} = Meetings.ensure_room(space.id)
+    Repo.delete_all(from(p in Meetings.Participant, where: p.room_id == ^room.id))
+
+    names
+    |> Enum.take(n)
+    |> Enum.each(&seed_meeting_presence(space, "user", &1))
+
+    space
+  end
 
   # ── Canvas tile on the meeting stage (task 019ff704 stage 2) ─────────────
   #
@@ -10087,7 +10385,12 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # The tile lives in neither roster section.
       assert count(html, ~s([data-section="humans"] [data-role="canvas-tile"])) == 0
-      assert count(html, ~s([data-section="agents"] [data-role="canvas-tile"])) == 0
+      # The strip's agents section no longer exists at all (task 01a05b14
+      # stage 1) — the surviving `[data-section="agents"]` is the
+      # participant RAIL's, a different surface. So the stronger claim is
+      # that the canvas is not tiled as an agent anywhere.
+      assert count(html, ~s([data-pane="bottom-strip"] [data-section="agents"])) == 0
+      assert count(html, ~s([data-pane="bottom-strip"] [data-agent-tile])) == 0
 
       # The declared counts match the tiles actually rendered in each
       # section. Pinned against the rendered count rather than a literal
@@ -10097,8 +10400,6 @@ defmodule PlatformWeb.MeetingLiveTest do
       human_tiles = count(html, ~s([data-section="humans"] .meeting-video-tile))
       assert human_tiles >= 1
       assert LazyHTML.attribute(strip, "data-tile-count-humans") == [to_string(human_tiles)]
-      assert LazyHTML.attribute(strip, "data-tile-count-agents") == ["1"]
-      assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 1
 
       # ...and it is genuinely rendered, so the two refutes above are not
       # vacuous.
@@ -10811,7 +11112,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # presence is seeded in this meeting, so any tile here would have
       # been invented by the canvas flow — which is the specific failure
       # stage 1 removed and this stage must not reintroduce.
-      assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 0
+      assert count(html, ~s([data-agent-tile])) == 0
     end
   end
 
@@ -10850,18 +11151,20 @@ defmodule PlatformWeb.MeetingLiveTest do
       )
   end
 
-  # The bottom strip — the tile's only non-test call site — is hidden in
-  # `:gallery`, which is the default stage mode. Switching modes is a pure
-  # `assign(:current_stage_mode, …)` and touches nothing this describe
-  # block asserts on, so it is setup rather than part of any assertion.
-  defp show_bottom_strip(view) do
-    view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+  # The bottom agent dock was retired in task 01a05b14 stage 1. The agent
+  # tile's only remaining non-test call site is the gallery grid, which
+  # admits an agent ONLY while it is in `speaking_identities` — so these
+  # tests promote the agent first and then assert on the grid instance.
+  # `speaking_identities` is an assign, so one promotion holds across every
+  # later `render/1`.
+  defp promote_agent(view, agent_id) do
+    render_hook(view, "active_speakers", %{"identities" => ["agent:" <> agent_id]})
   end
 
   defp tile_activity(html, agent_id) do
     html
     |> frag()
-    |> LazyHTML.query(~s([data-section="agents"] [data-agent="agent:#{agent_id}"]))
+    |> LazyHTML.query(~s([data-gallery-grid] [data-agent="agent:#{agent_id}"]))
     |> LazyHTML.attribute("data-activity-state")
   end
 
@@ -10873,7 +11176,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     |> frag()
     |> LazyHTML.query(
       ~s([data-component="participant-rail"] ) <>
-        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-badge"])
+        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-avatar"])
     )
     |> LazyHTML.attribute("data-activity-state")
   end
@@ -10913,10 +11216,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       chat_participant = seat_agent_in_chat(space, agent_id, "Solo Agent")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-      html = show_bottom_strip(view)
+      html = promote_agent(view, agent_id)
 
       # Baseline: nothing is happening, and the tile exists to be moved.
-      assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 1
+      assert count(html, ~s([data-gallery-grid] [data-agent-tile])) == 1
       assert tile_activity(html, agent_id) == ["idle"]
 
       # Activity 1 — an intent dispatched to this agent. Driven through the
@@ -10958,7 +11261,11 @@ defmodule PlatformWeb.MeetingLiveTest do
       typing_participant = seat_agent_in_chat(space, typing_id, "Typist")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-      _ = show_bottom_strip(view)
+
+      _ =
+        render_hook(view, "active_speakers", %{
+          "identities" => Enum.map([computing_id, typing_id, idle_id], &("agent:" <> &1))
+        })
 
       {:ok, row} = enqueue_intent(meeting, %{target_agent_id: computing_id})
       {:ok, _} = force_status(meeting, row, :dispatched)
@@ -10968,13 +11275,13 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # This is what a single shared assign cannot do, and what a
       # one-agent test can never catch: three tiles, three answers.
-      assert count(html, ~s([data-section="agents"] [data-agent-tile])) == 3
+      assert count(html, ~s([data-gallery-grid] [data-agent-tile])) == 3
       assert tile_activity(html, computing_id) == ["computing"]
       assert tile_activity(html, typing_id) == ["typing"]
       assert tile_activity(html, idle_id) == ["idle"]
 
       # The dot is per-tile too: exactly two of the three are lit.
-      assert count(html, ~s([data-section="agents"] [data-activity-indicator])) == 2
+      assert count(html, ~s([data-gallery-grid] [data-activity-indicator])) == 2
     end
 
     test "an agent that is `active` in the GLOBAL agents.status column but idle in THIS meeting renders idle",
@@ -10988,17 +11295,23 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert Repo.get(Platform.Agents.Agent, agent_id).status == "active"
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-      html = show_bottom_strip(view)
+      html = promote_agent(view, agent_id)
 
       assert tile_activity(html, agent_id) == ["idle"]
-      assert count(html, ~s([data-section="agents"] [data-activity-indicator])) == 0
+      assert count(html, ~s([data-gallery-grid] [data-activity-indicator])) == 0
 
       [idle_dot] = rail_dot_class(html, presence.id)
       refute idle_dot =~ "bg-success"
 
-      # An idle agent shows the reachability dot and NO activity badge —
-      # the rail stays quiet until something is actually happening.
-      assert rail_activity_state(html, presence.id) == []
+      # An idle agent shows the reachability dot AND is drawn as a real
+      # state: a muted ring and the word "Idle". `:idle` has a producer
+      # — it is what `AgentActivity.for_agent/2` computes here — so
+      # drawing it states a fact. It used to be gated out of the rail
+      # entirely and replaced by a bare dot, which meant three of the
+      # four visual cues were absent exactly on the quiet meeting where
+      # a reader most needs to read the row.
+      assert rail_activity_state(html, presence.id) == ["idle"]
+      assert rail_activity_word(html, presence.id) == "Idle"
 
       # ANTI-VACUITY. The rail is reachable and this meeting can light it
       # — it just takes activity IN THIS MEETING to do it, which is the
@@ -11028,7 +11341,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _} = force_status(meeting, row, :dispatched)
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-      html = show_bottom_strip(view)
+      html = promote_agent(view, agent_id)
 
       assert tile_activity(html, agent_id) == ["computing"]
 
@@ -11038,7 +11351,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert tile_activity(render(view), agent_id) == ["idle"]
 
       {:ok, view2, _} = live(conn, ~p"/meetings/#{meeting.slug}")
-      assert tile_activity(show_bottom_strip(view2), agent_id) == ["idle"]
+      assert tile_activity(promote_agent(view2, agent_id), agent_id) == ["idle"]
     end
 
     test "a HUMAN typing in the meeting chat lights no agent tile",
@@ -11047,7 +11360,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {human_participant, _message} = seed_message(space, "A Person", "hello")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-      _ = show_bottom_strip(view)
+      _ = promote_agent(view, agent_id)
 
       agent_typing!(space, human_participant, true)
       assert tile_activity(render(view), agent_id) == ["idle"]
@@ -11067,7 +11380,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       on_exit(fn -> IntentQueue.stop(other_meeting.id) end)
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-      _ = show_bottom_strip(view)
+      _ = promote_agent(view, agent_id)
 
       {:ok, other_row} = enqueue_intent(other_meeting, %{target_agent_id: agent_id})
       {:ok, _} = force_status(other_meeting, other_row, :dispatched)
@@ -11078,6 +11391,400 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{target_agent_id: agent_id})
       {:ok, _} = force_status(meeting, row, :dispatched)
       assert tile_activity(render(view), agent_id) == ["computing"]
+    end
+  end
+
+  # ── The bottom agent dock is retired (task 01a05b14 stage 1) ────────────
+  #
+  # Task 01a059e4 stage 2 made the bottom strip render in gallery mode
+  # carrying ONLY an agents section. This task removes the agent dock
+  # outright: agents live in the participant rail, and are tiled only while
+  # SPEAKING, in the gallery grid. The strip survives as the humans +
+  # canvas footer in canvas / screen / whiteboard modes — deleting it there
+  # would kill the `[data-local-video-dock][data-dock-mode="strip"]`
+  # reparent target and with it local video in those modes.
+  describe "the retired bottom agent dock" do
+    setup %{conn: conn} do
+      # One test in this block renders the JOINED state through
+      # `meeting_join`, which needs LiveKit creds to be present or the
+      # join fails with `:livekit_not_configured` and `@in_meeting` stays
+      # false. The test runtime config sets none (same reason as the
+      # "LiveKit wiring" block above), so stash a fake triple for this
+      # block and restore on exit. Without this the block only passed on
+      # a host that happened to export LIVEKIT_* (stage 5 finding).
+      original = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
+
+      {meeting, space} =
+        create_meeting(%{
+          slug: "dock-retired-#{System.unique_integer([:positive])}",
+          name: "Dock Retired"
+        })
+
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    # THE REGRESSION. An agent participant is present and the strip is on
+    # screen — the exact conditions under which the dock used to render —
+    # and there is no agents section in it.
+    test "an agent participant is present and the strip is rendered, yet it has no agents section",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Human")
+      {_presence, agent_id} = seed_meeting_presence(space, "agent", "Dockless Agent")
+
+      {:ok, view, gallery_html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Gallery: no strip at all (and no dock hiding in one).
+      assert gallery_html =~ ~s(data-stage-mode="gallery")
+      assert count(gallery_html, ~s([data-pane="bottom-strip"])) == 0
+
+      html = view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+
+      # DIRECTION CONTROL: the strip really is rendered, and the agent
+      # really is a participant of this meeting — so the refutations below
+      # are not vacuous on a missing footer or a missing agent.
+      assert count(html, ~s([data-pane="bottom-strip"])) == 1
+
+      assert Enum.any?(
+               :sys.get_state(view.pid).socket.assigns.participants,
+               &(&1.participant_type == "agent")
+             )
+
+      # THE CLAIM.
+      assert count(html, ~s([data-pane="bottom-strip"] [data-section="agents"])) == 0
+      assert count(html, ~s([data-pane="bottom-strip"] [data-agent-tile])) == 0
+      assert count(html, ~s([data-role="strip-agents-label"])) == 0
+      assert count(html, ~s([data-role="strip-divider"])) == 0
+
+      # A silent agent is tiled NOWHERE in the document.
+      assert count(html, ~s([data-agent-tile])) == 0
+
+      # ...and it has not simply vanished from the meeting: the rail still
+      # carries it.
+      rail = ~s([data-component="participant-rail"])
+
+      assert count(html, ~s(#{rail} [data-agent="agent:#{agent_id}"])) +
+               count(html, ~s(#{rail} [data-participant-type="agent"])) > 0
+    end
+
+    # The other half of the deletion: what must SURVIVE. `meeting_client.js`
+    # reparents the single persistent local `<video>` into
+    # `[data-local-video-dock][data-dock-mode="strip"]`, so removing the
+    # footer wholesale — the tempting simplification — kills local video in
+    # canvas / screen / whiteboard.
+    test "the humans strip tiles and the local-video dock survive the removal",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Human")
+      seed_meeting_presence(space, "agent", "Dockless Agent")
+
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+
+      assert count(html, ~s([data-pane="bottom-strip"] [data-section="humans"])) == 1
+      assert count(html, ~s([data-pane="bottom-strip"] [data-meeting-video-tile])) >= 1
+      assert count(html, ~s([data-local-video-dock][data-dock-mode="strip"])) == 1
+
+      # The declared human counter still matches the tiles rendered, and
+      # the retired agent counter is gone rather than lying about zero.
+      strip = html |> frag() |> LazyHTML.query(~s([data-pane="bottom-strip"]))
+      human_tiles = count(html, ~s([data-section="humans"] [data-meeting-video-tile]))
+      assert human_tiles >= 1
+      assert LazyHTML.attribute(strip, "data-tile-count-humans") == [to_string(human_tiles)]
+      assert LazyHTML.attribute(strip, "data-tile-count-agents") == []
+    end
+
+    # `agent_tile.ex` itself is KEPT — it is what renders a SPEAKING agent
+    # promoted into the gallery grid. Only its dock call site died.
+    test "the agent tile component still has a live call site: the speaking gallery promotion",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Human")
+      {_presence, agent_id} = seed_meeting_presence(space, "agent", "Loud Agent")
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert count(html, ~s([data-agent-tile])) == 0
+
+      promoted = promote_agent(view, agent_id)
+      assert count(promoted, ~s([data-gallery-grid] [data-agent-tile])) == 1
+      assert count(promoted, ~s([data-pane="bottom-strip"] [data-agent-tile])) == 0
+    end
+  end
+
+  # The `active_speakers` push comes from the `MeetingRoom` JS hook, which
+  # is mounted on `#meeting-room` INSIDE this LiveView. A hook's
+  # `pushEvent` ignores `phx-target`, so it lands on the root LV — which is
+  # why `render_hook(view, ...)` (root-targeted) is the honest simulation
+  # and why the handler must not be moved into a LiveComponent.
+  defp speaking_ring?(html, identity) do
+    classes =
+      html
+      |> frag()
+      |> LazyHTML.query(~s([data-participant="#{identity}"]))
+      |> LazyHTML.attribute("class")
+
+    classes != [] and Enum.any?(classes, &(&1 =~ "ring-primary"))
+  end
+
+  defp first_gallery_identity(html) do
+    html
+    |> frag()
+    |> LazyHTML.query(~s([data-gallery-grid] [data-participant]))
+    |> LazyHTML.attribute("data-participant")
+    |> List.first()
+  end
+
+  describe "active speakers → speaking ring + agent promotion (stage 3)" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "active-speakers-#{System.unique_integer([:positive])}",
+          name: "Active Speakers"
+        })
+
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "a human identity in the payload gains ring-primary; an empty list clears it",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Speaker")
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      identity = first_gallery_identity(html)
+      assert is_binary(identity), "expected a gallery tile with data-participant"
+
+      # DIRECTION CONTROL: nobody is speaking on mount, so the ring is absent.
+      # Without this the assertion below could pass on a tile that always
+      # carried the ring.
+      refute speaking_ring?(html, identity)
+
+      speaking_html = render_hook(view, "active_speakers", %{"identities" => [identity]})
+      assert speaking_ring?(speaking_html, identity)
+
+      cleared_html = render_hook(view, "active_speakers", %{"identities" => []})
+      refute speaking_ring?(cleared_html, identity)
+    end
+
+    test "a speaking agent is promoted into the gallery grid; a silent one is not",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Speaker")
+      seed_meeting_presence(space, "agent", "Promo Agent")
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-stage-mode="gallery")
+
+      agent_identity =
+        :sys.get_state(view.pid).socket.assigns.participants
+        |> Enum.find(&(&1.participant_type == "agent"))
+        |> PlatformWeb.MeetingLive.agent_gallery_identity()
+
+      assert agent_identity =~ ~r/^agent:.+/
+
+      # DIRECTION CONTROL: a silent agent is tiled NOWHERE — the bottom
+      # dock was retired in task 01a05b14 stage 1, so the rail is its only
+      # surface until it speaks.
+      assert count(html, ~s([data-gallery-grid] [data-agent-tile])) == 0
+      assert count(html, ~s([data-agent-tile])) == 0
+
+      # NOTE: `data-gallery-tile-count` is deliberately NOT asserted here.
+      # The human roster is presence-driven and the viewer's own auto-join
+      # lands asynchronously, so the number drifts (1 on mount, 3 a second
+      # later) for reasons that have nothing to do with speaking. The agent
+      # tile counts above and below ARE the claim.
+
+      promoted = render_hook(view, "active_speakers", %{"identities" => [agent_identity]})
+
+      # Grown into the grid, with the speaking ring, under a DISTINCT dom id
+      # so it does not collide with its dock tile.
+      assert count(promoted, ~s([data-gallery-grid] [data-agent-tile])) == 1
+      assert promoted =~ ~s(id="gallery-agent-tile-#{agent_identity}")
+
+      grid_agent_classes =
+        promoted
+        |> frag()
+        |> LazyHTML.query(~s([data-gallery-grid] [data-agent-tile]))
+        |> LazyHTML.attribute("class")
+
+      assert Enum.any?(grid_agent_classes, &(&1 =~ "ring-primary"))
+
+      # And it drops back out of the grid when it stops speaking.
+      silent = render_hook(view, "active_speakers", %{"identities" => []})
+      assert count(silent, ~s([data-gallery-grid] [data-agent-tile])) == 0
+      assert count(silent, ~s([data-agent-tile])) == 0
+    end
+
+    test "a malformed payload is ignored rather than crashing the LV",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Speaker")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert render_hook(view, "active_speakers", %{"nonsense" => true})
+      assert MapSet.size(:sys.get_state(view.pid).socket.assigns.speaking_identities) == 0
+    end
+  end
+
+  describe "top bar: live pill + roster count (task 01a05b14 stage 5)" do
+    alias Platform.Meetings
+    alias PlatformWeb.MeetingLive
+
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "top-bar-#{System.unique_integer([:positive])}",
+          name: "Top Bar"
+        })
+
+      {conn, user} = authenticated_conn(conn)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    # THE NEGATIVE. A scheduled meeting whose space has no live room must
+    # render NO pill — the approved target's green "meeting live" is
+    # earned by an observed room, never inferred from the meeting
+    # existing. Shown to detonate: loosening the `:if` to always-true
+    # fails this test (stage 5 evidence).
+    test "no live room, no pill", %{conn: conn, meeting: meeting, space: space} do
+      assert Meetings.get_active_room(space.id) == nil
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert count(html, ~s([data-role="meeting-live-pill"])) == 0
+      refute html =~ "meeting live"
+    end
+
+    test "a live room renders the pill, on the success slot, with the word as text", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      assert %Meetings.Room{status: "active"} = Meetings.get_active_room(space.id)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert count(html, ~s(header [data-role="meeting-live-pill"])) == 1
+
+      [pill_class] =
+        html
+        |> frag()
+        |> LazyHTML.query(~s([data-role="meeting-live-pill"]))
+        |> LazyHTML.attribute("class")
+
+      assert pill_class =~ "text-success"
+      assert pill_class =~ "rounded-full"
+      assert pill_class =~ "text-[10px]"
+
+      pill_text =
+        html
+        |> frag()
+        |> LazyHTML.query(~s([data-role="meeting-live-pill"]))
+        |> LazyHTML.text()
+        |> String.replace(~r/\s+/, " ")
+        |> String.trim()
+
+      assert pill_text == "meeting live"
+    end
+
+    # OBSERVED, not inferred, in the other direction too: when the room
+    # finishes (the LiveKit `room_finished` webhook path) the pill goes
+    # away on the presence broadcast, without a reload.
+    test "the pill follows the room: it leaves when the room finishes", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      assert count(html, ~s([data-role="meeting-live-pill"])) == 1
+
+      room = Meetings.get_active_room(space.id)
+      {:ok, _finished} = Meetings.finish_room(room)
+
+      # `finish_room/1` broadcasts `{:meeting_presence_update, _}` on the
+      # space topic; wait for the LV to process it.
+      assert render(view) =~ ~s(data-role="meeting-roster-count")
+      assert count(render(view), ~s([data-role="meeting-live-pill"])) == 0
+    end
+
+    test "the roster count is the rail's own partition", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      seed_meeting_presence(space, "user", "Grace Human")
+      seed_meeting_presence(space, "user", "Linus Human")
+      seed_meeting_presence(space, "agent", "Rail Agent")
+      seed_meeting_presence(space, "agent", "Other Agent")
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      readout = html |> frag() |> LazyHTML.query(~s(header [data-role="meeting-roster-count"]))
+      assert Enum.count(readout) == 1
+      assert LazyHTML.attribute(readout, "data-people") == ["3"]
+      assert LazyHTML.attribute(readout, "data-agents") == ["2"]
+      assert LazyHTML.attribute(readout, "title") == ["3 people · 2 agents"]
+
+      # The SAME numbers the rail draws: rows under "In this call" and
+      # rows under "Agents", from the same `partition_participants/1`.
+      rail = ~s([data-component="call-rail"] )
+
+      assert count(html, rail <> ~s([data-section="humans"] li[data-participant-type="user"])) ==
+               3
+
+      assert count(html, rail <> ~s([data-section="agents"] li[data-participant-type="agent"])) ==
+               2
+
+      participants = :sys.get_state(view.pid).socket.assigns.participants
+      assert MeetingLive.roster_count(participants) == {3, 2}
+    end
+
+    test "the count pluralises honestly", %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Human")
+      seed_meeting_presence(space, "agent", "Rail Agent")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      readout = html |> frag() |> LazyHTML.query(~s([data-role="meeting-roster-count"]))
+      assert LazyHTML.attribute(readout, "title") == ["1 person · 1 agent"]
+
+      assert MeetingLive.roster_label({0, 0}) == "0 people · 0 agents"
+      assert MeetingLive.roster_label({3, 4}) == "3 people · 4 agents"
+    end
+
+    defp people_count(html) do
+      html
+      |> frag()
+      |> LazyHTML.query(~s([data-role="meeting-roster-count"]))
+      |> LazyHTML.attribute("data-people")
+    end
+
+    test "the count follows a leave without a reload", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      seed_meeting_presence(space, "user", "Grace Human")
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      assert people_count(html) == ["2"]
+
+      # Broadcasts `{:meeting_presence_update, _}`; PubSub delivers to the
+      # LV mailbox before returning, and `render/1` queues behind it.
+      room = Meetings.get_active_room(space.id)
+      {:ok, _} = Meetings.participant_left(room, "Grace Human")
+
+      assert people_count(render(view)) == ["1"]
     end
   end
 end

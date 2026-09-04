@@ -2131,10 +2131,32 @@ body, .font-fabrikam {
   padding: 12px 20px 16px;
 }
 
+/* Task 01a05b14 stage 2: `flex-wrap` + a real floor on the textarea.
+
+   Measured defect, not a guess. On /chat at 1280 with the quickmeet
+   joined, the row is 832px and the two right columns are BOTH
+   `flex-shrink-0` -- the 320px media panel plus the 312px call rail --
+   so the chat column takes the 200px remainder. Inside that, the
+   attach button and the send button are fixed-size and the textarea is
+   the only `flex-1` item, so it absorbed the entire shortfall and
+   measured 24px WIDE by 200px TALL: the placeholder rendered as a
+   one-character vertical column reading "M e s s a g e".
+
+   The floor is what fixes it and the wrap is what makes the floor
+   satisfiable. `min-width` alone on a `flex-1` child in a
+   `nowrap` row is overrun by the row's own overflow, so the two
+   have to land together: below ~200px of pill-bar width the buttons
+   now move to a second line and the input keeps a usable measure.
+
+   This is width-driven, not breakpoint-driven, on purpose -- the
+   crush is a function of how much furniture is open beside the chat,
+   which no media query knows about. */
 .compose-pill-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  container-type: inline-size;
   background: oklch(0.21 0 0);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 26px;
@@ -2191,7 +2213,26 @@ body, .font-fabrikam {
   box-shadow: none !important;
   border-radius: 0 !important;
   padding: 4px 0 !important;
-  min-width: 0;
+  /* Task 01a05b14 stage 2. `min-width: 0` here was the actual cause of
+     the crushed composer, and it took a measurement to find: TWO
+     earlier attempts -- a `min-w-[7.5rem]` utility on the element and a
+     `.compose-pill-bar > textarea` rule of my own -- both landed in the
+     served CSS and both computed to `min-width: 0px`, because this rule
+     has the same specificity and comes later in source order. Each
+     looked right in the diff and proved nothing.
+
+     The 0 was correct for a nowrap row: it let the input absorb the
+     squeeze instead of overflowing the pill. But with the quickmeet
+     joined at 1280 the chat column is only 200px, the attach and send
+     buttons are fixed-size, and "absorb the squeeze" meant the textarea
+     measured 24px WIDE by 200px TALL -- the placeholder rendered as a
+     one-character vertical column reading "M e s s a g e".
+
+     The floor plus `flex-wrap` on the pill bar replaces that: the input
+     keeps a usable measure and the BUTTONS take the second row
+     instead. Width-driven, not breakpoint-driven -- how much furniture
+     is open beside the chat is not something a media query knows. */
+  min-width: 7.5rem;
   color: inherit;
   font-size: 14px;
   line-height: 1.5;
@@ -2206,6 +2247,71 @@ body, .font-fabrikam {
 @media (hover: none) {
   .compose-pill-bar textarea {
     font-size: 16px;
+  }
+}
+
+/* Task 01a05b14 stage 2, the second half of the composer fix.
+
+   `flex-wrap` + the textarea's `min-width` floor stops the crush, but
+   left to itself the wrap put all THREE children on their own line
+   (measured: pill bar 182px tall, attach at y611, input at y665, send
+   at y731). Two 44px buttons and a 132px input do not fit one 160px
+   line, but the two BUTTONS fit each other comfortably.
+
+   So: below a 260px pill bar the input takes a full line and the
+   buttons pair up beneath it. A CONTAINER query and not a media query,
+   because the trigger is how wide the chat column is -- which depends
+   on whether the quickmeet panel and call rail are open, something the
+   viewport width does not tell you. The 44px touch targets are
+   untouched; they are unconditional by org convention. */
+.compose-pill-bar {
+  container-type: inline-size;
+}
+
+@container (max-width: 260px) {
+  .compose-pill-bar textarea {
+    flex-basis: 100%;
+    order: -1;
+  }
+}
+
+/* Task 01a05b14 stage 2. See `CallShell.call_controls/1`: a bar
+   narrower than four labelled pills drops the LABELS, not a control.
+
+   The width that matters is the BAR's, not the viewport's -- at one
+   1280px viewport this component renders a 712px bar on `/meetings`
+   and a 319px bar inside the quickmeet's `w-80` panel, and it was the
+   second of those that clipped the Leave button in the capture Harper
+   rejected. Four labelled pills plus their gaps measure ~380px, hence
+   the 389px threshold.
+
+   MEASURED OUTCOME PER SURFACE, because a container query reads the
+   CONTENT box and the bar's padding therefore moves the line: labels
+   render on /meetings at 1280 (bar 712px) and collapse everywhere
+   else -- /meetings at 390 (bar 358), the quickmeet desktop panel
+   (bar 319) and the quickmeet mobile overlay (bar 390 outer, 366
+   inner). The last of those is the borderline case and it collapses
+   CORRECTLY: 371px of labelled pills does not fit a 366px box, so
+   keeping the text there would have reproduced the clip at a
+   different width.
+
+   `aria-label` stays on every button, so this costs redundant visible
+   text and nothing else. */
+[data-component="call-controls"] {
+  container-type: inline-size;
+}
+
+@container (max-width: 389px) {
+  [data-component="call-controls"] .call-control-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border-width: 0;
   }
 }
 
@@ -2298,19 +2404,40 @@ body, .font-fabrikam {
 
 /* -- Meeting Panel ------------------------------------------------- */
 
+/* Quick-meet participant grid.
+
+   The CHILDREN of `#meeting-participants` / `#meeting-participants-mobile`
+   are built by `meeting_client.js` and the containers are
+   `phx-update="ignore"`, so every layout rule for this grid has to live on
+   the CONTAINER. That is why the column rule is CSS keyed off child count
+   with `:has()` rather than a server-rendered `grid-cols-N` — the server
+   does not know how many tiles JS put there. `meeting_client.js` is
+   untouched by task 01a05b14 stage 3.
+
+   Task 01a05b14 stage 3: the grid now FILLS the panel's width. It used to
+   clamp a lone tile to 480px and centre it, which is the same "floating
+   card" defect the /meetings gallery had. Two tiles get two columns, to
+   match the approved canvas; three or more fall back to the auto-fill
+   track so tiles never drop below a legible 140px. */
 .meeting-participant-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   grid-auto-rows: min-content;
   align-content: start;
-  gap: 0.5rem;
+  gap: 0.625rem;
 }
 
 /* A single tile is framed by the column track rather than by its contents,
    otherwise a placeholder-only tile collapses to the width of the username. */
 .meeting-participant-grid:has(.meeting-tile:only-child) {
-  grid-template-columns: minmax(0, 480px);
-  justify-content: center;
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+}
+
+/* Exactly two tiles: the canvas draws them side by side, not auto-filled
+   into whatever the panel width happens to allow. */
+.meeting-participant-grid:has(.meeting-tile:nth-child(2):last-child) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .meeting-tile {
@@ -3812,52 +3939,44 @@ body, .font-fabrikam {
   }
 }
 
-/* Meeting Gallery — "fit-as-large-as-possible 16:9 tile within cell,
-   centered with letterbox on the unused axis" (task 019e412a).
+/* Meeting Gallery — "the cell owns the aspect, the tile FILLS the cell"
+   (task 01a05b14 stage 3; replaces the 019e412a container-query
+   letterbox).
 
-   Pure-CSS aspect-ratio behaves poorly when both width and height
-   are explicit (it becomes intrinsic-only) and inconsistently when
-   one is auto with a clamp on the other. The reliable pattern is a
-   container query: declare each cell a size container, then have
-   the tile pick its binding axis based on the cell's aspect ratio.
+   019e412a sized each tile to a 16:9 box inside its cell and centered
+   it, so at two participants on a 744px stage the grid measured 520px
+   and the tiles read as a floating column with 224px of dead margin
+   either side. The approved canvas draws the opposite: cells fill the
+   stage edge to edge and the video crops to fit (`object-cover`, which
+   the JS already applies to every injected <video> — see
+   `meeting_video_tile.js` and `meeting_client.js`).
 
-   The wrapper element is `[data-gallery-cell]` (see
-   `meeting_live.html.heex`). The tile is `.meeting-video-tile` with
-   `aspect-video` already applied.
+   So the tile now takes the cell's full box on both axes. No aspect
+   binding, no letterbox, no container query to pick an axis -- the
+   gallery-cell container-query blocks are GONE, and `canvas_tile_test.exs`
+   refutes their return (by the literal at-rule, which is why this
+   comment does not spell it) so a revert goes red rather than quietly
+   re-letterboxing. The cell keeps `container-type: size` so a future
+   tile interior can query its own cell without re-plumbing the
+   container; nothing queries it today.
 
-   Cell wider than 16:9 → tile is height-bound (full height, width
-   derives from aspect). Cell narrower than 16:9 → tile is width-
-   bound (full width, height derives from aspect). At exactly 16:9
-   either binding produces the same result. */
+   Faces are not distorted by this: the <video> is `object-cover`, so
+   the crop happens in the video's own box, not by stretching it. */
 [data-gallery-cell] {
   container-type: size;
   container-name: gallery-cell;
 }
 
+/* `.meeting-agent-tile` joins this group for the PROMOTED-AGENT case only
+   (task 01a059e4 stage 3): a speaking agent grows into a gallery cell, and
+   without the same rule it renders at its own intrinsic size beside the
+   face tiles. The bottom dock's agent tiles are NOT inside a
+   `[data-gallery-cell]`, so their geometry is untouched. */
 [data-gallery-cell] > .meeting-video-tile,
+[data-gallery-cell] > .meeting-agent-tile,
 [data-gallery-cell] > .meeting-canvas-tile {
-  aspect-ratio: 16 / 9;
-  max-width: 100%;
-  max-height: 100%;
-}
-
-@container gallery-cell (min-aspect-ratio: 16/9) {
-  /* Cell is wider than 16:9 → fix height, let width derive. */
-  [data-gallery-cell] > .meeting-video-tile,
-  [data-gallery-cell] > .meeting-canvas-tile {
-    height: 100%;
-    width: auto;
-  }
-}
-
-@container gallery-cell (max-aspect-ratio: 16/9) {
-  /* Cell is narrower than (or equal to) 16:9 → fix width, let
-     height derive. */
-  [data-gallery-cell] > .meeting-video-tile,
-  [data-gallery-cell] > .meeting-canvas-tile {
-    width: 100%;
-    height: auto;
-  }
+  width: 100%;
+  height: 100%;
 }
 
 /* Canvas tile hard clamp (task 019ff704 stage 2 rework).
@@ -3898,26 +4017,9 @@ body, .font-fabrikam {
    cell rect (which can be wider than 16:9 in landscape cells). */
 [data-gallery-cell] > [data-local-video-dock][data-dock-mode="gallery"] {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  aspect-ratio: 16 / 9;
-  max-width: 100%;
-  max-height: 100%;
-}
-
-@container gallery-cell (min-aspect-ratio: 16/9) {
-  [data-gallery-cell] > [data-local-video-dock][data-dock-mode="gallery"] {
-    height: 100%;
-    width: auto;
-  }
-}
-
-@container gallery-cell (max-aspect-ratio: 16/9) {
-  [data-gallery-cell] > [data-local-video-dock][data-dock-mode="gallery"] {
-    width: 100%;
-    height: auto;
-  }
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 /* ── Sectioned channel rail (chat plan v2 Stage 2) ─────────────────────
@@ -5444,16 +5546,47 @@ body, .font-fabrikam {
   opacity: 0.72;
 }
 
-.candidate-card__stage {
-  font-size: 9.5px;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--cc-stage);
-  margin-bottom: 9px;
+/* A card that is still being worked out is drawn DASHED — the same
+   grammar as the `+ Add agent` control and the ghost avatar: a dashed
+   edge is a shape that has not settled yet. Declared after the state
+   modifiers above so the style wins the cascade at equal specificity
+   while each state keeps its own border COLOUR. */
+.candidate-card--forming {
+  border-style: dashed;
+}
+
+/* `● Octavius is forming a card…` — actor and action, in the slot the
+   numbered stage label used to hold. */
+.candidate-card__forming {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--color-secondary);
+  margin-bottom: 6px;
+}
+
+.candidate-card__forming-dot {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-secondary);
+}
+
+/* Title and byline share ONE line, as the drawing sets them. Baseline
+   alignment rather than centre so a 11.5px title and a 9.5px byline sit
+   on the same rule; wrapping so a long title does not push the byline
+   off a 312px rail. */
+.candidate-card__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
 .candidate-card__title {
-  font-size: 13.5px;
+  font-size: 11.5px;
   font-weight: 600;
   line-height: 1.35;
   color: var(--cc-title);
@@ -5471,9 +5604,57 @@ body, .font-fabrikam {
 }
 
 .candidate-card__byline {
-  font-size: 11px;
+  font-size: 9.5px;
+  font-weight: 400;
   color: var(--cc-byline);
-  margin-top: 3px;
+}
+
+/* Dash and byline travel TOGETHER. Wrapped as one flex item so a title
+   too long for a 312px rail pushes the whole attribution onto the next
+   line rather than orphaning a bare em dash at the end of the title. */
+.candidate-card__attrib {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* The separator between title and byline. Its own element, aria-hidden,
+   so the byline's text node is the attribution and nothing else — a
+   test that reads the byline gets `Harper · 2m ago`, not a dash. */
+.candidate-card__dash {
+  font-size: 9.5px;
+  color: var(--cc-byline);
+}
+
+/* The assignment segment — the card's last written line, below the
+   evidence. `--color-info` per the target canvas's slot map: the agent
+   is working and nothing is being asked of the reader. Set apart by the
+   arrow so it cannot be taken for the person who spoke. */
+.candidate-card__assignment {
+  font-size: 9.5px;
+  color: var(--color-info);
+  margin-top: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+/* The verbatim fragment — somebody else's sentence, so it is SET as a
+   quote: italic, muted, behind a left rule, at the smallest size on the
+   card. That treatment is what stops it being read as the card's own
+   assertion, which matters most on the cards that now carry a title
+   above it as well. */
+.candidate-card__quote {
+  margin-top: 6px;
+  font-size: 10.5px;
+  font-style: italic;
+  line-height: 1.4;
+  color: var(--cc-micro);
+  border-left: 2px solid var(--cc-log-dot);
+  padding-left: 7px;
+  overflow-wrap: anywhere;
 }
 
 .candidate-card__reason {
@@ -5481,13 +5662,6 @@ body, .font-fabrikam {
   color: var(--cc-reason);
   margin-top: 3px;
   line-height: 1.4;
-}
-
-.candidate-card__micro {
-  margin-top: 10px;
-  font-size: 11.5px;
-  color: var(--cc-micro);
-  font-style: italic;
 }
 
 .candidate-card__chips {
@@ -5514,8 +5688,8 @@ body, .font-fabrikam {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-top: 9px;
-  font-size: 11px;
+  margin-top: 6px;
+  font-size: 9.5px;
   color: var(--color-success);
 }
 
@@ -5711,4 +5885,23 @@ body, .font-fabrikam {
   .candidate-ring__progress {
     transition: none;
   }
+}
+
+/* The SHORT mixed "who's here" strip tile is ~40px tall, so the activity
+   badge's word ("Thinking" / "Writing" / "Couldn't") does not fit next to the
+   ring. Hide the visible word only — the ring colour and glyph still
+   distinguish the states, and the badge renders its own `.sr-only` label for
+   assistive tech, so nothing is lost to a screen reader.
+
+   NARROWED (task 01a059e4 stage 2 refinement): this rule is unchanged, but
+   `agent_tile/1` now applies `.agent-tile-activity` ONLY on the non-dock
+   path. Stage 1 applied the class to EVERY agent tile, so the suppression
+   reached the gallery agent dock as well and hid the word there — which
+   defeats `AgentActivityBadge`, whose whole contract is ring + glyph + WORD,
+   never colour alone. The dock is a taller bordered panel with room for the
+   word, so it opts out by not carrying this class at all. Anything that
+   re-adds the class to the dock tile (or shrinks the dock back to a 40px
+   strip) is caught by the gallery dock word test in meeting_live_test.exs. */
+.agent-tile-activity [data-role="agent-activity-word"] {
+  display: none;
 }

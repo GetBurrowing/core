@@ -150,7 +150,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
     } do
       candidate = overdue_candidate!(meeting, "we should build the CSV export screen")
 
-      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true")
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
       assert has_element?(view, "[data-role=meeting-candidate-countdown-rail]")
 
@@ -169,7 +169,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
       stopped = overdue_candidate!(meeting, "we should build the CSV export screen")
       untouched = overdue_candidate!(meeting, "somebody rewrite the pricing page copy")
 
-      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true")
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
       # The human action. Not a context call — a click on a rendered
       # button, from an ordinary participant's session.
@@ -208,7 +208,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
       stopped = overdue_candidate!(meeting, "we should build the CSV export screen")
       kept = overdue_candidate!(meeting, "somebody rewrite the pricing page copy")
 
-      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true")
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
       view
       |> element("[data-role=meeting-candidate-stop][data-candidate-id='#{stopped.id}']")
@@ -237,7 +237,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
     } do
       candidate = overdue_candidate!(meeting, "we should build the CSV export screen")
 
-      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true")
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
       assert has_element?(
                view,
@@ -268,7 +268,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
     end
 
     test "no rail at all when nothing is counting down", %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true")
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
       # The refutation. Its control is the first test in this describe
       # block, which finds the rail on the same route with one armed
@@ -284,7 +284,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
       {other, _} = meeting!(user)
       theirs = overdue_candidate!(other, "somebody rewrite the pricing page copy")
 
-      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true")
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
       render_click(view, "stop_candidate", %{"candidate_id" => theirs.id})
 
@@ -303,7 +303,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
       {meeting, _participant} = meeting!(user)
       _candidate = overdue_candidate!(meeting, "we should build the CSV export screen")
 
-      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true")
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
       # No `meeting_producer` role is assigned anywhere in this test, so
       # the intents bar is absent — that is the control proving the gate

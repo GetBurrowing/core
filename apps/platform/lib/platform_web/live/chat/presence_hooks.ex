@@ -72,6 +72,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.SpaceAgentPresence
   alias Platform.Repo
+  alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.ChatLive.MessagesHooks
 
   @agent_presence_refresh_ms 30_000
@@ -320,6 +321,15 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
          {:agent_typing, %{typing: typing, participant_id: participant_id} = payload},
          socket
        ) do
+    # The quickmeet rail's fold runs HERE, before the scope decision: this
+    # hook is attached before `MeetingHooks` and halts below for the
+    # active space, so a `MeetingHooks` clause would never see the one
+    # broadcast a quickmeet actually cares about (task 01a05b14 stage 5,
+    # round 2). Self-guarding — a no-op on any socket that is not in a
+    # quickmeet bound to `payload.space_id`.
+
+    socket = MeetingHooks.apply_agent_typing(socket, payload)
+
     if space_scoped_to_active?(payload, socket) and typing_in_external_scope?(payload, socket) do
       apply_agent_typing(socket, typing, participant_id)
     else

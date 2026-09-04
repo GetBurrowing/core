@@ -1,0 +1,500 @@
+defmodule PlatformWeb.Components.Meetings.CallShellTest do
+  @moduledoc """
+  The shared call shell — the 312px right rail and the call controls.
+
+  Two of these tests exist because of specific ways this component
+  could be wrong while looking right:
+
+    * `call_controls/1` is only shareable if it emits the event names
+      it was GIVEN. A test that passes the surface's real names cannot
+      tell a parameterised component from a hardcoded one, so the
+      controls tests pass deliberately fake names and assert the real
+      vocabularies are ABSENT.
+
+    * The rail must not render a `Listening` row.
+      `Platform.Meetings.AgentActivity` declares `:listening` and
+      nothing can set it. The guard below was shown to detonate: a
+      temporary `meta(:listening)` row giving it a word made it fail
+      before being reverted.
+  """
+  use ExUnit.Case, async: true
+
+  import Phoenix.LiveViewTest
+
+  alias PlatformWeb.Components.Meetings.CallShell
+
+  defp human(name, id) do
+    %{
+      id: id,
+      participant_id: id,
+      participant_type: "user",
+      display_name: name,
+      avatar_url: nil,
+      attention_config: %{"mic_on" => true}
+    }
+  end
+
+  defp agent(name, id) do
+    %{
+      id: "p-" <> id,
+      participant_id: id,
+      participant_type: "agent",
+      display_name: name,
+      avatar_url: nil,
+      attention_config: %{}
+    }
+  end
+
+  defp meeting, do: %{id: "m-1", host_participant_id: "u-1"}
+
+  defp rail(overrides) do
+    render_component(
+      &CallShell.call_rail/1,
+      Keyword.merge(
+        [
+          tab_event: "call_rail_tab",
+          participants: [human("Harper", "u-1"), agent("Saru", "a-1")],
+          agents_by_id: %{},
+          meeting: meeting()
+        ],
+        overrides
+      )
+    )
+  end
+
+  describe "the tab strip" do
+    test "renders all three tabs with exactly one active" do
+      html = rail(active_tab: "people")
+
+      assert html =~ ">People<" or html =~ "People"
+      assert html =~ "Canvas"
+      assert html =~ "Transcript"
+
+      assert length(Regex.scan(~r/data-role="call-rail-tab"/, html)) == 3
+      assert length(Regex.scan(~r/data-active="true"/, html)) == 1
+      assert html =~ ~s(data-tab="people" data-active="true")
+    end
+
+    test "the active marker moves with active_tab" do
+      people = rail(active_tab: "people")
+      canvas = rail(active_tab: "canvas")
+
+      assert people =~ ~s(data-tab="people" data-active="true")
+      assert canvas =~ ~s(data-tab="canvas" data-active="true")
+      refute canvas =~ ~s(data-tab="people" data-active="true")
+    end
+
+    test "an unrecognised tab falls back to People rather than an empty pane" do
+      html = rail(active_tab: "nonsense")
+
+      assert html =~ ~s(data-pane-tab="people")
+      assert html =~ ~s(data-tab="people" data-active="true")
+    end
+
+    test "the tab click pushes the event it was given, carrying the tab id" do
+      html = rail(active_tab: "people", tab_event: "zzz_fake_tab_event")
+
+      assert html =~ ~s(phx-click="zzz_fake_tab_event")
+      assert html =~ ~s(phx-value-tab="canvas")
+    end
+  end
+
+  describe "the panes" do
+    test "People renders both participant sections" do
+      html = rail(active_tab: "people")
+
+      assert html =~ ~s(data-section="humans")
+      assert html =~ ~s(data-section="agents")
+      assert html =~ "Harper"
+      assert html =~ "Saru"
+    end
+
+    test "switching active_tab swaps the pane content, it does not just restyle" do
+      people = rail(active_tab: "people")
+      canvas = rail(active_tab: "canvas")
+      transcript = rail(active_tab: "transcript")
+
+      assert people =~ ~s(data-section="humans")
+      refute canvas =~ ~s(data-section="humans")
+      refute transcript =~ ~s(data-section="humans")
+
+      assert transcript =~ ~s(data-role="call-rail-transcript")
+      refute people =~ ~s(data-role="call-rail-transcript")
+    end
+
+    # Task 01a05b14 stage 5. `candidate_rail` renders nothing at all with
+    # no open card, no closed card and no error, so the quickmeet's Canvas
+    # tab was a blank tabpanel (0 children) that read as "loading". The
+    # pane now names its condition; the wording depends on whether a
+    # `meetings` row exists, because a call without one can never form a
+    # card and saying "no cards yet" there would promise something.
+    test "Canvas with no cards names why it is empty instead of a blank pane" do
+      live_meeting = rail(active_tab: "canvas")
+
+      assert live_meeting =~ ~s(data-role="call-rail-canvas-empty")
+      assert live_meeting =~ "No cards in this call yet"
+      refute live_meeting =~ "no meeting record"
+
+      adhoc = rail(active_tab: "canvas", meeting: nil)
+
+      assert adhoc =~ ~s(data-role="call-rail-canvas-empty")
+      assert adhoc =~ "This call has no meeting record, so no cards can form from it."
+      refute adhoc =~ "No cards in this call yet"
+
+      # Neither wording is the always-on lie the `Listening` refusal exists
+      # to prevent, and the line belongs to the Canvas pane only.
+      refute live_meeting =~ ~r/listening/i
+      refute adhoc =~ ~r/listening/i
+      refute rail(active_tab: "people") =~ ~s(call-rail-canvas-empty)
+      refute rail(active_tab: "transcript") =~ ~s(call-rail-canvas-empty)
+    end
+
+    test "the Canvas empty state yields to a card and to an error" do
+      card = %Platform.Meetings.MeetingCandidate{
+        id: Ecto.UUID.generate(),
+        evidence_quote: "we should rotate the staging secrets",
+        state: :shaping,
+        classified_intent: "action_item",
+        transcript_chunk_ids: [Ecto.UUID.generate()],
+        acts_at: nil,
+        inserted_at: ~U[2026-09-01 12:00:00.000000Z]
+      }
+
+      with_card = rail(active_tab: "canvas", candidates: [card])
+      assert with_card =~ ~s(data-role="meeting-candidate-card")
+      refute with_card =~ ~s(call-rail-canvas-empty)
+
+      with_error = rail(active_tab: "canvas", candidate_error: "could not load cards")
+      assert with_error =~ ~s(data-role="meeting-candidate-error")
+      refute with_error =~ ~s(call-rail-canvas-empty)
+    end
+
+    test "Transcript mounts the JS-owned log with phx-update=ignore" do
+      html = rail(active_tab: "transcript")
+
+      # `meeting:caption` is a client-side DOM CustomEvent that never
+      # reaches the server, so the lines are appended by the
+      # `MeetingTranscript` hook. Without `phx-update="ignore"` the next
+      # LiveView patch would morphdom them away mid-call.
+      assert html =~ ~s(data-role="call-rail-transcript-log")
+      assert html =~ ~s(phx-hook="MeetingTranscript")
+      assert html =~ ~s(phx-update="ignore")
+    end
+
+    test "the empty state names the condition and cannot be read as 'transcription is running'" do
+      html = rail(active_tab: "transcript")
+
+      assert html =~ "No captions have been received in this call."
+
+      # The refusal, stated as a test rather than a comment: this pane
+      # must never imply a transcriber is attached when none is. Those
+      # words are the always-on lie the `Listening` refusal exists to
+      # prevent, and a future edit that reaches for them fails here.
+      refute html =~ "Listening"
+      refute html =~ "Transcribing"
+      refute html =~ "Waiting for speech"
+    end
+
+    test "says captions are unavailable rather than implying none have arrived yet" do
+      available = rail(active_tab: "transcript", captions_available: true)
+      unavailable = rail(active_tab: "transcript", captions_available: false)
+
+      # DIRECTION CONTROL: the two branches are genuinely different text,
+      # so the assertion below is about the flag and not about a string
+      # that is present either way.
+      assert available =~ "No captions have been received in this call."
+      refute available =~ "Captions are unavailable for this meeting"
+
+      assert unavailable =~ "Captions are unavailable for this meeting"
+      refute unavailable =~ "No captions have been received in this call."
+    end
+
+    test "an explicit transcript slot wins over the JS-owned pane" do
+      html =
+        render_component(
+          &CallShell.call_rail/1,
+          id: "rail",
+          tab_event: "call_rail_tab",
+          active_tab: "transcript",
+          participants: [],
+          agents_by_id: %{},
+          meeting: meeting(),
+          transcript: [
+            %{inner_block: fn _, _ -> "ARCHIVED TRANSCRIPT" end, __slot__: :transcript}
+          ]
+        )
+
+      assert html =~ "ARCHIVED TRANSCRIPT"
+      refute html =~ ~s(phx-hook="MeetingTranscript")
+    end
+  end
+
+  describe "the + Add agent control" do
+    test "is absent when no invite_event is supplied" do
+      html = rail(active_tab: "people")
+
+      refute html =~ ~s(data-role="meeting-agent-invite")
+    end
+
+    test "offers each invitable agent against the given event" do
+      html =
+        rail(
+          active_tab: "people",
+          invite_event: "zzz_fake_invite",
+          invitable_agents: [%{id: "a-9", name: "Mycroft", slug: "mycroft"}]
+        )
+
+      assert html =~ ~s(data-role="meeting-agent-invite")
+      assert html =~ "+ Add agent"
+      assert html =~ ~s(phx-click="zzz_fake_invite")
+      assert html =~ ~s(data-agent-id="a-9")
+      assert html =~ "Mycroft"
+    end
+
+    # The #883 honesty rule: an invite whose join reached no subscriber
+    # is re-offered AND labelled, rather than being claimed as arrival.
+    test "labels an unanswered invite rather than claiming it arrived" do
+      pending =
+        rail(
+          active_tab: "people",
+          invite_event: "zzz_fake_invite",
+          invitable_agents: [%{id: "a-9", name: "Mycroft", slug: "mycroft"}],
+          pending_invite_agent_ids: MapSet.new(["a-9"])
+        )
+
+      fresh =
+        rail(
+          active_tab: "people",
+          invite_event: "zzz_fake_invite",
+          invitable_agents: [%{id: "a-9", name: "Mycroft", slug: "mycroft"}]
+        )
+
+      assert pending =~ "no answer yet"
+      assert pending =~ ~s(data-invite-pending="true")
+      refute fresh =~ "no answer yet"
+    end
+  end
+
+  describe "agent activity in the rail" do
+    # This is the assertion stage 1 could not make. `agent_tile/1`
+    # applies `.agent-tile-activity`, whose app.css rule sets
+    # `display:none` on `[data-role="agent-activity-word"]` — so on the
+    # gallery strip the word was in the DOM and invisible. DOM presence
+    # therefore proves nothing on its own; the suppressing class must
+    # also be absent.
+    test "the activity WORD renders and is not CSS-suppressed" do
+      html =
+        rail(
+          active_tab: "people",
+          agent_activity: %{"a-1" => :computing}
+        )
+
+      assert html =~ "Thinking"
+      assert html =~ ~s(data-role="agent-activity-word")
+      refute html =~ "agent-tile-activity"
+    end
+
+    test "each real state renders its own word" do
+      assert rail(active_tab: "people", agent_activity: %{"a-1" => :computing}) =~ "Thinking"
+      assert rail(active_tab: "people", agent_activity: %{"a-1" => :typing}) =~ "Writing"
+      assert rail(active_tab: "people", agent_activity: %{"a-1" => :failed}) =~ "Couldn&#39;t"
+    end
+
+    # THE REFUSAL. `:listening` has no producer, and drawing it would
+    # put a caption on screen that nothing can ever make true.
+    test "no state, real or declared-but-unproducible, renders Listening" do
+      for state <- [:computing, :typing, :failed, :idle, :listening] do
+        html = rail(active_tab: "people", agent_activity: %{"a-1" => state})
+        refute html =~ "Listening"
+      end
+    end
+  end
+
+  describe "the agent row's construction, through the shell" do
+    # The rail is reached here through `call_shell/1` rather than
+    # directly, so these assert what the SHELL actually puts on screen
+    # on both surfaces — the quickmeet and /meetings render the same
+    # shell, which is why one file can speak for both.
+    test "the state is drawn ON the avatar, ring plus corner glyph" do
+      html = rail(active_tab: "people", agent_activity: %{"a-1" => :computing})
+
+      assert html =~ ~s(data-role="agent-activity-avatar")
+      assert html =~ ~s(data-role="agent-activity-ring")
+      assert html =~ ~s(data-role="agent-activity-glyph")
+      assert html =~ "border-info"
+    end
+
+    test "the role chip no longer occupies the line under the name" do
+      html = rail(active_tab: "people", agent_activity: %{"a-1" => :computing})
+
+      refute html =~ ~s(data-role="agent-role-chip")
+      assert html =~ ~s(data-role="agent-activity-word")
+    end
+
+    # The state a quiet meeting spends nearly all of its time in, and
+    # the one the old rail drew as a bare dot with the literal word
+    # "agent" beside it.
+    test "idle is a drawn state: muted ring, dimmed face, the word Idle" do
+      html = rail(active_tab: "people", agent_activity: %{"a-1" => :idle})
+
+      assert html =~ "Idle"
+      assert html =~ ~s(data-role="agent-activity-avatar")
+      assert html =~ "border-base-content/25"
+      assert html =~ "opacity-45"
+      refute html =~ ~s(data-role="agent-activity-glyph")
+    end
+
+    test "the reachability dot is not lost when the ring takes the avatar" do
+      for state <- [:computing, :typing, :failed, :idle] do
+        html = rail(active_tab: "people", agent_activity: %{"a-1" => state})
+
+        assert html =~ ~s(data-role="agent-status-dot"),
+               "#{state}: the reachability dot — a different fact from activity — was dropped"
+      end
+    end
+  end
+
+  describe "call_controls/1" do
+    defp controls(overrides \\ []) do
+      render_component(
+        &CallShell.call_controls/1,
+        Keyword.merge(
+          [
+            mic_event: "zzz_fake_mic",
+            camera_event: "zzz_fake_camera",
+            share_event: "zzz_fake_share",
+            leave_event: "zzz_fake_leave"
+          ],
+          overrides
+        )
+      )
+    end
+
+    # The load-bearing one. A hardcoded component passes any test that
+    # feeds it a real event name, so this feeds it names no surface
+    # uses and asserts BOTH real vocabularies are absent.
+    test "emits the event names it was given, not either surface's literals" do
+      html = controls()
+
+      assert html =~ ~s(phx-click="zzz_fake_mic")
+      assert html =~ ~s(phx-click="zzz_fake_camera")
+      assert html =~ ~s(phx-click="zzz_fake_share")
+      assert html =~ ~s(phx-click="zzz_fake_leave")
+
+      refute html =~ "meeting_toggle_mic"
+      refute html =~ "meeting_toggle_camera"
+      refute html =~ "meeting_leave"
+      refute html =~ "meeting_start_screen_share"
+      refute html =~ "meeting_toggle_screen_share"
+    end
+
+    test "the mic button says what the click will DO, not what is true now" do
+      on = controls(mic_on: true)
+      off = controls(mic_on: false)
+
+      assert on =~ "Mute"
+      assert on =~ ~s(size-4 hero-microphone")
+      refute on =~ "hero-microphone-slash"
+      assert off =~ "Unmute"
+      assert off =~ "hero-microphone-slash"
+    end
+
+    test "Leave carries the error slot, and nothing else does" do
+      html = controls()
+
+      assert html =~ ~s(data-role="call-control-leave")
+      assert html =~ "text-error"
+      refute html =~ "hero-x-mark"
+    end
+
+    test "share reflects whether a share is already running" do
+      idle = controls(sharing: false)
+      live = controls(sharing: true)
+
+      assert idle =~ "Share"
+      assert idle =~ ~s(data-on="false")
+      assert live =~ "Stop sharing"
+    end
+  end
+
+  describe "the rail's type scale (task 01a05b14 stage 5)" do
+    # The approved target draws the rail at 12px name / 11px sub-line /
+    # 11px uppercase heading at EVERY width: the sub-`lg` drawer is the
+    # same rail narrowed, not a different screen. The rows used to say
+    # `text-sm` and let the name inherit the shell's body scale. These
+    # tests read the CLASS LIST of each node, not a substring of the
+    # page, and refute any breakpoint prefix on the size utility.
+    defp class_of(html, selector) do
+      classes =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(selector)
+        |> LazyHTML.attribute("class")
+
+      assert classes != [], "no element matched #{selector}"
+      classes
+    end
+
+    # `text-base-content/90` is a COLOUR, not a size — the lookahead
+    # stops `text-base` matching inside it.
+    defp size_utilities(class),
+      do: Regex.scan(~r/(?:\S+:)?text-(?:xs|sm|base|\[\d+px\])(?![\w\/-])/, class)
+
+    test "participant names are pinned to text-xs with no breakpoint variant" do
+      html =
+        rail(
+          active_tab: "people",
+          participants: [human("Harper", "u-1"), agent("Saru", "a-1")],
+          agent_activity: %{"a-1" => :computing}
+        )
+
+      names = class_of(html, ~s([data-role="participant-name"]))
+      assert length(names) == 2, "one name per row, human and agent alike"
+
+      for class <- names do
+        assert class =~ "text-xs"
+        refute class =~ "text-sm"
+
+        assert size_utilities(class) == [["text-xs"]],
+               "the name's size must be one bare utility, got: #{class}"
+      end
+    end
+
+    test "the sub-line and the section headings are 11px, unconditionally" do
+      html =
+        rail(
+          active_tab: "people",
+          participants: [human("Harper", "u-1"), agent("Saru", "a-1")],
+          agent_activity: %{"a-1" => :computing}
+        )
+
+      [word] = class_of(html, ~s([data-role="agent-activity-word"]))
+      assert size_utilities(word) == [["text-[11px]"]]
+
+      headings =
+        class_of(html, ~s([data-section] > div > span.uppercase))
+
+      assert length(headings) == 2, "In this call + Agents"
+
+      for class <- headings do
+        assert size_utilities(class) == [["text-[11px]"]]
+      end
+    end
+
+    test "the tab labels match the rail's 11px scale" do
+      for class <- class_of(rail(active_tab: "people"), ~s([data-role="call-rail-tab"])) do
+        assert size_utilities(class) == [["text-[11px]"]]
+      end
+    end
+
+    # The row itself carries the size too, so anything inside it that
+    # forgets its own utility inherits 12px rather than the shell's 14px.
+    test "the rows themselves set text-xs rather than inheriting" do
+      html = rail(active_tab: "people")
+
+      for class <- class_of(html, ~s([data-participant-id])) do
+        assert size_utilities(class) == [["text-xs"]], class
+      end
+    end
+  end
+end

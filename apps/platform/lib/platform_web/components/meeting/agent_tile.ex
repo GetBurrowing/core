@@ -37,19 +37,28 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
     * `:role` — short human-readable role label rendered in the chip. Optional;
       defaults to `"agent"`. Spec values include `"listener"`, `"designer"`,
       `"specialist"`.
-    * `:activity_state` — one of `:idle`, `:typing`, `:computing`, `:listening`.
-      Drives whether the activity dot renders. Defaults to `:idle`.
+    * `:activity_state` — one of `:idle`, `:typing`, `:computing`,
+      `:listening`, `:failed`. Drives the activity badge. Defaults to `:idle`.
     * `:accent_color` — optional hex color (e.g. `"#7c3aed"`) used as the tile
       background. When `nil`, falls back to `bg-base-200` so the tile remains
       legible against the meeting chrome.
     * `:avatar_url` — optional avatar image URL.
+    * `:dock?` — render as the GALLERY AGENT DOCK tile rather than the short
+      mixed "who's here" strip tile. The dock is a taller, bordered panel
+      (see `meeting_live.html.heex`), so the activity badge is laid out as a
+      full-width centered bar with its WORD VISIBLE instead of a corner glyph
+      with the word suppressed. Defaults to `false`.
   """
 
   use Phoenix.Component
 
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
+  import PlatformWeb.Components.Meetings.AgentActivityBadge, only: [agent_activity_badge: 1]
 
-  @activity_states [:idle, :typing, :computing, :listening]
+  # `:failed` belongs here because `MeetingLive.agent_activity_state/2`
+  # can return it and the strip's call site passes that straight through;
+  # leaving it out made the attr `values:` a lie rather than a guard.
+  @activity_states [:idle, :typing, :computing, :listening, :failed]
 
   @role_labels %{
     "listener" => "listener",
@@ -72,6 +81,24 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
   )
 
   attr(:avatar_url, :string, default: nil, doc: "avatar image URL")
+
+  attr(:dock?, :boolean,
+    default: false,
+    doc: "gallery dock tile: taller, so the activity WORD renders instead of being suppressed"
+  )
+
+  attr(:speaking?, :boolean,
+    default: false,
+    doc: "draws the same ring-2 ring-primary VideoTile uses for an active speaker"
+  )
+
+  attr(:id_prefix, :string,
+    default: "agent-tile",
+    doc:
+      "dom id prefix. The gallery grid passes a DISTINCT prefix so a speaking agent " <>
+        "promoted into the grid cannot collide ids with its bottom-dock tile."
+  )
+
   attr(:class, :any, default: nil, doc: "extra classes for the outer tile element")
   attr(:rest, :global)
 
@@ -90,18 +117,22 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
       |> assign(:accent_style, accent_style)
       |> assign(:accent_active?, accent_active?)
       |> assign(:active?, assigns.activity_state != :idle)
-      |> assign(:activity_label, activity_label(assigns.activity_state))
 
     ~H"""
     <div
-      id={"agent-tile-#{@identity}"}
+      id={"#{@id_prefix}-#{@identity}"}
       data-agent-tile
       data-agent={@identity}
       data-activity-state={Atom.to_string(@activity_state)}
+      data-speaking={@speaking? && "true"}
       class={
         [
           "meeting-agent-tile group relative overflow-hidden rounded-lg",
           "aspect-video h-full shrink-0",
+          # Same speaking affordance VideoTile draws. `ring-*` is an
+          # outline-style paint, so it changes no geometry — the scope
+          # fence on tile sizing/layout holds.
+          @speaking? && "ring-2 ring-primary",
           # bg-base-200 is the spec fallback when no accent color is supplied.
           !@accent_active? && "bg-base-200",
           @class
@@ -123,14 +154,36 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
         />
       </div>
 
-      <%!-- Activity indicator: pulsing success dot when state != :idle. --%>
+      <%!-- Activity indicator. NOT a colour-only dot: `agent_activity_badge/1`
+           owns the ring colour, glyph and word per state, so a `:failed`
+           agent reads as a red `!` instead of the healthy green pulse this
+           tile drew for every non-idle state.
+
+           Two layouts, and the difference is only ever about ROOM:
+
+             * `dock?` (gallery agent dock) — a full-width centered bar sitting
+               above the role chip. The dock footer is tall enough for it, so
+               the WORD RENDERS. This is the intended presentation: the badge's
+               own moduledoc is explicit that the contract is ring + glyph +
+               WORD and never colour alone, because colour at avatar size is a
+               few pixels and fails a colourblind viewer outright.
+
+             * otherwise (short mixed "who's here" strip) — a corner glyph, with
+               the word suppressed by `agent-tile-activity` (app.css). That
+               strip tile really is ~40px and the word does not fit. The class
+               is applied ONLY here, so the suppression can no longer reach the
+               dock: stage 1 shipped it unscoped and that hid the word
+               everywhere, which defeated the component. --%>
       <div
         :if={@active?}
         data-activity-indicator
-        class="absolute bottom-1 right-1 size-2.5 rounded-full bg-success ring-2 ring-base-100 animate-pulse"
-        title={"#{@name} is #{@activity_label}"}
+        class={
+          if @dock?,
+            do: "absolute inset-x-0 bottom-6 flex justify-center px-1",
+            else: "agent-tile-activity absolute bottom-1 right-1"
+        }
       >
-        <span class="sr-only">{@name} is {@activity_label}</span>
+        <.agent_activity_badge state={@activity_state} name={@name} />
       </div>
 
       <%!-- Role chip pinned below the avatar inside the tile. --%>
@@ -179,11 +232,6 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
   defp normalize_role(_), do: "agent"
 
   # ── Activity helpers ───────────────────────────────────────────────────────
-
-  defp activity_label(:typing), do: "typing"
-  defp activity_label(:computing), do: "computing"
-  defp activity_label(:listening), do: "listening"
-  defp activity_label(_), do: "active"
 
   # ── Accent background ──────────────────────────────────────────────────────
   # The accent color is sourced from agent.color (free-form hex) and applied as

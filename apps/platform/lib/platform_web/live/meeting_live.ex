@@ -216,7 +216,7 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
 
-  import PlatformWeb.Components.Meetings.CandidateRail, only: [candidate_rail: 1]
+  alias PlatformWeb.Components.Meetings.CallShell
 
   import PlatformWeb.Components.Meetings.IntentsCollapse,
     only: [intents_collapse: 1, intents_overlays: 1]
@@ -226,8 +226,6 @@ defmodule PlatformWeb.MeetingLive do
 
   import PlatformWeb.Components.Meetings.MeetingDetail,
     only: [meeting_detail_body: 1, meeting_detail_actions: 1]
-
-  import PlatformWeb.Components.Meetings.ParticipantRail, only: [participant_rail: 1]
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
@@ -375,9 +373,17 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:shell?, false)
       |> assign(:stage_modes, @stage_modes)
       |> assign(:chat_panel_open, false)
-      |> assign(:participant_rail_collapsed, false)
+      # Mobile-drawer open-state for the CALL RAIL (task 01a05b14 stage
+      # 6). Orthogonal to `:chat_panel_collapsed`, which is the desktop
+      # affordance. Before this the rail was `hidden lg:flex` and stage 5
+      # measured it at `width: 0` on a 390px viewport — People and Canvas
+      # simply did not exist on a phone, on either surface. A target that
+      # only exists above `lg:` is not the target that was approved.
+      |> assign(:call_rail_open, false)
       |> assign(:chat_panel_collapsed, false)
+      |> assign(:active_meeting_tab, "people")
       |> assign(:captions_visible, false)
+      |> assign(:speaking_identities, MapSet.new())
       |> seed_intent_assigns()
       |> assign_calendar_time_zone()
       |> seed_calendar_now()
@@ -486,8 +492,20 @@ defmodule PlatformWeb.MeetingLive do
      # `SidebarCollapse` JS hook (parameterized via `data-*` attrs in
      # stage 3) hydrates from localStorage so the preference survives
      # navigation + reload.
-     |> assign(:participant_rail_collapsed, false)
      |> assign(:chat_panel_collapsed, false)
+     # Mobile-drawer open-state for the CALL RAIL (task 01a05b14 stage
+     # 6). Orthogonal to `:chat_panel_collapsed`, which is the DESKTOP
+     # affordance. Before this the rail was `hidden lg:flex` and stage 5
+     # measured it at `width: 0` on a 390px viewport — People, Canvas
+     # and Transcript simply did not exist on a phone, on either
+     # surface. A target that only exists above `lg:` is not the target
+     # that was approved.
+     |> assign(:call_rail_open, false)
+     # Right-rail tab (task 01a05b14 stage 3). `CallShell.call_rail`
+     # holds no state of its own so each surface owns its own assign;
+     # `"people"` is the default because humans and agents are what the
+     # rail exists to show.
+     |> assign(:active_meeting_tab, "people")
      # Closed-captions toggle for the meeting surface (task 019f3f17
      # stage 1). Originally distinct-named from a shell `toggle_captions`
      # handler (removed by task 019f43da) — the shell had swallowed clicks
@@ -499,6 +517,12 @@ defmodule PlatformWeb.MeetingLive do
      # spec; a viewer preference is mirrored to localStorage by the
      # MeetingCaptions JS hook and restored via `meeting_captions_hydrate`.
      |> assign(:captions_visible, false)
+     # Active-speaker identities reported by THIS viewer's LiveKit client
+     # (`MeetingRoom._onActiveSpeaker` -> `active_speakers`). VIEWER-LOCAL
+     # for the same reason `:captions_visible` is: never persisted, never
+     # broadcast over PubSub. Each viewer's own client is the authority on
+     # what it is hearing.
+     |> assign(:speaking_identities, MapSet.new())
      # Intents-collapse bar defaults (task 019f70b8 stage 7). Seeded in
      # BOTH mount clauses so the `:index` action and the guest surface
      # render without a KeyError even though neither shows the bar.
@@ -563,6 +587,7 @@ defmodule PlatformWeb.MeetingLive do
     # badge on first paint rather than only after the next toggle.
     |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
     |> assign(:participants, participants)
+    |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:agents_by_id, %{})
     # Per-meeting agent activity (task 01a04a98). Hydrated on the GUEST
     # surface too: the guest holds `meeting:<id>` (see
@@ -736,6 +761,16 @@ defmodule PlatformWeb.MeetingLive do
   def handle_params(%{"slug" => slug} = params, _url, socket) do
     chrome_mode = socket.assigns[:chrome_mode]
 
+    # `?tab=` deep-links the right rail (task 01a05b14 stage 3). Absent
+    # or unrecognised leaves the current tab standing — `call_rail/1`
+    # normalises anything it does not know back to People, so a stale
+    # link costs the tab, never the pane.
+    socket =
+      case params["tab"] do
+        tab when is_binary(tab) -> assign(socket, :active_meeting_tab, tab)
+        _ -> socket
+      end
+
     case Meetings.fetch_meeting_for_user(socket.assigns[:current_user_record], slug) do
       # A DENIED MOUNT MUST NOT BOUNCE OFF THE CHROME-LESS SURFACE (task
       # 019fb955-f8b1 stage 5). The shell branches below `push_navigate` to
@@ -903,6 +938,7 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:page_title, "Meeting · #{meeting.name}")
           |> assign(:meeting, meeting)
           |> assign(:participants, participants)
+          |> assign(:room_live?, room_live?(meeting.chat_space_id))
           |> assign(:agents_by_id, agents_by_id)
           # The invite-an-agent control's options (task 01a04c2f). Seeded
           # here and re-derived by `refresh_participants/1`, so an agent that
@@ -2259,38 +2295,47 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, invite_agent_into_call(socket, agent_id)}
   end
 
+  # The two `<lg` drawers are MUTUALLY EXCLUSIVE. Both slide in from the
+  # right at `z-40` over the same backdrop, so letting both open would
+  # stack one unreachably behind the other — a state the user can enter
+  # with two taps and cannot obviously leave. Opening either therefore
+  # closes the other.
   def handle_event("toggle_chat_panel", _params, socket) do
-    {:noreply, update(socket, :chat_panel_open, &(!&1))}
-  end
-
-  # Desktop participant-rail collapse (task 019e40f2). Mirrors the
-  # `toggle_sidebar` shape in `shell_live.ex:236-244`: flip the assign,
-  # push a `*_collapsed_changed` browser event so the SidebarCollapse JS
-  # hook can mirror the value into localStorage. The matching
-  # `*_hydrate` handler below adopts a stored value on mount.
-  def handle_event("toggle_participant_rail", _params, socket) do
-    next = !socket.assigns.participant_rail_collapsed
+    next = !socket.assigns.chat_panel_open
 
     {:noreply,
      socket
-     |> assign(:participant_rail_collapsed, next)
-     |> push_event("meeting_participant_rail_collapsed_changed", %{collapsed: next})}
+     |> assign(:chat_panel_open, next)
+     |> assign(:call_rail_open, if(next, do: false, else: socket.assigns.call_rail_open))}
   end
 
-  def handle_event("meeting_participant_rail_hydrate", %{"collapsed" => collapsed}, socket)
-      when is_boolean(collapsed) do
-    # Idempotent: skip the re-render when the hook's localStorage value
-    # matches the current assign.
-    if collapsed == socket.assigns.participant_rail_collapsed do
-      {:noreply, socket}
-    else
-      {:noreply, assign(socket, :participant_rail_collapsed, collapsed)}
-    end
+  # Mobile call-rail drawer (task 01a05b14 stage 6). `lg:hidden` control;
+  # at `lg` the rail is an in-flow column and this state is not consulted.
+  def handle_event("toggle_call_rail", _params, socket) do
+    next = !socket.assigns.call_rail_open
+
+    {:noreply,
+     socket
+     |> assign(:call_rail_open, next)
+     |> assign(:chat_panel_open, if(next, do: false, else: socket.assigns.chat_panel_open))}
   end
+
+  # Right-rail tab select (task 01a05b14 stage 3). An unrecognised tab
+  # is normalised by `CallShell.call_rail/1` itself rather than being
+  # rejected here, so a stale value costs the tab, not the pane.
+  def handle_event("meeting_tab_select", %{"tab" => tab}, socket) when is_binary(tab) do
+    {:noreply, assign(socket, :active_meeting_tab, tab)}
+  end
+
+  # `toggle_participant_rail` and `meeting_participant_rail_hydrate` were
+  # DELETED with the left rail (task 01a05b14 stage 3), together with the
+  # `data-storage-key="suite.meeting.participant_rail.collapsed"` host
+  # that drove them. Removing one without the other would have left a
+  # live `SidebarCollapse` hook pushing at a missing handler.
 
   # Desktop chat-pane collapse (task 019e40f2). Strictly DESKTOP — the
   # mobile drawer continues to use `:chat_panel_open`. Same shape as
-  # `toggle_participant_rail` above.
+  # the retired `toggle_participant_rail` (see above).
   def handle_event("toggle_meeting_chat_pane", _params, socket) do
     next = !socket.assigns.chat_panel_collapsed
 
@@ -2337,6 +2382,29 @@ defmodule PlatformWeb.MeetingLive do
     else
       {:noreply, assign(socket, :captions_visible, visible)}
     end
+  end
+
+  # Active speakers reported by the viewer's own LiveKit client via the
+  # `MeetingRoom` hook. VIEWER-LOCAL presentation state: not persisted, not
+  # broadcast. Each connected client runs its own LiveKit room and reports
+  # what IT hears, so broadcasting one viewer's set over the others would
+  # be actively wrong.
+  #
+  # The push arrives on the ROOT LiveView, not a component: a JS hook's
+  # `pushEvent` ignores `phx-target`, and `MeetingRoom` is mounted on
+  # `#meeting-room` inside this LiveView. Keep this handler here.
+  #
+  # The hook already debounces (250ms trailing + identity-set equality), so
+  # this is not a hot path; the MapSet rebuild is cheap and idempotent.
+  #
+  # ONE implementation for both surfaces: `MeetingHooks.apply_active_speakers/2`
+  # (task 01a05b14 stage 5). The attached `MeetingHooks` handle_event hook
+  # already halts this event with that function on the authenticated
+  # surface, so this clause is reached only where the hook is not the
+  # authenticated one (the guest ingress, whose hook also delegates) or if
+  # the hook is ever detached. A malformed payload is tolerated there too.
+  def handle_event("active_speakers", params, socket) do
+    {:noreply, MeetingHooks.apply_active_speakers(socket, params)}
   end
 
   # Stage-mode switching (ADR 0042). The segmented control in the top bar
@@ -3783,6 +3851,9 @@ defmodule PlatformWeb.MeetingLive do
   # meeting surface keys agents by the latter, so the bridge is what makes
   # the signal addressable at all. It returns nil for a human participant,
   # so a person typing in the meeting chat cannot light an agent tile.
+  # The bridge AND the fold live in `AgentActivity.put_typing/3`, shared
+  # with the quickmeet (`MeetingHooks.apply_agent_typing/2`); this clause
+  # owns only the "is this my meeting's space" guard.
   #
   # NOT re-broadcast onto the shell topic: every authenticated MeetingLive
   # already receives this event once, and a rebroadcast from each of them
@@ -3793,13 +3864,11 @@ defmodule PlatformWeb.MeetingLive do
         {:agent_typing, %{space_id: space_id, participant_id: participant_id, typing: typing}},
         socket
       ) do
-    with true <- meeting_space?(socket, space_id),
-         agent_id when is_binary(agent_id) <-
-           AgentActivity.agent_id_for_chat_participant(participant_id) do
+    if meeting_space?(socket, space_id) do
       {:noreply,
-       update(socket, :agent_activity, &AgentActivity.put(&1, :typing, agent_id, typing == true))}
+       update(socket, :agent_activity, &AgentActivity.put_typing(&1, participant_id, typing))}
     else
-      _ -> {:noreply, socket}
+      {:noreply, socket}
     end
   end
 
@@ -4215,12 +4284,30 @@ defmodule PlatformWeb.MeetingLive do
 
     socket
     |> assign(:participants, participants)
+    |> assign(:room_live?, room_live?(space_id))
     |> assign(:agents_by_id, load_agents_by_id(participants))
     |> assign(:invitable_agents, invitable_agents(space_id, participants))
     |> assign(:pending_invite_agent_ids, pending_invite_agent_ids(participants))
   end
 
   defp refresh_participants(socket), do: socket
+
+  # Whether this meeting's space has a LIVE room right now (task 01a05b14
+  # stage 5). Drives the top bar's `meeting live` pill, which follows the
+  # invite banner's rule: OBSERVED, not inferred. `Meetings.get_active_room/1`
+  # answers from the `meeting_rooms.status` column, which only the join
+  # path (`activate_room/1`, on a participant actually entering) and the
+  # LiveKit `room_finished` webhook (`finish_room/1`) write — and both of
+  # those broadcast `{:meeting_presence_update, _}` on the space topic, the
+  # clause that re-runs `refresh_participants/1`. So the pill flips on the
+  # same tick the roster does and reads a row that the media plane, not
+  # this LiveView, decided. A scheduled meeting with no room renders NO
+  # pill rather than a green one that lies.
+  defp room_live?(space_id) when is_binary(space_id) do
+    match?(%Room{}, Meetings.get_active_room(space_id))
+  end
+
+  defp room_live?(_space_id), do: false
 
   # ── Agent invitation (task 01a04c2f) ───────────────────────────────────
   #
@@ -4587,9 +4674,18 @@ defmodule PlatformWeb.MeetingLive do
 
   defp nilify(_), do: nil
 
-  # Build a `%{agent_id => %Agent{}}` map for any agent-typed participants.
-  # Empty when no agents are seated. Drives the rail's role chip + status dot.
-  defp load_agents_by_id(participants) when is_list(participants) do
+  @doc """
+  Build a `%{agent_id => %Agent{}}` map for any agent-typed participants.
+
+  Empty when no agents are seated. Drives the rail's role chip + status
+  dot. PUBLIC as of task 01a05b14 stage 6: the in-chat quickmeet mounts
+  the same `CallShell.call_rail/1` and therefore needs the same map. A
+  second copy in `ChatLive.MeetingHooks` would be a second query shape
+  to keep in step with `ParticipantRail`'s expectations — which is the
+  exact two-surface drift this task exists to end.
+  """
+  @spec load_agents_by_id([map()]) :: %{binary() => Agent.t()}
+  def load_agents_by_id(participants) when is_list(participants) do
     agent_ids =
       participants
       |> Enum.flat_map(fn
@@ -4611,7 +4707,7 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
-  defp load_agents_by_id(_), do: %{}
+  def load_agents_by_id(_), do: %{}
 
   @doc """
   Per-meeting PubSub topic.
@@ -4756,7 +4852,20 @@ defmodule PlatformWeb.MeetingLive do
   # rather than per card: a rail of twenty cards would otherwise issue
   # twenty queries on every broadcast, and candidate broadcasts arrive
   # at transcript speed.
-  defp assign_candidate_board(socket, meeting_id) when is_binary(meeting_id) do
+  @doc """
+  Assign the Canvas tab's candidate board for `meeting_id`.
+
+  PUBLIC as of task 01a05b14 stage 6, for the same reason as
+  `load_agents_by_id/1`: the in-chat quickmeet renders the identical
+  `CandidateRail` through `CallShell.call_rail/1`, and the live/closed
+  split plus the grouped-event map is a CONTRACT of that component, not
+  an implementation detail of this LiveView. Duplicating the split in
+  `ChatLive.MeetingHooks` would let the two surfaces disagree about
+  what "closed" means.
+  """
+  @spec assign_candidate_board(Phoenix.LiveView.Socket.t(), binary() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  def assign_candidate_board(socket, meeting_id) when is_binary(meeting_id) do
     {closed, live} =
       meeting_id
       |> Candidates.list_for_meeting()
@@ -4771,7 +4880,7 @@ defmodule PlatformWeb.MeetingLive do
     )
   end
 
-  defp assign_candidate_board(socket, _meeting_id), do: socket
+  def assign_candidate_board(socket, _meeting_id), do: socket
 
   defp candidate_closed?(%{state: :closed}), do: true
   defp candidate_closed?(%{closed_reason: reason}) when not is_nil(reason), do: true
@@ -5843,14 +5952,58 @@ defmodule PlatformWeb.MeetingLive do
   Filter participants to the human (`participant_type == "user"`) subset
   that the Gallery mode renders. Public for tests + heex consumers.
   """
-  def gallery_participants(participants) when is_list(participants) do
+  def gallery_participants(participants), do: gallery_participants(participants, MapSet.new())
+
+  @doc """
+  Gallery roster, widened by the viewer's ACTIVE SPEAKER set.
+
+  Humans are always in the grid. An agent is in the grid only while its
+  identity (`"agent:" <> participant_id`) is in `speaking_identities` —
+  the target design's commitment that "an agent grows into a tile only
+  while speaking". When it stops speaking it falls out of this list and
+  is rendered by the bottom agent dock again.
+
+  `speaking_identities` is viewer-local (see the `active_speakers`
+  handler); the arity-1 clause above is the "nobody speaking" case and is
+  what non-gallery callers and older tests get.
+  """
+  def gallery_participants(participants, speaking_identities) when is_list(participants) do
+    speaking = speaking_identities || MapSet.new()
+
     Enum.filter(participants, fn
-      %{participant_type: "user"} -> true
-      _ -> false
+      %{participant_type: "user"} ->
+        true
+
+      %{participant_type: "agent"} = agent ->
+        MapSet.member?(speaking, agent_gallery_identity(agent))
+
+      _ ->
+        false
     end)
   end
 
-  def gallery_participants(_), do: []
+  def gallery_participants(_, _), do: []
+
+  @doc """
+  LiveKit identity for an agent participant: `"agent:" <> participant_id`.
+
+  Deliberately a named function rather than an inline string concat at the
+  three call sites (gallery filter, dock tile, promoted grid tile) — the
+  promotion only works if all three spell the identity identically.
+  """
+  def agent_gallery_identity(%{participant_id: pid}) when is_binary(pid) and pid != "",
+    do: "agent:" <> pid
+
+  def agent_gallery_identity(_), do: "agent:"
+
+  @doc """
+  True when a gallery roster entry is a promoted AGENT rather than a human.
+
+  Only ever true for entries `gallery_participants/2` admitted, i.e. an
+  agent that is currently speaking.
+  """
+  def agent_participant?(%{participant_type: "agent"}), do: true
+  def agent_participant?(_), do: false
 
   @doc """
   The canvas the meeting's canvas TILE displays, or `nil` when the
@@ -5912,86 +6065,69 @@ defmodule PlatformWeb.MeetingLive do
   def gallery_identity(_), do: "user:unknown"
 
   @doc """
-  Pick the grid shape (Tailwind class string) that maximizes per-tile area
-  for `count` 16:9 tiles in a roughly-portrait container (typical desktop
-  gallery interior is taller than wide once the bottom strip is hidden).
-  Returns the full `grid-cols-N` class plus a matching `grid-rows-M` class
-  so `auto-rows-fr` partitions the height evenly.
+  Column count (Tailwind class string) for `count` gallery cells.
 
-  Mobile (< sm = <640px) defaults to a vertical stack so each tile keeps
-  legible width — at 390px viewport a horizontal split into 3 columns
-  yields ~111×63 tiles which fall below the 80px legibility floor. The
-  `sm:` prefix restores the desktop-optimized shape from `sm` upward.
+  Task 01a05b14 stage 3 replaced the previous shape table. That table
+  paired an explicit `grid-cols-N grid-rows-M` with a per-TILE 16:9
+  binding and `place-items-center`, which is what produced the layout
+  the sponsor rejected: at two participants on a 744px stage the grid
+  measured 520px wide and the tiles floated as a centred column with
+  224px of dead margin either side.
 
-  Shapes (mobile / sm+ cols x rows):
-    1 -> 1x1 / 1x1
-    2 -> 1x2 / 1x2 (already vertical on both)
-    3 -> 1x3 / 1x3 (already vertical on both)
-    4 -> 1x4 / 2x2
-    5..6 -> 1xN / 3x2
-    7..9 -> 1xN / 3x3
-    10..12 -> 2xceil(N/2) / 4x3
-    13..16 -> 2xceil(N/2) / 4x4
-    17+ -> 2xceil(N/2) / 5x4 with overflow.
+  Now the CELL owns the aspect and the tile fills it (`object-cover`),
+  so the only thing the shape has to say is how many columns:
 
-  Why vertical stacking for 2 and 3 participants on desktop? In a roughly-
-  portrait gallery container (e.g. 624×780 desktop interior), splitting
-  horizontally into 2..3 columns yields tall, narrow cells (~312×780 or
-  200×780). A 16:9 tile centered in those cells is width-bounded and
-  tiny (312×175 or 200×113) with massive top/bottom letterboxing —
-  that's the "thumbnail floating in cell" look Rowan rejected.
-  Stacking vertically (1 col × 2..3 rows) gives wide-but-short cells
-  (624×390 or 624×260) where the 16:9 tile fits at 624×351 or 462×260
-  — roughly 4× the per-tile area for 2p.
+    1      -> grid-cols-1
+    2..4   -> grid-cols-2
+    5..9   -> grid-cols-3
+    10+    -> grid-cols-4
 
-  Both axes are explicit-class so Tailwind's content scanner picks them up
-  as literal strings in the helper body (which is itself in a `.heex`-
-  reachable module). Don't switch to interpolation like
+  Rows come from `auto-rows-fr`, which partitions the stage height
+  evenly across however many rows the column count implies — so the grid
+  fills the stage on BOTH axes with no explicit row class to keep in
+  sync. There is deliberately no `sm:` prefix: the mockup's 2x2 is the
+  layout at every width, and stretched cells stay legible at 390px in a
+  way the old width-bound 16:9 thumbnails did not.
+
+  Classes are literal strings in the function bodies so Tailwind's
+  scanner sees them. Don't switch to interpolation like
   `"grid-cols-\#{n}"` — that goes invisible to the JIT.
   """
   @spec gallery_grid_class(non_neg_integer()) :: String.t()
   def gallery_grid_class(count)
-  def gallery_grid_class(0), do: "grid-cols-1 grid-rows-1"
-  def gallery_grid_class(1), do: "grid-cols-1 grid-rows-1"
-  def gallery_grid_class(2), do: "grid-cols-1 grid-rows-2"
-  def gallery_grid_class(3), do: "grid-cols-1 grid-rows-3"
-  def gallery_grid_class(4), do: "grid-cols-1 grid-rows-4 sm:grid-cols-2 sm:grid-rows-2"
-  def gallery_grid_class(5), do: "grid-cols-1 grid-rows-5 sm:grid-cols-3 sm:grid-rows-2"
-  def gallery_grid_class(6), do: "grid-cols-1 grid-rows-6 sm:grid-cols-3 sm:grid-rows-2"
-  def gallery_grid_class(7), do: "grid-cols-1 grid-rows-7 sm:grid-cols-3 sm:grid-rows-3"
-  def gallery_grid_class(8), do: "grid-cols-1 grid-rows-8 sm:grid-cols-3 sm:grid-rows-3"
-  def gallery_grid_class(9), do: "grid-cols-1 grid-rows-9 sm:grid-cols-3 sm:grid-rows-3"
-  def gallery_grid_class(10), do: "grid-cols-2 grid-rows-5 sm:grid-cols-4 sm:grid-rows-3"
-  def gallery_grid_class(11), do: "grid-cols-2 grid-rows-6 sm:grid-cols-4 sm:grid-rows-3"
-  def gallery_grid_class(12), do: "grid-cols-2 grid-rows-6 sm:grid-cols-4 sm:grid-rows-3"
-  def gallery_grid_class(13), do: "grid-cols-2 grid-rows-7 sm:grid-cols-4 sm:grid-rows-4"
-  def gallery_grid_class(14), do: "grid-cols-2 grid-rows-7 sm:grid-cols-4 sm:grid-rows-4"
-  def gallery_grid_class(15), do: "grid-cols-2 grid-rows-8 sm:grid-cols-4 sm:grid-rows-4"
-  def gallery_grid_class(16), do: "grid-cols-2 grid-rows-8 sm:grid-cols-4 sm:grid-rows-4"
-  def gallery_grid_class(_n), do: "grid-cols-2 grid-rows-8 sm:grid-cols-5 sm:grid-rows-4"
+  def gallery_grid_class(0), do: "grid-cols-1"
+  def gallery_grid_class(1), do: "grid-cols-1"
+  def gallery_grid_class(n) when n in 2..4, do: "grid-cols-2"
+  def gallery_grid_class(n) when n in 5..9, do: "grid-cols-3"
+  def gallery_grid_class(_n), do: "grid-cols-4"
 
   @doc """
-  Chrome-aware variant of `gallery_grid_class/1`. The default (shell)
-  path routes to `gallery_grid_class/1` unchanged, so the auth surface's
-  vertical-stack layout Rowan explicitly chose (see the 1x2 / 1x3
-  comments above) is preserved.
+  True when the grid should render a GHOST cell — a dimmed, empty cell
+  that completes the 2x2 block the mockup draws.
 
-  When `chrome_mode == :none` the guest surface has no chat panel, no
-  icon rail — the meeting stage owns the full viewport width. In that
-  world stacking 2 or 3 tiles vertically leaves huge horizontal
-  letterbox: each 16:9 tile becomes height-bound at ~½ or ⅓ of the
-  vertical space and cannot expand horizontally. Side-by-side on `sm+`
-  reclaims that width — each tile fills ~½ or ⅓ of the viewport
-  horizontally, which is bigger than the auth-surface stacked variant
-  because the guest viewport is bigger to begin with.
+  Only at exactly three cells. Three cells in a two-column grid leaves a
+  visibly ragged hole; the mockup fills it with a 30%-opacity outline so
+  the stage reads as a call rather than as three floating cards. Every
+  other count is either already rectangular (1, 2, 4) or lives in a
+  three/four-column grid where "one ghost per empty slot" would paint up
+  to six dead boxes — which is emphatically NOT what the drawing shows,
+  so the rule stays pinned to 3 rather than generalised to
+  `rem(count, cols)`.
+  """
+  @spec gallery_ghost_cell?(non_neg_integer()) :: boolean()
+  def gallery_ghost_cell?(count) when is_integer(count), do: count == 3
 
-  Below `sm` (mobile portrait) both surfaces stack vertically. The
-  responsive `sm:` prefixes only kick in once viewport width is >= 640px
-  so mobile guests keep the readable stacked layout.
+  @doc """
+  Chrome-aware variant of `gallery_grid_class/1`.
+
+  Kept as a distinct arity because every call site passes a chrome mode,
+  but the shape no longer diverges: since task 01a05b14 stage 3 the cells
+  STRETCH to fill the stage on both surfaces, so the guest surface's old
+  side-by-side special-cases for 2 and 3 (which existed only to reclaim
+  width the stacked shell layout wasted) are exactly what the shared
+  column rule now does anyway.
   """
   @spec gallery_grid_class(non_neg_integer(), :shell | :none) :: String.t()
-  def gallery_grid_class(2, :none), do: "grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1"
-  def gallery_grid_class(3, :none), do: "grid-cols-1 grid-rows-3 sm:grid-cols-3 sm:grid-rows-1"
   def gallery_grid_class(count, _chrome_mode), do: gallery_grid_class(count)
 
   # ── Participant rail helpers (task 019e2475-4395) ────────────────────────
@@ -6006,6 +6142,75 @@ defmodule PlatformWeb.MeetingLive do
           {[Platform.Chat.Participant.t()], [Platform.Chat.Participant.t()]}
   def partition_participants(participants) do
     Enum.split_with(participants, &(&1.participant_type == "user"))
+  end
+
+  @doc """
+  `{people, agents}` counts for the top bar's `N people · M agents`
+  readout (task 01a05b14 stage 5).
+
+  Derived from `partition_participants/1` — the SAME split
+  `ParticipantRail` renders its two sections from — rather than from a
+  second predicate, so the number in the bar and the rows in the rail
+  cannot disagree: whatever the rail files under "In this call" is a
+  person here, and whatever it files under "Agents" is an agent.
+  """
+  @spec roster_count([map()]) :: {non_neg_integer(), non_neg_integer()}
+  def roster_count(participants) do
+    {humans, agents} = partition_participants(participants)
+    {length(humans), length(agents)}
+  end
+
+  @doc """
+  The bar's readout for one `{people, agents}` pair, pluralised —
+  "1 person · 2 agents", "3 people · 1 agent". The approved target draws
+  `3 people · 4 agents`; a bar that said "1 people" would be the kind of
+  thing a sponsor notices first.
+  """
+  @spec roster_label({non_neg_integer(), non_neg_integer()}) :: String.t()
+  def roster_label({people, agents}) do
+    "#{count_noun(people, "person", "people")} · #{count_noun(agents, "agent", "agents")}"
+  end
+
+  defp count_noun(1, singular, _plural), do: "1 #{singular}"
+  defp count_noun(n, _singular, plural), do: "#{n} #{plural}"
+
+  # The top bar's `N people · M agents` readout (approved target embed 1
+  # `.mini`: 11px, muted). A function component and NOT a LiveComponent,
+  # for the reason `CallShell`'s moduledoc gives: a hook `pushEvent`
+  # ignores `phx-target`, and this bar hosts `MeetingShareButton`'s
+  # neighbour, so nothing here may move into its own target.
+  #
+  # `hidden sm:flex`, MEASURED (stage 5, 390x844): with the pill and this
+  # readout both in the bar the meeting name collapsed from its full
+  # 53px to 7px, and no re-weighting recovers it — at `basis-[80%]` the
+  # title still gets 26px. Something yields below `sm`, and it is this:
+  # a count is information, not state, and the same two numbers are
+  # one tap away as the drawer's "In this call" and "Agents" lists. The
+  # pill stays at every width because "live" IS state, and this bar
+  # never hides state on a phone (see the mute-badge note in the
+  # template). The full sentence is in `title` for hover.
+  attr(:participants, :list, required: true)
+
+  defp roster_readout(assigns) do
+    {people, agents} = roster_count(assigns.participants)
+
+    assigns =
+      assigns
+      |> assign(:people, people)
+      |> assign(:agents, agents)
+      |> assign(:label, roster_label({people, agents}))
+
+    ~H"""
+    <span
+      class="hidden flex-shrink-0 items-center whitespace-nowrap text-[11px] text-base-content/50 sm:flex"
+      data-role="meeting-roster-count"
+      data-people={@people}
+      data-agents={@agents}
+      title={@label}
+    >
+      {@label}
+    </span>
+    """
   end
 
   @doc """

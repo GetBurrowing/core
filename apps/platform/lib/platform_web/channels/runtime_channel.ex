@@ -301,10 +301,7 @@ defmodule PlatformWeb.RuntimeChannel do
 
       participant_id ->
         # Stop typing indicator when reply arrives
-        Platform.Chat.PubSub.broadcast(
-          space_id,
-          {:agent_typing, %{space_id: space_id, participant_id: participant_id, typing: false}}
-        )
+        Platform.Chat.PubSub.broadcast_agent_typing(space_id, participant_id, false)
 
         Chat.post_message(%{
           space_id: space_id,
@@ -355,12 +352,10 @@ defmodule PlatformWeb.RuntimeChannel do
     RuntimePresence.touch(socket.assigns.runtime_id)
     agent_participant_id = get_agent_participant_id(socket, space_id)
 
+    # `typing` is raw client input; the producer takes a boolean, so
+    # anything that is not literally `true` is "stopped".
     if agent_participant_id do
-      Platform.Chat.PubSub.broadcast(
-        space_id,
-        {:agent_typing,
-         %{space_id: space_id, participant_id: agent_participant_id, typing: typing}}
-      )
+      Platform.Chat.PubSub.broadcast_agent_typing(space_id, agent_participant_id, typing == true)
     end
 
     {:noreply, socket}
@@ -434,11 +429,7 @@ defmodule PlatformWeb.RuntimeChannel do
 
       true ->
         # Stop typing indicator
-        Platform.Chat.PubSub.broadcast(
-          space_id,
-          {:agent_typing,
-           %{space_id: space_id, participant_id: agent_participant_id, typing: false}}
-        )
+        Platform.Chat.PubSub.broadcast_agent_typing(space_id, agent_participant_id, false)
 
         # Decode and persist each attachment
         attachment_results =

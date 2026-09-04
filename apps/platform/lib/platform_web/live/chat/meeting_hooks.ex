@@ -20,6 +20,20 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     * `:mic_enabled`, `:camera_enabled`, `:screen_share_enabled` — local
       media state mirrored from the MeetingClient JS hook
     * `:meeting_counts` — sidebar badges (space_id → participant count)
+    * `:quickmeet_meeting_id` / `:quickmeet_meeting` — the joined
+      meeting, set on a successful quickmeet join and cleared on leave.
+      Before task 01a05b14 stage 6 this module assigned NO meeting id at
+      all, which is why the quickmeet panel could not render a rail: not
+      because the markup was missing, but because there was nothing to
+      read it from.
+    * `:agent_activity` — `%Platform.Meetings.AgentActivity{}`, hydrated
+      at join and folded from `{:agent_activity, …}` on the meeting
+      shell topic
+    * `:agents_by_id`, `:meeting_candidates`,
+      `:meeting_candidates_closed`, `:meeting_candidate_events`,
+      `:candidate_error` — the rail's People and Canvas panes
+    * `:active_meeting_tab`, `:quickmeet_rail_open` — rail tab and the
+      `<lg` sheet's open state
 
   ## Events
 
@@ -56,13 +70,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   require Logger
 
-  import Phoenix.Component, only: [assign: 3]
+  import Phoenix.Component, only: [assign: 3, assign_new: 3, update: 3]
 
   import Phoenix.LiveView,
     only: [attach_hook: 4, detach_hook: 3, push_event: 3, connected?: 1, get_connect_params: 1]
 
   alias Platform.Accounts
   alias Platform.Meetings
+  alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.Membership, as: MeetingsMembership
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.State, as: MeetingState
@@ -85,6 +100,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       |> assign(:screen_share_enabled, false)
       |> assign(:meeting_counts, %{})
       |> assign(:meeting_participants, [])
+      |> assign_call_shell_defaults()
       |> attach_hook(:meeting_events, :handle_event, &handle_event/3)
       |> attach_hook(:meeting_info, :handle_info, &handle_info/2)
 
@@ -167,6 +183,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign(:screen_share_enabled, false)
     |> assign(:meeting_counts, %{})
     |> assign(:meeting_participants, [])
+    |> assign_call_shell_defaults()
     # Idempotent hook install: the guest surface calls attach_guest/1
     # once at mount (`:name_entry` state seeds the shell tree) and again
     # on the `:name_entry → :in_meeting` transition (submit_name event).
@@ -316,6 +333,19 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   def join(socket), do: do_join(socket)
 
   @doc """
+  Reset every meeting-local assign — media state AND the call shell the
+  quickmeet hydrated at join (task 01a05b14 stage 6).
+
+  Public for the same reason `join/1` is: `"meeting_leave"` and
+  `"meeting_left"` both funnel through it, and the teardown contract —
+  notably that the `<lg` rail sheet comes back DOWN and the meeting
+  topic is unsubscribed so a rejoin does not double-subscribe — is
+  worth naming in a test rather than reaching through a hook callback.
+  """
+  @spec reset_state(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def reset_state(socket), do: reset_meeting_state(socket)
+
+  @doc """
   Flip the local `:mic_enabled` assign, push `toggle-mic` to the
   MeetingClient JS hook, AND broadcast the authoritative post-toggle
   media-state pair to all subscribers on `MeetingState.topic(user_id)`.
@@ -422,6 +452,45 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, socket |> assign(:screen_share_enabled, enabled) |> maybe_switch_to_screen(enabled)}
   end
 
+  # Right-rail tab select. DELIBERATELY the same event name
+  # `MeetingLive` already ships (`"meeting_tab_select"`) rather than a
+  # quickmeet-flavoured second name: `CallShell.call_rail/1` takes the
+  # event as an attr precisely so both surfaces can speak one
+  # vocabulary, and a second name would mean a reader of the rail's
+  # markup could not tell which handler a click reaches.
+  #
+  # `{:halt, …}` is safe on `/meetings` too — `MeetingLive`'s own
+  # clause performs the identical assign, so halting here costs
+  # nothing. The value is NOT validated: `call_rail/1` normalises an
+  # unrecognised tab to People itself, so a stale `?tab=` costs the tab
+  # and not the pane.
+  # The `<lg` call-rail sheet. Server state rather than a `JS.toggle/1`
+  # because the overlay header's toggle and the sheet's own close button
+  # are in two different breakpoint subtrees, and because the sheet must
+  # come back DOWN when the user leaves the call — `leave_call_shell/1`
+  # resets it. A client-only toggle would strand it open over the chat.
+  defp handle_event("quickmeet_toggle_rail", _params, socket) do
+    {:halt, assign(socket, :quickmeet_rail_open, !socket.assigns[:quickmeet_rail_open])}
+  end
+
+  defp handle_event("meeting_tab_select", %{"tab" => tab}, socket) when is_binary(tab) do
+    {:halt, assign(socket, :active_meeting_tab, tab)}
+  end
+
+  # Active speakers from the viewer's own LiveKit client. The `MeetingRoom`
+  # JS hook is mounted on BOTH surfaces (`chat_live.html.heex` and
+  # `meeting_live.html.heex`) and a hook's `pushEvent` ignores `phx-target`,
+  # so the push lands on whichever root LiveView owns the page. Before this
+  # clause existed `ChatLive` had no handler at all: every speaker change
+  # in a quickmeet was a `FunctionClauseError`, the process crash-remounted,
+  # and the remount dropped transient rail state (`:typing`) that only
+  # arrives over PubSub — which is how the quickmeet read `Idle` where
+  # `/meetings` read `Writing` (task 01a05b14 stage 5). `{:halt, …}` is the
+  # same implementation `/meetings` runs, so halting there costs nothing.
+  defp handle_event("active_speakers", params, socket) do
+    {:halt, apply_active_speakers(socket, params)}
+  end
+
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
   # ── Guest-flavored event surface (task 019f498d stage 3) ────────────────
@@ -487,6 +556,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # idempotent, so the button path running both is fine.
   defp handle_guest_event("meeting_left", _params, socket) do
     {:halt, socket |> release_guest_topics() |> reset_meeting_state()}
+  end
+
+  defp handle_guest_event("active_speakers", params, socket) do
+    {:halt, apply_active_speakers(socket, params)}
   end
 
   defp handle_guest_event(_event, _params, socket), do: {:cont, socket}
@@ -581,7 +654,138 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:cont, apply_media_state(socket, %{user_id: uid, mic_enabled: mic, camera_enabled: camera})}
   end
 
+  # Agent activity for the quickmeet's People pane (task 01a05b14 stage
+  # 6). ONE fold, not two: the transition semantics live in
+  # `AgentActivity.put/4` and this clause is the same three-line shape
+  # `MeetingLive.handle_info/2` uses, deliberately not a reimplementation.
+  #
+  # `{:cont, …}`, and the guard is what makes that safe. `MeetingLive`
+  # mounts THIS module's hooks and keeps its own top-level clause for
+  # the same message; the guard below fires only when
+  # `:quickmeet_meeting_id` is set, which `join_call_shell/2` does only
+  # on a socket with no `:meeting` assign — i.e. never on `/meetings`.
+  # So exactly one fold runs per surface, and continuing lets
+  # `MeetingLive`'s clause see the message it has always seen.
+  defp handle_info(
+         {:agent_activity,
+          %{meeting_id: meeting_id, agent_id: agent_id, signal: signal, active?: active?}},
+         socket
+       ) do
+    {:cont,
+     apply_agent_activity(socket, %{
+       meeting_id: meeting_id,
+       agent_id: agent_id,
+       signal: signal,
+       active?: active?
+     })}
+  end
+
   defp handle_info(_msg, socket), do: {:cont, socket}
+
+  @doc """
+  Fold an `active_speakers` push from the `MeetingRoom` JS hook into
+  `:speaking_identities`.
+
+  VIEWER-LOCAL presentation state: each connected client runs its own
+  LiveKit room and reports what IT hears, so this is never persisted and
+  never broadcast. The payload is `%{"identities" => ["user:…", "agent:…"]}`;
+  anything else — a missing key, a non-list, non-binary members — is
+  tolerated rather than crashed on, because a malformed push must not
+  take the LiveView down (the hook debounces, but a crash-remount loop
+  loses every transient assign the surface holds). Identical for
+  `/meetings` (`MeetingLive` delegates here) and the quickmeet.
+  """
+  @spec apply_active_speakers(Phoenix.LiveView.Socket.t(), term()) ::
+          Phoenix.LiveView.Socket.t()
+  def apply_active_speakers(socket, %{"identities" => ids}) when is_list(ids) do
+    next = ids |> Enum.filter(&is_binary/1) |> MapSet.new()
+    current = socket.assigns[:speaking_identities] || MapSet.new()
+
+    if MapSet.equal?(next, current) do
+      socket
+    else
+      assign(socket, :speaking_identities, next)
+    end
+  end
+
+  def apply_active_speakers(socket, _params), do: socket
+
+  @doc """
+  Fold an `{:agent_activity, …}` payload into `:agent_activity`.
+
+  Public for the same reason `apply_media_state/2` is: the
+  `handle_info/2` clause above is hook plumbing, and the CONTRACT — the
+  meeting guard plus the `AgentActivity.put/4` fold — is what a test
+  should be able to name directly.
+
+  The guard is on `:quickmeet_meeting_id`, which only
+  `join_call_shell/2` sets and only on a socket with no `:meeting`
+  assign. That is what keeps `/meetings` — which mounts this module's
+  hooks AND keeps its own top-level clause for this message — from
+  folding the same transition twice.
+  """
+  @spec apply_agent_activity(Phoenix.LiveView.Socket.t(), map()) :: Phoenix.LiveView.Socket.t()
+  def apply_agent_activity(socket, %{
+        meeting_id: meeting_id,
+        agent_id: agent_id,
+        signal: signal,
+        active?: active?
+      }) do
+    if socket.assigns[:quickmeet_meeting_id] == meeting_id do
+      update(socket, :agent_activity, &AgentActivity.put(&1, signal, agent_id, active?))
+    else
+      socket
+    end
+  end
+
+  @doc """
+  Fold an `{:agent_typing, …}` broadcast into the quickmeet's
+  `:agent_activity`.
+
+  Task 01a05b14 stage 5, round 2. `MeetingLive` had this fold and the
+  quickmeet did not, so the rail row for a replying agent read "Idle"
+  on the chat surface while `/meetings` read "Writing" and the composer
+  on the SAME page showed "X is thinking…" — three consumers of one
+  broadcast, one of them unwired.
+
+  Deliberately NOT a `handle_info/2` clause of this module. `ChatLive`
+  attaches `PresenceHooks` BEFORE `MeetingHooks`, and `PresenceHooks`
+  HALTS `{:agent_typing, …}` for the active space (it owns the
+  composer's typing state), so a clause here would never run in exactly
+  the case a quickmeet cares about. `PresenceHooks` calls this from its
+  own clause instead, before it decides whether to halt.
+
+  The guard is what makes that call safe on every socket: it fires only
+  when `:quickmeet_meeting` is a meeting bound to the broadcast's space,
+  which `join_call_shell/2` sets only on the quickmeet — never on
+  `/meetings`, which keeps its own top-level clause — so exactly one
+  fold runs per surface. Never raises: a payload that is not the
+  canonical shape is returned untouched, and the participant bridge
+  inside `AgentActivity.put_typing/3` leaves the value alone for a
+  human or unknown id.
+  """
+  @spec apply_agent_typing(Phoenix.LiveView.Socket.t(), term()) :: Phoenix.LiveView.Socket.t()
+  def apply_agent_typing(
+        socket,
+        %{space_id: space_id, participant_id: participant_id, typing: typing}
+      ) do
+    if quickmeet_bound_to_space?(socket, space_id) do
+      update(socket, :agent_activity, &AgentActivity.put_typing(&1, participant_id, typing))
+    else
+      socket
+    end
+  end
+
+  def apply_agent_typing(socket, _payload), do: socket
+
+  defp quickmeet_bound_to_space?(
+         %{assigns: %{quickmeet_meeting_id: id, quickmeet_meeting: %{chat_space_id: space_id}}},
+         space_id
+       )
+       when is_binary(id) and is_binary(space_id),
+       do: true
+
+  defp quickmeet_bound_to_space?(_socket, _space_id), do: false
 
   @doc """
   Apply a `:meeting_media_state` payload to the socket assigns.
@@ -782,14 +986,22 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
           space_slug: space.slug
         })
 
-      # Meeting slug for deep-linking the mini-bar's Return-to-call: prefer
-      # the live `meetings` row's slug; fall back to the space slug if no
-      # Meeting row exists yet (room came up via raw LiveKit, no DB row).
+      # ONE lookup, two consumers. The mini-bar's Return-to-call deep
+      # link needs the slug; the call shell needs the whole row (its id
+      # is the PubSub topic and the key to every rail-facing query).
+      # Two `get_live_meeting_for_space/1` calls a few lines apart could
+      # also return two DIFFERENT rows if a meeting flipped live between
+      # them, which is how a rail ends up hydrated for a meeting the
+      # slug does not point at.
+      live_meeting = Meetings.get_live_meeting_for_space(space.id)
+
       meeting_slug =
-        case Meetings.get_live_meeting_for_space(space.id) do
+        case live_meeting do
           %{slug: slug} when is_binary(slug) -> slug
           _ -> space.slug
         end
+
+      socket = join_call_shell(socket, live_meeting)
 
       MeetingState.broadcast_joined(user_id, space.id, space.name, space.slug, meeting_slug)
 
@@ -939,9 +1151,110 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp user_name_or_email(_), do: nil
 
+  # ── Call shell (task 01a05b14 stage 6) ───────────────────────────────────
+  #
+  # The quickmeet panel renders `CallShell.call_rail/1`, the same rail
+  # `/meetings` renders. The MARKUP was never the hard part — before
+  # this stage `attach/2` assigned no meeting id, no agent activity, no
+  # candidates and no tab, so there was simply nothing for a rail to
+  # read. These helpers are that missing data plane.
+  #
+  # `assign_new/3` throughout, and that is load-bearing rather than
+  # stylistic: `MeetingLive` assigns `:agent_activity`,
+  # `:active_meeting_tab`, `:agents_by_id` and the candidate board
+  # BEFORE it calls `attach/2`. Plain `assign/3` here would blank every
+  # one of them on `/meetings` — a silent regression of stages 2-5 that
+  # no quickmeet test would ever see.
+  defp assign_call_shell_defaults(socket) do
+    socket
+    |> assign_new(:quickmeet_meeting_id, fn -> nil end)
+    |> assign_new(:quickmeet_meeting, fn -> nil end)
+    |> assign_new(:quickmeet_rail_open, fn -> false end)
+    |> assign_new(:active_meeting_tab, fn -> "people" end)
+    |> assign_new(:agent_activity, fn -> AgentActivity.new() end)
+    |> assign_new(:agents_by_id, fn -> %{} end)
+    |> assign_new(:meeting_candidates, fn -> [] end)
+    |> assign_new(:meeting_candidates_closed, fn -> [] end)
+    |> assign_new(:meeting_candidate_events, fn -> %{} end)
+    |> assign_new(:candidate_error, fn -> nil end)
+    |> assign_new(:speaking_identities, fn -> MapSet.new() end)
+  end
+
+  # Hydrate the rail for the meeting this socket just joined.
+  #
+  # NO-OP when `:meeting` is assigned. That assign is `MeetingLive`'s
+  # and only `MeetingLive`'s, so it is the exact discriminator for "this
+  # socket is /meetings, which already did all of this at
+  # handle_params". Without the guard, `/meetings` auto-join (which runs
+  # through `do_join/1`) would subscribe to `meeting_topic/1` a SECOND
+  # time from the same pid — Phoenix.PubSub then delivers every message
+  # on that topic twice, which is a far worse bug than a missing rail
+  # and would show up as duplicated intent rows rather than as anything
+  # named "double subscribe".
+  #
+  # DOCUMENTED LIMITATION, not an oversight: `AgentActivity.hydrate/1`
+  # restores `:computing` from the live intent queue and CANNOT restore
+  # `:typing`. `:typing` is a transient keystroke toggle broadcast on
+  # `chat:space:<id>`; it is written to no row, so a socket joining
+  # mid-meeting has nowhere to read it back from and starts with an
+  # empty `:typing` set until the next `{:agent_activity, …}` arrives.
+  # A joiner therefore may not see a `Writing` badge that a socket
+  # present since the start is showing. Stated here rather than papered
+  # over with a fabricated default.
+  defp join_call_shell(%{assigns: %{meeting: %{}}} = socket, _live_meeting), do: socket
+
+  defp join_call_shell(socket, %{id: meeting_id} = live_meeting) when is_binary(meeting_id) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Platform.PubSub, MeetingsPubSub.meeting_topic(meeting_id))
+    end
+
+    participants = socket.assigns[:meeting_participants] || []
+
+    socket
+    |> assign(:quickmeet_meeting_id, meeting_id)
+    |> assign(:quickmeet_meeting, live_meeting)
+    |> assign(:active_meeting_tab, socket.assigns[:active_meeting_tab] || "people")
+    |> assign(:agent_activity, AgentActivity.hydrate(meeting_id))
+    |> assign(:agents_by_id, PlatformWeb.MeetingLive.load_agents_by_id(participants))
+    |> PlatformWeb.MeetingLive.assign_candidate_board(meeting_id)
+  end
+
+  # No live `meetings` row for this space — the room came up through raw
+  # LiveKit. The panel still renders; the rail shows the server-presence
+  # roster and empty Canvas/Transcript panes, which is the truth.
+  defp join_call_shell(socket, _live_meeting), do: socket
+
+  # Symmetric teardown. Unsubscribing matters: without it a user who
+  # leaves and rejoins subscribes twice, and the third join thrice.
+  # Guarded on our OWN assign, so a `/meetings` socket — which never set
+  # it — cannot unsubscribe the topic `MeetingLive` still depends on.
+  defp leave_call_shell(socket) do
+    case socket.assigns[:quickmeet_meeting_id] do
+      meeting_id when is_binary(meeting_id) ->
+        if connected?(socket) do
+          Phoenix.PubSub.unsubscribe(Platform.PubSub, MeetingsPubSub.meeting_topic(meeting_id))
+        end
+
+        socket
+        |> assign(:quickmeet_meeting_id, nil)
+        |> assign(:quickmeet_meeting, nil)
+        |> assign(:quickmeet_rail_open, false)
+        |> assign(:agent_activity, AgentActivity.new())
+        |> assign(:agents_by_id, %{})
+        |> assign(:meeting_candidates, [])
+        |> assign(:meeting_candidates_closed, [])
+        |> assign(:meeting_candidate_events, %{})
+
+      _ ->
+        socket
+    end
+  end
+
   defp reset_meeting_state(socket) do
     socket
+    |> leave_call_shell()
     |> assign(:in_meeting, false)
+    |> assign(:speaking_identities, MapSet.new())
     |> assign(:mic_enabled, true)
     |> assign(:camera_enabled, true)
     |> assign(:screen_share_enabled, false)

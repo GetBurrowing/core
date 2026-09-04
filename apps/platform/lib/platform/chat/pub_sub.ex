@@ -182,6 +182,27 @@ defmodule Platform.Chat.PubSub do
   end
 
   @doc """
+  Broadcast the agent typing toggle for chat participant `participant_id`
+  on `space_id`'s topic.
+
+  THE producer of `{:agent_typing, %{space_id, participant_id, typing}}`.
+  `Platform.Chat.AgentResponder` and `PlatformWeb.RuntimeChannel` used to
+  build the tuple inline at six sites; the consumers are
+  `PlatformWeb.ChatLive.PresenceHooks` (the composer's "X is thinking…"),
+  `PlatformWeb.MeetingLive` (the `/meetings` rail) and
+  `PlatformWeb.ChatLive.MeetingHooks` (the quickmeet rail). Tests that
+  exercise a consumer broadcast through this function so the payload they
+  assert on cannot drift from the one production sends.
+  """
+  @spec broadcast_agent_typing(binary(), binary(), boolean()) :: :ok | {:error, term()}
+  def broadcast_agent_typing(space_id, participant_id, typing) when is_boolean(typing) do
+    broadcast(
+      space_id,
+      {:agent_typing, %{space_id: space_id, participant_id: participant_id, typing: typing}}
+    )
+  end
+
+  @doc """
   Broadcast `event` from `from_pid` — the sender will *not* receive it.
 
   Useful in LiveViews that want to optimistically update their own state

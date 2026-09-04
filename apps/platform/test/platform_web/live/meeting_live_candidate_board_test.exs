@@ -115,7 +115,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
   end
 
   defp mount_board(conn, meeting) do
-    {:ok, view, html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true")
+    {:ok, view, html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
     {view, html}
   end
 
@@ -150,6 +150,8 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
   defp text_of(nodes, selector) do
     nodes |> LazyHTML.query(selector) |> LazyHTML.text() |> String.trim()
   end
+
+  defp present?(nodes, selector), do: nodes |> LazyHTML.query(selector) |> Enum.any?()
 
   setup %{conn: conn} do
     {conn, user} = authenticated_conn(conn)
@@ -194,13 +196,15 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
       assert length(LazyHTML.attribute(cards(html), "data-candidate-id")) == 3
 
       # Each quote under its OWN card, not merely somewhere on the page.
-      assert text_of(card(html, heard), "[data-role='meeting-candidate-skeleton']") =~
-               "Heard something"
+      # Read from the QUOTE element at every state — the title now
+      # carries the classified intent, and the verbatim span is the one
+      # thing every card shows (task 01a05b14 stage 4).
+      assert present?(card(html, heard), "[data-role='meeting-candidate-skeleton']")
 
-      assert text_of(card(html, forming), "[data-role='meeting-candidate-title']") ==
+      assert text_of(card(html, forming), "[data-role='meeting-candidate-quote']") ==
                "somebody rewrite the pricing copy"
 
-      assert text_of(card(html, shaping), "[data-role='meeting-candidate-title']") ==
+      assert text_of(card(html, shaping), "[data-role='meeting-candidate-quote']") ==
                "rotate the staging secrets"
 
       # The refutation. Its control is on the SAME helper — `rail_html/1`
@@ -271,7 +275,13 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
       refute rail =~ "shaping"
       refute rail =~ "vetoed"
 
-      assert rail =~ "taking shape"
+      # The control is now the DISPLAY SLUG rather than the stage label:
+      # the numbered `3 · taking shape` line came off the card in task
+      # 01a05b14 stage 4, and the slug is the surviving place a
+      # `:shaping` row's vocabulary is mapped on its way to the DOM. It
+      # still diverges from the stored word, which is what keeps the
+      # refute above from going vacuous.
+      assert rail =~ "taking-shape"
       assert rail =~ "Not taken up"
     end
 
@@ -375,13 +385,14 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
   # ── 5. Avatar and byline ──────────────────────────────────────────────
 
   describe "byline and avatar" do
-    test "a shaping card names its agent; an unclassified card shows a skeleton and no byline",
+    test "a shaping card names its SPEAKER and assigns separately; an unclassified card shows a skeleton and no byline",
          %{conn: conn, meeting: meeting} do
       shaping =
         candidate!(meeting, %{
           evidence_quote: "rotate the staging secrets",
           state: :shaping,
           classified_intent: "action_item",
+          speaker: "Harper Parker",
           assigned_agent_slug: "octavius"
         })
 
@@ -389,8 +400,14 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
 
       {_view, html} = mount_board(conn, meeting)
 
+      # The byline names WHO SPOKE. It used to name the ASSIGNED AGENT,
+      # which credited a verbatim quote to somebody who was not in the
+      # room; the assignee now has its own trailing segment.
       assert text_of(card(html, shaping), "[data-role='meeting-candidate-byline']") ==
-               "octavius · drafting"
+               "Harper Parker"
+
+      assert text_of(card(html, shaping), "[data-role='meeting-candidate-assignment']") =~
+               "@octavius · drafting"
 
       # The card that has NOT been classified shows no face and no
       # name — the mockup's "a byline would be a claim the card cannot
@@ -431,6 +448,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
           evidence_quote: "rotate the staging secrets",
           state: :shaping,
           classified_intent: "action_item",
+          speaker: "Harper Parker",
           assigned_agent_slug: "octavius",
           last_utterance_at: DateTime.utc_now()
         })
@@ -440,6 +458,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
           evidence_quote: "and send the SOC2 pack",
           state: :shaping,
           classified_intent: "action_item",
+          speaker: "Rowan Ellis",
           assigned_agent_slug: "mycroft",
           last_utterance_at: DateTime.add(DateTime.utc_now(), -12 * 60, :second)
         })
@@ -449,23 +468,24 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
           evidence_quote: "we should add a CSV export",
           state: :shaping,
           classified_intent: "action_item",
+          speaker: "Saru Vance",
           assigned_agent_slug: "saru"
         })
 
       {_view, html} = mount_board(conn, meeting)
 
       assert text_of(card(html, recent), "[data-role='meeting-candidate-byline']") ==
-               "octavius · drafting · just now"
+               "Harper Parker · just now"
 
       # A DIFFERENT time, not a constant — the assertion the "just now"
       # above cannot make on its own.
       assert text_of(card(html, older), "[data-role='meeting-candidate-byline']") ==
-               "mycroft · drafting · 12m ago"
+               "Rowan Ellis · 12m ago"
 
       # And a card with no utterance timestamp does not grow an empty
       # separator or a fabricated time.
       assert text_of(card(html, timeless), "[data-role='meeting-candidate-byline']") ==
-               "saru · drafting"
+               "Saru Vance"
     end
   end
 

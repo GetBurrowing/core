@@ -22,6 +22,19 @@ defmodule PlatformWeb.MeetingPressCardVisibilityTest do
   `[data-role='meeting-candidate-card']` — markup this task never
   wrote — IS the serialisation constraint being met: one surface, two
   producers.
+
+  ## Why every mount names `tab=canvas`
+
+  Task 01a05b14 (the port to the final Meetings screen) moved
+  `CandidateRail` into the Canvas tab of the shared `CallShell` right
+  rail, which mounts on People by default. The card is still rendered
+  BEFORE the viewer joins — the rail is not gated on `@in_meeting` —
+  and `?tab=` is handled in `handle_params/3` ahead of the first
+  render, so deep-linking the tab keeps this file what it was: an
+  assertion on the HTML a separate user's mount RETURNED, not on a
+  later patch. Switching tabs via `render_click/3` instead would have
+  been an assertion about the second render, which is a weaker claim
+  about what the other person's browser showed them.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -131,14 +144,14 @@ defmodule PlatformWeb.MeetingPressCardVisibilityTest do
     # renderable at all, so a miss in the observer's session below is
     # about WHO is looking and not about the card being unrenderable.
     {:ok, _view, presser_html} =
-      conn |> conn_for(presser) |> live("/meetings/#{meeting.slug}?no_autojoin=true")
+      conn |> conn_for(presser) |> live("/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
     assert card_nodes(presser_html, card.id) |> Enum.count() == 1
 
     # ── The observer's session. Separate user, separate conn, separate
     # mount. This is the actual claim.
     {:ok, _view, observer_html} =
-      conn |> conn_for(observer) |> live("/meetings/#{meeting.slug}?no_autojoin=true")
+      conn |> conn_for(observer) |> live("/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
     assert card_nodes(observer_html, card.id) |> Enum.count() == 1
 
@@ -168,7 +181,7 @@ defmodule PlatformWeb.MeetingPressCardVisibilityTest do
     assert card.classified_intent == nil
 
     {:ok, _view, html} =
-      conn |> conn_for(observer) |> live("/meetings/#{meeting.slug}?no_autojoin=true")
+      conn |> conn_for(observer) |> live("/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
     nodes = card_nodes(html, card.id)
     assert Enum.count(nodes) == 1

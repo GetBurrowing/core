@@ -422,7 +422,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert html =~ ~s(data-role="meeting-mic")
       assert html =~ ~s(data-role="meeting-camera")
       assert html =~ ~s(data-role="meeting-screen-share")
-      assert html =~ ~s(data-pane="left-rail")
+      assert html =~ ~s(data-pane="call-rail")
       assert html =~ ~s(data-pane="center-stage")
       assert html =~ ~s(data-stage-mode=)
       # Guest identity badge shows on right side of top bar.
@@ -471,7 +471,6 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       refute html =~ ~s(data-role="chat-panel-toggle")
       refute html =~ ~s(data-role="meeting-copy-guest-link")
       refute html =~ ~s(data-role="chat-pane-toggle")
-      refute html =~ ~s(id="meeting-participant-rail-collapse-hook")
       refute html =~ ~s(id="meeting-chat-pane-collapse-hook")
       refute html =~ ~s(id="meeting-chat-drawer")
     end
@@ -621,7 +620,6 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert html =~ ~s(data-pane="chat-panel")
       assert html =~ ~s(data-role="chat-panel-toggle")
       assert html =~ ~s(data-role="chat-pane-toggle")
-      assert html =~ ~s(id="meeting-participant-rail-collapse-hook")
       assert html =~ ~s(id="meeting-chat-pane-collapse-hook")
       assert html =~ ~s(id="meeting-chat-drawer")
       # Guest identity badge is NOT rendered on the shell surface.
@@ -640,7 +638,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert html =~ ~s(data-role="meeting-controls")
       assert html =~ ~s(data-role="meeting-screen-share")
       assert html =~ ~s(data-role="meeting-mic")
-      assert html =~ ~s(data-pane="left-rail")
+      assert html =~ ~s(data-pane="call-rail")
       assert html =~ ~s(data-pane="center-stage")
     end
 
@@ -973,7 +971,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       {:ok, _} = Meetings.set_intent_muted(meeting.id, true)
 
       {:ok, view, html} =
-        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}?tab=canvas")
 
       # Positive first: the guest can see that the agents are held.
       assert html =~ ~s(data-role="meeting-intent-mute-badge")
@@ -998,7 +996,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       meeting = create_meeting()
 
       {:ok, view, html} =
-        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}?tab=canvas")
 
       refute html =~ ~s(data-role="meeting-intent-mute-badge")
       refute html =~ ~s(data-role="meeting-intent-mute-toggle")
@@ -1018,13 +1016,13 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       on_exit(fn -> Platform.Meetings.IntentQueue.stop(meeting.id) end)
 
       {:ok, guest_view, guest_html} =
-        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}?tab=canvas")
 
       refute guest_html =~ ~s(data-role="meeting-intent-mute-badge")
       guest_pid = guest_view.pid
 
       {:ok, auth_view, _auth_html} =
-        live(authenticated_meeting_conn(), ~p"/meetings/#{meeting.slug}")
+        live(authenticated_meeting_conn(), ~p"/meetings/#{meeting.slug}?tab=canvas")
 
       auth_view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
 
@@ -1052,7 +1050,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       on_exit(fn -> Platform.Meetings.IntentQueue.stop(meeting.id) end)
 
       {:ok, guest_view, _html} =
-        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}")
+        conn |> with_meet_host() |> live("/#{meeting.slug}/#{guest_token(meeting)}?tab=canvas")
 
       # The hand-crafted event a guest console can push. No element exists
       # to click, which is the point — this bypasses the DOM entirely.
@@ -1062,7 +1060,9 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       # The paired positive, in the same test body: the identical event
       # from an authenticated producer DOES flip the row. Without this, the
       # refute above is satisfiable by a fixture where nothing works.
-      {:ok, auth_view, _} = live(authenticated_meeting_conn(), ~p"/meetings/#{meeting.slug}")
+      {:ok, auth_view, _} =
+        live(authenticated_meeting_conn(), ~p"/meetings/#{meeting.slug}?tab=canvas")
+
       auth_view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
       assert Meetings.intent_muted?(meeting.id)
 

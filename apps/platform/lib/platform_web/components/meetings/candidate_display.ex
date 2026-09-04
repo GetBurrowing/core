@@ -135,6 +135,105 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
   def stage_label(:closed), do: "Closed"
 
   @doc """
+  The target chip's text — who an intent was aimed at, in words.
+
+  `Platform.Meetings.IntentClassifier` lands the SENTINEL STRING
+  `"null"` (`@no_target_role`) in `target_role` for an unrouted intent,
+  not a real `nil`. That representation is pinned by an invariant test
+  — a real nil crashes `build_dedupe_key/3`, and changing it would fork
+  every historical dedupe key — so the sentinel is not going anywhere
+  and the READ path is where it has to be absorbed.
+
+  This function is the ONLY place in `platform_web` that is allowed to
+  know that. A grep-style containment test asserts no other rendering
+  position touches `target_role`, because a magic string standing for
+  absence reproduces its bug in the next renderer that has not heard of
+  it.
+
+  The unassigned affordance is a plain `"unassigned"` with NO `"@"`
+  prefix — which is what the old dead `|| "unassigned"` third term
+  always intended. The prefix lives in here rather than in the heex so
+  a ROLE label (`"Triage officer"`) never reads as an at-mention of a
+  person; only a real agent slug gets an `@`.
+
+  ## Examples
+
+      iex> alias PlatformWeb.Components.Meetings.CandidateDisplay
+      iex> CandidateDisplay.target_label("octavius", "null")
+      "@octavius"
+      iex> CandidateDisplay.target_label(nil, "null")
+      "unassigned"
+      iex> CandidateDisplay.target_label(nil, "triage_officer")
+      "Triage officer"
+
+  """
+  @spec target_label(String.t() | nil, String.t() | nil) :: String.t()
+  def target_label(target_agent_slug, target_role) do
+    case normalize(target_agent_slug) do
+      nil -> role_label(normalize(target_role))
+      slug -> "@" <> slug
+    end
+  end
+
+  # The known role keys are enumerated so a rename fails a test rather
+  # than silently changing the copy. The final clause is NOT the usual
+  # `to_string/1` escape hatch — see `humanise/1`: `target_role` is
+  # whatever binary the model emitted (`normalise_target_role/1` in
+  # `IntentClassifier` accepts ANY string), so a total function over a
+  # closed set would crash the whole rail on a novel model output. That
+  # is a worse failure than the bug this fixes.
+  defp role_label(nil), do: "unassigned"
+  defp role_label("null"), do: "unassigned"
+  defp role_label("designer"), do: "Designer"
+  defp role_label("meeting_scribe"), do: "Meeting scribe"
+  defp role_label("historian"), do: "Historian"
+  defp role_label("triage_officer"), do: "Triage officer"
+  defp role_label(other), do: humanise(other)
+
+  @doc """
+  What the classifier decided, in words a participant reads.
+
+  Same discipline as `stage_label/1`: the stored enum token is a column
+  value, not copy. `brief_worthy` printed raw is a schema detail on
+  screen; one clause per known value with no catch-all is what makes a
+  sixth intent a change to this list rather than a leak.
+
+  `classified_intent` is NOT a closed enum — `IntentClassifier` stores
+  whatever binary the model returned. So the final clause humanises an
+  unrecognised value (`"brief_worthy"` -> `"Brief worthy"`) instead of
+  crashing the rail. The raw token still never reaches the DOM, which
+  is the property that matters.
+
+  ## Examples
+
+      iex> alias PlatformWeb.Components.Meetings.CandidateDisplay
+      iex> CandidateDisplay.intent_label("off_topic")
+      "Off topic"
+      iex> CandidateDisplay.intent_label(nil)
+      "—"
+
+  """
+  @spec intent_label(String.t() | nil) :: String.t()
+  def intent_label(nil), do: "—"
+  def intent_label("off_topic"), do: "Off topic"
+  def intent_label("action_items"), do: "Action items"
+  def intent_label("brief_worthy"), do: "Brief-worthy"
+  def intent_label("visual_adjust"), do: "Visual adjustment"
+  def intent_label("decision_recorded"), do: "Decision recorded"
+  def intent_label(other) when is_binary(other), do: humanise(other)
+
+  # A stored value nobody wrote copy for, made readable rather than
+  # printed raw. `"brief_worthy"` is a schema detail on screen;
+  # `"Brief worthy"` is at least a sentence. The known values above are
+  # still enumerated, so a rename is caught by the mapping test.
+  defp humanise(value) do
+    case value |> String.replace("_", " ") |> String.trim() do
+      "" -> "unassigned"
+      words -> String.capitalize(words)
+    end
+  end
+
+  @doc """
   The DISPLAY slug for a state — for `data-stage` and the stage class.
 
   Deliberately not `Atom.to_string/1`: see the moduledoc. `:shaping`
@@ -238,6 +337,29 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
   @spec agent_name(map()) :: String.t() | nil
   def agent_name(candidate) do
     candidate |> Map.get(:assigned_agent_slug) |> normalize()
+  end
+
+  @doc """
+  WHO SAID IT — the transcript's attribution for the utterance behind
+  this card, or `nil` when the transcript did not attribute it.
+
+  This is the byline's subject, and it is deliberately NOT
+  `agent_name/1`. The assigned agent is who the system pointed the work
+  AT; the speaker is who said the words in `evidence_quote`. Printing
+  the assignee where the author belongs is the defect this exists to
+  make impossible — it credits a sentence to an agent that was not in
+  the room when it was spoken.
+
+  `nil` means UNATTRIBUTED and the caller must render nothing at all.
+  There is no placeholder and no fallback to the assignee: a guessed
+  name on a verbatim quote is a claim the data cannot back. The
+  classifier answers `""` for an unknown speaker and the mirror
+  normalises `""` to nil on the way in (`meeting_candidate.ex:45`), so a
+  blank is normalised here too rather than rendering an empty byline.
+  """
+  @spec speaker_name(map()) :: String.t() | nil
+  def speaker_name(candidate) do
+    candidate |> Map.get(:speaker) |> normalize()
   end
 
   @doc """

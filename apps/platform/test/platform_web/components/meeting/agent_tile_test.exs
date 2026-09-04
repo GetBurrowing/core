@@ -105,7 +105,11 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
       refute html =~ "animate-pulse"
     end
 
-    test "renders a pulsing success dot when activity_state is :typing" do
+    # `info`, not `warning`, since Saru's ruling (canvas 01a05b11-54ff
+    # card 6, 2026-09-02; applied in task 01a05b14 stage 5): Writing and
+    # Thinking share the working slot and `warning` belongs to the invite
+    # banner alone. Motion is what separates Writing from Thinking.
+    test "renders the typing badge — info ring, pen glyph, name — when activity_state is :typing" do
       assigns = %{a: agent()}
 
       html =
@@ -114,10 +118,65 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
         """)
 
       assert html =~ ~s(data-activity-indicator)
+      assert html =~ ~s(data-role="agent-activity-badge")
       assert html =~ "animate-pulse"
-      assert html =~ "bg-success"
-      assert html =~ "Helga is typing"
+      assert html =~ "border-info"
+      refute html =~ "border-warning"
+      assert html =~ "Helga is Writing"
       assert html =~ ~s(data-activity-state="typing")
+
+      # The one green dot for every non-idle state is gone. It is the
+      # reason a failed agent read as healthy.
+      refute html =~ "bg-success"
+    end
+
+    test "a :failed agent is NOT a green pulsing dot" do
+      # THE BUG. `meeting_live.ex` resolves :failed and the strip passed
+      # it straight into a tile whose indicator was `bg-success
+      # animate-pulse` for ANY non-idle state — a failed agent rendered
+      # as a healthy, working one, with the word only in a `title=`.
+      assigns = %{a: agent()}
+
+      html =
+        rendered_to_string(~H"""
+        <.agent_tile agent_participant={@a} activity_state={:failed} />
+        """)
+
+      refute html =~ "bg-success"
+      # No pulse either: a pulse reads as "still going", the opposite of
+      # what this state says.
+      refute html =~ "animate-pulse"
+
+      assert html =~ ~s(data-activity-state="failed")
+      assert html =~ ~s(data-role="agent-activity-ring")
+      assert html =~ "border-error"
+      assert html =~ "Helga is Couldn&#39;t"
+    end
+
+    test ":failed and :computing do not render the same indicator" do
+      # ANTI-VACUITY for the assertion above: prove the tile can render a
+      # DIFFERENT ring, so `border-error` is a distinction and not just a
+      # class the tile always emits.
+      assigns = %{a: agent()}
+
+      failed =
+        rendered_to_string(~H"""
+        <.agent_tile agent_participant={@a} activity_state={:failed} />
+        """)
+
+      computing =
+        rendered_to_string(~H"""
+        <.agent_tile agent_participant={@a} activity_state={:computing} />
+        """)
+
+      # `border-info`, not `border-secondary`: task 01a05b14 stage 2
+      # moved "Thinking" onto the `info` slot per Saru's
+      # design-direction canvas, which does not list `secondary` at
+      # all. The assertion that matters is unchanged — computing and
+      # failed must not share a ring colour.
+      assert computing =~ "border-info"
+      refute computing =~ "border-error"
+      refute failed =~ "border-info"
     end
 
     test "labels other active states (:computing, :listening) on the indicator" do
@@ -128,7 +187,7 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
         <.agent_tile agent_participant={@a} activity_state={:computing} />
         """)
 
-      assert html_computing =~ "Helga is computing"
+      assert html_computing =~ "Helga is Thinking"
       assert html_computing =~ ~s(data-activity-state="computing")
 
       html_listening =
@@ -136,8 +195,11 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
         <.agent_tile agent_participant={@a} activity_state={:listening} />
         """)
 
-      assert html_listening =~ "Helga is listening"
+      # `:listening` has no producer in `AgentActivity` — the badge
+      # deliberately refuses to give it a word rather than print a
+      # caption nothing can ever set. The tile still marks the state.
       assert html_listening =~ ~s(data-activity-state="listening")
+      assert html_listening =~ "Helga is idle"
     end
   end
 
@@ -198,7 +260,7 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
         """)
 
       # Name surfaces via the activity indicator's accessible label.
-      assert html =~ "Northwind is typing"
+      assert html =~ "Northwind is Writing"
     end
   end
 

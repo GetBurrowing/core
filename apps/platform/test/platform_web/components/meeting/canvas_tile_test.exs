@@ -302,9 +302,9 @@ defmodule PlatformWeb.Components.Meeting.CanvasTileTest do
       end
     end
 
-    test "app.css applies the gallery-cell container query to the canvas tile too" do
+    test "app.css sizes the canvas tile exactly like a face tile in a gallery cell" do
       # The :gallery layout deliberately emits NO sizing classes — the cell
-      # container query owns it. That makes the CSS the actual sizing
+      # rule in app.css owns it. That makes the CSS the actual sizing
       # authority, so a class-only test would be asserting the empty set.
       # Resolved from __DIR__, not the cwd: a cwd-relative read passes or fails
       # depending on where mix was invoked from, which is a flake, not a test.
@@ -312,9 +312,12 @@ defmodule PlatformWeb.Components.Meeting.CanvasTileTest do
 
       assert css =~ "[data-gallery-cell] > .meeting-canvas-tile"
 
-      # Same rule blocks as the face tile: the base aspect/max clamp plus BOTH
-      # container-query branches. Missing one branch mis-sizes the canvas tile
-      # in exactly half of all cell shapes.
+      # Task 01a05b14 stage 3 retired the aspect-ratio container query: the
+      # CELL owns the aspect now and the tile FILLS it. What still has to
+      # hold is that the canvas tile is named in exactly the SAME rules as
+      # the face tile — being left out of one of them mis-sizes the canvas
+      # tile relative to the faces beside it, which is the defect this test
+      # has always existed to catch, independent of which rules those are.
       canvas_rules =
         css
         |> String.split("[data-gallery-cell] > .meeting-canvas-tile")
@@ -327,7 +330,12 @@ defmodule PlatformWeb.Components.Meeting.CanvasTileTest do
         |> length()
         |> Kernel.-(1)
 
-      assert canvas_rules == video_rules and canvas_rules == 3
+      assert canvas_rules == video_rules and canvas_rules == 1
+
+      # And the shared rule is a FILL, not a letterbox. A reverted
+      # `aspect-ratio` here restores the floating-card layout the sponsor
+      # rejected with nothing else failing.
+      refute css =~ "@container gallery-cell"
 
       # The unlayered clamp. Unlayered beats Tailwind's @layer utilities, so a
       # call site cannot widen the tile with a utility class.

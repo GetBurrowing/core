@@ -11,6 +11,9 @@
  * legacy `window.__livekitRoom`). The hook gracefully no-ops when no room
  * is available, and binds once a `livekit:room-connected` event fires.
  */
+// Trailing-debounce window for `activeSpeakersChanged` pushes, in ms.
+const ACTIVE_SPEAKER_DEBOUNCE_MS = 250
+
 const MeetingRoom = {
   mounted() {
     this._boundOnTranscription = this._onTranscription.bind(this)
@@ -24,6 +27,10 @@ const MeetingRoom = {
   },
 
   destroyed() {
+    if (this._speakerTimer) {
+      clearTimeout(this._speakerTimer)
+      this._speakerTimer = null
+    }
     this._unbind()
   },
 
@@ -104,11 +111,56 @@ const MeetingRoom = {
   },
 
   /**
-   * Handle activeSpeakersChanged — no-op for now; tile highlighting is
-   * done client-side by MeetingClient._markSpeakers.
+   * Handle activeSpeakersChanged by pushing the speaking identities to the
+   * LiveView, which assigns `:speaking_identities` and paints the ring on
+   * the matching `[data-participant]` tile.
+   *
+   * This is NOT a client-side class toggle. The historical comment here
+   * claimed tile highlighting was handled by `MeetingClient._markSpeakers`
+   * — that is false on this surface: `_markSpeakers` toggles
+   * `meeting-tile-speaking` over MeetingClient's OWN generated
+   * `.meeting-tile` nodes, while MeetingLive renders `.meeting-video-tile`
+   * nodes keyed by `data-participant`. The two registries never intersect,
+   * so the event was dropped, not missing. A JS-added class on the tile
+   * root would also be clobbered by morphdom on the next LV render (only
+   * the inner video slot is `phx-update="ignore"`), so the server assign
+   * is the only stable home for this.
+   *
+   * `pushEvent` (not `pushEventTo`): a hook's pushEvent ignores
+   * `phx-target` and always lands on the root LiveView. MeetingRoom is
+   * mounted on `#meeting-room` inside MeetingLive, so `handle_event/3`
+   * lives in `meeting_live.ex`. If this markup is ever extracted into a
+   * LiveComponent the push silently stops arriving.
+   *
+   * DEBOUNCE: LiveKit fires activeSpeakersChanged many times a second, and
+   * an undebounced push is a render storm. Two guards, in order:
+   *   1. Identity-set equality — an unchanged set is dropped outright.
+   *   2. A 250ms TRAILING timer — bursts of genuinely-changing sets
+   *      collapse into a single push carrying the LAST set seen.
    */
-  _onActiveSpeaker(_speakers) {
-    // no-op
+  _onActiveSpeaker(speakers) {
+    const identities = (speakers || [])
+      .map((p) => (p && p.identity) || "")
+      .filter((id) => id !== "")
+      .sort()
+
+    const key = identities.join("\u0000")
+
+    // Guard 1: nothing changed since the last push — drop it.
+    if (key === this._lastSpeakerKey) return
+
+    // Guard 2: trailing 250ms debounce. Keep the newest payload and reset
+    // the timer so a burst results in exactly one push.
+    this._pendingSpeakers = identities
+    if (this._speakerTimer) clearTimeout(this._speakerTimer)
+    this._speakerTimer = setTimeout(() => {
+      this._speakerTimer = null
+      const pending = this._pendingSpeakers || []
+      const pendingKey = pending.join("\u0000")
+      if (pendingKey === this._lastSpeakerKey) return
+      this._lastSpeakerKey = pendingKey
+      this.pushEvent("active_speakers", { identities: pending })
+    }, ACTIVE_SPEAKER_DEBOUNCE_MS)
   },
 }
 

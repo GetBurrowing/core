@@ -58,12 +58,26 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadgeTest do
       refute writing =~ "◐"
     end
 
-    # A pulse reads as "still going", which is the opposite of what
-    # `:failed` says. The in-progress states move; the cap does not.
-    test "only the in-progress states animate" do
-      assert badge(:computing) =~ "animate-pulse"
+    # Saru's ruling (canvas 01a05b11-54ff card 6, 2026-09-02): Thinking
+    # and Writing share the `info` slot, and MOTION is what tells them
+    # apart — Thinking is static, Writing moves. A pulse also reads as
+    # "still going", which is the opposite of what `:failed` says, so
+    # the cap never moves either. Only Writing animates.
+    test "only Writing animates: motion, not colour, separates it from Thinking" do
+      refute badge(:computing) =~ "animate-pulse"
       assert badge(:typing) =~ "animate-pulse"
       refute badge(:failed) =~ "animate-pulse"
+    end
+
+    # The token swap itself. `warning` on this screen now means one
+    # thing — a human is being asked for something (the invite banner)
+    # — and a working agent must never borrow it.
+    test "Writing sits on info, not on the invite banner's warning slot" do
+      writing = badge(:typing)
+
+      assert writing =~ "border-info"
+      assert writing =~ "text-info"
+      refute writing =~ "warning"
     end
 
     test "name the agent in the accessible label" do

@@ -19,8 +19,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
        per `participant_type == "agent"` carrying:
          * avatar
          * display name
-         * role chip (`agent.metadata["role"]`, fallback `"agent"`) as
-           small text below the name
+         * the state word ("Thinking" / "Writing" / "Couldn't" /
+           "Idle") as small text below the name, matching the ring
+           and corner glyph on the avatar
          * status dot keyed off THIS MEETING's agent activity, with the
            global `agents.status` column only as an offline fallback
            (task 01a04a98)
@@ -36,11 +37,28 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
 
   Hero icons only. Tap targets `min-h-11` to keep mobile usable from
   the drawer (stage 4 ships the toggle behavior).
+
+  ## The type scale is pinned, not inherited (task 01a05b14 stage 5)
+
+  Every row carries its own size utility — `text-xs` on the row and
+  the name, `text-[11px]` on the sub-line and the section heading —
+  with NO breakpoint variant on any of them. The rows used to say
+  `text-sm` and let the name inherit it, which is the shell's body
+  scale and roughly twice the approved target's 12px name. The target
+  draws the rail at 12px name / 10-11px sub-line / uppercase 10-11px
+  heading at EVERY width: the sub-`lg` drawer is the same rail
+  narrowed, not a different screen, so the size must not depend on
+  the viewport. `call_shell_test.exs` refutes a `sm:`/`lg:` prefix on
+  any of these utilities, and the stage-5 capture measured
+  `getComputedStyle(name).fontSize` equal at 1280 and 390.
   """
   use Phoenix.Component
 
-  import PlatformWeb.AvatarComponents
   import PlatformWeb.Components.Meetings.AgentActivityBadge
+
+  alias PlatformWeb.Components.Meetings.AgentActivityBadge
+
+  import PlatformWeb.AvatarComponents
 
   alias Platform.Meetings.AgentActivity
   alias PlatformWeb.MeetingLive
@@ -66,13 +84,28 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     <div data-component="participant-rail" class="flex flex-col">
       <%!-- ── Section 1: Hosts / humans ─────────────────────────────────── --%>
       <section data-section="humans" class="px-2 py-2">
+        <%!-- The Agents section below has carried a heading since it
+             shipped; this one did not, so the People pane opened on an
+             unlabelled list of faces. Same glyph-plus-uppercase pair,
+             `hero-users` rather than `hero-cpu-chip` because these are
+             people. Rendered unconditionally — the section itself is
+             unconditional (it has an empty state), so a heading that
+             hid with the list would leave "No people yet." floating
+             under nothing. --%>
+        <div class="flex items-center gap-1.5 px-2 pb-1.5" data-role="humans-heading">
+          <span class="hero-users size-3.5 text-base-content/50"></span>
+          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">
+            In this call
+          </span>
+        </div>
+
         <ul class="flex flex-col gap-0.5" role="list">
           <li
             :for={p <- @humans}
             data-participant-id={p.id}
             data-participant-type="user"
             data-host={to_string(MeetingLive.host?(p, @meeting))}
-            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm min-h-11 transition-colors hover:bg-base-300/40"
+            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs min-h-11 transition-colors hover:bg-base-300/40"
           >
             <.human_avatar
               name={p.display_name || "Unknown participant"}
@@ -83,7 +116,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             />
             <div class="min-w-0 flex-1">
               <div
-                class="truncate font-medium text-base-content/90"
+                class="truncate text-xs font-medium text-base-content/90"
                 data-role="participant-name"
               >
                 {p.display_name || "Unknown participant"}
@@ -158,52 +191,57 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             :for={p <- @agents}
             data-participant-id={p.id}
             data-participant-type="agent"
-            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm min-h-11 hover:bg-base-300/40 transition-colors"
+            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs min-h-11 hover:bg-base-300/40 transition-colors"
           >
-            <%!-- `agent_avatar/1`, not `human_avatar/1`. This section is agents
-                 by construction, and the human component would give them two
-                 initials over the seeded human palette and stamp them
-                 `data-avatar-kind="human"`. --%>
-            <.agent_avatar
+            <%!-- ONE construction for all four states.
+
+                 Was: a bare `agent_avatar`, a role chip on line 2
+                 rendering the literal string "agent", and a badge
+                 gated on `!= :idle` with a substitute status dot on
+                 the other branch. Three of Saru's four visual cues
+                 were absent exactly when a viewer most needs to read
+                 the row, and a state was representable by whichever
+                 of two mutually-exclusive branches happened to fire.
+                 The state now lives ON the face — ring around it,
+                 glyph in its corner — with the WORD directly under
+                 the name, and `:idle` is drawn like any other state.
+
+                 `agent_avatar/1`, not `human_avatar/1`: this section
+                 is agents by construction, and the human component
+                 would give them two initials over the seeded human
+                 palette and stamp them `data-avatar-kind="human"`.
+                 `agent_activity_avatar/1` renders it internally. --%>
+            <.agent_activity_avatar
+              state={AgentActivity.for_agent(@agent_activity, agent_id_of(p))}
               name={p.display_name || "Agent"}
               avatar_url={p.avatar_url}
-              size="sm"
-              class="flex-shrink-0"
             />
             <div class="min-w-0 flex-1">
-              <div class="truncate font-medium text-base-content/90">
+              <div
+                class="truncate text-xs font-medium text-base-content/90"
+                data-role="participant-name"
+              >
                 {p.display_name || "Agent"}
               </div>
-              <div class="truncate text-[11px] text-base-content/50" data-role="agent-role-chip">
-                {MeetingLive.agent_role_chip(p, @agents_by_id)}
+              <div
+                data-role="agent-activity-word"
+                class={[
+                  "truncate text-[11px] font-medium",
+                  activity_meta(@agent_activity, p).text
+                ]}
+              >
+                {activity_meta(@agent_activity, p).word}
               </div>
             </div>
 
-            <%!-- What this agent is doing, in ring + glyph + word.
-
-                 Was a single `size-2` dot coloured by
-                 `agent_status_dot_class/3`, which mapped every
-                 non-idle state to `bg-success` — so `:typing`,
-                 `:computing` and `:failed` were resolved apart in
-                 `AgentActivity` and rendered identically here. The dot
-                 is kept for the REACHABILITY fallback below, which is
-                 a different fact about an agent (is it connected) from
-                 what this badge shows (what is it doing).
-
-                 An agent doing nothing renders the dot alone, so the
-                 rail stays quiet until something is actually
-                 happening. --%>
-            <.agent_activity_badge
-              :if={AgentActivity.for_agent(@agent_activity, agent_id_of(p)) != :idle}
-              state={AgentActivity.for_agent(@agent_activity, agent_id_of(p))}
-              name={p.display_name || "Agent"}
-              class="flex-shrink-0"
-            />
-
+            <%!-- REACHABILITY, a different fact from the activity above:
+                 is this agent connected at all. It is a real signal, so
+                 it moves to the row's trailing edge rather than being
+                 dropped when the activity ring took over the avatar —
+                 matching the trailing dot on the human rows. --%>
             <span
-              :if={AgentActivity.for_agent(@agent_activity, agent_id_of(p)) == :idle}
               class={[
-                "size-2 flex-shrink-0 rounded-full",
+                "size-[7px] flex-shrink-0 rounded-full",
                 MeetingLive.agent_status_dot_class(p, @agents_by_id, @agent_activity)
               ]}
               aria-hidden="true"
@@ -229,4 +267,15 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
        do: agent_id
 
   defp agent_id_of(_participant), do: nil
+
+  # The state word and its colour come from `AgentActivityBadge`'s own
+  # table — the same one that decides the ring and the glyph — so the
+  # word under the name cannot drift from the ring around the face.
+  # Rendering the badge component here just to scrape the word would
+  # put a second ring in the row, so the table is read directly.
+  defp activity_meta(agent_activity, participant) do
+    agent_activity
+    |> AgentActivity.for_agent(agent_id_of(participant))
+    |> AgentActivityBadge.activity_meta()
+  end
 end

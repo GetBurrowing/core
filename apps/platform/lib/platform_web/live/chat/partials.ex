@@ -32,6 +32,7 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   alias Phoenix.LiveView.JS
   alias PlatformWeb.ChatLive.CanvasHooks
+  alias PlatformWeb.Components.Meetings.CallShell
 
   @doc """
   The brand-new-user empty state — `docs/design-system/03-voice.md` §5.1,
@@ -1303,7 +1304,53 @@ defmodule PlatformWeb.ChatLive.Partials do
     """
   end
 
-  @doc "In-meeting UI — desktop side panel + mobile full-screen overlay."
+  @doc """
+  In-meeting UI — desktop side panel + mobile full-screen overlay.
+
+  ## The two surfaces are one screen now (task 01a05b14 stage 6)
+
+  The roster and the four hand-rolled control buttons are gone. This
+  panel renders `PlatformWeb.Components.Meetings.CallShell.call_rail/1`
+  and `call_controls/1` — the SAME components `/meetings` renders — so
+  People, Canvas and Transcript stop being a thing you can only see on
+  one of the two surfaces. The event names are passed in because
+  `ChatLive.MeetingHooks` owns `meeting_toggle_mic` /
+  `meeting_toggle_camera` / `meeting_leave` and `MeetingLive` owns a
+  different vocabulary; that is exactly what the event-name attrs on
+  `call_controls/1` exist for.
+
+  ## ONE rail across BOTH breakpoint subtrees
+
+  The rail is hoisted OUT of the `hidden lg:flex` desktop panel and the
+  `lg:hidden` mobile overlay, for the same reason the captions host was
+  hoisted in task 019ff712: both subtrees are in the document at once
+  (CSS, not the server, picks the visible one), so authoring the rail
+  inside each would put two `#quickmeet-call-rail`s, two
+  `MeetingTranscript` hooks and two sets of candidate buttons in one
+  page. At `lg` the hoisted rail is an in-flow column beside the media
+  panel; below `lg` it is a bottom sheet over the full-screen overlay,
+  opened from the overlay header.
+
+  ## What is NOT here, and why
+
+    * **The intents-collapse bar.** `/meetings` passes it through the
+      rail's `:canvas_extra` slot. Its five controls push
+      `toggle_intents_collapse`, `toggle_intents_expanded`,
+      `cancel_intent`, `pick_intent_reason` and `toggle_intent_mute` —
+      handlers that live in `MeetingLive` and are wrapped in its
+      `with_intents_gate/2` role check. Rendering the bar here would
+      put five buttons on screen that push at no handler in `ChatLive`,
+      which is the same "draw a state with nothing behind it" defect the
+      `Listening` refusal exists to prevent. Porting the gate and the
+      handlers is a second surface's worth of work, not a markup move.
+
+    * **`+ Add agent`.** `invite_event` is left nil, which hides the
+      control. `meeting_invite_agent` is a `MeetingLive` handler.
+
+    * **`Listening`.** Deliberately absent everywhere: nothing in the
+      system can set `AgentActivity`'s `:listening`. See
+      `CallShell`'s moduledoc.
+  """
   attr(:in_meeting, :boolean, required: true)
   attr(:active_space, :any, default: nil)
   attr(:mic_enabled, :boolean, required: true)
@@ -1311,12 +1358,29 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:screen_share_enabled, :boolean, required: true)
   attr(:meeting_participants, :list, default: [])
 
+  # ── Call-shell assigns, all owned by `ChatLive.MeetingHooks` ─────────
+  #
+  # Defaulted rather than required: the panel must still render for a
+  # space whose room came up through raw LiveKit with no `meetings` row,
+  # in which case there is no meeting id to hydrate any of this from and
+  # the honest result is an empty Canvas and Transcript.
+  attr(:active_meeting_tab, :string, default: "people")
+  attr(:rail_open, :boolean, default: false)
+  attr(:meeting, :any, default: nil)
+  attr(:agents_by_id, :map, default: %{})
+  attr(:agent_activity, :any, default: nil)
+  attr(:candidates, :list, default: [])
+  attr(:candidates_closed, :list, default: [])
+  attr(:candidate_events, :map, default: %{})
+  attr(:candidate_error, :string, default: nil)
+  attr(:captions_available, :boolean, default: true)
+
   def meeting_panel(assigns) do
     ~H"""
     <div
       :if={@in_meeting}
       id="meeting-panel"
-      class="relative hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
+      class="relative hidden lg:flex w-80 min-w-0 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
     >
       <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
         <div class="flex items-center gap-2 min-w-0">
@@ -1387,12 +1451,11 @@ defmodule PlatformWeb.ChatLive.Partials do
           data-pane="desktop"
         >
         </div>
-        <.meeting_roster id="meeting-roster" participants={@meeting_participants} />
         <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
         <div
           id="meeting-participants"
           phx-update="ignore"
-          class="meeting-participant-grid gap-2"
+          class="meeting-participant-grid w-full gap-2.5"
         >
         </div>
         <%!-- v4 stage 2: gallery dock the hook reparents the persistent
@@ -1414,68 +1477,41 @@ defmodule PlatformWeb.ChatLive.Partials do
         </div>
       </div>
 
-      <div class="flex items-center justify-center gap-2 border-t border-base-300 px-4 py-3">
-        <button
-          phx-click="meeting_toggle_mic"
-          class={[
-            "meeting-control-btn rounded-full p-2.5 transition-colors",
-            if(@mic_enabled,
-              do: "bg-base-200 hover:bg-base-300 text-base-content",
-              else: "bg-error/20 text-error hover:bg-error/30"
-            )
-          ]}
-          title={if @mic_enabled, do: "Mute microphone", else: "Unmute microphone"}
-        >
-          <span class={[
-            "size-5",
-            if(@mic_enabled, do: "hero-microphone", else: "hero-microphone-slash")
-          ]}>
-          </span>
-        </button>
-        <button
-          phx-click="meeting_toggle_camera"
-          class={[
-            "meeting-control-btn rounded-full p-2.5 transition-colors",
-            if(@camera_enabled,
-              do: "bg-base-200 hover:bg-base-300 text-base-content",
-              else: "bg-error/20 text-error hover:bg-error/30"
-            )
-          ]}
-          title={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
-        >
-          <span class={[
-            "size-5",
-            if(@camera_enabled, do: "hero-video-camera", else: "hero-video-camera-slash")
-          ]}>
-          </span>
-        </button>
-        <%!-- task 019e420f stage 2: client-side click handler. The
-             gesture must reach `getDisplayMedia()` without yielding to
-             the WebSocket; see `meeting_share_button.js`. --%>
-        <button
-          id="meeting-share-btn-desktop"
-          phx-hook="MeetingShareButton"
-          type="button"
-          class={[
-            "meeting-control-btn rounded-full p-2.5 transition-colors",
-            if(@screen_share_enabled,
-              do: "bg-primary/20 text-primary hover:bg-primary/30",
-              else: "bg-base-200 hover:bg-base-300 text-base-content"
-            )
-          ]}
-          title={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
-          data-role="meeting-share-button"
-        >
-          <span class="hero-computer-desktop size-5"></span>
-        </button>
-        <button
-          phx-click="meeting_leave"
-          class="meeting-control-btn rounded-full p-2.5 bg-error text-error-content hover:bg-error/80 transition-colors"
-          title="Leave meeting"
-        >
-          <span class="hero-phone-x-mark size-5"></span>
-        </button>
-      </div>
+      <%!-- Mic / Camera / Share / Leave are `CallShell.call_controls/1`
+           now (task 01a05b14 stage 6) — the identical component
+           `/meetings` mounts, so the two surfaces cannot drift again.
+
+           The event names are THIS surface's: `ChatLive.MeetingHooks`
+           handles `meeting_toggle_mic`, `meeting_toggle_camera`,
+           `meeting_toggle_screen_share` and `meeting_leave`. They are
+           attrs precisely because `/meetings` says something else.
+
+           `share_id` + `share_hook` are load-bearing and are threaded
+           through unchanged. `meeting_share_button.js` binds the click
+           on ITS OWN element (`this.el`) via `phx-hook` — it does NOT
+           look the button up by id — and calls `getDisplayMedia()`
+           inside the gesture. The stable id stays because a shipped
+           test pins it and because two panes must not collide, but the
+           reason the hook keeps working is the `phx-hook` attribute,
+           not the id. Dropping either would leave a Share button that
+           silently fails only in a real browser. --%>
+      <CallShell.call_controls
+        class="h-[46px] shrink-0 justify-center gap-2 border-t border-base-300 px-2"
+        mic_event="meeting_toggle_mic"
+        camera_event="meeting_toggle_camera"
+        share_event="meeting_toggle_screen_share"
+        leave_event="meeting_leave"
+        mic_on={@mic_enabled}
+        camera_on={@camera_enabled}
+        sharing={@screen_share_enabled}
+        mic_role="meeting-mic"
+        camera_role="meeting-camera"
+        share_role="meeting-share-button"
+        leave_role="meeting-leave"
+        share_id="meeting-share-btn-desktop"
+        share_hook="MeetingShareButton"
+        share_click?={false}
+      />
 
       <div
         data-soundboard-toasts
@@ -1490,6 +1526,7 @@ defmodule PlatformWeb.ChatLive.Partials do
 
     <div
       :if={@in_meeting}
+      data-role="quickmeet-mobile-overlay"
       class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden safe-area-x"
     >
       <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
@@ -1503,6 +1540,24 @@ defmodule PlatformWeb.ChatLive.Partials do
           </span>
         </div>
         <div class="flex items-center gap-1">
+          <%!-- Opens the hoisted call rail as a bottom sheet. Mobile-only:
+               at `lg` the rail is an in-flow column and always visible.
+               Before task 01a05b14 stage 6 there was no way to reach
+               People / Canvas / Transcript below `lg` on EITHER surface —
+               the rail was `hidden lg:flex` and measured `width: 0` at
+               390px. --%>
+          <button
+            type="button"
+            phx-click="quickmeet_toggle_rail"
+            aria-label="Toggle call panel"
+            aria-expanded={to_string(@rail_open)}
+            aria-controls="quickmeet-call-rail"
+            title="Toggle call panel"
+            class="btn btn-ghost btn-xs btn-square text-base-content/60"
+            data-role="quickmeet-rail-toggle"
+          >
+            <span class="hero-user-group size-4"></span>
+          </button>
           <.soundboard_menu id="soundboard-menu-mobile" />
           <button phx-click="meeting_leave" class="btn btn-ghost btn-xs" title="Back to chat">
             <span class="hero-arrow-left size-4"></span>
@@ -1552,12 +1607,11 @@ defmodule PlatformWeb.ChatLive.Partials do
           data-pane="mobile"
         >
         </div>
-        <.meeting_roster id="meeting-roster-mobile" participants={@meeting_participants} />
         <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
         <div
           id="meeting-participants-mobile"
           phx-update="ignore"
-          class="meeting-participant-grid gap-2"
+          class="meeting-participant-grid w-full gap-2.5"
         >
         </div>
         <div
@@ -1571,63 +1625,130 @@ defmodule PlatformWeb.ChatLive.Partials do
         </div>
       </div>
 
-      <div class="flex items-center justify-center gap-3 border-t border-base-300 px-4 py-4 safe-area-bottom">
+      <%!-- Mobile controls, same component, same event vocabulary, its
+           own `share_id` so the two panes never collide on a duplicate
+           id while both subtrees are in the document. `safe-area-bottom`
+           and the bottom-nav clearance stay on the control row: this is
+           the primary action row at 375px. --%>
+      <CallShell.call_controls
+        class="min-h-[46px] shrink-0 justify-center gap-2 border-t border-base-300 px-3 py-2 safe-area-bottom"
+        mic_event="meeting_toggle_mic"
+        camera_event="meeting_toggle_camera"
+        share_event="meeting_toggle_screen_share"
+        leave_event="meeting_leave"
+        mic_on={@mic_enabled}
+        camera_on={@camera_enabled}
+        sharing={@screen_share_enabled}
+        mic_role="meeting-mic"
+        camera_role="meeting-camera"
+        share_role="meeting-share-button"
+        leave_role="meeting-leave"
+        share_id="meeting-share-btn-mobile"
+        share_hook="MeetingShareButton"
+        share_click?={false}
+      />
+    </div>
+
+    <%!-- ── THE CALL RAIL, hoisted out of BOTH breakpoint subtrees ────
+         People / Canvas / Transcript, the same `CallShell.call_rail/1`
+         `/meetings` renders. Authored ONCE and positioned by CSS, for
+         the reason the captions host above it was hoisted in task
+         019ff712: the `hidden lg:flex` desktop panel and the
+         `lg:hidden` mobile overlay are BOTH in the document at all
+         times — CSS, not the server, picks which is visible — so a copy
+         in each would mean two `#quickmeet-call-rail`s, two
+         `MeetingTranscript` hooks writing into two logs, and two
+         `stop_candidate` buttons per card.
+
+         At `lg`: an in-flow 312px column to the right of the media
+         panel, mirroring `/meetings`.
+
+         Below `lg`: a bottom sheet at `z-[55]`, one layer above the
+         mobile overlay's `z-50`, sliding up from the overlay header's
+         toggle. `top-12` clears that header so the meeting name and
+         Leave stay reachable while the sheet is open, and the bottom
+         edge clears BOTH the safe-area inset and the bottom nav, so
+         Canvas's last card is not parked under the home indicator.
+
+         THIS IS THE MOBILE FIX. Stage 5 measured
+         `[data-component="call-rail"]` at `width: 0` on a 390px
+         viewport and a capture failed outright. `width_class` carries
+         `w-full` here rather than the desktop 312px because two width
+         utilities on one element resolve by CSS SOURCE order and the
+         override would have been non-deterministic.
+
+         COLLAPSED (stage 5, round 2). `translate-y-full` moves the sheet
+         by its OWN height, and the sheet's bottom edge is already
+         `nav + safe-area` above the viewport's — so the collapsed top
+         landed exactly `nav + safe-area` (56px on a phone) inside the
+         viewport, over the mobile overlay's control bar, and a tap on
+         Leave hit the Transcript tab instead. The collapsed transform
+         therefore offsets by its height PLUS the same bottom clearance
+         it sits on, which parks the sheet fully below the viewport
+         whatever the inset is; `env(safe-area-inset-bottom)` is 0 in
+         headless Chrome and a real inset only makes the peek larger,
+         which is why the clearance is computed rather than hard-coded.
+         `pointer-events-none` while collapsed is the belt for that
+         brace: even mid-transition, nothing under the sliding sheet is
+         intercepted, and `lg:pointer-events-auto` hands the in-flow
+         desktop column its clicks back regardless of the toggle state.
+
+         OPEN, the sheet's bottom edge sits `nav + safe-area` above the
+         viewport's — ABOVE the overlay's control bar, which is the
+         viewport's last 46px + inset — so the bar stays reachable
+         while the sheet covers the tiles. The tiles are what a sheet is
+         for; the bar is what a caller needs to leave. `/meetings` at
+         390px places its bar above the nav the same way. --%>
+    <div
+      :if={@in_meeting}
+      id="quickmeet-call-rail-host"
+      data-role="quickmeet-call-rail-host"
+      data-rail-open={to_string(@rail_open)}
+      class={[
+        "flex flex-col bg-base-100",
+        "fixed inset-x-0 top-12 z-[55] transition-transform duration-200 ease-out",
+        "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]",
+        if(@rail_open,
+          do: "translate-y-0",
+          else:
+            "translate-y-[calc(100%+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] pointer-events-none"
+        ),
+        "lg:static lg:inset-auto lg:bottom-auto lg:z-auto lg:pointer-events-auto",
+        "lg:w-[312px] lg:flex-shrink-0 lg:translate-y-0"
+      ]}
+    >
+      <%!-- Mobile-only dismissal. The header toggle that opened the
+           sheet is behind it once it is up, so without this the sheet
+           has no close affordance at all. --%>
+      <div class="flex flex-shrink-0 justify-end border-b border-l border-base-300 bg-base-200/40 px-2 py-1 lg:hidden">
         <button
-          phx-click="meeting_toggle_mic"
-          class={[
-            "meeting-control-btn rounded-full p-3 transition-colors",
-            if(@mic_enabled,
-              do: "bg-base-200 text-base-content",
-              else: "bg-error/20 text-error"
-            )
-          ]}
-        >
-          <span class={[
-            "size-6",
-            if(@mic_enabled, do: "hero-microphone", else: "hero-microphone-slash")
-          ]}>
-          </span>
-        </button>
-        <button
-          phx-click="meeting_toggle_camera"
-          class={[
-            "meeting-control-btn rounded-full p-3 transition-colors",
-            if(@camera_enabled,
-              do: "bg-base-200 text-base-content",
-              else: "bg-error/20 text-error"
-            )
-          ]}
-        >
-          <span class={[
-            "size-6",
-            if(@camera_enabled, do: "hero-video-camera", else: "hero-video-camera-slash")
-          ]}>
-          </span>
-        </button>
-        <%!-- task 019e420f stage 2: client-side click handler — see
-             the desktop variant above for the rationale. --%>
-        <button
-          id="meeting-share-btn-mobile"
-          phx-hook="MeetingShareButton"
           type="button"
-          class={[
-            "meeting-control-btn rounded-full p-3 transition-colors",
-            if(@screen_share_enabled,
-              do: "bg-primary/20 text-primary",
-              else: "bg-base-200 text-base-content"
-            )
-          ]}
-          data-role="meeting-share-button"
+          phx-click="quickmeet_toggle_rail"
+          aria-label="Close call panel"
+          title="Close"
+          class="btn btn-ghost btn-xs btn-square text-base-content/60"
+          data-role="quickmeet-rail-close"
         >
-          <span class="hero-computer-desktop size-6"></span>
-        </button>
-        <button
-          phx-click="meeting_leave"
-          class="meeting-control-btn rounded-full p-3 bg-error text-error-content hover:bg-error/80 transition-colors"
-        >
-          <span class="hero-phone-x-mark size-6"></span>
+          <span class="hero-x-mark size-4"></span>
         </button>
       </div>
+
+      <CallShell.call_rail
+        id="quickmeet-call-rail"
+        class="min-h-0 flex-1"
+        width_class="w-full lg:w-[312px]"
+        active_tab={@active_meeting_tab}
+        tab_event="meeting_tab_select"
+        participants={@meeting_participants}
+        agents_by_id={@agents_by_id}
+        meeting={@meeting}
+        agent_activity={@agent_activity}
+        candidates={@candidates}
+        candidates_closed={@candidates_closed}
+        candidate_events={@candidate_events}
+        candidate_error={@candidate_error}
+        captions_available={@captions_available}
+      />
     </div>
 
     <%!-- Task 019ff712 stage 2: ONE caption host for the whole quick-meet

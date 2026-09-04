@@ -146,29 +146,57 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
       class="border-base-300 bg-base-200/40 border-b px-3 py-3"
       data-role="meeting-candidate-countdown-rail"
     >
+      <%!-- `Cards ● appearing live` — the drawing's own words, and an
+           ACTIVITY statement rather than a label for a container. The
+           count chip the previous heading carried is gone: the drawing
+           does not contain one, and `2` beside a list of two cards
+           restates what the reader is already looking at.
+
+           The dot stays SUCCESS, not the mockup's amber. Amber is
+           spoken for on this screen — the canvas's own slot map gives
+           `--color-warning` exactly one meaning, "you are being asked
+           for something", which is the invite banner and nothing else.
+           A live-activity dot is asking for nothing. --%>
       <header class="mb-3 flex items-center gap-2">
-        <span class="candidate-rail-dot" aria-hidden="true"></span>
-        <h3 class="text-base-content/60 text-[11px] font-semibold tracking-[0.09em] uppercase">
-          Meeting tasks
-        </h3>
-        <span
-          class="bg-base-300 text-base-content/70 rounded-full px-2 py-px text-[11px] tabular-nums"
-          data-role="meeting-candidate-count"
+        <h3
+          class="text-base-content/60 flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.09em] uppercase"
+          data-role="meeting-candidate-rail-heading"
         >
-          {length(@open)}
-        </span>
+          Cards <span class="candidate-rail-dot" aria-hidden="true"></span> appearing live
+        </h3>
       </header>
 
       <div :if={@open != []} class="flex flex-col gap-2">
         <article
           :for={candidate <- @open}
-          class={["candidate-card", "candidate-card--#{CandidateDisplay.slug(candidate.state)}"]}
+          class={[
+            "candidate-card",
+            "candidate-card--#{CandidateDisplay.slug(candidate.state)}",
+            forming?(candidate) && "candidate-card--forming"
+          ]}
           data-role="meeting-candidate-card"
           data-candidate-id={candidate.id}
           data-stage={CandidateDisplay.slug(candidate.state)}
         >
-          <p class="candidate-card__stage" data-role="meeting-candidate-stage">
-            {CandidateDisplay.stage_label(candidate.state)}
+          <%!-- ACTOR AND ACTION, where the numbered stage label used to
+               be. `1 · HEARD` named a position in a state machine, which
+               is a fact about our pipeline rather than about the card;
+               the drawing leads a still-forming card with a sentence
+               about who is working on it instead.
+
+               It renders ONLY while a card is still forming and ONLY
+               when an agent is actually named. A placeholder actor
+               ("someone is forming a card") is the same defect as a
+               placeholder byline — a claim the card cannot back — so
+               with no agent there is no sentence, and the skeleton
+               bars beneath already say the card is in progress. --%>
+          <p
+            :if={forming?(candidate) and CandidateDisplay.agent_name(candidate)}
+            class="candidate-card__forming"
+            data-role="meeting-candidate-forming"
+          >
+            <span class="candidate-card__forming-dot" aria-hidden="true"></span>
+            {CandidateDisplay.agent_name(candidate)} is forming a card…
           </p>
 
           <.card_head candidate={candidate} now={@now} />
@@ -178,16 +206,6 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
             lines={Map.get(@events, candidate.id, [])}
             candidate_id={candidate.id}
           />
-
-          <p
-            :if={presentation(candidate) == :full}
-            class="candidate-card__chips"
-            data-role="meeting-candidate-chips"
-          >
-            <span class="candidate-card__chip" data-role="meeting-candidate-utterances">
-              {utterance_count(candidate)}
-            </span>
-          </p>
 
           <%!-- `✓ Added to Tasks`. Drawn from a stored `task_id` /
                `canvas_id`, never from `state == :acting`: `graduate/2`
@@ -201,6 +219,45 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
           >
             <span aria-hidden="true">✓</span>
             {CandidateDisplay.outcome_label(candidate)}
+          </p>
+
+          <%!-- WHO IT WENT TO — the card's LAST WRITTEN LINE, below the
+               quote, which is the whole point of moving it. Under the
+               title it read as attribution: a verbatim sentence with an
+               agent's name directly beneath it says that agent said it.
+               Last, after the evidence, it reads as what it is — where
+               this is going next. Reading order is now what it is →
+               who said it → the words → who will action it.
+
+               Still a SEPARATE element from the byline, never joined to
+               it. `target_label/2` absorbs the `"null"` sentinel, so an
+               unrouted card says `unassigned` and never `@null`. --%>
+          <p
+            :if={presentation(candidate) != :skeleton}
+            class="candidate-card__assignment"
+            data-role="meeting-candidate-assignment"
+          >
+            <span aria-hidden="true">→</span>
+            {assignment(candidate)}
+          </p>
+
+          <%!-- The APPROVAL GATE, and everything that argues for it.
+               None of this is in the drawing, and it is kept anyway:
+               `Not now` / `Go ahead` call `close/2` and `graduate/2`,
+               and `1 utterance` is the evidence a reader weighs before
+               pressing either. Deleting a live gate to match a static
+               picture would remove a feature the picture simply never
+               had a reason to draw. They move BELOW the assignment,
+               so the card still READS in the drawing's order and the
+               controls sit under it as controls. --%>
+          <p
+            :if={presentation(candidate) == :full}
+            class="candidate-card__chips"
+            data-role="meeting-candidate-chips"
+          >
+            <span class="candidate-card__chip" data-role="meeting-candidate-utterances">
+              {utterance_count(candidate)}
+            </span>
           </p>
 
           <.review_row :if={review?(candidate)} candidate={candidate} />
@@ -264,28 +321,74 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
     <div :if={@presentation == :skeleton} data-role="meeting-candidate-skeleton">
       <span class="candidate-skeleton candidate-skeleton--a"></span>
       <span class="candidate-skeleton candidate-skeleton--b"></span>
-      <p class="candidate-card__micro">Heard something — getting started</p>
+      <%!-- No TITLE — nobody has worked out what this is yet, and an
+           invented one is a confident card about somebody's dropped
+           audio. The VERBATIM fragment is a different thing: it is the
+           words that were actually said, which is the one claim a
+           forming card can always back. `evidence_quote` is NOT NULL in
+           practice — the classifier refuses to emit a candidate without
+           one — so a card with no quote is a card nobody can defend. --%>
+      <p class="candidate-card__quote" data-role="meeting-candidate-quote">
+        {@candidate.evidence_quote}
+      </p>
     </div>
 
     <div :if={@presentation != :skeleton} class="flex items-start gap-2.5">
       <.candidate_avatar candidate={@candidate} presentation={@presentation} />
 
       <div class="min-w-0 flex-1">
-        <p
-          class={[
-            "candidate-card__title",
-            @presentation == :forming && "candidate-card__title--half"
-          ]}
-          data-role="meeting-candidate-title"
-        >
+        <%!-- TITLE and BYLINE on ONE LINE, as the drawing sets them:
+             `▤ Pricing objection — Harper · just now`. Two elements
+             rather than one nested pair, so each reads on its own —
+             the title says WHAT THIS IS, the byline says WHO SPOKE, and
+             neither can be queried and get the other's words back.
+
+             The title is the CLASSIFIED INTENT, humanised. It is not
+             the quote: the drawing carries a short label AND a separate
+             verbatim block, and printing one string into both would be
+             a relabelling rather than the two claims it draws. Where
+             the classifier has not answered yet there is no title at
+             all — `intent_label(nil)` would render an em dash, which is
+             a heading that says nothing.
+
+             The drawing's third line (`Client pushed back on seat-based
+             pricing…`) has NO column behind it. `meeting_candidates`
+             stores an intent and a verbatim span, not a summary, so
+             there is nothing truthful to put on that line and it is
+             left out rather than filled. --%>
+        <div class="candidate-card__head">
+          <p
+            :if={Map.get(@candidate, :classified_intent)}
+            class={[
+              "candidate-card__title",
+              @presentation == :forming && "candidate-card__title--half"
+            ]}
+            data-role="meeting-candidate-title"
+          >
+            {CandidateDisplay.intent_label(Map.get(@candidate, :classified_intent))}
+          </p>
+          <%!-- WHO SPOKE, and when. A nil speaker is UNATTRIBUTED and
+               renders NOTHING — no placeholder, and above all no
+               fallback to the assignee, which would credit the sentence
+               to an agent that was not in the room. The em dash is a
+               SEPARATOR and sits outside the element, so the byline's
+               text is the attribution and nothing else. --%>
+          <span :if={byline(@candidate, @now)} class="candidate-card__attrib">
+            <span class="candidate-card__dash" aria-hidden="true">—</span>
+            <span class="candidate-card__byline" data-role="meeting-candidate-byline">
+              {byline(@candidate, @now)}
+            </span>
+          </span>
+        </div>
+
+        <%!-- THE WORDS THAT WERE ACTUALLY SAID — the same element the
+             shimmering card carries, now on every card that has left
+             the skeleton, which is what lets the assignment sit BELOW
+             the evidence on all of them instead of only in the drawing.
+             Set as a quote, not as body copy: it is somebody else's
+             sentence and the card is quoting it. --%>
+        <p class="candidate-card__quote" data-role="meeting-candidate-quote">
           {@candidate.evidence_quote}
-        </p>
-        <p
-          :if={byline(@candidate, @now)}
-          class="candidate-card__byline"
-          data-role="meeting-candidate-byline"
-        >
-          {byline(@candidate, @now)}
         </p>
       </div>
     </div>
@@ -474,32 +577,49 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
 
   def presentation(_candidate), do: :full
 
-  # `Octavius · drafting`. Falls back to the state word alone when no
-  # agent has been assigned — the presence mockup's own pattern for a
-  # row with no name on it — and to nothing at all when there is neither.
-  # `— Dalton, just now`: who, what they are doing, and WHEN it was said.
+  # `Dalton · 2m ago` — WHO SAID IT, and when.
   #
-  # The time was missing until now, and the target screen commits to it
-  # in as many words: "Cards land as they're made, and say who made them
-  # and when." Without it a card thirty seconds old and one that has been
-  # sitting there ten minutes read identically.
+  # It used to read `octavius · drafting · just now`: the ASSIGNED AGENT
+  # in the author position. The target screen says "cards say who made
+  # them and when", and `speaker` is the column that answers that
+  # (`meeting_candidate.ex:144`, written by `open_new/6`). The assignee
+  # answers a different question and now has its own element.
   #
-  # Joined with the same `·` the name and state already use, so the
-  # byline stays one line at rail width rather than growing a second
-  # element that wraps. A candidate with no agent and no state still
-  # shows its time — "just now" alone is more use than nothing while the
-  # card is still forming.
+  # A card with no speaker renders NO BYLINE AT ALL — not a placeholder,
+  # not the assignee. The time goes with the name because "2m ago" under
+  # a quote nobody is attributed for is a timestamp on an anonymous
+  # sentence, and the assignment line beneath still dates the card by
+  # its countdown.
   defp byline(candidate, now) do
-    [
-      CandidateDisplay.agent_name(candidate),
-      CandidateDisplay.byline_state(candidate),
-      CandidateDisplay.said_ago(candidate, now)
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> nil
-      parts -> Enum.join(parts, " · ")
+    case CandidateDisplay.speaker_name(candidate) do
+      nil ->
+        nil
+
+      speaker ->
+        [speaker, CandidateDisplay.said_ago(candidate, now)]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(" · ")
     end
+  end
+
+  # `→ @octavius · drafting`, `→ unassigned`. The assignee and what it
+  # is doing with the card, kept apart from the byline above.
+  #
+  # `target_label/2` is total and absorbs the `"null"` sentinel
+  # `IntentClassifier` stores for an unrouted intent, so this line says
+  # the WORD "unassigned" — never `@null`, and never a bare `@` in front
+  # of a role, which would read as an at-mention of a person who does
+  # not exist.
+  defp assignment(candidate) do
+    target =
+      CandidateDisplay.target_label(
+        Map.get(candidate, :assigned_agent_slug),
+        Map.get(candidate, :target_role)
+      )
+
+    [target, CandidateDisplay.byline_state(candidate)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" · ")
   end
 
   defp utterance_count(candidate) do
@@ -522,6 +642,14 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   # skeleton would be asking a human to approve an utterance nobody has
   # classified.
   defp review?(candidate), do: not armed?(candidate) and presentation(candidate) == :full
+
+  # Still being worked out — the drawing's dashed card. Keyed on the
+  # PRESENTATION rather than on `state`, for the same reason
+  # `presentation/1` exists: a `:heard` row that `reconcile/2` has
+  # already classified is further along than its state says, and a
+  # dashed border plus "is forming a card…" over a card the system has
+  # finished thinking about is the progress bar that lies.
+  defp forming?(candidate), do: presentation(candidate) in [:skeleton, :forming]
 
   defp stage_rank(%{state: state} = candidate) do
     {Map.get(@stage_rank, state, 9), DateTime.to_unix(candidate.inserted_at, :microsecond)}

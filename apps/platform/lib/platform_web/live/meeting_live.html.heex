@@ -220,17 +220,14 @@
          value differs. --%>
       <%!-- Stage 4 (task 019f498d): shell-only. Guests never persist pane
          collapse — no shell chrome to collapse against. --%>
-      <div
-        :if={@shell?}
-        id="meeting-participant-rail-collapse-hook"
-        phx-hook="SidebarCollapse"
-        data-collapsed={if @participant_rail_collapsed, do: "true", else: "false"}
-        data-storage-key="suite.meeting.participant_rail.collapsed"
-        data-hydrate-event="meeting_participant_rail_hydrate"
-        data-change-event="meeting_participant_rail_collapsed_changed"
-        class="hidden"
-      >
-      </div>
+      <%!-- The participant-rail persistence host went with the rail
+         (task 01a05b14 stage 3). Humans and agents now live in the
+         right rail's People tab and there is no left rail to collapse,
+         so `suite.meeting.participant_rail.collapsed` has nothing to
+         store. The host is deleted rather than left behind DELIBERATELY:
+         a `SidebarCollapse` instance outliving its assign would keep
+         pushing `meeting_participant_rail_hydrate` at a handler that no
+         longer exists — a client-side break `mix test` cannot see. --%>
       <div
         :if={@shell?}
         id="meeting-chat-pane-collapse-hook"
@@ -322,13 +319,61 @@
            auto-width box + `flex-1` spacer pair: same right-alignment for
            everything after it, but the title now has a proportional share of
            the line instead of being the residue of everyone else's. --%>
+        <%!-- `basis-[60%] sm:basis-[50%]` (task 01a05b14 stage 5): the
+           live pill below sits INSIDE this box, so below `sm` the box
+           needs a larger share of the line or the pill eats the name.
+           Measured at 390x844: 50% put the name at 43px (truncated),
+           60% gives it its full 53px, and the segmented control absorbs
+           the difference into its scroll port — which is exactly the
+           mechanism the bar's own comment above says should take the
+           squeeze. Still a percentage of the line, per that comment. --%>
         <div
-          class="flex min-w-0 shrink grow basis-[50%] items-center gap-2"
+          class="flex min-w-0 shrink grow basis-[60%] items-center gap-2 sm:basis-[50%]"
           data-role="meeting-title"
         >
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
+
+          <%!-- `● meeting live` (task 01a05b14 stage 5, approved target
+             embed 1 `.pill`): 10px, fully rounded, on the `success` slot
+             — Saru's "live audio right now" colour. Rendered ONLY while
+             `@room_live?` is true, and that assign is OBSERVED, not
+             inferred: it reads `Meetings.get_active_room/1`, a row only
+             the join path and the LiveKit `room_finished` webhook write
+             (see `room_live?/1` in meeting_live.ex). It follows the invite
+             banner's rule — green is earned. A meeting with no live room
+             renders nothing here, not a pill that lies; the `:if` is the
+             whole guarantee and `meeting_live_test.exs` detonates when it
+             is loosened.
+
+             Colour is never the only signal: the word "live" is painted at
+             EVERY width. Only the leading "meeting " yields below `sm`,
+             where the title, this pill, the count and the controls all
+             compete for one 390px line. --%>
+          <span
+            :if={@room_live?}
+            class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-success/40 bg-success/15 px-2 py-0.5 text-[10px] font-medium leading-4 text-success"
+            data-role="meeting-live-pill"
+          >
+            <span class="size-1.5 rounded-full bg-success" aria-hidden="true"></span>
+            <span><span class="sr-only sm:not-sr-only">meeting </span>live</span>
+          </span>
         </div>
+
+        <%!-- `N people · M agents` (task 01a05b14 stage 5, approved target
+           embed 1 `.mini`): 11px, muted, right-aligned by the growing
+           title before it. Derived from `MeetingLive.roster_count/1`,
+           which is `partition_participants/1` — the SAME split the rail's
+           two sections render from — so the bar and the rail can never
+           disagree about who is a person and who is an agent.
+
+           INFORMATIONAL, so it yields first: `hidden sm:flex`, because
+           at 390px it and a readable meeting name cannot both fit
+           (measured; see `roster_readout/1` in meeting_live.ex). That
+           is NOT the reveal-over-persistence pattern the mute badge
+           note below bans — that rule protects STATE, and a count is
+           not state. The live pill above is state and stays. --%>
+        <.roster_readout participants={@participants} />
 
         <%!-- Guest identity badge (task 019f498d stage 4). Only rendered on
            the guest surface (`chrome_mode == :none`) so the guest can see
@@ -470,145 +515,44 @@
             <span class="sr-only sm:not-sr-only">Agents muted</span>
           </.chip>
 
-          <button
-            type="button"
-            phx-click="meeting_toggle_mic"
-            aria-label={if @mic_enabled, do: "Mute mic", else: "Unmute mic"}
-            aria-pressed={to_string(@mic_enabled)}
-            title={if @mic_enabled, do: "Mute mic", else: "Unmute mic"}
-            data-role="meeting-mic"
-            data-active={to_string(@mic_enabled)}
-            class={[
-              "btn btn-sm btn-ghost btn-square min-h-11",
-              if(@mic_enabled,
-                do: "text-base-content/70",
-                else: "text-error bg-error/10 hover:bg-error/20"
-              )
-            ]}
-          >
-            <span class={[
-              "size-4",
-              if(@mic_enabled, do: "hero-microphone", else: "hero-microphone-slash")
-            ]}>
-            </span>
-          </button>
+          <%!-- Mic / Camera / Share / Leave USED to sit here. Task
+             01a05b14 stage 2 moved `<CallShell.call_controls>` out of
+             this bar and into a centred 46px row at the BOTTOM of the
+             stage column (search `data-role="meeting-stage-controls"`
+             below), which is where the approved canvas puts them.
 
-          <%!-- Push-to-talk (task 01a03f4e stage 5). Hold to address an
-             agent directly; the waveform beside it is the evidence that
-             something is actually being heard.
+             WHAT STAYED, DELIBERATELY: the stage-mode segmented
+             control, the captions toggle, the chat-panel toggle, the
+             call-rail toggle and the intent-mute chip. None of them
+             appear in the mockup, and none of them were removed --
+             they are real, handled features and a static drawing is
+             not evidence they should be deleted. The bar stops being
+             a control DUMP; it does not stop being a bar. If it still
+             overflows at 1280 with four fewer pills in it, that is a
+             separate pre-existing debt, not a regression from this
+             move.
 
-             The level is read client-side by the `MeetingPushToTalk`
-             hook from an AnalyserNode on the LOCAL LiveKit publication.
-             There is no server-side level to render — the microphone is
-             published to the SFU and never reaches Suite — so the hook
-             is the only possible source and the bars below are inert
-             until it paints them.
+             PUSH-TO-TALK MOVED TOO, in the merge with #910 (task
+             01a03f4e stage 5 landed on main while this port was in
+             flight). It is a real control, so it lives in the control
+             bar with the other four -- passed to `call_controls` through
+             its `before_leave` slot, between Share and Leave, id and
+             hook byte-identical to #910. It is NOT in the quickmeet:
+             that surface has no push-to-talk producer.
 
-             `phx-update="ignore"`: the hook owns the bars' inline
-             transforms, and a re-render (a roster change, a flash being
-             cleared) would otherwise reset them mid-press.
-
-             Colour comes from semantic token slots only — `primary` /
-             `primary-content` for the armed state, `base-content` for
-             rest, `error` for a refused press. No raw hex and no fixed
-             tailwind palette colour: `lib/platform_web` currently
-             contains zero of either and this is not the place to
-             start. --%>
-          <button
-            id="meeting-push-to-talk"
-            phx-hook="MeetingPushToTalk"
-            phx-update="ignore"
-            type="button"
-            aria-label="Hold to talk to an agent"
-            title="Hold to talk to an agent"
-            data-role="meeting-push-to-talk"
-            data-pressed="false"
-            class={[
-              "btn btn-sm btn-ghost min-h-11 gap-2 px-2",
-              "text-base-content/70",
-              "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
-              "data-[rejected=no-microphone]:text-error",
-              "data-[rejected=microphone-muted]:text-error"
-            ]}
-          >
-            <span class="hero-signal size-4" aria-hidden="true"></span>
-            <%!-- The waveform. Twelve bars, scaled on the Y axis by the
-               hook; `origin-center` so a bar grows from its middle and
-               the meter reads as a waveform rather than a bar chart.
-               `currentColor` keeps them on whatever token the button is
-               wearing, so the armed and refused states carry through
-               without JS ever naming a colour. --%>
-            <span
-              class="flex h-4 items-center gap-px"
-              data-role="meeting-push-to-talk-waveform"
-              aria-hidden="true"
-            >
-              <span
-                :for={_bar <- 1..12}
-                data-ptt-bar
-                class="h-full w-0.5 origin-center rounded-full bg-current opacity-70 transition-transform duration-75"
-                style="transform: scaleY(0.08)"
-              >
-              </span>
-            </span>
-            <span class="sr-only lg:not-sr-only lg:text-xs">Hold to talk</span>
-          </button>
-
-          <button
-            type="button"
-            phx-click="meeting_toggle_camera"
-            aria-label={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
-            aria-pressed={to_string(@camera_enabled)}
-            title={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
-            data-role="meeting-camera"
-            data-active={to_string(@camera_enabled)}
-            class={[
-              "btn btn-sm btn-ghost btn-square min-h-11",
-              if(@camera_enabled,
-                do: "text-base-content/70",
-                else: "text-base-content/40"
-              )
-            ]}
-          >
-            <span class={[
-              "size-4",
-              if(@camera_enabled, do: "hero-video-camera", else: "hero-video-camera-slash")
-            ]}>
-            </span>
-          </button>
-
-          <%!-- The meeting-wide "Copy guest link" button lived here until
-             task 019fb955-1d7b stage 1 removed it. It minted ONE
-             forwardable URL per meeting from an OPTIONAL display name, so
-             whoever opened it was unidentifiable: transcript speech could
-             not be attributed and action items had no principal. Guest
-             admission is now per-invite only — `Meetings.invite_guest/2`
-             mints a token naming a single `meeting_invites` row, which is
-             what makes a join attributable and one guest revocable
-             without invalidating the others. Do not reintroduce a
-             meeting-wide link here. --%>
-
-          <%!-- task 019e420f stage 2: client-side hook keeps the click
-             gesture alive across the call into getDisplayMedia(). --%>
-          <button
-            id="meeting-share-btn-topbar"
-            phx-hook="MeetingShareButton"
-            type="button"
-            aria-label={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
-            aria-pressed={to_string(@screen_share_enabled)}
-            title={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
-            data-role="meeting-screen-share"
-            data-active={to_string(@screen_share_enabled)}
-            class={[
-              "btn btn-sm btn-ghost btn-square min-h-11 hidden sm:inline-flex",
-              if(@screen_share_enabled,
-                do: "text-primary",
-                else: "text-base-content/40"
-              )
-            ]}
-          >
-            <span class="hero-computer-desktop size-4"></span>
-          </button>
+             THE SHARE BUTTON'S IDENTITY SURVIVED THE MOVE BYTE FOR
+             BYTE. `share_id="meeting-share-btn-desktop"`,
+             `share_hook="MeetingShareButton"`,
+             `share_role="meeting-screen-share"` and the mic / camera /
+             leave roles are unchanged. That is not tidiness:
+             `meeting_share_button.js` calls `pushEvent(...)` from the
+             hook, and a hook `pushEvent` IGNORES `phx-target` -- it
+             resolves against the LiveView that OWNS the element. The
+             control row is still rendered by THIS template into THIS
+             LiveView's target, so the push still lands. Had the
+             controls been re-parented under a LiveComponent instead,
+             the Share path would have died silently while every click
+             still looked fine and `mix test` saw nothing. --%>
 
           <%!-- Closed-captions toggle (task 019f3f17 stage 1). Only rendered
              when the viewer is joined (mirrors the Leave-button gate
@@ -648,18 +592,11 @@
             </button>
           <% end %>
 
-          <%= if @in_meeting do %>
-            <button
-              type="button"
-              phx-click="meeting_leave"
-              data-role="meeting-leave"
-              class="btn btn-sm btn-ghost min-h-11 gap-1.5 text-error hover:bg-error/10"
-              title="Leave meeting"
-            >
-              <span class="hero-phone-x-mark size-4"></span>
-              <span class="hidden sm:inline">Leave</span>
-            </button>
-          <% else %>
+          <%!-- Leave is `call_controls`' own button (above), gated by the
+             same `@in_meeting` it always was. Only the Join CTA is left
+             here, because there is no shared component for "you have not
+             joined yet". --%>
+          <%= if not @in_meeting do %>
             <button
               type="button"
               phx-click="meeting_join"
@@ -814,6 +751,29 @@
         >
           <span class="hero-chat-bubble-left-right size-5"></span>
         </button>
+
+        <%!-- Call-rail toggle (task 01a05b14 stage 6). Mobile-only, for
+           the same reason as its sibling above: at `lg` the rail is an
+           in-flow column and this would be a no-op.
+
+           NOT `@shell?`-gated, unlike the chat toggle. A guest has no
+           chat panel, but a guest DOES have a participant list, a
+           candidate board and a transcript — the rail is the only place
+           any of those exist now that the left rail is gone, so gating
+           this would leave a guest on a phone with a bare video grid
+           and no way to reach them. --%>
+        <button
+          type="button"
+          phx-click="toggle_call_rail"
+          aria-label="Toggle call panel"
+          aria-expanded={to_string(@call_rail_open)}
+          aria-controls="meeting-call-rail"
+          title="Toggle call panel"
+          class="btn btn-sm btn-ghost btn-square text-base-content/60 lg:hidden"
+          data-role="call-rail-toggle"
+        >
+          <span class="hero-user-group size-5"></span>
+        </button>
       </header>
 
       <%!-- ── Body: left rail + center stage + chat panel ─────────────────── --%>
@@ -858,151 +818,26 @@
         >
         </div>
 
-        <%!-- Left rail (task 019e2475-4395): sectioned participant list.
-           Hosts/humans on top with mic + speaking + host-badge cues;
-           agents below a divider with role chip + status dot.
+        <%!-- The left participant rail is GONE (task 01a05b14 stage 3).
 
-           Task 019e40f2 — desktop collapse: two presentations on
-           `>=lg`, mutually exclusive via `@participant_rail_collapsed`:
-             * expanded (default): the existing w-60 aside, with a
-               chevron-double-left button in the header that pushes
-               `toggle_participant_rail`.
-             * collapsed: a separate slim w-12 rail showing a
-               chevron-double-right + user-group icon + participant
-               count. Two-state render avoids participant-row reflow
-               and speaking-ring paint artifacts vs a width transition. --%>
-        <aside
-          :if={!@participant_rail_collapsed}
-          class="hidden w-60 flex-shrink-0 flex-col border-r border-base-300 bg-base-200/40 lg:flex"
-          data-pane="left-rail"
-        >
-          <div class="flex items-center gap-2 border-b border-base-300 px-3 py-2">
-            <span class="hero-user-group size-4 text-base-content/60"></span>
-            <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              Participants
-            </span>
-            <span class="ml-auto text-xs text-base-content/40" data-role="participant-count">
-              {length(assigns[:participants] || [])}
-            </span>
-            <button
-              type="button"
-              phx-click="toggle_participant_rail"
-              aria-label="Collapse participants pane"
-              aria-expanded="true"
-              title="Collapse"
-              class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-base-content hidden lg:inline-flex"
-              data-role="participant-rail-toggle"
-            >
-              <span class="hero-chevron-double-left size-4"></span>
-            </button>
-          </div>
-          <div class="min-h-0 flex-1 overflow-y-auto">
-            <.participant_rail
-              participants={assigns[:participants] || []}
-              agents_by_id={assigns[:agents_by_id] || %{}}
-              meeting={@meeting}
-              agent_activity={assigns[:agent_activity]}
-            />
-          </div>
-
-          <%!-- Invite an agent into the call (task 01a04c2f).
-
-             `Meetings.invite_agent/3` shipped with no caller, so agent voice
-             had no way in from the product. This is that way in.
-
-             Options come from `@invitable_agents` — the meeting space's own
-             agent roster minus whoever has actually ARRIVED in the call — so
-             the section disappears once every space agent has joined, and
-             never renders at all for a space with no agents. Each button
-             carries only the agent id; the handler resolves it back against
-             this same server-built list.
-
-             "Arrived", not "has a participant row": task 01a04e0f. An invite
-             whose `meeting_join` reached no subscriber still writes a row,
-             and excluding on the row alone made that invite unretryable. See
-             `invitable_agents/2`. `@pending_invite_agent_ids` marks the
-             agents in this list that are in exactly that state — offered
-             again, and labelled so the two cases are told apart. --%>
-          <div
-            :if={assigns[:invitable_agents] not in [nil, []]}
-            class="border-t border-base-300 px-3 py-2"
-            data-role="meeting-agent-invite"
-          >
-            <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              Invite an agent
-            </span>
-            <ul class="mt-1.5 flex flex-col gap-1">
-              <li :for={agent <- assigns[:invitable_agents]}>
-                <button
-                  type="button"
-                  phx-click="meeting_invite_agent"
-                  phx-value-agent-id={agent.id}
-                  data-role="meeting-agent-invite-button"
-                  data-agent-id={agent.id}
-                  data-invite-pending={
-                    invite_pending?(assigns[:pending_invite_agent_ids], agent.id) && "true"
-                  }
-                  aria-label={
-                    if invite_pending?(assigns[:pending_invite_agent_ids], agent.id),
-                      do:
-                        "Invite #{agent.name || agent.slug} to the meeting again — the first invite has not been answered",
-                      else: "Invite #{agent.name || agent.slug} to the meeting"
-                  }
-                  class="btn btn-ghost btn-xs w-full justify-start gap-2 font-normal text-base-content/70 hover:text-base-content"
-                >
-                  <span class="hero-plus-small size-4 shrink-0" aria-hidden="true"></span>
-                  <span class="truncate">{agent.name || agent.slug}</span>
-                  <span
-                    :if={invite_pending?(assigns[:pending_invite_agent_ids], agent.id)}
-                    class="ml-auto shrink-0 text-[0.625rem] uppercase tracking-wide text-base-content/40"
-                    data-role="meeting-agent-invite-pending"
-                  >
-                    no answer yet
-                  </span>
-                </button>
-              </li>
-            </ul>
-          </div>
-        </aside>
-
-        <%!-- Collapsed slim rail (task 019e40f2). Only renders on `>=lg`
-           AND when `@participant_rail_collapsed` is true. Carries the
-           same `data-pane="left-rail"` selector so consumers can find
-           "the left rail in either state", plus `data-pane-collapsed`
-           so tests + e2e can disambiguate. --%>
-        <aside
-          :if={@participant_rail_collapsed}
-          class="hidden w-12 flex-shrink-0 flex-col items-center border-r border-base-300 bg-base-200/40 py-2 lg:flex"
-          data-pane="left-rail"
-          data-pane-collapsed="true"
-        >
-          <button
-            type="button"
-            phx-click="toggle_participant_rail"
-            aria-label="Expand participants pane"
-            aria-expanded="false"
-            title="Expand participants"
-            class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
-            data-role="participant-rail-toggle"
-          >
-            <span class="hero-chevron-double-right size-4"></span>
-          </button>
-          <span class="hero-user-group mt-2 size-4 text-base-content/40" aria-hidden="true">
-          </span>
-          <span
-            class="mt-1 text-[10px] font-semibold text-base-content/40"
-            data-role="participant-count"
-          >
-            {length(assigns[:participants] || [])}
-          </span>
-        </aside>
+           Both `data-pane="left-rail"` presentations — the expanded
+           w-60 aside and the collapsed slim strip, mutually exclusive
+           via `@participant_rail_collapsed` — are deleted along with
+           that assign, its `toggle_participant_rail` /
+           `meeting_participant_rail_hydrate` handlers and its
+           localStorage host. Humans and agents are ONE list, and that
+           list is the right rail's People tab: `<CallShell.call_rail>`
+           renders the same `<.participant_rail>` component this block
+           used to. The `data-role="meeting-agent-invite"` picker moved
+           with it, opening from the rail's `+ Add agent` control
+           instead of from here. --%>
 
         <%!-- Center stage. Renders one of four stage-mode components keyed
            off @current_stage_mode. The `data-stage-mode` attribute drives
            renderer selection and is the e2e/test contract — keep it
            stable. --%>
         <main
-          class="relative flex min-w-0 flex-1 items-center justify-center bg-base-100 p-4"
+          class="relative flex min-h-0 min-w-0 flex-1 flex-col bg-base-100 p-4"
           data-pane="center-stage"
           data-stage-mode={@current_stage_mode}
         >
@@ -1099,17 +934,29 @@
             </span>
           </div>
 
-          <%= cond do %>
-            <% @current_stage_mode == :canvas and assigns[:meeting_canvas] -> %>
-              <%!-- Canvas mode (active canvas). Reuse the chat canvas
+          <%!-- STAGE BODY. The mode renderers live in their own
+             `flex-1` row so the control bar below can be a fixed
+             sibling rather than an overlay -- `.stage` in the approved
+             canvas is a column of exactly two things, tiles then
+             controls. The absolutely-positioned whiteboard host and
+             remote-notice above stay direct children of `<main>` so
+             they keep covering the WHOLE stage, controls included,
+             which is what they did before. --%>
+          <div
+            class="relative flex min-h-0 min-w-0 flex-1 items-center justify-center"
+            data-role="meeting-stage-body"
+          >
+            <%= cond do %>
+              <% @current_stage_mode == :canvas and assigns[:meeting_canvas] -> %>
+                <%!-- Canvas mode (active canvas). Reuse the chat canvas
                  renderer so the meeting's surface stays visually
                  consistent with how a canvas appears in chat. --%>
-              <div
-                class="flex h-full w-full flex-col items-center"
-                data-placeholder="center-stage"
-                data-canvas-id={@meeting_canvas.id}
-              >
-                <%!-- Canvas picker (task 019ff704 stage 3).
+                <div
+                  class="flex h-full w-full flex-col items-center"
+                  data-placeholder="center-stage"
+                  data-canvas-id={@meeting_canvas.id}
+                >
+                  <%!-- Canvas picker (task 019ff704 stage 3).
 
                    A LABELLED CONTROL carrying the current canvas's name,
                    opening a plain LIST. Deliberately not a tab strip:
@@ -1128,67 +975,67 @@
                    disclosure state is pure client-side presentation, and
                    keeping it out of the assigns means a peer's canvas
                    broadcast can't snap the list shut mid-scroll. --%>
-                <details
-                  :if={@meeting_canvases != []}
-                  class="group w-full max-w-3xl shrink-0 px-1 pt-1"
-                  data-role="canvas-picker"
-                  data-canvas-count={length(@meeting_canvases)}
-                >
-                  <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg border border-base-300 bg-base-200 px-3 text-left">
-                    <span
-                      class="hero-rectangle-stack size-4 shrink-0 text-base-content/60"
-                      aria-hidden="true"
-                    >
-                    </span>
-                    <span class="shrink-0 text-xs uppercase tracking-wide text-base-content/50">
-                      Canvas
-                    </span>
-                    <%!-- The name yields space; the affordance never does. --%>
-                    <span
-                      class="min-w-0 truncate text-sm font-medium text-base-content"
-                      data-role="canvas-picker-current"
-                    >
-                      {canvas_picker_label(@meeting_canvas)}
-                    </span>
-                    <span
-                      class="hero-chevron-down ml-auto size-4 shrink-0 text-base-content/60 group-open:rotate-180"
-                      aria-hidden="true"
-                    >
-                    </span>
-                  </summary>
-
-                  <ul
-                    class="mt-1 max-h-64 overflow-y-auto rounded-lg border border-base-300 bg-base-100 py-1"
-                    aria-label="Choose a canvas"
+                  <details
+                    :if={@meeting_canvases != []}
+                    class="group w-full max-w-3xl shrink-0 px-1 pt-1"
+                    data-role="canvas-picker"
+                    data-canvas-count={length(@meeting_canvases)}
                   >
-                    <li :for={c <- @meeting_canvases}>
-                      <button
-                        type="button"
-                        phx-click="select_meeting_canvas"
-                        phx-value-canvas_id={c.id}
-                        data-role="canvas-picker-option"
-                        data-canvas-id={c.id}
-                        data-selected={to_string(c.id == @meeting_canvas.id)}
-                        aria-current={c.id == @meeting_canvas.id && "true"}
-                        class={[
-                          "flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm",
-                          if(c.id == @meeting_canvas.id,
-                            do: "font-medium text-primary",
-                            else: "text-base-content"
-                          )
-                        ]}
+                    <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg border border-base-300 bg-base-200 px-3 text-left">
+                      <span
+                        class="hero-rectangle-stack size-4 shrink-0 text-base-content/60"
+                        aria-hidden="true"
                       >
-                        <span class="min-w-0 truncate">{canvas_picker_label(c)}</span>
-                        <%!-- The marker is `shrink-0 whitespace-nowrap`: a
+                      </span>
+                      <span class="shrink-0 text-xs uppercase tracking-wide text-base-content/50">
+                        Canvas
+                      </span>
+                      <%!-- The name yields space; the affordance never does. --%>
+                      <span
+                        class="min-w-0 truncate text-sm font-medium text-base-content"
+                        data-role="canvas-picker-current"
+                      >
+                        {canvas_picker_label(@meeting_canvas)}
+                      </span>
+                      <span
+                        class="hero-chevron-down ml-auto size-4 shrink-0 text-base-content/60 group-open:rotate-180"
+                        aria-hidden="true"
+                      >
+                      </span>
+                    </summary>
+
+                    <ul
+                      class="mt-1 max-h-64 overflow-y-auto rounded-lg border border-base-300 bg-base-100 py-1"
+                      aria-label="Choose a canvas"
+                    >
+                      <li :for={c <- @meeting_canvases}>
+                        <button
+                          type="button"
+                          phx-click="select_meeting_canvas"
+                          phx-value-canvas_id={c.id}
+                          data-role="canvas-picker-option"
+                          data-canvas-id={c.id}
+                          data-selected={to_string(c.id == @meeting_canvas.id)}
+                          aria-current={c.id == @meeting_canvas.id && "true"}
+                          class={[
+                            "flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm",
+                            if(c.id == @meeting_canvas.id,
+                              do: "font-medium text-primary",
+                              else: "text-base-content"
+                            )
+                          ]}
+                        >
+                          <span class="min-w-0 truncate">{canvas_picker_label(c)}</span>
+                          <%!-- The marker is `shrink-0 whitespace-nowrap`: a
                            marker must never win space from the name it
                            annotates. --%>
-                        <span
-                          :if={c.id == @meeting_canvas.id}
-                          class="ml-auto shrink-0 whitespace-nowrap text-xs text-primary"
-                        >
-                          Showing
-                        </span>
-                        <%!-- Changed-since-you-looked marker (task 019ff704
+                          <span
+                            :if={c.id == @meeting_canvas.id}
+                            class="ml-auto shrink-0 whitespace-nowrap text-xs text-primary"
+                          >
+                            Showing
+                          </span>
+                          <%!-- Changed-since-you-looked marker (task 019ff704
                            stage 4). A DOT, and that is the whole signal:
                            the list is where you go to change what you are
                            looking at, so the list is where the news
@@ -1204,77 +1051,77 @@
                            construction — `canvas_changed?/3` returns
                            false for the canvas on screen — so both may
                            claim `ml-auto` without ever competing. --%>
-                        <span
-                          :if={canvas_changed?(@canvas_seen_revisions, c, @meeting_canvas)}
-                          class="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-secondary"
-                          data-role="canvas-changed-dot"
-                          data-canvas-id={c.id}
-                        >
-                          <span class="size-2 rounded-full bg-secondary" aria-hidden="true">
+                          <span
+                            :if={canvas_changed?(@canvas_seen_revisions, c, @meeting_canvas)}
+                            class="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-secondary"
+                            data-role="canvas-changed-dot"
+                            data-canvas-id={c.id}
+                          >
+                            <span class="size-2 rounded-full bg-secondary" aria-hidden="true">
+                            </span>
+                            <span class="sr-only">Changed</span>
                           </span>
-                          <span class="sr-only">Changed</span>
-                        </span>
-                      </button>
-                    </li>
-                  </ul>
-                </details>
+                        </button>
+                      </li>
+                    </ul>
+                  </details>
 
-                <%!-- `min-h-0` on the scroll child: a flex item's default
+                  <%!-- `min-h-0` on the scroll child: a flex item's default
                    `min-height: auto` refuses to shrink below its content,
                    so without it the document pushes the picker off the
                    top instead of scrolling under it. --%>
-                <div class="flex w-full min-h-0 flex-1 justify-center overflow-y-auto">
-                  <div class="w-full max-w-3xl">
-                    <.canvas_document
-                      canvas={@meeting_canvas}
-                      dom_id_base="meeting-stage"
-                    />
+                  <div class="flex w-full min-h-0 flex-1 justify-center overflow-y-auto">
+                    <div class="w-full max-w-3xl">
+                      <.canvas_document
+                        canvas={@meeting_canvas}
+                        dom_id_base="meeting-stage"
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            <% @current_stage_mode == :canvas -> %>
-              <%!-- Canvas mode (empty state). Meeting has no canvas yet —
+              <% @current_stage_mode == :canvas -> %>
+                <%!-- Canvas mode (empty state). Meeting has no canvas yet —
                  surface a single CTA that mints one in the bound chat
                  space and assigns it as the active meeting canvas. --%>
-              <div
-                class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/50"
-                data-placeholder="center-stage"
-                data-empty-state="canvas"
-              >
-                <span class="hero-rectangle-stack size-10 text-base-content/40"></span>
-                <p class="mt-2 text-sm font-medium text-base-content/70">No canvas yet</p>
-                <p class="mt-0.5 max-w-xs text-center text-xs">
-                  Meetings work best when there's something to point at. Spin one up to start sketching.
-                </p>
-                <button
-                  type="button"
-                  phx-click="create_meeting_canvas"
-                  class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
-                  data-action="create-meeting-canvas"
+                <div
+                  class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/50"
+                  data-placeholder="center-stage"
+                  data-empty-state="canvas"
                 >
-                  <span class="hero-plus size-4"></span>
-                  <span>Create canvas</span>
-                </button>
-              </div>
-            <% @current_stage_mode == :whiteboard -> %>
-              <%!-- Whiteboard mode fallback. The real drawing surface is the
+                  <span class="hero-rectangle-stack size-10 text-base-content/40"></span>
+                  <p class="mt-2 text-sm font-medium text-base-content/70">No canvas yet</p>
+                  <p class="mt-0.5 max-w-xs text-center text-xs">
+                    Meetings work best when there's something to point at. Spin one up to start sketching.
+                  </p>
+                  <button
+                    type="button"
+                    phx-click="create_meeting_canvas"
+                    class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
+                    data-action="create-meeting-canvas"
+                  >
+                    <span class="hero-plus size-4"></span>
+                    <span>Create canvas</span>
+                  </button>
+                </div>
+              <% @current_stage_mode == :whiteboard -> %>
+                <%!-- Whiteboard mode fallback. The real drawing surface is the
                  `#meeting-whiteboard-host` overlay above; this branch is what
                  shows underneath it before the hook has anything to paint
                  (server-rendered first paint, JS disabled, or the island
                  fetch still in flight). It is NOT "coming soon" any more —
                  the `data-coming-soon="whiteboard"` marker is gone on
                  purpose, and its absence is asserted in meeting_live_test. --%>
-              <div
-                class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
-                data-placeholder="center-stage"
-                data-whiteboard-fallback
-              >
-                <span class="hero-pencil-square size-10"></span>
-                <p class="mt-2 text-sm font-medium text-base-content/70">Whiteboard</p>
-                <p class="mt-0.5 text-xs">Loading the drawing surface…</p>
-              </div>
-            <% @current_stage_mode == :screen -> %>
-              <%!-- Screen mode. The active LiveKit screen-share track (any
+                <div
+                  class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
+                  data-placeholder="center-stage"
+                  data-whiteboard-fallback
+                >
+                  <span class="hero-pencil-square size-10"></span>
+                  <p class="mt-2 text-sm font-medium text-base-content/70">Whiteboard</p>
+                  <p class="mt-0.5 text-xs">Loading the drawing surface…</p>
+                </div>
+              <% @current_stage_mode == :screen -> %>
+                <%!-- Screen mode. The active LiveKit screen-share track (any
                  participant) is attached client-side by the
                  `MeetingScreenShare` JS hook into `[data-screen-share-slot]`.
                  When nobody is sharing, the empty-state `[data-screen-share-empty]`
@@ -1284,14 +1131,14 @@
                  Room lives on `window.__livekit_room`, so flipping to
                  Gallery and back re-mounts this hook against the same
                  room and synchronously reattaches the existing track. --%>
-              <div
-                id="meeting-screen-stage"
-                phx-hook="MeetingScreenShare"
-                class="relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
-                data-placeholder="center-stage"
-                data-screen-share-active="false"
-              >
-                <%!-- Hook target: the JS attaches the <video> element here
+                <div
+                  id="meeting-screen-stage"
+                  phx-hook="MeetingScreenShare"
+                  class="relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
+                  data-placeholder="center-stage"
+                  data-screen-share-active="false"
+                >
+                  <%!-- Hook target: the JS attaches the <video> element here
                    when a screen-share track is found. Hidden until a
                    track lands so the empty-state shows through.
 
@@ -1306,91 +1153,103 @@
                    shared screen vanished. Mirrors the quick-meet slot
                    (`#meeting-screen-share-slot-desktop`, partials.ex) and the
                    local-video docks fixed in #421. --%>
-                <div
-                  data-screen-share-slot
-                  id="meeting-screen-share-slot"
-                  phx-update="ignore"
-                  class="absolute inset-0 hidden h-full w-full"
-                >
-                </div>
+                  <div
+                    data-screen-share-slot
+                    id="meeting-screen-share-slot"
+                    phx-update="ignore"
+                    class="absolute inset-0 hidden h-full w-full"
+                  >
+                  </div>
 
-                <%!-- Empty state: visible when no screen-share is live. The
+                  <%!-- Empty state: visible when no screen-share is live. The
                    hook toggles `hidden` on this node when it (de)attaches. --%>
-                <div
-                  data-screen-share-empty
-                  class="flex h-full w-full flex-col items-center justify-center text-base-content/50"
-                >
-                  <span class="hero-computer-desktop size-10 text-base-content/40"></span>
-                  <p class="mt-2 text-sm font-medium text-base-content/70">
-                    No active screen-share
-                  </p>
-                  <p class="mt-0.5 max-w-xs text-center text-xs">
-                    Anyone in the meeting can share their screen. Drop a window in to walk the team through it.
-                  </p>
-                  <%!-- task 019e420f stage 2: hook owns the click so
+                  <div
+                    data-screen-share-empty
+                    class="flex h-full w-full flex-col items-center justify-center text-base-content/50"
+                  >
+                    <span class="hero-computer-desktop size-10 text-base-content/40"></span>
+                    <p class="mt-2 text-sm font-medium text-base-content/70">
+                      No active screen-share
+                    </p>
+                    <p class="mt-0.5 max-w-xs text-center text-xs">
+                      Anyone in the meeting can share their screen. Drop a window in to walk the team through it.
+                    </p>
+                    <%!-- task 019e420f stage 2: hook owns the click so
                      `getDisplayMedia()` runs inside the user gesture.
                      Falls back to pushing `meeting_toggle_screen_share`
                      when no LiveKit room is attached. --%>
-                  <button
-                    id="meeting-share-btn-screen-cta"
-                    phx-hook="MeetingShareButton"
-                    type="button"
-                    class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
-                    data-action="start-screen-share"
-                    data-role="meeting-share-button"
-                  >
-                    <span class="hero-arrow-up-tray size-4"></span>
-                    <span>Start sharing</span>
-                  </button>
+                    <button
+                      id="meeting-share-btn-screen-cta"
+                      phx-hook="MeetingShareButton"
+                      type="button"
+                      class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
+                      data-action="start-screen-share"
+                      data-role="meeting-share-button"
+                    >
+                      <span class="hero-arrow-up-tray size-4"></span>
+                      <span>Start sharing</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
-            <% @current_stage_mode == :gallery -> %>
-              <%!-- Gallery mode. Lay out one `<.video_tile>` per human
+              <% @current_stage_mode == :gallery -> %>
+                <%!-- Gallery mode. Lay out one `<.video_tile>` per human
                  participant in a responsive grid. Agents are excluded —
                  Gallery is a face-grid and agents surface in the bottom
                  strip's right-hand section via `<.agent_tile>` (sibling
                  task 019e2475-0037). The same `MeetingVideoTile` hook
                  powers the bottom-strip tiles, so identity strings are
                  kept in sync via `gallery_identity/1`. --%>
-              <div
-                class="flex h-full w-full flex-col"
-                data-placeholder="center-stage"
-                data-gallery-tile-count={
-                  length(gallery_participants(assigns[:participants] || []))
-                }
-              >
-                <%= if gallery_participants(assigns[:participants] || []) == [] do %>
-                  <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40">
-                    <span class="hero-squares-2x2 size-10"></span>
-                    <p class="mt-2 text-sm font-medium text-base-content/70">
-                      No participants yet
-                    </p>
-                    <p class="mt-0.5 text-xs">Tiles appear as people join the meeting.</p>
-                  </div>
-                <% else %>
-                  <div
-                    class={[
-                      "grid h-full w-full auto-rows-fr gap-2 overflow-y-auto p-1 place-items-center",
-                      gallery_grid_class(
-                        gallery_cell_count(
-                          length(gallery_participants(assigns[:participants] || [])),
-                          canvas_tile_canvas(assigns) != nil
-                        ),
-                        assigns[:chrome_mode] || :shell
-                      )
-                    ]}
-                    data-gallery-grid
-                    data-gallery-grid-shape={
-                      gallery_grid_class(
-                        gallery_cell_count(
-                          length(gallery_participants(assigns[:participants] || [])),
-                          canvas_tile_canvas(assigns) != nil
-                        ),
-                        assigns[:chrome_mode] || :shell
-                      )
-                    }
-                  >
-                    <%!-- Each cell is a `[data-gallery-cell]` size container
+                <div
+                  class="flex h-full w-full flex-col"
+                  data-placeholder="center-stage"
+                  data-gallery-tile-count={
+                    length(
+                      gallery_participants(assigns[:participants] || [], @speaking_identities)
+                    )
+                  }
+                >
+                  <%= if gallery_participants(assigns[:participants] || [], @speaking_identities) == [] do %>
+                    <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40">
+                      <span class="hero-squares-2x2 size-10"></span>
+                      <p class="mt-2 text-sm font-medium text-base-content/70">
+                        No participants yet
+                      </p>
+                      <p class="mt-0.5 text-xs">Tiles appear as people join the meeting.</p>
+                    </div>
+                  <% else %>
+                    <div
+                      class={[
+                        "grid min-h-0 w-full flex-1 auto-rows-fr gap-2.5 overflow-y-auto p-1",
+                        gallery_grid_class(
+                          gallery_cell_count(
+                            length(
+                              gallery_participants(
+                                assigns[:participants] || [],
+                                @speaking_identities
+                              )
+                            ),
+                            canvas_tile_canvas(assigns) != nil
+                          ),
+                          assigns[:chrome_mode] || :shell
+                        )
+                      ]}
+                      data-gallery-grid
+                      data-gallery-grid-shape={
+                        gallery_grid_class(
+                          gallery_cell_count(
+                            length(
+                              gallery_participants(
+                                assigns[:participants] || [],
+                                @speaking_identities
+                              )
+                            ),
+                            canvas_tile_canvas(assigns) != nil
+                          ),
+                          assigns[:chrome_mode] || :shell
+                        )
+                      }
+                    >
+                      <%!-- Each cell is a `[data-gallery-cell]` size container
                        (container-type: size). The tile inside uses a
                        container query to pick its binding axis based
                        on cell aspect ratio — see the
@@ -1398,12 +1257,56 @@
                        block in `apps/platform/assets/css/app.css`. The
                        wrapper fills its grid cell so the container
                        query has dimensions to work with. --%>
-                    <div
-                      :for={p <- gallery_participants(assigns[:participants] || [])}
-                      class="relative grid h-full w-full place-items-center"
-                      data-gallery-cell
-                    >
-                      <%!-- v2 (task 019e42f6): for the LOCAL participant the
+                      <div
+                        :for={
+                          p <-
+                            gallery_participants(
+                              assigns[:participants] || [],
+                              @speaking_identities
+                            )
+                        }
+                        class="relative grid h-full w-full"
+                        data-gallery-cell
+                      >
+                        <%!-- A cell holds EITHER a human face tile or a
+                         PROMOTED AGENT tile. `gallery_participants/2`
+                         admits an agent to the grid only while its
+                         identity is in `@speaking_identities` — the design
+                         commitment that an agent "grows into a tile only
+                         while speaking". The moment it stops it falls out
+                         of this list and stops being tiled at all — the
+                         bottom agent dock was retired in task 01a05b14
+                         stage 1, so the participant rail is where a silent
+                         agent lives.
+
+                         `id_prefix="gallery-agent-tile"` is kept distinct
+                         from the component default `agent-tile` for the
+                         same reason the video tiles carry distinct
+                         prefixes: it keeps grid ids unambiguous.
+
+                         `dock?={false}` — this is a grid cell, not the
+                         short strip, so the badge keeps the non-dock corner
+                         layout it has everywhere outside the dock panel. No
+                         geometry, sizing or dock-layout change here; the
+                         speaking affordance is a `ring-*` paint only. --%>
+                        <%= if agent_participant?(p) do %>
+                          <PlatformWeb.Components.Meeting.AgentTile.agent_tile
+                            id_prefix="gallery-agent-tile"
+                            dock?={false}
+                            agent_participant={
+                              %{
+                                identity: agent_gallery_identity(p),
+                                id: p.id,
+                                name: p.display_name || "Agent"
+                              }
+                            }
+                            role={agent_role(p)}
+                            activity_state={agent_activity_state(p, assigns[:agent_activity])}
+                            avatar_url={Map.get(p, :avatar_url)}
+                            speaking?={true}
+                          />
+                        <% else %>
+                          <%!-- v2 (task 019e42f6): for the LOCAL participant the
                          tile carries `data-local-dock` so the MeetingVideoTile
                          hook skips its own camera-attach (the single
                          persistent local <video> is owned + reparented by the
@@ -1412,8 +1315,8 @@
                          appendChilds the live <video> into it so the feed
                          re-occupies the slot allocated to this user.
                          Remote tiles attach their own track unchanged. --%>
-                      <% local? = gallery_identity(p) == viewer_gallery_identity(assigns) %>
-                      <%!-- `id_prefix="gallery-tile"` (not the shared default
+                          <% local? = gallery_identity(p) == viewer_gallery_identity(assigns) %>
+                          <%!-- `id_prefix="gallery-tile"` (not the shared default
                          `video-tile`) so the gallery tile and the bottom-strip
                          tile for the SAME participant have DISTINCT DOM ids.
                          The shared id used to encourage morphdom to move/reuse
@@ -1425,22 +1328,22 @@
                          `_detach` runs cleanly on the old tile,
                          `_syncExistingTrack` rebinds the live track on the
                          freshly mounted tile in the new location. --%>
-                      <.video_tile
-                        id_prefix="gallery-tile"
-                        participant={
-                          %{
-                            identity: gallery_identity(p),
-                            name: p.display_name || "Unknown participant"
-                          }
-                        }
-                        video_track={false}
-                        audio_muted?={false}
-                        speaking?={false}
-                        avatar_url={Map.get(p, :avatar_url)}
-                        layout={:gallery}
-                        data-local-dock={local? && "true"}
-                      />
-                      <%!-- Gallery local-video dock: the persistent local
+                          <.video_tile
+                            id_prefix="gallery-tile"
+                            participant={
+                              %{
+                                identity: gallery_identity(p),
+                                name: p.display_name || "Unknown participant"
+                              }
+                            }
+                            video_track={false}
+                            audio_muted?={false}
+                            speaking?={MapSet.member?(@speaking_identities, gallery_identity(p))}
+                            avatar_url={Map.get(p, :avatar_url)}
+                            layout={:gallery}
+                            data-local-dock={local? && "true"}
+                          />
+                          <%!-- Gallery local-video dock: the persistent local
                          <video> is reparented here on gallery mode. Absolutely
                          positioned to cover the local participant's gallery
                          cell so the reparented `object-cover` video re-occupies
@@ -1451,7 +1354,7 @@
                          (the dock is empty). Only the local cell renders one.
                          See the `data-local-video-dock` contract note near
                          `#meeting-local-self-view`. --%>
-                      <%!-- Stable id + phx-update="ignore": the persistent
+                          <%!-- Stable id + phx-update="ignore": the persistent
                          local <video> is appendChild'd here by MeetingClient.
                          This dock lives inside the server `:for` over gallery
                          participants, so without `ignore` ANY LV re-render
@@ -1462,24 +1365,25 @@
                          safe. Belt-and-suspenders with the hook's `updated()`
                          re-dock (which only fires when the hook's own element
                          is in the diff). --%>
-                      <%!-- Sizing: dropped `absolute inset-0` so the dock no
+                          <%!-- Sizing: dropped `absolute inset-0` so the dock no
                          longer overlays the WHOLE cell (which made the local
                          video render extra-wide vs the 16:9-constrained remote
                          tiles). CSS in app.css matches the dock to the same
                          16:9 + container-query sizing as `.meeting-video-tile`
                          under the same `[data-gallery-cell]` parent, so the
                          dock + remote tiles are pixel-aligned. --%>
-                      <div
-                        :if={local?}
-                        id="meeting-local-video-dock-gallery"
-                        phx-update="ignore"
-                        class="pointer-events-none overflow-hidden rounded-lg"
-                        data-local-video-dock
-                        data-dock-mode="gallery"
-                      >
+                          <div
+                            :if={local?}
+                            id="meeting-local-video-dock-gallery"
+                            phx-update="ignore"
+                            class="pointer-events-none overflow-hidden rounded-lg"
+                            data-local-video-dock
+                            data-dock-mode="gallery"
+                          >
+                          </div>
+                        <% end %>
                       </div>
-                    </div>
-                    <%!-- Canvas tile: exactly ONE cell, always LAST, and only
+                      <%!-- Canvas tile: exactly ONE cell, always LAST, and only
                        when the meeting actually has a canvas. It reuses the
                        same `[data-gallery-cell]` wrapper as the face tiles so
                        the grid geometry stays uniform — the cell is a size
@@ -1497,23 +1401,164 @@
                        move/reuse the node across `set_stage_mode` swaps, and
                        the move path has historically dropped injected
                        children. --%>
-                    <div
-                      :if={canvas_tile_canvas(assigns)}
-                      class="relative grid h-full w-full place-items-center"
-                      data-gallery-cell
-                    >
-                      <PlatformWeb.Components.Meeting.CanvasTile.canvas_tile
-                        id_prefix="gallery-canvas-tile"
-                        layout={:gallery}
-                        canvas={canvas_tile_canvas(assigns)}
-                        changed?={assigns[:canvas_tile_changed?] || false}
-                        class="max-h-full max-w-full min-h-0 min-w-0"
-                      />
+                      <div
+                        :if={canvas_tile_canvas(assigns)}
+                        class="relative grid h-full w-full"
+                        data-gallery-cell
+                      >
+                        <PlatformWeb.Components.Meeting.CanvasTile.canvas_tile
+                          id_prefix="gallery-canvas-tile"
+                          layout={:gallery}
+                          canvas={canvas_tile_canvas(assigns)}
+                          changed?={assigns[:canvas_tile_changed?] || false}
+                          class="max-h-full max-w-full min-h-0 min-w-0"
+                        />
+                      </div>
+                      <%!-- GHOST CELL (task 01a05b14 stage 3). At exactly
+                       three cells the two-column grid leaves one ragged
+                       hole; the approved canvas fills it with a dimmed,
+                       empty outline so the stage reads as a call with a
+                       free seat rather than as three floating cards.
+
+                       Pinned to three deliberately. A ghost per empty
+                       slot would paint up to six dead boxes in the
+                       nine-cell grid, which is not what the drawing
+                       shows -- see `gallery_ghost_cell?/1`.
+
+                       `aria-hidden` + no text: it is decoration, not a
+                       participant, and a screen reader announcing an
+                       empty seat would be noise. It carries NO
+                       `data-gallery-cell` because that attribute marks
+                       a size container that a tile binds against, and
+                       this cell has no tile. --%>
+                      <div
+                        :if={
+                          gallery_ghost_cell?(
+                            gallery_cell_count(
+                              length(
+                                gallery_participants(
+                                  assigns[:participants] || [],
+                                  @speaking_identities
+                                )
+                              ),
+                              canvas_tile_canvas(assigns) != nil
+                            )
+                          )
+                        }
+                        class="rounded-xl border border-base-content/30 opacity-30"
+                        data-gallery-ghost-cell
+                        aria-hidden="true"
+                      >
+                      </div>
                     </div>
-                  </div>
-                <% end %>
-              </div>
-          <% end %>
+                  <% end %>
+                </div>
+            <% end %>
+          </div>
+
+          <%!-- THE CONTROL BAR (task 01a05b14 stage 2). A centred 46px
+             row at the bottom of the stage column, four pills, nothing
+             else in it -- `.ctrls` in the approved canvas. Moved here
+             from the top bar; see the note at the old site for why
+             every id and `data-role` is byte-identical and why the
+             other header controls stayed put.
+
+             `w-full` + the component's own `justify-center` is what
+             makes it CENTRED under the tiles rather than left-packed,
+             and `shrink-0` keeps it 46px when the grid above wants
+             more room. --%>
+          <CallShell.call_controls
+            data-role="meeting-stage-controls"
+            class="h-[46px] w-full shrink-0 gap-2"
+            mic_event="meeting_toggle_mic"
+            camera_event="meeting_toggle_camera"
+            share_event="meeting_toggle_screen_share"
+            leave_event="meeting_leave"
+            mic_on={@mic_enabled}
+            camera_on={@camera_enabled}
+            sharing={@screen_share_enabled}
+            show_leave={@in_meeting}
+            mic_role="meeting-mic"
+            camera_role="meeting-camera"
+            share_role="meeting-screen-share"
+            leave_role="meeting-leave"
+            share_id="meeting-share-btn-desktop"
+            share_hook="MeetingShareButton"
+          >
+            <:before_leave>
+              <%!-- Push-to-talk (task 01a03f4e stage 5, re-homed here in
+                 the merge with #910). Hold to address an agent directly;
+                 the waveform beside it is the evidence that something is
+                 actually being heard.
+
+                 `/meetings` ONLY. The quickmeet mounts the same
+                 `call_controls` without this slot because it has no
+                 push-to-talk producer -- a control that lit up there
+                 would be the exact lie the hook is written against.
+
+                 This bar renders ONCE on `/meetings` (the desktop /
+                 mobile split is the quickmeet's, in `partials.ex`), so
+                 the id stays unique without a suffix and the hook mounts
+                 on the one visible copy at every width.
+
+                 The level is read client-side by the `MeetingPushToTalk`
+                 hook from an AnalyserNode on the LOCAL LiveKit publication.
+                 There is no server-side level to render — the microphone is
+                 published to the SFU and never reaches Suite — so the hook
+                 is the only possible source and the bars below are inert
+                 until it paints them.
+
+                 `phx-update="ignore"`: the hook owns the bars' inline
+                 transforms, and a re-render (a roster change, a flash being
+                 cleared) would otherwise reset them mid-press.
+
+                 Colour comes from semantic token slots only — `primary` /
+                 `primary-content` for the armed state, `base-content` for
+                 rest, `error` for a refused press. No raw hex and no fixed
+                 tailwind palette colour: `lib/platform_web` currently
+                 contains zero of either and this is not the place to
+                 start. --%>
+              <button
+                id="meeting-push-to-talk"
+                phx-hook="MeetingPushToTalk"
+                phx-update="ignore"
+                type="button"
+                aria-label="Hold to talk to an agent"
+                title="Hold to talk to an agent"
+                data-role="meeting-push-to-talk"
+                data-pressed="false"
+                class={[
+                  "btn btn-sm btn-ghost min-h-11 gap-2 px-2",
+                  "text-base-content/70",
+                  "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
+                  "data-[rejected=no-microphone]:text-error",
+                  "data-[rejected=microphone-muted]:text-error"
+                ]}
+              >
+                <span class="hero-signal size-4" aria-hidden="true"></span>
+                <%!-- The waveform. Twelve bars, scaled on the Y axis by the
+                   hook; `origin-center` so a bar grows from its middle and
+                   the meter reads as a waveform rather than a bar chart.
+                   `currentColor` keeps them on whatever token the button is
+                   wearing, so the armed and refused states carry through
+                   without JS ever naming a colour. --%>
+                <span
+                  class="flex h-4 items-center gap-px"
+                  data-role="meeting-push-to-talk-waveform"
+                  aria-hidden="true"
+                >
+                  <span
+                    :for={_bar <- 1..12}
+                    data-ptt-bar
+                    class="h-full w-0.5 origin-center rounded-full bg-current opacity-70 transition-transform duration-75"
+                    style="transform: scaleY(0.08)"
+                  >
+                  </span>
+                </span>
+                <span class="sr-only lg:not-sr-only lg:text-xs">Hold to talk</span>
+              </button>
+            </:before_leave>
+          </CallShell.call_controls>
         </main>
 
         <%!-- Right pane: embedded chat panel (sibling 019e2475-87a8).
@@ -1542,6 +1587,139 @@
            header caption text "placeholder for intent panel (ADR 0042)"
            is also intentionally greppable for the same migration. --%>
 
+        <%!-- THE RIGHT RAIL (task 01a05b14 stage 3). `/meetings` is now
+           mounted on the shared `CallShell` — the same rail the in-chat
+           quickmeet gets in stage 6, so the two surfaces converge on one
+           implementation instead of drifting apart.
+
+           People holds `<.participant_rail>` (humans, then agents with
+           their activity badges) and the `+ Add agent` picker that used
+           to open from the dead left rail. Canvas holds
+           `<.candidate_rail>` and, through `:canvas_extra`, the intents
+           bar — MOVED here, not re-rendered, so there is exactly one of
+           each in the DOM. Transcript is stage 5's.
+
+           NOT `@shell?`-gated: the guest surface has no chat panel, so
+           gating this would leave a guest with no participant list at
+           all now that the left rail is gone.
+
+           Collapse reuses `@chat_panel_collapsed` and its existing
+           `toggle_meeting_chat_pane` handler + localStorage host. No
+           second collapse mechanism was invented; the participant-rail
+           one was deleted, not replaced. --%>
+        <%!-- Task 01a05b14 stage 6: the rail exists at EVERY width now.
+           It used to be `hidden w-[312px] … lg:flex`, i.e. People,
+           Canvas and Transcript did not render at all below `lg` —
+           stage 5 measured `[data-component="call-rail"]` at `width: 0`
+           on a 390px viewport and could not screenshot it. Below `lg`
+           it is a right-hand slide-in drawer with the same geometry as
+           the discussion drawer beside it (top-12, safe-area-aware
+           bottom edge, z-40 over the z-30 backdrop); at `lg` it reverts
+           to the in-flow 312px column, byte-for-byte the shipped
+           desktop layout.
+
+           ONE DOM node, not two. A `<lg` copy and an `lg:` copy would
+           put two `#meeting-call-rail`s, two transcript hooks and two
+           sets of candidate buttons in one document.
+
+           `@chat_panel_collapsed` now only hides it at `lg`: that
+           collapse is a DESKTOP affordance driven by a `lg:`-only
+           chevron, and letting it suppress the mobile drawer would
+           leave a phone user with a rail toggle that silently does
+           nothing because of a checkbox they flipped on a laptop. --%>
+        <div
+          class={
+            [
+              "flex flex-col",
+              "fixed top-12 right-0 z-40 w-[85vw] max-w-sm shadow-xl transition-transform duration-200 ease-out",
+              # The bottom-nav clearance is SHELL-ONLY. `--bottom-nav-height`
+              # is a shell variable and the guest layout deliberately carries
+              # no shell chrome: `meeting_live_test.exs`'s chrome-escape test
+              # refutes the literal `bottom-nav` anywhere in a guest
+              # document, and it caught this. A guest clears the safe-area
+              # inset and nothing else, because there is nothing else there.
+              if(@shell?,
+                do: "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]",
+                else: "bottom-[env(safe-area-inset-bottom)]"
+              ),
+              if(@call_rail_open, do: "translate-x-0", else: "translate-x-full"),
+              "lg:static lg:bottom-auto lg:z-auto lg:w-[312px] lg:max-w-none",
+              "lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none",
+              if(@chat_panel_collapsed, do: "lg:!hidden")
+            ]
+          }
+          data-pane="call-rail"
+          data-call-rail-open={to_string(@call_rail_open)}
+        >
+          <%!-- Mobile-only close affordance. The toggle in the top bar is
+             behind the backdrop once the drawer is open, so without this
+             the only dismissal is a backdrop tap — which is not
+             discoverable and is unreachable when the drawer is wide. --%>
+          <div class="flex flex-shrink-0 justify-end border-b border-l border-base-300 bg-base-200/40 px-2 py-1 lg:hidden">
+            <button
+              type="button"
+              phx-click="toggle_call_rail"
+              aria-label="Close call panel"
+              title="Close"
+              class="btn btn-ghost btn-xs btn-square text-base-content/60"
+              data-role="call-rail-close"
+            >
+              <span class="hero-x-mark size-4"></span>
+            </button>
+          </div>
+          <%!-- Shell-only, like every other pane-collapse affordance here:
+             a guest has no persisted pane state to collapse against. --%>
+          <div
+            :if={@shell?}
+            class="flex flex-shrink-0 justify-end border-b border-l border-base-300 bg-base-200/40 px-2 py-1"
+          >
+            <button
+              type="button"
+              phx-click="toggle_meeting_chat_pane"
+              aria-label="Collapse call rail"
+              aria-expanded="true"
+              title="Collapse"
+              class="btn btn-ghost btn-xs btn-square text-base-content/60 hidden lg:inline-flex"
+              data-role="chat-pane-toggle"
+            >
+              <span class="hero-chevron-double-right size-4"></span>
+            </button>
+          </div>
+
+          <CallShell.call_rail
+            id="meeting-call-rail"
+            class="min-h-0 flex-1"
+            width_class="w-full lg:w-[312px]"
+            active_tab={@active_meeting_tab}
+            tab_event="meeting_tab_select"
+            participants={assigns[:participants] || []}
+            agents_by_id={assigns[:agents_by_id] || %{}}
+            meeting={@meeting}
+            agent_activity={assigns[:agent_activity]}
+            invitable_agents={assigns[:invitable_agents] || []}
+            pending_invite_agent_ids={assigns[:pending_invite_agent_ids]}
+            invite_event="meeting_invite_agent"
+            candidates={@meeting_candidates}
+            candidates_closed={@meeting_candidates_closed}
+            candidate_events={@meeting_candidate_events}
+            candidate_error={@candidate_error}
+            captions_available={(assigns[:livekit_url] || "") != ""}
+          >
+            <:canvas_extra>
+              <.intents_collapse
+                :if={@intents_visible?}
+                intents={@intents}
+                open={@intents_open}
+                expanded={@intents_expanded}
+                pending_cancels={@intent_pending_cancels}
+                reason_picker_id={@intent_reason_picker_id}
+                error={@intent_error}
+                muted={@intent_muted?}
+              />
+            </:canvas_extra>
+          </CallShell.call_rail>
+        </div>
+
         <%!-- Mobile drawer backdrop. Only on `<lg` AND only when the
            drawer is open. phx-click closes the drawer. Sits below the
            drawer (z-30) but above the meeting body. Shell-only (stage 4
@@ -1553,6 +1731,22 @@
           aria-hidden="true"
           class="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm lg:hidden"
           data-role="chat-panel-backdrop"
+        >
+        </div>
+
+        <%!-- Backdrop for the call-rail drawer (task 01a05b14 stage 6).
+           A SEPARATE element from the chat one above rather than a
+           widened `:if`, because the two dismiss to different handlers
+           and the chat backdrop is `@shell?`-gated while this one is
+           not. The two drawers are mutually exclusive (see
+           `toggle_call_rail`), so at most one backdrop is ever in the
+           DOM. --%>
+        <div
+          :if={@call_rail_open}
+          phx-click="toggle_call_rail"
+          aria-hidden="true"
+          class="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm lg:hidden"
+          data-role="call-rail-backdrop"
         >
         </div>
 
@@ -1576,8 +1770,14 @@
               # overrides the shared `flex` so the wide pane disappears at
               # the desktop breakpoint while the embedded `live_render`
               # stays in the DOM (preserves chat scroll + message stream).
-              "lg:static lg:top-auto lg:bottom-auto lg:right-auto lg:z-auto lg:max-w-none lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none lg:transition-none",
-              if(@chat_panel_collapsed, do: "lg:!hidden", else: "lg:w-80")
+              # Task 01a05b14 stage 3: the discussion is a DRAWER on every
+              # width now. The desktop right column belongs to the shared
+              # call rail, and the embedded `live_render` below must stay
+              # in EXACTLY ONE DOM node, so the pane is hidden at `lg`
+              # rather than duplicated. The chat stays mounted (scroll and
+              # message stream survive) and stays reachable at every width
+              # through the top bar's `toggle_chat_panel`.
+              "lg:!hidden"
             ]
           }
           data-pane="chat-panel"
@@ -1598,21 +1798,11 @@
             <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content">
               {@meeting.name}
             </h2>
-            <%!-- Desktop-only collapse chevron (task 019e40f2). Hidden on
-               `<lg` so the mobile drawer header is byte-identical;
-               flips the wide chat pane to a slim 48px collapsed rail
-               at the right edge. --%>
-            <button
-              type="button"
-              phx-click="toggle_meeting_chat_pane"
-              aria-label="Collapse chat pane"
-              aria-expanded="true"
-              title="Collapse"
-              class="btn btn-ghost btn-xs btn-square text-base-content/60 hidden lg:inline-flex"
-              data-role="chat-pane-toggle"
-            >
-              <span class="hero-chevron-double-right size-4"></span>
-            </button>
+            <%!-- The desktop collapse chevron moved to the call rail's own
+               header (task 01a05b14 stage 3): this pane is a drawer at
+               every width now, so a `lg:`-only control inside it would be
+               unreachable. `toggle_meeting_chat_pane` is unchanged — it
+               is simply pushed from there. --%>
             <%!-- Mobile-only close button inside the drawer header. The
                top-bar toggle handles open; this gives a one-tap close
                that doesn't require backdrop-tap (e.g. for a wide
@@ -1629,36 +1819,11 @@
             </button>
           </header>
 
-          <%!-- Intents-collapse bar (task 019f70b8 stage 7). A SIBLING
-             above the chat body, not a replacement for it: the producer
-             watches the intent queue and the discussion in the same
-             rail. Absent from the DOM — not hidden — when the
-             `meeting_producer` role is unassigned (AC13); an unfilled
-             capability is not a denial, and there is nothing to reserve
-             layout space for. --%>
-          <%!-- Armed-candidate rail + stop button (task 01a03fba stage 4).
-             ABOVE the intents bar and deliberately OUTSIDE its
-             `meeting_producer` gate: the ticket's requirement is that
-             stop works from any participant's session, and the intents
-             bar vanishes for anyone without that role. Renders nothing
-             when no candidate is counting down. --%>
-          <.candidate_rail
-            candidates={@meeting_candidates}
-            closed={@meeting_candidates_closed}
-            events={@meeting_candidate_events}
-            error={@candidate_error}
-          />
-
-          <.intents_collapse
-            :if={@intents_visible?}
-            intents={@intents}
-            open={@intents_open}
-            expanded={@intents_expanded}
-            pending_cancels={@intent_pending_cancels}
-            reason_picker_id={@intent_reason_picker_id}
-            error={@intent_error}
-            muted={@intent_muted?}
-          />
+          <%!-- The candidate rail and the intents bar MOVED to the call
+             rail's Canvas pane (task 01a05b14 stage 3). They are not
+             re-rendered here: two copies would mean two sets of
+             `stop_candidate` / `toggle_intents_collapse` targets in one
+             document. Their handlers are untouched. --%>
 
           <%!-- Body wrapper: flex-1/min-h-0 lets the embedded LV consume
              the remaining vertical space *below* the header, while its
@@ -1702,23 +1867,22 @@
           </div>
         </aside>
 
-        <%!-- Collapsed slim chat rail (task 019e40f2). Mirror image of
-           the participant collapsed rail: only on `>=lg` AND when
-           `@chat_panel_collapsed`. Carries `data-pane="chat-panel"`
-           + `data-pane-collapsed="true"` so consumers can find "the
-           chat pane in either state". --%>
+        <%!-- Collapsed slim rail (task 019e40f2, re-pointed by
+           01a05b14 stage 3). Only on `>=lg` AND when
+           `@chat_panel_collapsed`. It now expands the CALL RAIL, since
+           that is what the desktop right column holds. --%>
         <aside
-          :if={@shell? and @chat_panel_collapsed}
+          :if={@chat_panel_collapsed}
           class="hidden w-12 flex-shrink-0 flex-col items-center border-l border-base-300 bg-base-200/40 py-2 lg:flex"
-          data-pane="chat-panel"
+          data-pane="call-rail"
           data-pane-collapsed="true"
         >
           <button
             type="button"
             phx-click="toggle_meeting_chat_pane"
-            aria-label="Expand chat pane"
+            aria-label="Expand call rail"
             aria-expanded="false"
-            title="Expand chat"
+            title="Expand call rail"
             class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
             data-role="chat-pane-toggle"
           >
@@ -1739,30 +1903,71 @@
          `safe-area-inset-bottom` so the iOS home indicator never overlaps
          the tiles.
 
-         Gallery-default reframe (stage 3, task 019e2d1a): the strip is
-         hidden in gallery mode so the responsive grid owns the full
-         vertical space. It re-renders in canvas / screen / whiteboard
-         modes as the compact "who's here" footer. Identity strings are
-         deliberately aligned with gallery (`"user:" <> pid` instead of
-         `"strip:user:" <> pid`) so the MeetingVideoTile hook reuses the
-         same DOM node across mode swaps and the LiveKit track stays
-         attached during the layout flip. --%>
+         Gallery-default reframe (stage 3, task 019e2d1a): the strip WAS
+         hidden entirely in gallery mode so the responsive grid owned the
+         full vertical space.
+
+         Agent dock (stage 2, task 01a059e4): that whole-footer gate meant
+         the agent dock was not in the DOM at all in the DEFAULT view, so
+         agents only ever appeared in the participant rail. The gate now
+         lives on the HUMAN section, the divider and the canvas section
+         instead — in gallery the humans are already tiles in the grid, so
+         re-rendering them here would give two DOM nodes per participant
+         (which is exactly what the differing `gallery-tile` /
+         `strip-tile` id prefixes exist to keep safe). The AGENT section
+         renders in every mode: that is the dock.
+
+         Empty-bar guard: we put the zero-agent guard on the FOOTER
+         (rather than only on the agents `<section>`) because an empty
+         `<section>` inside the footer would still leave the 96px bar and
+         its top border on screen in gallery — the bar's height is on the
+         footer, not the section. In non-gallery modes the footer keeps
+         rendering unconditionally so the "who's here" humans strip is
+         unaffected by whether any agent is present.
+
+         Dock chrome + height (stage 2 refinement): in gallery the footer is
+         a BORDERED CARD PANEL — `mx-2 mb-1 rounded-xl border` instead of a
+         full-bleed `border-t` — with the "Agents" label at its left edge,
+         vertically centred, and the tiles in a row beside it. Matches the
+         target mockup (canvas 01a05590-7076-7001-bee0-ccbb408627a4). It is
+         also TALLER (132px / 148px on lg, from 96px / 120px) for one
+         reason: the activity WORD. Stage 1 hid the word with a blanket
+         `.agent-tile-activity` CSS rule because it did not fit the 40px
+         strip tile, which defeated `AgentActivityBadge` — whose contract is
+         ring + glyph + word, never colour alone. The fix is room, not
+         suppression: the dock is tall enough, so `agent_tile/1` is passed
+         `dock?` and stops applying the suppressing class. The short
+         non-gallery strip keeps its 96px height AND the suppression.
+
+         Safe-area arithmetic, checked: the footer's own
+         `pb-[calc(0.5rem+env(safe-area-inset-bottom))]` is UNCHANGED, and
+         the captions shell's `bottom-[calc(1.75rem+env(safe-area-inset-bottom)
+         +var(--bottom-nav-height,0px))]` is `fixed`, i.e. viewport-relative
+         — it composes from those two terms and NOT from this footer's
+         height, so growing the dock cannot shift it. The bar already sat in
+         front of the 96px footer (28px < 96px), so the overlap relationship
+         is unchanged in kind, only in magnitude.
+
+         Identity strings are deliberately aligned with gallery
+         (`"user:" <> pid` instead of `"strip:user:" <> pid`) so the
+         MeetingVideoTile hook reuses the same DOM node across mode swaps
+         and the LiveKit track stays attached during the layout flip. --%>
       <footer
         :if={@current_stage_mode != :gallery}
         id="meeting-bottom-strip"
         class={[
           "flex flex-shrink-0 items-stretch gap-2 overflow-x-auto overscroll-contain",
-          "border-t border-base-300 bg-base-200/40 px-2 py-2",
-          "h-[96px] lg:h-[120px]",
-          "pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
+          "bg-base-200/40 px-2 py-2",
+          "pb-[calc(0.5rem+env(safe-area-inset-bottom))]",
+          "border-t border-base-300 h-[96px] lg:h-[120px]"
         ]}
         data-pane="bottom-strip"
         data-tile-count-humans={length(strip_humans(assigns[:participants]))}
-        data-tile-count-agents={length(strip_agents(assigns[:participants]))}
       >
         <%!-- Human section: one `<.video_tile>` per human participant.
            Empty-state stays silent so the strip doesn't churn when humans
-           join/leave. --%>
+           join/leave. Not rendered in gallery — see the footer comment:
+           the humans are already tiles in the grid. --%>
         <section
           class="flex h-full items-stretch gap-2"
           data-section="humans"
@@ -1792,7 +1997,7 @@
               }
               video_track={false}
               audio_muted?={!Map.get(participant.attention_config || %{}, "mic_on", false)}
-              speaking?={false}
+              speaking?={MapSet.member?(@speaking_identities, gallery_identity(participant))}
               avatar_url={participant.avatar_url}
               data-local-dock={local? && "true"}
             />
@@ -1815,55 +2020,6 @@
           </div>
         </section>
 
-        <%!-- Vertical divider: only when BOTH sections have at least one
-           tile. --%>
-        <div
-          :if={
-            strip_humans(assigns[:participants]) != [] and
-              strip_agents(assigns[:participants]) != []
-          }
-          class="h-full w-px flex-shrink-0 self-stretch border-l border-base-300"
-          data-role="strip-divider"
-          aria-hidden="true"
-        >
-        </div>
-
-        <%!-- Agent section: one `<.agent_tile>` per agent participant.
-
-             `accent_color` is deliberately NOT passed. The component declares
-             `attr :accent_color, :string, default: nil`, which already means
-             "no accent -> bg-base-200"; a literal `accent_color={nil}` is a
-             type error against a `:string` attr no matter what its default is.
-
-             It is not wired to a real accent here because the only accent a
-             meeting can reach is `Platform.Agents.ColorPalette.accent_for/1`
-             (via `@agents_by_id`), which returns an `oklch()` string, while
-             `agent_tile/1`'s `accent_background_style/1` accepts hex only and
-             silently discards anything else. Wiring it would therefore render
-             no accent at all until that validator is widened, which is a
-             behaviour change to the component and out of scope for a warning
-             cleanup. Recorded in
-             notes/2026-08-17-compile-warnings-baseline.md. --%>
-        <section
-          class="flex h-full items-stretch gap-2"
-          data-section="agents"
-          aria-label="Agent presence"
-        >
-          <PlatformWeb.Components.Meeting.AgentTile.agent_tile
-            :for={participant <- strip_agents(assigns[:participants])}
-            agent_participant={
-              %{
-                identity: "agent:" <> (participant.participant_id || ""),
-                id: participant.id,
-                name: participant.display_name || "Agent"
-              }
-            }
-            role={agent_role(participant)}
-            activity_state={agent_activity_state(participant, assigns[:agent_activity])}
-            avatar_url={participant.avatar_url}
-          />
-        </section>
-
         <%!-- Canvas section: the same tile as the gallery grid, on the
            agent side of the strip, so the canvas stays visible in
            canvas / screen / whiteboard modes too. Its own `<section>`
@@ -1880,10 +2036,7 @@
           aria-label="Meeting canvas"
         >
           <div
-            :if={
-              strip_humans(assigns[:participants]) != [] or
-                strip_agents(assigns[:participants]) != []
-            }
+            :if={strip_humans(assigns[:participants]) != []}
             class="h-full w-px flex-shrink-0 self-stretch border-l border-base-300"
             data-role="strip-canvas-divider"
             aria-hidden="true"

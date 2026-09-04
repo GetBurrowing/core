@@ -812,6 +812,248 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
     end
   end
 
+  # A LIVE `meetings` row bound to `space`. Deliberately explicit in the
+  # tests that want one: see the no-meetings-row test below for why a
+  # quickmeet join does NOT create one.
+  defp seed_live_meeting(space) do
+    {:ok, project} =
+      %Platform.Tasks.Project{}
+      |> Platform.Tasks.Project.changeset(%{
+        name: "Quickmeet Project #{System.unique_integer([:positive])}",
+        slug: "quickmeet-project-#{System.unique_integer([:positive])}",
+        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+      })
+      |> Platform.Repo.insert()
+
+    meeting_id = Platform.Types.UUIDv7.generate()
+
+    {:ok, meeting} =
+      %Platform.Meetings.Meeting{id: meeting_id}
+      |> Platform.Meetings.Meeting.changeset(%{
+        project_id: project.id,
+        chat_space_id: space.id,
+        slug: "quickmeet-#{System.unique_integer([:positive])}",
+        name: "Quickmeet",
+        livekit_room_name: "meeting-#{meeting_id}",
+        status: "live"
+      })
+      |> Platform.Repo.insert()
+
+    meeting
+  end
+
+  # ── Call-shell data plane (task 01a05b14 stage 6) ────────────────────────
+  #
+  # THE STAGE'S REAL WORK. Before this, `attach/2` assigned no meeting
+  # id, no agent activity and no candidates — so the quickmeet could not
+  # have rendered a rail whatever its markup said. These tests name the
+  # data, not the markup; `partials_meeting_panel_test.exs` covers what
+  # the rail does with it.
+  describe "join hydrates the call shell (stage 6)" do
+    setup [:put_livekit_env]
+
+    test "join assigns the live meeting id, an AgentActivity and a candidate board" do
+      space = create_space()
+      alice = create_user("Dev Alice")
+
+      socket =
+        build_socket(%{
+          user_id: alice.id,
+          active_space: space,
+          current_participant: nil,
+          in_meeting: false,
+          meeting_participants: [],
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false,
+          quickmeet_meeting_id: nil,
+          quickmeet_meeting: nil,
+          agent_activity: nil,
+          agents_by_id: %{},
+          meeting_candidates: nil,
+          meeting_candidates_closed: nil,
+          meeting_candidate_events: nil,
+          active_meeting_tab: "people"
+        })
+
+      meeting = seed_live_meeting(space)
+
+      joined = MeetingHooks.join(socket)
+
+      assert joined.assigns.in_meeting == true
+      assert joined.assigns.quickmeet_meeting_id == meeting.id
+      assert joined.assigns.quickmeet_meeting.id == meeting.id
+
+      assert %Platform.Meetings.AgentActivity{} = joined.assigns.agent_activity
+      assert is_map(joined.assigns.agents_by_id)
+      assert is_list(joined.assigns.meeting_candidates)
+      assert is_list(joined.assigns.meeting_candidates_closed)
+      assert is_map(joined.assigns.meeting_candidate_events)
+    end
+
+    test "leaving clears the meeting id and the hydrated rail state" do
+      space = create_space()
+      alice = create_user("Dev Alice")
+
+      socket =
+        build_socket(%{
+          user_id: alice.id,
+          active_space: space,
+          current_participant: nil,
+          in_meeting: false,
+          meeting_participants: [],
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false,
+          quickmeet_meeting_id: nil,
+          quickmeet_meeting: nil,
+          quickmeet_rail_open: true,
+          agent_activity: nil,
+          agents_by_id: %{},
+          meeting_candidates: nil,
+          meeting_candidates_closed: nil,
+          meeting_candidate_events: nil,
+          active_meeting_tab: "people"
+        })
+
+      seed_live_meeting(space)
+
+      joined = MeetingHooks.join(socket)
+      assert is_binary(joined.assigns.quickmeet_meeting_id)
+
+      left = MeetingHooks.reset_state(joined)
+
+      assert left.assigns.in_meeting == false
+      assert left.assigns.quickmeet_meeting_id == nil
+      assert left.assigns.quickmeet_meeting == nil
+      # The `<lg` sheet comes back down; a sheet left up would sit over
+      # the chat the user just returned to.
+      assert left.assigns.quickmeet_rail_open == false
+      assert left.assigns.meeting_candidates == []
+    end
+
+    # DOCUMENTED, NOT PAPERED OVER. A quickmeet join calls
+    # `ensure_room/1`, which writes a `meeting_rooms` row — NOT a
+    # `meetings` row. `meetings` rows are created by `create_meeting/1`
+    # (the `/meetings` path). So a chat space whose call came up purely
+    # from the "Meet" button has no meeting id, and Canvas, Transcript
+    # and the agent-activity badges have nothing to read from.
+    #
+    # The People pane still works, because it is fed by
+    # `:meeting_participants`, which the join populates directly. That
+    # is the honest behaviour and it is asserted here rather than being
+    # hidden behind a fixture that always seeds a meeting: creating a
+    # `meetings` row from a chat join would mint a slug, an inbox row
+    # and a `room_finished` end-path, which is a lifecycle change and
+    # not a rail wiring change.
+    test "a join with no live meetings row leaves the shell empty but keeps People" do
+      space = create_space()
+      alice = create_user("Dev Alice")
+
+      socket =
+        build_socket(%{
+          user_id: alice.id,
+          active_space: space,
+          current_participant: nil,
+          in_meeting: false,
+          meeting_participants: [],
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false,
+          quickmeet_meeting_id: nil,
+          quickmeet_meeting: nil,
+          agent_activity: nil,
+          agents_by_id: %{},
+          meeting_candidates: [],
+          meeting_candidates_closed: [],
+          meeting_candidate_events: %{},
+          active_meeting_tab: "people"
+        })
+
+      refute Meetings.get_live_meeting_for_space(space.id)
+
+      joined = MeetingHooks.join(socket)
+
+      assert joined.assigns.in_meeting == true
+      assert joined.assigns.quickmeet_meeting_id == nil
+
+      names = Enum.map(joined.assigns.meeting_participants, & &1.display_name)
+      assert "Dev Alice" in names
+    end
+  end
+
+  describe "apply_agent_activity/2 (stage 6)" do
+    test "folds a signal for THIS meeting into :agent_activity" do
+      meeting_id = Ecto.UUID.generate()
+      agent_id = Ecto.UUID.generate()
+
+      socket =
+        build_socket(%{
+          quickmeet_meeting_id: meeting_id,
+          agent_activity: Platform.Meetings.AgentActivity.new()
+        })
+
+      updated =
+        MeetingHooks.apply_agent_activity(socket, %{
+          meeting_id: meeting_id,
+          agent_id: agent_id,
+          signal: :computing,
+          active?: true
+        })
+
+      assert Platform.Meetings.AgentActivity.for_agent(updated.assigns.agent_activity, agent_id) ==
+               :computing
+    end
+
+    test "a signal for a DIFFERENT meeting is ignored" do
+      socket =
+        build_socket(%{
+          quickmeet_meeting_id: Ecto.UUID.generate(),
+          agent_activity: Platform.Meetings.AgentActivity.new()
+        })
+
+      agent_id = Ecto.UUID.generate()
+
+      updated =
+        MeetingHooks.apply_agent_activity(socket, %{
+          meeting_id: Ecto.UUID.generate(),
+          agent_id: agent_id,
+          signal: :computing,
+          active?: true
+        })
+
+      assert Platform.Meetings.AgentActivity.for_agent(updated.assigns.agent_activity, agent_id) ==
+               :idle
+    end
+
+    # THE GUARD AGAINST DOUBLE-FOLDING. `MeetingLive` mounts this module
+    # AND keeps its own top-level clause for `{:agent_activity, …}`. A
+    # socket with no `:quickmeet_meeting_id` — which is every
+    # `/meetings` socket, because `join_call_shell/2` refuses to set it
+    # when `:meeting` is assigned — must pass the message through
+    # untouched.
+    test "a socket that never joined a quickmeet is left alone" do
+      agent_id = Ecto.UUID.generate()
+
+      socket =
+        build_socket(%{
+          quickmeet_meeting_id: nil,
+          agent_activity: Platform.Meetings.AgentActivity.new()
+        })
+
+      updated =
+        MeetingHooks.apply_agent_activity(socket, %{
+          meeting_id: Ecto.UUID.generate(),
+          agent_id: agent_id,
+          signal: :computing,
+          active?: true
+        })
+
+      assert Platform.Meetings.AgentActivity.for_agent(updated.assigns.agent_activity, agent_id) ==
+               :idle
+    end
+  end
+
   # ── Toggle helpers broadcast media_state (stage 2) ────────────────────────
 
   describe "toggle_mic/1 broadcasts authoritative media state" do

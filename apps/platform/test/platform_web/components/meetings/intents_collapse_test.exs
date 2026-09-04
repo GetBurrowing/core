@@ -12,6 +12,9 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapseTest do
   """
   use ExUnit.Case, async: true
 
+  import Phoenix.Component
+  import Phoenix.LiveViewTest
+
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentQueue
   alias PlatformWeb.Components.Meetings.IntentsCollapse, as: Bar
@@ -352,4 +355,54 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapseTest do
   end
 
   defp intent(status), do: %{id: Ecto.UUID.generate(), status: status}
+
+  describe "intents_collapse/1 — pending_cancels default" do
+    # REGRESSION. `pending_cancels` carried `default: nil` while the
+    # function body tried to repair it with `assign_new/3`. An attr
+    # default makes the key PRESENT-and-nil, so `assign_new/3` never
+    # fired, `@pending_cancels` stayed nil, and the `MapSet.member?/2`
+    # in the `intent_row` loop raised FunctionClauseError. It was latent
+    # only because the single call site always passed the attr.
+    #
+    # The `intents` list is NON-EMPTY on purpose: with `intents == []`
+    # the `:for` never runs, `MapSet.member?/2` is never called, and the
+    # test passes against the broken version — vacuous.
+    test "renders without the attr when there is an intent to loop over" do
+      assigns = %{intents: [row_intent()]}
+
+      html =
+        rendered_to_string(~H"""
+        <Bar.intents_collapse intents={@intents} />
+        """)
+
+      # Proof the crashing line was reached: the row rendered.
+      assert html =~ ~s(data-role="intent-row")
+      assert html =~ ~s(data-pending-cancel="false")
+    end
+
+    test "still honours an explicit pending_cancels set" do
+      intent = row_intent()
+      assigns = %{intents: [intent], pending: MapSet.new([intent.id])}
+
+      html =
+        rendered_to_string(~H"""
+        <Bar.intents_collapse intents={@intents} pending_cancels={@pending} />
+        """)
+
+      assert html =~ ~s(data-pending-cancel="true")
+      assert html =~ ~s(data-role="intent-pending-cancel-chip")
+    end
+  end
+
+  defp row_intent do
+    %{
+      id: Ecto.UUID.generate(),
+      status: :queued,
+      classified_intent: "summarise the thread",
+      chunk_excerpt: "…can you summarise…",
+      target_agent_slug: "helga",
+      target_role: nil,
+      confidence: 0.91
+    }
+  end
 end

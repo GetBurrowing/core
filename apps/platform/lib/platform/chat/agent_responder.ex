@@ -148,10 +148,7 @@ defmodule Platform.Chat.AgentResponder do
     space_id = context.message.space_id
     agent_participant_id = context.agent_participant.id
 
-    ChatPubSub.broadcast(
-      space_id,
-      {:agent_typing, %{space_id: space_id, participant_id: agent_participant_id, typing: true}}
-    )
+    ChatPubSub.broadcast_agent_typing(space_id, agent_participant_id, true)
 
     result =
       with {:ok, response} <-
@@ -177,10 +174,7 @@ defmodule Platform.Chat.AgentResponder do
           :ok
       end
 
-    ChatPubSub.broadcast(
-      space_id,
-      {:agent_typing, %{space_id: space_id, participant_id: agent_participant_id, typing: false}}
-    )
+    ChatPubSub.broadcast_agent_typing(space_id, agent_participant_id, false)
 
     result
   end
@@ -193,10 +187,7 @@ defmodule Platform.Chat.AgentResponder do
     runtime_id = context.agent.runtime_id
 
     # Show typing indicator immediately while the external runtime processes
-    ChatPubSub.broadcast(
-      space_id,
-      {:agent_typing, %{space_id: space_id, participant_id: agent_participant_id, typing: true}}
-    )
+    ChatPubSub.broadcast_agent_typing(space_id, agent_participant_id, true)
 
     if is_nil(runtime_id) do
       Logger.warning("[AgentResponder] external agent #{context.agent.id} has no runtime_id")
