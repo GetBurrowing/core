@@ -148,12 +148,91 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert Platform.Federation.RuntimePresence.online?(ctx.runtime.runtime_id)
     end
 
+    test "the 30s retrack preserves connected_at and only advances last_seen_at", ctx do
+      # The self-heal above must not cost `connected_at` its meaning. When the
+      # retrack overwrites the whole entry, `connected_at` becomes a rolling
+      # 30-second clock: never older than one tick for ANY online runtime, so it
+      # can no longer distinguish a fresh session from a month-old one. Note
+      # that "connected_at is present and recent" passes either way — the
+      # assertion that separates them is that it does not MOVE.
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      before = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id)
+      assert %{connected_at: %DateTime{}, last_seen_at: %DateTime{}} = before
+
+      # Two full retrack cycles. The sleep is what makes the difference
+      # observable: `DateTime.utc_now/0` twice inside one microsecond would
+      # compare `:eq` for reasons that have nothing to do with the fix.
+      for _ <- 1..2 do
+        Process.sleep(10)
+        send(joined_socket.channel_pid, :presence_retrack)
+        _ = :sys.get_state(joined_socket.channel_pid)
+      end
+
+      later = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id)
+
+      # The session start is not a rolling clock.
+      assert DateTime.compare(later.connected_at, before.connected_at) == :eq
+
+      # ...and the retrack still ran: liveness moved forward. Without this half
+      # a retrack that did nothing at all would pass.
+      assert DateTime.compare(later.last_seen_at, before.last_seen_at) == :gt
+    end
+
+    test "a genuine re-join DOES move connected_at", ctx do
+      # The counterpart to the test above: `connected_at` is pinned against the
+      # 30s tick, not frozen. A real new session must still reset it, otherwise
+      # the field is merely stale rather than merely rolling.
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      first_session = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id)
+
+      # `close/1` shuts the channel down with `{:shutdown, :closed}`, and
+      # `subscribe_and_join` linked it to this process — untrapped, that EXIT
+      # takes the test with it.
+      Process.flag(:trap_exit, true)
+
+      # Wait for terminate/2 to have actually run — it untracks, and racing it
+      # against the second join would delete the entry we are about to read.
+      ref = Process.monitor(joined_socket.channel_pid)
+      close(joined_socket)
+      assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 5_000
+      refute Platform.Federation.RuntimePresence.online?(ctx.runtime.runtime_id)
+
+      {:ok, rejoin_socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, _rejoined} =
+        subscribe_and_join(rejoin_socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      second_session = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id)
+
+      assert DateTime.compare(second_session.connected_at, first_session.connected_at) == :gt
+    end
+
     test "join drains this runtime's dead letters, and the 30s retrack does NOT", ctx do
-      # There are exactly two `RuntimePresence.track/1` call sites in this
-      # module: join/3 and the periodic `:presence_retrack` self-heal. Only the
-      # first is a reconnect. Hooking the second would re-drain every connected
-      # runtime twice a minute forever, so this test pins BOTH halves — a
-      # drain-on-join assertion alone would still pass with the hook in the
+      # There are exactly two presence call sites in this module: `track/1` in
+      # join/3 and `touch/1` in the periodic `:presence_retrack` self-heal. Only
+      # the first is a reconnect. Hooking the second would re-drain every
+      # connected runtime twice a minute forever, so this test pins BOTH halves
+      # — a drain-on-join assertion alone would still pass with the hook in the
       # wrong place.
       first = seed_dead_letter(ctx, 1)
 

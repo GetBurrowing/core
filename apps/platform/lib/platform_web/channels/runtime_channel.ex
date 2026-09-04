@@ -101,9 +101,8 @@ defmodule PlatformWeb.RuntimeChannel do
       # Drain anything that was dead-lettered while this runtime was away
       # (task 019fa56b-ca2d stage 3). A `cast`, so join/3 never blocks on a
       # Repo read — and deliberately here in join/3 rather than beside the
-      # OTHER `RuntimePresence.track/1` call, which is the 30-second
-      # `:presence_retrack` self-heal. Scheduling a drain there would re-drain
-      # every connected runtime twice a minute, forever.
+      # 30-second `:presence_retrack` self-heal. Scheduling a drain there would
+      # re-drain every connected runtime twice a minute, forever.
       Platform.Federation.DeadLetterReplay.schedule(runtime_id)
 
       # Push capabilities after join completes (push/3 not allowed during join/3)
@@ -180,7 +179,13 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   def handle_info(:presence_retrack, socket) do
-    RuntimePresence.track(socket.assigns.runtime_id)
+    # `touch/1`, not `track/1`: this fires every 30s for the life of the
+    # connection, and `track/1` is an unconditional whole-entry overwrite that
+    # would rewrite `connected_at` on every tick — making it a rolling 30s
+    # clock rather than the session start. `touch/1` upserts when the entry is
+    # missing (the Agent-crash case this self-heal exists for) and otherwise
+    # advances only `last_seen_at`. Task 01a06d03-e5d5-7001-aba3-703cfd232b9d.
+    RuntimePresence.touch(socket.assigns.runtime_id)
     schedule_presence_retrack()
     {:noreply, socket}
   end
