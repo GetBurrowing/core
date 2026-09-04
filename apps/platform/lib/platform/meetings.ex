@@ -5837,7 +5837,23 @@ defmodule Platform.Meetings do
               true ->
                 case IntentRuntimeAdapter.resolve_target(agent) do
                   {:ok, %{topic: topic}} ->
+                    # NO `RuntimePresence.prove(_, "meeting_transcript")` here,
+                    # and that omission is load-bearing. This is a frame core
+                    # SENT. Whether the plugin on the far end has the
+                    # `meeting_transcript` listener at all (it was added in
+                    # `63229eb`; a build one commit earlier drops the frame in
+                    # silence) is precisely the unknown, and a broadcast core
+                    # made cannot answer it. Recording a proof here would
+                    # report every runtime as able to hear meetings — the
+                    # inversion this whole mechanism exists to remove.
+                    #
+                    # There is no inbound transcript ack frame today, so the
+                    # `meeting_transcript` cell honestly reads `never`. That is
+                    # not a stub: it is the literal record of what core has
+                    # observed. Adding a plugin-side ack is a
+                    # `claude-code-suite-channel` change.
                     :ok = PlatformWeb.Endpoint.broadcast(topic, "meeting_transcript", payload)
+
                     {[agent.id | ok], skip}
 
                   {:error, reason} ->

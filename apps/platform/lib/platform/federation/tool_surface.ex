@@ -70,6 +70,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Repo
 
   alias Platform.Federation.ResultBound
+  alias Platform.Federation.RuntimePresence
   alias Platform.Federation.TaskAttrs
 
   import Ecto.Query, only: [from: 2]
@@ -176,12 +177,12 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "federation_status",
         description:
-          "Check the connection status of all registered agent runtimes. Shows which runtimes are online, when they connected, and when they last sent a message.",
+          "Check the status of all registered agent runtimes. Reports three groups of facts that routinely disagree: connection (is a socket up), build (which code the process is running), and proven (which capabilities core has actually OBSERVED this runtime exercise).",
         parameters: %{},
         returns:
-          "Array of runtime status objects with runtime_id, agent_name, online, connected_at, last_seen_at, last_connected_at",
+          "Array of runtime status objects with runtime_id, agent_name, agent_slug; connection: online, connected_at, last_seen_at, last_connected_at; build: client_build (\"unknown\" if the client never told us), process_started_at; proven: {capability => ISO8601 timestamp or \"never\"}; declared_features",
         limitations:
-          "Only shows active runtimes. Presence data is in-memory and resets on restart.",
+          "Only shows active runtimes. `online` means the socket is live and nothing more — it says nothing about which build is loaded or what that build can do. Presence and `proven` are in-memory and reset on restart, so `never` after a core restart means \"not since restart\". `declared_features` is the runtime's own claim and cannot discriminate builds that ship a capability from builds that do not; read `client_build` and `proven` instead.",
         when_to_use:
           "When you need to diagnose connectivity issues or verify which agent runtimes are currently reachable"
       }
@@ -6593,10 +6594,24 @@ defmodule Platform.Federation.ToolSurface do
           runtime_id: r.runtime_id,
           agent_name: r.agent_name,
           agent_slug: r.agent_slug,
+
+          # 1. Connection. `online` is the socket and only the socket.
           online: r.online,
           connected_at: format_datetime(r.connected_at),
           last_seen_at: format_datetime(r.last_seen_at),
-          last_connected_at: format_datetime(r.last_connected_at)
+          last_connected_at: format_datetime(r.last_connected_at),
+
+          # 2. Build. Independent of connection: a runtime that is offline
+          # right now still reports the build from its last handshake.
+          client_build: format_build(r.client_build),
+          process_started_at: format_datetime(r.process_started_at),
+
+          # 3. Proven — what core observed, `never` where it observed nothing.
+          proven: format_proven(r.proven),
+
+          # 4. Declared — what the runtime asserted. Last, after everything
+          # core measured itself.
+          declared_features: r.declared_features
         }
       end)
 
@@ -12697,6 +12712,45 @@ defmodule Platform.Federation.ToolSurface do
       scheduled_start_at: format_datetime(meeting.scheduled_start_at),
       scheduled_end_at: format_datetime(meeting.scheduled_end_at)
     }
+  end
+
+  # A runtime that has not told us its build reports the literal "unknown".
+  #
+  # Not nil, not "", not "-". A blank cell reads as a rendering gap and gets
+  # skipped; "unknown" is a positive statement that core asked and was not
+  # told, which is a different and reportable fact from any sha. Inventing a
+  # sha here, or borrowing `version`, would be worse than saying nothing.
+  defp format_build(build) when is_binary(build) and build != "", do: build
+  defp format_build(_), do: "unknown"
+
+  # Render the observed-capability map, with a cell for every capability the
+  # surface always reports.
+  #
+  # A capability core has never observed renders as the literal "never" rather
+  # than being omitted. THE EMPTY CELL IS THE INFORMATION: the whole ticket
+  # exists because a runtime looked healthy while silently lacking a handler,
+  # and a `transcript never` row against a green dot says so immediately.
+  # Omitting unobserved capabilities would restore exactly that blind spot.
+  #
+  # Observations recorded under names outside `reported_capabilities/0` are
+  # merged in rather than filtered out — core saw them, so it reports them.
+  defp format_proven(proven) do
+    always_reported =
+      RuntimePresence.reported_capabilities()
+      |> Map.new(&{&1, "never"})
+
+    observed =
+      (proven || %{})
+      |> Enum.flat_map(fn
+        {capability, %DateTime{} = at} when is_binary(capability) ->
+          [{capability, format_datetime(at)}]
+
+        _ ->
+          []
+      end)
+      |> Map.new()
+
+    Map.merge(always_reported, observed)
   end
 
   defp format_datetime(nil), do: nil

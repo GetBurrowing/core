@@ -306,4 +306,40 @@ defmodule Platform.Meetings.TranscriptDeliveryTest do
     assert {:ok, %{delivered: [], skipped: [{^agent_id, :no_runtime}]}} =
              Meetings.deliver_transcript_segment(updated, stored)
   end
+
+  # Task 01a06d01 stage 2 — the discriminating case for `RuntimePresence.proven`.
+  #
+  # The client here DECLARES `meeting_transcript` in `client_info.features`
+  # and core successfully broadcasts a transcript frame to it. Neither of
+  # those is evidence: the declaration is a claim by the process under
+  # suspicion, and the broadcast is a frame core SENT. Whether the plugin on
+  # the far end has the listener at all (added in `63229eb`; the commit
+  # before it drops the frame in silence, with a byte-identical
+  # `client_info`) is unobservable from this side, so the proof must stay
+  # absent and the cell must read `never`.
+  #
+  # This is the assertion that kills the tempting "just prove it at the
+  # broadcast" change, which would report every connected runtime as able to
+  # hear meetings — the exact inversion this mechanism exists to remove.
+  test "delivering a transcript records NO proof, even when the client declared the feature" do
+    owner = user!()
+    %{agent: agent, runtime: brain, raw_token: raw_token} = brain!(owner, agent!())
+    _client = join_client!(brain, raw_token, ["system_event_prompt", "meeting_transcript"])
+
+    ctx = seated_room!([agent])
+    transcript = transcript!(ctx)
+    topic = IntentRuntimeAdapter.runtime_topic(brain.runtime_id)
+    :ok = PlatformWeb.Endpoint.subscribe(topic)
+
+    assert {:ok, %Transcript{}} = Meetings.append_segment(transcript.id, segment())
+
+    # The frame really did go out — without this the absence below would hold
+    # for the boring reason that nothing happened at all.
+    assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: @event}, 500
+
+    proven = Platform.Federation.RuntimePresence.status(brain.runtime_id).proven
+
+    refute Map.has_key?(proven, "meeting_transcript")
+    assert proven == %{}
+  end
 end

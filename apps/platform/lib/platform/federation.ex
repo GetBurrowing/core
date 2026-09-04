@@ -650,8 +650,25 @@ defmodule Platform.Federation do
   @doc """
   Returns the federation health status for all active runtimes.
 
-  Combines DB records with live presence data to show connectivity,
-  connected_at, last_seen_at, and historical last_connected_at.
+  Combines DB records with live presence data. Each row carries three groups
+  of facts that are reported SEPARATELY because they routinely disagree:
+
+    * connection — `online`, `connected_at`, `last_seen_at`,
+      `last_connected_at`. Whether a socket is up.
+    * build — `client_build`, `process_started_at`. Which code the process is
+      running. Read from the DB row, so an OFFLINE runtime still reports the
+      build it declared on its last handshake.
+    * proven — `%{capability => DateTime}` of what core actually OBSERVED
+      arrive from this runtime, `%{}` when offline or nothing was observed.
+
+  `declared_features` comes last and is what the runtime CLAIMED. It is
+  included for provenance, not because it answers anything: measured across
+  the capability boundary that motivated this, the plugin builds either side
+  of `63229eb` send an identical feature list.
+
+  The three groups are never collapsed into one another. A runtime can be
+  connected for twenty seconds, running six-day-old code, and have never
+  proven the one capability someone needs — that sentence is the deliverable.
   """
   def federation_status do
     runtimes = Repo.all(from(r in AgentRuntime, where: r.status == "active"))
@@ -679,10 +696,36 @@ defmodule Platform.Federation do
         agent_slug: agent && agent.slug,
         agent_id: runtime.agent_id,
         status: runtime.status,
+
+        # Connection facts. `online` is the socket and ONLY the socket: it goes
+        # true the instant a process completes a handshake, whatever code that
+        # process is running. Build age and proof state are deliberately NOT
+        # folded in — a green dot that already accounted for staleness would
+        # hide the disagreement between these three groups, and that
+        # disagreement is what this surface exists to show.
         online: online_info != nil,
         connected_at: online_info && online_info.connected_at,
         last_seen_at: online_info && online_info.last_seen_at,
-        last_connected_at: runtime.last_connected_at
+        last_connected_at: runtime.last_connected_at,
+
+        # Build facts, read off the DB row and therefore independent of
+        # liveness: an offline runtime still reports the build it declared on
+        # its last handshake. Both are nil when the client has not told us —
+        # never a fabricated sha, never a `utc_now/0` stand-in.
+        client_build: AgentRuntime.client_build(runtime),
+        process_started_at: AgentRuntime.client_started_at(runtime),
+
+        # What core OBSERVED: %{capability => DateTime}. `%{}` when the runtime
+        # is offline (presence holds no entry) or when nothing has been proven
+        # this session. Rendering an absent capability is the caller's job.
+        proven: (online_info && Map.get(online_info, :proven, %{})) || %{},
+
+        # What the runtime CLAIMED. Last on purpose, and below the two groups
+        # above: everything before this was measured by core, this was asserted
+        # by the process whose competence is in question. It also cannot
+        # discriminate the boundary this ticket was filed from — the plugin
+        # builds either side of `63229eb` declare an identical feature list.
+        declared_features: AgentRuntime.client_features(runtime)
       }
     end)
   end

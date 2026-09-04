@@ -32,29 +32,58 @@
           No active runtimes registered.
         </div>
       <% else %>
-        <div class="rounded-lg border border-base-300 overflow-hidden">
+        <%!--
+          Connection, build and proof are THREE cells that are allowed to
+          disagree (task 01a06d01 stage 4, per the attached design canvas).
+          `Connected` and `Build` are adjacent so a row can visibly say
+          "connected 20s ago, running for six days"; `Last proven` reports
+          events core observed, never settings.
+
+          `overflow-x-auto` rather than `overflow-hidden` so the widened row
+          scrolls at 375px instead of clipping the proof column off. `Runtime
+          ID` moved from second place to just before `Actions` for the same
+          reason and nothing else: it is the widest column on the row, and in
+          second place it pushed all three of the canvas's facts past the
+          right edge of a 375px viewport. Nothing is hidden — the whole row is
+          still reachable by scrolling — but the columns that lead are now the
+          ones the canvas says have to be read together.
+        --%>
+        <div class="rounded-lg border border-base-300 overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
               <tr>
                 <th class="px-4 py-2 text-left">Agent</th>
-                <th class="px-4 py-2 text-left">Runtime ID</th>
                 <th class="px-4 py-2 text-left">Status</th>
-                <th class="px-4 py-2 text-left">Connected At</th>
+                <th class="px-4 py-2 text-left">Connected</th>
+                <th class="px-4 py-2 text-left">Build</th>
+                <%!--
+                  `Last proven`, never `Capabilities`: this cell is a log, not
+                  a verdict.
+                --%>
+                <th class="px-4 py-2 text-left">Last proven</th>
                 <th class="px-4 py-2 text-left">Last Seen</th>
                 <th class="px-4 py-2 text-left">Last Connected (DB)</th>
+                <th class="px-4 py-2 text-left">Runtime ID</th>
                 <th class="px-4 py-2 text-left">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-base-200">
               <%= for runtime <- @runtimes do %>
-                <tr class="hover:bg-base-100">
-                  <td class="px-4 py-3 font-medium">
+                <tr id={"runtime-row-#{runtime.runtime_id}"} class="hover:bg-base-100">
+                  <%!--
+                    Public Sans 600 / 13px, and it never truncates: this is
+                    the one string that says which process you are about to
+                    restart.
+                  --%>
+                  <td class="px-4 py-3 align-top text-[13px] font-semibold whitespace-nowrap">
                     {runtime.agent_name || runtime.agent_slug || "(unlinked)"}
                   </td>
-                  <td class="px-4 py-3 font-mono text-xs text-base-content/60">
-                    {runtime.runtime_id}
-                  </td>
-                  <td class="px-4 py-3">
+                  <%!--
+                    `--color-success` marks that the socket is live and ONLY
+                    that. It must never grow to mean "healthy" or "capable" —
+                    that conflation is the whole ticket.
+                  --%>
+                  <td class="px-4 py-3 align-top">
                     <%= if runtime.online do %>
                       <span class="inline-flex items-center gap-1.5 text-success">
                         <span class="size-2 rounded-full bg-success inline-block"></span> Online
@@ -65,16 +94,122 @@
                       </span>
                     <% end %>
                   </td>
-                  <td class="px-4 py-3 text-xs text-base-content/60">
+                  <%!--
+                    Connection age. The VALUE here is deliberately untouched —
+                    task 01a06d03 (`e752bdce`) repairs what feeds it and asked
+                    that this expression be left alone.
+                  --%>
+                  <td class="px-4 py-3 align-top text-xs text-base-content/60">
                     {format_dt(runtime.connected_at)}
                   </td>
-                  <td class="px-4 py-3 text-xs text-base-content/60">
+                  <%!--
+                    Build age, adjacent to connection age on purpose. Amber
+                    fires ONLY on a capability this runtime is expected to
+                    serve whose code cannot be in the running process — never
+                    for merely being behind main. `--color-error` is
+                    deliberately unused: a stale agent is answering, just with
+                    old code, and red would push an operator toward a bounce
+                    more expensive than the condition.
+                  --%>
+                  <td class="px-4 py-3 align-top">
+                    <div class="flex items-baseline gap-1.5">
+                      <span
+                        data-build={build_sha(runtime)}
+                        class="font-mono text-[11px] max-w-[10ch] truncate"
+                      >
+                        {build_sha(runtime)}
+                      </span>
+                      <span class="text-neutral text-[11px]">·</span>
+                      <span data-build-age class="text-neutral text-[12px] whitespace-nowrap">
+                        {build_age(runtime)}
+                      </span>
+                    </div>
+                    <%= for stale <- predated_capabilities(runtime) do %>
+                      <div
+                        data-build-warning={stale.capability}
+                        class="mt-1 flex items-start gap-1 text-warning text-[12px]"
+                      >
+                        <span class="hero-exclamation-triangle size-3.5 shrink-0"></span>
+                        <span>predates {stale.capability} ({stale.landed_label})</span>
+                      </div>
+                    <% end %>
+                  </td>
+                  <%!--
+                    The proof cell. It never truncates, and it never carries a
+                    tooltip — a hover is unreachable in a terminal, on a phone
+                    and in the screenshot someone pastes into the channel at
+                    midnight, which is where this gets read.
+
+                    The `border-base-300` hairline below is the most
+                    load-bearing pixel on the page: everything above it
+                    HAPPENED, everything below it was ASSERTED by the process
+                    whose competence is in question.
+
+                    Emphasis inside the cell follows the canvas's budget:
+                    "an event actually observed is the only cell on this row
+                    that cannot lie, everything else stays quiet so this one
+                    reads first". So the LABEL takes `--color-neutral` (the
+                    canvas assigns that token to quiet supporting text) and
+                    the VALUE keeps full `base-content` weight — `never` is
+                    the word the whole ticket is about, and it has to survive
+                    being read at midnight off a pasted screenshot.
+                  --%>
+                  <td class="px-4 py-3 align-top whitespace-nowrap">
+                    <div data-proof-list class="w-fit min-w-[15ch] space-y-0.5">
+                      <%= for proof <- proof_rows(runtime) do %>
+                        <div
+                          data-proof={proof.capability}
+                          class="flex items-baseline justify-between gap-4"
+                        >
+                          <%!--
+                            `w-fit` on the list, not the cell: the pair stays
+                            as tight as its own widest row so the label and
+                            its time are read together. Without it the cell is
+                            sized by the declared chip below and
+                            `justify-between` flings the time to the far edge,
+                            which at 375px puts `never` past the fold — the
+                            one word this column exists to deliver.
+                          --%>
+                          <span data-proof-label class="text-neutral text-[12px]">
+                            {proof.label}
+                          </span>
+                          <span data-proof-value class="text-[12px]">
+                            {proof.value}
+                          </span>
+                        </div>
+                      <% end %>
+                    </div>
+                    <div data-proof-rule class="mt-2 border-t border-base-300 pt-2">
+                      <%= if Enum.empty?(declared_chips(runtime)) do %>
+                        <span data-declared class="text-info text-[12px]">declared: none</span>
+                      <% else %>
+                        <div
+                          data-declared
+                          class="flex flex-wrap items-baseline gap-1 text-info text-[12px]"
+                        >
+                          <span>declared:</span>
+                          <%= for feature <- declared_chips(runtime) do %>
+                            <span
+                              data-declared-chip
+                              class="rounded border border-info/40 px-1 max-w-[24ch] truncate"
+                            >
+                              {feature}
+                            </span>
+                          <% end %>
+                        </div>
+                      <% end %>
+                    </div>
+                  </td>
+                  <td class="px-4 py-3 align-top text-xs text-base-content/60">
                     {format_dt(runtime.last_seen_at)}
                   </td>
-                  <td class="px-4 py-3 text-xs text-base-content/60">
+                  <td class="px-4 py-3 align-top text-xs text-base-content/60">
                     {format_dt(runtime.last_connected_at)}
                   </td>
-                  <td class="px-4 py-3">
+                  <td class="px-4 py-3 align-top font-mono text-xs text-base-content/60">
+                    {runtime.runtime_id}
+                  </td>
+                  <td class="px-4 py-3 align-top">
                     <%= if runtime.online do %>
                       <button
                         phx-click="ping"

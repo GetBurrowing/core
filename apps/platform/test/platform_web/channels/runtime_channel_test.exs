@@ -5,6 +5,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Agents.AgentRuntime
   alias Platform.Chat
   alias Platform.Federation
   alias Platform.Federation.DeadLetter
@@ -349,6 +350,22 @@ defmodule PlatformWeb.RuntimeChannelTest do
     joined
   end
 
+  # Register and activate a SECOND runtime (with its own agent), so a test can
+  # hold two independently-declaring runtimes at once. Mirrors the setup block.
+  defp register_second_runtime(user) do
+    agent = create_agent()
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "test-rt-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, activated, raw_token} = Federation.activate_runtime(runtime)
+    {:ok, _linked} = Federation.link_agent(activated, agent)
+
+    {Federation.get_runtime(activated.id), raw_token}
+  end
+
   # Regression guard for the bug this task fixes: the push used to be
   # `ToolSurface.tool_definitions()` — the whole catalogue — regardless
   # of the runtime's `allowed_bundles`. It must now be exactly the set
@@ -456,6 +473,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert joined_socket.assigns.client_info == %{
                product: "openclaw",
                version: "1.2.3",
+               build: nil,
+               started_at: nil,
                features: []
              }
 
@@ -480,6 +499,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert joined_socket.assigns.client_info == %{
                product: "unknown",
                version: nil,
+               build: nil,
+               started_at: nil,
                features: []
              }
 
@@ -504,6 +525,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert joined_socket.assigns.client_info == %{
                product: "unknown",
                version: nil,
+               build: nil,
+               started_at: nil,
                features: []
              }
 
@@ -544,6 +567,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert joined.assigns.client_info == %{
                product: "claude_channel",
                version: "0.3.0",
+               build: nil,
+               started_at: nil,
                features: ["system_event_prompt"]
              }
 
@@ -693,6 +718,482 @@ defmodule PlatformWeb.RuntimeChannelTest do
                "system_event_prompt",
                String.duplicate("z", 64)
              ]
+    end
+  end
+
+  # The fact this whole task exists for: a plugin release only takes effect
+  # when the client PROCESS restarts, so `version` alone cannot tell you
+  # whether a shipped capability is actually loaded. `build` says which build,
+  # `started_at` says how old the process running it is.
+  #
+  # CROSS-REPO NOTE: core can only RECEIVE these keys. The channel plugin that
+  # would send them lives in `claude-code-suite-channel`, a different repo.
+  # Until a plugin release actually sends them, both persist as nil for real
+  # runtimes — expected, and rendered downstream as "unknown", not as a bug.
+  describe "client_info build and process start time" do
+    test "two runtimes declaring different builds each persist their OWN build", ctx do
+      {runtime_b, token_b} = register_second_runtime(ctx.user)
+
+      sha_a = "1111111111111111111111111111111111111111"
+      sha_b = "2222222222222222222222222222222222222222"
+      refute sha_a == sha_b
+
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "build" => sha_a,
+        "started_at" => "2026-09-04T01:02:03Z"
+      })
+
+      join_with_client_info(runtime_b, token_b, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "build" => sha_b,
+        "started_at" => "2026-09-04T09:08:07Z"
+      })
+
+      reloaded_a = Repo.get(AgentRuntime, ctx.runtime.id)
+      reloaded_b = Repo.get(AgentRuntime, runtime_b.id)
+
+      # Deliberately NOT "a build key is present" — that is vacuous and passes
+      # against a handshake that hardcodes one constant. Each row must carry
+      # the value ITS OWN client sent, and the two must differ.
+      assert AgentRuntime.client_build(reloaded_a) == sha_a
+      assert AgentRuntime.client_build(reloaded_b) == sha_b
+      refute AgentRuntime.client_build(reloaded_a) == AgentRuntime.client_build(reloaded_b)
+
+      # Same shape of check for the process start time.
+      assert AgentRuntime.client_started_at(reloaded_a) == ~U[2026-09-04 01:02:03Z]
+      assert AgentRuntime.client_started_at(reloaded_b) == ~U[2026-09-04 09:08:07Z]
+
+      refute AgentRuntime.client_started_at(reloaded_a) ==
+               AgentRuntime.client_started_at(reloaded_b)
+    end
+
+    test "a client_info declaring neither build nor started_at persists nil for both", ctx do
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "features" => ["system_event_prompt"]
+      })
+
+      reloaded = Repo.get(AgentRuntime, ctx.runtime.id)
+      ci = reloaded.metadata["client_info"]
+
+      assert Map.has_key?(ci, "build")
+      assert Map.has_key?(ci, "started_at")
+      assert ci["build"] == nil
+      assert ci["started_at"] == nil
+      assert AgentRuntime.client_build(reloaded) == nil
+      assert AgentRuntime.client_started_at(reloaded) == nil
+
+      # The new keys must be ADDITIVE: everything the handshake already
+      # recorded still round-trips.
+      assert ci["product"] == "claude_channel"
+      assert ci["version"] == "0.3.0"
+      assert ci["features"] == ["system_event_prompt"]
+      assert is_binary(ci["last_seen_at"])
+    end
+
+    test "a malformed started_at persists nil, and the join still succeeds", ctx do
+      joined =
+        join_with_client_info(ctx.runtime, ctx.raw_token, %{
+          "product" => "claude_channel",
+          "version" => "0.3.0",
+          "build" => "deadbeef",
+          "started_at" => "yesterday"
+        })
+
+      # nil, NOT DateTime.utc_now/0. A fabricated process-start time would
+      # render as "just restarted" — the exact false reassurance this field
+      # exists to prevent — so an unparseable value must degrade to absent.
+      assert joined.assigns.client_info.started_at == nil
+
+      reloaded = Repo.get(AgentRuntime, ctx.runtime.id)
+      assert reloaded.metadata["client_info"]["started_at"] == nil
+      assert AgentRuntime.client_started_at(reloaded) == nil
+
+      # And it does not take the rest of the declaration down with it.
+      assert reloaded.metadata["client_info"]["build"] == "deadbeef"
+      assert reloaded.metadata["client_info"]["product"] == "claude_channel"
+    end
+
+    test "a legacy join with no client_info at all records neither key", ctx do
+      original_metadata = ctx.runtime.metadata || %{}
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      assert joined.assigns.client_info.build == nil
+      assert joined.assigns.client_info.started_at == nil
+
+      reloaded = Repo.get(AgentRuntime, ctx.runtime.id)
+
+      # The `declared?` gate skips the persist entirely, so "never told us"
+      # stays distinguishable from "told us it has no build".
+      assert reloaded.metadata == original_metadata
+      refute Map.has_key?(reloaded.metadata || %{}, "client_info")
+      assert AgentRuntime.client_build(reloaded) == nil
+      assert AgentRuntime.client_started_at(reloaded) == nil
+    end
+
+    test "rejoining on an older build REPLACES the recorded build", ctx do
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "build" => "newbuildsha",
+        "started_at" => "2026-09-04T10:00:00Z"
+      })
+
+      assert AgentRuntime.client_build(Repo.get(AgentRuntime, ctx.runtime.id)) == "newbuildsha"
+
+      # Same runtime, restarted onto an older build. update_metadata/2 is
+      # shallow at the top level so the nested map is replaced wholesale, and
+      # the newer claim is lost. That is REQUIRED: a build claim must not
+      # outlive the process that made it.
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.2.0",
+        "build" => "oldbuildsha",
+        "started_at" => "2026-09-04T11:00:00Z"
+      })
+
+      reloaded = Repo.get(AgentRuntime, ctx.runtime.id)
+      assert AgentRuntime.client_build(reloaded) == "oldbuildsha"
+      assert AgentRuntime.client_started_at(reloaded) == ~U[2026-09-04 11:00:00Z]
+    end
+
+    test "a build at the byte cap is kept; one over it is rejected, not truncated", ctx do
+      at_cap = String.duplicate("a", 64)
+      over_cap = String.duplicate("b", 65)
+
+      joined_ok =
+        join_with_client_info(ctx.runtime, ctx.raw_token, %{
+          "product" => "claude_channel",
+          "build" => at_cap
+        })
+
+      assert joined_ok.assigns.client_info.build == at_cap
+      assert AgentRuntime.client_build(Repo.get(AgentRuntime, ctx.runtime.id)) == at_cap
+
+      joined_over =
+        join_with_client_info(ctx.runtime, ctx.raw_token, %{
+          "product" => "claude_channel",
+          "build" => over_cap
+        })
+
+      # nil, not a 64-byte prefix: a truncated sha is still a well-formed sha,
+      # so truncating would manufacture an identifier pointing at no commit.
+      assert joined_over.assigns.client_info.build == nil
+      assert AgentRuntime.client_build(Repo.get(AgentRuntime, ctx.runtime.id)) == nil
+    end
+
+    test "the accessors return nil for every degenerate metadata shape", _ctx do
+      degenerate = [
+        %{},
+        %{metadata: nil},
+        %{metadata: "not a map"},
+        %{metadata: %{}},
+        %{metadata: %{"client_info" => nil}},
+        %{metadata: %{"client_info" => "not a map"}},
+        %{metadata: %{"client_info" => []}},
+        %{metadata: %{"client_info" => %{}}},
+        %{metadata: %{"client_info" => %{"build" => 42, "started_at" => 42}}},
+        %{metadata: %{"client_info" => %{"build" => nil, "started_at" => nil}}},
+        %{metadata: %{"client_info" => %{"build" => "", "started_at" => "yesterday"}}},
+        %{metadata: %{"client_info" => %{"started_at" => "2026-13-45T99:99:99Z"}}}
+      ]
+
+      for input <- degenerate do
+        assert AgentRuntime.client_build(input) == nil,
+               "client_build/1 did not return nil for #{inspect(input)}"
+
+        assert AgentRuntime.client_started_at(input) == nil,
+               "client_started_at/1 did not return nil for #{inspect(input)}"
+      end
+    end
+
+    # DISCRIMINATING CHECK against the failure this ticket was actually filed
+    # from, using the verbatim handshake the channel plugin sends on either
+    # side of the capability boundary.
+    #
+    # The missing capability was the `meeting_transcript` handler, added to
+    # `claude-code-suite-channel` in 63229eb (2026-09-03). A plugin older than
+    # that receives nothing from a meeting and sits mute, with no error.
+    # 63229eb touched NEITHER package.json NOR CLIENT_FEATURES — verified in
+    # that repo: `version` is "0.3.0" and `CLIENT_FEATURES` is the identical
+    # single-element ["system_event_prompt"] at both commits. The two builds
+    # therefore send a BYTE-IDENTICAL client_info across exactly the boundary
+    # that cost a real meeting.
+    #
+    # So: any surfacing built on product/version/features alone is VACUOUS for
+    # this ticket — an operator reads 0.3.0 / ["system_event_prompt"] either
+    # way and concludes the runtime is fine. This test pins that, and pins
+    # that `build` is the field that breaks the tie.
+    #
+    # It is a TRIPWIRE. When a plugin release starts declaring `build`, the
+    # first two nil assertions below start failing, and what has to be
+    # rewritten is precisely the claim "core still cannot tell these apart".
+    test "the two plugin builds this ticket was filed from are indistinguishable until the plugin declares a build",
+         ctx do
+      {runtime_b, token_b} = register_second_runtime(ctx.user)
+
+      # Verbatim CLIENT_INFO from both commits. Equal on purpose.
+      before_capability = %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "features" => ["system_event_prompt"]
+      }
+
+      after_capability = %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "features" => ["system_event_prompt"]
+      }
+
+      assert before_capability == after_capability,
+             "the premise of this test is that the plugin handshake did not change across 63229eb"
+
+      join_with_client_info(ctx.runtime, ctx.raw_token, before_capability)
+      join_with_client_info(runtime_b, token_b, after_capability)
+
+      stale = Repo.get(AgentRuntime, ctx.runtime.id)
+      current = Repo.get(AgentRuntime, runtime_b.id)
+
+      # Everything that arrives TODAY is equal, so nothing built on it can
+      # discriminate the two builds.
+      assert Map.take(stale.metadata["client_info"], ["product", "version", "features"]) ==
+               Map.take(current.metadata["client_info"], ["product", "version", "features"])
+
+      # And the two fields this stage adds are nil on both sides, because
+      # neither plugin build sends them. Core can only RECEIVE these keys —
+      # the plugin is a different repository. This stage alone therefore does
+      # NOT make the originating failure detectable; the remaining gap is
+      # entirely upstream.
+      assert AgentRuntime.client_build(stale) == nil
+      assert AgentRuntime.client_build(current) == nil
+      assert AgentRuntime.client_started_at(stale) == nil
+      assert AgentRuntime.client_started_at(current) == nil
+
+      # The same two runtimes DO separate the moment the plugin declares its
+      # build. The receive path added here is the mechanism; only the client
+      # side is missing.
+      join_with_client_info(
+        ctx.runtime,
+        ctx.raw_token,
+        Map.put(before_capability, "build", "b238164e")
+      )
+
+      join_with_client_info(runtime_b, token_b, Map.put(after_capability, "build", "63229eb"))
+
+      refute AgentRuntime.client_build(Repo.get(AgentRuntime, ctx.runtime.id)) ==
+               AgentRuntime.client_build(Repo.get(AgentRuntime, runtime_b.id))
+    end
+
+    # MEASURED COUNTEREXAMPLE, encoded so it cannot be forgotten by a display
+    # stage. On 2026-09-04 a runtime on another host reported a process start
+    # of 2026-09-03 21:06 — SIX HOURS AFTER plugin commit 63229eb merged
+    # upstream at 15:07Z — and still could not hear a meeting, because its
+    # local checkout was behind and the restart loaded months-old code.
+    #
+    # So "started_at is later than the fix" does NOT imply "has the fix".
+    # `started_at` can only REFUTE freshness (started before the fix => cannot
+    # have it), never establish it. `build` is the field that actually
+    # discriminates. This test pins that asymmetry as behaviour: the runtime
+    # that looks NEWER by start time is the one that is STALE by build.
+    test "a process that restarted after the fix can still be on an old build — started_at cannot establish freshness",
+         ctx do
+      {runtime_b, token_b} = register_second_runtime(ctx.user)
+
+      fix_merged_at = ~U[2026-09-03 15:07:00Z]
+
+      # Saru's runtime: restarted well AFTER the fix merged, but the checkout
+      # it loaded was stale, so it is running pre-capability code.
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "build" => "b238164e",
+        "started_at" => "2026-09-03T21:06:00Z"
+      })
+
+      # A genuinely current runtime that happens to have been started EARLIER
+      # than the stale one, but after the fix.
+      join_with_client_info(runtime_b, token_b, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0",
+        "build" => "63229eb",
+        "started_at" => "2026-09-03T16:00:00Z"
+      })
+
+      stale = Repo.get(AgentRuntime, ctx.runtime.id)
+      current = Repo.get(AgentRuntime, runtime_b.id)
+
+      # Both restarted after the fix merged, so a "started after the fix ⇒ has
+      # the fix" reading calls BOTH current. That reading is wrong.
+      assert DateTime.compare(AgentRuntime.client_started_at(stale), fix_merged_at) == :gt
+      assert DateTime.compare(AgentRuntime.client_started_at(current), fix_merged_at) == :gt
+
+      # Worse: ordering by start time ranks the STALE runtime as the fresher
+      # of the two. Recency of restart is anti-correlated with truth here.
+      assert DateTime.compare(
+               AgentRuntime.client_started_at(stale),
+               AgentRuntime.client_started_at(current)
+             ) == :gt
+
+      # Only `build` separates them correctly.
+      assert AgentRuntime.client_build(stale) == "b238164e"
+      assert AgentRuntime.client_build(current) == "63229eb"
+    end
+
+    test "a non-UTC started_at is normalized to UTC on the way in and out", ctx do
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "build" => "tzsha",
+        "started_at" => "2026-09-04T12:00:00+02:00"
+      })
+
+      reloaded = Repo.get(AgentRuntime, ctx.runtime.id)
+      assert AgentRuntime.client_started_at(reloaded) == ~U[2026-09-04 10:00:00Z]
+    end
+  end
+
+  # Task 01a06d01 stage 2: `proven` is an observation log, not a claim.
+  #
+  # The declared list (`client_info.features`) provably cannot do this job:
+  # across `claude-code-suite-channel` `b238164e` -> `63229eb`, the commit
+  # that ADDED the `meeting_transcript` listener, package.json `version`
+  # stays `0.3.0` and `CLIENT_FEATURES` stays `["system_event_prompt"]`.
+  # Two builds, one able to hear a meeting and one not, send a byte-identical
+  # `client_info`. Only an inbound frame separates them.
+  describe "inbound frames record capability proofs" do
+    test "a reply frame proves chat_reply and leaves meeting_transcript ABSENT", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "reply", %{
+        "space_id" => ctx.space.id,
+        "content" => "Hello from external runtime!"
+      })
+
+      # Round-trip a frame the channel answers, so the earlier cast is done.
+      ref = push(socket, "pong", %{})
+      assert is_reference(ref)
+      Process.sleep(50)
+
+      proven = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven
+
+      assert Map.has_key?(proven, "chat_reply")
+
+      # THE discriminating assertion. Core broadcasts `meeting_transcript`
+      # OUTBOUND and never hears back, so nothing about this runtime's
+      # ability to receive one has been observed. Asserted as an explicit
+      # absence, because the failure mode being guarded against is a proof
+      # being recorded from a frame core SENT — which would look like a
+      # working feature while reporting the opposite of the truth.
+      refute Map.has_key?(proven, "meeting_transcript")
+    end
+
+    test "a meeting_say_ack proves meeting_voice, not the transcript path", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "meeting_say_ack", %{
+        "utterance_id" => Platform.Types.UUIDv7.generate(),
+        "room_name" => "space-test",
+        "status" => "spoken"
+      })
+
+      Process.sleep(50)
+
+      proven = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven
+
+      assert Map.has_key?(proven, "meeting_voice")
+      refute Map.has_key?(proven, "meeting_transcript")
+      refute Map.has_key?(proven, "chat_reply")
+    end
+
+    test "a pong proves NOTHING — a heartbeat is a socket, not a capability", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      before = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id)
+
+      push(socket, "pong", %{})
+      Process.sleep(50)
+
+      after_pong = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id)
+
+      # Every connected runtime sends these. If a pong proved anything, every
+      # cell would read green for every runtime forever and the column would
+      # carry no information at all.
+      assert after_pong.proven == before.proven
+      assert after_pong.proven == %{}
+      assert after_pong.connected_at == before.connected_at
+    end
+
+    test "a proof does not survive into a new session on the same runtime_id", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(joined_socket, "reply", %{"space_id" => ctx.space.id, "content" => "first session"})
+      Process.sleep(50)
+
+      assert Map.has_key?(
+               Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven,
+               "chat_reply"
+             )
+
+      # Same shutdown dance as the `connected_at` re-join test above: `close/1`
+      # exits with `{:shutdown, :closed}` over a link `subscribe_and_join`
+      # created, and `terminate/2` must have finished untracking before the
+      # second join, or the two race.
+      Process.flag(:trap_exit, true)
+      ref = Process.monitor(joined_socket.channel_pid)
+      close(joined_socket)
+      assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 5_000
+
+      {:ok, rejoin} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, _rejoined} =
+        subscribe_and_join(rejoin, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      # The reconnecting process may be a different build entirely. What the
+      # last one demonstrated is not evidence about this one.
+      assert Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven == %{}
     end
   end
 

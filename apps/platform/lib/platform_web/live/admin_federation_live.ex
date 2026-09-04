@@ -9,6 +9,7 @@ defmodule PlatformWeb.AdminFederationLive do
   alias Platform.Federation.DeadLetter
   alias Platform.Federation.DeadLetterStat
   alias Platform.Federation.DeadLetters
+  alias Platform.Federation.RuntimePresence
   alias Platform.Repo
   alias Platform.Tasks.Plan
   alias Platform.Tasks.Stage
@@ -248,6 +249,137 @@ defmodule PlatformWeb.AdminFederationLive do
 
   defp short_id(nil), do: nil
   defp short_id(id) when is_binary(id), do: String.slice(id, 0, 8)
+
+  # ── Build and proof cells (task 01a06d01 stage 4) ────────────────────
+  #
+  # The design canvas attached to the task is binding here. Its argument, in
+  # one line: a green dot says a socket is up and NOTHING else, so connection
+  # age, build age and observed proof are three separate cells that are
+  # allowed to disagree on screen. Collapsing them into one indicator is the
+  # defect — an agent showed green all evening while running a build with no
+  # `meeting_transcript` listener, and two people spent an hour looking at the
+  # wrong layer.
+
+  # Human labels for the capabilities the surface always reports, taken
+  # verbatim from the canvas wireframe ("chat reply", "transcript",
+  # "voice out"). A capability observed under a name outside this map renders
+  # under its raw name rather than being hidden — `reported_capabilities/0` is
+  # a floor, not an allowlist.
+  @capability_labels %{
+    "chat_reply" => "chat reply",
+    "meeting_transcript" => "transcript",
+    "meeting_voice" => "voice out"
+  }
+
+  # When a capability landed in the plugin. This is the ONLY thing that turns
+  # a build cell amber, and it is deliberately much narrower than "behind
+  # main": the canvas rejected amber-for-behind-main outright, because every
+  # merge would make the whole fleet amber and the column would be ignored
+  # inside a week.
+  #
+  # `meeting_transcript` landed with the plugin's `63229eb` on 3 Sep 2026 (the
+  # date the canvas prints in the warning string). The build immediately
+  # before it, `b238164e`, cannot hear a meeting — and both builds report
+  # package.json `0.3.0` and an identical `CLIENT_FEATURES`, which is why the
+  # declared list below the hairline cannot answer this and a date can.
+  @capability_landed_at %{
+    "meeting_transcript" => ~U[2026-09-03 00:00:00Z]
+  }
+
+  # Truncated to 7 characters per the canvas: the sha is the field an operator
+  # pastes into an incident note, and it is FIRST to give up width because its
+  # human-readable twin (the age) is already on the row.
+  #
+  # A client that never told us its build reports the literal "unknown" —
+  # never a blank, never a dash, and never a borrowed `version`.
+  defp build_sha(%{client_build: build}) when is_binary(build) and build != "",
+    do: String.slice(build, 0, 7)
+
+  defp build_sha(_), do: "unknown"
+
+  # The build cell's second half, in words rather than a timestamp, because
+  # this is the half that gets skimmed. Reads "6 days old" beside the
+  # connection cell's "20s ago" — which is the sentence nobody could read on
+  # the night this ticket was filed.
+  defp build_age(%{process_started_at: %DateTime{} = started}) do
+    format_uptime(DateTime.diff(DateTime.utc_now(), started, :second))
+  end
+
+  defp build_age(_), do: "age unknown"
+
+  defp format_uptime(seconds) when seconds < 60, do: pluralise(seconds, "second")
+  defp format_uptime(seconds) when seconds < 3600, do: pluralise(div(seconds, 60), "minute")
+  defp format_uptime(seconds) when seconds < 86_400, do: pluralise(div(seconds, 3600), "hour")
+  defp format_uptime(seconds), do: pluralise(div(seconds, 86_400), "day")
+
+  defp pluralise(1, unit), do: "1 #{unit} old"
+  defp pluralise(n, unit), do: "#{n} #{unit}s old"
+
+  # Capabilities this runtime is expected to serve whose code CANNOT be in the
+  # running process, because the process started before that code existed.
+  #
+  # The inference is one-way on purpose. A process that started before a
+  # capability landed definitely predates it; a process that started after it
+  # may still be running old code, and that case stays quiet rather than
+  # guessing. False amber would destroy the column, a false quiet costs
+  # nothing that the `never` in the proof cell does not already say.
+  #
+  # "Expected to serve" is `reported_capabilities/0` — the set core reports a
+  # cell for on every runtime.
+  defp predated_capabilities(%{process_started_at: %DateTime{} = started}) do
+    expected = RuntimePresence.reported_capabilities()
+
+    @capability_landed_at
+    |> Enum.filter(fn {capability, landed_at} ->
+      capability in expected and DateTime.compare(started, landed_at) == :lt
+    end)
+    |> Enum.sort_by(fn {capability, _} -> capability end)
+    |> Enum.map(fn {capability, landed_at} ->
+      %{capability: capability, landed_label: Calendar.strftime(landed_at, "%-d %b")}
+    end)
+  end
+
+  defp predated_capabilities(_), do: []
+
+  # One row per capability, ABOVE the hairline. Everything here is an event
+  # core observed arriving from this runtime; nothing here is a setting.
+  #
+  # A capability core has never observed keeps its row and reads `never`. The
+  # absent row is the blind spot this ticket exists to close: "transcript
+  # never" beside a green dot is the line that would have ended the incident
+  # in ten seconds, and it only exists because the row is not omitted.
+  defp proof_rows(runtime) do
+    proven = Map.get(runtime, :proven) || %{}
+    expected = RuntimePresence.reported_capabilities()
+
+    observed_elsewhere =
+      proven
+      |> Map.keys()
+      |> Enum.filter(&is_binary/1)
+      |> Enum.reject(&(&1 in expected))
+      |> Enum.sort()
+
+    Enum.map(expected ++ observed_elsewhere, fn capability ->
+      %{
+        capability: capability,
+        label: Map.get(@capability_labels, capability, capability),
+        value: proof_value(Map.get(proven, capability))
+      }
+    end)
+  end
+
+  defp proof_value(%DateTime{} = at), do: format_dt(at)
+  defp proof_value(_), do: "never"
+
+  # What the runtime CLAIMED, rendered BELOW the hairline in info blue. A
+  # declaration is information, not a promise: it is asserted by the very
+  # process whose competence is in question, and measured across the boundary
+  # that motivated this ticket it does not change at all.
+  defp declared_chips(%{declared_features: features}) when is_list(features) do
+    Enum.filter(features, &is_binary/1)
+  end
+
+  defp declared_chips(_), do: []
 
   defp format_dt(nil), do: "—"
 

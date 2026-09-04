@@ -36,6 +36,18 @@ defmodule PlatformWeb.RuntimeChannel do
   @max_client_features 32
   @max_client_feature_bytes 64
 
+  # Max byte size of a client-declared `build` identifier (a plugin commit
+  # sha, or a release string). A full sha is 40 bytes and a semver-ish tag
+  # is well under that, so 64 — the same bound as a feature name — is
+  # generous. Same rationale as above: this is an abuse-surface cap on
+  # free text we did not author, not a format check.
+  #
+  # An over-long value is REJECTED to nil, never truncated. A truncated
+  # sha is still a syntactically valid sha, so truncating would
+  # manufacture a plausible-looking identifier that points at no commit.
+  # Absent is honest; wrong-but-well-formed is not.
+  @max_client_build_bytes 64
+
   # How often to re-affirm this runtime's presence from the live channel
   # process. Belt-and-suspenders against RuntimePresence Agent crashes /
   # hot-reloads that would otherwise leave the map permanently empty.
@@ -190,6 +202,11 @@ defmodule PlatformWeb.RuntimeChannel do
     {:noreply, socket}
   end
 
+  # Deliberately `touch/1` and NOT `prove/2`. A heartbeat evidences a live
+  # socket and nothing else: every runtime that is connected at all sends
+  # one, so proving a capability here would mark every cell observed for
+  # every runtime, forever, and destroy the only signal that discriminates
+  # a stale build from a current one.
   @impl true
   def handle_in("pong", _payload, socket) do
     RuntimePresence.touch(socket.assigns.runtime_id)
@@ -238,7 +255,11 @@ defmodule PlatformWeb.RuntimeChannel do
   # join ack: nothing is pushed back down the socket.
   @impl true
   def handle_in("meeting_say_ack", %{"utterance_id" => utterance_id} = payload, socket) do
-    RuntimePresence.touch(socket.assigns.runtime_id)
+    # `prove/2` rather than `touch/1`: it advances `last_seen_at` exactly as
+    # `touch/1` does and additionally stamps the capability. A runtime that
+    # returns a say-ack has demonstrably run the meeting-voice path — this
+    # is an INBOUND frame, so it is evidence and not a claim.
+    RuntimePresence.prove(socket.assigns.runtime_id, "meeting_voice")
     agent_id = socket.assigns[:agent_id]
 
     Logger.info(
@@ -290,7 +311,11 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @impl true
   def handle_in("reply", %{"space_id" => space_id, "content" => content}, socket) do
-    RuntimePresence.touch(socket.assigns.runtime_id)
+    # Proven at the top of the clause, before the participant check below:
+    # the capability under test is "this build can emit a chat reply", and a
+    # well-formed inbound `reply` frame settles that whether or not the agent
+    # turns out to be a participant of the space it named.
+    RuntimePresence.prove(socket.assigns.runtime_id, "chat_reply")
 
     # Track which space this agent is actively replying in for NodeContext
     if agent_id = socket.assigns[:agent_id] do
@@ -767,13 +792,105 @@ defmodule PlatformWeb.RuntimeChannel do
         {%{
            product: product,
            version: version,
+           build: normalize_build(Map.get(ci, "build")),
+           started_at: normalize_started_at(Map.get(ci, "started_at")),
            features: normalize_features(Map.get(ci, "features"))
          }, true}
 
       _ ->
-        {%{product: "unknown", version: nil, features: []}, false}
+        {%{product: "unknown", version: nil, build: nil, started_at: nil, features: []}, false}
     end
   end
+
+  # Normalize a client-declared build identifier — the plugin commit sha or
+  # release string that says WHICH build of the client is running — into a
+  # bounded binary, or nil.
+  #
+  # Non-binaries (a number, a map, nil), the empty string, and anything over
+  # @max_client_build_bytes all degrade to nil rather than raising: like
+  # `features`, a hostile payload here must not be a denial of service on
+  # the handshake.
+  #
+  # WHAT A BUILD HAS TO BE for this to be worth anything: a constant baked
+  # into the client bundle at BUILD time, so it names the code actually
+  # loaded in the process. A client that computes it at join time by reading
+  # disk (`git rev-parse`, a file read) reports what is CHECKED OUT, not what
+  # is running — it would report the new sha for a process that never
+  # restarted, which is one of the two failure modes this task exists to
+  # expose. Core cannot enforce that from here; it is a contract on the
+  # client, stated so the receiving side is not read as a guarantee.
+  defp normalize_build(build) when is_binary(build) do
+    if build != "" and byte_size(build) <= @max_client_build_bytes, do: build, else: nil
+  end
+
+  defp normalize_build(_), do: nil
+
+  # Parse a client-declared PROCESS start time (ISO8601) into a UTC
+  # `DateTime`, or nil.
+  #
+  # This is a different fact from every timestamp already on the row.
+  # Presence `connected_at` and `agent_runtimes.last_connected_at` are
+  # CONNECTION ages: they reset on every socket blip while the OS process
+  # keeps running, which is exactly why a long-lived process on a stale
+  # build reads as freshly started. `started_at` is the age of the process
+  # itself, so "has this runtime picked up the build we shipped?" becomes
+  # answerable. Both must survive; neither substitutes for the other.
+  #
+  # There is deliberately NO `DateTime.utc_now()` fallback on a parse
+  # failure. A fabricated process-start time is strictly WORSE than an
+  # absent one: nil renders as "unknown", while a synthesized now() renders
+  # as "just restarted" — the precise false reassurance this field exists
+  # to prevent. `DateTime.from_iso8601/1` already normalizes a non-UTC
+  # offset to UTC, so no further shifting is needed (and no tz database is
+  # required).
+  #
+  # `build` and `started_at` cover two failure modes, and neither field
+  # covers both:
+  #
+  #   (a) the client checkout is BEHIND the shipped fix. `build` catches
+  #       this, provided it is baked in at build time (see normalize_build/1).
+  #   (b) the checkout is current but the process was never restarted, so the
+  #       old code is still resident. ONLY `started_at` catches this: a
+  #       process that started before the fix landed cannot be running it,
+  #       whatever is on disk. No version, feature list, or disk read can
+  #       detect (b) at all.
+  #
+  # READ THIS BEFORE RENDERING `started_at` ANYWHERE. The two modes are NOT
+  # mutually exclusive, so `started_at` is a ONE-WAY test and must never be
+  # displayed as if it answered "is this runtime current?" on its own:
+  #
+  #   * started_at EARLIER than the fix  => REFUTES freshness. Sound. The
+  #     process cannot be running code that did not exist when it booted.
+  #   * started_at LATER than the fix    => proves NOTHING. Unsound.
+  #
+  # Measured counterexample (2026-09-04, a second host): a runtime process
+  # started 2026-09-03 21:06, six hours AFTER plugin commit 63229eb merged
+  # upstream at 15:07Z, and still could not hear a meeting — its local
+  # checkout was behind, so a post-merge restart loaded July code. "Restarted
+  # after the fix landed" is therefore not evidence of having the fix.
+  # Inferring freshness from a recent `started_at` reproduces exactly the
+  # false-positive this ticket exists to kill, one level up.
+  #
+  # So `build` is the LOAD-BEARING field: it names the code actually loaded.
+  # `started_at` is a qualifier on `build`, not a substitute for it, and is
+  # kept because it is the only thing that detects (b) — a stale process
+  # whose checkout has since been updated, where `build` (baked in at build
+  # time) still honestly reports the OLD sha but nothing else says why.
+  #
+  # Corollary for anything server-side: core cannot resolve the sha itself.
+  # The plugin checkout has no fixed path across hosts (observed at both
+  # `~/projects/claude-code-suite-channel` and
+  # `~/.local/share/suite/claude-code-suite-channel`), and reading disk would
+  # report what is CHECKED OUT rather than what is RUNNING anyway. It has to
+  # arrive in the handshake, which is what this function receives.
+  defp normalize_started_at(started_at) when is_binary(started_at) do
+    case DateTime.from_iso8601(started_at) do
+      {:ok, %DateTime{} = dt, _utc_offset} -> dt
+      _ -> nil
+    end
+  end
+
+  defp normalize_started_at(_), do: nil
 
   # Normalize a client-declared capability list into a bounded, sorted,
   # deduplicated list of binaries. Anything that is not a list — a map,
@@ -796,11 +913,35 @@ defmodule PlatformWeb.RuntimeChannel do
 
   defp normalize_features(_), do: []
 
-  defp persist_client_info(runtime, %{product: product, version: version, features: features}) do
+  defp persist_client_info(runtime, %{
+         product: product,
+         version: version,
+         build: build,
+         started_at: started_at,
+         features: features
+       }) do
     payload = %{
       "client_info" => %{
         "product" => product,
         "version" => version,
+        # `build` and `started_at` together answer "is the capability we
+        # shipped actually loaded in this process?" — which `version`
+        # alone cannot, because a plugin release only takes effect when
+        # the client process restarts.
+        #
+        # Both are written unconditionally, including as nil, and both
+        # follow the replace-not-merge rule described below: a process
+        # that rejoins on an older build must LOSE its newer claim.
+        #
+        # `started_at` is stored as an ISO8601 string (jsonb has no
+        # timestamp type); `AgentRuntime.client_started_at/1` parses it
+        # back. It is the CLIENT PROCESS start time and is deliberately
+        # NOT the same fact as `last_seen_at` below, presence
+        # `connected_at`, or the `last_connected_at` column — those are
+        # connection ages and reset on a reconnect that never restarted
+        # anything.
+        "build" => build,
+        "started_at" => started_at && DateTime.to_iso8601(started_at),
         # `features` is ALWAYS written, including as `[]`.
         #
         # `Federation.update_metadata/2` is shallow at the top level, so

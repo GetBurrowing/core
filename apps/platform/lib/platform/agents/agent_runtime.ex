@@ -114,6 +114,110 @@ defmodule Platform.Agents.AgentRuntime do
   defp classify_product(product) when product in @valid_client_products, do: product
   defp classify_product(_), do: "unknown"
 
+  # Shared absent-safe read of one key out of `metadata["client_info"]`.
+  # Returns nil for a missing `client_info`, a `client_info` that is not a
+  # map, or a missing key — so callers only have to validate the value.
+  defp client_info_field(metadata, key) do
+    metadata
+    |> Map.get("client_info", %{})
+    |> case do
+      m when is_map(m) -> Map.get(m, key)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Reads `metadata["client_info"]["build"]` — the build identifier (a plugin
+  commit sha, or a release string) the client declared on its most recent
+  declaring join.
+
+  Returns `nil` — never raises — for:
+
+    * no metadata at all (or `nil` metadata on a legacy row),
+    * no `client_info`, or a `client_info` that is not a map,
+    * no `build` key,
+    * a `build` value that is not a non-empty binary.
+
+  `nil` means "this runtime has not told us", which is the honest state for
+  a client whose build predates the handshake carrying this key. It is never
+  read as "no build".
+
+  This is the LOAD-BEARING field for "is the capability we shipped actually
+  loaded here?". `version` cannot answer it (two plugin builds either side of
+  the capability boundary that motivated this ticket both declare "0.3.0" and
+  the identical feature list), and `client_started_at/1` cannot answer it
+  alone either — see the one-way-test warning on that function.
+
+  Pure function, no DB access. Works on freshly-loaded structs whose
+  `metadata` map has string keys (jsonb round-trip).
+  """
+  @spec client_build(%__MODULE__{} | %{metadata: map()}) :: String.t() | nil
+  def client_build(%{metadata: metadata}) when is_map(metadata) do
+    case client_info_field(metadata, "build") do
+      build when is_binary(build) and build != "" -> build
+      _ -> nil
+    end
+  end
+
+  def client_build(_), do: nil
+
+  @doc """
+  Reads `metadata["client_info"]["started_at"]` — when the client PROCESS
+  started — and parses it back from its stored ISO8601 form into a UTC
+  `DateTime`.
+
+  Returns `nil` — never raises — for:
+
+    * no metadata at all (or `nil` metadata on a legacy row),
+    * no `client_info`, or a `client_info` that is not a map,
+    * no `started_at` key,
+    * a `started_at` that is not a binary, or that does not parse.
+
+  This is a PROCESS age and is deliberately distinct from `last_connected_at`
+  and from presence `connected_at`, which are CONNECTION ages: those reset
+  whenever a socket drops and re-establishes, even though nothing restarted.
+  A shipped client build only takes effect on a process restart, so the
+  process age is the only one of the three that can answer whether a runtime
+  has actually picked the build up.
+
+  There is no `DateTime.utc_now()` fallback anywhere on this path — an
+  invented start time would render as "just restarted", which is the exact
+  false reassurance the field exists to prevent.
+
+  ## Do not render this value on its own
+
+  This is a ONE-WAY test. It can REFUTE freshness and cannot establish it:
+
+    * started before a known fix landed => the process cannot be running
+      that fix. Sound.
+    * started after a known fix landed  => proves nothing at all. Unsound.
+
+  Measured counterexample (2026-09-04): a runtime process started six hours
+  after the relevant plugin commit merged upstream, and still lacked the
+  capability — its local checkout was behind, so the restart loaded months-old
+  code. A recent restart is not evidence of current code.
+
+  So pair it with `client_build/1`, which names the code actually loaded and
+  is the load-bearing field. A surface that shows "started 20 minutes ago"
+  without the build it started ON re-creates the false-confidence bug this
+  field was added to expose. `client_started_at/1` earns its place only by
+  catching the opposite case — a process too OLD to have picked up a build
+  that its checkout may since have received.
+
+  Pure function, no DB access.
+  """
+  @spec client_started_at(%__MODULE__{} | %{metadata: map()}) :: DateTime.t() | nil
+  def client_started_at(%{metadata: metadata}) when is_map(metadata) do
+    with value when is_binary(value) <- client_info_field(metadata, "started_at"),
+         {:ok, %DateTime{} = started_at, _utc_offset} <- DateTime.from_iso8601(value) do
+      started_at
+    else
+      _ -> nil
+    end
+  end
+
+  def client_started_at(_), do: nil
+
   @system_event_prompt_feature "system_event_prompt"
 
   @doc """
