@@ -4451,7 +4451,7 @@ defmodule PlatformWeb.MeetingLive do
       # above and by the participant rail when the worker actually publishes.
       socket
       |> refresh_participants()
-      |> put_flash(:info, "Invited #{agent.name} — waiting for it to join.")
+      |> put_flash(:info, invite_flash(agent, room, socket.assigns[:user_id]))
     else
       {:error, :forbidden} ->
         put_flash(socket, :error, "You do not have permission to invite an agent here.")
@@ -4481,6 +4481,44 @@ defmodule PlatformWeb.MeetingLive do
 
       _ ->
         put_flash(socket, :error, "That agent could not be invited.")
+    end
+  end
+
+  # Task 01a06925 stage 3. Runs only AFTER `invite_agent/3` has delivered the
+  # join, and can only ever lengthen the success flash: the roster row that
+  # makes the page show the inviter as present is written server-side
+  # before the browser connects, so this asks LiveKit who is actually in
+  # the media room and says so — the one fact the 21:16Z incident could not
+  # be diagnosed from the page without. `:unavailable` keeps the copy as it
+  # was; a diagnostic never turns a delivered invite into an error.
+  defp invite_flash(agent, room, user_id) do
+    base = "Invited #{agent.name} — waiting for it to join."
+    presence = Meetings.media_room_presence(room.livekit_room_name, "user:#{user_id}")
+
+    Logger.info(
+      "[Meetings] invite agent=#{agent.slug} room=#{room.livekit_room_name} " <>
+        "sfu=#{sfu_summary(presence, "user:#{user_id}")}"
+    )
+
+    case presence do
+      :unavailable ->
+        base
+
+      %{viewer_present?: true, others: others} ->
+        base <> " LiveKit sees you and #{length(others)} other(s) in the media room."
+
+      %{viewer_present?: false} ->
+        base <>
+          " LiveKit does not see you in the media room yet; the agent will be speaking to nobody. Check your call connection."
+    end
+  end
+
+  defp sfu_summary(:unavailable, _viewer), do: "unavailable"
+
+  defp sfu_summary(%{viewer_present?: present?, others: others}, viewer) do
+    case if(present?, do: [viewer | others], else: others) do
+      [] -> "(nobody)"
+      identities -> Enum.join(identities, ",")
     end
   end
 

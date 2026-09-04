@@ -2613,7 +2613,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The created meeting map: id, project_id, name, slug, status, chat_space_id, livekit_room_name, host_participant_id, started_at, ended_at, scheduled_start_at, scheduled_end_at. The two scheduled_* keys are always present, and are null for an ad-hoc meeting.",
+          "The created meeting map: id, project_id, name, slug, status, chat_space_id, livekit_room_name, host_participant_id, started_at, ended_at, scheduled_start_at, scheduled_end_at. `livekit_room_name` is the LiveKit room a joiner is minted into — `space-<chat_space_id>`, the same `room_name` a meeting_join payload carries — not a meeting-keyed name. The two scheduled_* keys are always present, and are null for an ad-hoc meeting.",
         limitations:
           "Requires a valid project_id and name. If an explicit slug collides with an existing meeting in the project, a clean changeset error is returned (auto-generated slugs are de-duplicated instead). The intended-time pair is all-or-nothing: supply both scheduled_start_at and scheduled_end_at or neither, with the end strictly after the start; a malformed or half-supplied pair is refused rather than dropped, and creates no meeting.",
         when_to_use:
@@ -12666,7 +12666,16 @@ defmodule Platform.Federation.ToolSurface do
       slug: meeting.slug,
       status: meeting.status,
       chat_space_id: meeting.chat_space_id,
-      livekit_room_name: meeting.livekit_room_name,
+      # The room a joiner is actually minted into, NOT the row's own column
+      # (task 01a06925). `meetings.livekit_room_name` holds `meeting-<id>`,
+      # a name nothing joins: `MeetingHooks.do_join/1` resolves
+      # `Meetings.ensure_room(space.id)`, `Meetings.invite_agent/3` is handed
+      # `get_active_room(space_id)`, `meeting_say` and the LiveKit webhook
+      # look rooms up by name, and `legit_room?/1` accepts only `space-`.
+      # Reporting the column would hand an agent a room it cannot find anyone
+      # in. The column itself is left alone — it carries a unique index and
+      # repurposing it is a schema decision, not this serializer's.
+      livekit_room_name: Meetings.room_name_for_space(meeting.chat_space_id),
       host_participant_id: meeting.host_participant_id,
       started_at: format_datetime(meeting.started_at),
       ended_at: format_datetime(meeting.ended_at),

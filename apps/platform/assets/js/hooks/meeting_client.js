@@ -541,14 +541,52 @@ const MeetingClient = {
     this._roomListeners = []
   },
 
-  async _join({ token, url }) {
+  async _join({ token, url, room_name }) {
     // Adopt instead of disconnect-then-reconnect when we already hold a
     // connected room (task 019e4b3e stage 1) — avoids the
     // publish->disconnect->republish thrash seen in Rowan's console.
+    //
+    // ...but only when it is the SAME room (task 01a06925 stage 2). The
+    // Room is pinned on window across LiveView navigation, so a tab that
+    // joined a quickmeet in space A and then live-navigated to a /meetings
+    // page backed by space B kept space A's connection while the server
+    // wrote its roster row for B and dispatched the invited agent into
+    // space-B: the page showed the human present, the SFU saw nobody. The
+    // token's `video.room` is what LiveKit admits and `room_name` is the
+    // server's statement of it (pinned equal to the token in
+    // invite_room_parity_test.exs), so it is what the adopted room's `name`
+    // has to match.
     const existing = this._room || window.__livekit_room || window.__livekitRoom
     if (existing && existing.state === "connected") {
-      this._adoptRoom(existing)
-      return
+      if (!room_name) {
+        // The server always sends room_name; a payload without it is an
+        // older or foreign push. Keep the pre-stage-2 behaviour, but say so.
+        console.warn(
+          "[MeetingClient] join-meeting carried no room_name; adopting the connected room",
+          { connected: existing.name },
+        )
+        this._adoptRoom(existing)
+        return
+      }
+      if (existing.name === room_name) {
+        this._adoptRoom(existing)
+        return
+      }
+      console.warn(
+        "[MeetingClient] join-meeting names a different room than the connected one; reconnecting",
+        { connected: existing.name, requested: room_name },
+      )
+      // Release OUR listeners before disconnecting: the Disconnected handler
+      // bound in _bindRoomEvents runs _cleanupRoom() and pushes
+      // "meeting_left", which would take the human out of the meeting they
+      // are joining right now. Then drop the pinned refs, tiles and
+      // self-view so the fresh connect below starts from a clean slate.
+      this._releaseRoomListeners()
+      await existing.disconnect().catch(() => {})
+      this._room = null
+      window.__livekit_room = null
+      window.__livekitRoom = null
+      this._cleanupRoom()
     }
 
     if (this._room) {

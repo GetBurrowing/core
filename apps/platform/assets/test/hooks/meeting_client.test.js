@@ -1,5 +1,78 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import MeetingClient from "../../js/hooks/meeting_client.js"
+
+// Task 01a06925 stage 2: `_join` constructs `new Room(...)` from
+// livekit-client when it has no room to adopt. Swap ONLY the Room class for
+// a recording fake (RoomEvent / Track stay real) so the reconnect tests can
+// assert that a fresh connection was made, and with which token.
+const livekitFake = vi.hoisted(() => ({ created: [], connectedName: null }))
+
+vi.mock("livekit-client", async (importOriginal) => {
+  const actual = await importOriginal()
+  class Room {
+    constructor(opts) {
+      this.opts = opts
+      this.name = ""
+      this.state = "disconnected"
+      this.connectArgs = null
+      this.connectCalls = 0
+      this.disconnectCalls = 0
+      this._handlers = new Map()
+      this.remoteParticipants = new Map()
+      this.localParticipant = {
+        identity: "user:fresh",
+        name: "Fresh",
+        isLocal: true,
+        isCameraEnabled: false,
+        isMicrophoneEnabled: false,
+        trackPublications: new Map(),
+        setCameraCalls: [],
+        setMicCalls: [],
+        setCameraEnabled(v) {
+          this.setCameraCalls.push(v)
+          this.isCameraEnabled = v
+          return Promise.resolve()
+        },
+        setMicrophoneEnabled(v) {
+          this.setMicCalls.push(v)
+          this.isMicrophoneEnabled = v
+          return Promise.resolve()
+        },
+      }
+      livekitFake.created.push(this)
+    }
+    on(event, cb) {
+      const list = this._handlers.get(event) || []
+      list.push(cb)
+      this._handlers.set(event, list)
+      return this
+    }
+    off(event, cb) {
+      const list = this._handlers.get(event) || []
+      const i = list.indexOf(cb)
+      if (i >= 0) list.splice(i, 1)
+      return this
+    }
+    listenerCount(event) {
+      return (this._handlers.get(event) || []).length
+    }
+    connect(url, token) {
+      this.connectCalls += 1
+      this.connectArgs = [url, token]
+      this.state = "connected"
+      // LiveKit reports the granted room's name after connect; the test
+      // declares which room the token it hands over was minted for.
+      this.name = livekitFake.connectedName
+      return Promise.resolve()
+    }
+    disconnect() {
+      this.disconnectCalls += 1
+      this.state = "disconnected"
+      return Promise.resolve()
+    }
+  }
+  return { ...actual, Room }
+})
 
 /**
  * Tests for the `MeetingClient` hook's v2 local self-view reparenting
@@ -436,6 +509,22 @@ function buildSignalDocument() {
   }
 }
 
+// Record console.warn calls for the duration of one _join (task 01a06925
+// stage 2: the mismatch and missing-room_name paths must SAY what they did).
+function captureWarns() {
+  const calls = []
+  const prev = globalThis.console.warn
+  globalThis.console.warn = (...args) => {
+    calls.push(args)
+  }
+  return {
+    calls,
+    restore() {
+      globalThis.console.warn = prev
+    },
+  }
+}
+
 function buildReconnectHook(el) {
   const hook = Object.create(MeetingClient)
   hook._tiles = new Map()
@@ -592,18 +681,127 @@ describe("MeetingClient — reconnect survival + signal (stages 1-4)", () => {
     expect(room.listenerCount("participantConnected")).toBe(1)
   })
 
-  // 3. _join adopts instead of disconnect-reconnect when already connected.
-  it("_join adopts the existing connected room instead of reconnecting", async () => {
+  // 3. _join adopts instead of disconnect-reconnect when already connected
+  //    — provided it is the SAME room (task 01a06925 stage 2, J2). The
+  //    pinned Room carries a name and the push carries the room the token
+  //    grants; equal names keep 019e4b3e's no-thrash adopt.
+  it("_join adopts the existing connected room instead of reconnecting when the names match", async () => {
     const room = fakeRoom({ state: "connected" })
+    room.name = "space-B"
     globalThis.window.__livekit_room = room
     const hook = buildReconnectHook(fakeHookEl())
+    livekitFake.created.length = 0
 
-    await hook._join({ token: "tok", url: "wss://livekit.test" })
+    await hook._join({ token: "tok", url: "wss://livekit.test", room_name: "space-B" })
 
     // No disconnect-then-reconnect thrash; the live room is adopted.
     expect(room.disconnectCalls).toBe(0)
     expect(room.connectCalls).toBe(0)
+    expect(livekitFake.created).toHaveLength(0)
     expect(hook._room).toBe(room)
+  })
+
+  // 3-J1 (task 01a06925 stage 2). The defect: a tab that joined space-A
+  //      (quickmeet, or an earlier meeting) live-navigates to a meeting
+  //      backed by space-B. mounted() adopted the still-connected space-A
+  //      Room; the server then pushes join-meeting for space-B. The hook
+  //      must NOT keep space-A: warn naming both, disconnect the stale
+  //      room, drop the pinned refs, and connect the granted room with the
+  //      new token. Releasing our listeners first is load-bearing — the
+  //      Disconnected handler pushes "meeting_left", which would remove the
+  //      human from the meeting they are joining.
+  it("_join disconnects a connected room whose name differs from room_name and connects the granted one", async () => {
+    const stale = fakeRoom({ state: "connected" })
+    stale.name = "space-A"
+    globalThis.window.__livekit_room = stale
+    globalThis.window.__livekitRoom = stale
+    const hook = buildReconnectHook(fakeHookEl())
+    const pushed = []
+    hook.pushEvent = (event) => pushed.push(event)
+    // What mounted() does on the new page: adopt the surviving room.
+    hook._adoptRoom(stale)
+    expect(stale.listenerCount("disconnected")).toBe(1)
+
+    livekitFake.created.length = 0
+    livekitFake.connectedName = "space-B"
+    const warns = captureWarns()
+    try {
+      await hook._join({ token: "tok-B", url: "wss://livekit.test", room_name: "space-B" })
+    } finally {
+      warns.restore()
+    }
+
+    // The stale room was disconnected exactly once, and our listeners were
+    // off it before that happened.
+    expect(stale.disconnectCalls).toBe(1)
+    expect(stale.listenerCount("disconnected")).toBe(0)
+    stale.emit("disconnected")
+    expect(pushed).not.toContain("meeting_left")
+
+    // A fresh Room was connected with the NEW token and is now the pinned one.
+    expect(livekitFake.created).toHaveLength(1)
+    const fresh = livekitFake.created[0]
+    expect(fresh.connectArgs).toEqual(["wss://livekit.test", "tok-B"])
+    expect(hook._room).toBe(fresh)
+    expect(globalThis.window.__livekit_room).toBe(fresh)
+    expect(globalThis.window.__livekitRoom).toBe(fresh)
+    expect(globalThis.window.__livekit_room.name).not.toBe("space-A")
+    expect(globalThis.window.__livekit_room.name).toBe("space-B")
+    expect(fresh.listenerCount("disconnected")).toBe(1)
+
+    // One warn, naming BOTH rooms — the client noticed, it did not land
+    // in the right room by luck.
+    const mismatchWarns = warns.calls.filter((args) => {
+      const text = JSON.stringify(args)
+      return text.includes("space-A") && text.includes("space-B")
+    })
+    expect(mismatchWarns).toHaveLength(1)
+  })
+
+  // 3-J3. A push with no room_name (the server always sends one; this is
+  //      an older or foreign payload) degrades to the pre-stage-2 adopt,
+  //      and says so once.
+  it("_join without room_name adopts the connected room and warns once", async () => {
+    const room = fakeRoom({ state: "connected" })
+    room.name = "space-A"
+    globalThis.window.__livekit_room = room
+    const hook = buildReconnectHook(fakeHookEl())
+    livekitFake.created.length = 0
+
+    const warns = captureWarns()
+    try {
+      await hook._join({ token: "tok", url: "wss://livekit.test" })
+    } finally {
+      warns.restore()
+    }
+
+    expect(room.disconnectCalls).toBe(0)
+    expect(room.connectCalls).toBe(0)
+    expect(livekitFake.created).toHaveLength(0)
+    expect(hook._room).toBe(room)
+    const missingWarns = warns.calls.filter((args) =>
+      String(args[0]).includes("no room_name"),
+    )
+    expect(missingWarns).toHaveLength(1)
+  })
+
+  // 3-J4. A pinned room that is already DISCONNECTED (whatever its name) is
+  //      not adopted and not disconnected again: plain fresh connect.
+  it("_join with a disconnected pinned room of another name connects fresh without calling disconnect", async () => {
+    const dead = fakeRoom({ state: "disconnected" })
+    dead.name = "space-A"
+    globalThis.window.__livekit_room = dead
+    const hook = buildReconnectHook(fakeHookEl())
+    livekitFake.created.length = 0
+    livekitFake.connectedName = "space-B"
+
+    await hook._join({ token: "tok-B", url: "wss://livekit.test", room_name: "space-B" })
+
+    expect(dead.disconnectCalls).toBe(0)
+    expect(livekitFake.created).toHaveLength(1)
+    expect(livekitFake.created[0].connectArgs).toEqual(["wss://livekit.test", "tok-B"])
+    expect(globalThis.window.__livekit_room).toBe(livekitFake.created[0])
+    expect(hook._room).toBe(livekitFake.created[0])
   })
 
   // 3b. adopt-on-remount (v4 stage 4): when mounted() adopts a surviving

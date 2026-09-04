@@ -782,6 +782,103 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     end
   end
 
+  # ── What LiveKit sees, in the flash (task 01a06925 stage 3) ──────────────
+  #
+  # The roster row that lists the inviter as present is written server-side
+  # before the browser connects; the flash after Invite now says whether the
+  # SFU sees them. Three variants, and in every one the invite is still
+  # DELIVERED — `assert_push "meeting_join"` — because the diagnostic runs
+  # after `invite_agent/3` and can only lengthen the copy.
+
+  describe "the invite flash and the media room" do
+    # `ListParticipants` is made from the LiveView process, so the stub is
+    # shared rather than owned by the test process.
+    defp stub_livekit_participants(identities) do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :livekit_req_client,
+        Req.new(plug: {Req.Test, :livekit_invite_test})
+      )
+
+      Req.Test.set_req_test_to_shared(%{})
+
+      Req.Test.stub(:livekit_invite_test, fn conn ->
+        Req.Test.json(conn, %{
+          "participants" => Enum.map(identities, &%{"identity" => &1, "name" => &1})
+        })
+      end)
+
+      on_exit(fn ->
+        Req.Test.set_req_test_to_private(%{})
+        Application.delete_env(:platform, :livekit_req_client)
+      end)
+    end
+
+    defp invite_and_read_flash(conn, inviter, meeting, runtime_agent) do
+      _channel = join_runtime_client!(runtime_agent)
+      {:ok, view, _html} = conn |> login(inviter) |> live(~p"/meetings/#{meeting.slug}")
+      _ = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting
+
+      html =
+        view
+        |> element(~s([data-role="meeting-agent-invite-button"]))
+        |> render_click()
+
+      # Delivered, whatever the diagnostic said.
+      assert_push "meeting_join", _payload, 1_000
+      html
+    end
+
+    test "LiveKit sees the inviter and two others: the flash says so, with the count",
+         %{conn: conn, meeting: meeting, runtime_agent: runtime_agent} do
+      inviter = user!("inviter")
+      # The viewer plus TWO others — the viewer's own identity is excluded
+      # from the count, so a wrong fold reads 3 (or 1), never 2.
+      stub_livekit_participants(["user:#{inviter.id}", "agent:other", "user:someone-else"])
+
+      html = invite_and_read_flash(conn, inviter, meeting, runtime_agent)
+
+      assert html =~ "Invited"
+      assert html =~ "waiting for it to join."
+      assert html =~ "LiveKit sees you and 2 other(s) in the media room."
+      refute html =~ "does not see you"
+    end
+
+    test "LiveKit sees only agents: the flash says the inviter is not in the media room",
+         %{conn: conn, meeting: meeting, runtime_agent: runtime_agent} do
+      inviter = user!("inviter")
+      stub_livekit_participants(["agent:other"])
+
+      html = invite_and_read_flash(conn, inviter, meeting, runtime_agent)
+
+      assert html =~ "Invited"
+
+      assert html =~
+               "LiveKit does not see you in the media room yet; the agent will be speaking to nobody. Check your call connection."
+
+      refute html =~ "LiveKit sees you"
+    end
+
+    test "LiveKit cannot be asked: the flash is the existing copy, unchanged",
+         %{conn: conn, meeting: meeting, runtime_agent: runtime_agent} do
+      # No stub: the configured `wss://livekit.test` does not resolve, so
+      # `ListParticipants` fails in transport and presence is :unavailable.
+      # The diagnostic must degrade to the old flash, not to an error.
+      inviter = user!("inviter")
+
+      html = invite_and_read_flash(conn, inviter, meeting, runtime_agent)
+
+      assert html =~ "Invited"
+      assert html =~ "waiting for it to join."
+      refute html =~ "LiveKit sees you"
+      refute html =~ "does not see you"
+      refute html =~ "could not be invited"
+    end
+  end
+
   # ── The refusal ──────────────────────────────────────────────────────────
 
   describe "a viewer who may see the meeting but may not write to its space" do

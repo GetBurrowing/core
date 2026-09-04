@@ -6192,6 +6192,130 @@ defmodule Platform.Meetings do
     "space-#{space_id}"
   end
 
+  # ── What LiveKit itself sees (task 01a06925 stage 3) ─────────────────────
+  #
+  # The roster is the truth about INTENT: `MeetingHooks.do_join/1` writes the
+  # joiner's participant row server-side before the browser has connected,
+  # so the page can list a human who is not in the media room at all. The
+  # SFU is the truth about MEDIA. Nothing on the page could tell the two
+  # apart on 2026-09-03 21:16Z, when an invited agent published into a room
+  # LiveKit reported empty while the page showed the inviter present. These
+  # two functions let the invite flash say which one holds.
+
+  @doc """
+  The participant identities LiveKit reports in `room_name` right now, via
+  `RoomService/ListParticipants`. `{:error, :livekit_not_configured}` without
+  credentials; any HTTP or transport failure is `{:error, reason}` — this is
+  a diagnostic and must never raise into its caller.
+
+  The token carries `roomAdmin` scoped to the room: `ListParticipants`
+  refuses the `roomCreate`-only grant `ensure_livekit_room/1` uses, so
+  reusing that token would make every answer `:unavailable` on a real
+  server. The Req client is injectable through `:livekit_req_client` (a
+  `Req.Test` plug in tests), the way `Platform.ExternalAgents` does it.
+  """
+  @spec list_livekit_participants(String.t()) ::
+          {:ok, [String.t()]} | {:error, :livekit_not_configured | term()}
+  def list_livekit_participants(room_name) when is_binary(room_name) do
+    config = livekit_config()
+    url = config[:url]
+    api_key = config[:api_key]
+    api_secret = config[:api_secret]
+
+    if is_nil(url) or is_nil(api_key) or is_nil(api_secret) do
+      {:error, :livekit_not_configured}
+    else
+      token = room_admin_token(api_key, api_secret, room_name)
+
+      twirp_url =
+        url
+        |> String.replace_prefix("wss://", "https://")
+        |> String.replace_prefix("ws://", "http://")
+
+      case Req.post(livekit_req_client(),
+             url: "#{twirp_url}/twirp/livekit.RoomService/ListParticipants",
+             json: %{"room" => room_name},
+             headers: [{"authorization", "Bearer #{token}"}],
+             receive_timeout: 2_000,
+             retry: false
+           ) do
+        {:ok, %{status: 200, body: body}} -> {:ok, participant_identities(body)}
+        {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  rescue
+    e -> {:error, {:exception, Exception.message(e)}}
+  end
+
+  @doc """
+  Whether LiveKit sees `viewer_identity` in `room_name`, and who else it
+  sees. `:unavailable` when LiveKit cannot be asked, so a caller can keep
+  its existing copy rather than guess. The shape is
+  `%{viewer_present?: boolean, others: [identity]}`; the viewer is never
+  counted among `others`.
+  """
+  @spec media_room_presence(String.t(), String.t()) ::
+          %{viewer_present?: boolean(), others: [String.t()]} | :unavailable
+  def media_room_presence(room_name, viewer_identity)
+      when is_binary(room_name) and is_binary(viewer_identity) do
+    case list_livekit_participants(room_name) do
+      {:ok, identities} -> presence_from_identities(identities, viewer_identity)
+      {:error, _reason} -> :unavailable
+    end
+  end
+
+  @doc """
+  The pure half of `media_room_presence/2`: fold a list of identities into
+  the presence map for one viewer. Exposed so it can be tested without HTTP.
+  """
+  @spec presence_from_identities([String.t()], String.t()) ::
+          %{viewer_present?: boolean(), others: [String.t()]}
+  def presence_from_identities(identities, viewer_identity) when is_list(identities) do
+    %{
+      viewer_present?: viewer_identity in identities,
+      others: Enum.reject(identities, &(&1 == viewer_identity))
+    }
+  end
+
+  # LiveKit's protobuf-JSON omits an empty repeated field, so a 200 with no
+  # `participants` key is an EMPTY room, not a malformed answer.
+  defp participant_identities(%{"participants" => list}) when is_list(list) do
+    list
+    |> Enum.map(fn
+      %{"identity" => identity} when is_binary(identity) -> identity
+      _ -> nil
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp participant_identities(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> participant_identities(decoded)
+      _ -> []
+    end
+  end
+
+  defp participant_identities(_), do: []
+
+  defp room_admin_token(api_key, api_secret, room_name) do
+    now = System.system_time(:second)
+
+    encode_jwt(
+      %{
+        "iss" => api_key,
+        "nbf" => now,
+        "exp" => now + 600,
+        "video" => %{"roomAdmin" => true, "room" => room_name}
+      },
+      api_secret
+    )
+  end
+
+  defp livekit_req_client do
+    Application.get_env(:platform, :livekit_req_client, Req.new())
+  end
+
   defp livekit_config do
     app_config = Application.get_env(:platform, :livekit)
 
