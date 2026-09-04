@@ -943,8 +943,7 @@ defmodule PlatformWeb.MeetingLive do
           # The invite-an-agent control's options (task 01a04c2f). Seeded
           # here and re-derived by `refresh_participants/1`, so an agent that
           # joins the call leaves the list on the same tick its tile appears.
-          |> assign(:invitable_agents, invitable_agents(meeting.chat_space_id, participants))
-          |> assign(:pending_invite_agent_ids, pending_invite_agent_ids(participants))
+          |> assign_invite_rows(meeting.chat_space_id, participants)
           # Per-meeting agent activity (task 01a04a98), seeded from the
           # LIVE intent queue rather than from the tile's old
           # `activity_state={:idle}` literal. A socket that mounts at
@@ -4286,11 +4285,25 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:participants, participants)
     |> assign(:room_live?, room_live?(space_id))
     |> assign(:agents_by_id, load_agents_by_id(participants))
-    |> assign(:invitable_agents, invitable_agents(space_id, participants))
-    |> assign(:pending_invite_agent_ids, pending_invite_agent_ids(participants))
+    |> assign_invite_rows(space_id, participants)
   end
 
   defp refresh_participants(socket), do: socket
+
+  # The three invite assigns move together (task 01a0691d): `:invite_rows` is
+  # the model, `:invitable_agents` its clickable projection, and
+  # `:pending_invite_agent_ids` the presentational set the rail already reads.
+  # Deriving the projection from the rows is one roster read per refresh
+  # instead of one per assign, and it is what keeps the button list and the
+  # row list from ever disagreeing about the same agent.
+  defp assign_invite_rows(socket, space_id, participants) do
+    rows = invite_rows(space_id, participants)
+
+    socket
+    |> assign(:invite_rows, rows)
+    |> assign(:invitable_agents, invitable_agents_from_rows(rows))
+    |> assign(:pending_invite_agent_ids, pending_invite_agent_ids(participants))
+  end
 
   # Whether this meeting's space has a LIVE room right now (task 01a05b14
   # stage 5). Drives the top bar's `meeting live` pill, which follows the
@@ -4369,21 +4382,92 @@ defmodule PlatformWeb.MeetingLive do
   # collapsed. Silently hiding a client core has never heard from would
   # reproduce this task's defect one layer over.
   #
-  # Public so the exclusion can be exercised against hand-built participant
-  # lists, for the same reason `build_meeting_participants/1` is.
+  # ## The row model this list is a projection of (task 01a0691d)
+  #
+  # `invitable_agents/2` answers only "who gets a button". The People tab has
+  # to say more than that: the design canvas
+  # (01a064fc-5c89-7001-9ea1-491f076b6746, "Where this lives now") keeps every
+  # roster agent LISTED and replaces the button with the reason it cannot be
+  # pressed — an agent that silently vanishes from the list is a second
+  # mystery on top of the first, and the founder went looking for one five
+  # times. So `invite_rows/2` is the model both surfaces render from, and
+  # `invitable_agents/2` is derived from it rather than being a second
+  # predicate that could drift from the first.
+  #
+  # Per agent, first match wins:
+  #
+  #   * `:in_call`   — a participant row proves arrival (`agent_in_call?/2`).
+  #   * `:incapable` — its runtime declared features without voice
+  #                    (`Meetings.join_capability/1`); the control could only
+  #                    ever have failed.
+  #   * `:pending`   — a roster row from an invite nobody has answered yet
+  #                    (`pending_invite_agent_ids/1`); still clickable, which
+  #                    is what makes an undelivered invite recoverable.
+  #   * `:invitable` — everything else, INCLUDING `capability: :unknown`.
+  #                    01a0554f's ruling, kept: a client core has never heard
+  #                    from is offered, not hidden.
+  #
+  # `:capability` is carried on every row, not only the blocked ones, so the
+  # template can decide what the second line says without re-running the
+  # predicate.
+  #
+  # ORDER: invitable, pending, incapable, in_call — the canvas's "one ordered
+  # list, invitable first, then blocked". Within a state the roster order
+  # (`Chat.list_space_agents/1`, ascending `joined_at`) is preserved:
+  # `Enum.sort_by/2` is stable.
+  @invite_state_order %{invitable: 0, pending: 1, incapable: 2, in_call: 3}
+
   @doc false
-  def invitable_agents(space_id, participants) when is_binary(space_id) do
+  def invite_rows(space_id, participants) when is_binary(space_id) do
+    pending_ids = pending_invite_agent_ids(participants)
+
     space_id
     |> Chat.list_space_agents()
     |> Enum.flat_map(fn
       %{agent: %Agent{} = agent} -> [agent]
       _ -> []
     end)
-    |> Enum.reject(&agent_in_call?(&1, participants))
-    |> Enum.reject(&(Meetings.join_capability(&1) == :incapable))
+    |> Enum.map(&agent_invite_row(&1, participants, pending_ids))
+    |> Enum.sort_by(&Map.fetch!(@invite_state_order, &1.state))
   end
 
-  def invitable_agents(_space_id, _participants), do: []
+  def invite_rows(_space_id, _participants), do: []
+
+  # `agent_invite_row`, not `invite_row`: the calendar detail surface above
+  # already owns `invite_row/3` for its human-invite rows.
+  defp agent_invite_row(%Agent{} = agent, participants, pending_ids) do
+    capability = Meetings.join_capability(agent)
+
+    state =
+      cond do
+        agent_in_call?(agent, participants) -> :in_call
+        capability == :incapable -> :incapable
+        MapSet.member?(pending_ids, agent.id) -> :pending
+        true -> :invitable
+      end
+
+    %{agent: agent, state: state, capability: capability}
+  end
+
+  # Public so the exclusion can be exercised against hand-built participant
+  # lists, for the same reason `build_meeting_participants/1` is. Since task
+  # 01a0691d this is `invite_rows/2` filtered to the CLICKABLE states; the
+  # exclusions documented above are now decided there.
+  @doc false
+  def invitable_agents(space_id, participants) do
+    space_id
+    |> invite_rows(participants)
+    |> invitable_agents_from_rows()
+  end
+
+  # Public for `MeetingHooks.assign_roster/2`, which builds the same three
+  # assigns for the quickmeet from one roster read (task 01a0691d stage 2).
+  @doc false
+  def invitable_agents_from_rows(rows) do
+    rows
+    |> Enum.filter(&(&1.state in [:invitable, :pending]))
+    |> Enum.map(& &1.agent)
+  end
 
   # True when some participant row proves THIS agent published into the room.
   #
@@ -4428,109 +4512,22 @@ defmodule PlatformWeb.MeetingLive do
     is_struct(pending_ids, MapSet) and MapSet.member?(pending_ids, agent_id)
   end
 
-  # The `"meeting_invite_agent"` body. Every failure ends in a flash rather
-  # than a raise: unlike the calendar surface's invite, this control lives on
-  # a page that is open for the whole call, so an agent can leave the roster
-  # or the call can end between the render and the click. Those are real
-  # runtime outcomes, not caller bugs.
+  # The `"meeting_invite_agent"` body lives in
+  # `MeetingHooks.invite_agent_into_call/3` since task 01a0691d, so this page
+  # and the quickmeet panel run ONE `with` chain and flash ONE set of
+  # messages (its comment explains why every failure is a flash and not a
+  # raise). What stays here is the part only this LiveView can do: refresh
+  # the roster it renders, which reads `:meeting` off THIS socket.
   defp invite_agent_into_call(socket, agent_id) do
-    with %Meeting{chat_space_id: space_id} when is_binary(space_id) <-
-           socket.assigns[:meeting],
-         %Agent{} = agent <-
-           Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)),
-         %Room{} = room <- Meetings.get_active_room(space_id),
-         {:ok, _participant} <-
-           Meetings.invite_agent(room, agent, socket.assigns[:current_user_record]) do
-      # "Invited", not "is joining" (task 01a0554f). A successful return from
-      # `invite_agent/3` means the join was BROADCAST, and
-      # `Phoenix.Endpoint.broadcast/3` returns `:ok` into a topic with no
-      # subscriber just as readily as into a live one — the hazard
-      # `Meetings.invite_agent/3` documents at length. The old copy asserted
-      # arrival on the strength of a send, which is the claim this whole task
-      # is about. Arrival is reported by the `{:agent_join_failed, _}` clause
-      # above and by the participant rail when the worker actually publishes.
-      socket
-      |> refresh_participants()
-      |> put_flash(:info, invite_flash(agent, room, socket.assigns[:user_id]))
-    else
-      {:error, :forbidden} ->
-        put_flash(socket, :error, "You do not have permission to invite an agent here.")
+    space_id =
+      case socket.assigns[:meeting] do
+        %Meeting{chat_space_id: space_id} -> space_id
+        _ -> nil
+      end
 
-      # Distinguished from the catch-all because it is the one failure a
-      # human can act on: the agent is real and on the roster, but no
-      # runtime is connected to it, so nothing could receive the join.
-      # Before task 01a04f31 this case returned `{:ok, participant}` and
-      # flashed success.
-      {:error, :no_runtime} ->
-        put_flash(
-          socket,
-          :error,
-          "That agent has no connected runtime, so it cannot join the meeting."
-        )
-
-      # Task 01a06686: the agent's voice worker has its own runtime row, and
-      # it is that row — not the brain — that is not connected. Named apart
-      # from `:no_runtime` because the remedy differs: the brain may be
-      # online and answering chat while the mouth is down.
-      {:error, :voice_runtime_offline} ->
-        put_flash(
-          socket,
-          :error,
-          "#{voice_offline_agent_name(socket, agent_id)}'s voice worker is offline, so it cannot join the meeting."
-        )
-
-      _ ->
-        put_flash(socket, :error, "That agent could not be invited.")
-    end
-  end
-
-  # Task 01a06925 stage 3. Runs only AFTER `invite_agent/3` has delivered the
-  # join, and can only ever lengthen the success flash: the roster row that
-  # makes the page show the inviter as present is written server-side
-  # before the browser connects, so this asks LiveKit who is actually in
-  # the media room and says so — the one fact the 21:16Z incident could not
-  # be diagnosed from the page without. `:unavailable` keeps the copy as it
-  # was; a diagnostic never turns a delivered invite into an error.
-  defp invite_flash(agent, room, user_id) do
-    base = "Invited #{agent.name} — waiting for it to join."
-    presence = Meetings.media_room_presence(room.livekit_room_name, "user:#{user_id}")
-
-    Logger.info(
-      "[Meetings] invite agent=#{agent.slug} room=#{room.livekit_room_name} " <>
-        "sfu=#{sfu_summary(presence, "user:#{user_id}")}"
-    )
-
-    case presence do
-      :unavailable ->
-        base
-
-      %{viewer_present?: true, others: others} ->
-        base <> " LiveKit sees you and #{length(others)} other(s) in the media room."
-
-      %{viewer_present?: false} ->
-        base <>
-          " LiveKit does not see you in the media room yet; the agent will be speaking to nobody. Check your call connection."
-    end
-  end
-
-  defp sfu_summary(:unavailable, _viewer), do: "unavailable"
-
-  defp sfu_summary(%{viewer_present?: present?, others: others}, viewer) do
-    case if(present?, do: [viewer | others], else: others) do
-      [] -> "(nobody)"
-      identities -> Enum.join(identities, ",")
-    end
-  end
-
-  # The `with` above has already bound `agent` by the time `invite_agent/3`
-  # can answer `:voice_runtime_offline`, but an `else` clause cannot see the
-  # bindings of the `with` chain, so the name is looked up again from the
-  # same list the chain read.
-  defp voice_offline_agent_name(socket, agent_id) do
-    case Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)) do
-      %Agent{name: name} when is_binary(name) and name != "" -> name
-      _ -> "That agent"
-    end
+    socket
+    |> MeetingHooks.invite_agent_into_call(space_id, agent_id)
+    |> refresh_participants()
   end
 
   # True only when the deleted row is THIS viewer's participant row on THIS

@@ -1344,8 +1344,12 @@ defmodule PlatformWeb.ChatLive.Partials do
       `Listening` refusal exists to prevent. Porting the gate and the
       handlers is a second surface's worth of work, not a markup move.
 
-    * **`+ Add agent`.** `invite_event` is left nil, which hides the
-      control. `meeting_invite_agent` is a `MeetingLive` handler.
+    * **Invite an agent.** `CallShell.invite_section/1` renders from
+      `@invite_rows` against `quickmeet_invite_agent`, which `MeetingHooks`
+      handles with the same body `/meetings` runs
+      (`MeetingHooks.invite_agent_into_call/3`, task 01a0691d). The
+      section is unconditional on this surface: a signed-in chat viewer in
+      a call may always invite.
 
     * **`Listening`.** Deliberately absent everywhere: nothing in the
       system can set `AgentActivity`'s `:listening`. See
@@ -1357,6 +1361,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:camera_enabled, :boolean, required: true)
   attr(:screen_share_enabled, :boolean, required: true)
   attr(:meeting_participants, :list, default: [])
+  attr(:invite_rows, :list, default: [])
 
   # ── Call-shell assigns, all owned by `ChatLive.MeetingHooks` ─────────
   #
@@ -1743,6 +1748,8 @@ defmodule PlatformWeb.ChatLive.Partials do
         agents_by_id={@agents_by_id}
         meeting={@meeting}
         agent_activity={@agent_activity}
+        invite_rows={@invite_rows}
+        invite_event="quickmeet_invite_agent"
         candidates={@candidates}
         candidates_closed={@candidates_closed}
         candidate_events={@candidate_events}

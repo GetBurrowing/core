@@ -32,7 +32,8 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
           candidates_closed: [],
           candidate_events: %{},
           candidate_error: nil,
-          captions_available: true
+          captions_available: true,
+          invite_rows: []
         },
         assigns
       )
@@ -55,6 +56,7 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       candidate_events={@candidate_events}
       candidate_error={@candidate_error}
       captions_available={@captions_available}
+      invite_rows={@invite_rows}
     />
     """
     |> rendered_to_string()
@@ -690,6 +692,69 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
   # Counted with LazyHTML, not with `=~`: `LazyHTML.query/2` returns a
   # struct and is NEVER falsy, so `if result do` and `result == []` are
   # both wrong — the nodes have to be counted.
+  # ── The invite section reaches the quickmeet (task 01a0691d stage 2) ───
+  #
+  # The quickmeet used to pass no `invite_event`, which removed the block
+  # entirely. It now renders `CallShell.invite_section/1` against
+  # `quickmeet_invite_agent` — unconditionally, so a space with no agents
+  # still shows the heading and the line explaining the emptiness.
+  describe "the invite section on the quickmeet" do
+    defp invite_row(id, state, capability) do
+      %{
+        agent: %{id: id, name: "Agent " <> id, slug: "agent-" <> id},
+        state: state,
+        capability: capability
+      }
+    end
+
+    test "renders in the rail with the empty line when there are no rows" do
+      html = render_panel(%{invite_rows: []})
+
+      assert count(html, ~s(#quickmeet-call-rail [data-role="meeting-agent-invite"])) == 1
+
+      assert text(html, ~s(#quickmeet-call-rail [data-role="meeting-agent-invite-empty"]))
+             |> String.replace(~r/\s+/, " ")
+             |> String.trim() ==
+               "No agents in this space yet. Add one to the space and it appears here, without a reload."
+
+      refute html =~ ~s(data-role="meeting-agent-invite-row")
+    end
+
+    test "an invitable row offers the quickmeet's own invite event" do
+      html = render_panel(%{invite_rows: [invite_row("a-1", :invitable, :capable)]})
+
+      buttons =
+        within(html, ~s(#quickmeet-call-rail [data-role="meeting-agent-invite-button"]))
+
+      assert LazyHTML.attribute(buttons, "phx-click") == ["quickmeet_invite_agent"]
+      assert LazyHTML.attribute(buttons, "phx-value-agent-id") == ["a-1"]
+      refute html =~ ~s(data-role="meeting-agent-invite-empty")
+    end
+
+    test "a disabled row is listed with its reason and no control" do
+      html = render_panel(%{invite_rows: [invite_row("a-2", :incapable, :incapable)]})
+
+      selector =
+        ~s(#quickmeet-call-rail [data-role="meeting-agent-invite-row"][data-agent-id="a-2"])
+
+      assert count(html, selector) == 1
+      assert count(html, selector <> ~s([data-invite-state="incapable"])) == 1
+
+      assert text(html, selector <> ~s( [data-role="meeting-agent-invite-reason"]))
+             |> String.trim() ==
+               "No voice runtime online"
+
+      row = html |> within(selector) |> LazyHTML.to_html()
+      refute row =~ "<button"
+      refute row =~ "phx-click"
+    end
+
+    test "the section is absent when not in a meeting, like the rest of the rail" do
+      html = render_panel(%{in_meeting: false, invite_rows: []})
+      refute html =~ ~s(data-role="meeting-agent-invite")
+    end
+  end
+
   describe "single caption host (stage 2)" do
     defp caption_hosts(html) do
       html

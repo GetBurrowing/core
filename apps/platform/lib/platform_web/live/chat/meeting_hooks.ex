@@ -73,13 +73,22 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   import Phoenix.Component, only: [assign: 3, assign_new: 3, update: 3]
 
   import Phoenix.LiveView,
-    only: [attach_hook: 4, detach_hook: 3, push_event: 3, connected?: 1, get_connect_params: 1]
+    only: [
+      attach_hook: 4,
+      detach_hook: 3,
+      push_event: 3,
+      put_flash: 3,
+      connected?: 1,
+      get_connect_params: 1
+    ]
 
   alias Platform.Accounts
+  alias Platform.Agents.Agent
   alias Platform.Meetings
   alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.Membership, as: MeetingsMembership
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.Room
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Tenancy
 
@@ -100,6 +109,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       |> assign(:screen_share_enabled, false)
       |> assign(:meeting_counts, %{})
       |> assign(:meeting_participants, [])
+      # `assign_new`, not `assign`: on `/meetings` this runs AFTER
+      # `MeetingLive.mount` has already built both from the roster, and a
+      # plain assign here blanked the People tab on first render.
+      |> assign_new(:invite_rows, fn -> [] end)
+      |> assign_new(:invitable_agents, fn -> [] end)
       |> assign_call_shell_defaults()
       |> attach_hook(:meeting_events, :handle_event, &handle_event/3)
       |> attach_hook(:meeting_info, :handle_info, &handle_info/2)
@@ -183,6 +197,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign(:screen_share_enabled, false)
     |> assign(:meeting_counts, %{})
     |> assign(:meeting_participants, [])
+    |> assign_new(:invite_rows, fn -> [] end)
+    |> assign_new(:invitable_agents, fn -> [] end)
     |> assign_call_shell_defaults()
     # Idempotent hook install: the guest surface calls attach_guest/1
     # once at mount (`:name_entry` state seeds the shell tree) and again
@@ -471,6 +487,24 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # resets it. A client-only toggle would strand it open over the chat.
   defp handle_event("quickmeet_toggle_rail", _params, socket) do
     {:halt, assign(socket, :quickmeet_rail_open, !socket.assigns[:quickmeet_rail_open])}
+  end
+
+  # The People tab's Invite button on the quickmeet (task 01a0691d stage
+  # 2). The body is `invite_agent_into_call/3` — the same `with` chain and
+  # the same flashes `/meetings` runs — against the space this chat surface
+  # is in a call on, then the roster refresh that turns the clicked row
+  # `:pending`. Halted: `ChatLive` has no clause for this event and the
+  # flash is already on the socket.
+  defp handle_event("quickmeet_invite_agent", %{"agent-id" => agent_id}, socket)
+       when is_binary(agent_id) do
+    space_id = active_space_id(socket)
+
+    socket =
+      socket
+      |> invite_agent_into_call(space_id, agent_id)
+      |> maybe_refresh_roster(space_id)
+
+    {:halt, socket}
   end
 
   defp handle_event("meeting_tab_select", %{"tab" => tab}, socket) when is_binary(tab) do
@@ -913,16 +947,158 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
           Phoenix.LiveView.Socket.t()
   def maybe_refresh_roster(socket, space_id) do
     if socket.assigns[:in_meeting] and active_space_id(socket) == space_id do
-      assign(socket, :meeting_participants, meeting_participants(space_id))
+      assign_roster(socket, space_id)
     else
       socket
     end
+  end
+
+  # The rail's roster assigns move together (task 01a0691d stage 2), as
+  # `MeetingLive.assign_invite_rows/3` moves them on `/meetings`: the
+  # participants, the invite rows built from them, and the clickable
+  # projection `invite_agent_into_call/3` resolves a click against. One
+  # roster read per refresh, and the button list can never disagree with
+  # the row list about the same agent.
+  defp assign_roster(socket, space_id) do
+    participants = meeting_participants(space_id)
+    rows = PlatformWeb.MeetingLive.invite_rows(space_id, participants)
+
+    socket
+    |> assign(:meeting_participants, participants)
+    |> assign(:invite_rows, rows)
+    |> assign(:invitable_agents, PlatformWeb.MeetingLive.invitable_agents_from_rows(rows))
   end
 
   defp active_space_id(socket) do
     case socket.assigns[:active_space] do
       %{id: id} -> id
       _ -> nil
+    end
+  end
+
+  @doc """
+  The `"meeting_invite_agent"` body, shared by `PlatformWeb.MeetingLive` and
+  the quickmeet panel (task 01a0691d stage 1; moved here verbatim from
+  `MeetingLive.invite_agent_into_call/2`, where task 01a04c2f wrote it).
+
+  Every failure ends in a flash rather than a raise: this control lives on a
+  page that is open for the whole call, so an agent can leave the roster or
+  the call can end between the render and the click. Those are real runtime
+  outcomes, not caller bugs.
+
+  Two assigns are read, and both surfaces carry them:
+
+    * `:invitable_agents` — the server-built CLICKABLE list this socket just
+      rendered. The agent id is resolved against it rather than against the
+      `agents` table, so a forged or stale `agent-id` is a miss (the
+      catch-all flash), never a cross-space reach. An agent that
+      `MeetingLive.invite_rows/2` lists as `:incapable` or `:in_call` is not
+      in this list, which is what makes "not offered" hold on the server and
+      not only in the markup.
+    * `:current_user_record` — the viewer, seeded by `ShellLive`'s on_mount
+      on both views; `Meetings.invite_agent/3` authorizes it.
+
+  `space_id` is the meeting's chat space. The caller owns what happens to
+  its roster afterwards: `MeetingLive` runs `refresh_participants/1`, which
+  reads its own `:meeting` assign and so cannot live here.
+
+  The success flash says "Invited", not "is joining" (task 01a0554f). A
+  successful return from `invite_agent/3` means the join was BROADCAST, and
+  `Phoenix.Endpoint.broadcast/3` returns `:ok` into a topic with no
+  subscriber just as readily as into a live one — the hazard
+  `Meetings.invite_agent/3` documents at length. Arrival is reported by the
+  `{:agent_join_failed, _}` path and by the participant rail when the worker
+  actually publishes.
+  """
+  @spec invite_agent_into_call(Phoenix.LiveView.Socket.t(), binary() | nil, binary()) ::
+          Phoenix.LiveView.Socket.t()
+  def invite_agent_into_call(socket, space_id, agent_id) do
+    with space_id when is_binary(space_id) <- space_id,
+         %Agent{} = agent <-
+           Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)),
+         %Room{} = room <- Meetings.get_active_room(space_id),
+         {:ok, _participant} <-
+           Meetings.invite_agent(room, agent, socket.assigns[:current_user_record]) do
+      put_flash(socket, :info, invite_flash(agent, room, socket.assigns[:user_id]))
+    else
+      {:error, :forbidden} ->
+        put_flash(socket, :error, "You do not have permission to invite an agent here.")
+
+      # Distinguished from the catch-all because it is the one failure a
+      # human can act on: the agent is real and on the roster, but no
+      # runtime is connected to it, so nothing could receive the join.
+      # Before task 01a04f31 this case returned `{:ok, participant}` and
+      # flashed success.
+      {:error, :no_runtime} ->
+        put_flash(
+          socket,
+          :error,
+          "That agent has no connected runtime, so it cannot join the meeting."
+        )
+
+      # Task 01a06686: the agent's voice worker has its own runtime row, and
+      # it is that row — not the brain — that is not connected. Named apart
+      # from `:no_runtime` because the remedy differs: the brain may be
+      # online and answering chat while the mouth is down.
+      {:error, :voice_runtime_offline} ->
+        put_flash(
+          socket,
+          :error,
+          "#{voice_offline_agent_name(socket, agent_id)}'s voice worker is offline, so it cannot join the meeting."
+        )
+
+      _ ->
+        put_flash(socket, :error, "That agent could not be invited.")
+    end
+  end
+
+  # Task 01a06925 stage 3, moved here verbatim by task 01a0691d stage 1 when
+  # the invite body left `MeetingLive`. Runs only AFTER `invite_agent/3` has
+  # delivered the join, and can only ever lengthen the success flash: the
+  # roster row that makes the page show the inviter as present is written
+  # server-side before the browser connects, so this asks LiveKit who is
+  # actually in the media room and says so — the one fact the 21:16Z incident
+  # could not be diagnosed from the page without. `:unavailable` keeps the
+  # copy as it was; a diagnostic never turns a delivered invite into an error.
+  defp invite_flash(agent, room, user_id) do
+    base = "Invited #{agent.name} — waiting for it to join."
+    presence = Meetings.media_room_presence(room.livekit_room_name, "user:#{user_id}")
+
+    Logger.info(
+      "[Meetings] invite agent=#{agent.slug} room=#{room.livekit_room_name} " <>
+        "sfu=#{sfu_summary(presence, "user:#{user_id}")}"
+    )
+
+    case presence do
+      :unavailable ->
+        base
+
+      %{viewer_present?: true, others: others} ->
+        base <> " LiveKit sees you and #{length(others)} other(s) in the media room."
+
+      %{viewer_present?: false} ->
+        base <>
+          " LiveKit does not see you in the media room yet; the agent will be speaking to nobody. Check your call connection."
+    end
+  end
+
+  defp sfu_summary(:unavailable, _viewer), do: "unavailable"
+
+  defp sfu_summary(%{viewer_present?: present?, others: others}, viewer) do
+    case if(present?, do: [viewer | others], else: others) do
+      [] -> "(nobody)"
+      identities -> Enum.join(identities, ",")
+    end
+  end
+
+  # The `with` above has already bound `agent` by the time `invite_agent/3`
+  # can answer `:voice_runtime_offline`, but an `else` clause cannot see the
+  # bindings of the `with` chain, so the name is looked up again from the
+  # same list the chain read.
+  defp voice_offline_agent_name(socket, agent_id) do
+    case Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)) do
+      %Agent{name: name} when is_binary(name) and name != "" -> name
+      _ -> "That agent"
     end
   end
 
@@ -978,7 +1154,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         socket
         |> assign(:current_participant, participant)
         |> assign(:in_meeting, true)
-        |> assign(:meeting_participants, meeting_participants(space.id))
+        |> assign_roster(space.id)
         |> push_event("join-meeting", %{
           token: token,
           url: Meetings.livekit_url(),

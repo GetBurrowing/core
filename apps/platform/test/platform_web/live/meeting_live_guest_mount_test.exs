@@ -475,6 +475,26 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       refute html =~ ~s(id="meeting-chat-drawer")
     end
 
+    # Task 01a0691d stage 2: the invite section is gated on a signed-in
+    # `user_id`, not on `@shell?`. A guest has `user_id: nil` and could
+    # never pass `authorize_writer`, so the section is absent — while the
+    # rail it would live in IS rendered, which keeps this a statement about
+    # the gate rather than about the rail.
+    test "renders the call rail but no invite section: a guest may not invite",
+         %{conn: conn} do
+      meeting = create_meeting()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
+
+      {:ok, _view, html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assert html =~ ~s(data-component="call-rail")
+      refute html =~ ~s(data-role="meeting-agent-invite")
+    end
+
     # Task 019f498d re-dispatch — Bug A fix. The persistent local self-view
     # parking slot (data-role="local-self-view") is gated on `self_view`
     # being truthy. Stage 3 seeded `:current_participant = nil` for guests

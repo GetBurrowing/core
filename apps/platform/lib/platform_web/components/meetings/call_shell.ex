@@ -86,8 +86,6 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
   use Phoenix.Component
 
-  alias Phoenix.LiveView.JS
-
   import PlatformWeb.Components.Meetings.CandidateRail
   import PlatformWeb.Components.Meetings.ParticipantRail
   import PlatformWeb.Components.Meetings.TranscriptPane
@@ -143,12 +141,22 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   attr(:meeting, :any, default: nil)
   attr(:agent_activity, :any, default: nil)
 
-  attr(:invitable_agents, :list, default: [])
-  attr(:pending_invite_agent_ids, :any, default: nil)
+  attr(:invite_rows, :list,
+    default: [],
+    doc: """
+    `PlatformWeb.MeetingLive.invite_rows/2` output — one
+    `%{agent, state, capability}` per agent of the meeting's space,
+    invitable first. The section renders whenever `invite_event` is set,
+    rows or none (task 01a0691d).
+    """
+  )
 
   attr(:invite_event, :string,
     default: nil,
-    doc: "event pushed when an agent is picked; the `+ Add agent` control hides when nil"
+    doc: """
+    event pushed when an agent is invited, with `phx-value-agent-id`. nil
+    means the viewer may not invite, and the invite section is absent
+    """
   )
 
   # ── Canvas pane ──────────────────────────────────────────────────
@@ -246,11 +254,10 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               agent_activity={@agent_activity}
             />
             {render_slot(@people_extra)}
-            <.add_agent
+            <.invite_section
               :if={@invite_event}
               id={@id}
-              invitable_agents={@invitable_agents}
-              pending_invite_agent_ids={@pending_invite_agent_ids}
+              invite_rows={@invite_rows}
               invite_event={@invite_event}
             />
           <% "canvas" -> %>
@@ -338,100 +345,138 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   end
 
   @doc """
-  The `+ Add agent` control and the picker it opens.
+  The People tab's "Invite an agent" section (task 01a0691d stage 2).
 
-  This is the `data-role="meeting-agent-invite"` picker moved out of
-  the `/meetings` header and into the rail, unchanged in behaviour:
-  the same `phx-value-agent-id`, the same server-built
-  `@invitable_agents` list, and the same amber `no answer yet` honesty
-  from #883 — an invite whose `meeting_join` reached no subscriber is
-  offered again and LABELLED, rather than being silently claimed as an
-  arrival.
+  Rendered UNCONDITIONALLY whenever the rail was given an `invite_event`:
+  the list being empty is the state this section exists to explain, not a
+  reason to remove it. The block used to vanish when no agent was
+  invitable, which on the founder's screen read as "this feature does not
+  exist" — the rail showed PARTICIPANTS (2) and nothing else.
 
-  The open/close toggle is client-side `JS.toggle/1` deliberately. It
-  is pure view state, and routing it through the socket would add a
-  handler to every surface that mounts this rail for no behaviour the
-  server needs to know about.
+  Every roster agent is a row, and every row explains itself. The rows
+  come server-built from `PlatformWeb.MeetingLive.invite_rows/2`, invitable
+  first, and this component decides nothing about capability: it only
+  draws the state it is handed. Per state (design canvas
+  01a064fc-5c89-7001-9ea1-491f076b6746, "Where this lives now"):
+
+    * `:invitable`, capability `:capable` — "Voice runtime online", Invite.
+    * `:invitable`, capability `:unknown` — NO second line, Invite. A hedge
+      on a row that usually works teaches people to ignore hedges
+      (01a0554f's ruling, kept).
+    * `:pending` — "Invite sent, no answer yet", and the button reads
+      Waiting in `info`. Still clickable: an undelivered invite has to be
+      recoverable from the row that made it.
+    * `:incapable` — "No voice runtime online", no control.
+    * `:in_call` — "Already in the call", no control; the agent is listed
+      above under In this call too.
+
+  Blocked rows are plain `<li>`s: no `<button>`, no `phx-click`, no hover
+  fill (`base-300` is a raised surface, not a hover colour). Muted, never
+  `warning`: warning on this rail means something is asking a human for a
+  response, which an agent that cannot join is not. `info` appears on
+  Waiting and nowhere else. The words "listening" and "hidden" do not
+  appear here; the approved target canvas drew a third group titled
+  "No voice — hidden", and this section is the reversal of that.
+
+  The heading is the rail's own 11px section style, not `text-xs`: the
+  approved type scale (01a05b14 stage 5) pins every rail heading to
+  `text-[11px]` unconditionally.
   """
   attr(:id, :string, required: true)
-  attr(:invitable_agents, :list, default: [])
-  attr(:pending_invite_agent_ids, :any, default: nil)
+  attr(:invite_rows, :list, default: [])
   attr(:invite_event, :string, required: true)
 
-  def add_agent(assigns) do
+  def invite_section(assigns) do
     ~H"""
-    <div class="px-3 pb-3 pt-2" data-role="meeting-agent-invite">
-      <button
-        type="button"
-        phx-click={JS.toggle(to: "##{@id}-agent-picker")}
-        aria-controls={"#{@id}-agent-picker"}
-        class="w-full rounded-field border border-dashed border-base-300 px-3 py-2 text-xs text-base-content/60 transition-colors hover:border-base-content/40 hover:text-base-content/80"
-        data-role="add-agent-toggle"
-      >
-        + Add agent
-      </button>
-
-      <div
-        id={"#{@id}-agent-picker"}
-        class="mt-2 hidden rounded-box border border-base-300 bg-base-100/60 p-2"
-        data-role="meeting-agent-invite-picker"
-      >
-        <%!-- PLANNER PREMISE CORRECTED, task 01a05b14 stage 2. The
-             stage text says this picker's three capability groups
-             ("Can join a call" / "Never declared — may work" / "No
-             voice — hidden") "survive untouched". They do not exist:
-             a repo-wide grep for those literals returns only
-             `control_center/agent_detail.ex`, and the shipped picker
-             in `meeting_live.html.heex` was a FLAT list. The flat
-             list is what moved. Grouping the options is real work
-             against `agents.capabilities`, not a relocation, and
-             inventing a grouping here would have put three headings
-             on screen with nothing deciding which agent falls under
-             which — the same class of defect as `Listening`. --%>
-        <span class="block px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-base-content/50">
+    <section
+      id={"#{@id}-agent-invite"}
+      class="px-3 pb-3 pt-2 text-xs"
+      data-role="meeting-agent-invite"
+    >
+      <div class="px-1 pb-1.5">
+        <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">
           Invite an agent
         </span>
-
-        <ul class="flex flex-col gap-1" role="list">
-          <li :for={agent <- @invitable_agents}>
-            <button
-              type="button"
-              phx-click={@invite_event}
-              phx-value-agent-id={agent.id}
-              data-role="meeting-agent-invite-button"
-              data-agent-id={agent.id}
-              data-invite-pending={invite_pending?(@pending_invite_agent_ids, agent.id) && "true"}
-              aria-label={
-                if invite_pending?(@pending_invite_agent_ids, agent.id),
-                  do:
-                    "Invite #{agent.name || agent.slug} to the meeting again — the first invite has not been answered",
-                  else: "Invite #{agent.name || agent.slug} to the meeting"
-              }
-              class="btn btn-ghost btn-xs w-full justify-start gap-2 font-normal text-base-content/70 hover:text-base-content"
-            >
-              <span class="hero-plus-small size-4 shrink-0" aria-hidden="true"></span>
-              <span class="truncate">{agent.name || agent.slug}</span>
-              <span
-                :if={invite_pending?(@pending_invite_agent_ids, agent.id)}
-                class="ml-auto shrink-0 text-[0.625rem] uppercase tracking-wide text-warning"
-                data-role="meeting-agent-invite-pending"
-              >
-                no answer yet
-              </span>
-            </button>
-          </li>
-
-          <li
-            :if={@invitable_agents == []}
-            class="px-1 py-1.5 text-[11px] text-base-content/40"
-          >
-            Every agent in this space has already joined.
-          </li>
-        </ul>
       </div>
-    </div>
+
+      <ul class="flex flex-col" role="list">
+        <li
+          :for={row <- @invite_rows}
+          class="flex items-center gap-2 px-1 py-1.5"
+          data-role="meeting-agent-invite-row"
+          data-invite-state={row.state}
+          data-agent-id={row.agent.id}
+        >
+          <span class="min-w-0 flex-1">
+            <span
+              class={[
+                "block truncate text-[13px] leading-tight",
+                if(row.state in [:incapable, :in_call],
+                  do: "text-base-content/50",
+                  else: "text-base-content"
+                )
+              ]}
+              data-role="meeting-agent-invite-name"
+            >
+              {row.agent.name || row.agent.slug}
+            </span>
+            <span
+              :if={invite_reason(row)}
+              class="block truncate text-[11px] text-base-content/50"
+              data-role="meeting-agent-invite-reason"
+            >
+              {invite_reason(row)}
+            </span>
+          </span>
+
+          <button
+            :if={row.state in [:invitable, :pending]}
+            type="button"
+            phx-click={@invite_event}
+            phx-value-agent-id={row.agent.id}
+            data-role="meeting-agent-invite-button"
+            data-agent-id={row.agent.id}
+            data-invite-pending={row.state == :pending && "true"}
+            aria-label={invite_label(row)}
+            class="btn btn-ghost btn-xs shrink-0 font-normal text-base-content/70 hover:text-base-content"
+          >
+            <span
+              :if={row.state == :pending}
+              class="text-info"
+              data-role="meeting-agent-invite-pending"
+            >
+              Waiting
+            </span>
+            <span :if={row.state != :pending}>Invite</span>
+          </button>
+        </li>
+
+        <li
+          :if={@invite_rows == []}
+          class="rounded-box border border-dashed border-base-300 px-3 py-2.5 text-[11px] leading-relaxed text-base-content/50"
+          data-role="meeting-agent-invite-empty"
+        >
+          No agents in this space yet. Add one to the space and it appears here, without a reload.
+        </li>
+      </ul>
+    </section>
     """
   end
+
+  # The second line per state — the canvas's "exact line each shows". nil
+  # is a real answer: an `:invitable` row of `:unknown` capability draws no
+  # reason element at all.
+  defp invite_reason(%{state: :invitable, capability: :capable}), do: "Voice runtime online"
+  defp invite_reason(%{state: :invitable}), do: nil
+  defp invite_reason(%{state: :pending}), do: "Invite sent, no answer yet"
+  defp invite_reason(%{state: :incapable}), do: "No voice runtime online"
+  defp invite_reason(%{state: :in_call}), do: "Already in the call"
+
+  defp invite_label(%{state: :pending, agent: agent}),
+    do:
+      "Invite #{agent.name || agent.slug} to the meeting again — the first invite has not been answered"
+
+  defp invite_label(%{agent: agent}), do: "Invite #{agent.name || agent.slug} to the meeting"
 
   @doc """
   Mute / Camera / Share / Leave.
@@ -607,9 +652,4 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   end
 
   defp normalize_tab(_), do: "people"
-
-  defp invite_pending?(nil, _agent_id), do: false
-  defp invite_pending?(%MapSet{} = pending, agent_id), do: MapSet.member?(pending, agent_id)
-  defp invite_pending?(pending, agent_id) when is_list(pending), do: agent_id in pending
-  defp invite_pending?(_pending, _agent_id), do: false
 end

@@ -256,49 +256,168 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
     end
   end
 
-  describe "the + Add agent control" do
-    test "is absent when no invite_event is supplied" do
-      html = rail(active_tab: "people")
+  # ── The invite section (task 01a0691d stage 2) ─────────────────────────
+  #
+  # The rows are the server's (`MeetingLive.invite_rows/2`); the component
+  # is handed `%{agent, state, capability}` maps and must draw exactly what
+  # the design canvas says for each. Fake event name throughout, so a
+  # component that hardcoded either surface's literal would fail here.
 
-      refute html =~ ~s(data-role="meeting-agent-invite")
+  defp invite_row(id, state, capability \\ :capable) do
+    %{
+      agent: %{id: id, name: "Agent " <> id, slug: "agent-" <> id},
+      state: state,
+      capability: capability
+    }
+  end
+
+  defp four_rows do
+    [
+      invite_row("a-free", :invitable),
+      invite_row("a-pend", :pending),
+      invite_row("a-off", :incapable, :incapable),
+      invite_row("a-here", :in_call)
+    ]
+  end
+
+  defp invite_rail(rows),
+    do: rail(active_tab: "people", invite_event: "zzz_fake_invite", invite_rows: rows)
+
+  defp section(html) do
+    html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="meeting-agent-invite"]))
+  end
+
+  defp invite_row_html(html, id) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-role="meeting-agent-invite-row"][data-agent-id="#{id}"]))
+    |> LazyHTML.to_html()
+  end
+
+  defp squish(text), do: text |> String.replace(~r/\s+/, " ") |> String.trim()
+
+  describe "the invite section" do
+    test "is present with the heading and the empty line when there are no rows" do
+      html = invite_rail([])
+
+      sect = section(html)
+      assert Enum.count(sect) == 1
+      assert LazyHTML.text(sect) =~ "Invite an agent"
+
+      empty = LazyHTML.query(sect, ~s([data-role="meeting-agent-invite-empty"]))
+      assert Enum.count(empty) == 1
+
+      assert squish(LazyHTML.text(empty)) ==
+               "No agents in this space yet. Add one to the space and it appears here, without a reload."
+
+      refute html =~ ~s(data-role="meeting-agent-invite-row")
     end
 
-    test "offers each invitable agent against the given event" do
-      html =
-        rail(
-          active_tab: "people",
-          invite_event: "zzz_fake_invite",
-          invitable_agents: [%{id: "a-9", name: "Mycroft", slug: "mycroft"}]
-        )
+    test "is absent when no invite_event is supplied, rows or not" do
+      refute rail(active_tab: "people") =~ ~s(data-role="meeting-agent-invite")
 
-      assert html =~ ~s(data-role="meeting-agent-invite")
-      assert html =~ "+ Add agent"
-      assert html =~ ~s(phx-click="zzz_fake_invite")
-      assert html =~ ~s(data-agent-id="a-9")
-      assert html =~ "Mycroft"
+      refute rail(active_tab: "people", invite_rows: four_rows()) =~
+               ~s(data-role="meeting-agent-invite")
     end
 
-    # The #883 honesty rule: an invite whose join reached no subscriber
-    # is re-offered AND labelled, rather than being claimed as arrival.
-    test "labels an unanswered invite rather than claiming it arrived" do
-      pending =
-        rail(
-          active_tab: "people",
-          invite_event: "zzz_fake_invite",
-          invitable_agents: [%{id: "a-9", name: "Mycroft", slug: "mycroft"}],
-          pending_invite_agent_ids: MapSet.new(["a-9"])
-        )
+    test "renders the four states in the order given, each with its exact reason" do
+      html = invite_rail(four_rows())
 
-      fresh =
-        rail(
-          active_tab: "people",
-          invite_event: "zzz_fake_invite",
-          invitable_agents: [%{id: "a-9", name: "Mycroft", slug: "mycroft"}]
-        )
+      rows =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-agent-invite-row"]))
 
-      assert pending =~ "no answer yet"
+      assert LazyHTML.attribute(rows, "data-invite-state") ==
+               ["invitable", "pending", "incapable", "in_call"]
+
+      assert LazyHTML.attribute(rows, "data-agent-id") == ["a-free", "a-pend", "a-off", "a-here"]
+
+      reasons =
+        rows
+        |> LazyHTML.query(~s([data-role="meeting-agent-invite-reason"]))
+        |> Enum.map(&squish(LazyHTML.text(&1)))
+
+      assert reasons == [
+               "Voice runtime online",
+               "Invite sent, no answer yet",
+               "No voice runtime online",
+               "Already in the call"
+             ]
+
+      # Rows present: the empty line is not.
+      refute html =~ ~s(data-role="meeting-agent-invite-empty")
+    end
+
+    test "blocked rows are plain items: no button, no phx-click" do
+      html = invite_rail(four_rows())
+
+      for id <- ["a-off", "a-here"] do
+        row = invite_row_html(html, id)
+        assert row =~ ~s(data-agent-id="#{id}")
+        refute row =~ "<button", id
+        refute row =~ "phx-click", id
+        refute row =~ "zzz_fake_invite", id
+      end
+    end
+
+    test "invitable and pending rows offer the button against the given event" do
+      html = invite_rail(four_rows())
+
+      buttons =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-agent-invite-button"]))
+
+      assert LazyHTML.attribute(buttons, "phx-click") == ["zzz_fake_invite", "zzz_fake_invite"]
+      assert LazyHTML.attribute(buttons, "phx-value-agent-id") == ["a-free", "a-pend"]
+      assert LazyHTML.attribute(buttons, "data-agent-id") == ["a-free", "a-pend"]
+    end
+
+    # The #883 honesty rule, re-tokened: an invite whose join reached no
+    # subscriber is re-offered AND labelled — in `info`, because warning on
+    # this rail means a human is being asked for something.
+    test "a pending row keeps the button, says Waiting in the info token, never warning" do
+      html = invite_rail(four_rows())
+
+      pending = invite_row_html(html, "a-pend")
+      assert pending =~ ~s(data-role="meeting-agent-invite-button")
       assert pending =~ ~s(data-invite-pending="true")
-      refute fresh =~ "no answer yet"
+      assert pending =~ "Waiting"
+      refute pending =~ "text-warning"
+
+      label =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-agent-invite-pending"]))
+
+      assert [class] = LazyHTML.attribute(label, "class")
+      assert class =~ "text-info"
+      assert squish(LazyHTML.text(label)) == "Waiting"
+
+      fresh = invite_row_html(html, "a-free")
+      refute fresh =~ "data-invite-pending"
+      refute fresh =~ "Waiting"
+      assert fresh =~ "Invite"
+    end
+
+    test "an agent of unknown capability gets the button and no reason line at all" do
+      html = invite_rail([invite_row("a-unk", :invitable, :unknown)])
+
+      row = invite_row_html(html, "a-unk")
+      assert row =~ ~s(data-role="meeting-agent-invite-button")
+      refute row =~ "meeting-agent-invite-reason"
+    end
+
+    test "the section carries no warning or error token and never says listening or hidden" do
+      for rows <- [four_rows(), []] do
+        sect = rows |> invite_rail() |> section() |> LazyHTML.to_html()
+
+        refute sect =~ "warning"
+        refute sect =~ "error"
+        refute sect =~ ~r/listening/i
+        refute sect =~ ~r/hidden/i
+      end
     end
   end
 

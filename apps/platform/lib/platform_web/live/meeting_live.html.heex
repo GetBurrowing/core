@@ -1692,6 +1692,13 @@
                assigned on the GUEST bundle path, so deriving it from that
                read "unavailable" for every signed-in viewer, before,
                during and after a join (task 01a0693d). --%>
+          <%!-- The invite section is gated on a signed-in `user_id`, NOT on
+               `@shell?` (task 01a0691d stage 2). The guest mount assigns
+               `user_id: nil` and could never pass `authorize_writer`, so the
+               section is absent for guests; a signed-in member on the
+               `:meet_member` session has `shell?: false` yet may invite, and
+               a `@shell?` gate would take the control away from exactly the
+               external members the invite tests cover. --%>
           <CallShell.call_rail
             id="meeting-call-rail"
             class="min-h-0 flex-1"
@@ -1702,9 +1709,8 @@
             agents_by_id={assigns[:agents_by_id] || %{}}
             meeting={@meeting}
             agent_activity={assigns[:agent_activity]}
-            invitable_agents={assigns[:invitable_agents] || []}
-            pending_invite_agent_ids={assigns[:pending_invite_agent_ids]}
-            invite_event="meeting_invite_agent"
+            invite_rows={assigns[:invite_rows] || []}
+            invite_event={if is_binary(assigns[:user_id]), do: "meeting_invite_agent"}
             candidates={@meeting_candidates}
             candidates_closed={@meeting_candidates_closed}
             candidate_events={@meeting_candidate_events}

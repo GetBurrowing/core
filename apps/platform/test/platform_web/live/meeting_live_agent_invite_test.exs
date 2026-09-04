@@ -94,7 +94,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   # `connect/2` is deliberately NOT imported — `Phoenix.ConnTest` exports one
   # too and the call would be ambiguous. It is called fully qualified below;
   # the macro reads `@endpoint` from the calling module either way.
-  import Phoenix.ChannelTest, only: [subscribe_and_join: 3, assert_push: 3]
+  import Phoenix.ChannelTest, only: [subscribe_and_join: 3, assert_push: 3, refute_push: 3]
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
@@ -580,6 +580,20 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       # offered. This is the assertion that stops the filter being "hide
       # everything we are unsure about".
       assert setup_agent.id in offered
+
+      # Task 01a0691d stage 2: "dropped" means dropped from the BUTTONS, not
+      # from the list. Both declared-without-voice agents are still rows,
+      # blocked and explained, so the reader can find the agent that used to
+      # vanish. The old assertion ("gone") is the defect this task fixes.
+      rows =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(
+          ~s([data-role="meeting-agent-invite-row"][data-invite-state="incapable"])
+        )
+
+      assert MapSet.new(LazyHTML.attribute(rows, "data-agent-id")) ==
+               MapSet.new([text_only.id, declared_empty.id])
     end
 
     # `:incapable` is about the DECLARATION, not about reachability. An agent
@@ -600,6 +614,133 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
         |> render_click()
 
       assert html =~ "no connected runtime"
+    end
+  end
+
+  # ── The People tab's invite section (task 01a0691d stage 2) ────────────
+
+  defp invite_row(html, agent_id) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-role="meeting-agent-invite-row"][data-agent-id="#{agent_id}"]))
+  end
+
+  defp squish(text), do: text |> String.replace(~r/\s+/, " ") |> String.trim()
+
+  describe "the People tab's invite section" do
+    # The defect that filed the task: an empty INVITABLE list used to remove
+    # the whole block, and the founder read that as "no such feature". The
+    # only roster agent here declares no voice, so the clickable list is
+    # exactly empty — and the section is still there, listing it.
+    test "renders with zero invitable agents",
+         %{conn: conn, meeting: meeting, agent: agent, runtime: runtime} do
+      {:ok, _runtime} =
+        Federation.update_metadata(runtime, %{
+          "client_info" => %{"product" => "openclaw", "version" => "0.1.0", "features" => []}
+        })
+
+      {:ok, view, html} =
+        conn |> login(user!("zero-invitable")) |> live(~p"/meetings/#{meeting.slug}")
+
+      # Positive control on the premise: nothing is clickable.
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-role="meeting-agent-invite-button"]))
+             |> Enum.empty?()
+
+      assert has_element?(view, ~s([data-role="meeting-agent-invite"]))
+
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-agent-invite-row"][data-invite-state="incapable"][data-agent-id="#{agent.id}"])
+             )
+
+      refute has_element?(view, ~s([data-role="meeting-agent-invite-empty"]))
+    end
+
+    test "a text-only agent is rendered disabled with its reason and is not clickable",
+         %{conn: conn, meeting: meeting, space: space} do
+      %{agent: text_only} = declaring_roster_agent!(space, [])
+
+      {:ok, view, html} =
+        conn |> login(user!("text-only-row")) |> live(~p"/meetings/#{meeting.slug}")
+
+      row = invite_row(html, text_only.id)
+      assert Enum.count(row) == 1
+      assert LazyHTML.attribute(row, "data-invite-state") == ["incapable"]
+
+      assert row
+             |> LazyHTML.query(~s([data-role="meeting-agent-invite-reason"]))
+             |> LazyHTML.text()
+             |> squish() == "No voice runtime online"
+
+      row_html = LazyHTML.to_html(row)
+      refute row_html =~ "<button"
+      refute row_html =~ "phx-click"
+
+      refute has_element?(
+               view,
+               ~s([data-role="meeting-agent-invite-button"][data-agent-id="#{text_only.id}"])
+             )
+    end
+
+    test "a space with no agents shows the empty line under the heading", %{conn: conn} do
+      # A fresh space, so the setup agent's auto-roster (which ran at link
+      # time) cannot reach it. Anything that DID land is removed, and the
+      # emptiness is asserted rather than assumed.
+      space = space!()
+      meeting = meeting!(space)
+      viewer = user!("empty-roster")
+
+      {:ok, _} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: viewer.id,
+          joined_at: DateTime.utc_now()
+        })
+
+      for entry <- Chat.list_space_agents(space.id) do
+        {:ok, _} = Chat.remove_space_agent({:user, viewer.id}, space.id, entry.agent_id)
+      end
+
+      assert Chat.list_space_agents(space.id) == []
+
+      {:ok, view, html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
+
+      assert has_element?(view, ~s([data-role="meeting-agent-invite"]))
+
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-role="meeting-agent-invite-empty"]))
+             |> LazyHTML.text()
+             |> squish() ==
+               "No agents in this space yet. Add one to the space and it appears here, without a reload."
+
+      refute html =~ ~s(data-role="meeting-agent-invite-row")
+    end
+
+    # The gate is `user_id`, not `@shell?`. On the `meet.` host the
+    # `:meet_member` session mounts a signed-in member with `chrome_mode:
+    # "none"` — no shell — and that member may invite. A `@shell?` gate
+    # would take the control away from exactly this viewer.
+    test "a signed-in member on the meet host has no shell and still gets the section",
+         %{conn: conn, meeting: meeting, agent: agent} do
+      {:ok, view, _html} =
+        conn
+        |> login(user!("meet-member"))
+        |> Map.put(:host, "meet.localhost")
+        |> live("/meetings/#{meeting.slug}")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.shell? == false
+      assert is_binary(assigns.user_id)
+
+      assert has_element?(view, ~s([data-role="meeting-agent-invite"]))
+
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-agent-invite-button"][data-agent-id="#{agent.id}"])
+             )
     end
   end
 
@@ -696,6 +837,145 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
                PlatformWeb.MeetingLive.invitable_agents(space.id, participants)
 
       assert offered == agent.id
+    end
+  end
+
+  # ── The row model (task 01a0691d stage 1) ────────────────────────────────
+
+  # Four roster agents, one per state, inserted in the REVERSE of the order
+  # `invite_rows/2` must return them in, so the roster's own `joined_at`
+  # ordering cannot produce the expected order by accident: only the sort
+  # can. Returns the agents by state and the participant list that puts two
+  # of them in it.
+  defp four_state_roster!(space) do
+    %{agent: arrived} = declaring_roster_agent!(space, ["meeting_voice"])
+    %{agent: incapable} = declaring_roster_agent!(space, [])
+    %{agent: pending} = declaring_roster_agent!(space, ["meeting_voice"])
+    %{agent: free} = declaring_roster_agent!(space, ["meeting_voice"])
+
+    participants = [
+      # Invited, never answered: a roster row and no LiveKit identity.
+      %{
+        participant_type: "agent",
+        participant_id: pending.id,
+        identity: nil,
+        display_name: pending.name
+      },
+      # Arrived: the identity only `upsert_live_participant/2` writes.
+      %{
+        participant_type: "agent",
+        participant_id: arrived.id,
+        identity: "agent:#{arrived.slug}",
+        display_name: arrived.name
+      }
+    ]
+
+    %{
+      free: free,
+      pending: pending,
+      incapable: incapable,
+      arrived: arrived,
+      participants: participants
+    }
+  end
+
+  defp rows_for(rows, agents) do
+    ids = MapSet.new(agents, & &1.id)
+
+    rows
+    |> Enum.filter(&MapSet.member?(ids, &1.agent.id))
+    |> Enum.map(&{&1.agent.id, &1.state, &1.capability})
+  end
+
+  describe "invite_rows/2" do
+    # T1.1 — the four states and the one order, pinned in a single equality so
+    # a wrong state AND a wrong position both fail here.
+    test "yields the four states, invitable first, whatever order the roster holds them in",
+         %{space: space} do
+      %{free: free, pending: pending, incapable: incapable, arrived: arrived} =
+        fixture = four_state_roster!(space)
+
+      rows = PlatformWeb.MeetingLive.invite_rows(space.id, fixture.participants)
+
+      assert rows_for(rows, [free, pending, incapable, arrived]) == [
+               {free.id, :invitable, :capable},
+               {pending.id, :pending, :capable},
+               {incapable.id, :incapable, :incapable},
+               {arrived.id, :in_call, :capable}
+             ]
+
+      # Every row carries a real `%Agent{}`, not an id the template would
+      # have to look up again.
+      assert Enum.all?(rows, &match?(%{agent: %Agent{}}, &1))
+    end
+
+    # T1.2 — 01a0554f's ruling, kept: never declared is offered, and the row
+    # says so rather than hiding the hedge inside `:invitable`.
+    test "an undeclared runtime is invitable with capability :unknown",
+         %{space: space, agent: undeclared} do
+      rows = PlatformWeb.MeetingLive.invite_rows(space.id, [])
+
+      assert rows_for(rows, [undeclared]) == [{undeclared.id, :invitable, :unknown}]
+    end
+
+    # T1.3 — the button list is a projection of the row model, not a second
+    # predicate. Pinned as an equality on the FULL list (setup agent included)
+    # so a projection that dropped or reordered anything fails.
+    test "invitable_agents/2 is exactly the agents of the invitable and pending rows",
+         %{space: space, agent: setup_agent} do
+      %{free: free, pending: pending, participants: participants} = four_state_roster!(space)
+
+      rows = PlatformWeb.MeetingLive.invite_rows(space.id, participants)
+
+      expected =
+        rows
+        |> Enum.filter(&(&1.state in [:invitable, :pending]))
+        |> Enum.map(& &1.agent)
+
+      offered = PlatformWeb.MeetingLive.invitable_agents(space.id, participants)
+
+      assert offered == expected
+
+      assert Enum.map(offered, & &1.id) |> Enum.sort() ==
+               Enum.sort([setup_agent.id, free.id, pending.id])
+    end
+  end
+
+  describe "an agent whose runtime declared no voice" do
+    # T1.4 — the refusal is the SERVER's, not the markup's. The click is
+    # forged straight at the handler with an id the rail never offered, and
+    # the agent's runtime has a real client on its channel, so the refutation
+    # below is on a topic a wrongly-let-through invite WOULD reach
+    # (`resolve_voice_target/1` routes a declared-without-voice agent to its
+    # brain runtime, so a push here is exactly what a broken filter produces).
+    test "is refused even when the click is forged, and nothing is dispatched",
+         %{conn: conn, space: space, meeting: meeting} do
+      %{agent: incapable} = incapable_ctx = declaring_roster_agent!(space, [])
+      _channel = join_runtime_client!(incapable_ctx)
+
+      {:ok, view, _html} =
+        conn |> login(user!("forger")) |> live(~p"/meetings/#{meeting.slug}")
+
+      # Auto-join has landed: the room is active, so the only thing between
+      # this click and a dispatch is the invite list.
+      _ = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting
+
+      # Positive control on the fixture: the agent is on the roster and the
+      # rail renders it no button.
+      assert incapable.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id)
+
+      refute has_element?(
+               view,
+               ~s([data-role="meeting-agent-invite-button"][data-agent-id="#{incapable.id}"])
+             )
+
+      html = render_click(view, "meeting_invite_agent", %{"agent-id" => incapable.id})
+
+      refute_push "meeting_join", _payload, 200
+      assert agent_participant_rows(space.id, incapable.id) == []
+      assert html =~ "That agent could not be invited."
+      refute html =~ "waiting for it to join"
     end
   end
 
