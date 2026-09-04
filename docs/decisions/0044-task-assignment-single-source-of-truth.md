@@ -152,11 +152,22 @@ precondition's job, so an unknown agent id filled into `execution` or
 `review` still refuses with `:agent_not_found`. Without the flag the
 rule above is unchanged: planning-only.
 
-`task_update` deliberately does NOT fan out. It calls the same builder
-with `:update` mode, and its flat pair keeps routing to the
-current-phase slot: fanning there would clobber existing per-phase
-assignments on a live task. The `:create`-only mode gate is the
-mechanism; the `task_create` tool schema text states the same decision.
+**Conditional fan-out on update (task 01a0589b).** On `:update` the
+same fill runs behind a gate. With `auto_approve_plan: true` and an
+agent-typed flat pair, every slot ABSENT in the MERGED map — the task's
+persisted `phase_assignees` overlaid by this call's routed slots —
+fills from the flat agent, and the merged-with-fills map is what the
+caller hands to `set_phase_assignees/2`. Present slots are never
+overwritten: the clobber that motivated the create-only scoping cannot
+occur, because a fill keyed off the merged map never names an assigned
+slot as a candidate, and `set_phase_assignees/2` merges per-slot over
+the persisted map besides. The fill fires only when the caller supplies
+the persisted slots via the `:existing_phase_assignees` opt — the
+`task_update` tool surface does so as of stage 2 of task 01a0589b — and
+a caller that omits it keeps the planning-only routing above,
+byte-for-byte. The fill shares `fill_absent_fanout_slots/2` with the
+create path: which phases count as "missing" is the whole precondition,
+so the two modes must not drift.
 
 The auto-approve refusal suggestion ("Flat assignee_id only sets
 planning per ADR 0044") predates the fan-out: on `task_create` with the

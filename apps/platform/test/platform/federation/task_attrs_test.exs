@@ -504,13 +504,109 @@ defmodule Platform.Federation.TaskAttrsTest do
              }
     end
 
-    test "DELIBERATE ASYMMETRY PIN: :update mode with the same args + opts routes planning-only" do
-      # task_update never fans out — its flat pair keeps routing to the
-      # current-phase slot only, because fanning would clobber existing
-      # per-phase assignments on a live task.
+    test "DELIBERATE ASYMMETRY PIN (rewritten, task 01a0589b): :create fans out on the routed map alone; :update fans out only behind :existing_phase_assignees" do
+      # The old blanket pin — ":update never fans out" — is
+      # intentionally flipped by task 01a0589b (ADR 0044 §5 amendment):
+      # :update now fans out behind the `:existing_phase_assignees` opt,
+      # pinned by the ":update" describe below. What survives of this
+      # pin is its planning-only assertion in the new correct scope —
+      # no opt: the SAME args + opts that fan out on :create still
+      # route planning-only on :update.
       args = %{
         "assignee_id" => @agent_id,
         "assignee_type" => "agent",
+        "auto_approve_plan" => true
+      }
+
+      assert {:ok, _flat, create_phase_attrs} =
+               TaskAttrs.build_task_attrs(args, :create, @fanout_opts)
+
+      assert create_phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+
+      assert {:ok, _flat, update_phase_attrs} =
+               TaskAttrs.build_task_attrs(args, :update, @fanout_opts)
+
+      assert update_phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+  end
+
+  # ── Auto-approve fan-out on :update (task 01a0589b, ADR 0044 §5) ────────
+  #
+  # The create fill keyed off the routed map alone was the clobber
+  # hazard on :update: a routed-keyed fill overlays persisted slots
+  # through `Tasks.set_phase_assignees/2`'s per-slot merge. Keyed off
+  # the MERGED map (persisted slots overlaid by this call's routed
+  # slots), a present slot is never a fill candidate. The fill fires
+  # only when the caller supplies the persisted slots via
+  # `:existing_phase_assignees` — without the opt, :update is
+  # byte-for-byte today's planning-only routing. All expectations below
+  # are LITERAL maps built from the fixture ids — never re-derived from
+  # the builder — so a mutant that over- or under-fills cannot pass by
+  # construction.
+  describe "build_task_attrs/3 — auto-approve fan-out on :update" do
+    @fanout_opts [auto_route_flat_assignee_current_phase: true, current_phase: "planning"]
+    @agent_b "01900000-0000-7000-8000-0000000000ab"
+
+    test "flag + flat agent + existing_phase_assignees: %{} fans out to the literal three-slot map" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "auto_approve_plan" => true
+      }
+
+      opts = @fanout_opts ++ [existing_phase_assignees: %{}]
+
+      assert {:ok, flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :update, opts)
+
+      refute Map.has_key?(flat, :assignee_id)
+      refute Map.has_key?(flat, :assignee_type)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "NO-CLOBBER: persisted execution/review slots survive the fill (literal map)" do
+      # A routed-keyed fill (the clobber mutant) overwrites execution
+      # and review with the flat agent and fails this test.
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "auto_approve_plan" => true
+      }
+
+      existing = %{
+        "execution" => %{"assignee_id" => @agent_b, "assignee_type" => "agent"},
+        "review" => %{"assignee_id" => @agent_b, "assignee_type" => "agent"}
+      }
+
+      opts = @fanout_opts ++ [existing_phase_assignees: existing]
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :update, opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => @agent_b, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => @agent_b, "assignee_type" => "agent"}
+             }
+    end
+
+    test "MUTATION PROBE (opt gate): flag + flat agent with the opt ABSENT routes planning-only" do
+      # Fails if the :update fill is made unconditional.
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
         "auto_approve_plan" => true
       }
 
@@ -518,6 +614,106 @@ defmodule Platform.Federation.TaskAttrsTest do
 
       assert phase_attrs == %{
                "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "flag false + the opt supplied routes planning-only (mutation probe: fan-out is flag-gated on :update)" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "auto_approve_plan" => false
+      }
+
+      opts = @fanout_opts ++ [existing_phase_assignees: %{}]
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :update, opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "flag absent + the opt supplied routes planning-only (mutation probe: fan-out is flag-gated on :update)" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id
+      }
+
+      opts = @fanout_opts ++ [existing_phase_assignees: %{}]
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :update, opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "flat USER-typed pair + flag + the opt routes planning-only, no fan-out (type gate holds on :update)" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @user_id,
+        "assignee_type" => "user",
+        "auto_approve_plan" => true
+      }
+
+      opts = @fanout_opts ++ [existing_phase_assignees: %{}]
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :update, opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @user_id, "assignee_type" => "user"}
+             }
+    end
+
+    test "explicit planning entry is untouched; execution + review fill from the flat agent (literal map)" do
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "auto_approve_plan" => true,
+        "phase_assignees" => %{
+          "planning" => %{"assignee_id" => @sponsor_id, "assignee_type" => "agent"}
+        }
+      }
+
+      opts = @fanout_opts ++ [existing_phase_assignees: %{}]
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :update, opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @sponsor_id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "explicitly-nil submitted slot overlays the persisted slot and is never filled" do
+      # The create-mode documented posture, carried over: the nil
+      # overlays the persisted slot (Map.merge semantics), stays nil,
+      # and then trips the precondition with :absent.
+      args = %{
+        "title" => "t",
+        "project_id" => "p",
+        "assignee_id" => @agent_id,
+        "auto_approve_plan" => true,
+        "phase_assignees" => %{"execution" => nil}
+      }
+
+      existing = %{
+        "execution" => %{"assignee_id" => @agent_b, "assignee_type" => "agent"}
+      }
+
+      opts = @fanout_opts ++ [existing_phase_assignees: existing]
+
+      assert {:ok, _flat, phase_attrs} = TaskAttrs.build_task_attrs(args, :update, opts)
+
+      assert phase_attrs == %{
+               "planning" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"},
+               "execution" => nil,
+               "review" => %{"assignee_id" => @agent_id, "assignee_type" => "agent"}
              }
     end
   end

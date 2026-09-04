@@ -38,10 +38,15 @@ defmodule Platform.Federation.TaskAttrs do
       precondition requires agent-resolved execution + review, which
       planning-only routing can never satisfy. Explicit
       `phase_assignees` entries (including an explicitly-nil slot) are
-      never overwritten. `:update` mode DELIBERATELY never fans out: its
-      flat pair keeps routing to the current-phase slot only, because
-      fanning there would clobber existing per-phase assignments on a
-      live task.
+      never overwritten. On `:update` the same fill runs only when the
+      caller passes the task's persisted slots via
+      `existing_phase_assignees: map`: the fill is then keyed off the
+      MERGED map (persisted slots overlaid by this call's routed
+      slots), so a present slot is never a fill candidate — the clobber
+      an update-mode fill was once feared to cause cannot occur, because
+      `set_phase_assignees/2` merges per-slot and a merged-keyed fill
+      never names an assigned slot. Without that opt, `:update` routing
+      is byte-for-byte unchanged (planning-only).
     * When BOTH structured `phase_assignees` AND flat `assignee_*` are
       supplied, structured wins — flat is dropped.
     * Every other field: `nil` means "untouched" and is dropped from
@@ -122,18 +127,33 @@ defmodule Platform.Federation.TaskAttrs do
           and into `phase_attrs` at the current-phase slot.
         * `:current_phase` — the phase name to use as the slot. Required
           when `auto_route_flat_assignee_current_phase: true`.
+        * `:existing_phase_assignees` — the task's persisted per-phase
+          slots (string- or atom-keyed map), or `nil`. Consulted ONLY by
+          the `:update` auto-approve fill; `:create` ignores it.
 
-  ## Auto-approve fan-out (`:create` only, ADR 0044 §5)
+  ## Auto-approve fan-out (ADR 0044 §5, tasks 01a05877 + 01a0589b)
 
-  When `mode` is `:create`, the auto-route opts are on, the args carry a
-  truthy `auto_approve_plan`, and the flat pair is agent-typed
-  (`assignee_id` a non-empty binary; `assignee_type` absent or exactly
-  `"agent"`), the emitted `phase_attrs` fills every ABSENT one of
-  `"planning"`, `"execution"`, `"review"` with the flat agent entry.
-  Explicit `phase_assignees` entries win over the fill; an explicitly-nil
-  slot is never filled (and then trips the auto-approve precondition).
-  The fill does no DB access — agent liveness stays the precondition's
-  job. `:update` never fans out.
+  When the auto-route opts are on, the args carry a truthy
+  `auto_approve_plan`, and the flat pair is agent-typed (`assignee_id` a
+  non-empty binary; `assignee_type` absent or exactly `"agent"`), the
+  emitted `phase_attrs` fills every ABSENT one of `"planning"`,
+  `"execution"`, `"review"` with the flat agent entry. The fill is
+  keyed off the MERGED map — the task's persisted slots overlaid by
+  this call's routed slots — so a present slot (including an
+  explicitly-nil one) is never overwritten.
+
+  The two modes differ only in what that merge sees. On `:create`
+  there are no persisted slots, so the fill runs on the routed map
+  exactly as before. On `:update` the merge runs only when the caller
+  supplies the persisted slots via `:existing_phase_assignees` (a map);
+  the merged-with-fills map is then the emitted `phase_attrs`, and
+  re-emitting the persisted slots through it is harmless because
+  `Tasks.set_phase_assignees/2` merges per-slot. With the opt absent,
+  `:update` routing is byte-for-byte unchanged (planning-only) — the
+  opt gate is the mutation-probe surface for that contract. The fill
+  does no DB access — agent liveness stays the precondition's job: an
+  unknown agent id filled into `execution` or `review` still refuses
+  with `:agent_not_found` there.
 
   ## Returns
 
@@ -147,6 +167,7 @@ defmodule Platform.Federation.TaskAttrs do
   def build_task_attrs(args, mode, opts \\ [])
       when is_map(args) and mode in [:create, :update] do
     args = stringify_keys(args)
+    existing_phase_assignees = Keyword.get(opts, :existing_phase_assignees)
 
     with {:ok, phase_attrs_from_struct} <- extract_phase_assignees(args),
          {:ok, current_phase} <- resolve_current_phase(opts, args),
@@ -155,7 +176,14 @@ defmodule Platform.Federation.TaskAttrs do
            build_flat_attrs(args, mode, auto_route, current_phase, phase_attrs_from_struct) do
       merged_phase_attrs = merge_phase_attrs(phase_attrs_from_struct, phase_attrs_from_flat)
 
-      {:ok, flat_attrs, maybe_fanout_auto_approve(merged_phase_attrs, args, mode, auto_route)}
+      {:ok, flat_attrs,
+       maybe_fanout_auto_approve(
+         merged_phase_attrs,
+         args,
+         mode,
+         auto_route,
+         existing_phase_assignees
+       )}
     end
   end
 
@@ -301,40 +329,75 @@ defmodule Platform.Federation.TaskAttrs do
     struct
   end
 
-  # ── Auto-approve fan-out (ADR 0044 §5, task 01a05877) ───────────────────
+  # ── Auto-approve fan-out (ADR 0044 §5, tasks 01a05877 + 01a0589b) ───────
   #
-  # DELIBERATE ASYMMETRY, stated: on `:create` (the `task_create`
-  # surface) an agent-typed flat pair under `auto_approve_plan: true`
-  # fans out into every ABSENT one of the planning / execution / review
-  # slots, because the auto-approve precondition (below) requires
-  # agent-resolved execution AND review slots that planning-only
-  # auto-routing can never satisfy — task_create with the flag and a
-  # flat agent pair refused unconditionally before this fill existed.
-  # `:update` deliberately does NOT fan out: its flat pair keeps routing
-  # to the current-phase slot only, because fanning there would clobber
-  # existing per-phase assignments on a live task. The mode gate is the
-  # mechanism; the ADR amendment and the task_create tool schema text
-  # state the same decision.
+  # An agent-typed flat pair under `auto_approve_plan: true` fans out
+  # into every ABSENT one of the planning / execution / review slots,
+  # because the auto-approve precondition (below) requires agent-resolved
+  # execution AND review slots that planning-only auto-routing can never
+  # satisfy — task_create with the flag and a flat agent pair refused
+  # unconditionally before this fill existed.
+  #
+  # The fill is keyed off the MERGED map — the task's persisted slots
+  # overlaid by this call's routed slots — so a slot that is already
+  # assigned is never a fill candidate. That is what makes the `:update`
+  # fill safe: `Tasks.set_phase_assignees/2` merges per-slot over the
+  # persisted map, so a fill keyed off the routed map alone would overlay
+  # (clobber) live assignments, while a merged-keyed fill cannot name
+  # one. On `:create` there are no persisted slots, so merged == routed
+  # and the two are the same fill. Both modes share
+  # `fill_absent_fanout_slots/2` — which phases count as "missing" IS the
+  # whole precondition, so the slot-filling core must not drift between
+  # them.
+  #
+  # The `:update` fill fires ONLY when the caller passes the persisted
+  # slots via the `:existing_phase_assignees` opt; callers that do not
+  # (every one of them until the task_update surface supplies it) keep
+  # today's planning-only routing, byte-for-byte. The opt gate is the
+  # mutation-probe surface for that contract.
   #
   # The fill does no DB access — agent liveness is the precondition's
   # job, so an unknown agent id filled into `execution` or `review`
   # still refuses with `:agent_not_found` there. Without the flag the
-  # routing is byte-for-byte unchanged (planning-only).
+  # routing is byte-for-byte unchanged (planning-only) in BOTH modes.
 
   @auto_approve_fanout_phases ~w(planning execution review)
 
-  defp maybe_fanout_auto_approve(phase_attrs, args, mode, auto_route) do
-    if auto_approve_fanout?(args, mode, auto_route) do
-      fill_absent_fanout_slots(phase_attrs || %{}, flat_agent_entry(args))
-    else
-      phase_attrs
+  defp maybe_fanout_auto_approve(phase_attrs, args, mode, auto_route, existing_phase_assignees) do
+    cond do
+      not auto_approve_fanout?(args, mode, auto_route, existing_phase_assignees) ->
+        phase_attrs
+
+      mode == :create ->
+        # No persisted slots exist on :create — the fill runs on the
+        # routed map exactly as before, and the opt is never consulted.
+        fill_absent_fanout_slots(phase_attrs || %{}, flat_agent_entry(args))
+
+      true ->
+        # :update: fill the merged map. Persisted slots re-emitted
+        # through it are harmless — set_phase_assignees/2 merges
+        # per-slot — and an explicitly-nil routed slot still overlays
+        # its persisted slot, stays nil, and trips the precondition.
+        persisted = stringify_keys(existing_phase_assignees || %{})
+        merged = Map.merge(persisted, phase_attrs || %{})
+
+        fill_absent_fanout_slots(merged, flat_agent_entry(args))
     end
   end
 
-  defp auto_approve_fanout?(args, mode, auto_route) do
-    mode == :create and auto_route == true and
-      auto_approve_flag_on?(args) and agent_typed_flat_pair?(args)
+  defp auto_approve_fanout?(args, mode, auto_route, existing_phase_assignees) do
+    auto_route == true and
+      auto_approve_flag_on?(args) and
+      agent_typed_flat_pair?(args) and
+      mode_gate_open?(mode, existing_phase_assignees)
   end
+
+  # :create gates open unconditionally. :update opens only when the
+  # caller supplied the persisted slots via :existing_phase_assignees —
+  # the opt gate that keeps non-opting :update callers byte-for-byte
+  # unchanged. A non-map value counts as not supplied.
+  defp mode_gate_open?(:create, _existing), do: true
+  defp mode_gate_open?(:update, existing), do: is_map(existing)
 
   # Truthy means the key is present and neither nil nor false.
   defp auto_approve_flag_on?(args) do
@@ -398,7 +461,9 @@ defmodule Platform.Federation.TaskAttrs do
   and `task_update` after `build_task_attrs/3` has routed the flat
   `assignee_id + assignee_type` pair into `phase_attrs` per ADR 0044 —
   planning-only without the flag, every absent one of the three slots
-  under the `:create` auto-approve fan-out. The precondition inspects
+  under the auto-approve fan-out (`:create` on the routed slots;
+  `:update` only behind the `:existing_phase_assignees` opt, keyed off
+  the merged map). The precondition inspects
   the execution + review slots
   (never planning) because auto-approve exists to save Rowan the click on
   the plan-review gate that runs immediately AFTER planning, and the
@@ -567,9 +632,16 @@ defmodule Platform.Federation.TaskAttrs do
       completed map, string-keyed.
 
   After the `:create` fan-out landed (task 01a05877 stage 1), a
-  task_create refusal this repair could fix already succeeds, so in
-  practice the correction fires on the task_update path; both call sites
-  run the same rule regardless.
+  task_create refusal this repair could fix already succeeds. The
+  `:update` fill (task 01a0589b, keyed off the merged map behind
+  `:existing_phase_assignees`) pre-empts every mechanical repair the
+  same way once the task_update surface supplies the persisted slots:
+  a refusal it could fix already succeeds, so on that path this helper
+  is DORMANT-BY-SUCCESS. It is KEPT — logic and tests unchanged — as
+  the fallback for refusals the fill did not prevent: callers that do
+  not opt in, and failing slots no fill can repair (present-but-invalid
+  user-typed, unknown id, or an explicitly-cleared nil slot). Both call
+  sites run the same rule regardless.
   """
   @spec auto_approve_corrected_args(map(), map() | nil, [String.t()]) ::
           %{String.t() => term()} | nil

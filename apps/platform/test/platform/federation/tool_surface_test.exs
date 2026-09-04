@@ -2189,6 +2189,31 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert task_create.description =~ "still need explicit phase_assignees"
     end
 
+    test "tool definitions state the update-mode fill on task_update (task 01a0589b stage 2)" do
+      # Same pin pattern as the task_create schema test above: the
+      # task_update description and its auto_approve_plan parameter
+      # description must tell the caller that an agent-typed flat assignee
+      # under the flag fills every ABSENT phase slot (judged against the
+      # persisted slots overlaid with the call's routed slots), that
+      # explicit entries win and present slots are never overwritten, and
+      # that user-typed or missing flat assignees still need explicit
+      # agent-typed phase_assignees.
+      tools = ToolSurface.tool_definitions()
+      task_update = Enum.find(tools, &(&1.name == "task_update"))
+
+      assert Map.has_key?(task_update.parameters, :auto_approve_plan)
+      assert task_update.parameters.auto_approve_plan.type == "boolean"
+
+      param_description = task_update.parameters.auto_approve_plan.description
+      assert param_description =~ "fills the absent phase slots"
+      assert param_description =~ "never overwritten"
+      assert param_description =~ "still need explicit agent-typed phase_assignees"
+
+      assert task_update.description =~ "absent phase slots"
+      assert task_update.description =~ "present slots are never overwritten"
+      assert task_update.description =~ "still need explicit agent-typed phase_assignees"
+    end
+
     test "task_get exposes auto_approve_plan on the read envelope (task 019f25f2 stage 5)" do
       # Stage 3 threaded the flag through the `task_create` response
       # envelope; stage 5 threads it through the shared `serialize_task/1`
@@ -2487,16 +2512,18 @@ defmodule Platform.Federation.ToolSurfaceTest do
              }
     end
 
-    test "task_update with flat agent + auto_approve_plan: true still refuses (no fan-out on update)" do
-      # DELIBERATE ASYMMETRY at the MCP boundary: the fan-out is
-      # :create-only. On a live task the flat pair keeps routing to the
-      # current-phase slot, so a flag flip with a flat agent still hits
-      # the precondition instead of clobbering per-phase assignments.
+    test "task_update with flat agent + auto_approve_plan: true fans into every absent phase slot (task 01a0589b stage 2)" do
+      # ADR 0044 §5 (task 01a0589b): the :update fill runs on the task's
+      # persisted slots overlaid by this call's routed slots, so a
+      # slotless probe fans into all three slots. The old pin asserted a
+      # refusal ("no fan-out on update"); the assertion moving from a
+      # refusal to a literal persisted map is the intended behavior
+      # change, not a weakened test.
       project = create_project()
       agent = create_agent()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Slotless task"})
 
-      assert {:error, envelope} =
+      assert {:ok, _updated} =
                ToolSurface.execute(
                  "task_update",
                  %{
@@ -2508,13 +2535,113 @@ defmodule Platform.Federation.ToolSurfaceTest do
                  %{}
                )
 
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.auto_approve_plan == true
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "task_update flat agent + flag fills only absent slots — persisted execution/review survive (no-clobber, task 01a0589b stage 2)" do
+      # Mutation probe for the fill key: a fill keyed off the routed map
+      # alone would overlay the persisted slots through
+      # set_phase_assignees/2's per-slot merge and clobber execution and
+      # review to the flat agent. Keyed off the merged map (persisted
+      # slots overlaid by this call's routed slots), the only absent slot
+      # is planning — the one this call routes.
+      project = create_project()
+      flat_agent = create_agent(%{slug: "flat-#{System.unique_integer([:positive])}"})
+      bound = create_agent(%{slug: "bound-#{System.unique_integer([:positive])}"})
+
+      {:ok, probe} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Bound probe",
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => bound.id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => bound.id, "assignee_type" => "agent"}
+          }
+        })
+
+      assert {:ok, _updated} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{
+                   "task_id" => probe.id,
+                   "auto_approve_plan" => true,
+                   "assignee_id" => flat_agent.id,
+                   "assignee_type" => "agent"
+                 },
+                 %{}
+               )
+
+      reloaded = Tasks.get_task_record(probe.id)
+      assert reloaded.auto_approve_plan == true
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => flat_agent.id, "assignee_type" => "agent"},
+               "execution" => %{"assignee_id" => bound.id, "assignee_type" => "agent"},
+               "review" => %{"assignee_id" => bound.id, "assignee_type" => "agent"}
+             }
+    end
+
+    test "task_update with flat USER assignee + auto_approve_plan: true refuses, echoes submitted_args, no corrected_args (task 01a0589b stage 2)" do
+      # The fill is agent-typed only. A user flat pair routes to the
+      # current-phase slot but never satisfies the precondition, so the
+      # refusal survives for unrepairable shapes — and
+      # auto_approve_corrected_args/3 returns nil (the repair is not
+      # mechanical), so :corrected_args is absent from the envelope.
+      # Nothing is persisted when the check fires.
+      project = create_project()
+      user = insert_user_for_sponsor()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "User flat task",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"}
+          }
+        })
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{
+                   "task_id" => task.id,
+                   "auto_approve_plan" => true,
+                   "assignee_id" => user.id,
+                   "assignee_type" => "user"
+                 },
+                 %{}
+               )
+
       assert envelope.code == :auto_approve_precondition_missing
       assert envelope.missing_phases == ["execution", "review"]
       assert envelope.recoverable == true
 
-      # Task unchanged — the changeset writer never ran.
+      # submitted_args echoes the call verbatim.
+      assert envelope.submitted_args == %{
+               "task_id" => task.id,
+               "auto_approve_plan" => true,
+               "assignee_id" => user.id,
+               "assignee_type" => "user"
+             }
+
+      # The repair is not mechanical for a user-typed flat pair.
+      refute Map.has_key?(envelope, :corrected_args)
+
+      # Task unchanged — the precondition fires before any writer ran.
       reloaded = Tasks.get_task_record(task.id)
       assert reloaded.auto_approve_plan == false
+
+      assert reloaded.phase_assignees == %{
+               "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"}
+             }
     end
 
     test "task_create with planning+execution but missing review rejects with review-only" do
@@ -2740,9 +2867,18 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute Map.has_key?(envelope.submitted_args, "project_id")
     end
 
-    test "task_update slotless task + flat agent + flag: corrected_args completes the three slots" do
+    test "task_update flat agent with an UNRESOLVABLE id + flag refuses with no corrected_args (fill cannot repair, task 01a0589b stage 2)" do
+      # Rewritten (task 01a0589b stage 2): the old pin used a slotless
+      # task + resolvable flat agent and expected the refusal to carry a
+      # corrected_args completion. That shape now completes in-call (the
+      # :update fill runs before the precondition), so the mechanical
+      # repair is dormant-by-success on :update. What still refuses with
+      # no corrected_args is an id that does not resolve: the fill places
+      # it into the absent slots, the slots are present-but-unresolvable,
+      # and auto_approve_corrected_args/3 never offers a repair for a
+      # failing slot that is present in the merged map.
       project = create_project()
-      agent = create_agent()
+      ghost_id = Ecto.UUID.generate()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Slotless echo"})
 
       assert {:error, envelope} =
@@ -2751,7 +2887,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
                  %{
                    "task_id" => task.id,
                    "auto_approve_plan" => true,
-                   "assignee_id" => agent.id,
+                   "assignee_id" => ghost_id,
                    "assignee_type" => "agent"
                  },
                  %{}
@@ -2763,36 +2899,16 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert envelope.submitted_args == %{
                "task_id" => task.id,
                "auto_approve_plan" => true,
-               "assignee_id" => agent.id,
+               "assignee_id" => ghost_id,
                "assignee_type" => "agent"
              }
 
-      # LITERAL three-slot agent map built from the flat pair — the
-      # mechanical completion the caller can resubmit.
-      assert envelope.corrected_args == %{
-               "task_id" => task.id,
-               "auto_approve_plan" => true,
-               "assignee_id" => agent.id,
-               "assignee_type" => "agent",
-               "phase_assignees" => %{
-                 "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
-                 "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
-                 "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
-               }
-             }
+      refute Map.has_key?(envelope, :corrected_args)
 
-      # The retry shape works end-to-end: resubmitting corrected_args
-      # verbatim satisfies the precondition and lands the update.
-      assert {:ok, result} = ToolSurface.execute("task_update", envelope.corrected_args, %{})
-      assert result.auto_approve_plan == true
-
+      # DB unchanged — the precondition fires before any writer ran.
       reloaded = Tasks.get_task_record(task.id)
-
-      assert reloaded.phase_assignees == %{
-               "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
-               "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
-               "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
-             }
+      assert reloaded.auto_approve_plan == false
+      assert reloaded.phase_assignees == %{}
     end
 
     test "task_update with a present-but-user-typed execution slot: no corrected_args (fill cannot repair)" do
@@ -2825,11 +2941,14 @@ defmodule Platform.Federation.ToolSurfaceTest do
                )
 
       assert envelope.code == :auto_approve_precondition_missing
-      assert envelope.missing_phases == ["execution", "review"]
 
-      # The failing execution slot is present (user-typed) in the merged
-      # map the precondition read — completion cannot repair it, so no
-      # corrected_args is offered.
+      # Rewritten expectation (task 01a0589b stage 2): the :update fill
+      # completes the ABSENT review slot from the agent-typed flat pair,
+      # so only the failing execution slot — present-but-user-typed in
+      # the merged map the precondition read — stays missing. Completion
+      # cannot repair it, so no corrected_args is offered.
+      assert envelope.missing_phases == ["execution"]
+
       refute Map.has_key?(envelope, :corrected_args)
 
       assert envelope.submitted_args == %{

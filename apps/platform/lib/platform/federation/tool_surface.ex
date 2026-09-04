@@ -1846,7 +1846,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_update",
         description:
-          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042). Flat assignee_id + assignee_type writes are auto-routed to the task's current-phase slot in phase_assignees (survives phase transitions per ADR 0044). Pass phase_assignees directly to set multiple phase slots in one call — when both are supplied, phase_assignees wins.",
+          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042). Flat assignee_id + assignee_type writes are auto-routed to the task's current-phase slot in phase_assignees (survives phase transitions per ADR 0044); with auto_approve_plan true and an agent-typed flat assignee, task_update also fills the absent phase slots (judged against the task's persisted phase_assignees overlaid with this call's routed slots) from the flat agent, while explicit phase_assignees entries win and present slots are never overwritten. User-typed or missing flat assignees still need explicit agent-typed phase_assignees for auto-approve. Pass phase_assignees directly to set multiple phase slots in one call — when both are supplied, phase_assignees wins.",
         parameters: %{
           task_id: %{
             type: "string",
@@ -1881,7 +1881,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "boolean",
             required: false,
             description:
-              "When true, the engine auto-approves the task's submitted plan without waiting for a human approval — the task moves straight from plan_submit to in_progress. Useful for well-scoped low-risk tasks where plan review is procedural. Defaults to false on new tasks."
+              "When true, the engine auto-approves the task's submitted plan without waiting for a human approval — the task moves straight from plan_submit to in_progress. With an agent-typed flat assignee_id + assignee_type, task_update fills the absent phase slots (judged against the task's persisted phase_assignees overlaid with this call's routed slots) from the flat agent; explicit phase_assignees entries win and present slots are never overwritten. User-typed or missing flat assignees still need explicit agent-typed phase_assignees. Useful for well-scoped low-risk tasks where plan review is procedural. Defaults to false on new tasks."
           },
           phase_assignees: %{
             type: "object",
@@ -4556,7 +4556,12 @@ defmodule Platform.Federation.ToolSurface do
         with {:ok, flat_attrs, phase_attrs} <-
                TaskAttrs.build_task_attrs(args, :update,
                  auto_route_flat_assignee_current_phase: true,
-                 current_phase: Tasks.current_phase(task)
+                 current_phase: Tasks.current_phase(task),
+                 # The :update auto-approve fill (ADR 0044 §5, task
+                 # 01a0589b) is keyed off the task's persisted slots
+                 # overlaid by this call's routed slots, so a present
+                 # slot is never overwritten by the flat pair.
+                 existing_phase_assignees: task.phase_assignees || %{}
                ) do
           # Status transitions still route through
           # `Tasks.transition_task_status/2` (validates the edge), while
@@ -7878,8 +7883,9 @@ defmodule Platform.Federation.ToolSurface do
   # rebuild-everything; `corrected_args`
   # (`TaskAttrs.auto_approve_corrected_args/3`) appears only when the
   # repair is mechanical. The suggestion is per-site because ADR 0044 §5
-  # changed what a flat assignee means on task_create (fan-out) while
-  # task_update keeps current-phase-only routing.
+  # changed what a flat assignee means on task_create (fan-out) and, since
+  # task 01a0589b, on task_update (route to the current-phase slot AND fill
+  # every absent slot behind the persisted-slot merge).
   defp auto_approve_precondition_envelope(phases, submitted_args, corrected_args, site) do
     suggestion =
       case site do
@@ -7890,9 +7896,11 @@ defmodule Platform.Federation.ToolSurface do
             "or missing (or a slot was explicitly nil): supply explicit agent-typed phase_assignees."
 
         :update ->
-          "Pass phase_assignees with agent-typed assignee_id + assignee_type for each of: planning, execution, review. " <>
-            "On task_update the flat assignee_id still routes to the current-phase slot only " <>
-            "(ADR 0044 §5 — no fan-out on update), so execution and review need explicit agent-typed phase_assignees."
+          "On task_update a flat agent-typed assignee_id + assignee_type with auto_approve_plan true routes " <>
+            "to the current-phase slot AND fills every absent phase slot (ADR 0044 §5), so this refusal " <>
+            "means the flat assignee was user-typed or missing, or a failing slot is present-but-invalid — " <>
+            "user-typed, explicitly nil, or an id that does not resolve: supply explicit agent-typed " <>
+            "phase_assignees."
       end
 
     suggestion =
