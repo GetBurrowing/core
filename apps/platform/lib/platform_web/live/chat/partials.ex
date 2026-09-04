@@ -1407,7 +1407,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         </div>
       </div>
 
-      <div class="flex-1 overflow-y-auto p-3">
+      <div class="flex-1 overflow-y-auto p-3" data-role="call-stage" data-pane="desktop">
         <%!-- Screen-share preview (task 019e420f stage 3). JS owns
              these children — meeting_client.js attaches the live
              `<video>` here when a peer publishes a screen-share track,
@@ -1460,6 +1460,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <div
           id="meeting-participants"
           phx-update="ignore"
+          data-role="call-tile-grid"
           class="meeting-participant-grid w-full gap-2.5"
         >
         </div>
@@ -1577,7 +1578,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       >
       </div>
 
-      <div class="flex-1 overflow-y-auto p-4">
+      <div class="flex-1 overflow-y-auto p-4" data-role="call-stage" data-pane="mobile">
         <%!-- Screen-share preview (task 019e420f stage 3). See the
              desktop variant for the rationale. --%>
         <div class="mb-2">
@@ -1616,6 +1617,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <div
           id="meeting-participants-mobile"
           phx-update="ignore"
+          data-role="call-tile-grid"
           class="meeting-participant-grid w-full gap-2.5"
         >
         </div>

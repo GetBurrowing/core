@@ -153,6 +153,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
           "absolute inset-[3px] flex items-center justify-center",
           @meta.face_dim && "opacity-45"
         ]}
+        data-role="agent-activity-face"
       />
       <span
         class={[

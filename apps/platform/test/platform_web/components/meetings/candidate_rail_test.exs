@@ -410,4 +410,168 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
       end
     end
   end
+
+  # ── Card reading order ────────────────────────────────────────────────
+
+  describe "card reading order" do
+    # THE INVARIANT: the assignment renders BELOW the evidence quote.
+    #
+    # It has been inverted and fixed twice. Flipped, the assignment sits
+    # directly under the title beside the byline, and the card reads as
+    # though the ASSIGNEE is who spoke — the exact authorship confusion
+    # this component exists to remove. The reading order the approved
+    # canvas draws is: what was said → who said it → the evidence →
+    # who will action it.
+    #
+    # Asserted on DOM ORDER over the card's subtree, never on text and
+    # never on class names. A `=~` against the rendered string is a text
+    # match by another name and breaks the moment an attribute reorders.
+    # `Floki.find/2` answers in document order, so the index of each
+    # marker in its result IS the card's reading order.
+    #
+    # RED ON PURPOSE — see `Platform.PendingFix`. Today the populated
+    # card renders its evidence quote as `meeting-candidate-title` and
+    # has no `meeting-candidate-quote` element at all; only the skeleton
+    # spells it that way. Stage 4 of task `01a05b14` gives the populated
+    # card the italic left-ruled quote line and moves the assignment to
+    # the card's last line, which is what turns this green. This task
+    # asserts the relation and deliberately does NOT edit the template:
+    # two agents editing `candidate_rail.ex` on overlapping branches is
+    # how work gets lost.
+    @order_markers "[data-role='meeting-candidate-byline']," <>
+                     "[data-role='meeting-candidate-quote']," <>
+                     "[data-role='meeting-candidate-assignment']"
+
+    defp reading_order(html, %MeetingCandidate{id: id}) do
+      {:ok, doc} = Floki.parse_fragment(html)
+
+      doc
+      |> Floki.find("[data-role='meeting-candidate-card'][data-candidate-id='#{id}']")
+      |> Floki.find(@order_markers)
+      |> Enum.map(fn node -> node |> Floki.attribute("data-role") |> List.first() end)
+      |> Enum.map(&String.replace_prefix(&1, "meeting-candidate-", ""))
+    end
+
+    # Every state that renders a card at all, not just the fully
+    # populated one: the inversion has previously survived in one branch
+    # of an `:if` while the other read correctly, so a test covering only
+    # the happy card is how the last two got through.
+    defp order_cases do
+      [
+        {"forming — classified, still early",
+         candidate(%{
+           state: :heard,
+           classified_intent: "action_item",
+           speaker: "Harper Parker",
+           assigned_agent_slug: "octavius"
+         })},
+        {"full — the populated card",
+         candidate(%{state: :shaping, speaker: "Harper Parker", assigned_agent_slug: "octavius"})},
+        {"acting — armed and counting down",
+         candidate(%{
+           state: :acting,
+           speaker: "Harper Parker",
+           assigned_agent_slug: "octavius",
+           acts_at: DateTime.add(@now, 30, :second)
+         })},
+        # UNATTRIBUTED: renders NO byline at all, and the quote →
+        # assignment relation still has to hold. A test that only covers
+        # the fully-populated card is how the last two inversions got
+        # through.
+        {"nil speaker — unattributed, renders no byline",
+         candidate(%{state: :shaping, speaker: nil, assigned_agent_slug: "octavius"})},
+        {"blank speaker — the classifier's empty-string reading",
+         candidate(%{state: :shaping, speaker: "   ", assigned_agent_slug: "octavius"})},
+        {"unassigned — the sentinel row",
+         candidate(%{
+           state: :shaping,
+           speaker: "Harper Parker",
+           assigned_agent_slug: nil,
+           target_role: "null"
+         })}
+      ]
+    end
+
+    @tag :pending_fix
+    test "the assignment renders after the evidence quote so the byline cannot read as the assignee" do
+      for {label, card} <- order_cases() do
+        order = reading_order(rail([card]), card)
+
+        quote_at = Enum.find_index(order, &(&1 == "quote"))
+        assignment_at = Enum.find_index(order, &(&1 == "assignment"))
+        byline_at = Enum.find_index(order, &(&1 == "byline"))
+
+        # THE ANTI-VACUITY GUARD. Without it, every ordering assertion
+        # below is satisfied by a card that renders neither marker and
+        # the test passes while asserting nothing at all.
+        assert is_integer(quote_at) and is_integer(assignment_at),
+               "#{label}: the card must render BOTH the evidence quote and the " <>
+                 "assignment for its reading order to mean anything; " <>
+                 "markers in document order: #{inspect(order)}"
+
+        assert assignment_at > quote_at,
+               "#{label}: the assignment must follow the evidence quote, " <>
+                 "got #{inspect(order)}"
+
+        if is_integer(byline_at) do
+          assert byline_at < quote_at,
+                 "#{label}: the byline must precede the evidence quote, " <>
+                   "got #{inspect(order)}"
+        end
+      end
+    end
+
+    # The SKELETON is the one state deliberately outside the set above:
+    # it has no agent yet, so it renders a quote and NO assignment BY
+    # DESIGN. Asserted as a positive claim rather than left as a hole in
+    # the case list — a state quietly dropped from an ordering test is
+    # indistinguishable from a state the test forgot.
+    test "the skeleton card carries the quote and no assignment — and still cannot invert" do
+      skeleton = candidate(%{state: :heard, classified_intent: nil, speaker: "Harper Parker"})
+
+      assert CandidateRail.presentation(skeleton) == :skeleton
+
+      order = reading_order(rail([skeleton]), skeleton)
+
+      assert "quote" in order,
+             "the shimmering card must still show the fragment that triggered it, got #{inspect(order)}"
+
+      # If an assignment ever appears here it must obey the same
+      # relation; today there is none, and that is the claim.
+      case {Enum.find_index(order, &(&1 == "quote")),
+            Enum.find_index(order, &(&1 == "assignment"))} do
+        {_q, nil} ->
+          :ok
+
+        {q, a} ->
+          assert a > q, "skeleton: assignment must follow the quote, got #{inspect(order)}"
+      end
+    end
+
+    test "reading_order/2 measures document order rather than returning a constant" do
+      # The control for the assertions above. `Floki.find/2` is shown to
+      # distinguish two different arrangements of the same three markers,
+      # so a green ordering assertion is a measurement and not a tautology.
+      html = """
+      <div data-role="meeting-candidate-card" data-candidate-id="ctl">
+        <p data-role="meeting-candidate-byline">who</p>
+        <p data-role="meeting-candidate-quote">what</p>
+        <p data-role="meeting-candidate-assignment">to whom</p>
+      </div>
+      """
+
+      inverted = """
+      <div data-role="meeting-candidate-card" data-candidate-id="ctl">
+        <p data-role="meeting-candidate-assignment">to whom</p>
+        <p data-role="meeting-candidate-byline">who</p>
+        <p data-role="meeting-candidate-quote">what</p>
+      </div>
+      """
+
+      probe = %MeetingCandidate{id: "ctl"}
+
+      assert reading_order(html, probe) == ["byline", "quote", "assignment"]
+      assert reading_order(inverted, probe) == ["assignment", "byline", "quote"]
+    end
+  end
 end

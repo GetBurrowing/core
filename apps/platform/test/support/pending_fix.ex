@@ -54,11 +54,41 @@ defmodule Platform.PendingFix do
   #     `Meetings.resolve_meeting_org_id/1` + `maybe_put_org_id/2` into
   #     `Meetings.create_meeting/1`.
   #
-  # The registry is EMPTY, and that is its healthy state. `excluded_tags/0`
-  # then returns `[]`, so `test/test_helper.exs` excludes nothing on this
-  # account and every test in the suite runs by default.
+  @tag :pending_fix
 
-  @entries []
+  @entries [
+    %{
+      tag: @tag,
+      test:
+        "test/platform_web/components/meetings/candidate_rail_test.exs: " <>
+          "the assignment renders after the evidence quote so the byline cannot " <>
+          "read as the assignee",
+      ticket: "01a064fa",
+      reason: """
+      The populated candidate card has NO `data-role="meeting-candidate-quote"`
+      element. Only the `:skeleton` branch spells the evidence quote that way
+      (`candidate_rail.ex:274`); the `:forming` and `:full` branch renders the
+      same `evidence_quote` as `data-role="meeting-candidate-title"` at `:289`
+      and then puts `meeting-candidate-assignment` at `:312`, immediately under
+      the title and beside the byline — where it reads as part of the
+      attribution, which is the authorship confusion this component was fixed
+      twice to remove.
+
+      The test asserts the approved canvas's reading order on DOM position:
+      byline BEFORE the quote, assignment AFTER it, for every card state that
+      renders both. Red today with the anti-vacuity guard, which reports the
+      markers each card actually rendered.
+
+      Stage 4 of task `01a05b14` is the stage that gives the populated card the
+      italic left-ruled quote line and moves the assignment to the card's last
+      line. It makes this green and deletes both the `@tag :pending_fix` and
+      this entry. Task `01a064fa` deliberately does NOT edit
+      `candidate_rail.ex`: two agents editing it on overlapping branches is how
+      work gets lost.
+      """,
+      added_on: ~D[2026-09-02]
+    }
+  ]
 
   @doc "Every known-open-defect entry."
   @spec entries() :: [map()]

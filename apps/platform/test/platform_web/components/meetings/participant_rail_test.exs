@@ -164,6 +164,48 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       end
     end
 
+    # WHY A MARKER ON THE FACE (task 01a064fa stage 1). The geometric
+    # gate has to ask "does the ring wrap THE AVATAR", and the avatar
+    # itself had nothing to hang on — only the CSS class `agent-avatar`.
+    # A class-name lookup is the same species of check as the presence
+    # check that let three rejected rounds through, so the face gets a
+    # `data-role` and the browser assertion resolves through DOM
+    # ancestry instead.
+    #
+    # Asserted as ANCESTRY over the parsed subtree, not as `row =~`: a
+    # string containment check passes on a document where the face was
+    # moved out of the avatar wrapper to sit beside it, which is
+    # precisely the defect shape being guarded against.
+    test "the face carries a marker and sits INSIDE the activity avatar wrapper" do
+      html = four_state_rail()
+
+      for {id, _state} <- @four_states do
+        row = Floki.parse_fragment!(agent_row(html, id))
+
+        wrappers = Floki.find(row, ~s([data-role="agent-activity-avatar"]))
+
+        assert length(wrappers) == 1,
+               "#{id}: expected exactly one activity avatar wrapper, got #{length(wrappers)}"
+
+        assert Floki.find(row, ~s([data-role="agent-activity-face"])) != [],
+               "#{id}: the avatar has no data-role=\"agent-activity-face\" marker"
+
+        # The face found ANYWHERE in the row must be the same node as
+        # the face found under the wrapper — that equality is what
+        # fails when the face is hoisted out to be the wrapper's
+        # sibling while still rendering somewhere in the row.
+        assert Floki.find(wrappers, ~s([data-role="agent-activity-face"])) ==
+                 Floki.find(row, ~s([data-role="agent-activity-face"])),
+               "#{id}: the face is in the row but NOT inside the activity avatar wrapper"
+
+        # The ring is co-located with the face in the same wrapper, so
+        # ring and face are one object rather than two things a reader
+        # is asked to associate across a row.
+        assert Floki.find(wrappers, ~s([data-role="agent-activity-ring"])) != [],
+               "#{id}: the ring is not inside the wrapper the face lives in"
+      end
+    end
+
     test "the ring colour differs per state rather than collapsing to one" do
       html = four_state_rail()
 

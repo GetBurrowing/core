@@ -50,3 +50,81 @@ don't touch the host camera/mic; synthetic tracks carry a spinning color wheel
 - Set `BASE_URL=http://dev-host:4000` to run against a different host.
 - Failure traces land in `test-results/`; open the `.zip` with
   `npx playwright show-trace <path>` for step-by-step DOM + network replay.
+
+## The meetings layout gate — run it BEFORE every meetings capture
+
+**Why, in one sentence: presence checks pass on a screen wired into the wrong
+parents, and three rounds of the meetings surface were rejected on sight by the
+sponsor because every element the approved canvas called for was present and
+every colour token was right while the ring, the controls, the grid and the
+card's reading order were assembled into different parents.**
+
+So a meetings visual stage does not ship a screenshot alone. Immediately before
+the capture, run:
+
+```bash
+e2e/scripts/measure-meeting-layout.sh \
+  --base-url http://192.0.2.200:4046 \
+  --surface meetings|quickmeet \
+  --viewport 1280x800|390x844
+```
+
+It drives `tests/meeting_layout_geometry.spec.ts` and prints a machine-readable
+verdict block: one line per assertion with the assertion name, the **measured
+numbers**, the tolerance, and PASS or FAIL. The numbers are printed on PASS as
+well as on FAIL — a bare PASS is indistinguishable from an assertion that could
+not fail, which is the whole reason this gate exists.
+
+**Paste the verdict block into the evidence canvas alongside the screenshot. A
+`manual_approval` submitted with a screenshot and no verdict block is an
+INCOMPLETE REVIEW and should be sent back.**
+
+### Exit codes are distinct on purpose
+
+| Code | Meaning |
+|---|---|
+| 0 | every assertion PASSed |
+| 1 | a real layout FAIL |
+| 2 | usage error |
+| 3 | **rig fault** — `/assets/js/app.js` did not return 200 |
+| 4 | **rig fault** — the spec crashed/timed out and produced no measurements |
+
+Exit **3** is the one to know. The hive→moon rsync runs `--delete` and
+`priv/static` does not exist on hive, so any source edit wipes the built assets
+on moon; the page then renders with **no tiles at all**, which reads exactly
+like the feature being missing and would turn every assertion red for a reason
+that has nothing to do with layout. `mix assets.build` exits 1 on
+`mix esbuild excalidraw` while still writing a serving bundle, so its exit code
+proves nothing — the curl does. Never record an exit 3 as a layout regression.
+
+### What the runner handles for you
+
+- **The quickmeet prelude.** No rail exists until `meeting_join` is clicked, and
+  below `lg` none is on screen until `[data-role="quickmeet-rail-toggle"]` is
+  pressed. Both are encoded in the surface path and the verdict block prints a
+  `prelude` line showing they ran, so a false "feature missing" is visible as a
+  rig state rather than reported as a layout result.
+- **Duplicate-element disambiguation.** Each control exists twice in the DOM (a
+  hidden `lg`-only copy and the mobile copy) and a zero-rect element passes
+  every containment test there is. The verdict block prints ALL matching rects
+  so the disambiguation is shown to have fired.
+- **Derived tolerances.** The grid tolerance is the stage's own measured padding
+  (`padLeft+padRight`), not a hardcoded pixel count — a hardcoded 40px catches a
+  520-in-745 grid but misses the same defect on a 560px stage.
+
+### Preconditions
+
+`e2e/scripts/seed-meeting-layout-fixture.sh <task-slug>` first — the dev DB
+starts with no agents, projects or meetings, and `/meetings` creation silently
+no-ops because `project_id` is NOT NULL.
+
+### Known gaps the verdict block names rather than hides
+
+- `statesExercised=["idle"]`: `:computing` / `:typing` / `:failed` have
+  in-memory-only producers and the dev container's serving BEAM has no
+  distribution, so the glyph-overlap branch is never exercised on this rig.
+- `card.domorder` SKIPs until task `01a05b14` stage 4 lands the populated card's
+  quote line; the card list is printed so the skip is a measurement, not a tick.
+- The rig fingerprint (`app.js` sha) narrows but does not prove which of the
+  shared 400x dev servers was measured — two servers on the same branch
+  fingerprint identically.

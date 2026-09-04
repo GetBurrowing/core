@@ -558,6 +558,76 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
     end
   end
 
+  # TASK 01a064fa STAGE 1. The quickmeet's stage column and tile grid
+  # were both anonymous divs, so the geometric gate had nothing to
+  # measure. The grid marker goes on `#meeting-participants` /
+  # `#meeting-participants-mobile` — the `phx-update="ignore"`
+  # CONTAINER, which LiveView still renders — and NEVER on a child,
+  # because meeting_client.js owns the children and a server-rendered
+  # child inside an ignored node never survives.
+  #
+  # Asserted as a DESCENDANT selector rather than two presence checks:
+  # a grid that renders outside its stage column is the
+  # wired-into-the-wrong-parent defect this task exists to catch, and
+  # two independent presence checks pass on it.
+  describe "call-stage / call-tile-grid markers (task 01a064fa)" do
+    defp sel_count(html, selector) do
+      html |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> Enum.count()
+    end
+
+    test "both panes carry one stage column and one tile grid, grid inside stage" do
+      html = render_panel(%{})
+
+      # Two panes are in the document at once (one hidden by CSS at the
+      # lg breakpoint), so two of each is the correct count here — the
+      # browser-side helper disambiguates by rect, which is why it must
+      # never fall back to `.first()`.
+      assert sel_count(html, ~s([data-role="call-stage"])) == 2
+      assert sel_count(html, ~s([data-role="call-tile-grid"])) == 2
+
+      assert sel_count(html, ~s([data-role="call-stage"] [data-role="call-tile-grid"])) == 2,
+             "a tile grid renders outside its stage column"
+    end
+
+    test "each pane's stage and grid are the pane's own, not the other's" do
+      html = render_panel(%{})
+
+      for pane <- ~w(desktop mobile) do
+        assert sel_count(html, ~s([data-role="call-stage"][data-pane="#{pane}"])) == 1
+      end
+
+      assert sel_count(
+               html,
+               ~s([data-role="call-stage"][data-pane="desktop"] #meeting-participants[data-role="call-tile-grid"])
+             ) == 1
+
+      assert sel_count(
+               html,
+               ~s([data-role="call-stage"][data-pane="mobile"] #meeting-participants-mobile[data-role="call-tile-grid"])
+             ) == 1
+    end
+
+    # The marker is on the ignored CONTAINER. If a future stage moves it
+    # to a child it would stop rendering entirely, and a presence check
+    # on the container would keep passing.
+    test "the grid marker sits on the phx-update=ignore container itself" do
+      html = render_panel(%{})
+
+      assert sel_count(html, ~s([phx-update="ignore"][data-role="call-tile-grid"])) == 2
+    end
+
+    # `data-component="call-controls"` already exists on the shared
+    # component and is the marker the placement assertion uses. Pinned
+    # so nobody adds a second spelling: two spellings for one thing means
+    # the harness starts passing on whichever happens to be present.
+    test "the controls marker is the existing data-component, singular per pane" do
+      html = render_panel(%{})
+
+      assert sel_count(html, ~s([data-component="call-controls"])) == 2
+      assert sel_count(html, ~s([data-role="call-controls"])) == 0
+    end
+  end
+
   # The badge WORD, not a colour and not a class. `AgentActivityBadge`'s
   # contract is ring + glyph + word.
   describe "agent activity reaches the quickmeet People pane (stage 6)" do

@@ -1930,6 +1930,82 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ ~s(data-gallery-grid)
     end
 
+    # TASK 01a064fa STAGE 1. The geometric gate measures "does the tile
+    # grid fill the stage column", which needs both boxes to be
+    # addressable. Neither was: the stage column carried only
+    # `data-pane` and the grid only `data-gallery-grid`, and the
+    # geometry harness is deliberately forbidden from locating anything
+    # by class name — a class-name lookup is the same species of check
+    # as the presence check that let three rejected rounds through.
+    #
+    # Asserted as ANCESTRY over the parsed document, not as two
+    # independent `=~` presence checks: the grid being SOMEWHERE on the
+    # page while sitting outside the stage column is exactly the
+    # wired-into-the-wrong-parent defect this task exists to catch.
+    test "the stage column and the tile grid are addressable, and the grid is inside the stage",
+         %{conn: conn, meeting: meeting, space: space} do
+      {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
+      {_grace, _} = seed_meeting_presence(space, "user", "Grace Hopper")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="gallery"]))
+        |> render_click()
+
+      doc = Floki.parse_document!(html)
+
+      stages = Floki.find(doc, ~s([data-role="call-stage"]))
+
+      assert length(stages) == 1,
+             "expected exactly one [data-role=\"call-stage\"], got #{length(stages)} — " <>
+               "the geometry harness fails loudly on an ambiguous selector"
+
+      grids = Floki.find(doc, ~s([data-role="call-tile-grid"]))
+      assert length(grids) == 1
+
+      assert Floki.find(stages, ~s([data-role="call-tile-grid"])) == grids,
+             "the tile grid renders but is NOT inside the stage column"
+
+      # The grid is the element that DIRECTLY parents the cells — if the
+      # marker drifted onto an outer wrapper the fill measurement would
+      # silently be measuring the wrong box.
+      assert Floki.find(grids, ~s([data-gallery-cell])) != []
+      assert Floki.find(grids, ~s([data-gallery-grid])) == grids
+    end
+
+    # The markers are ATTRIBUTES on nodes LiveView already renders. The
+    # seven `phx-update="ignore"` ids below have JS-owned children
+    # (meeting_client.js, MeetingWhiteboard), so a marker placed on a
+    # CHILD would be wiped or never rendered — and a change of id would
+    # break the hooks' lookups without any test noticing. Pinned here so
+    # the next marker-adding stage cannot quietly reach into the
+    # JS-owned region.
+    test "the JS-owned phx-update=ignore ids are unchanged", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Rendered for every stage mode, unconditionally.
+      for id <- ~w(meeting-media meeting-whiteboard-host) do
+        assert html =~ ~s(id="#{id}"), "the phx-update=ignore node #{id} is gone or renamed"
+      end
+
+      # The screen-share slot lives inside the stage-mode `cond`, so it
+      # is only in the document in :screen mode. Asserting it on the
+      # gallery mount is how the first cut of this guard failed — worth
+      # keeping the distinction visible rather than dropping the id.
+      screen_html =
+        view
+        |> element(~s([data-stage-mode-button="screen"]))
+        |> render_click()
+
+      assert screen_html =~ ~s(id="meeting-screen-share-slot"),
+             "the phx-update=ignore node meeting-screen-share-slot is gone or renamed"
+    end
+
     test "renders one VideoTile per human participant in a grid", %{
       conn: conn,
       meeting: meeting,

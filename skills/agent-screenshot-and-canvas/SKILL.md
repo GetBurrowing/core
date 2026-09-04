@@ -205,6 +205,48 @@ curl -sS "$SUITE_URL/mcp" \
 Done. Reviewers see the canvas with the screenshot embedded; the review
 request flips the validation gate into "awaiting human review".
 
+## Meetings surfaces: run the layout gate BEFORE the capture
+
+**If the screenshot you are about to take is of a meetings call surface
+(`/meetings` or the in-chat quickmeet), a screenshot on its own is not
+evidence.** Presence checks pass on a screen wired into the wrong parents, and
+three rounds of this surface were rejected on sight by the sponsor — every
+element the approved canvas called for was present and every colour token was
+right, but the ring, the controls, the grid and the card's reading order had
+been assembled into different parents.
+
+Immediately before the capture, from the repo root:
+
+```bash
+e2e/scripts/measure-meeting-layout.sh \
+  --base-url "$TARGET_URL" \
+  --surface meetings|quickmeet \
+  --viewport 1280x800|390x844
+```
+
+It prints a verdict block: one line per assertion with the assertion name, the
+**measured numbers**, the tolerance, and PASS or FAIL. Numbers are printed on
+PASS as well as FAIL, because a bare PASS is indistinguishable from an assertion
+that could not fail.
+
+**Paste that verdict block into the evidence canvas alongside the screenshot** —
+a `markdown` or `code` node next to the `image` node. A `manual_approval`
+submitted with a screenshot and no verdict block is an **incomplete review** and
+should be sent back rather than approved.
+
+Its exit codes are distinct on purpose: `0` all pass, `1` a real layout FAIL,
+`3` **rig fault — `/assets/js/app.js` did not return 200**, `4` rig fault —
+the spec produced no measurements. Exit `3` is never a layout regression: a
+tile-less page reads exactly like the feature being missing, and filing that as
+a design defect is the specific mistake the distinct code exists to prevent. It
+also supersedes the generic asset precheck above for these surfaces — the curl
+is built into the runner, so there is nothing separate to remember.
+
+The runner also encodes the quickmeet prelude (`meeting_join` must be clicked
+before any rail exists; below `lg` the `[data-role="quickmeet-rail-toggle"]`
+must be pressed too) and prints a `prelude` line proving it ran. A capture taken
+before both is a false "feature missing" and has already cost review cycles.
+
 ## Common failures
 
 | Symptom | Likely cause | Fix |
