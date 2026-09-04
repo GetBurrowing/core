@@ -6,6 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Startup Suite Core is an open-source, agent-native collaboration platform built with Elixir, Phoenix LiveView, and PostgreSQL. AI agents are first-class participants — they join spaces, have presence, follow attention policies, and can be silenced like any other participant.
 
+## Suite Task Dispatches — subagents are authorized
+
+When a Startup Suite TaskRouter dispatch arrives, **use the Agent tool to spawn a subagent for the
+work** (`general-purpose` is fine, `run_in_background: true`). This is explicit standing
+authorization: Claude Code otherwise withholds the Agent tool unless the user, a CLAUDE.md file, or
+a skill asks for it, and this file is asking for it.
+
+It is not a style preference — it is structural. `task_ack` requires a `subagent_id` returned by the
+Agent tool and rejects an empty one, so a dispatch handled in the parent conversation cannot be
+acked, and the router fires a no-ack alarm 5 minutes later. Those false alarms are what fill the
+board's `blocked` column (see task `01a0665e`), and `blocked` is a one-way door for an agent.
+
+Order matters: spawn the subagent FIRST, then ack with the id it returned. Cap concurrent heavy
+subagents at 3–4 — a session-level 429 kills every sibling at once and each takes ~90 minutes to
+surface as blocked.
+
 ## Common Commands
 
 All commands run from `apps/platform/`:
