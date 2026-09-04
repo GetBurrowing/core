@@ -2898,23 +2898,48 @@ defmodule Platform.Orchestration.TaskRouter do
   # `mark_no_ack_fired/1` flips the LeaseManager row's `no_ack_fired?`
   # atomically — if it returns anything other than `{:ok, :fired}`
   # (already-fired race), we swallow the check with no state change.
-  # Durable-ack guard. The ETS lease row is the only place an ack lives at
-  # runtime, and `clear_liveness/1` DELETES that row from ~15 call sites — so
-  # any re-dispatch of a stage the executor already acked (opening a review
-  # request is the reachable one) re-arms this alarm against an agent that DID
-  # ack. `execution.acked` lives in Postgres and survives every clear, so we
-  # consult it before firing and re-stamp the ETS row on a hit.
+  # Durable-ack guard, BOUNDED BY THE LAST HUMAN RELEASE. The ETS lease row is
+  # the only place an ack lives at runtime, and `clear_liveness/1` DELETES that
+  # row from ~15 call sites — so any re-dispatch of a stage the executor
+  # already acked (opening a review request is the reachable one) re-arms this
+  # alarm against an agent that DID ack. `execution.acked` lives in Postgres
+  # and survives every clear, so we consult it before firing and re-stamp the
+  # ETS row on a hit. That is task 01a007bf / PR #757, and it stays: an alarm
+  # that fires at a runtime which acked THIS dispatch is the false-positive
+  # class that fills the blocked column.
   #
-  # ACCEPTED TRADE-OFF: this deliberately does NOT compare the ack's
-  # `occurred_at` against `lease.dispatched_at`. Any time bound reintroduces
-  # the false positive, because the re-dispatch happens AFTER the ack.
-  # Consequence: a stage force-reassigned to a NEW runtime will not re-fire
-  # no-ack on the old owner's ack — that case is covered by
-  # `execution.safety_net_fired`, which is left untouched.
+  # THE TIME BOUND (task 01a06d39, observed live 2026-09-04). "Was this stage
+  # ever acked" is not the same question as "did anyone take THIS dispatch",
+  # and one path drives them apart: the runtime acks, files
+  # `report_blocker(needs_human: true)`, and a PERSON releases the hold on the
+  # board. `Tasks.maybe_release_needs_human_holds/3` → `force_dispatch/1`
+  # re-dispatches and arms a fresh five-minute window — and if the runtime
+  # ignores that re-dispatch, the PRE-BLOCKER ack suppressed this alarm
+  # forever, leaving only the 90-minute `execution.safety_net_fired`. So the
+  # ack is compared against the most recent human release, exactly as the
+  # DISPATCH-suppression guard already does (`live_acked_executor?/2` →
+  # `human_released_since?/3`, backed by
+  # `RuntimeSupervision.last_human_release_at/2`): an ack OLDER than the
+  # release says nothing about the dispatch that release produced and does NOT
+  # suppress; an ack NEWER than it means the runtime took the re-dispatch, and
+  # suppresses exactly as before.
+  #
+  # STILL NOT BOUNDED BY `lease.dispatched_at`, for the reason the previous
+  # revision of this comment gave: the re-dispatch ALWAYS postdates the ack, so
+  # that bound re-opens the #757 false positive on every ordinary path. A human
+  # release is a different quantity — a person caused it, it postdates the ack
+  # only on the broken path, and it never occurs at all on the
+  # clear-then-re-dispatch sequences `task_router_acked_stage_no_ack_test.exs`
+  # pins.
+  #
+  # Consequence still accepted: a stage force-reassigned to a NEW runtime with
+  # no human release recorded will not re-fire no-ack on the old owner's ack.
+  # That case remains covered by `execution.safety_net_fired`, untouched here.
   #
   # Stage-scoped by construction: a lease with a nil/blank stage_id falls
-  # through to the alarm (`stage_acked?/2` answers false), and an ack on stage
-  # N never suppresses the alarm for stage N+1.
+  # through to the alarm (`last_stage_ack_at/2` returns nil for a blank stage,
+  # carrying the same guard `stage_acked?/2` documents), and an ack on stage N
+  # never suppresses the alarm for stage N+1.
   # Best-effort stage label for the ack log line: the event payload is the
   # authority (the ack names its own stage), the router's current stage is
   # the fallback, and "unknown" when neither is set.
@@ -2929,7 +2954,7 @@ defmodule Platform.Orchestration.TaskRouter do
   end
 
   defp maybe_fire_no_ack(%State{} = state, task_id, lease) do
-    if Platform.Orchestration.stage_acked?(task_id, lease.stage_id) do
+    if durable_ack_suppresses_alarm?(task_id, lease.stage_id) do
       LeaseManager.record_ack(task_id)
 
       Logger.info(
@@ -2939,6 +2964,17 @@ defmodule Platform.Orchestration.TaskRouter do
       {:noreply, state}
     else
       do_fire_no_ack(state, task_id, lease)
+    end
+  end
+
+  # The bounded form of the durable-ack read — see the guard note above.
+  # `last_stage_ack_at/2` is the recency twin of `stage_acked?/2` (same query
+  # shape, same nil/blank-stage_id guard), so the only behavioural difference
+  # from the unbounded version is the `human_released_since?/3` clause.
+  defp durable_ack_suppresses_alarm?(task_id, stage_id) do
+    case Platform.Orchestration.last_stage_ack_at(task_id, stage_id) do
+      %DateTime{} = acked_at -> not human_released_since?(task_id, stage_id, acked_at)
+      _ -> false
     end
   end
 

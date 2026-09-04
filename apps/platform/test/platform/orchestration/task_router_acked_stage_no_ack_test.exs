@@ -26,6 +26,23 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
   it stays silent even when the lease row was wiped wholesale between dispatch
   and deadline.
 
+  ## Case 6 (task 01a06d39): the guard is BOUNDED by the last human release
+
+  Cases 1-5 pinned "an acked stage does not alarm". They did not, and could
+  not, distinguish that from "a stage that was EVER acked never alarms again",
+  which is what the guard actually said — and one live path drives the two
+  apart. The runtime acks, files `report_blocker(needs_human: true)`, a PERSON
+  releases the hold, and the router re-dispatches the same stage with a fresh
+  five-minute window. If the runtime then ignores that re-dispatch, the
+  PRE-BLOCKER ack suppressed the alarm forever and only the 90-minute safety
+  net was left (observed 2026-09-04).
+
+  Case 6 is a PAIR, and only the pair discriminates: 6a runs the clock out on
+  a re-dispatch the runtime ignored and the alarm must FIRE; 6b runs the same
+  clock out after the runtime ACKED the re-dispatch and the alarm must stay
+  SILENT. 6a alone is satisfied by deleting the case-1-5 guard, which is a
+  regression; 6b alone is satisfied by the unbounded guard, which is the bug.
+
   ## Every state here is DRIVEN, not constructed
 
   * the ack is `ToolSurface.execute("task_ack", ...)` — the real MCP entry
@@ -60,7 +77,15 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
 
   alias Platform.Federation.ToolSurface
   alias Platform.Orchestration
-  alias Platform.Orchestration.{ExecutionSpace, LeaseManager, TaskRouter}
+
+  alias Platform.Orchestration.{
+    ExecutionLease,
+    ExecutionSpace,
+    LeaseManager,
+    RuntimeSupervision,
+    TaskRouter
+  }
+
   alias Platform.Tasks
   alias Platform.Tasks.ReviewRequests
 
@@ -532,5 +557,272 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
 
       :ok = refute_alarm!(pid, task.id)
     end
+  end
+
+  # ── CASE 6 — the human release re-dispatch (task 01a06d39) ────────────
+  #
+  # THE DISCRIMINATING PAIR. Both tests below drive the SAME live sequence
+  # (observed 2026-09-04): the runtime acks, files
+  # `report_blocker(needs_human: true)`, a PERSON releases the hold on the
+  # board, and `Tasks.maybe_release_needs_human_holds/3` -> `force_dispatch/1`
+  # re-dispatches the same stage with a fresh five-minute window. They differ
+  # in one thing — whether the runtime ACKS that re-dispatch — and they must
+  # reach opposite verdicts at the deadline.
+  #
+  # WHY BOTH, OR NEITHER COUNTS. Test 6a alone ("the alarm fires") is
+  # satisfied by simply deleting the #757 durable-ack guard, which is a
+  # regression. Test 6b alone ("the alarm stays silent") is satisfied by the
+  # unbounded `stage_acked?/2` this stage replaced, which is the bug. Only the
+  # pair separates the bound from either failure mode.
+  #
+  # WHY THE TWO SHAPES ARE NOT LINE-FOR-LINE IDENTICAL AFTER THE RELEASE.
+  # `LeaseManager.record_ack/1` clears `no_ack_at`, so a lease whose ETS row
+  # still remembers the new ack has NO deadline to reach and
+  # `handle_info(:check_no_ack, …)` short-circuits on `%{ack_at: %DateTime{}}`
+  # long before the guard. A post-release ack can therefore only be tested at
+  # a deadline through the DURABLE read — which is the exact quantity this
+  # stage changed. 6b gets there the way production does: `execution.finished`
+  # calls `clear_liveness/1` (REPRO B above), the row dies with the ack in it,
+  # and the next same-stage re-dispatch arms a fresh ack-less window.
+  # `refute_alarm_and_assert_restamped!/2` asserts `ack_at: nil` as a
+  # PRECONDITION, so the ETS short-circuit is provably not what keeps 6b
+  # silent.
+  #
+  # WHAT WENT WRONG THE FIRST TIME. Commit `e107a7a6` pinned this re-dispatch
+  # with `assert %{ack_at: nil, no_ack_at: %DateTime{}} = LeaseManager.get(…)`
+  # — true at t+0, false at t+5min, and the alarm it advertised never fired in
+  # any test. An assertion can be real and still vacuous if it stops being
+  # true one instant after it is checked. Both tests here run the clock out.
+
+  describe "a human release re-dispatches the stage (task 01a06d39)" do
+    setup do
+      # `force_dispatch/1` sends `:dispatch`, which only SCHEDULES
+      # `:dispatch_now` a debounce later — `sync_router/1` is a mailbox
+      # barrier and cannot wait on a timer. Shorten it so the re-dispatch is
+      # observable in bounded time; `assert_eventually/1` still does the
+      # waiting.
+      previous = Application.get_env(:platform, :task_router_dispatch_debounce_ms)
+      Application.put_env(:platform, :task_router_dispatch_debounce_ms, 1)
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:platform, :task_router_dispatch_debounce_ms, previous)
+        else
+          Application.delete_env(:platform, :task_router_dispatch_debounce_ms)
+        end
+      end)
+
+      :ok
+    end
+
+    test "6a THE BUG: the runtime IGNORES the re-dispatch and the alarm FIRES", %{
+      task: task,
+      stage: stage,
+      assignee: assignee
+    } do
+      pid = boot_router!(task, assignee)
+
+      # 1. The runtime acks, exactly as every dispatch prompt tells it to.
+      :ok = ack_via_tool!(task, stage)
+      pre_blocker_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
+      assert %DateTime{} = pre_blocker_ack_at
+
+      # 2. ...then parks itself on a person. The hold clears the liveness row,
+      #    so the ONLY surviving memory of the ack is the durable one.
+      hold = file_needs_human_blocker!(task, stage, assignee.id)
+      assert hold.status == "blocked"
+      :ok = sync_router(task.id)
+
+      assert LeaseManager.get(task.id) == nil,
+             "the needs_human hold clears the liveness row — the ETS ack is gone"
+
+      # 3. A PERSON rules. Driven through the real board write, so the
+      #    `expired` + `released_by_user_id` lease row that
+      #    `last_human_release_at/2` reads genuinely exists. A hand-inserted
+      #    row would prove nothing about the production path.
+      released_at = release_hold!(task, hold)
+
+      assert DateTime.compare(released_at, pre_blocker_ack_at) == :gt,
+             "the release must postdate the ack, or there is no bound to test"
+
+      assert released_at == RuntimeSupervision.last_human_release_at(task.id, stage.id)
+
+      # 4. The release IS the wake (task 01a0665e stage 4): nothing else is
+      #    scheduled, and the re-dispatch arms a fresh ack-less window.
+      lease =
+        assert_eventually(fn ->
+          case LeaseManager.get(task.id) do
+            %{ack_at: nil, no_ack_at: %DateTime{}} = lease -> lease
+            other -> other
+          end
+        end)
+
+      assert %{ack_at: nil, no_ack_at: %DateTime{}, no_ack_fired?: false} = lease
+      assert lease.stage_id == stage.id, "same stage — no boundary was crossed"
+
+      # 5. THE RUNTIME IGNORES IT. No `task_ack`, no event of any kind. The
+      #    durable ack on this stage is still the PRE-BLOCKER one.
+      assert Orchestration.last_stage_ack_at(task.id, stage.id) == pre_blocker_ack_at
+      assert Orchestration.stage_acked?(task.id, stage.id)
+
+      # 6. Five minutes later. Under the unbounded `stage_acked?/2` guard the
+      #    pre-blocker ack suppressed this forever and only the 90-minute
+      #    safety net was left. It must fire.
+      expire_no_ack_deadline!(task.id)
+      {event, blocker} = observe_alarm!(pid, task.id)
+
+      # NAMED, not merely "the task became blocked": the 90-minute safety net
+      # also produces a blocked task with a needs_human blocker, and the
+      # release itself filed one earlier in this very test.
+      assert event.event_type == "execution.no_ack_timeout"
+      assert event.stage_id == stage.id
+      assert event.task_id == task.id
+      assert blocker.content =~ "Executor never acked"
+      assert get_in(blocker.metadata, ["needs_human"]) == true
+      assert get_in(blocker.metadata, ["reason"]) == "execution.no_ack_timeout"
+      assert %{no_ack_fired?: true} = LeaseManager.get(task.id)
+
+      # And the reason it fired is the BOUND, not the absence of an ack.
+      assert Orchestration.stage_acked?(task.id, stage.id),
+             "a durable ack exists; it is older than the release, which is why it no longer suppresses"
+    end
+
+    test "6b CONTROL: the runtime ACKS the re-dispatch and the alarm stays SILENT", %{
+      task: task,
+      stage: stage,
+      assignee: assignee
+    } do
+      pid = boot_router!(task, assignee)
+
+      :ok = ack_via_tool!(task, stage)
+      pre_blocker_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
+
+      hold = file_needs_human_blocker!(task, stage, assignee.id)
+      :ok = sync_router(task.id)
+      assert LeaseManager.get(task.id) == nil
+
+      released_at = release_hold!(task, hold)
+      assert DateTime.compare(released_at, pre_blocker_ack_at) == :gt
+
+      assert_eventually(fn ->
+        case LeaseManager.get(task.id) do
+          %{ack_at: nil, no_ack_at: %DateTime{}} = lease -> lease
+          other -> other
+        end
+      end)
+
+      # THE ONE DIFFERENCE FROM 6a. The runtime took the re-dispatch.
+      :ok = ack_via_tool!(task, stage)
+      post_release_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
+
+      assert DateTime.compare(post_release_ack_at, released_at) == :gt,
+             "the new ack must postdate the release, or this is not the control it claims to be"
+
+      # Now put the deadline back within reach the way production does.
+      # `record_ack/1` cleared `no_ack_at`, and `execution.finished` ->
+      # `clear_liveness/1` (REPRO B above) throws the ETS ack away entirely;
+      # the same-stage re-dispatch then arms a fresh ack-less window. This is
+      # the ONLY route by which a post-release ack ever meets a deadline, and
+      # it is the durable read that has to answer for it.
+      {:ok, _event} =
+        Orchestration.record_runtime_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => assignee.id,
+          "event_type" => "execution.finished",
+          "occurred_at" => DateTime.utc_now(),
+          "payload" => %{"stage_id" => stage.id}
+        })
+
+      :ok = sync_router(task.id)
+      assert LeaseManager.get(task.id) == nil, "execution.finished clears the lease"
+
+      Tasks.broadcast_board({:stage_transitioned, reload_stage!(task.id, stage.id)})
+      :ok = sync_router(task.id)
+
+      lease =
+        assert_eventually(fn ->
+          case LeaseManager.get(task.id) do
+            %{ack_at: nil, no_ack_at: %DateTime{}} = lease -> lease
+            other -> other
+          end
+        end)
+
+      assert lease.stage_id == stage.id
+
+      # Same deadline as 6a. The durable ack is NEWER than the release, so it
+      # still means "someone took this dispatch" and must still suppress —
+      # otherwise this stage has simply reverted PR #757.
+      expire_no_ack_deadline!(task.id)
+      :ok = refute_alarm_and_assert_restamped!(pid, task.id)
+
+      assert Orchestration.last_stage_ack_at(task.id, stage.id) == post_release_ack_at
+    end
+  end
+
+  # ── helpers for the human-release pair (task 01a06d39) ────────────────
+
+  # The real `report_blocker(needs_human: true)` write: the runtime event the
+  # MCP tool emits, which `RuntimeSupervision` turns into the stage-scoped
+  # `needs_human` hold lease. Filed at `now` — unlike
+  # `task_router_needs_human_hold_test.exs` nothing here turns on the hold
+  # outliving a TTL; all that matters is that a PERSON ends it afterwards.
+  defp file_needs_human_blocker!(task, stage, runtime_id) do
+    {:ok, _event} =
+      Orchestration.record_runtime_event(%{
+        "task_id" => task.id,
+        "phase" => "execution",
+        "runtime_id" => runtime_id,
+        "event_type" => "execution.blocked",
+        "occurred_at" => DateTime.utc_now(),
+        "payload" => %{
+          "stage_id" => stage.id,
+          "description" => "The premise is invalidated; a person must rule on it.",
+          "needs_human" => true,
+          "reported_by" => "agent"
+        }
+      })
+
+    hold = RuntimeSupervision.needs_human_hold(task.id, stage.id, runtime_id)
+    assert hold, "expected report_blocker(needs_human: true) to leave a stage-scoped hold"
+    hold
+  end
+
+  # The human release, driven through the board's own write
+  # (`drop_task_to_column/3` → `Tasks.maybe_release_needs_human_holds/3` →
+  # `RuntimeSupervision.release_needs_human_holds/2`), which is the path the
+  # 2026-09-04 incident took. A hand-inserted `expired` lease row would prove
+  # nothing about the production path, so the row `last_human_release_at/2`
+  # reads is the one this write leaves behind. Returns the release instant.
+  defp release_hold!(task, hold) do
+    user = create_user!()
+
+    # The watchdog parks the task with a plain status write and no hooks, as
+    # `stamp_blocked_reason/2` → `ensure_blocked/1` leaves it. The drag out of
+    # `blocked` is what the person then does.
+    parked =
+      task.id
+      |> Tasks.get_task_record()
+      |> Ecto.Changeset.change(status: "blocked")
+      |> Repo.update!()
+
+    assert {:ok, %{status: "in_progress"}} =
+             Tasks.drop_task_to_column(parked, "in_progress", {:user, user.id})
+
+    released = Repo.get!(ExecutionLease, hold.id)
+    assert released.status == "expired", "the release must end the hold row"
+
+    assert released.metadata["released_by_user_id"] == user.id,
+           "the release must be attributable to a PERSON, or last_human_release_at/2 will not see it"
+
+    released.updated_at
+  end
+
+  defp create_user! do
+    Repo.insert!(%Platform.Accounts.User{
+      email: "acked-no-ack-#{System.unique_integer([:positive])}@example.com",
+      name: "Release ruler",
+      oidc_sub: "oidc-acked-no-ack-#{System.unique_integer([:positive])}"
+    })
   end
 end
