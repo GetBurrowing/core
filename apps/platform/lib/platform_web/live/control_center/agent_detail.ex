@@ -242,6 +242,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr :federation_spaces, :list, default: []
   attr :show_add_space_modal, :boolean, default: false
   attr :available_spaces, :list, default: []
+  attr :available_meeting_spaces, :list, default: []
 
   def federation_panels(assigns) do
     ~H"""
@@ -401,6 +402,11 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               <%= for space <- @available_spaces do %>
                 <option value={space.id}>{space.name}</option>
               <% end %>
+              <optgroup :if={@available_meeting_spaces != []} label="Meetings">
+                <%= for space <- @available_meeting_spaces do %>
+                  <option value={space.id}>{space.name}</option>
+                <% end %>
+              </optgroup>
             </select>
           </div>
           <div class="form-control mb-6">

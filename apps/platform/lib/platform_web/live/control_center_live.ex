@@ -88,6 +88,7 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:regenerated_token, nil)
      |> assign(:show_add_space_modal, false)
      |> assign(:available_spaces, [])
+     |> assign(:available_meeting_spaces, [])
      # Roles panel assigns (M7 stage 5)
      |> assign(:active_tab, :roles)
      |> assign(:show_role_advanced, false)
@@ -503,11 +504,13 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("show_add_space_modal", _params, socket) do
     spaces = Platform.Chat.list_spaces() |> Enum.filter(&(&1.kind != "dm"))
+    {others, meetings} = Platform.Chat.MeetingSpaces.partition_for_picker(spaces)
 
     {:noreply,
      socket
      |> assign(:show_add_space_modal, true)
-     |> assign(:available_spaces, spaces)}
+     |> assign(:available_spaces, others)
+     |> assign(:available_meeting_spaces, meetings)}
   end
 
   def handle_event("hide_add_space_modal", _params, socket) do
@@ -715,6 +718,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 federation_spaces={@federation_spaces}
                 show_add_space_modal={@show_add_space_modal}
                 available_spaces={@available_spaces}
+                available_meeting_spaces={@available_meeting_spaces}
               />
             </div>
 
@@ -837,6 +841,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:federation_spaces, [])
     |> assign(:show_add_space_modal, false)
     |> assign(:available_spaces, [])
+    |> assign(:available_meeting_spaces, [])
     |> assign_roles_panel()
   end
 
