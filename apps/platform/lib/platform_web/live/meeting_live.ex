@@ -843,7 +843,10 @@ defmodule PlatformWeb.MeetingLive do
         # silent leak that still reads as "we release". `:meeting` is this
         # module's own owner tag, so releasing all of it cannot touch the
         # shell's `:presence` / `:roster` holds or ChatLive's `:chat_active`.
-        socket = SpaceTopics.release_all(socket, :meeting)
+        socket =
+          socket
+          |> SpaceTopics.release_all(:meeting)
+          |> SpaceTopics.release_all_agents(:meeting)
 
         socket =
           if connected?(socket) do
@@ -859,6 +862,19 @@ defmodule PlatformWeb.MeetingLive do
                 # subscribe duplicates delivery, and anybody's later
                 # unsubscribe destroys BOTH registrations.
                 socket = SpaceTopics.hold(socket, meeting.chat_space_id, :meeting)
+
+                # Roster changes on the meeting's space (task 01a0691d stage
+                # 3). `Chat.broadcast_roster_changed/3` publishes
+                # `{:roster_changed, space_id}` on `space_agents:<id>` from
+                # add / remove / set_principal, and the People tab re-derives
+                # its invite rows on it without a reload. Through
+                # `SpaceTopics` for exactly the reason the line above is:
+                # `ShellLive`'s roster branch holds this same topic on this
+                # same pid whenever its visible space is this space, and its
+                # release used to be a bare `Phoenix.PubSub.unsubscribe/2`,
+                # which removes EVERY registration of the pid. Now both are
+                # refcounted and neither can silently unsubscribe the other.
+                socket = SpaceTopics.hold_agents(socket, meeting.chat_space_id, :meeting)
 
                 # Live meeting presence: `broadcast_presence_change` publishes
                 # `{:meeting_presence_update, …}` on this per-space topic for
@@ -944,6 +960,13 @@ defmodule PlatformWeb.MeetingLive do
           # here and re-derived by `refresh_participants/1`, so an agent that
           # joins the call leaves the list on the same tick its tile appears.
           |> assign_invite_rows(meeting.chat_space_id, participants)
+          # Task 01a0691d stage 3. Opt in to `ShellLive`'s `:roster_updates`
+          # hook FORWARDING `{:roster_changed, _}` instead of halting it; the
+          # `handle_info/2` clause below is what folds it. Assigned
+          # unconditionally rather than only when connected: the hook reads it
+          # on every message, a disconnected mount receives none, and a flag
+          # that is only sometimes present is the shape that goes stale.
+          |> assign(:roster_changed_downstream?, true)
           # Per-meeting agent activity (task 01a04a98), seeded from the
           # LIVE intent queue rather than from the tile's old
           # `activity_state={:idle}` literal. A socket that mounts at
@@ -1025,7 +1048,10 @@ defmodule PlatformWeb.MeetingLive do
     # meeting. `release_all/2` because the departed meeting's space id is not
     # in scope on this clause at all; only `:meeting`'s own holds are dropped,
     # so a space the shell's presence branch also holds stays subscribed.
-    socket = SpaceTopics.release_all(socket, :meeting)
+    socket =
+      socket
+      |> SpaceTopics.release_all(:meeting)
+      |> SpaceTopics.release_all_agents(:meeting)
 
     projects = Tasks.list_projects_for_user(socket.assigns[:current_user_record])
     project_ids = Enum.map(projects, & &1.id)
@@ -3422,7 +3448,9 @@ defmodule PlatformWeb.MeetingLive do
   def handle_info({:participant_left, participant}, socket) do
     socket =
       if viewer_lost_meeting_space?(socket, participant) do
-        SpaceTopics.release(socket, participant.space_id, :meeting)
+        socket
+        |> SpaceTopics.release(participant.space_id, :meeting)
+        |> SpaceTopics.release_agents(participant.space_id, :meeting)
       else
         socket
       end
@@ -3871,6 +3899,27 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # An agent was added to, removed from, or promoted on a space's roster
+  # (task 01a0691d stage 3). `refresh_participants/1` re-derives
+  # `:invite_rows` and its clickable projection, so the People tab gains or
+  # loses the row without a reload.
+  #
+  # Matched on the MEETING'S space, and the second clause is not decoration:
+  # `ShellLive`'s roster branch holds `space_agents:<id>` on this same pid for
+  # ITS visible space, which is not necessarily this meeting's, so a message
+  # for an unrelated space genuinely arrives here. `refresh_participants/1` is
+  # keyed on the meeting's own space and would answer the same thing either
+  # way, so the guard skips a pointless refetch rather than closing a leak —
+  # said plainly because a reader who assumes otherwise would delete it.
+  def handle_info(
+        {:roster_changed, space_id},
+        %{assigns: %{meeting: %Meeting{chat_space_id: space_id}}} = socket
+      ) do
+    {:noreply, refresh_participants(socket)}
+  end
+
+  def handle_info({:roster_changed, _space_id}, socket), do: {:noreply, socket}
+
   # Catch-all: chat-space topic carries many event shapes (messages,
   # reactions, pins, …). The shell only cares about roster + canvas
   # events; ignore the rest so a broadcast can't crash the LV.
@@ -4199,6 +4248,19 @@ defmodule PlatformWeb.MeetingLive do
   # leak the one that is.
   defp enter_guest_topics(socket, meeting) do
     MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+
+    # Roster changes for the People tab (task 01a0691d stage 3). Needed HERE
+    # for the same reason the intent-mute line below is: the guest mount seeds
+    # `:state`, so it never reaches the `:show` body where the member surface
+    # takes this hold.
+    #
+    # NOT recorded in `:guest_topic_subs`, and that is not an omission —
+    # `SpaceTopics` IS the record, and a second bookkeeping copy of the same
+    # fact is exactly the drift the module exists to remove. The
+    # `:guest_meeting` live_session (`router.ex:570`) carries no `ShellLive`
+    # on_mount, so on this surface there is no co-owner and no halt to opt out
+    # of; a guest cannot invite, but the rail still lists the roster.
+    socket = SpaceTopics.hold_agents(socket, meeting.chat_space_id, :meeting)
 
     # Per-meeting intent mute (task 019fbaac stage 4). This one line
     # is what makes the guest badge live-update, and it is needed

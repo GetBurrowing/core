@@ -1,6 +1,7 @@
 defmodule PlatformWeb.SpaceTopics do
   @moduledoc """
-  Single writer for the `chat:space:<id>` PubSub subscription on a LiveView pid.
+  Single writer for the per-space PubSub subscriptions on a LiveView pid:
+  `chat:space:<id>`, and — since task 01a0691d stage 3 — `space_agents:<id>`.
 
   ## Why this module exists
 
@@ -77,6 +78,34 @@ defmodule PlatformWeb.SpaceTopics do
 
   @owners [:roster, :presence, :chat_rail, :chat_active, :tasks_exec, :meeting]
 
+  # ── The second topic family: `space_agents:<id>` (task 01a0691d stage 3) ──
+  #
+  # Same registry, same asymmetry, and until this task the same accident
+  # waiting to happen. `space_agents:<id>` carries `{:roster_changed, _}` and
+  # used to have exactly ONE subscriber per pid — ShellLive's roster branch —
+  # so a bare `Phoenix.PubSub.unsubscribe/2` there was sound by having no
+  # co-owner to destroy. The People tab's invite rows need the same message on
+  # `/meetings` and on the quickmeet, both of which mount inside that same
+  # shell pid, which retires the "sole owner" premise the bare unsubscribe
+  # rested on.
+  #
+  # Bringing it here rather than teaching the shell to be careful is
+  # deliberate, and it is this module's own argument (see "Why a refcount
+  # owned by only one surface would be worse"): the moment a topic has two
+  # writers on one pid, a guard held by only one of them is UNSOUND, not
+  # merely incomplete. The second writer's raw unsubscribe destroys the
+  # registration while the first still believes it holds one, and the topic
+  # goes silently dead — the failure mode is a People tab that simply stops
+  # updating, with nothing in a log to say so.
+  #
+  # A SEPARATE holder map rather than a shared one, because the two topics are
+  # held by overlapping-but-different owner sets and a single map keyed only by
+  # space id could not distinguish "holds chat:space:<id>" from "holds
+  # space_agents:<id>". Releasing one would then unsubscribe the other.
+  @agents_assign :agent_topic_holders
+
+  @agents_owners [:roster, :meeting, :quickmeet]
+
   @typedoc """
   Closed set of surfaces permitted to hold a `chat:space:<id>` subscription on a
   shell pid. Closed on purpose: an unknown atom is a typo, and a typo that
@@ -96,6 +125,24 @@ defmodule PlatformWeb.SpaceTopics do
   """
   @type owner ::
           :roster | :presence | :chat_rail | :chat_active | :tasks_exec | :meeting
+
+  @typedoc """
+  Closed set of surfaces permitted to hold a `space_agents:<id>` subscription.
+  Same discipline as `t:owner/0`, spelled in the same three places
+  (`@agents_owners`, this union, this prose), and a deliberately SHORTER list:
+  only three surfaces want roster changes.
+
+    * `:roster` — `PlatformWeb.ShellLive`'s `{:roster_resolved, _}` branch,
+      which drives the global Agents meter.
+    * `:meeting` — `PlatformWeb.MeetingLive`, member and guest mounts, for the
+      People tab's invite rows.
+    * `:quickmeet` — `PlatformWeb.ChatLive.MeetingHooks`, the same rows on the
+      chat surface. It is NOT `:meeting` even though both are "the People
+      tab": `/meetings` auto-joins through `MeetingHooks.do_join/1`, so one
+      atom would mean the quickmeet's leave teardown released the hold
+      `MeetingLive` still needs for a page that is still open.
+  """
+  @type agents_owner :: :roster | :meeting | :quickmeet
 
   @typedoc "Space id => the set of owners currently holding its subscription."
   @type holders :: %{optional(binary()) => MapSet.t(owner())}
@@ -130,15 +177,7 @@ defmodule PlatformWeb.SpaceTopics do
   """
   @spec hold(Phoenix.LiveView.Socket.t(), binary(), owner()) :: Phoenix.LiveView.Socket.t()
   def hold(socket, space_id, owner) when is_binary(space_id) and owner in @owners do
-    socket = ensure_holders(socket)
-    holders = socket.assigns[@assign]
-    current = Map.get(holders, space_id, MapSet.new())
-
-    if MapSet.size(current) == 0 do
-      Chat.PubSub.subscribe(space_id)
-    end
-
-    assign(socket, @assign, Map.put(holders, space_id, MapSet.put(current, owner)))
+    do_hold(socket, @assign, space_id, owner)
   end
 
   @doc """
@@ -150,16 +189,7 @@ defmodule PlatformWeb.SpaceTopics do
   """
   @spec release(Phoenix.LiveView.Socket.t(), binary(), owner()) :: Phoenix.LiveView.Socket.t()
   def release(socket, space_id, owner) when is_binary(space_id) and owner in @owners do
-    socket = ensure_holders(socket)
-    holders = socket.assigns[@assign]
-    current = Map.get(holders, space_id, MapSet.new())
-
-    if MapSet.member?(current, owner) do
-      remaining = MapSet.delete(current, owner)
-      assign(socket, @assign, put_or_drop(holders, space_id, remaining))
-    else
-      socket
-    end
+    do_release(socket, @assign, space_id, owner)
   end
 
   @doc """
@@ -172,10 +202,7 @@ defmodule PlatformWeb.SpaceTopics do
   """
   @spec release_all(Phoenix.LiveView.Socket.t(), owner()) :: Phoenix.LiveView.Socket.t()
   def release_all(socket, owner) when owner in @owners do
-    socket = ensure_holders(socket)
-
-    socket.assigns[@assign]
-    |> Enum.reduce(socket, fn {space_id, _set}, acc -> release(acc, space_id, owner) end)
+    do_release_all(socket, @assign, owner)
   end
 
   @doc """
@@ -183,8 +210,124 @@ defmodule PlatformWeb.SpaceTopics do
   """
   @spec held_by?(Phoenix.LiveView.Socket.t(), binary(), owner()) :: boolean()
   def held_by?(socket, space_id, owner) when is_binary(space_id) and owner in @owners do
+    do_held_by?(socket, @assign, space_id, owner)
+  end
+
+  # ── `space_agents:<id>` ───────────────────────────────────────────────────
+  #
+  # The same four calls against the second holder map. Separate public
+  # functions rather than a topic argument on the existing ones so the
+  # `owner in @owners` / `owner in @agents_owners` guards stay compile-time
+  # closed per topic: `:chat_active` is meaningless for the roster topic and
+  # `:quickmeet` is meaningless for the chat topic, and a shared entry point
+  # would have to accept both and lose that.
+
+  @doc """
+  Returns the list of owner atoms recognised for `space_agents:<id>`.
+  """
+  @spec agents_owners() :: [agents_owner()]
+  def agents_owners, do: @agents_owners
+
+  @doc """
+  Records `owner` as a holder of `space_agents:<space_id>`, subscribing iff
+  nobody held it yet. See `hold/3`; the semantics are identical.
+  """
+  @spec hold_agents(Phoenix.LiveView.Socket.t(), binary(), agents_owner()) ::
+          Phoenix.LiveView.Socket.t()
+  def hold_agents(socket, space_id, owner)
+      when is_binary(space_id) and owner in @agents_owners do
+    do_hold(socket, @agents_assign, space_id, owner)
+  end
+
+  @doc """
+  Drops `owner` from `space_agents:<space_id>`'s holder set, unsubscribing iff
+  it just emptied. See `release/3`.
+
+  This is the call that replaced `ShellLive.release_roster_subscriptions/1`'s
+  bare `Phoenix.PubSub.unsubscribe/2`. The bare form removed EVERY registration
+  the pid held for the topic, so the shell re-resolving its roster to a
+  different space silently killed the People tab's live updates on a call that
+  was still in progress.
+  """
+  @spec release_agents(Phoenix.LiveView.Socket.t(), binary(), agents_owner()) ::
+          Phoenix.LiveView.Socket.t()
+  def release_agents(socket, space_id, owner)
+      when is_binary(space_id) and owner in @agents_owners do
+    do_release(socket, @agents_assign, space_id, owner)
+  end
+
+  @doc """
+  Drops `owner` from every `space_agents:<id>` it holds. See `release_all/2`.
+  """
+  @spec release_all_agents(Phoenix.LiveView.Socket.t(), agents_owner()) ::
+          Phoenix.LiveView.Socket.t()
+  def release_all_agents(socket, owner) when owner in @agents_owners do
+    do_release_all(socket, @agents_assign, owner)
+  end
+
+  @doc """
+  Whether `owner` currently holds `space_agents:<space_id>` on this socket.
+  """
+  @spec agents_held_by?(Phoenix.LiveView.Socket.t(), binary(), agents_owner()) :: boolean()
+  def agents_held_by?(socket, space_id, owner)
+      when is_binary(space_id) and owner in @agents_owners do
+    do_held_by?(socket, @agents_assign, space_id, owner)
+  end
+
+  @doc """
+  The PubSub topic `Platform.Chat.broadcast_roster_changed/3` publishes
+  `{:roster_changed, space_id}` on.
+
+  Public so tests can read the registry for it without re-spelling the string,
+  and so this module is the only place in `apps/platform/lib` that builds it
+  for a SUBSCRIBE. `Platform.Chat` still builds it for the broadcast.
+  """
+  @spec agents_topic(binary()) :: String.t()
+  def agents_topic(space_id) when is_binary(space_id), do: "space_agents:#{space_id}"
+
+  # ── Shared implementation ─────────────────────────────────────────────────
+  #
+  # Parameterised on the ASSIGN KEY, which also selects the topic: the two
+  # families are otherwise the same algorithm, and duplicating it would mean
+  # the refcount could be fixed in one and left broken in the other.
+
+  defp do_hold(socket, assign_key, space_id, owner) do
+    socket = seed(socket, assign_key)
+    holders = socket.assigns[assign_key]
+    current = Map.get(holders, space_id, MapSet.new())
+
+    if MapSet.size(current) == 0 do
+      subscribe(assign_key, space_id)
+    end
+
+    assign(socket, assign_key, Map.put(holders, space_id, MapSet.put(current, owner)))
+  end
+
+  defp do_release(socket, assign_key, space_id, owner) do
+    socket = seed(socket, assign_key)
+    holders = socket.assigns[assign_key]
+    current = Map.get(holders, space_id, MapSet.new())
+
+    if MapSet.member?(current, owner) do
+      remaining = MapSet.delete(current, owner)
+      assign(socket, assign_key, put_or_drop(assign_key, holders, space_id, remaining))
+    else
+      socket
+    end
+  end
+
+  defp do_release_all(socket, assign_key, owner) do
+    socket = seed(socket, assign_key)
+
+    socket.assigns[assign_key]
+    |> Enum.reduce(socket, fn {space_id, _set}, acc ->
+      do_release(acc, assign_key, space_id, owner)
+    end)
+  end
+
+  defp do_held_by?(socket, assign_key, space_id, owner) do
     case socket.assigns do
-      %{@assign => holders} when is_map(holders) ->
+      %{^assign_key => holders} when is_map(holders) ->
         holders |> Map.get(space_id, MapSet.new()) |> MapSet.member?(owner)
 
       _ ->
@@ -192,12 +335,31 @@ defmodule PlatformWeb.SpaceTopics do
     end
   end
 
+  defp seed(socket, @assign), do: ensure_holders(socket)
+
+  defp seed(socket, @agents_assign) do
+    case socket.assigns do
+      %{@agents_assign => holders} when is_map(holders) -> socket
+      _ -> assign(socket, @agents_assign, %{})
+    end
+  end
+
+  defp subscribe(@assign, space_id), do: Chat.PubSub.subscribe(space_id)
+
+  defp subscribe(@agents_assign, space_id),
+    do: Phoenix.PubSub.subscribe(Platform.PubSub, agents_topic(space_id))
+
+  defp unsubscribe(@assign, space_id), do: Chat.PubSub.unsubscribe(space_id)
+
+  defp unsubscribe(@agents_assign, space_id),
+    do: Phoenix.PubSub.unsubscribe(Platform.PubSub, agents_topic(space_id))
+
   # An emptied set is deleted rather than stored as an empty MapSet, so the
   # holder map does not grow without bound over a long-lived shell session --
   # `release_all/2` walks every key on every call.
-  defp put_or_drop(holders, space_id, remaining) do
+  defp put_or_drop(assign_key, holders, space_id, remaining) do
     if MapSet.size(remaining) == 0 do
-      Chat.PubSub.unsubscribe(space_id)
+      unsubscribe(assign_key, space_id)
       Map.delete(holders, space_id)
     else
       Map.put(holders, space_id, remaining)

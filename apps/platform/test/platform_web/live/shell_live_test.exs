@@ -297,6 +297,37 @@ defmodule PlatformWeb.ShellLiveTest do
     assert %AsyncResult{ok?: true, result: _} = assigns_after.principal_name
   end
 
+  # Task 01a0691d stage 3 (T3.6): the shell FORWARDS `{:roster_changed, _}`
+  # only to views that declare `:roster_changed_downstream?`, and keeps the
+  # halt for everyone else. That is not caution for its own sake — the views in
+  # the `:authenticated` session have no `handle_info` catch-all
+  # (`ChangelogLive` has exactly one clause; likewise `AdminFederationLive` and
+  # `RecoveryLive`), so a blanket `:cont` would `FunctionClauseError` them and
+  # crash-remount the page on somebody else's roster edit.
+  #
+  # The case above is the positive half: the shell's own roster still refreshes
+  # on the same message, on both branches.
+  test "a shell view without the downstream flag still halts {:roster_changed, _}",
+       %{conn: conn} do
+    {conn, _user} = authenticated_conn_with_user(conn)
+
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Halt Space",
+        slug: "test-shell-halt-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, view, _html} = live(conn, "/changelog")
+
+    refute :sys.get_state(view.pid).socket.assigns[:roster_changed_downstream?],
+           "this view declares the flag, so it is not the un-flagged case this test needs"
+
+    send(view.pid, {:roster_changed, space.id})
+
+    assert is_binary(render(view))
+    assert Process.alive?(view.pid)
+  end
+
   test "roster_resolved message subscribes to PubSub topics for the space", %{conn: conn} do
     {:ok, space} = Chat.create_space(%{name: "PubSub Space", slug: "test-shell-pubsub"})
 

@@ -91,6 +91,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   alias Platform.Meetings.Room
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Tenancy
+  alias PlatformWeb.SpaceTopics
 
   @doc """
   Attach Meeting handlers. Call from `ChatLive.mount/3`.
@@ -114,6 +115,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       # plain assign here blanked the People tab on first render.
       |> assign_new(:invite_rows, fn -> [] end)
       |> assign_new(:invitable_agents, fn -> [] end)
+      # Task 01a0691d stage 3. Opt in to `ShellLive`'s `:roster_updates` hook
+      # FORWARDING `{:roster_changed, _}` rather than halting it, which is what
+      # it does for every view that does not ask. The `handle_info/2` clause
+      # below folds it into the People tab's invite rows.
+      #
+      # Set at ATTACH rather than at join, unlike the subscription itself: the
+      # flag only decides whether the shell propagates a message this pid may
+      # not even be subscribed to, so it is free, and a flag toggled on the
+      # join/leave path is one more thing that can end up out of step with the
+      # hold it is supposed to accompany.
+      |> assign(:roster_changed_downstream?, true)
       |> assign_call_shell_defaults()
       |> attach_hook(:meeting_events, :handle_event, &handle_event/3)
       |> attach_hook(:meeting_info, :handle_info, &handle_info/2)
@@ -714,6 +726,29 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
      })}
   end
 
+  # `/meetings` folds this message in `MeetingLive.handle_info/2` against its
+  # own `:meeting` assign, so re-deriving here would be a second identical
+  # roster read on every roster change. Same discriminator as
+  # `hold_roster_topic/2` and `join_call_shell/2`.
+  defp handle_info({:roster_changed, _space_id}, %{assigns: %{meeting: %{}}} = socket) do
+    {:cont, socket}
+  end
+
+  # An agent was added to, removed from, or promoted on a space's roster
+  # (task 01a0691d stage 3). This clause is reachable at all only because
+  # `ShellLive`'s `:roster_updates` hook now FORWARDS the message for views
+  # carrying `:roster_changed_downstream?`; it halted it for everybody before,
+  # which is why the broadcast existed and no meeting surface could hear it.
+  #
+  # `maybe_refresh_roster/2` is the same fold the live-presence path uses, and
+  # it carries the guard for real here: it re-derives only when this viewer is
+  # in a call AND the message names the space that call is on. `{:cont, …}`
+  # because `ChatLive` has a `handle_info/2` catch-all and `MeetingLive` keeps
+  # its own clause for this message.
+  defp handle_info({:roster_changed, space_id}, socket) when is_binary(space_id) do
+    {:cont, maybe_refresh_roster(socket, space_id)}
+  end
+
   defp handle_info(_msg, socket), do: {:cont, socket}
 
   @doc """
@@ -1155,6 +1190,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         |> assign(:current_participant, participant)
         |> assign(:in_meeting, true)
         |> assign_roster(space.id)
+        |> hold_roster_topic(space.id)
         |> push_event("join-meeting", %{
           token: token,
           url: Meetings.livekit_url(),
@@ -1426,9 +1462,66 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     end
   end
 
+  # The quickmeet's hold on `space_agents:<space_id>` — the topic
+  # `Chat.broadcast_roster_changed/3` publishes `{:roster_changed, _}` on, and
+  # what makes the People tab's invite rows live (task 01a0691d stage 3).
+  #
+  # TAKEN AT JOIN, NOT AT ATTACH, and that is the confidentiality fence rather
+  # than a tidiness preference. `attach/2`'s `space_ids` is
+  # `Enum.map(all_spaces, & &1.id)` (`chat_live.ex:721`) — an internal viewer's
+  # rail is workspace-wide (`Chat.list_spaces/1` applies no membership
+  # filter), so subscribing that set would hold a roster topic for channels
+  # this viewer never joined, which is the 01a011e6 fence open.
+  # `presence_subscribe_space_ids/2`, which the adjacent presence line uses,
+  # would NOT have closed it either: it intersects only for EXTERNAL users and
+  # returns its input unchanged for internal staff (`chat_live.ex:138-147`).
+  #
+  # `do_join/1` has already run `authorize_join/2` and
+  # `ensure_chat_space_participant/3` by the time this is called, so
+  # participation in this one space is proven rather than assumed — and one
+  # space is all the fold can use: `maybe_refresh_roster/2` acts only on the
+  # space the viewer is in a call on.
+  #
+  # `:quickmeet`, not `:meeting`: `/meetings` auto-joins through `do_join/1`
+  # too, and `MeetingLive` holds this topic as `:meeting` for as long as the
+  # PAGE is open. One shared atom would make the release below — which fires
+  # when the CALL ends — drop the hold that page still needs.
+  #
+  # NO-OP ON `/meetings`, on the same `:meeting`-assign discriminator
+  # `join_call_shell/2` uses two functions down: that surface auto-joins
+  # through `do_join/1` too, and it holds this topic for as long as the PAGE is
+  # open rather than for as long as the CALL lasts — a viewer who leaves the
+  # call but stays on `/meetings` still has a People tab that must follow the
+  # roster. Without the guard the two holds overlap, and the overlap is not
+  # merely redundant: it hid MeetingLive's own hold from this stage's mutation
+  # run (dropping it left T3.1 green, because the quickmeet hold this function
+  # took on the same pid was still delivering).
+  defp hold_roster_topic(%{assigns: %{meeting: %{}}} = socket, _space_id), do: socket
+
+  defp hold_roster_topic(socket, space_id) when is_binary(space_id) do
+    if connected?(socket) do
+      SpaceTopics.hold_agents(socket, space_id, :quickmeet)
+    else
+      socket
+    end
+  end
+
+  defp hold_roster_topic(socket, _space_id), do: socket
+
+  # Symmetric teardown, by owner rather than by id. `release_all_agents/2`
+  # because the space this socket joined on is not reliably in scope on every
+  # leave path (`:active_space` can have moved), and a targeted release that
+  # misses is a leak that still reads as "we release". Only `:quickmeet`'s own
+  # holds are dropped, so the shell's `:roster` hold and, on `/meetings`,
+  # `MeetingLive`'s `:meeting` hold both survive.
+  defp release_roster_topic(socket) do
+    SpaceTopics.release_all_agents(socket, :quickmeet)
+  end
+
   defp reset_meeting_state(socket) do
     socket
     |> leave_call_shell()
+    |> release_roster_topic()
     |> assign(:in_meeting, false)
     |> assign(:speaking_identities, MapSet.new())
     |> assign(:mic_enabled, true)

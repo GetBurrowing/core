@@ -744,6 +744,192 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     end
   end
 
+  # ── The People tab follows the space roster (task 01a0691d stage 3) ─────
+  #
+  # `Chat.add_space_agent/3` and `remove_space_agent/3` broadcast
+  # `{:roster_changed, space_id}` on `space_agents:<id>`; the page must fold it
+  # without a reload. `ShellLive`'s on_mount hook used to HALT that message for
+  # every view, so the discriminating mutant here is the one that stops
+  # `MeetingLive` declaring `:roster_changed_downstream?` — with it, both
+  # surfaces go dark at once.
+  #
+  # `render/1` is a synchronous call into the LiveView process and local PubSub
+  # delivery is a plain `send`, so a broadcast issued BEFORE the render is
+  # folded before the render answers; no sleeps.
+
+  defp seat!(space, user) do
+    {:ok, _} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    user
+  end
+
+  # Steer the shell's OWN roster hold away from the meeting's space.
+  #
+  # `ShellLive` holds `space_agents:<id>` for the viewer's newest agent-bearing
+  # seated space and, since this stage, forwards `{:roster_changed, _}` to the
+  # view. If that space were the meeting's, ONE registration would serve both
+  # holders (`SpaceTopics` refcounts them) and the message would arrive whether
+  # or not `MeetingLive` took a hold of its own — which it must, because the
+  # guest surface mounts with no shell at all. A decoy created LAST is the
+  # newest, so the shell picks it and this file's cases turn on MeetingLive's
+  # own hold.
+  defp decoy_shell_space!(viewer) do
+    decoy = space!()
+    seat!(decoy, viewer)
+
+    stranger =
+      Repo.insert!(%Agent{
+        slug: "decoy-#{System.unique_integer([:positive])}",
+        name: "Decoy",
+        status: "active"
+      })
+
+    {:ok, _} = Chat.add_space_agent(decoy.id, stranger.id, role: "member")
+    decoy
+  end
+
+  defp row_selector(agent_id, state),
+    do:
+      ~s([data-role="meeting-agent-invite-row"][data-invite-state="#{state}"][data-agent-id="#{agent_id}"])
+
+  defp any_row_selector(agent_id),
+    do: ~s([data-role="meeting-agent-invite-row"][data-agent-id="#{agent_id}"])
+
+  describe "the People tab follows the space roster" do
+    # T3.1 — an agent ADDED while the page is open appears, with the state its
+    # runtime earns (declared voice -> invitable + capable).
+    #
+    # THIS CASE DOES NOT ISOLATE THIS STAGE'S MECHANISM, and saying so is the
+    # point. `Chat.add_space_agent/3` reaches `add_participant/2`, which also
+    # broadcasts `{:participant_joined, p}` on `chat:space:<id>`
+    # (`chat.ex:1407`) — a topic `MeetingLive` already held and already
+    # refreshed its participants on (`:3425`). So the add half was live before
+    # this stage, and every mutant that removes the roster subscription leaves
+    # this case GREEN. Verified, not assumed: M11 survives here.
+    #
+    # T3.2 below is the case that carries the surface. `remove_space_agent/3`
+    # deletes the row with a bare `Repo.delete` and broadcasts ONLY
+    # `{:roster_changed, _}`, so the removal genuinely rides this stage's
+    # topic. Kept as a user-facing claim rather than deleted, and labelled so
+    # the next reader does not mistake it for evidence.
+    test "an agent added to the space appears without a reload",
+         %{conn: conn, space: space, meeting: meeting} do
+      viewer = seat!(space, user!("roster-add"))
+      _decoy = decoy_shell_space!(viewer)
+      %{agent: capable} = declaring_roster_agent!(space, ["meeting_voice"])
+
+      # Off the roster BEFORE the mount, so its later appearance is the
+      # broadcast's doing and not the mount's.
+      :ok = Chat.remove_space_agent({:user, viewer.id}, space.id, capable.id)
+      refute capable.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id)
+
+      {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
+      _ = render(view)
+
+      refute has_element?(view, any_row_selector(capable.id))
+
+      {:ok, _} = Chat.add_space_agent(space.id, capable.id, role: "member")
+
+      assert has_element?(view, row_selector(capable.id, "invitable"))
+
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-agent-invite-button"][data-agent-id="#{capable.id}"])
+             )
+
+      assert Process.alive?(view.pid)
+    end
+
+    # T3.2 — and one REMOVED disappears.
+    test "an agent removed from the space disappears without a reload",
+         %{conn: conn, space: space, meeting: meeting, agent: agent} do
+      viewer = seat!(space, user!("roster-remove"))
+      _decoy = decoy_shell_space!(viewer)
+
+      {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
+      _ = render(view)
+      assert has_element?(view, any_row_selector(agent.id))
+
+      :ok = Chat.remove_space_agent({:user, viewer.id}, space.id, agent.id)
+
+      refute has_element?(view, any_row_selector(agent.id))
+      assert Process.alive?(view.pid)
+    end
+
+    # T3.3 — negative control: a roster change on a DIFFERENT space adds no
+    # row. On this surface the refetch is keyed on the meeting's own space, so
+    # this holds by construction; it is here to pin that it stays so.
+    test "a roster change on another space adds no row",
+         %{conn: conn, space: space, meeting: meeting, agent: agent} do
+      viewer = seat!(space, user!("roster-other"))
+      other_space = space!()
+
+      stranger =
+        Repo.insert!(%Agent{
+          slug: "stranger-#{System.unique_integer([:positive])}",
+          name: "Stranger",
+          status: "active"
+        })
+
+      {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
+      _ = render(view)
+
+      {:ok, _} = Chat.add_space_agent(other_space.id, stranger.id, role: "member")
+
+      refute has_element?(view, any_row_selector(stranger.id))
+
+      # The page is still alive and still lists its own roster.
+      assert has_element?(view, any_row_selector(agent.id))
+    end
+
+    # T3.7 — an invited agent's ARRIVAL reaches the rail. The worker's own
+    # `upsert_live_participant/2` matches the roster row `invite_agent/3` wrote
+    # and takes the identity-backfill branch, which never broadcast before this
+    # stage: the row sat on "Invite sent, no answer yet" while the agent was in
+    # the call.
+    test "an invited agent's arrival flips its row to in_call",
+         %{conn: conn, space: space, meeting: meeting} do
+      %{agent: voice} = ctx = declaring_roster_agent!(space, ["meeting_voice"])
+      _channel = join_runtime_client!(ctx)
+
+      {:ok, view, _html} = conn |> login(user!("arrival")) |> live(~p"/meetings/#{meeting.slug}")
+      _ = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting
+
+      view
+      |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{voice.id}"]))
+      |> render_click()
+
+      assert has_element?(view, row_selector(voice.id, "pending"))
+      assert [_row] = agent_participant_rows(space.id, voice.id)
+
+      room = Meetings.get_active_room(space.id)
+      assert %Meetings.Room{} = room
+
+      {:ok, arrived} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "agent:#{voice.slug}",
+          name: voice.name
+        })
+
+      # The SAME row, backfilled — not a second one.
+      assert arrived.metadata["identity"] == "agent:#{voice.slug}"
+      assert [_still_one] = agent_participant_rows(space.id, voice.id)
+
+      assert has_element?(view, row_selector(voice.id, "in_call"))
+
+      refute has_element?(
+               view,
+               ~s([data-role="meeting-agent-invite-button"][data-agent-id="#{voice.id}"])
+             )
+    end
+  end
+
   describe "join_capability/1" do
     test "reads the three cases apart", %{space: space} do
       %{agent: voice} = declaring_roster_agent!(space, ["meeting_voice"])

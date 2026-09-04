@@ -299,11 +299,13 @@ defmodule PlatformWeb.ShellLive do
           if socket.assigns[:roster_space_id] != sid do
             socket = release_roster_subscriptions(socket)
 
-            Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{sid}")
-
             {:halt,
              socket
              |> SpaceTopics.hold(sid, :roster)
+             # Task 01a0691d stage 3: through `SpaceTopics` too, for the same
+             # reason `chat:space:<id>` is — `/meetings` and the quickmeet now
+             # want this topic on the same pid. See the release below.
+             |> SpaceTopics.hold_agents(sid, :roster)
              |> assign(:roster_space_id, sid)}
           else
             {:halt, socket}
@@ -313,8 +315,29 @@ defmodule PlatformWeb.ShellLive do
           # Async load found no spaces; nothing to subscribe to.
           {:halt, socket}
 
+        # Task 01a0691d stage 3. `MeetingLive` and `MeetingHooks` fold this
+        # same message into the People tab's invite rows, and they run BEHIND
+        # this hook, which used to halt it for every view — so the topic was
+        # live, the broadcast was real, and nothing downstream could ever see
+        # it.
+        #
+        # Forwarding it unconditionally is NOT the fix. The
+        # `:authenticated`/`:admin` sessions mount views with no `handle_info`
+        # catch-all (`ChangelogLive` has exactly one clause; also
+        # `AdminFederationLive`, `RecoveryLive`), and a forwarded
+        # `{:roster_changed, _}` would `FunctionClauseError` them. So a view
+        # OPTS IN with `:roster_changed_downstream?` and everyone else keeps
+        # the halt they have always had. The shell refreshes its own roster on
+        # both branches; only the propagation differs. Precedent for `:cont`
+        # from this hook: the `{:participant_left, _}` clause below.
         {:roster_changed, space_id}, socket ->
-          {:halt, refresh_roster(socket, space_id)}
+          socket = refresh_roster(socket, space_id)
+
+          if socket.assigns[:roster_changed_downstream?] do
+            {:cont, socket}
+          else
+            {:halt, socket}
+          end
 
         # Task 01a01a1b stage 3. The shell releases ITS OWN holds when the
         # viewer loses access to a space, because nobody else may.
@@ -915,20 +938,26 @@ defmodule PlatformWeb.ShellLive do
   # subscription open with no surface able to drop it. The release below is
   # therefore unconditional; SpaceTopics decides whether it unsubscribes.
   #
-  #   * `space_agents:<id>` is roster-EXCLUSIVE, so the roster branch is its
-  #     sole owner and may always unsubscribe it directly. Confirmed on this
-  #     tree with `git grep -n 'space_agents:' -- apps/platform/lib`, which
-  #     returns four hits and exactly one per-space subscribe:
-  #     `chat.ex:4282` (a broadcast), `chat.ex:4304` (`global_roster_topic/0`,
-  #     the literal `"space_agents:*"` fan-out topic, a different topic), the
-  #     subscribe in the `{:roster_resolved, sid}` branch above, and the
-  #     unsubscribe below.
+  #   * `space_agents:<id>` USED TO BE roster-EXCLUSIVE, and that premise —
+  #     not the bare call itself — was what made a direct
+  #     `Phoenix.PubSub.unsubscribe/2` sound here. Task 01a0691d stage 3
+  #     retires it: `MeetingLive` (member and guest mounts) and
+  #     `ChatLive.MeetingHooks` (on join) now hold the same topic for the
+  #     People tab's invite rows, and they mount inside THIS pid. The bare
+  #     unsubscribe would have destroyed their registration along with the
+  #     roster's, on a call still in progress, with the only symptom a People
+  #     tab that quietly stopped updating.
+  #
+  #     So it goes through `SpaceTopics` on exactly the same argument as
+  #     `chat:space:<id>`: two writers on one pid make a guard held by only
+  #     one of them unsound rather than merely incomplete. The release is
+  #     unconditional and `SpaceTopics` decides whether it unsubscribes.
   defp release_roster_subscriptions(socket) do
     case socket.assigns[:roster_space_id] do
       prev when is_binary(prev) ->
-        Phoenix.PubSub.unsubscribe(Platform.PubSub, "space_agents:#{prev}")
-
-        SpaceTopics.release(socket, prev, :roster)
+        socket
+        |> SpaceTopics.release(prev, :roster)
+        |> SpaceTopics.release_agents(prev, :roster)
 
       _ ->
         socket

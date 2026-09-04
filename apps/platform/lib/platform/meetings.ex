@@ -3090,7 +3090,7 @@ defmodule Platform.Meetings do
 
     case find_active_participant(room.id, fk, display_name) do
       %Participant{} = existing ->
-        maybe_backfill_identity(existing, metadata)
+        maybe_backfill_identity(room, existing, metadata)
 
       nil ->
         case participant_joined(
@@ -3139,13 +3139,37 @@ defmodule Platform.Meetings do
   # Idempotently backfill `metadata["identity"]` on an existing active row
   # so a reconnect (or a guest-side upsert after the webhook already ran)
   # doesn't drop the identity we need to match tiles to LiveKit tracks.
-  defp maybe_backfill_identity(%Participant{} = existing, metadata) do
+  #
+  # AND ANNOUNCE IT (task 01a0691d stage 3). Only the NEW-row branch of
+  # `upsert_live_participant/2` broadcast, via `participant_joined/2`, and an
+  # INVITED agent never takes that branch: `invite_agent/3` writes its roster
+  # row first, so when the worker actually arrives it matches an existing row
+  # and lands here, on an identity backfill. With a bare `Repo.update` the
+  # People tab on every open surface went on showing "Invite sent, no answer
+  # yet" for an agent that was already in the call, for the rest of the
+  # meeting.
+  #
+  # Both broadcasts, because the two surfaces listen on different topics:
+  # `{:participant_updated, _}` on the ROOM topic is what `/meetings`'
+  # `handle_info/2` re-derives its rail on, and `broadcast_presence_change/2`
+  # is the per-space topic the quickmeet's presence path folds. Neither is new
+  # machinery — this is the same pair `participant_joined/2` already fires on
+  # the branch next door.
+  defp maybe_backfill_identity(%Room{} = room, %Participant{} = existing, metadata) do
     current = existing.metadata || %{}
 
     if map_size(metadata) > 0 and Map.get(current, "identity") != Map.get(metadata, "identity") do
-      existing
-      |> Participant.changeset(%{metadata: Map.merge(current, metadata)})
-      |> Repo.update()
+      case existing
+           |> Participant.changeset(%{metadata: Map.merge(current, metadata)})
+           |> Repo.update() do
+        {:ok, updated} ->
+          MeetingsPubSub.broadcast_room(room.id, {:participant_updated, updated})
+          broadcast_presence_change(room.id, room.space_id)
+          {:ok, updated}
+
+        error ->
+          error
+      end
     else
       {:ok, existing}
     end
