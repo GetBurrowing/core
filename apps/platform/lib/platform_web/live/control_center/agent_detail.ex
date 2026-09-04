@@ -264,73 +264,89 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       />
     </section>
 
-    <%!-- Identity section --%>
-    <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-      <h2 class="text-lg font-semibold text-base-content">
-        <span class="hero-identification mr-1 inline-block h-5 w-5 align-text-bottom" /> Identity
-      </h2>
-      <p class="mt-1 text-sm text-base-content/60">
-        How this agent appears in Suite chat. Config and model routing are managed by the remote OpenClaw instance.
-      </p>
-      <%!-- `phx-change`: see the note on the native config form — the avatar
-      `live_file_input` needs it to report a picked file. --%>
-      <.form
-        for={@config_form}
-        id="federated-identity-form"
-        phx-submit="save_config"
-        phx-change="validate_config"
-        class="mt-4 space-y-4"
-      >
-        <label class="form-control max-w-md">
-          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-            Display name
-          </span>
-          <input
-            type="text"
-            name="config[name]"
-            value={@config_form[:name].value || ""}
-            class="input input-bordered w-full"
-          />
-        </label>
-        <%!-- Color family picker for federated agents --%>
-        <div>
-          <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
-            Color family
-          </span>
-          <div class="flex flex-wrap gap-2">
-            <label
-              :for={color <- Platform.Agents.ColorPalette.all()}
-              class="cursor-pointer"
-              title={color.label}
-            >
-              <input
-                type="radio"
-                name="config[color]"
-                value={color.id}
-                class="sr-only peer"
-                checked={(@config_form[:color].value || "") == color.id}
-              />
-              <span
-                class={[
-                  "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
-                  "peer-checked:border-current border-transparent hover:border-base-300"
-                ]}
-                style={"color: #{color.accent};"}
+    <%!-- Identity and Voice are two CARDS inside ONE form (01a06dff stage 2).
+    They are drawn as separate cards because voice describes how the agent
+    behaves in a room, not how it connects — but they submit together on
+    purpose. `AgentData.config_attrs_from_params/2` builds the FULL attrs map
+    from the submitted params and `color` has no fallback to the stored agent
+    (`blank_to_nil`), so a SECOND `phx-submit="save_config"` form carrying only
+    the voice fields would blank the agent's colour on every voice save — which
+    an operator reads as "setting the voice broke the avatar". "Save voice" is
+    therefore another submit button of THIS form, and one submit carries name,
+    colour and voice together.
+
+    `phx-change`: see the note on the native config form — the avatar
+    `live_file_input` needs it to report a picked file. It is also what makes
+    the half-set warning on the voice card appear as you type. --%>
+    <.form
+      for={@config_form}
+      id="federated-identity-form"
+      phx-submit="save_config"
+      phx-change="validate_config"
+      class="flex flex-col gap-6"
+    >
+      <%!-- Identity section --%>
+      <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+        <h2 class="text-lg font-semibold text-base-content">
+          <span class="hero-identification mr-1 inline-block h-5 w-5 align-text-bottom" /> Identity
+        </h2>
+        <p class="mt-1 text-sm text-base-content/60">
+          How this agent appears in Suite chat. Config and model routing are managed by the remote OpenClaw instance.
+        </p>
+        <div class="mt-4 space-y-4">
+          <label class="form-control max-w-md">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Display name
+            </span>
+            <input
+              type="text"
+              name="config[name]"
+              value={@config_form[:name].value || ""}
+              class="input input-bordered w-full"
+            />
+          </label>
+          <%!-- Color family picker for federated agents --%>
+          <div>
+            <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Color family
+            </span>
+            <div class="flex flex-wrap gap-2">
+              <label
+                :for={color <- Platform.Agents.ColorPalette.all()}
+                class="cursor-pointer"
+                title={color.label}
               >
-                <span class="w-5 h-5 rounded-full" style={"background: #{color.accent};"}></span>
-                <span class="text-[9px] text-base-content/60 font-medium">{color.label}</span>
-              </span>
-            </label>
+                <input
+                  type="radio"
+                  name="config[color]"
+                  value={color.id}
+                  class="sr-only peer"
+                  checked={(@config_form[:color].value || "") == color.id}
+                />
+                <span
+                  class={[
+                    "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
+                    "peer-checked:border-current border-transparent hover:border-base-300"
+                  ]}
+                  style={"color: #{color.accent};"}
+                >
+                  <span class="w-5 h-5 rounded-full" style={"background: #{color.accent};"}></span>
+                  <span class="text-[9px] text-base-content/60 font-medium">{color.label}</span>
+                </span>
+              </label>
+            </div>
+          </div>
+          <.avatar_field agent={@agent} uploads={@uploads} />
+          <div class="flex justify-stretch sm:justify-end">
+            <button type="submit" class="btn btn-neutral w-full sm:w-auto">
+              Update identity
+            </button>
           </div>
         </div>
-        <.avatar_field agent={@agent} uploads={@uploads} />
-        <div class="flex justify-stretch sm:justify-end">
-          <button type="submit" class="btn btn-neutral w-full sm:w-auto">
-            Update identity
-          </button>
-        </div>
-      </.form>
-    </section>
+      </section>
+
+      <.voice_card agent={@agent} config_form={@config_form} />
+    </.form>
 
     <%!-- Spaces section --%>
     <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
@@ -675,55 +691,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
         </div>
 
-        <%!-- Voice (01a03f4f). The provider is a select over
-        `Platform.Agents.Voice.known_providers/0`, NOT a hard-coded vendor
-        list here — adding a provider is one entry in that module and this
-        control follows it. --%>
-        <div class="grid gap-4 md:grid-cols-3">
-          <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              Voice provider
-            </span>
-            <select name="config[voice_provider]" class="select select-bordered w-full">
-              <option value="" selected={(@config_form[:voice_provider].value || "") == ""}>
-                No voice
-              </option>
-              <option
-                :for={provider <- Platform.Agents.Voice.known_providers()}
-                selected={@config_form[:voice_provider].value == provider}
-                value={provider}
-              >
-                {provider}
-              </option>
-            </select>
-          </label>
-
-          <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              Voice ID
-            </span>
-            <input
-              type="text"
-              name="config[voice_id]"
-              value={@config_form[:voice_id].value || ""}
-              class="input input-bordered w-full"
-              placeholder="the provider's voice identifier"
-            />
-          </label>
-
-          <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              Voice model
-            </span>
-            <input
-              type="text"
-              name="config[voice_model]"
-              value={@config_form[:voice_model].value || ""}
-              class="input input-bordered w-full"
-              placeholder="optional"
-            />
-          </label>
-        </div>
+        <.voice_fields config_form={@config_form} />
 
         <p class="text-xs text-base-content/50">
           Spoken personality lives in this agent's
@@ -802,6 +770,234 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
       </.form>
     </section>
+    """
+  end
+
+  @doc """
+  The voice controls for an agent's config form.
+
+  Extracted from `config_form/1` so every surface that offers voice renders
+  the same fields (01a06dff). The provider is a select over
+  `Platform.Agents.Voice.known_providers/0`, so adding a provider stays one
+  entry in that module.
+  """
+  attr :config_form, :map, required: true
+
+  def voice_fields(assigns) do
+    ~H"""
+    <%!-- Voice (01a03f4f). The provider is a select over
+    `Platform.Agents.Voice.known_providers/0`, NOT a hard-coded vendor
+    list here — adding a provider is one entry in that module and this
+    control follows it. --%>
+    <div class="grid gap-4 md:grid-cols-3">
+      <label class="form-control">
+        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          Voice provider
+        </span>
+        <.voice_provider_select config_form={@config_form} />
+      </label>
+
+      <label class="form-control">
+        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          Voice ID
+        </span>
+        <.voice_id_input config_form={@config_form} />
+      </label>
+
+      <label class="form-control">
+        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          Voice model
+        </span>
+        <.voice_model_input config_form={@config_form} />
+      </label>
+    </div>
+    """
+  end
+
+  @doc """
+  The voice card on the external-agent panel (01a06dff stage 2).
+
+  A voice was reachable only from `config_form/1`, which
+  `control_center_live.ex` renders solely for `runtime_type != "external"` —
+  so every external agent had a voice column nothing in the UI could write.
+  This is the same three fields on the branch external agents actually get.
+
+  Two things about it are load-bearing:
+
+  * The effective-voice line reads `Platform.Agents.Voice.config_for/1` on the
+    STORED agent, never `@config_form`. A form echoing its own params back is
+    the one thing that cannot tell an operator whether the save landed, and
+    wiring it to form state would reproduce the class of bug that produced
+    this ticket. After a save `save_config_with_avatar/4` re-assigns
+    `:selected_agent` from `Repo.update/1`, so this line re-reads the row.
+  * There is no `<form>` here. The inputs belong to `federated-identity-form`
+    and "Save voice" is one of its submit buttons — see the comment there for
+    why a second form would blank the agent's colour.
+
+  Colour is spent deliberately: `--color-info` for the unset state, which is
+  the correct permanent state for most agents; `--color-warning` only for the
+  genuinely transient half-set one; `--color-error` never, because nothing on
+  this card is a failure.
+  """
+  attr :agent, :map, required: true
+  attr :config_form, :map, required: true
+
+  def voice_card(assigns) do
+    provider = assigns.config_form[:voice_provider].value |> to_string() |> String.trim()
+    voice_id = assigns.config_form[:voice_id].value |> to_string() |> String.trim()
+
+    assigns =
+      assigns
+      |> assign(:effective_voice, Platform.Agents.Voice.config_for(assigns.agent))
+      |> assign(:half_set?, provider != "" and voice_id == "")
+
+    ~H"""
+    <section
+      data-role="agent-voice-card"
+      class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm"
+    >
+      <h2 class="text-[13px] font-semibold text-base-content">
+        <span class="hero-speaker-wave mr-1 inline-block h-4 w-4 align-text-bottom" /> Voice
+      </h2>
+
+      <%!-- The signature element: what this agent ACTUALLY speaks with right
+      now, read back from the stored row. Everything below stays quiet so this
+      line reads first. --%>
+      <div class="mt-3 border-b border-base-300 pb-3">
+        <p
+          :if={is_nil(@effective_voice)}
+          data-role="agent-voice-effective"
+          class="text-[13px] font-semibold text-info"
+        >
+          Using the shared fallback voice — sounds identical to every other agent.
+        </p>
+        <p
+          :if={@effective_voice}
+          data-role="agent-voice-effective"
+          class="flex flex-wrap items-baseline gap-x-1 text-[13px] font-semibold text-base-content"
+        >
+          <span>Speaking as</span>
+          <%!-- An opaque token that gets pasted and compared character by
+          character, so it wraps and never truncates. The provider label is
+          what gives way when the row is too narrow. --%>
+          <span data-role="agent-voice-effective-id" class="break-all font-mono text-[11px]">
+            {@effective_voice["voice_id"]}
+          </span>
+          <span>via</span>
+          <span data-role="agent-voice-effective-provider" class="min-w-0 truncate">
+            {@effective_voice["provider"]}
+          </span>
+        </p>
+      </div>
+
+      <p class="mt-3 text-[12px] font-normal text-neutral">
+        How this agent sounds out loud when it speaks in a meeting room.
+      </p>
+
+      <%!-- Provider and voice id share ONE ground because they are one
+      setting wearing two inputs: neither is meaningful alone, and
+      `AgentData.voice_config_from_params/1` stores both or neither. --%>
+      <fieldset class={[
+        "mt-3 rounded-field bg-base-200 p-4",
+        @half_set? && "border border-warning"
+      ]}>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <label class="form-control min-w-0">
+            <span class="mb-1 text-[13px] font-semibold text-base-content">Provider</span>
+            <.voice_provider_select config_form={@config_form} />
+          </label>
+
+          <label class="form-control min-w-0">
+            <span class="mb-1 text-[13px] font-semibold text-base-content">Voice id</span>
+            <.voice_id_input
+              config_form={@config_form}
+              class="input input-bordered w-full font-mono text-[11px]"
+            />
+            <span class="mt-1 text-[12px] font-normal text-neutral">
+              Paste the id from ElevenLabs. Both fields or neither.
+            </span>
+          </label>
+        </div>
+
+        <p
+          :if={@half_set?}
+          data-role="agent-voice-half-set"
+          class="mt-3 text-[12px] font-normal text-warning"
+        >
+          A provider without a voice id saves as no voice at all.
+        </p>
+      </fieldset>
+
+      <label class="form-control mt-4 min-w-0 max-w-xs">
+        <span class="mb-1 truncate text-[13px] font-semibold text-base-content">Voice model</span>
+        <.voice_model_input config_form={@config_form} class="input input-bordered w-full truncate" />
+      </label>
+
+      <div class="mt-4 flex justify-stretch sm:justify-end">
+        <button type="submit" class="btn btn-neutral w-full sm:w-auto">
+          Save voice
+        </button>
+      </div>
+    </section>
+    """
+  end
+
+  @doc """
+  The provider control, shared by every surface that offers a voice.
+
+  One definition so `Voice.known_providers/0` stays the single place a
+  provider is added — a second copy of this select is how the built-in form
+  and the external card would drift apart.
+  """
+  attr :config_form, :map, required: true
+  attr :class, :string, default: "select select-bordered w-full"
+
+  def voice_provider_select(assigns) do
+    ~H"""
+    <select name="config[voice_provider]" class={@class}>
+      <option value="" selected={(@config_form[:voice_provider].value || "") == ""}>
+        No voice
+      </option>
+      <option
+        :for={provider <- Platform.Agents.Voice.known_providers()}
+        selected={@config_form[:voice_provider].value == provider}
+        value={provider}
+      >
+        {provider}
+      </option>
+    </select>
+    """
+  end
+
+  @doc "The voice id control. `config[voice_id]` is read by `AgentData.voice_config_from_params/1`."
+  attr :config_form, :map, required: true
+  attr :class, :string, default: "input input-bordered w-full"
+
+  def voice_id_input(assigns) do
+    ~H"""
+    <input
+      type="text"
+      name="config[voice_id]"
+      value={@config_form[:voice_id].value || ""}
+      class={@class}
+      placeholder="the provider's voice identifier"
+    />
+    """
+  end
+
+  @doc "The optional voice model control."
+  attr :config_form, :map, required: true
+  attr :class, :string, default: "input input-bordered w-full"
+
+  def voice_model_input(assigns) do
+    ~H"""
+    <input
+      type="text"
+      name="config[voice_model]"
+      value={@config_form[:voice_model].value || ""}
+      class={@class}
+      placeholder="optional"
+    />
     """
   end
 
