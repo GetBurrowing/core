@@ -507,6 +507,15 @@
         >
           <span class="hero-arrow-down-tray size-4"></span> Download
         </a>
+        <%!-- The interactive-code flag, beside Download per the design
+             direction: flipping it is a deliberate second act taken
+             after looking at the file. HTML files only — the gate
+             governs code execution, which only an HTML preview's
+             iframe surface can exercise (task 01a06a20 stage 3). --%>
+        <PlatformWeb.Components.FilePreview.interactive_toggle
+          :if={preview_mode(@selected_file) == :html}
+          file={@selected_file}
+        />
         <button
           type="button"
           id={"files-detail-copy-link-" <> @selected_file.id}
@@ -628,6 +637,11 @@
         >
           <span class="hero-arrow-down-tray size-4"></span> Download
         </a>
+        <PlatformWeb.Components.FilePreview.interactive_toggle
+          :if={preview_mode(@selected_file) == :html}
+          file={@selected_file}
+          id_suffix="-mobile"
+        />
         <button
           type="button"
           id={"files-detail-copy-link-mobile-" <> @selected_file.id}

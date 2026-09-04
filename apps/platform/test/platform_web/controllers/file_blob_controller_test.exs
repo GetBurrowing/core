@@ -264,6 +264,78 @@ defmodule PlatformWeb.FileBlobControllerTest do
       [disposition] = get_resp_header(conn, "content-disposition")
       assert disposition =~ "attachment"
     end
+
+    # ── Interactive-code gate (task 01a06a20 stage 2) ─────────────────────
+
+    test "a flagged file requested by the preview iframe receives sandbox allow-scripts",
+         %{conn: conn} do
+      user = insert_user()
+      project = seed_fabrikam_project()
+      {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
+      {:ok, file} = Files.mark_interactive(%{id: user.id}, file)
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("sec-fetch-dest", "iframe")
+        |> get(~p"/files/blob/#{file.id}?preview=1")
+
+      assert conn.status == 200
+      [csp] = get_resp_header(conn, "content-security-policy")
+      assert csp =~ "sandbox allow-scripts"
+      assert csp =~ "default-src 'none'"
+      assert csp =~ "script-src 'unsafe-inline'"
+      assert csp =~ "style-src 'unsafe-inline'"
+      assert csp =~ "img-src data: blob:"
+      assert csp =~ "media-src data: blob:"
+      assert csp =~ "font-src data:"
+      assert csp =~ "connect-src 'none'"
+      assert csp =~ "form-action 'none'"
+      # Never these, under any circumstance — `allow-scripts` plus any of
+      # them lets the document lift its own sandbox restriction.
+      refute csp =~ "allow-same-origin"
+      refute csp =~ "allow-popups"
+      refute csp =~ "allow-forms"
+      refute csp =~ "allow-modals"
+      refute csp =~ "allow-top-navigation"
+    end
+
+    test "a flagged file requested as a top-level document (not framed) falls back to bare sandbox",
+         %{conn: conn} do
+      user = insert_user()
+      project = seed_fabrikam_project()
+      {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
+      {:ok, file} = Files.mark_interactive(%{id: user.id}, file)
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("sec-fetch-dest", "document")
+        |> get(~p"/files/blob/#{file.id}?preview=1")
+
+      assert conn.status == 200
+      [csp] = get_resp_header(conn, "content-security-policy")
+      assert csp =~ "sandbox"
+      refute csp =~ "allow-scripts"
+    end
+
+    test "a flagged, framed response still carries Phoenix's base-uri and frame-ancestors",
+         %{conn: conn} do
+      user = insert_user()
+      project = seed_fabrikam_project()
+      {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
+      {:ok, file} = Files.mark_interactive(%{id: user.id}, file)
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("sec-fetch-dest", "iframe")
+        |> get(~p"/files/blob/#{file.id}?preview=1")
+
+      [csp] = get_resp_header(conn, "content-security-policy")
+      assert csp =~ "base-uri 'self'"
+      assert csp =~ "frame-ancestors 'self'"
+    end
   end
 
   describe "GET /files/blob/:id?download=1" do

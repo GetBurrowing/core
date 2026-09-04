@@ -27,6 +27,23 @@ defmodule PlatformWeb.FileBlobController do
       the response carries `Content-Security-Policy: sandbox`, so the
       document loads into an opaque origin with scripts refused rather
       than executing on the application origin.
+
+  ## Interactive-code gate (task 01a06a20 stage 2)
+
+  A file whose `interactive_at` is set (task 01a06a20 stage 1) gets
+  `sandbox allow-scripts` instead of bare `sandbox` — but only when the
+  request's `Sec-Fetch-Dest` header is `iframe`. A direct top-level hit on
+  this route (address bar, a bare link) carries no such header and always
+  gets bare `sandbox`, because a flagged file rendered full-page on the
+  Suite origin is a phishing surface (attacker-styled content behind a
+  suite.example.com URL), not an XSS one, and `allow-scripts` would make
+  that surface active instead of inert.
+
+  INVARIANT: the framed document can still call `window.postMessage`
+  toward its parent — `sandbox` does not block that. Nothing in
+  `apps/platform/assets/js` listens for `message` events today, so there
+  is nothing to receive it. Adding such a listener later without
+  validating `event.origin` would reopen the surface this gate closes.
   """
 
   use PlatformWeb, :controller
@@ -66,7 +83,7 @@ defmodule PlatformWeb.FileBlobController do
       conn
       # Prevent MIME-sniffing: stored content_type is authoritative.
       |> put_resp_header("x-content-type-options", "nosniff")
-      |> maybe_sandbox_header(file.content_type)
+      |> maybe_sandbox_header(file)
       |> send_download({:file, path},
         filename: file.original_filename || file.name || "file",
         content_type: file.content_type,
@@ -91,28 +108,70 @@ defmodule PlatformWeb.FileBlobController do
 
   defp sandboxed_preview?(_params, _content_type), do: false
 
+  # `default-src 'none'` denies everything not explicitly reopened below,
+  # for the narrow case of a flagged file framed for real (see
+  # `sandbox_directive/2`):
+  #
+  #   * `script-src 'unsafe-inline'` — inline `<script>` in the uploaded
+  #     markup. `script-src-attr` has no value of its own and falls back
+  #     to `script-src`, so this also covers inline event-handler
+  #     attributes — verified against the CSP3 fallback rules while
+  #     planning, not assumed.
+  #   * `style-src 'unsafe-inline'` — inline styling in the same markup.
+  #   * `img-src`/`media-src` include `blob:` because canvas chart flows
+  #     call `canvas.toBlob()`; without it, charts render blank.
+  #   * `connect-src 'none'` is the point of the whole design: the framed
+  #     document gets no network of its own, so `allow-scripts` running
+  #     inside it has no exfiltration path.
+  #   * `form-action 'none'` — no `<form>` submission out of the frame.
+  #
+  # `sandbox` is a document directive and composes with these fetch
+  # directives in one policy (CSP3) — no need to split them across two
+  # headers.
+  @interactive_frame_csp "sandbox allow-scripts; default-src 'none'; " <>
+                           "script-src 'unsafe-inline'; style-src 'unsafe-inline'; " <>
+                           "img-src data: blob:; media-src data: blob:; font-src data:; " <>
+                           "connect-src 'none'; form-action 'none'"
+
   # APPENDS rather than sets: the browser pipeline's
   # `put_secure_browser_headers` already put `base-uri 'self';
   # frame-ancestors 'self';` on this response, and replacing the header
   # would quietly drop both while looking like a hardening change.
-  defp maybe_sandbox_header(conn, content_type) do
-    if markup_content_type?(content_type) do
-      # `sandbox` with no allow-list: opaque origin, scripts refused.
-      # Never add `allow-scripts` together with `allow-same-origin` —
-      # the pair is equivalent to no sandbox, because the document can
-      # then reach out and remove the restriction itself.
+  defp maybe_sandbox_header(conn, %Files.File{} = file) do
+    if markup_content_type?(file.content_type) do
       existing =
         case get_resp_header(conn, "content-security-policy") do
           [value | _] -> String.trim(value)
           [] -> ""
         end
 
-      merged = String.trim_leading(existing <> " sandbox;")
+      merged = String.trim_leading(existing <> " " <> sandbox_directive(conn, file))
       put_resp_header(conn, "content-security-policy", merged)
     else
       conn
     end
   end
+
+  # Flagged (`interactive_at` set) AND requested by the preview <iframe> —
+  # the only combination that gets `allow-scripts`. `Sec-Fetch-Dest:
+  # iframe` is what tells the preview frame's request apart from a direct
+  # top-level hit on the same URL; a missing header (older browsers) or
+  # any other value (a bare link, the address bar, `Sec-Fetch-Dest:
+  # document`) falls back to bare `sandbox`, same as an unflagged file.
+  #
+  # Emits `sandbox allow-scripts` rather than a second, separate `sandbox`
+  # directive: CSP ignores every directive of a given type after the
+  # first one in a policy, so a duplicate `sandbox` later in the header
+  # would silently leave the file inert instead of interactive.
+  defp sandbox_directive(conn, %Files.File{interactive_at: %DateTime{}}) do
+    if get_req_header(conn, "sec-fetch-dest") == ["iframe"] do
+      @interactive_frame_csp
+    else
+      "sandbox;"
+    end
+  end
+
+  defp sandbox_directive(_conn, _file), do: "sandbox;"
 
   defp markup_content_type?(ct), do: ct in ["text/html", "application/xhtml+xml"]
 

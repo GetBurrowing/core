@@ -100,6 +100,7 @@ defmodule PlatformWeb.FilesLive do
 
   use PlatformWeb, :live_view
 
+  alias Platform.Accounts
   alias Platform.Chat.ContentRenderer
   alias Platform.Files
   alias Platform.Files.Storage
@@ -383,6 +384,73 @@ defmodule PlatformWeb.FilesLive do
 
           {:error, _changeset} ->
             {:noreply, put_flash(socket, :error, "Could not change this file's audience.")}
+        end
+    end
+  end
+
+  # Interactive-code gate (task 01a06a20 stage 3) — the segmented
+  # control beside Download in the detail pane, not a toggle. Two
+  # explicit events rather than one "toggle_interactive" that infers
+  # direction from current state: the segmented control's two buttons
+  # each name the consequence they cause, and collapsing that into one
+  # event would put the direction-inference back on the server, which is
+  # exactly the implicit branching a named-consequence control is meant
+  # to avoid. Reuses `delete_actor/1` (actor-map construction is not
+  # delete-specific) and `find_known_file/2` (a semantic-search hit can
+  # select a row outside `@files`, same as the delete path).
+  def handle_event("mark_interactive", %{"id" => file_id}, socket) do
+    case {delete_actor(socket), find_known_file(socket, file_id)} do
+      {nil, _file} ->
+        {:noreply, put_flash(socket, :error, "Sign in to run a file as a prototype.")}
+
+      {_actor, nil} ->
+        {:noreply, socket}
+
+      {actor, file} ->
+        case Files.mark_interactive(actor, file) do
+          {:ok, updated} ->
+            {:noreply, put_file_row(socket, updated)}
+
+          {:error, :already_interactive} ->
+            # Another session (or a replayed click) beat us to it —
+            # converge silently, same as the delete path's
+            # :already_deleted branch.
+            {:noreply, socket}
+
+          {:error, :project_archived} ->
+            {:noreply,
+             put_flash(socket, :error, "This project is archived — files can't be changed.")}
+
+          {:error, _reason} ->
+            {:noreply,
+             put_flash(socket, :error, "Couldn't turn on scripts for #{display_name(file)}.")}
+        end
+    end
+  end
+
+  def handle_event("unmark_interactive", %{"id" => file_id}, socket) do
+    case {delete_actor(socket), find_known_file(socket, file_id)} do
+      {nil, _file} ->
+        {:noreply, put_flash(socket, :error, "Sign in to change this file's script setting.")}
+
+      {_actor, nil} ->
+        {:noreply, socket}
+
+      {actor, file} ->
+        case Files.unmark_interactive(actor, file) do
+          {:ok, updated} ->
+            {:noreply, put_file_row(socket, updated)}
+
+          {:error, :not_interactive} ->
+            {:noreply, socket}
+
+          {:error, :project_archived} ->
+            {:noreply,
+             put_flash(socket, :error, "This project is archived — files can't be changed.")}
+
+          {:error, _reason} ->
+            {:noreply,
+             put_flash(socket, :error, "Couldn't turn off scripts for #{display_name(file)}.")}
         end
     end
   end
@@ -948,10 +1016,13 @@ defmodule PlatformWeb.FilesLive do
 
   # ── Delete + undo internals (task 019f7cb0 stage 5) ────────────────────
 
-  # Actor map for Platform.Files.delete_file/2 / restore_file/2 — the
-  # platform's actor-first convention. An untyped map audits as "user",
-  # which is correct here; nil (no session user) fails the context's
-  # presence gate.
+  # Actor map for the session's current user — shared by every
+  # Platform.Files mutator that follows the actor-first convention
+  # (delete_file/2, restore_file/2, and, as of task 01a06a20 stage 3,
+  # mark_interactive/2 / unmark_interactive/2). An untyped map audits as
+  # "user", which is correct here; nil (no session user) fails the
+  # context's presence gate. Named for its original caller; nothing
+  # about its shape is delete-specific.
   defp delete_actor(%{assigns: %{current_user_id: user_id}}) when is_binary(user_id),
     do: %{id: user_id}
 
@@ -1558,6 +1629,21 @@ defmodule PlatformWeb.FilesLive do
   """
   def html_preview_width, do: 1280
 
+  @doc """
+  Design height, in CSS pixels, of the auto-scaled INTERACTIVE prototype
+  frame (task 01a06a20 stage 3).
+
+  Paired with `html_preview_width/0` by the client-side `FilePreviewScale`
+  hook, which reuses the canvas embed's scale-to-fit approach: both
+  numbers go out as `data-declared-*` attributes so the hook can compute
+  `containerWidth / declared_width` and collapse the wrapper to
+  `declared_height * scale`, rather than leaving blank space below a
+  shrunk frame. Not used by the unflagged path, which keeps its `70vh`
+  height and horizontal scroll (`html_preview_width/0`'s own doc still
+  applies there).
+  """
+  def html_preview_height, do: 800
+
   @doc false
   def is_image?(%Files.File{content_type: ct}) when is_binary(ct),
     do: String.starts_with?(ct, "image/")
@@ -1574,7 +1660,11 @@ defmodule PlatformWeb.FilesLive do
     * `:image`    — render an inline `<img>` (image/*).
     * `:pdf`      — embed in an `<iframe>` (application/pdf).
     * `:html`     — render the markup in a SANDBOXED `<iframe>`
-                    (text/html), scripts refused.
+                    (text/html), scripts refused — unless the file is
+                    flagged interactive (`interactive_at` set, task
+                    01a06a20 stage 3), in which case scripts run and an
+                    attribution bar renders above the frame. See
+                    `PlatformWeb.Components.FilePreview`'s moduledoc.
     * `:markdown` — render extracted text through the chat markdown
                     pipeline (text/markdown).
     * `:text`     — render extracted text in a `<pre>` block
@@ -1627,6 +1717,73 @@ defmodule PlatformWeb.FilesLive do
   """
   def render_markdown_text(nil), do: Phoenix.HTML.raw("")
   def render_markdown_text(text) when is_binary(text), do: ContentRenderer.render_message(text)
+
+  @doc """
+  The attribution line for a flagged HTML preview's bar (task 01a06a20
+  stage 3, fix stage 4): `"Made interactive by <name> · <when>"`.
+
+  This is the anti-phishing mitigation for the whole feature — its job is
+  to say who made this thing run, not who uploaded it. Those are
+  frequently different people, so the copy names the flagging action
+  (`interactive_by_user_id` / `interactive_at`) explicitly rather than
+  reading as upload provenance.
+
+  Reads `interactive_by_user_id` fresh via `Platform.Accounts.get_user/2`
+  rather than expecting a preloaded association — the detail pane shows
+  one file at a time, so the extra lookup is a single primary-key read,
+  not a query fan-out. `interactive_by_user_id` nilifies on user delete
+  (stage 1's migration), so a flagged file can outlive the account that
+  flagged it; that case degrades to `"Made interactive <when>"` rather
+  than showing a stale or blank name.
+
+  `<when>` is recency-framed via `interactive_recency_text/1`: seconds
+  read as "just now", minutes/hours as "N minute(s)/hour(s) ago", one
+  full day as "yesterday", and anything older falls back to the absolute
+  `%-d %b` date — the question this bar answers is who made this run and
+  how recently, not just who.
+  """
+  def interactive_attribution_text(%Files.File{interactive_at: %DateTime{} = at} = file) do
+    when_text = interactive_recency_text(at)
+
+    case interactive_uploader_name(file) do
+      nil -> "Made interactive #{when_text}"
+      name -> "Made interactive by #{name} · #{when_text}"
+    end
+  end
+
+  def interactive_attribution_text(_file), do: nil
+
+  @doc false
+  def interactive_uploader_name(%Files.File{interactive_by_user_id: nil}), do: nil
+
+  def interactive_uploader_name(%Files.File{interactive_by_user_id: user_id}) do
+    case Accounts.get_user(user_id) do
+      nil -> nil
+      user -> user.name || user.email
+    end
+  end
+
+  # Recency framing for `interactive_attribution_text/1`'s "<when>" — see
+  # that function's doc for the boundaries. Compared against `now` at call
+  # time rather than a stored/precomputed value: the bar re-renders on
+  # every mount, so "5 minutes ago" is expected to march forward on
+  # refresh, not freeze at flag time.
+  defp interactive_recency_text(%DateTime{} = at) do
+    diff_seconds = DateTime.diff(DateTime.utc_now(), at, :second)
+
+    cond do
+      diff_seconds < 60 -> "just now"
+      diff_seconds < 3600 -> ago(div(diff_seconds, 60), "minute")
+      diff_seconds < 86_400 -> ago(div(diff_seconds, 3600), "hour")
+      diff_seconds < 172_800 -> "yesterday"
+      true -> Calendar.strftime(at, "%-d %b")
+    end
+  end
+
+  defp ago(count, unit), do: "#{count} #{pluralize_unit(unit, count)} ago"
+
+  defp pluralize_unit(word, 1), do: word
+  defp pluralize_unit(word, _count), do: word <> "s"
 
   @doc false
   def org_label_for(%{org: %Tenancy.Org{slug: slug}}), do: Tenancy.scope_label(slug)

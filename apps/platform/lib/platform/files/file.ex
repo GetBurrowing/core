@@ -22,6 +22,11 @@ defmodule Platform.Files.File do
     * `:name` — display label (defaults to `original_filename` when the
       caller doesn't supply one).
     * `:uploaded_by_user_id` — historical only; nilifies on user delete.
+    * `:interactive_at` / `:interactive_by_user_id` — the interactive-code
+      gate (task 01a06a20 stage 1). Set/cleared exclusively by
+      `Platform.Files.mark_interactive/2` / `unmark_interactive/2`, never
+      through this changeset's cast. See the field comment in the schema
+      block below.
   """
 
   use Ecto.Schema
@@ -39,6 +44,7 @@ defmodule Platform.Files.File do
     belongs_to(:project, Platform.Tasks.Project)
     belongs_to(:org, Platform.Tenancy.Org)
     belongs_to(:uploaded_by_user, Platform.Accounts.User, foreign_key: :uploaded_by_user_id)
+    belongs_to(:interactive_by_user, Platform.Accounts.User, foreign_key: :interactive_by_user_id)
     has_many(:chunks, Platform.Files.Chunk, foreign_key: :file_id)
 
     field(:name, :string)
@@ -59,6 +65,18 @@ defmodule Platform.Files.File do
     # change — deliberately NOT in `@cast_fields`, so bulk attrs can never
     # flip a row in or out of the deleted state.
     field(:deleted_at, :utc_datetime_usec)
+
+    # Interactive-code gate (task 01a06a20 stage 1): decides whether this
+    # file may run its own code. NOT a boolean — `interactive_at` (when)
+    # pairs with `interactive_by_user_id` (who, belongs_to above) because
+    # after an incident the only question that matters is who turned
+    # scripts on and when, which a boolean can't answer. Same shape as
+    # `deleted_at` above: nullable, moves only via a dedicated change in
+    # `Platform.Files.mark_interactive/2` / `unmark_interactive/2`, and
+    # deliberately NOT in `@cast_fields` — bulk attrs (an upload form, an
+    # MCP tool) can never flip a file's execute permission. There is no
+    # generic `update_file/2` in `Platform.Files` for the same reason.
+    field(:interactive_at, :utc_datetime_usec)
 
     # Consecutive failed ingest attempts (task 01a0008b stage 1).
     # `ingest_status` holds only the latest outcome, so this is what tells

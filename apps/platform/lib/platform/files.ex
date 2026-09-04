@@ -479,6 +479,92 @@ defmodule Platform.Files do
   end
 
   @doc """
+  Marks a file's own code as runnable, on behalf of `actor` (task
+  01a06a20 stage 1) — the gate that decides whether a file may execute.
+
+  Sets `interactive_at` (when) and `interactive_by_user_id` (who). NOT a
+  boolean: after an incident the only question that matters is who
+  turned scripts on and when, which a boolean can't answer. Mirrors the
+  soft-delete shape of `delete_file/2` on this same struct: both fields
+  sit OUTSIDE `File.changeset/2`'s `@cast_fields`, moved only by this
+  function and `unmark_interactive/2` via a dedicated
+  `Ecto.Changeset.change/2` — never through `cast/2` — so bulk attrs
+  (an upload form, an MCP tool) can never flip a file's execute
+  permission. There is deliberately no generic `update_file/2` on this
+  module, and nothing here (or anywhere else in `Platform.Files`) casts
+  `storage_key` after insert: that is what stops the gate being set on
+  innocent bytes which are then swapped for hostile ones.
+
+  Emits the `[:platform, :files, :file_interactive_marked]` audit event
+  (same telemetry→audit bridge as the soft-delete pair) with the actor
+  attributed. No search-index or PubSub side effect: the gate governs
+  code execution, not visibility, and this stage is backend/DB only —
+  there is no UI yet to react to a broadcast.
+
+  Actor-first: `actor` must be a map with a binary `:id` (the platform
+  convention — every gate flip is attributable), and `:id` must be a
+  real user id — `interactive_by_user_id` is a genuine FK to `users`
+  (unlike `deleted_at`'s bare timestamp), so a bogus id surfaces as
+  `{:error, changeset}` rather than crashing. Errors:
+  `{:error, :unauthorized}` (missing/anonymous actor),
+  `{:error, :project_archived}`, `{:error, :already_interactive}`,
+  `{:error, changeset}` (actor id references no user).
+  """
+  @spec mark_interactive(map() | nil, File.t()) ::
+          {:ok, File.t()}
+          | {:error,
+             Ecto.Changeset.t() | :unauthorized | :project_archived | :already_interactive}
+  def mark_interactive(actor, %File{} = file) do
+    with :ok <- ensure_actor(actor),
+         :ok <- Lifecycle.ensure_project_writable(file.project_id),
+         :ok <- ensure_not_yet_interactive(file),
+         {:ok, marked} <-
+           file
+           |> Ecto.Changeset.change(
+             interactive_at: DateTime.utc_now(),
+             interactive_by_user_id: actor.id
+           )
+           # Unlike `deleted_at`, `interactive_by_user_id` is a genuine FK
+           # to `users` — a bogus actor id must surface as a changeset
+           # error, not an unhandled `Ecto.ConstraintError` crash.
+           |> Ecto.Changeset.foreign_key_constraint(:interactive_by_user_id)
+           |> Repo.update() do
+      emit([:platform, :files, :file_interactive_marked], actor, file_meta(marked, %{}))
+      {:ok, marked}
+    end
+  end
+
+  @doc """
+  Clears the interactive-code gate on behalf of `actor` (task 01a06a20
+  stage 1) — the inverse of `mark_interactive/2`.
+
+  Clears both `interactive_at` and `interactive_by_user_id` together —
+  the pair moves as one, so there is never a stale actor id sitting on a
+  nil timestamp. Same dedicated-change / not-in-`@cast_fields` contract
+  as `mark_interactive/2`.
+
+  Emits the `[:platform, :files, :file_interactive_unmarked]` audit
+  event with the actor attributed. Errors: `{:error, :unauthorized}`,
+  `{:error, :project_archived}`, `{:error, :not_interactive}` when the
+  gate is already closed.
+  """
+  @spec unmark_interactive(map() | nil, File.t()) ::
+          {:ok, File.t()}
+          | {:error, Ecto.Changeset.t() | :unauthorized | :project_archived | :not_interactive}
+  def unmark_interactive(actor, %File{} = file) do
+    with :ok <- ensure_actor(actor),
+         :ok <- Lifecycle.ensure_project_writable(file.project_id),
+         :ok <- ensure_interactive(file),
+         {:ok, unmarked} <-
+           file
+           |> Ecto.Changeset.change(interactive_at: nil, interactive_by_user_id: nil)
+           |> Repo.update() do
+      emit([:platform, :files, :file_interactive_unmarked], actor, file_meta(unmarked, %{}))
+      {:ok, unmarked}
+    end
+  end
+
+  @doc """
   Updates the `:ingest_status` field on a `Platform.Files.File`.
 
   Used by `Platform.Files.Ingester` to mark `:ingested` / `:failed`
@@ -1245,6 +1331,14 @@ defmodule Platform.Files do
 
   defp ensure_deleted(%File{deleted_at: %DateTime{}}), do: :ok
   defp ensure_deleted(%File{}), do: {:error, :not_deleted}
+
+  # Interactive-code gate guards (task 01a06a20 stage 1) — same
+  # toggle-pair shape as the soft-delete guards above.
+  defp ensure_not_yet_interactive(%File{interactive_at: nil}), do: :ok
+  defp ensure_not_yet_interactive(%File{}), do: {:error, :already_interactive}
+
+  defp ensure_interactive(%File{interactive_at: %DateTime{}}), do: :ok
+  defp ensure_interactive(%File{}), do: {:error, :not_interactive}
 
   # Remove the file's entry from the vector index. The ingest pipeline
   # indexes each file under its own row id (`Platform.Files.Ingester`

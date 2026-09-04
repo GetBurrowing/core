@@ -240,6 +240,17 @@ defmodule Platform.Audit.TelemetryHandler do
     # row immediately after the call returns.
     [:platform, :files, :file_deleted],
     [:platform, :files, :file_restored],
+    # Task 01a06a20 stage 1 — the interactive-code gate. Emitted by
+    # `Platform.Files.mark_interactive/2` and `unmark_interactive/2` after
+    # the DB write commits. Metadata carries actor_id, actor_type: "user",
+    # resource_type: "file", resource_id, project_id, org_id, file_name —
+    # same shape as the file_deleted/file_restored pair above. Sync
+    # (default handle_event clause) so tests can assert the audit row
+    # immediately after the call returns. Registration here is
+    # load-bearing: an emit with no matching @events entry fails
+    # SILENTLY (nothing raises, the audit row simply never appears).
+    [:platform, :files, :file_interactive_marked],
+    [:platform, :files, :file_interactive_unmarked],
     # Task 019f7cb0 stage 3 — permanent purge after the retention window.
     # Emitted by `Platform.Files.Purger` (actor_type: "system", actor_id
     # nil — timer purges have no acting user) once a soft-deleted file's

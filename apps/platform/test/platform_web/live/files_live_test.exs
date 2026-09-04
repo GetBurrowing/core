@@ -965,6 +965,341 @@ defmodule PlatformWeb.FilesLiveTest do
     end
   end
 
+  describe "interactive prototype flag + attribution bar (task 01a06a20 stage 3)" do
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Interactive Prototype Project")
+      {:ok, conn: conn, project: project}
+    end
+
+    test "unflagged HTML file renders the ORIGINAL notice + bare sandbox, unchanged",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      html = select(view, file)
+
+      assert node_count(html, "[data-role='files-detail-html-interactive']") == 0
+      assert node_count(html, "[data-role='files-detail-html-attribution-bar']") == 0
+
+      [sandbox] = attribute_values(html, "iframe[data-role='files-detail-html']", "sandbox")
+      refute sandbox =~ "allow-scripts"
+
+      notice =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("[data-role='files-detail-html-notice']")
+        |> LazyHTML.text()
+
+      assert notice =~ "Scripts are off in preview."
+    end
+
+    test "flagging a file grants allow-scripts, renders the bar, and changes the notice",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      select(view, file)
+
+      html =
+        view
+        |> element("[data-role='files-detail-interactive-on']")
+        |> render_click()
+
+      assert node_count(html, "[data-role='files-detail-html-interactive']") == 1
+      assert node_count(html, "[data-role='files-detail-html-attribution-bar']") == 1
+      assert node_count(html, "[data-role='files-detail-html-live-pill']") == 1
+
+      [sandbox] = attribute_values(html, "iframe[data-role='files-detail-html']", "sandbox")
+      assert sandbox =~ "allow-scripts"
+      refute sandbox =~ "allow-same-origin"
+
+      filename_text =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("[data-role='files-detail-html-filename']")
+        |> LazyHTML.text()
+
+      assert filename_text =~ "mockup.html"
+
+      attribution_text =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("[data-role='files-detail-html-attribution']")
+        |> LazyHTML.text()
+
+      # authenticated_conn/1 always names its user "Files LV User". Flagged
+      # via a live click a moment ago, so the recency framing reads "just
+      # now" rather than an absolute date.
+      assert attribution_text =~ "Made interactive by Files LV User"
+      assert attribution_text =~ "just now"
+
+      notice =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("[data-role='files-detail-html-notice']")
+        |> LazyHTML.text()
+
+      assert notice =~ "Interactive prototype. Never enter a password here."
+
+      # The DB actually flipped, actor attributed — not just a UI flag.
+      updated = Files.get_file(file.id)
+      assert %DateTime{} = updated.interactive_at
+      assert is_binary(updated.interactive_by_user_id)
+    end
+
+    test "no warning/error colour token appears anywhere on the flagged surface",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      select(view, file)
+
+      html =
+        view
+        |> element("[data-role='files-detail-interactive-on']")
+        |> render_click()
+
+      [bar_class] =
+        attribute_values(html, "[data-role='files-detail-html-attribution-bar']", "class")
+
+      refute bar_class =~ "warning"
+      refute bar_class =~ "error"
+
+      [notice_class] = attribute_values(html, "[data-role='files-detail-html-notice']", "class")
+      refute notice_class =~ "warning"
+      refute notice_class =~ "error"
+    end
+
+    test "unflagging reverts to the bare sandbox and the original notice",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      select(view, file)
+      view |> element("[data-role='files-detail-interactive-on']") |> render_click()
+
+      html =
+        view
+        |> element("[data-role='files-detail-interactive-off']")
+        |> render_click()
+
+      assert node_count(html, "[data-role='files-detail-html-interactive']") == 0
+
+      [sandbox] = attribute_values(html, "iframe[data-role='files-detail-html']", "sandbox")
+      refute sandbox =~ "allow-scripts"
+
+      updated = Files.get_file(file.id)
+      assert updated.interactive_at == nil
+      assert updated.interactive_by_user_id == nil
+    end
+
+    test "the flag control renders only for :html mode files", %{conn: conn, project: project} do
+      pdf_file =
+        seed_file(project, %{
+          name: "spec.pdf",
+          original_filename: "spec.pdf",
+          content_type: "application/pdf",
+          ingest_status: "ingested"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      html = select(view, pdf_file)
+
+      assert node_count(html, "[data-role='files-detail-interactive-toggle']") == 0
+    end
+
+    test "the corner full-screen icon is suppressed on a flagged file — the bar's action replaces it",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      select(view, file)
+
+      html =
+        view
+        |> element("[data-role='files-detail-interactive-on']")
+        |> render_click()
+
+      assert node_count(html, "[data-role='files-detail-fullscreen-open']") == 0
+      assert node_count(html, "[data-role='files-detail-html-full-window']") == 1
+    end
+
+    test "unflagged html keeps the corner full-screen icon (only the flagged path replaces it)",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      html = select(view, file)
+
+      assert node_count(html, "[data-role='files-detail-fullscreen-open']") == 1
+    end
+
+    test "the flagged frame carries the auto-scale hook with the declared width/height",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      select(view, file)
+
+      html =
+        view
+        |> element("[data-role='files-detail-interactive-on']")
+        |> render_click()
+
+      assert node_count(html, "[data-role='files-detail-html-scale']") == 1
+
+      [declared_width] =
+        attribute_values(html, "[data-role='files-detail-html-scale']", "data-declared-width")
+
+      [declared_height] =
+        attribute_values(html, "[data-role='files-detail-html-scale']", "data-declared-height")
+
+      assert declared_width == to_string(PlatformWeb.FilesLive.html_preview_width())
+      assert declared_height == to_string(PlatformWeb.FilesLive.html_preview_height())
+    end
+
+    test "clicking the already-active side of the control is a silent no-op",
+         %{conn: conn, project: project} do
+      file = seed_html_file(project)
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+      select(view, file)
+
+      # Already off — clicking "Scripts are off" again must not error and
+      # must not touch the DB row.
+      html =
+        view
+        |> element("[data-role='files-detail-interactive-off']")
+        |> render_click()
+
+      assert node_count(html, "[data-role='files-detail-html-interactive']") == 0
+      assert Files.get_file(file.id).interactive_at == nil
+      assert Process.alive?(view.pid)
+    end
+  end
+
+  describe "interactive_attribution_text/1 + interactive_uploader_name/1" do
+    defp insert_user(name) do
+      Repo.insert!(%User{
+        email: "interactive-attr-#{System.unique_integer([:positive])}@example.com",
+        name: name,
+        oidc_sub: "oidc-interactive-attr-#{System.unique_integer([:positive])}"
+      })
+    end
+
+    test "nil when the file has never been flagged" do
+      file = %Files.File{interactive_at: nil, interactive_by_user_id: nil}
+      assert PlatformWeb.FilesLive.interactive_attribution_text(file) == nil
+    end
+
+    test "degrades to a date-only string when the flagging user is gone" do
+      file = %Files.File{
+        interactive_at: ~U[2026-08-15 12:00:00.000000Z],
+        interactive_by_user_id: nil
+      }
+
+      assert PlatformWeb.FilesLive.interactive_attribution_text(file) ==
+               "Made interactive 15 Aug"
+
+      assert PlatformWeb.FilesLive.interactive_uploader_name(file) == nil
+    end
+
+    test "names the actor who flipped the flag, absolute date once it's old" do
+      user = insert_user("Marlowe Quill")
+
+      file = %Files.File{
+        interactive_at: ~U[2026-08-15 12:00:00.000000Z],
+        interactive_by_user_id: user.id
+      }
+
+      assert PlatformWeb.FilesLive.interactive_attribution_text(file) ==
+               "Made interactive by Marlowe Quill · 15 Aug"
+
+      assert PlatformWeb.FilesLive.interactive_uploader_name(file) == "Marlowe Quill"
+    end
+
+    test "a file flagged seconds ago reads \"just now\"" do
+      user = insert_user("Priya Nair")
+
+      file = %Files.File{
+        interactive_at: DateTime.add(DateTime.utc_now(), -5, :second),
+        interactive_by_user_id: user.id
+      }
+
+      assert PlatformWeb.FilesLive.interactive_attribution_text(file) ==
+               "Made interactive by Priya Nair · just now"
+    end
+
+    test "recency framing across the minute, hour, and yesterday boundaries" do
+      user = insert_user("Priya Nair")
+      now = DateTime.utc_now()
+
+      build = fn seconds_ago ->
+        %Files.File{
+          interactive_at: DateTime.add(now, -seconds_ago, :second),
+          interactive_by_user_id: user.id
+        }
+      end
+
+      assert PlatformWeb.FilesLive.interactive_attribution_text(build.(60)) ==
+               "Made interactive by Priya Nair · 1 minute ago"
+
+      assert PlatformWeb.FilesLive.interactive_attribution_text(build.(5 * 60)) ==
+               "Made interactive by Priya Nair · 5 minutes ago"
+
+      assert PlatformWeb.FilesLive.interactive_attribution_text(build.(3600)) ==
+               "Made interactive by Priya Nair · 1 hour ago"
+
+      assert PlatformWeb.FilesLive.interactive_attribution_text(build.(3 * 3600)) ==
+               "Made interactive by Priya Nair · 3 hours ago"
+
+      assert PlatformWeb.FilesLive.interactive_attribution_text(build.(30 * 3600)) ==
+               "Made interactive by Priya Nair · yesterday"
+    end
+
+    test "older than two days falls back to the absolute date, not a relative phrase" do
+      user = insert_user("Priya Nair")
+
+      file = %Files.File{
+        interactive_at: DateTime.add(DateTime.utc_now(), -5 * 86_400, :second),
+        interactive_by_user_id: user.id
+      }
+
+      text = PlatformWeb.FilesLive.interactive_attribution_text(file)
+      refute text =~ "ago"
+      refute text =~ "yesterday"
+      assert text =~ "Priya Nair"
+    end
+
+    test "REGRESSION: names the user who flagged the file, not the original uploader" do
+      uploader = insert_user("Alice Uploader")
+      flagger = insert_user("Bob Flagger")
+
+      # Same file, two different people: A uploaded it, B is the one who
+      # later flipped it interactive. The bar's entire job is to say who
+      # made this run — so it must name B, never A. A test that reused one
+      # user for both roles could not fail if this regressed.
+      file = %Files.File{
+        uploaded_by_user_id: uploader.id,
+        interactive_at: ~U[2026-08-15 12:00:00.000000Z],
+        interactive_by_user_id: flagger.id
+      }
+
+      text = PlatformWeb.FilesLive.interactive_attribution_text(file)
+
+      assert text =~ "Bob Flagger"
+      refute text =~ "Alice Uploader"
+    end
+  end
+
+  describe "html_preview_height/1" do
+    test "returns a fixed declared pixel height, paired with html_preview_width/0" do
+      assert PlatformWeb.FilesLive.html_preview_height() == 800
+      assert is_integer(PlatformWeb.FilesLive.html_preview_width())
+    end
+  end
+
   describe "filtered_and_sorted helper" do
     test "filter narrows by case-insensitive substring", %{conn: _conn} do
       project = seed_project("fabrikam", "Filter Helper Project")

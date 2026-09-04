@@ -38,6 +38,47 @@ defmodule PlatformWeb.Components.FilePreview do
       frame gets a declared design width and the pane scrolls
       horizontally. Shrink-to-fit was rejected: 1280px squeezed into a
       600px pane is unreadable, and reading the mockup is the use case.
+
+  ## Interactive prototypes (task 01a06a20 stage 3)
+
+  A file flagged via `Platform.Files.mark_interactive/2`
+  (`file.interactive_at` set) renders a DIFFERENT `:html` sub-branch.
+  The unflagged branch above is untouched by this stage, byte for byte.
+
+  The sandbox gains `allow-scripts` — never `allow-same-origin`, same
+  invariant as above — because a flagged file is meant to be clicked
+  through, not just looked at. Network access is already cut at the
+  response layer by the `Sec-Fetch-Dest: iframe` CSP gate added in
+  stage 2 (`PlatformWeb.FileBlobController`), so `allow-scripts` here
+  grants code execution inside an origin that still can't phone home.
+
+  What THIS stage adds is the attribution bar above the frame, in
+  Suite's own DOM, never inside the `<iframe>`. That placement is the
+  actual mitigation for the one thing the sandbox cannot stop: a framed
+  page that imitates Suite to phish whoever is clicking through it. A
+  badge drawn inside the iframe is worthless against that — an
+  imitation page simply paints its own copy over it — so the bar has to
+  live on a surface the framed document cannot draw into, and it owns a
+  full edge rather than a corner. See canvas
+  `01a06a22-8607-7001-ba02-8095ab4531ad` for the full design rationale,
+  including the two rejected alternatives (a warning banner, a corner
+  badge).
+
+  Token discipline on this surface is deliberate: `--color-info` (the
+  `Live` pill) and `--color-primary` (the one action) are the only
+  saturated colours. No `--color-warning`, no `--color-error`, anywhere
+  — the condition is permanent and identical on every prototype, and an
+  always-on warning is furniture within a week (the same argument the
+  unflagged notice above already makes about "Scripts are off").
+
+  The frame itself drops the fixed-1280px-with-horizontal-scroll
+  treatment for a scale-to-fit transform (`phx-hook="FilePreviewScale"`,
+  reusing the canvas embed's auto-scale approach — see that hook's
+  moduledoc for why it is a separate file rather than a shared one). A
+  prototype is meant to be used, not studied at a fixed width; the
+  unflagged path keeps the fixed-width treatment because its reasoning
+  above (a shrunk desktop mockup's media queries fire wrong) still
+  holds for a static picture nobody is clicking through.
   """
 
   use Phoenix.Component
@@ -63,10 +104,18 @@ defmodule PlatformWeb.Components.FilePreview do
       |> assign(:mode, FilesLive.preview_mode(assigns.file))
       |> assign(:download_url, FilesLive.file_download_url(assigns.file))
       |> assign(:blob_url, FilesLive.file_attachment_url(assigns.file))
+      |> assign(:interactive?, not is_nil(assigns.file.interactive_at))
 
     ~H"""
     <div class="relative">
-      <.fullscreen_button :if={@expandable and @mode != :unknown} scope={@scope} />
+      <%!-- The interactive :html branch renders its own "Full window"
+           action inside the attribution bar (task 01a06a20 stage 3) —
+           the corner icon would be a second, redundant control for the
+           one mode that already has one. --%>
+      <.fullscreen_button
+        :if={@expandable and @mode != :unknown and not (@mode == :html and @interactive?)}
+        scope={@scope}
+      />
       <%= case @mode do %>
         <% :image -> %>
           <img
@@ -84,32 +133,73 @@ defmodule PlatformWeb.Components.FilePreview do
           >
           </iframe>
         <% :html -> %>
-          <div class="rounded border border-base-300 bg-base-100">
-            <div class="overflow-x-auto">
-              <iframe
-                src={FilesLive.file_preview_frame_url(@file)}
-                sandbox=""
-                referrerpolicy="no-referrer"
-                style={"width: #{FilesLive.html_preview_width()}px; height: 70vh; border: 0; display: block;"}
-                title={"Preview of " <> (@file.original_filename || "file")}
-                data-role={@scope <> "-html"}
-              >
-              </iframe>
-            </div>
+          <%= if @interactive? do %>
             <div
-              class="flex items-center justify-between gap-3 border-t border-base-300 px-3 py-2 text-sm text-base-content"
-              data-role={@scope <> "-html-notice"}
+              class="overflow-hidden rounded-box border border-base-300 bg-base-100"
+              data-role={@scope <> "-html-interactive"}
             >
-              <span>Scripts are off in preview.</span>
-              <a
-                href={@download_url}
-                class="link link-primary"
-                download={@file.original_filename || @file.name || "file"}
+              <.interactive_attribution_bar file={@file} scope={@scope} />
+              <div
+                id={@scope <> "-html-scale-" <> @file.id}
+                phx-hook="FilePreviewScale"
+                phx-update="ignore"
+                data-role={@scope <> "-html-scale"}
+                data-declared-width={FilesLive.html_preview_width()}
+                data-declared-height={FilesLive.html_preview_height()}
+                style={"height: #{FilesLive.html_preview_height()}px;"}
               >
-                Download
-              </a>
+                <iframe
+                  src={FilesLive.file_preview_frame_url(@file)}
+                  sandbox="allow-scripts"
+                  referrerpolicy="no-referrer"
+                  style={"width: #{FilesLive.html_preview_width()}px; height: #{FilesLive.html_preview_height()}px; border: 0; display: block;"}
+                  title={"Preview of " <> (@file.original_filename || "file")}
+                  data-role={@scope <> "-html"}
+                >
+                </iframe>
+              </div>
+              <div
+                class="flex items-center justify-between gap-3 border-t border-base-300 px-3 py-2 text-sm text-base-content"
+                data-role={@scope <> "-html-notice"}
+              >
+                <span>Interactive prototype. Never enter a password here.</span>
+                <a
+                  href={@download_url}
+                  class="link link-primary"
+                  download={@file.original_filename || @file.name || "file"}
+                >
+                  Download
+                </a>
+              </div>
             </div>
-          </div>
+          <% else %>
+            <div class="rounded border border-base-300 bg-base-100">
+              <div class="overflow-x-auto">
+                <iframe
+                  src={FilesLive.file_preview_frame_url(@file)}
+                  sandbox=""
+                  referrerpolicy="no-referrer"
+                  style={"width: #{FilesLive.html_preview_width()}px; height: 70vh; border: 0; display: block;"}
+                  title={"Preview of " <> (@file.original_filename || "file")}
+                  data-role={@scope <> "-html"}
+                >
+                </iframe>
+              </div>
+              <div
+                class="flex items-center justify-between gap-3 border-t border-base-300 px-3 py-2 text-sm text-base-content"
+                data-role={@scope <> "-html-notice"}
+              >
+                <span>Scripts are off in preview.</span>
+                <a
+                  href={@download_url}
+                  class="link link-primary"
+                  download={@file.original_filename || @file.name || "file"}
+                >
+                  Download
+                </a>
+              </div>
+            </div>
+          <% end %>
         <% :markdown -> %>
           <div
             :if={@text}
@@ -164,6 +254,66 @@ defmodule PlatformWeb.Components.FilePreview do
     <p class="text-sm text-base-content/60" data-role={@scope <> "-no-text"}>
       No extracted text yet. The file may still be ingesting.
     </p>
+    """
+  end
+
+  # Attribution bar for a flagged (interactive) HTML preview (task
+  # 01a06a20 stage 3).
+  #
+  # Suite DOM, not iframe content — see the "Interactive prototypes"
+  # moduledoc section for why that placement is the mitigation, not
+  # decoration. Six token slots, no more: `base-200` ground, `base-300`
+  # hairline, `base-content` filename, `neutral` attribution, `info` the
+  # `Live` pill, `primary` the one action. No warning/error token
+  # appears here.
+  #
+  # Truncation order (most meaningful last): the pill, size and action
+  # carry `shrink-0 whitespace-nowrap` and never truncate. The filename
+  # is `flex-1 min-w-0 truncate` — it goes second. The attribution line
+  # is pinned to its own full-width row (`w-full`) below the rest, so on
+  # a narrow viewport it is the first thing to run out of room.
+  attr :file, Files.File, required: true
+  attr :scope, :string, required: true
+
+  defp interactive_attribution_bar(assigns) do
+    ~H"""
+    <div
+      class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-base-300 bg-base-200 px-3 py-2"
+      data-role={@scope <> "-html-attribution-bar"}
+    >
+      <span
+        class="badge badge-info badge-sm shrink-0 whitespace-nowrap"
+        data-role={@scope <> "-html-live-pill"}
+      >
+        Live
+      </span>
+      <span
+        class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content"
+        data-role={@scope <> "-html-filename"}
+      >
+        {@file.original_filename || @file.name || "file"}
+      </span>
+      <span
+        class="shrink-0 whitespace-nowrap font-mono text-xs text-base-content/70"
+        data-role={@scope <> "-html-size"}
+      >
+        {FilesLive.humanize_bytes(@file.byte_size)}
+      </span>
+      <button
+        type="button"
+        phx-click="open_preview_fullscreen"
+        class="btn btn-primary btn-xs shrink-0 whitespace-nowrap"
+        data-role={@scope <> "-html-full-window"}
+      >
+        Full window
+      </button>
+      <span
+        class="w-full min-w-0 truncate text-xs text-neutral"
+        data-role={@scope <> "-html-attribution"}
+      >
+        {FilesLive.interactive_attribution_text(@file)}
+      </span>
+    </div>
     """
   end
 
@@ -230,6 +380,65 @@ defmodule PlatformWeb.Components.FilePreview do
           <.file_preview file={@file} text={@text} scope="files-fullscreen" />
         </div>
       </div>
+    </div>
+    """
+  end
+
+  @doc """
+  The interactive-code flag control (task 01a06a20 stage 3).
+
+  Lives in the FilesLive detail pane beside Download, never in the
+  upload dialogue: flipping it is a deliberate second act taken after
+  looking at the file, not a checkbox ticked while dragging something
+  in. A `join`/`join-item` segmented control — DaisyUI styles a join's
+  end buttons with `--radius-field` itself, so no manual radius class is
+  needed here — deliberately not a toggle switch: a switch implies a
+  personal preference, and this is a decision with consequences for
+  whoever opens the file next.
+
+  States are named by CONSEQUENCE rather than by setting, per the same
+  descriptive-naming rule the rest of this surface follows. Calls
+  `PlatformWeb.FilesLive`'s `"mark_interactive"` / `"unmark_interactive"`
+  event clauses, which wrap `Platform.Files.mark_interactive/2` /
+  `unmark_interactive/2` from stage 1.
+
+  `id_suffix` disambiguates the desktop pane's control from the mobile
+  drawer's — both render in the DOM at once, same reason `scope` exists
+  on `file_preview/1`.
+  """
+  attr :file, Files.File, required: true
+  attr :id_suffix, :string, default: ""
+
+  def interactive_toggle(assigns) do
+    assigns = assign(assigns, :interactive?, not is_nil(assigns.file.interactive_at))
+
+    ~H"""
+    <div
+      class="join shrink-0"
+      role="group"
+      aria-label="Interactive prototype control"
+      data-role={"files-detail-interactive-toggle" <> @id_suffix}
+    >
+      <button
+        type="button"
+        phx-click="unmark_interactive"
+        phx-value-id={@file.id}
+        class={["btn btn-sm join-item", if(@interactive?, do: "btn-ghost", else: "btn-primary")]}
+        aria-pressed={to_string(!@interactive?)}
+        data-role={"files-detail-interactive-off" <> @id_suffix}
+      >
+        Scripts are off
+      </button>
+      <button
+        type="button"
+        phx-click="mark_interactive"
+        phx-value-id={@file.id}
+        class={["btn btn-sm join-item", if(@interactive?, do: "btn-primary", else: "btn-ghost")]}
+        aria-pressed={to_string(@interactive?)}
+        data-role={"files-detail-interactive-on" <> @id_suffix}
+      >
+        Runs as a prototype
+      </button>
     </div>
     """
   end
