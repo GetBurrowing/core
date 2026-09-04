@@ -112,3 +112,33 @@ gate can't silently green-light regressions.
 - `test/**/*_test.mjs` — node native test runner, hand-rolled DOM shims
   where possible so the toolchain stays zero-dependency.
 - Both suites plus the lint gate are wired into `npm test`.
+
+## Meetings: synthesising captions
+
+The call rail's Transcript pane (`js/hooks/meeting_transcript.js`) and the
+caption overlay (`js/hooks/meeting_captions.js`) both consume one client-side
+DOM event, `meeting:caption`, which `js/hooks/meeting_room.js`
+(`_onTranscription()`) dispatches on `document` for every LiveKit
+`TranscriptionSegment` it receives. Nothing server-side ever sees the payload.
+
+```js
+// detail shape, as meeting_room.js builds it:
+//   id        seg.id || crypto.randomUUID()      interim/final pairing key
+//   speaker   participant.name || identity || "Unknown"
+//   identity  participant.identity || ""         "user:…" | "agent:…" | "guest:…"
+//   text      seg.text || ""
+//   final     seg.final !== false                defaults to TRUE when absent
+//   timestamp seg.startTime || Date.now()        epoch ms
+document.dispatchEvent(
+  new CustomEvent("meeting:caption", {
+    detail: { id: "u1", speaker: "Ada", identity: "", text: "first line", final: true, timestamp: Date.now() },
+  })
+)
+```
+
+So a transcript can be driven with no LiveKit room at all — from the browser
+console, a CDP `Runtime.evaluate`, or a jsdom test — on either surface that
+mounts the rail (`/meetings/:slug`, or the in-chat quickmeet panel once
+`in_meeting` is set). An interim (`final: false`) followed by a final replaces
+it in place, whether or not the two share an `id`; a redelivered final with the
+same `id` updates in place rather than duplicating.

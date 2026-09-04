@@ -335,15 +335,42 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
     # caption lines into a `phx-update="ignore"` log. TWO of them across
     # the two breakpoint subtrees would mean one utterance rendered into
     # two logs, half of them off-screen — the exact defect the caption
-    # host was hoisted to fix in task 019ff712. Asserted on the
-    # Transcript TAB because the panes are mutually exclusive: the hook
-    # is legitimately absent while People is active, so a count taken on
-    # the default mount would be 0 and would prove nothing.
+    # host was hoisted to fix in task 019ff712.
     test "the Transcript pane hosts exactly one MeetingTranscript hook" do
       html = render_panel(%{active_meeting_tab: "transcript"})
 
       assert count(html, ~s([data-component="call-rail"] [phx-hook="MeetingTranscript"])) == 1
       assert count(html, ~s([phx-hook="MeetingTranscript"][phx-update="ignore"])) == 1
+      assert count(html, ~s([data-role="meeting-transcript"])) == 1
+    end
+
+    # Task 01a06524 stage 1. The host is present on EVERY tab, not only
+    # Transcript — this REPLACES the "toggling adds/removes the host"
+    # contract on purpose. A host that leaves the DOM on People is a hook
+    # LiveView destroys, and a destroyed hook is a lost buffer. What flips
+    # is `hidden` on the outer wrap LiveView owns; under
+    # `phx-update="ignore"` a flip on the host itself never reaches the
+    # DOM. `mix test` sees the markup; that the browser keeps the lines
+    # across the flip is the e2e's to prove.
+    test "the transcript host persists on the People tab, hidden by the wrap" do
+      for tab <- ~w(people canvas transcript) do
+        html = render_panel(%{active_meeting_tab: tab})
+
+        assert count(html, ~s([data-role="meeting-transcript"])) == 1, tab
+        assert count(html, ~s([phx-hook="MeetingTranscript"])) == 1, tab
+        assert count(html, ~s([data-role="meeting-transcript-wrap"])) == 1, tab
+
+        expected_hidden = if(tab == "transcript", do: 0, else: 1)
+
+        assert count(html, ~s([data-role="meeting-transcript-wrap"][hidden])) == expected_hidden,
+               tab
+
+        assert count(
+                 html,
+                 ~s([data-role="meeting-transcript-wrap"][data-active="#{tab == "transcript"}"])
+               ) == 1,
+               tab
+      end
     end
 
     test "the rail carries the three tabs, People active by default" do

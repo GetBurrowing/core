@@ -90,6 +90,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
   import PlatformWeb.Components.Meetings.CandidateRail
   import PlatformWeb.Components.Meetings.ParticipantRail
+  import PlatformWeb.Components.Meetings.TranscriptPane
 
   @tabs [
     {"people", "People"},
@@ -282,46 +283,55 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             </p>
             {render_slot(@canvas_extra)}
           <% "transcript" -> %>
-            <div class="p-3" data-role="call-rail-transcript">
-              <%= if @transcript != [] do %>
-                {render_slot(@transcript)}
-              <% else %>
-                <%!-- JS-owned pane. `meeting:caption` is a client-side DOM
-                     CustomEvent dispatched by `meeting_room.js` from
-                     LiveKit's `TranscriptionReceived`; the payload never
-                     reaches the server, so there is nothing here for
-                     LiveView to render a list from. `MeetingTranscript`
-                     appends lines directly and `phx-update="ignore"` keeps
-                     morphdom from discarding them on the next patch. The
-                     hook pushes NOTHING back. --%>
-                <div
-                  id={"#{@id}-transcript-log"}
-                  phx-hook="MeetingTranscript"
-                  phx-update="ignore"
-                  data-role="call-rail-transcript-log"
-                  class="max-h-full overflow-y-auto"
-                >
-                  <%!-- Honest empty state. It must never read as
-                       "transcription is running": if the room has no
-                       transcriber attached, NOTHING is being captured, and
-                       a bare spinner or a "Listening…" line would be the
-                       same always-on lie the `Listening` refusal exists to
-                       prevent. Both branches below name the condition
-                       plainly and state what the pane will and will not
-                       do. --%>
-                  <p :if={@captions_available} class="text-xs text-base-content/40">
-                    No captions have been received in this call. Lines appear here only while
-                    someone is speaking and the room has a transcriber attached — nothing is
-                    being captured otherwise.
-                  </p>
-                  <p :if={!@captions_available} class="text-xs text-base-content/40">
-                    Captions are unavailable for this meeting, so no transcript lines will
-                    appear here.
-                  </p>
-                </div>
-              <% end %>
+            <%!-- Only the OVERRIDE renders inside the case. The JS-owned
+                 pane is mounted unconditionally below the case, because a
+                 branch that unmounts it on People/Canvas destroys the hook
+                 and with it every line received so far (task 01a06524). --%>
+            <div :if={@transcript != []} class="p-3" data-role="call-rail-transcript">
+              {render_slot(@transcript)}
             </div>
         <% end %>
+
+        <%!-- The transcript pane, mounted ONCE and never unmounted while
+             the rail lives (task 01a06524 stage 1).
+
+             WHY OUTSIDE THE `case`. `meeting:caption` is a client-side DOM
+             CustomEvent; the lines exist only in the DOM the
+             `MeetingTranscript` hook writes. If this host were rendered
+             inside the "transcript" branch, switching to People would
+             remove the element, LiveView would call `destroyed()` on the
+             hook, and switching back would mount a fresh, empty pane —
+             thirty seconds of scrollback gone because the reader glanced
+             at the roster. So the host persists and this OUTER div, which
+             LiveView owns and re-renders freely, carries `hidden` whenever
+             the tab is not Transcript. The flip cannot live on the host
+             itself: under `phx-update="ignore"` non-`data-*` attributes
+             are PRESERVED across renders, so a class change there would
+             never reach the DOM.
+
+             VIEWER-LOCAL STATE, DELIBERATELY NOTHING NEW. The pane renders
+             whenever the Transcript tab is selected and there is no second
+             show/hide toggle: choosing the tab IS the opt-in (Saru's canvas
+             01a068fc, "Three calls"). A separate switch inside a tab that
+             exists to show one thing would be a control with nothing to do.
+             The tab is `:active_meeting_tab`, already per-socket on both
+             surfaces (`meeting_live.ex` and `chat/meeting_hooks.ex`), never
+             broadcast, never persisted — the same viewer-local shape as
+             `:captions_visible`, which remains the OVERLAY's toggle and is
+             a different job (a glance over the video versus reading).
+
+             The explicit `:transcript` slot (an archived transcript) wins:
+             when it is given the JS pane is not mounted at all, since
+             nothing would ever write into it. --%>
+        <div
+          :if={@transcript == []}
+          data-role="meeting-transcript-wrap"
+          data-active={to_string(@active == "transcript")}
+          hidden={@active != "transcript"}
+          class="flex h-full min-h-0 flex-col"
+        >
+          <.transcript_pane id={"#{@id}-transcript"} captions_available={@captions_available} />
+        </div>
       </div>
     </aside>
     """

@@ -47,6 +47,9 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
 
   defp meeting, do: %{id: "m-1", host_participant_id: "u-1"}
 
+  defp count(html, selector),
+    do: html |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> Enum.count()
+
   defp rail(overrides) do
     render_component(
       &CallShell.call_rail/1,
@@ -118,8 +121,10 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       refute canvas =~ ~s(data-section="humans")
       refute transcript =~ ~s(data-section="humans")
 
-      assert transcript =~ ~s(data-role="call-rail-transcript")
-      refute people =~ ~s(data-role="call-rail-transcript")
+      # The transcript pane is NOT swapped — it persists and is hidden
+      # (see the next test). What swaps is the wrap's visibility.
+      assert count(transcript, ~s([data-role="meeting-transcript-wrap"][data-active="true"])) == 1
+      assert count(people, ~s([data-role="meeting-transcript-wrap"][data-active="false"])) == 1
     end
 
     # Task 01a05b14 stage 5. `candidate_rail` renders nothing at all with
@@ -169,29 +174,49 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       refute with_error =~ ~s(call-rail-canvas-empty)
     end
 
-    test "Transcript mounts the JS-owned log with phx-update=ignore" do
-      html = rail(active_tab: "transcript")
-
+    test "Transcript mounts the JS-owned pane with phx-update=ignore, once, on every tab" do
       # `meeting:caption` is a client-side DOM CustomEvent that never
       # reaches the server, so the lines are appended by the
       # `MeetingTranscript` hook. Without `phx-update="ignore"` the next
       # LiveView patch would morphdom them away mid-call.
-      assert html =~ ~s(data-role="call-rail-transcript-log")
-      assert html =~ ~s(phx-hook="MeetingTranscript")
-      assert html =~ ~s(phx-update="ignore")
+      #
+      # And the host is present on EVERY tab (count == 1, never 0). This
+      # replaces the earlier "toggling adds/removes the host" contract on
+      # purpose: a removed host is a destroyed hook, and a destroyed hook
+      # is a lost buffer. The People tab must not cost the reader their
+      # scrollback. What flips is `hidden` on the OUTER wrap LiveView
+      # owns, because under `phx-update="ignore"` a class or `hidden`
+      # change on the host itself never reaches the DOM (task 01a06524).
+      for tab <- ~w(people canvas transcript) do
+        html = rail(active_tab: tab)
+
+        assert count(html, ~s([data-role="meeting-transcript"])) == 1, tab
+
+        assert count(
+                 html,
+                 ~s([data-role="meeting-transcript"][phx-hook="MeetingTranscript"][phx-update="ignore"])
+               ) == 1,
+               tab
+
+        assert count(html, ~s([phx-hook="MeetingTranscript"])) == 1, tab
+        assert count(html, ~s([data-role="meeting-transcript-wrap"])) == 1, tab
+
+        hidden = count(html, ~s([data-role="meeting-transcript-wrap"][hidden]))
+        assert hidden == if(tab == "transcript", do: 0, else: 1), tab
+      end
     end
 
     test "the empty state names the condition and cannot be read as 'transcription is running'" do
       html = rail(active_tab: "transcript")
 
-      assert html =~ "No captions have been received in this call."
+      assert html =~ "No speech yet. Lines appear here as people talk."
 
       # The refusal, stated as a test rather than a comment: this pane
       # must never imply a transcriber is attached when none is. Those
       # words are the always-on lie the `Listening` refusal exists to
       # prevent, and a future edit that reaches for them fails here.
-      refute html =~ "Listening"
-      refute html =~ "Transcribing"
+      refute html =~ ~r/listening/i
+      refute html =~ ~r/transcribing/i
       refute html =~ "Waiting for speech"
     end
 
@@ -202,11 +227,11 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       # DIRECTION CONTROL: the two branches are genuinely different text,
       # so the assertion below is about the flag and not about a string
       # that is present either way.
-      assert available =~ "No captions have been received in this call."
+      assert available =~ "No speech yet. Lines appear here as people talk."
       refute available =~ "Captions are unavailable for this meeting"
 
       assert unavailable =~ "Captions are unavailable for this meeting"
-      refute unavailable =~ "No captions have been received in this call."
+      refute unavailable =~ "No speech yet."
     end
 
     test "an explicit transcript slot wins over the JS-owned pane" do
@@ -225,7 +250,9 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
         )
 
       assert html =~ "ARCHIVED TRANSCRIPT"
+      assert html =~ ~s(data-role="call-rail-transcript")
       refute html =~ ~s(phx-hook="MeetingTranscript")
+      refute html =~ ~s(data-role="meeting-transcript-wrap")
     end
   end
 

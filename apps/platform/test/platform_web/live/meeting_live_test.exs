@@ -6913,7 +6913,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # clicking through from the default mount.
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=transcript")
 
-      assert count(html, ~s([data-role="call-rail-transcript-log"])) == 1
+      assert count(html, ~s([data-role="meeting-transcript"])) == 1
 
       # The container is hook-owned and morphdom-exempt: `meeting:caption`
       # is a client-side DOM CustomEvent that never reaches the server, so
@@ -6921,7 +6921,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # without `phx-update="ignore"` would erase the transcript mid-call.
       assert count(
                html,
-               ~s([data-role="call-rail-transcript-log"][phx-hook="MeetingTranscript"][phx-update="ignore"])
+               ~s([data-role="meeting-transcript"][phx-hook="MeetingTranscript"][phx-update="ignore"])
              ) == 1
 
       # Honest empty state. The test env has no LiveKit configured — the
@@ -6933,6 +6933,41 @@ defmodule PlatformWeb.MeetingLiveTest do
       # rather than hardcoding the optimistic branch.
       assert html =~ "Captions are unavailable for this meeting"
       refute html =~ "Listening"
+    end
+
+    # Task 01a06524 stage 1. This REPLACES the "toggling adds/removes
+    # `[data-role=meeting-transcript]`" contract the ticket first asked
+    # for, deliberately: a host that leaves the DOM on People is a hook
+    # LiveView destroys, and a destroyed hook is the whole buffer gone
+    # because the reader glanced at the roster. So the host is present
+    # exactly once in BOTH tab states and what flips is `hidden` on the
+    # outer wrap LiveView owns (under `phx-update="ignore"` a flip on the
+    # host itself would never reach the DOM). What this cannot prove is
+    # that the browser keeps the lines across the flip — that is the
+    # e2e's job, in a real DOM under morphdom.
+    test "the transcript host persists across meeting_tab_select and only the wrap hides", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      transcript = render_click(view, "meeting_tab_select", %{"tab" => "transcript"})
+      assert count(transcript, ~s([data-role="meeting-transcript"])) == 1
+      assert count(transcript, ~s([phx-hook="MeetingTranscript"])) == 1
+      assert count(transcript, ~s([data-role="meeting-transcript-wrap"][data-active="true"])) == 1
+      assert count(transcript, ~s([data-role="meeting-transcript-wrap"][hidden])) == 0
+
+      people = render_click(view, "meeting_tab_select", %{"tab" => "people"})
+      assert count(people, ~s([data-role="meeting-transcript"])) == 1
+      assert count(people, ~s([phx-hook="MeetingTranscript"])) == 1
+
+      assert count(people, ~s([data-role="meeting-transcript-wrap"][data-active="false"][hidden])) ==
+               1
+
+      # And back: still the one host, revealed again.
+      again = render_click(view, "meeting_tab_select", %{"tab" => "transcript"})
+      assert count(again, ~s([data-role="meeting-transcript"])) == 1
+      assert count(again, ~s([data-role="meeting-transcript-wrap"][hidden])) == 0
     end
 
     test "the candidate rail lives in the Canvas pane, once", %{
