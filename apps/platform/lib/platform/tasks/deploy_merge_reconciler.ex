@@ -36,6 +36,21 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   observation. Deploy completion is a separate fact that this module does not
   claim to have.
 
+  ## A merge must POSTDATE the stage it is offered as evidence for
+
+  `gh pr list --head` looks backwards over all time, so "a PR from this
+  branch merged" is not the same claim as "a PR from this branch merged for
+  this stage". Until task 01a06d6d this module conflated them and passed
+  gates on merges hours older than the stage that minted them; see
+  `merge_postdates_stage?/2` for the live specimen and the reasoning. A merge
+  whose time is unknown, unparseable, or not strictly after the stage's
+  `started_at` leaves the gate pending at `warning` — it is never a failure,
+  and never a pass.
+
+  This bounds WHEN, not WHAT: it does not establish that the merged commit
+  contains this stage's work. That containment check is separate, and is not
+  in this module today.
+
   ## It never merges
 
   `MergeRunner` has no merge callback and this module never asks for one.
@@ -60,8 +75,8 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   ## The transitional refusal branch, and how to know when it can go
 
-  `ask/5` splits on whether the gate RECORDS a deploy branch. A gate minted
-  before `DeployStageBuilder.repo_validation/2` began writing `"branch"`
+  `ask/7` splits on whether the gate RECORDS a deploy branch. A gate minted
+  before `DeployStageBuilder.repo_validation/3` began writing `"branch"`
   does not, and `refuse/2` leaves it pending at `warning` rather than
   guessing a name. That branch is transitional and its population is
   bounded: gates with a nil payload were never this sweeper's business, and
@@ -75,7 +90,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   one `info` per sweep naming the count while it is non-zero — the
   condition announces itself rather than waiting to be queried. When it
   reaches zero and stays there, `refuse/2` and the `present?/1` split in
-  `ask/5` can be deleted along with the tests that pin them.
+  `ask/7` can be deleted along with the tests that pin them.
 
   ### It counts what the sweeper REFUSES, not what lacks a key
 
@@ -258,7 +273,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   end
 
   # `present?/1` and not `Map.has_key?/2`, deliberately — this must agree
-  # with what `ask/5` refuses, or the zero it reports is about a different
+  # with what `ask/7` refuses, or the zero it reports is about a different
   # set than the branch it licenses deleting. A nil payload is a legacy
   # unscoped row and was never in scope.
   defp unrecorded_branch?(%Validation{evaluation_payload: payload}) when is_map(payload),
@@ -269,7 +284,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   @doc """
   Whether a gate's `evaluation_payload` RECORDS a deploy branch.
 
-  The one predicate three call sites share: `ask/5`'s split between
+  The one predicate three call sites share: `ask/7`'s split between
   polling and `refuse/2`, `unrecorded_branch_gates/0`'s count, and
   `mix suite.deploy.scope_gate`'s refusal to overwrite a fact that is
   already written down.
@@ -433,7 +448,13 @@ defmodule Platform.Tasks.DeployMergeReconciler do
         where: v.status == "pending",
         where: s.status == "running",
         order_by: [asc: s.position, asc: v.inserted_at],
-        select: %{validation: v, task: t, plan_id: p.id}
+        # The stage rides along on the JOIN this query already performs.
+        # `poll/7` needs its `started_at` to decide whether an observed merge
+        # postdates the gate, and selecting it here keeps that a property of
+        # the row `candidates/0` hands out rather than a second lookup that
+        # could disagree about which stage owns the gate — and avoids adding
+        # a `Repo.get` on an id this query already resolved.
+        select: %{validation: v, task: t, plan_id: p.id, stage: s}
       )
 
     query
@@ -468,27 +489,29 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   # ── One gate ────────────────────────────────────────────────────────────
 
-  defp reconcile(%{validation: validation}, runner) do
+  defp reconcile(%{validation: validation, stage: stage}, runner) do
     case gate_repo(validation) do
       :skip ->
         0
 
-      {:ok, %{target: target, slug: slug, branch: branch}} ->
-        ask(runner, validation, branch, target, slug)
+      {:ok, %{target: target, slug: slug, branch: branch, branch_tip_sha: tip}} ->
+        ask(runner, validation, branch, target, slug, stage, tip)
     end
   end
 
-  # The branch is READ from the gate. `ask/5` no longer takes the task,
-  # because there is nothing left to compute from it.
-  defp ask(runner, validation, branch, target, slug) do
+  # The branch is READ from the gate. `ask/7` no longer takes the task,
+  # because there is nothing left to compute from it. It does take the STAGE,
+  # which is not a derivation but a fact the gate is scoped to — see
+  # `merge_postdates_stage?/2`.
+  defp ask(runner, validation, branch, target, slug, stage, tip) do
     if present?(branch) do
-      poll(runner, validation, branch, target, slug)
+      poll(runner, validation, branch, target, slug, stage, tip)
     else
       refuse(validation, slug)
     end
   end
 
-  # A scoped gate minted before `DeployStageBuilder.repo_validation/2` began
+  # A scoped gate minted before `DeployStageBuilder.repo_validation/3` began
   # recording the branch. Deriving one here is the thing this module stopped
   # doing, and the reason is not style:
   #
@@ -522,7 +545,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
     0
   end
 
-  defp poll(runner, validation, branch, target, slug) do
+  defp poll(runner, validation, branch, target, slug, stage, tip) do
     case runner.merged_pr(%{repo: target, branch: branch}) do
       {:ok, nil} ->
         # `debug` deliberately. This fires every five minutes for every open
@@ -538,7 +561,16 @@ defmodule Platform.Tasks.DeployMergeReconciler do
         0
 
       {:ok, pr} ->
-        pass(validation, slug, pr, branch)
+        cond do
+          not merge_postdates_stage?(pr, stage) ->
+            pend_stale(validation, slug, pr, branch, stage)
+
+          not merge_carries_reviewed_tree?(pr, tip) ->
+            pend_wrong_tree(validation, slug, pr, branch, tip)
+
+          true ->
+            pass(validation, slug, pr, branch)
+        end
 
       # A failed question is not a "no". Leave the gate pending and say so
       # above `debug` — an unreachable GitHub is an operator-visible
@@ -553,12 +585,200 @@ defmodule Platform.Tasks.DeployMergeReconciler do
     end
   end
 
+  # ── Is this merge evidence for THIS stage? ──────────────────────────────
+
+  # `{:ok, pr}` answers "a PR from this branch merged". It does NOT answer "a
+  # PR from this branch merged FOR THIS STAGE", and until task 01a06d6d this
+  # module read the first as if it were the second.
+  #
+  # `gh pr list --head` looks BACKWARDS over all time. A branch that already
+  # shipped — a previous plan version, an earlier deploy stage on the same
+  # task, a re-run after a revert — answers every subsequent poll with the
+  # same historical merge, forever. Measured live 2026-09-04: validation
+  # `01a06d69-7ece-7001-a61f-dd7349436391` passed at 17:14:03Z on a stage
+  # whose `started_at` was 17:13:45Z, citing PR #919 merged at 14:33:13Z — a
+  # merge two hours and forty minutes older than the gate it was accepted as
+  # evidence for. The task reached `done` with its reviewed code not on main.
+  #
+  # This is `refuse/2`'s harm arriving by a different route. There, a DERIVED
+  # BRANCH NAME attributes a merge to the wrong branch; here, a correctly
+  # recorded branch attributes the wrong MERGE. "A wrong attribution is
+  # strictly worse than no attribution" (changelog.ex:253-262) decides both
+  # the same way: hang the gate visibly rather than mark unmerged code as
+  # shipped.
+  #
+  # The webhook path needs no equivalent. `GithubWebhookController` matches
+  # pending gates at the moment a PR closes, so it can only pass a gate that
+  # already exists — the ordering is a property of WHEN it runs. This module
+  # is the only one that looks backwards, which is why it is the only one
+  # with the hole.
+  #
+  # ## Nil and unparseable fail CLOSED
+  #
+  # `MergeRunner`'s `merged_pr` typedoc: "Every field except `:number` may be
+  # `nil`". So `merged_at` is a `String.t() | nil` from `gh`, and an absent or
+  # malformed one cannot be SHOWN to postdate the stage. Unknown is therefore
+  # not-after, not maybe-after: admitting unknown would reinstate this entire
+  # defect for any merge method that returns a null timestamp. A `nil`
+  # `started_at` folds into the same clause for the same reason — a stage we
+  # cannot date is a comparison we cannot make.
+  #
+  # STRICTLY after. A merge stamped at exactly the stage's `started_at` is not
+  # evidence the stage caused it, and equality here is far likelier to be a
+  # truncated timestamp than a real simultaneity.
+  defp merge_postdates_stage?(%{merged_at: merged_at}, %Stage{started_at: %DateTime{} = started}) do
+    case parse_merged_at(merged_at) do
+      {:ok, merged} -> DateTime.compare(merged, started) == :gt
+      :error -> false
+    end
+  end
+
+  defp merge_postdates_stage?(_pr, _stage), do: false
+
+  defp parse_merged_at(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, merged, _offset} -> {:ok, merged}
+      {:error, _reason} -> :error
+    end
+  end
+
+  defp parse_merged_at(_value), do: :error
+
+  # ── Is this merge THE TREE the gate was minted for? ─────────────────────
+
+  # The ordering check above is a PROXY. It proves a merge is recent enough
+  # to be plausible; it does not prove the merge carried the reviewed work.
+  # A force-push onto the task branch, followed by a PR merging seconds after
+  # the deploy stage opened, satisfies ordering exactly and ships a tree
+  # nobody looked at. This is the check that pins the real invariant:
+  #
+  #     the tip the gate was minted for == the tip the PR merged
+  #
+  # `branch_tip_sha` is written by `DeployStageBuilder.repo_validation/3` at
+  # the instant the deploy stage is injected, which is the instant the last
+  # review stage passed. `head_sha` is GitHub's `headRefOid` on the merged
+  # PR. Equal means the reviewed commit is what went in.
+  #
+  # ## Why this is an EQUALITY and not an ancestry test
+  #
+  # `git merge-base --is-ancestor` is the obvious expression of "the merge
+  # contains the reviewed commit" and it is WRONG here, in both directions,
+  # because `main` squash-merges:
+  #
+  #   * `--is-ancestor <branch tip> main` is FALSE for a branch that shipped
+  #     perfectly — the squash created a new commit and the branch tip never
+  #     becomes an ancestor of main. Used as the check, it hangs every
+  #     correct deploy.
+  #   * `--is-ancestor <the cited merge commit> main` is TRUE for ANY commit
+  #     that has ever merged, the stale PR #919 that caused this ticket
+  #     included. Used as the check, it certifies the exact defect.
+  #
+  # Comparing two branch tips asks git nothing, needs no clone, and cannot be
+  # confused by the merge method. That is why it is the discriminator.
+  #
+  # ## Absent on either side falls THROUGH — deliberately
+  #
+  # This is the one fail-SOFT decision in the feature, and it is opposite to
+  # how `merge_postdates_stage?/2` handles a nil, so it is worth saying why.
+  #
+  # A nil `merged_at` is a fact GitHub declined to give about a merge it says
+  # happened; admitting it would reinstate the whole defect for any merge
+  # method that returns a null timestamp, and the safe reading of "unknown"
+  # there is "not after".
+  #
+  # A nil tip is different in kind. `branch_tip_sha` is absent for every gate
+  # minted before this change, and `head_sha` is null for some merge methods
+  # and older PRs. Reading either as "the trees differ" would hang every
+  # pre-existing live deploy in the system at once — the population is not a
+  # narrow window here, it is every gate open right now. `refuse/2`'s comment
+  # settles this class of question the same way: the harm of stranding live
+  # deploys outweighs a narrower check, so the gate keeps the ordering check
+  # it already had and loses only the strengthening. A gate that falls
+  # through is no weaker than it was before this stage existed.
+  #
+  # The absence is not silent: `BranchProvisioner.branch_tip_shas/3` logs a
+  # `warning` naming the repository whenever it cannot resolve a tip, so a
+  # gate that will only ever get the ordering check says so when it is minted
+  # rather than at the moment it matters.
+  defp merge_carries_reviewed_tree?(%{head_sha: head_sha}, tip)
+       when is_binary(head_sha) and is_binary(tip) do
+    trimmed_head = String.trim(head_sha)
+    trimmed_tip = String.trim(tip)
+
+    # Blank on either side is an absent value wearing a string, and must fall
+    # through with the nils rather than compare unequal — otherwise a payload
+    # written as `""` by any future path hangs the gate forever with no
+    # operator-legible reason.
+    if trimmed_head == "" or trimmed_tip == "" do
+      true
+    else
+      trimmed_head == trimmed_tip
+    end
+  end
+
+  defp merge_carries_reviewed_tree?(_pr, _tip), do: true
+
+  # `warning`, and for the same reason as `pend_stale/5`: a merge the sweeper
+  # found but will not accept is not the routine answer, it is a deploy that
+  # now hangs until an operator looks. Both shas are in the line because the
+  # single most useful thing an operator can do with this message is compare
+  # them by eye — one is the commit the review passed on, the other is what
+  # actually merged, and knowing WHICH tree shipped is the entire question.
+  defp pend_wrong_tree(validation, slug, pr, branch, tip) do
+    Logger.warning(
+      "[deploy_merge_reconciler] #{slug} PR ##{pr.number} for #{branch} merged head " <>
+        "#{inspect(pr.head_sha)}, but this gate was minted for branch tip #{inspect(tip)}; " <>
+        "the merge did not carry the reviewed tree, so leaving validation " <>
+        "#{validation.id} pending. This is what a force-push after review looks like. " <>
+        "Re-review the branch as it now stands rather than passing the gate by hand."
+    )
+
+    0
+  end
+
+  # `warning`, matching `refuse/2` and NOT the `{:ok, nil}` branch's `debug`.
+  # "No merged PR yet" is the routine answer for every open gate on every
+  # five-minute tick and would drown the log. A merge this sweeper found but
+  # cannot attribute is not routine: it means the branch is in a state the
+  # gate cannot vouch for, and the deploy will now hang until an operator
+  # looks. Both facts belong in the line, so it names the validation, the
+  # branch, the PR, the merge time it was given and the stage time it failed
+  # against.
+  defp pend_stale(validation, slug, pr, branch, stage) do
+    Logger.warning(
+      "[deploy_merge_reconciler] #{slug} PR ##{pr.number} for #{branch} reports merged_at " <>
+        "#{inspect(pr.merged_at)}, which is not strictly after the stage's started_at " <>
+        "#{stage_started_display(stage)}; refusing to attribute a merge this gate cannot " <>
+        "have caused and leaving validation #{validation.id} pending. An unknown or " <>
+        "unparseable merge time counts as not-after. If this merge really is the deploy, " <>
+        "pass the gate by hand with the evidence rather than widening this check."
+    )
+
+    0
+  end
+
+  # ISO8601 and not `inspect/1`, so the two timestamps in that line are
+  # comparable by eye and greppable by the same shape. `~U[…]` next to a
+  # quoted ISO8601 string invites a misreading of which one is older.
+  defp stage_started_display(%Stage{started_at: %DateTime{} = started_at}),
+    do: DateTime.to_iso8601(started_at)
+
+  defp stage_started_display(_stage), do: "nil (the stage records no start time)"
+
   defp pass(validation, slug, pr, branch) do
     evidence = %{
       "pr_url" => pr.url,
       "pr_number" => pr.number,
       "merged_at" => pr.merged_at,
       "merge_commit_sha" => pr.merge_commit_sha,
+      # The tree, next to the merge commit. Under a squash merge
+      # `merge_commit_sha` is a NEW commit on the base and shares no sha with
+      # anything the branch held, so it cannot answer "which work shipped?".
+      # `head_sha` can. Recorded for the same reason as `observed_by`: the
+      # question "what did this gate actually accept?" has to stay answerable
+      # from the evidence alone, months later, without re-asking GitHub about
+      # a PR whose branch may no longer exist.
+      "head_sha" => Map.get(pr, :head_sha),
       "repo" => slug,
       # The provenance key. A webhook-passed gate does not carry this, so
       # "was this merge pushed to us or did we go looking?" stays answerable
@@ -592,20 +812,26 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   # ── Reading the gate ────────────────────────────────────────────────────
 
-  # `DeployStageBuilder.repo_validation/1` writes BOTH `"repo"` (canonical
+  # `DeployStageBuilder.repo_validation/3` writes BOTH `"repo"` (canonical
   # slug, what the webhook matcher compares on) and `"repo_url"` (what the
   # human declared). `gh -R` is handed the URL, matching
   # `AutoMerger.execute_merge/3`; the slug is what lands in evidence, so the
   # polled and delivered paths agree on how a repository is named.
   #
   # `"branch"` is read the same way and deliberately NOT defaulted: absent
-  # and present-but-empty both have to reach `ask/5` as "not recorded", so the
+  # and present-but-empty both have to reach `ask/7` as "not recorded", so the
   # refusal is what decides, rather than a default quietly standing in for a
   # fact nobody wrote down.
+  #
+  # `"branch_tip_sha"` is read here too and NOT defaulted either, but it
+  # decides the opposite way — absent means "fall back to the ordering check",
+  # not "refuse". See `merge_carries_reviewed_tree?/2` for why the two keys
+  # get opposite treatment.
   defp gate_repo(%Validation{evaluation_payload: payload}) when is_map(payload) do
     repo_url = Map.get(payload, "repo_url")
     slug = Map.get(payload, "repo") || Platform.Tasks.RepoRef.slug(repo_url)
     branch = Map.get(payload, "branch")
+    branch_tip_sha = Map.get(payload, "branch_tip_sha")
 
     cond do
       # A gate with no canonical slug is a DECLARED repository whose URL
@@ -617,10 +843,10 @@ defmodule Platform.Tasks.DeployMergeReconciler do
         :skip
 
       present?(repo_url) ->
-        {:ok, %{target: repo_url, slug: slug, branch: branch}}
+        {:ok, %{target: repo_url, slug: slug, branch: branch, branch_tip_sha: branch_tip_sha}}
 
       true ->
-        {:ok, %{target: slug, slug: slug, branch: branch}}
+        {:ok, %{target: slug, slug: slug, branch: branch, branch_tip_sha: branch_tip_sha}}
     end
   end
 
@@ -648,7 +874,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   # past. Only recording the name at mint time does that.
   #
   # So the branch is now READ from the gate — `DeployStageBuilder`
-  # `repo_validation/2` writes it when the deploy stage is built (stage 1 of
+  # `repo_validation/3` writes it when the deploy stage is built (stage 1 of
   # this plan) and `gate_repo/1` reads it back. When it is absent the sweeper
   # refuses rather than guessing; see `refuse/2`.
   #

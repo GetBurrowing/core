@@ -1,9 +1,9 @@
 defmodule Platform.Tasks.BranchProvisioner.GhRunner do
   @moduledoc """
-  Default `Platform.Tasks.BranchProvisioner.Runner` — three `gh api` calls.
+  Default `Platform.Tasks.BranchProvisioner.Runner` — `gh api` calls only.
 
       gh api repos/<owner>/<name>                       # default_branch
-      gh api repos/<owner>/<name>/git/ref/heads/<b>     # its head sha
+      gh api repos/<owner>/<name>/git/ref/heads/<b>     # a branch's head sha
       gh api repos/<owner>/<name>/git/matching-refs/... # existence
       gh api -X POST repos/<owner>/<name>/git/refs      # create
       gh api repos/<owner>/<name>/compare/<base>...<head>  # divergence
@@ -34,6 +34,34 @@ defmodule Platform.Tasks.BranchProvisioner.GhRunner do
       {:error, _, _} = err -> err
       {:error, _} = err -> err
       other -> {:error, {:unexpected_response, other}}
+    end
+  end
+
+  @impl true
+  def branch_head_sha(%{repo: repo, branch: branch}) do
+    # The same endpoint `default_branch_sha/1` finishes on, asked directly
+    # about a named branch. `git/ref/heads/<b>` is an EXACT-ref lookup and
+    # 404s on a miss, unlike `matching-refs`, which prefix-matches and would
+    # answer `task/019f` for `task/019fb9c5-…`.
+    case api(["api", "repos/#{repo}/git/ref/heads/#{branch}"]) do
+      {:ok, %{"object" => %{"sha" => sha}}} when is_binary(sha) ->
+        {:ok, sha}
+
+      {:error, {:gh_error, output}} ->
+        if String.contains?(output, "Not Found") do
+          {:error, :ref_not_found}
+        else
+          {:error, {:gh_error, output}}
+        end
+
+      {:error, _, _} = err ->
+        err
+
+      {:error, _} = err ->
+        err
+
+      other ->
+        {:error, {:unexpected_response, other}}
     end
   end
 

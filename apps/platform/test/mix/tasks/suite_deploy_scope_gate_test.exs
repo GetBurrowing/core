@@ -95,7 +95,15 @@ defmodule Mix.Tasks.Suite.Deploy.ScopeGateTest do
      %{
        number: number,
        url: "https://github.com/#{@bridge}/pull/#{number}",
-       merged_at: "2026-07-31T12:09:00Z",
+       # Computed, not pinned. Since task 01a06d6d the reconciler passes a
+       # gate only on a merge that POSTDATES the stage's `started_at`, and
+       # every fixture in this file starts its deploy stage at test time — so
+       # the literal `"2026-07-31T12:09:00Z"` this used to carry now describes
+       # a STALE merge, and made "the same sweep returns 1 after the command"
+       # measure the ordering check rather than the scoping the command does.
+       # One second, not zero: the comparison is strict and both timestamps
+       # are microsecond-precision, so a same-instant tie reads as not-after.
+       merged_at: DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.to_iso8601(),
        merge_commit_sha: "326d2b08" <> String.duplicate("a", 32)
      }}
   end

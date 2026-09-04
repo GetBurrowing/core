@@ -43,12 +43,25 @@ defmodule Platform.Tasks.DeployMergeReconciler.MergeRunner do
   A merged pull request. Every field except `:number` may be `nil` — GitHub
   returns a null `mergeCommit` for some merge methods, and the reconciler
   records what it was given rather than inventing a SHA.
+
+  `:head_sha` is `headRefOid`: the commit at the tip of the PR's HEAD branch,
+  i.e. the tree this PR actually merged. It is the field that answers "which
+  work did this merge carry?", which `:merge_commit_sha` does not — under a
+  squash merge the merge commit is a NEW commit on the base and shares no sha
+  with anything the branch ever held.
+
+  It is `nil` under the same rule as the others: some merge methods and some
+  older PRs answer a null `headRefOid`, and a fabricated sha in deploy
+  evidence is worse than an absent one. `DeployMergeReconciler.poll/7` treats
+  an absent `:head_sha` as "this question was not answered", not as "the
+  trees differ".
   """
   @type merged_pr :: %{
           required(:number) => pos_integer(),
           required(:url) => String.t() | nil,
           required(:merged_at) => String.t() | nil,
-          required(:merge_commit_sha) => String.t() | nil
+          required(:merge_commit_sha) => String.t() | nil,
+          required(:head_sha) => String.t() | nil
         }
 
   @doc """

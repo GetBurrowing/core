@@ -18,6 +18,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
           "repo" => "Startup-Suite/core",   # canonical slug, or nil
           "repo_url" => "https://github.com/Startup-Suite/core",
           "branch" => "task/019fba18-d074-7185-8e0e-032ee6d02fbe",
+          "branch_tip_sha" => "9fcec268…" | nil,
           "ci" => "required" | "none",
           "auto_merge" => boolean(),
           "merge_method" => "squash" | "merge" | "rebase"
@@ -27,7 +28,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
 
   The gate records the branch this task pushes, supplied by the caller
   (`PlanEngine`, from `StackDeployer.member_branch_for/1`) as the REQUIRED
-  third argument to `build_stage/3`. Every scoped gate on one stage carries
+  third argument to `build_stage/4`. Every scoped gate on one stage carries
   the SAME value — one branch, N repositories.
 
   It is recorded rather than re-derived downstream because the derivation is
@@ -118,13 +119,13 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # ── Public API ─────────────────────────────────────────────────────────
 
   @doc """
-  The name prefix every stage built by `build_stage/3` carries.
+  The name prefix every stage built by `build_stage/4` carries.
   """
   @spec deploy_stage_name_prefix() :: String.t()
   def deploy_stage_name_prefix, do: @deploy_stage_name_prefix
 
   @doc """
-  Whether `name` is a stage name minted by `build_stage/3`.
+  Whether `name` is a stage name minted by `build_stage/4`.
 
   Deliberately an EXACT, case-sensitive prefix match — not a substring search.
   `TaskRouter.infer_stage_type/1` does the substring thing on the same field
@@ -146,6 +147,19 @@ defmodule Platform.Tasks.DeployStageBuilder do
   re-deriving a name that is a UUIDv7 time bucket rather than an identifier;
   see the moduledoc. Required, so a call site cannot omit it silently.
 
+  `branch_tip_shas` is `%{canonical_slug => sha}` — the tip each repository's
+  copy of `branch` stood at when this stage was minted, resolved by the
+  caller (`PlanEngine`, via `BranchProvisioner.branch_tip_shas/3`) so the
+  builder still touches no `Repo` and makes no network call.
+
+  It DEFAULTS to `%{}`, unlike `branch`, and the asymmetry is deliberate.
+  Omitting `branch` makes a consumer DERIVE one, and a derived branch name
+  attributes a merge to the wrong branch — strictly worse than no
+  attribution. Omitting a tip attributes nothing: the gate falls back to the
+  merge-ordering check alone, which is exactly what every gate minted before
+  this key existed does. The safe direction is a default; the unsafe one is
+  not.
+
   Returns a map with `:name`, `:description`, `:position`, and `:validations`,
   or `:skip` if the strategy type is `"none"` or `"no_op_wait_for_rollup"`
   (bug #5 — stack members ship via the stack-level rollup PR, not a
@@ -162,10 +176,11 @@ defmodule Platform.Tasks.DeployStageBuilder do
       iex> DeployStageBuilder.build_stage(%{"type" => "no_op_wait_for_rollup"}, 3, "task/019fba18-d074-7185-8e0e-032ee6d02fbe")
       :skip
   """
-  @spec build_stage(map(), pos_integer(), String.t()) :: map() | :skip
-  def build_stage(strategy, position, branch)
+  @spec build_stage(map(), pos_integer(), String.t(), %{String.t() => String.t()}) ::
+          map() | :skip
+  def build_stage(strategy, position, branch, branch_tip_shas \\ %{})
 
-  def build_stage(%{"type" => "none"}, _position, _branch), do: :skip
+  def build_stage(%{"type" => "none"}, _position, _branch, _tips), do: :skip
 
   # Bug #5 (task 019f708f): stack members with a live rollup branch
   # get `no_op_wait_for_rollup` from `Tasks.resolve_deploy_strategy/1`.
@@ -174,9 +189,9 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # would either open a shattering PR (if we materialized `pr_merge`)
   # or dispatch a deploy subagent that has nothing to do (if we
   # materialized a stage_complete-only stage). Skipping is safer.
-  def build_stage(%{"type" => "no_op_wait_for_rollup"}, _position, _branch), do: :skip
+  def build_stage(%{"type" => "no_op_wait_for_rollup"}, _position, _branch, _tips), do: :skip
 
-  def build_stage(%{"type" => "pr_merge"} = strategy, position, branch) do
+  def build_stage(%{"type" => "pr_merge"} = strategy, position, branch, tips) do
     config = Map.get(strategy, "config", %{})
 
     case Map.get(strategy, "repos") do
@@ -187,7 +202,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
           name: "Deploy: PR merge",
           description: pr_merge_description(config, entries),
           position: position,
-          validations: Enum.map(entries, &repo_validation(&1, branch))
+          validations: Enum.map(entries, &repo_validation(&1, branch, tips))
         }
 
       # No declared repo set. `Tasks.resolve_deploy_strategy_with_repos/1`
@@ -220,7 +235,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     end
   end
 
-  def build_stage(%{"type" => "docker_deploy"} = strategy, position, _branch) do
+  def build_stage(%{"type" => "docker_deploy"} = strategy, position, _branch, _tips) do
     config = Map.get(strategy, "config", %{})
 
     %{
@@ -231,7 +246,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
-  def build_stage(%{"type" => "fly"} = strategy, position, _branch) do
+  def build_stage(%{"type" => "fly"} = strategy, position, _branch, _tips) do
     config = Map.get(strategy, "config", %{})
 
     %{
@@ -242,7 +257,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
-  def build_stage(%{"type" => "skill_driven"} = strategy, position, _branch) do
+  def build_stage(%{"type" => "skill_driven"} = strategy, position, _branch, _tips) do
     config = Map.get(strategy, "config", %{})
     skill_id = Map.get(strategy, "skill_id")
 
@@ -254,7 +269,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
-  def build_stage(%{"type" => "manual"} = _strategy, position, _branch) do
+  def build_stage(%{"type" => "manual"} = _strategy, position, _branch, _tips) do
     %{
       name: "Deploy: Manual",
       description:
@@ -265,7 +280,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
-  def build_stage(%{"type" => "project_files"} = strategy, position, _branch) do
+  def build_stage(%{"type" => "project_files"} = strategy, position, _branch, _tips) do
     config = Map.get(strategy, "config", %{})
 
     # `test_pass` is the canonical success/failure signal for auto-invoked
@@ -499,13 +514,45 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # VALIDATION: `DeployMergeReconciler.candidates/0` selects validations and
   # `gate_repo/1` reads `evaluation_payload`. A stage-level home would need a
   # second lookup on a table the sweeper does not otherwise touch.
-  defp repo_validation(gate, branch) do
+  # ## `"branch_tip_sha"` — WHICH TREE the gate was minted for
+  #
+  # `"branch"` says which branch to watch. It does not say which WORK, and
+  # `gh pr list --head` looks backwards over all time, so a branch that
+  # already shipped answers every later poll with the same historical merge.
+  # Stage 1 of task 01a06d6d narrowed that with an ordering check — the merge
+  # must postdate the stage — but ordering is a proxy: a force-push followed
+  # by a PR merging seconds after the stage opens satisfies it and still ships
+  # a tree nobody reviewed.
+  #
+  # This records the sha the branch stood at WHEN THE GATE WAS MINTED, which
+  # is the commit the review stages passed on. `DeployMergeReconciler.poll/7`
+  # requires it to equal the merged PR's `headRefOid`. That equality is the
+  # discriminator, and it is deliberately NOT a git ancestry test: main
+  # squash-merges here, so `merge-base --is-ancestor <branch tip> main` is
+  # false even for a branch that shipped correctly, while the same test
+  # against the cited merge commit is true for any commit that ever merged —
+  # including the stale PR that caused this ticket. Both directions lie, in
+  # opposite directions. Comparing two branch tips asks git nothing.
+  #
+  # Per-repo lookup, from a map keyed by canonical slug: one branch NAME
+  # lands in N repositories as N unrelated refs with N unrelated tips (see
+  # `BranchProvisioner.branch_tip_shas/3`). A stage-wide sha would match one
+  # repository and hang the others.
+  #
+  # `nil` is written, not omitted, when the tip could not be resolved — a
+  # `gh` that flaked, a branch nobody pushed yet, a repository we cannot
+  # read. The reconciler treats nil and absent identically (fall through to
+  # the ordering check), so this is a record of "we looked and got nothing"
+  # rather than a second meaning; the key's presence keeps a minted-today
+  # gate distinguishable from a genuinely legacy one at a glance.
+  defp repo_validation(gate, branch, tips) do
     %{
       kind: "pr_merged",
       evaluation_payload: %{
         "repo" => gate.slug,
         "repo_url" => gate.repo_url,
         "branch" => branch,
+        "branch_tip_sha" => Map.get(tips, gate.slug),
         "ci" => gate.ci,
         "auto_merge" => gate.auto_merge,
         "merge_method" => gate.merge_method

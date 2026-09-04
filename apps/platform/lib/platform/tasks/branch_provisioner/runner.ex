@@ -2,10 +2,11 @@ defmodule Platform.Tasks.BranchProvisioner.Runner do
   @moduledoc """
   The GitHub seam `Platform.Tasks.BranchProvisioner` calls.
 
-  Three operations, all scoped to git refs on ONE repository:
+  Five operations, all scoped to git refs on ONE repository:
 
     * `default_branch_sha/1` — the head commit of the repository's default
       branch, the base a new task branch is cut from.
+    * `branch_head_sha/1` — the head commit of ONE named branch.
     * `list_matching_refs/1` — does a ref with this exact name already
       exist?
     * `create_ref/1` — create it.
@@ -31,6 +32,29 @@ defmodule Platform.Tasks.BranchProvisioner.Runner do
   """
   @callback default_branch_sha(%{repo: repo()}) ::
               {:ok, String.t()} | {:error, atom(), String.t()} | {:error, term()}
+
+  @doc """
+  The sha at the head of `branch` on `repo`.
+
+  `{:error, :ref_not_found}` when the branch does not exist — a normal
+  answer for a task whose executor never pushed, not a failure of the
+  question. Distinct from `{:error, term()}` so a caller can tell "there
+  is no such branch" from "we could not ask".
+
+  Separate from `default_branch_sha/1` rather than a `ref` argument on it
+  because the two answer different questions and one call site must not be
+  able to drift into the other by passing a different string: the default
+  branch is the BASE a task branch is cut from, this is the TIP of the task
+  branch itself, and `Platform.Tasks.DeployStageBuilder` records the second
+  onto deploy gates as the commit under review. Handing the base sha to
+  that recorder would mint a gate that can only ever match a PR merging
+  main into itself.
+  """
+  @callback branch_head_sha(%{repo: repo(), branch: String.t()}) ::
+              {:ok, String.t()}
+              | {:error, :ref_not_found}
+              | {:error, atom(), String.t()}
+              | {:error, term()}
 
   @doc """
   Refs under `ref` (a `heads/...` prefix, GitHub's `matching-refs` shape).

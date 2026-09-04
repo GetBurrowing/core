@@ -90,8 +90,19 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
        %{
          number: 999,
          url: "https://github.com/anything/999",
-         merged_at: "2026-07-31T17:00:00Z",
-         merge_commit_sha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+         # Computed, not pinned. Since task 01a06d6d the sweeper passes a gate
+         # only on a merge that POSTDATES the stage, and every stage in this
+         # file is started at test time — so a hardcoded 2026-07-31 string
+         # would make this runner "always merged, always too old", which is
+         # the opposite of what every caller below relies on it for. See
+         # `after_stage_start/0`.
+         merged_at: DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.to_iso8601(),
+         merge_commit_sha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+         # Nil for the same reason as `merged/2`'s default: this runner exists
+         # so a zero result cannot be blamed on it having nothing to say, and
+         # a head sha that matched nothing would give it a second way to
+         # decline.
+         head_sha: nil
        }}
     end
   end
@@ -107,10 +118,48 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
      %{
        number: number,
        url: Keyword.get(opts, :url, "https://github.com/x/pull/#{number}"),
-       merged_at: Keyword.get(opts, :merged_at, "2026-07-31T12:09:00Z"),
+       merged_at: Keyword.get(opts, :merged_at, after_stage_start()),
        merge_commit_sha:
-         Keyword.get(opts, :merge_commit_sha, "326d2b08" <> String.duplicate("a", 32))
+         Keyword.get(opts, :merge_commit_sha, "326d2b08" <> String.duplicate("a", 32)),
+       # DEFAULTS TO NIL, and that is deliberate rather than lazy. Gates
+       # minted by the fixtures below record NO tip: `config/test.exs` pins
+       # `BranchProvisioner.NoopRunner`, so `branch_tip_shas/3` resolves
+       # nothing and the payload carries `"branch_tip_sha" => nil`. A default
+       # head sha would therefore be compared against nothing, and every test
+       # in this file would silently be exercising the fallback while looking
+       # like it exercised the comparison. Tests that mean to compare trees
+       # pin BOTH sides explicitly — see `sweep/1 — the merge must carry the
+       # reviewed tree`.
+       head_sha: Keyword.get(opts, :head_sha)
      }}
+  end
+
+  # An ISO8601 merge time that POSTDATES every stage this file mints.
+  #
+  # `merged/2`'s default used to be the literal `"2026-07-31T12:09:00Z"`,
+  # which was fine while `poll/6` compared nothing. Task 01a06d6d made the
+  # sweeper require the merge to be strictly after the gate's stage
+  # `started_at`, and every fixture here starts its deploy stage at test
+  # time — so that literal now describes the STALE case, not the ordinary
+  # one. Leaving it in place would have turned every "the sweeper finds a
+  # merge" test red for the right reason and taught the next reader the wrong
+  # lesson.
+  #
+  # One second, not zero: `started_at` and `DateTime.utc_now/0` are both
+  # microsecond-precision, and the comparison is strict, so a same-instant
+  # tie would read as "not after". The margin is against a tie, not against
+  # clock skew — there is one clock here.
+  defp after_stage_start,
+    do: DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.to_iso8601()
+
+  # A merge time expressed RELATIVE TO THE ACTUAL STAGE under test, so the
+  # ordering cases below do not depend on how long the fixture took to build.
+  # `offset` is seconds: negative is before the stage started, zero is the
+  # boundary itself.
+  defp stage_relative_merge_time(stage, offset) do
+    reload_stage(stage.id).started_at
+    |> DateTime.add(offset, :second)
+    |> DateTime.to_iso8601()
   end
 
   # ── Fixtures ─────────────────────────────────────────────────────────────
@@ -239,6 +288,24 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
     put_payload!(gate, Map.put(gate.evaluation_payload, "branch", branch))
   end
 
+  # Writes the mint-time branch tip onto a MINTED gate. Same route and same
+  # reason as `record_branch!/2`: the fixtures run under
+  # `BranchProvisioner.NoopRunner`, which cannot resolve a tip, so the only
+  # way to pin the value on both sides of the comparison is to write it here.
+  defp record_tip!(%Validation{} = gate, sha) do
+    put_payload!(gate, Map.put(gate.evaluation_payload, "branch_tip_sha", sha))
+  end
+
+  # Removes the key entirely — NOT `%{"branch_tip_sha" => nil}`. This is the
+  # LEGACY gate: every `pr_merged` row minted before stage 2 of task 01a06d6d
+  # landed, which at the moment of the deploy is every gate open in the
+  # system. The two states are written separately below because they are
+  # different facts (never recorded vs. looked-up-and-failed) even though the
+  # sweeper must treat them identically.
+  defp drop_recorded_tip!(%Validation{} = gate) do
+    put_payload!(gate, Map.delete(gate.evaluation_payload, "branch_tip_sha"))
+  end
+
   # Reads the retirement query out of the module's OWN moduledoc, so the
   # thing under test is the text an operator copies rather than a
   # second copy living here. If the comment drifts, this breaks.
@@ -264,7 +331,11 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
   describe "sweep/1 — an observed merge" do
     test "passes the gate for the repository whose PR merged" do
       %{gates: gates} = two_repo_task!(id: "019fb9c5-6196-7a42-8c30-1e2d3f4a5b6c")
-      script(@bridge, merged(41))
+      # Pinned into a variable rather than left to the default, so the
+      # evidence assertion below compares against a value this test chose
+      # instead of one it recomputes.
+      merged_at = after_stage_start()
+      script(@bridge, merged(41, merged_at: merged_at))
 
       assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
 
@@ -273,7 +344,7 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
       assert bridge.evaluated_by == "deploy_merge_reconciler"
       assert bridge.evidence["repo"] == @bridge
       assert bridge.evidence["pr_number"] == 41
-      assert bridge.evidence["merged_at"] == "2026-07-31T12:09:00Z"
+      assert bridge.evidence["merged_at"] == merged_at
 
       # The provenance key. A polled observation and a webhook delivery are
       # different facts; evidence that read identically would erase that.
@@ -330,6 +401,400 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
 
       assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
       assert reload(gates[@bridge]).evidence["merge_commit_sha"] == nil
+    end
+  end
+
+  # ── The merge must postdate the stage (task 01a06d6d) ────────────────────
+
+  describe "sweep/1 — a merge that predates the stage" do
+    # CASE A. The live defect: validation
+    # `01a06d69-7ece-7001-a61f-dd7349436391` passed at 17:14:03Z on a stage
+    # started 17:13:45Z, citing PR #919 merged at 14:33:13Z. The task reached
+    # `done` with its reviewed code not on main.
+    #
+    # The assertion is on the VALIDATION, not on the return count. A sweep
+    # returning 0 is also what a broken query returns; a gate still `pending`
+    # with `evidence == %{}` after the runner reported a merge is only
+    # producible by the ordering check declining it. The
+    # `assert_received` proves the runner really was asked.
+    test "leaves the gate pending when the merge is older than the stage" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      stale = stage_relative_merge_time(stage, -2 * 60 * 60)
+      script(@bridge, merged(919, merged_at: stale))
+
+      log =
+        capture_log(fn ->
+          assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+        end)
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      assert gate.evidence == %{}
+      assert gate.evaluated_by == nil
+
+      assert_received {:merged_pr_called, %{repo: "https://github.com/" <> @bridge}}
+
+      # `warning`, like `refuse/2` — a merge the sweeper found but cannot
+      # attribute hangs a deploy and must be operator-visible. The
+      # `{:ok, nil}` branch's `debug` would bury it.
+      assert log =~ "[warning]"
+      assert log =~ gate.id
+      assert log =~ "919"
+      assert log =~ stale
+      assert log =~ DateTime.to_iso8601(reload_stage(stage.id).started_at)
+    end
+
+    # The boundary, pinned separately because "after or equal" and "strictly
+    # after" differ on exactly this row and nothing else in this file would
+    # notice. A merge stamped at the stage's own `started_at` is far likelier
+    # to be a truncated timestamp than a real simultaneity.
+    test "leaves the gate pending when the merge is stamped at the stage's own started_at" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      script(@bridge, merged(920, merged_at: stage_relative_merge_time(stage, 0)))
+
+      capture_log(fn ->
+        assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+      end)
+
+      assert reload(gates[@bridge]).status == "pending"
+      assert reload(gates[@bridge]).evidence == %{}
+    end
+
+    # CASE B. The negative control for Case A, and the reason Case A alone is
+    # not enough: a reconciler that passed NOTHING would satisfy Case A while
+    # breaking every deploy in the system. This is the row that says the
+    # sweeper still works.
+    test "passes the gate when the merge postdates the stage" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      fresh = stage_relative_merge_time(stage, 30)
+      script(@bridge, merged(921, merged_at: fresh))
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "passed"
+      assert gate.evaluated_by == "deploy_merge_reconciler"
+      assert gate.evidence["pr_number"] == 921
+      assert gate.evidence["merged_at"] == fresh
+      assert gate.evidence["observed_by"] == "reconciler"
+    end
+
+    # CASE C. `MergeRunner`'s typedoc: "Every field except `:number` may be
+    # `nil`". An unknown merge time cannot be SHOWN to postdate the stage, so
+    # it is not-after rather than maybe-after. Admitting it would reinstate
+    # the whole defect for any merge method GitHub answers with a null
+    # timestamp — which is the same class of hole as the original.
+    test "leaves the gate pending when merged_at is nil" do
+      %{gates: gates} = one_repo_task!()
+      script(@bridge, merged(922, merged_at: nil))
+
+      log =
+        capture_log(fn ->
+          assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+        end)
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      assert gate.evidence == %{}
+
+      assert log =~ "[warning]"
+      assert log =~ gate.id
+      assert log =~ "nil"
+    end
+
+    test "leaves the gate pending when merged_at does not parse" do
+      %{gates: gates} = one_repo_task!()
+      script(@bridge, merged(923, merged_at: "yesterday afternoon"))
+
+      capture_log(fn ->
+        assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+      end)
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      assert gate.evidence == %{}
+    end
+
+    # A stale merge is NOT a failure. The gate hangs visibly and an operator
+    # decides — the same posture `refuse/2` takes. Marking it `failed` would
+    # hand the branch a verdict this module has no standing to give: the
+    # merge it found is real, it just is not evidence for this stage.
+    test "does not FAIL the gate on a stale merge — it hangs it" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      script(@bridge, merged(924, merged_at: stage_relative_merge_time(stage, -60)))
+
+      capture_log(fn -> DeployMergeReconciler.sweep(runner: StubRunner) end)
+
+      assert reload(gates[@bridge]).status == "pending"
+      refute reload(gates[@bridge]).status == "failed"
+      assert reload_stage(stage.id).status == "running"
+    end
+  end
+
+  # ── The merge must carry THE REVIEWED TREE (task 01a06d6d stage 2) ───────
+
+  describe "sweep/1 — the merge must carry the reviewed tree" do
+    # Two shas that differ, written out rather than generated, so a reader can
+    # see at a glance which side of every assertion below is which.
+    @reviewed_tip "1111111111111111111111111111111111111111"
+    @other_tree "2222222222222222222222222222222222222222"
+
+    # CASE D. The hole stage 1 leaves open, and the reason this stage exists.
+    #
+    # Everything the ordering check looks at is satisfied here: the merge is
+    # 30 seconds AFTER the stage started, so stage 1 passes this gate. What
+    # merged is a different tree from the one the gate was minted for — which
+    # is what a force-push onto the task branch, followed by a PR merging
+    # moments after the deploy stage opened, produces.
+    #
+    # If the tip/head comparison is deleted, this test must go RED. If it
+    # stays green without it, it is being satisfied by the ordering check and
+    # proves nothing about this stage.
+    test "leaves the gate pending when the PR merged a tree other than the minted tip" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 30)
+      script(@bridge, merged(930, merged_at: fresh, head_sha: @other_tree))
+
+      log =
+        capture_log(fn ->
+          assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+        end)
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      assert gate.evidence == %{}
+      assert gate.evaluated_by == nil
+
+      # The runner WAS asked and DID report a merge. Without this the zero
+      # above is equally consistent with a query that excluded the row.
+      assert_received {:merged_pr_called, %{repo: "https://github.com/" <> @bridge}}
+
+      # Both shas in the line: the operator's first move is to compare them,
+      # and a message naming only one turns "which tree shipped?" back into a
+      # question they have to go and ask GitHub.
+      assert log =~ "[warning]"
+      assert log =~ gate.id
+      assert log =~ @reviewed_tip
+      assert log =~ @other_tree
+    end
+
+    # CASE E. The negative control for Case D, and the row that says the
+    # comparison is an EQUALITY rather than a refusal. A check that hung
+    # everything would satisfy Case D perfectly and break every deploy.
+    test "passes the gate when the PR merged exactly the minted tip" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 30)
+      script(@bridge, merged(931, merged_at: fresh, head_sha: @reviewed_tip))
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "passed"
+      assert gate.evaluated_by == "deploy_merge_reconciler"
+      assert gate.evidence["pr_number"] == 931
+    end
+
+    # The evidence key, pinned on its own. `merge_commit_sha` cannot answer
+    # "which work shipped?" under a squash merge — it is a NEW commit on the
+    # base that shares no sha with anything the branch ever held. `head_sha`
+    # can, and recording it is what keeps the question answerable from the
+    # evidence months later, without re-asking GitHub about a PR whose branch
+    # may no longer exist.
+    test "records the merged head_sha in the evidence, alongside merge_commit_sha" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      script(
+        @bridge,
+        merged(932,
+          merged_at: stage_relative_merge_time(stage, 30),
+          head_sha: @reviewed_tip,
+          merge_commit_sha: "abc123abc123abc123abc123abc123abc123abcd"
+        )
+      )
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      evidence = reload(gates[@bridge]).evidence
+      assert evidence["head_sha"] == @reviewed_tip
+      assert evidence["merge_commit_sha"] == "abc123abc123abc123abc123abc123abc123abcd"
+      # The two are DIFFERENT shas and both are kept. A test that pinned only
+      # one would pass against a change that wrote the same value twice.
+      refute evidence["head_sha"] == evidence["merge_commit_sha"]
+    end
+
+    # CASE F. BACKWARD COMPATIBILITY, and the most consequential row in this
+    # describe block.
+    #
+    # Every `pr_merged` gate open in the system right now was minted before
+    # this key existed. Reading an absent tip as "the trees differ" would hang
+    # ALL of them at once — not a narrow hours-wide window like the one
+    # `refuse/2` reasons about, but every live deploy. So an absent tip falls
+    # THROUGH to the ordering check and passes on that alone.
+    #
+    # The compatibility path is therefore load-bearing production behaviour,
+    # not dead code, and this test is what says so: make the fallback hang
+    # instead of fall through and this must go RED.
+    test "a LEGACY gate with no branch_tip_sha key passes on the ordering check alone" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      drop_recorded_tip!(gates[@bridge])
+
+      # Confirms the fixture really is in the legacy state. Without this the
+      # test would still pass against a gate that recorded a tip which
+      # happened to match, and would then be pinning the wrong thing.
+      refute Map.has_key?(reload(gates[@bridge]).evaluation_payload, "branch_tip_sha")
+
+      # A REAL head sha on the PR. The absent side is the gate's, so this
+      # cannot pass by both sides being nil — the fallback is what carries it.
+      fresh = stage_relative_merge_time(stage, 30)
+      script(@bridge, merged(933, merged_at: fresh, head_sha: @other_tree))
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "passed"
+      assert gate.evidence["head_sha"] == @other_tree
+    end
+
+    # The other half of the compatibility story, and a DIFFERENT fact from
+    # Case F: this gate was minted today and the key IS present — the tip
+    # lookup failed (no `gh`, a branch nobody pushed, a repository we cannot
+    # read) and `BranchProvisioner.branch_tip_shas/3` logged a warning and
+    # omitted it. The sweeper must treat the two identically even though they
+    # mean different things, or a flaky `gh` at mint time would hang a deploy
+    # hours later with no trace of why.
+    #
+    # This is also the state EVERY fixture in this file is in by default,
+    # which is why the rest of the suite keeps passing.
+    test "a gate whose tip lookup failed at mint time records nil and still passes" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+
+      assert Map.has_key?(reload(gates[@bridge]).evaluation_payload, "branch_tip_sha")
+      assert reload(gates[@bridge]).evaluation_payload["branch_tip_sha"] == nil
+
+      script(
+        @bridge,
+        merged(934, merged_at: stage_relative_merge_time(stage, 30), head_sha: @other_tree)
+      )
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+      assert reload(gates[@bridge]).status == "passed"
+    end
+
+    # The MIRROR of the fallback: the gate knows its tip, GitHub does not
+    # report a head. `MergeRunner`'s typedoc says every field but `:number`
+    # may be nil, and `headRefOid` is null for some merge methods and older
+    # PRs. Unknown on GitHub's side is not "a different tree" either.
+    #
+    # Note this is the OPPOSITE call from `merged_at`, where nil fails closed.
+    # The asymmetry is the point: a null timestamp is a fact withheld about a
+    # merge, while a null head is the state of an entire population of gates
+    # and PRs, and hanging all of them is the larger harm.
+    test "passes when the gate records a tip but the PR reports no head_sha" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      script(
+        @bridge,
+        merged(935, merged_at: stage_relative_merge_time(stage, 30), head_sha: nil)
+      )
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "passed"
+      # Recorded as nil rather than invented, matching `merge_commit_sha`.
+      assert gate.evidence["head_sha"] == nil
+    end
+
+    # A blank is an absent value wearing a string. Comparing it as data would
+    # hang the gate forever with no operator-legible reason, so it falls
+    # through with the nils. Pinned because `present?/1` guards the BRANCH
+    # key this way and a reader could reasonably assume the tip key is
+    # guarded the same way — it is, but in the opposite direction.
+    test "a blank recorded tip falls through rather than hanging the gate" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], "   ")
+
+      script(
+        @bridge,
+        merged(936, merged_at: stage_relative_merge_time(stage, 30), head_sha: @other_tree)
+      )
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+      assert reload(gates[@bridge]).status == "passed"
+    end
+
+    # CASE K. ORDER OF OPERATIONS. A matching tree does not excuse a stale
+    # merge: a branch that shipped correctly once answers every later poll
+    # with that same historical merge, whose head IS the tip — so if the tree
+    # check ran first, or replaced the ordering check, this exact row would
+    # pass and re-open the whole defect for re-runs and reverts.
+    #
+    # The log assertion is what makes this test specific: it must be the
+    # ORDERING message, naming the stage's `started_at`, not the tree one.
+    test "a stale merge is still refused even when its head matches the minted tip" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      stale = stage_relative_merge_time(stage, -2 * 60 * 60)
+      script(@bridge, merged(937, merged_at: stale, head_sha: @reviewed_tip))
+
+      log =
+        capture_log(fn ->
+          assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+        end)
+
+      assert reload(gates[@bridge]).status == "pending"
+      assert log =~ "started_at"
+      assert log =~ stale
+      refute log =~ "did not carry the reviewed tree"
+    end
+
+    # A wrong tree is NOT a failure, for the same reason a stale merge is not:
+    # the module has no standing to give the branch a verdict. It hangs
+    # visibly and an operator decides.
+    test "does not FAIL the gate on a wrong tree — it hangs it" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      script(
+        @bridge,
+        merged(938, merged_at: stage_relative_merge_time(stage, 30), head_sha: @other_tree)
+      )
+
+      capture_log(fn -> DeployMergeReconciler.sweep(runner: StubRunner) end)
+
+      assert reload(gates[@bridge]).status == "pending"
+      refute reload(gates[@bridge]).status == "failed"
+      assert reload_stage(stage.id).status == "running"
+    end
+
+    # Per-repository, not per-stage. One branch NAME lands in N repositories
+    # as N unrelated refs with N unrelated tips; a stage-wide sha would match
+    # one and hang the rest. Both gates here are polled on the same branch and
+    # each is judged against ITS OWN recorded tip.
+    test "each repository's gate is judged against its own recorded tip" do
+      %{gates: gates, stage: stage} = two_repo_task!()
+      record_tip!(gates[@core], @reviewed_tip)
+      record_tip!(gates[@bridge], @other_tree)
+
+      fresh = stage_relative_merge_time(stage, 30)
+      # Both PRs merge the tree recorded for CORE. Core is right; the bridge
+      # is being handed core's tree and must not accept it.
+      script(@core, merged(939, merged_at: fresh, head_sha: @reviewed_tip))
+      script(@bridge, merged(940, merged_at: fresh, head_sha: @reviewed_tip))
+
+      capture_log(fn ->
+        assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+      end)
+
+      assert reload(gates[@core]).status == "passed"
+      assert reload(gates[@bridge]).status == "pending"
     end
   end
 

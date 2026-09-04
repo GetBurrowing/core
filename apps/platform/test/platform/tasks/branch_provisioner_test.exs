@@ -38,6 +38,9 @@ defmodule Platform.Tasks.BranchProvisionerTest do
   defmodule StubRunner do
     @behaviour Platform.Tasks.BranchProvisioner.Runner
 
+    @impl true
+    def branch_head_sha(_args), do: {:error, :not_stubbed}
+
     def start(script), do: Agent.start_link(fn -> %{script: script, calls: []} end)
 
     def calls(pid), do: pid |> Agent.get(& &1.calls) |> Enum.reverse()
@@ -76,6 +79,9 @@ defmodule Platform.Tasks.BranchProvisionerTest do
   # wrapping the module in one that injects `:agent`.
   defmodule Injector do
     @behaviour Platform.Tasks.BranchProvisioner.Runner
+
+    @impl true
+    def branch_head_sha(_args), do: {:error, :not_stubbed}
 
     @impl true
     def default_branch_sha(args), do: StubRunner.default_branch_sha(inject(args))

@@ -126,7 +126,7 @@ defmodule Platform.Tasks.PlanCompletion do
        do: transition_to_done(task, plan, "no deploy strategy")
 
   # `no_op_wait_for_rollup` — the deploy has NOT happened. It ships via a stack
-  # rollup PR, which may not even be open yet. `DeployStageBuilder.build_stage/3`
+  # rollup PR, which may not even be open yet. `DeployStageBuilder.build_stage/4`
   # collapses this and `"none"` to a single `:skip`; `PlanEngine.skip_reason/1`
   # is what keeps them apart, because sweeping this task to `done` would mark an
   # undeployed task deployed. Never advance here.

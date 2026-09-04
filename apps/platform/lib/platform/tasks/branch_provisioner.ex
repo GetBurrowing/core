@@ -2,7 +2,7 @@ defmodule Platform.Tasks.BranchProvisioner do
   @moduledoc """
   Create the task branch Suite's deploy gates already expect to exist.
 
-  `DeployStageBuilder.repo_validation/2` writes
+  `DeployStageBuilder.repo_validation/3` writes
   `StackDeployer.member_branch_for/1` onto every `pr_merged` gate's
   `evaluation_payload["branch"]`, and `MergeControl.build/1` asks GitHub
   about exactly that string. So the branch name is DERIVED from the task
@@ -124,7 +124,93 @@ defmodule Platform.Tasks.BranchProvisioner do
     {:ok, %{branch: branch, results: results}}
   end
 
+  @doc """
+  The current tip sha of `branch` in every repository `strategy` deploys to,
+  as `%{canonical_slug => sha}`.
+
+  `strategy` is the map `Platform.Tasks.resolve_deploy_strategy_with_repos/1`
+  returns — the SAME resolution `Platform.Tasks.DeployStageBuilder` builds
+  gates from, so the keys here and the `"repo"` slugs on the gates are
+  produced by one normalizer (`Platform.Tasks.RepoRef`) and cannot disagree
+  about how a repository is named.
+
+  ## Per repository, not once per stage
+
+  One task pushes ONE branch name into N repositories, and those N branches
+  are unrelated refs with unrelated tips. A single sha recorded onto all N
+  gates would match at most one of them and hang the rest forever, which is
+  the failure this map exists to avoid. The multi-repo deploy is the reason
+  the return value is a map rather than a string.
+
+  ## A repository that cannot be asked is ABSENT, not nil
+
+  Every failure mode — no `gh`, a 404 for a branch nobody pushed, an
+  unnormalizable url, a repository we lack a token for — omits that key. The
+  caller writes `nil` for a missing key, and
+  `Platform.Tasks.DeployMergeReconciler` reads a nil tip as "this gate cannot
+  make the tree comparison" and falls through to its ordering check. That is
+  deliberately fail-SOFT, and it is the one place in this feature that is:
+  hanging every gate in a repository whose ref lookup flaked would strand
+  live deploys, and the ordering check still stands. The `warning` below is
+  what makes the degraded gate visible.
+  """
+  @spec branch_tip_shas(map(), String.t(), keyword()) :: %{String.t() => String.t()}
+  def branch_tip_shas(strategy, branch, opts \\ [])
+
+  def branch_tip_shas(strategy, branch, opts) when is_map(strategy) and is_binary(branch) do
+    runner = Keyword.get(opts, :runner, runner())
+
+    strategy
+    |> Map.get("repos", [])
+    |> List.wrap()
+    |> Enum.map(&slug_of/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.reduce(%{}, fn slug, acc ->
+      case runner.branch_head_sha(%{repo: slug, branch: branch}) do
+        {:ok, sha} when is_binary(sha) ->
+          Map.put(acc, slug, sha)
+
+        # `NoopRunner`'s answer, and the ONE failure that is not a
+        # degradation: it means an operator deliberately switched branch
+        # provisioning off (`config/test.exs` does exactly this, so every
+        # deploy-stage injection in the suite lands here). A `warning` for a
+        # configured no-op is noise that trains people to ignore the real
+        # one below, which fires when we tried and could not.
+        {:error, :branch_provisioning_disabled} ->
+          Logger.debug(
+            "[branch_provisioner] branch provisioning is disabled; recording no " <>
+              "branch_tip_sha for #{branch} in #{slug}"
+          )
+
+          acc
+
+        other ->
+          Logger.warning(
+            "[branch_provisioner] could not resolve the tip of #{branch} in #{slug}: " <>
+              "#{inspect(other)} — the deploy gate for this repository will record no " <>
+              "branch_tip_sha and can only check merge ORDERING, not which tree merged"
+          )
+
+          acc
+      end
+    end)
+  end
+
+  def branch_tip_shas(_strategy, _branch, _opts), do: %{}
+
   # ── Internals ───────────────────────────────────────────────────────────
+
+  # `RepoRef.slug/1` and not a second spelling: these keys are looked up by
+  # `DeployStageBuilder.repo_validation/3` under the slug `repo_gate/2`
+  # computed the same way, and two normalizers that agree today are two
+  # normalizers that can stop agreeing.
+  defp slug_of(entry) do
+    case entry do
+      %{"slug" => slug} when is_binary(slug) -> slug
+      other -> other |> repo_url_of() |> RepoRef.slug()
+    end
+  end
 
   defp do_ensure(runner, repo, branch) do
     ref = "refs/heads/" <> branch

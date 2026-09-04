@@ -2638,6 +2638,9 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       @behaviour Platform.Tasks.BranchProvisioner.Runner
 
       @impl true
+      def branch_head_sha(_args), do: {:error, :not_stubbed}
+
+      @impl true
       def default_branch_sha(_), do: {:error, :not_used}
 
       @impl true
@@ -2650,6 +2653,9 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     defmodule MatchRunner do
       @moduledoc false
       @behaviour Platform.Tasks.BranchProvisioner.Runner
+
+      @impl true
+      def branch_head_sha(_args), do: {:error, :not_stubbed}
 
       @impl true
       def default_branch_sha(_), do: {:error, :not_used}

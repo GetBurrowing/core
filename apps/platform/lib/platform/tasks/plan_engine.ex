@@ -26,6 +26,7 @@ defmodule Platform.Tasks.PlanEngine do
 
   alias Platform.Architecture.StageAudit
   alias Platform.Tasks
+  alias Platform.Tasks.BranchProvisioner
   alias Platform.Tasks.EvidenceCarry
   alias Platform.Tasks.MemberReviewEntry
   alias Platform.Tasks.PlanCompletion
@@ -1108,7 +1109,7 @@ defmodule Platform.Tasks.PlanEngine do
   Build deploy stages for a task based on its resolved deploy strategy.
 
   Looks up the task's project deploy strategy via `Tasks.resolve_deploy_strategy/1`,
-  then calls `DeployStageBuilder.build_stage/3` to produce stage definitions.
+  then calls `DeployStageBuilder.build_stage/4` to produce stage definitions.
 
   If the task already has an approved plan, the deploy stage position is set to
   follow the last existing stage. Otherwise, it starts at position 1.
@@ -1167,10 +1168,13 @@ defmodule Platform.Tasks.PlanEngine do
         # directly would make the `Tasks -> Orchestration` reference mutual
         # (`tasks.ex:1679-1696`); a sibling submodule calling it is already
         # established, the top-level context calling it is not.
+        branch = StackDeployer.member_branch_for(task)
+
         case DeployStageBuilder.build_stage(
                strategy,
                next_position,
-               StackDeployer.member_branch_for(task)
+               branch,
+               BranchProvisioner.branch_tip_shas(strategy, branch)
              ) do
           :skip -> {:ok, :skip}
           stage_def -> {:ok, [stage_def]}
@@ -1814,10 +1818,29 @@ defmodule Platform.Tasks.PlanEngine do
 
           # Recorded branch — see the identical call in `build_deploy_plan/1`
           # for why it is recorded here rather than derived by the consumer.
+          #
+          # The TIP each repository's copy of that branch stands at right now
+          # is recorded alongside it, and "right now" is the load-bearing
+          # word: this line runs at the moment the last review stage passed,
+          # so the sha it captures IS the commit the review passed on.
+          # `DeployMergeReconciler` later requires the merged PR's head to
+          # equal it. Resolving it here rather than at poll time is the whole
+          # point — a tip read at poll time is just "whatever the branch says
+          # now", which a force-push controls.
+          #
+          # `branch_tip_shas/3` fails SOFT (an unreachable repository yields
+          # no key, a `warning`, and a gate that keeps only the ordering
+          # check), so a flaky `gh` degrades this gate instead of blocking
+          # plan completion. It is a shell-out inside this function's
+          # enclosing `Repo.transaction`, which `Platform.Deploy.dispatch/3`
+          # below already is; N is the declared repo count, almost always 1.
+          branch = StackDeployer.member_branch_for(task)
+
           case DeployStageBuilder.build_stage(
                  strategy,
                  max_position(stages) + 1,
-                 StackDeployer.member_branch_for(task)
+                 branch,
+                 BranchProvisioner.branch_tip_shas(strategy, branch)
                ) do
             :skip ->
               # No deploy stage to inject — complete normally. The reason is
@@ -1856,7 +1879,7 @@ defmodule Platform.Tasks.PlanEngine do
     end
   end
 
-  # `DeployStageBuilder.build_stage/3` returns a bare `:skip` for TWO strategy
+  # `DeployStageBuilder.build_stage/4` returns a bare `:skip` for TWO strategy
   # types — `"none"` and `"no_op_wait_for_rollup"` — and they mean opposite
   # things for the task's terminal status:
   #

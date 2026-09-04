@@ -58,6 +58,9 @@ defmodule Platform.Orchestration.TaskRouterBranchProvisioningTest do
   defmodule StubRunner do
     @behaviour Platform.Tasks.BranchProvisioner.Runner
 
+    @impl true
+    def branch_head_sha(_args), do: {:error, :not_stubbed}
+
     @sha "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334"
 
     @impl true

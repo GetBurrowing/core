@@ -590,10 +590,16 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert [validation] = result.validations
       assert validation.kind == "pr_merged"
 
+      # `branch_tip_sha` is nil here because this call passes no tips map —
+      # the key is WRITTEN regardless, so a gate minted today is
+      # distinguishable at a glance from a genuinely legacy one that predates
+      # the key. See `build_stage/4 \u2014 the recorded branch tip` below for the
+      # populated case.
       assert validation.evaluation_payload == %{
                "repo" => "Startup-Suite/core",
                "repo_url" => "https://github.com/Startup-Suite/core",
                "branch" => @recorded_branch,
+               "branch_tip_sha" => nil,
                "ci" => "required",
                "auto_merge" => false,
                "merge_method" => "squash"
@@ -849,6 +855,115 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
   # The derivation appears only as the INPUT to `build_stage/3`, which is
   # what production does; the output is pinned against a literal typed out by
   # hand from the fixture's pinned id.
+  # ── The recorded branch TIP (task 01a06d6d stage 2) ──────────────────────
+  #
+  # `"branch"` says which branch to watch. `"branch_tip_sha"` says which TREE
+  # the gate was minted for, and `DeployMergeReconciler` requires the merged
+  # PR's head to equal it. Recorded per REPOSITORY, because one branch name
+  # lands in N repositories as N unrelated refs with N unrelated tips.
+  describe "build_stage/4 — the recorded branch tip" do
+    @tip_core_entry %{
+      "repo_url" => "https://github.com/Startup-Suite/core",
+      "slug" => "Startup-Suite/core",
+      "ci" => "required",
+      "role" => "primary",
+      "config" => %{}
+    }
+
+    @tip_bridge_entry %{
+      "repo_url" => "https://github.com/Startup-Suite/claude-code-suite-channel",
+      "slug" => "Startup-Suite/claude-code-suite-channel",
+      "ci" => "none",
+      "role" => "secondary",
+      "config" => %{}
+    }
+
+    @core_tip "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    @bridge_tip "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+    defp two_repo_strategy do
+      %{
+        "type" => "pr_merge",
+        "config" => %{},
+        "repos" => [@tip_core_entry, @tip_bridge_entry]
+      }
+    end
+
+    defp gate_for(result, slug),
+      do: Enum.find(result.validations, &(&1.evaluation_payload["repo"] == slug))
+
+    # The whole point of the map. Two DIFFERENT shas, and each must land on
+    # its own repository's gate — a stage-wide sha would match one repository
+    # and hang the other forever.
+    test "each repo-scoped gate records ITS OWN repository's tip" do
+      result =
+        DeployStageBuilder.build_stage(two_repo_strategy(), 4, @recorded_branch, %{
+          "Startup-Suite/core" => @core_tip,
+          "Startup-Suite/claude-code-suite-channel" => @bridge_tip
+        })
+
+      assert gate_for(result, "Startup-Suite/core").evaluation_payload["branch_tip_sha"] ==
+               @core_tip
+
+      assert gate_for(result, "Startup-Suite/claude-code-suite-channel").evaluation_payload[
+               "branch_tip_sha"
+             ] == @bridge_tip
+
+      # Stated as a non-equality too. Two lookups that both returned the same
+      # value would satisfy the pair above if the builder ignored the key and
+      # wrote one sha everywhere.
+      refute @core_tip == @bridge_tip
+    end
+
+    # A repository whose tip could not be resolved — no `gh`, a branch nobody
+    # pushed, a repository we cannot read — records nil while its SIBLING
+    # still records a real sha. Partial resolution must degrade one gate, not
+    # the stage.
+    test "a repository missing from the map records nil, and does not disturb its sibling" do
+      result =
+        DeployStageBuilder.build_stage(two_repo_strategy(), 4, @recorded_branch, %{
+          "Startup-Suite/core" => @core_tip
+        })
+
+      assert gate_for(result, "Startup-Suite/core").evaluation_payload["branch_tip_sha"] ==
+               @core_tip
+
+      assert gate_for(result, "Startup-Suite/claude-code-suite-channel").evaluation_payload[
+               "branch_tip_sha"
+             ] == nil
+    end
+
+    # The key is PRESENT and nil, not absent. `DeployMergeReconciler` treats
+    # the two identically, but only a present key says "this gate was minted
+    # after the check existed and the lookup failed" rather than "this gate
+    # predates the check". Operators read payloads.
+    test "the key is written even when no tips are known at all" do
+      result = DeployStageBuilder.build_stage(two_repo_strategy(), 4, @recorded_branch, %{})
+
+      for validation <- result.validations do
+        assert Map.has_key?(validation.evaluation_payload, "branch_tip_sha")
+        assert validation.evaluation_payload["branch_tip_sha"] == nil
+      end
+    end
+
+    # The UNSCOPED gate — no declared repo set — keeps its ABSENT payload.
+    # Giving it one would move it out of `DeployMergeReconciler.gate_repo/1`'s
+    # nil-payload clause, which is a routing change dressed up as a field
+    # addition. Same reasoning the moduledoc gives for `"branch"`.
+    test "an undeclared repo set still emits ONE gate with no payload at all" do
+      result =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}},
+          4,
+          @recorded_branch,
+          %{"Startup-Suite/core" => @core_tip}
+        )
+
+      assert [%{kind: "pr_merged"} = validation] = result.validations
+      refute Map.has_key?(validation, :evaluation_payload)
+    end
+  end
+
   describe "build_stage/3 — the recorded branch" do
     @core_entry %{
       "repo_url" => "https://github.com/Startup-Suite/core",

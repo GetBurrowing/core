@@ -26,6 +26,9 @@ defmodule Platform.Tasks.BranchProvisioner.NoopRunner do
   def default_branch_sha(_args), do: @disabled
 
   @impl true
+  def branch_head_sha(_args), do: @disabled
+
+  @impl true
   def list_matching_refs(_args), do: @disabled
 
   @impl true

@@ -3,7 +3,7 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
   Default `MergeRunner` — asks the GitHub CLI whether a branch's PR merged.
 
       gh pr list -R <repo> --head <branch> --state merged \\
-        --json number,mergedAt,mergeCommit,url --limit 1
+        --json number,mergedAt,mergeCommit,headRefOid,url --limit 1
 
   Read-only. This module runs exactly one `gh` subcommand and it is
   `pr list`; there is no code path here that mutates a repository.
@@ -61,7 +61,7 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
       "--state",
       "merged",
       "--json",
-      "number,mergedAt,mergeCommit,url",
+      "number,mergedAt,mergeCommit,headRefOid,url",
       "--limit",
       "1"
     ]
@@ -90,7 +90,8 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
            number: number,
            url: pr["url"],
            merged_at: pr["mergedAt"],
-           merge_commit_sha: merge_commit_sha(pr["mergeCommit"])
+           merge_commit_sha: merge_commit_sha(pr["mergeCommit"]),
+           head_sha: head_sha(pr["headRefOid"])
          }}
 
       {:ok, []} ->
@@ -106,4 +107,21 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
   # SHA in deploy evidence is worse than an absent one.
   defp merge_commit_sha(%{"oid" => oid}) when is_binary(oid), do: oid
   defp merge_commit_sha(_), do: nil
+
+  # `headRefOid` is a bare sha string, not the `%{"oid" => …}` object
+  # `mergeCommit` uses — one extra field on the SAME `pr list` query, not a
+  # second API call. Same nil discipline as `merge_commit_sha/1`, and here it
+  # matters more: `DeployMergeReconciler.poll/7` compares this against the
+  # tip the gate was minted for, so a placeholder string would not merely sit
+  # in evidence, it would decide the comparison. A blank is a nil too — an
+  # empty string would compare unequal to every recorded tip and hang every
+  # gate on a repository whose merge method answers `""`.
+  defp head_sha(oid) when is_binary(oid) do
+    case String.trim(oid) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp head_sha(_), do: nil
 end

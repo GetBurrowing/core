@@ -37,7 +37,7 @@ defmodule Platform.Tasks.MergeControl do
       Merge button is wrong twice over (ADR 0041).
     * a deploy stage is LIVE (`running`) and carries a `pr_merged` gate
       recording a branch. The branch on that gate is the only recorded
-      one — see `Platform.Tasks.DeployStageBuilder.repo_validation/2`.
+      one — see `Platform.Tasks.DeployStageBuilder.repo_validation/3`.
 
   ## What it never does
 

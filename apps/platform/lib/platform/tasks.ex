@@ -2039,7 +2039,7 @@ defmodule Platform.Tasks do
   `resolve_deploy_strategy/1` with the resolved repository set attached.
 
   This is what deploy-stage construction consumes, so
-  `DeployStageBuilder.build_stage/3` stays a pure map → map function with no
+  `DeployStageBuilder.build_stage/4` stays a pure map → map function with no
   `Repo` access. Its third argument, the recorded branch, is resolved by the
   CALLER (`PlanEngine`, via `StackDeployer.member_branch_for/1`) and handed in
   already-computed, so the builder still touches no `Repo`.
