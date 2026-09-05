@@ -18,6 +18,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
   import Phoenix.LiveViewTest
 
+  alias Platform.Meetings.AgentActivity
   alias PlatformWeb.Components.Meetings.ParticipantRail
 
   @heading_type "text-[11px] font-semibold uppercase tracking-widest text-base-content/50"
@@ -58,6 +59,21 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       agents_by_id: %{},
       meeting: %{id: "m-1", host_participant_id: "u-1"},
       agent_activity: agent_activity
+    )
+  end
+
+  # `now` explicit, for task 01a06e07 stage 3: the ceiling and the age
+  # counter are both pure functions of `entered_at` and `now`, so a test
+  # proves them by choosing both `DateTime`s — no clock, no timer, no
+  # `Process.sleep/1` (`AgentActivity.resolve_at/2`'s own moduledoc makes
+  # the same claim; this is that claim exercised through the component).
+  defp rail(participants, agent_activity, now) do
+    render_component(&ParticipantRail.participant_rail/1,
+      participants: participants,
+      agents_by_id: %{},
+      meeting: %{id: "m-1", host_participant_id: "u-1"},
+      agent_activity: agent_activity,
+      now: now
     )
   end
 
@@ -294,6 +310,144 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       listening = rail([agent("Saru", "a-1")], %{"a-1" => :listening})
       refute listening =~ "Listening"
       assert listening =~ "Idle", "an unsettable state must present as idle, not as itself"
+    end
+  end
+
+  # Task 01a06e07 stage 3. Stage 1 (`61d4e616`) shipped
+  # `AgentActivity.resolve_at/2`'s 120s ceiling unit-tested but never
+  # called from any render path — `participant_rail.ex` called
+  # `for_agent/2`, which has no ceiling, so a stuck agent read `Thinking`
+  # forever on screen even though `resolve_at/2` would have said
+  # `:failed`. These tests pin the render path onto `resolve_at/2`
+  # (through `AgentActivity.resolve_for_render/2`), asserted THROUGH the
+  # component — not only through the struct, which stage 1's own tests
+  # already covered and which this stage is explicit is not enough on its
+  # own.
+  describe "the ceiling and the age, on the render path" do
+    test "an agent computing for over 120s renders Couldn't, capped by resolve_at/2" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      past_ceiling = DateTime.add(t0, AgentActivity.ceiling_seconds() + 1, :second)
+
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+
+      html = rail([agent("Stuck", "a-1")], activity, past_ceiling)
+      row = agent_row(html, "a-1")
+
+      assert row =~ ~s(data-activity-state="failed")
+      assert row =~ "Couldn&#39;t"
+      assert row =~ "no response for 2m"
+      # Not a bare counter — the stage spec: "carries its reason, not a
+      # counter."
+      refute row =~ "Couldn&#39;t · 121s"
+    end
+
+    test "an agent still under the ceiling keeps reading Thinking, with its real age" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      still_working = DateTime.add(t0, AgentActivity.ceiling_seconds() - 1, :second)
+
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+
+      html = rail([agent("Working", "a-1")], activity, still_working)
+      row = agent_row(html, "a-1")
+
+      assert row =~ ~s(data-activity-state="computing")
+      assert row =~ "Thinking"
+      assert row =~ "119s"
+      refute row =~ "Couldn&#39;t"
+    end
+
+    test "the SAME struct renders a DIFFERENT age as `now` moves — no tick, no timer, just the clock handed in" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+
+      early = rail([agent("Thinker", "a-1")], activity, DateTime.add(t0, 3, :second))
+      later = rail([agent("Thinker", "a-1")], activity, DateTime.add(t0, 47, :second))
+
+      assert agent_row(early, "a-1") =~ "Thinking · 3s"
+      assert agent_row(later, "a-1") =~ "Thinking · 47s"
+
+      # Every state is still correct even if a tick was MISSED — the
+      # stage spec's own requirement — because nothing here is derived
+      # from how many ticks fired, only from `t0` and whatever `now` this
+      # particular render was handed.
+      refute agent_row(early, "a-1") == agent_row(later, "a-1")
+    end
+
+    test "Heard renders with no counter, then resolves to Thinking once it decays" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+
+      heard_only = AgentActivity.put_at(AgentActivity.new(), :heard, "a-1", true, t0)
+
+      just_heard = rail([agent("Listener", "a-1")], heard_only, DateTime.add(t0, 1, :second))
+      row = agent_row(just_heard, "a-1")
+
+      assert row =~ ~s(data-activity-state="heard")
+      assert row =~ "Heard"
+      # No counter on Heard, per the stage spec — "Heard and Idle carry
+      # NO counter."
+      refute row =~ "Heard ·"
+
+      # Heard AND computing at once: once the 2s heard window decays,
+      # `resolve_at/2` falls through to the still-live `:computing` signal
+      # underneath it, and the row picks that up on the very next render
+      # — no special-casing needed on this side, since the render always
+      # re-derives from scratch.
+      both =
+        AgentActivity.new()
+        |> AgentActivity.put_at(:computing, "a-1", true, t0)
+        |> AgentActivity.put_at(:heard, "a-1", true, t0)
+
+      decayed = rail([agent("Listener", "a-1")], both, DateTime.add(t0, 3, :second))
+      decayed_row = agent_row(decayed, "a-1")
+
+      assert decayed_row =~ ~s(data-activity-state="computing")
+      assert decayed_row =~ "Thinking · 3s"
+      refute decayed_row =~ "Heard"
+    end
+
+    # `AgentActivityBadge`'s ONE table, extended rather than duplicated —
+    # the stage's own constraint ("add rows to that ONE table"). `:heard`
+    # sits on the same `--color-info` slot Thinking/Writing use (working
+    # FOR you, nothing asked OF you), and its ring pulses — the shipped
+    # motion vocabulary has no "single pulse" utility, and the stamp only
+    # lives 2s regardless.
+    test "Heard sits on the info slot and pulses, matching Thinking/Writing's colour family" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      activity = AgentActivity.put_at(AgentActivity.new(), :heard, "a-1", true, t0)
+
+      row =
+        agent_row(rail([agent("Listener", "a-1")], activity, DateTime.add(t0, 1, :second)), "a-1")
+
+      assert row =~ "border-info"
+      assert row =~ "text-info"
+      assert row =~ "animate-pulse"
+      refute row =~ "warning"
+    end
+
+    # TRUNCATION (the stage spec): "the word never truncates and the age
+    # never truncates; the reason clause WRAPS to a second line rather
+    # than clipping. The node currently carries `truncate` — that class
+    # must not be allowed to clip a reason." A generic (no linked Agent)
+    # delay clause is enough to prove the node's OWN class list, without
+    # needing a DB-backed Agent/Room — `AgentDelayReason`'s default
+    # clause shows once `age_s` reaches its own threshold regardless of
+    # who is asking.
+    test "the word node does not truncate, and a present reason gets its own wrappable node" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      delayed = DateTime.add(t0, 15, :second)
+
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+      html = rail([agent("Slow", "a-1")], activity, delayed)
+
+      parsed = Floki.parse_fragment!(agent_row(html, "a-1"))
+      [word_node] = Floki.find(parsed, ~s([data-role="agent-activity-word"]))
+
+      refute Floki.attribute([word_node], "class") |> List.first() =~ "truncate",
+             "the word node still carries `truncate`, which can clip the reason clause"
+
+      assert Floki.find(parsed, ~s([data-role="agent-activity-primary"])) != []
+      assert Floki.find(parsed, ~s([data-role="agent-activity-reason"])) != []
+      assert agent_row(html, "a-1") =~ "still running a tool"
     end
   end
 end

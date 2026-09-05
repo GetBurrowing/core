@@ -103,6 +103,15 @@ defmodule Platform.Application do
            # owns the :meeting_say_registry table. Same shape as PressWindow:
            # ETS lifecycle owner plus a ttl sweep, no PubSub and no DB.
            Platform.Meetings.SayRegistry,
+           # Short-TTL cache in front of `Meetings.resolve_voice_target/1`
+           # (task 01a06e07 stage 2) — owns the :meeting_voice_seat_cache
+           # table. Bounds the "no voice worker in this room" delay-reason
+           # cause, which is a DB read plus a presence read, against a
+           # per-agent-per-second render tick. No sweep: bounded by agent
+           # count, not by ticks. Needs Repo (its cache-miss path calls
+           # `resolve_voice_target/1`) and RuntimePresence, both already
+           # started above.
+           Platform.Meetings.VoiceSeatCache,
            # Per-MEETING intent queues (task 019f70b8 stage 2) — one
            # on-demand GenServer per meeting, each owning an unnamed
            # ETS table that dies with it. No sweeper: cleanup is

@@ -1009,6 +1009,17 @@ defmodule PlatformWeb.MeetingLive do
           |> assign_candidate_board(meeting.id)
           |> MeetingHooks.attach(List.wrap(meeting.chat_space_id))
 
+        # THE `/meetings` HALF OF THE TWO-SURFACE AGENT-ACTIVITY TICK (task
+        # 01a06e07 stage 3, correction 1). `MeetingHooks.attach/2` just
+        # above installs the `:meeting_info` hook whose `:agent_activity_tick`
+        # clause updates `:agent_activity_now` and re-arms itself every
+        # second — this call is only ever the FIRST beat. Without it the
+        # rail's `Thinking · Ns` counter on THIS surface would render once
+        # at mount and freeze, and the 120s ceiling in
+        # `AgentActivity.resolve_at/2` would never get asked again either,
+        # exactly the quickmeet-only-fix trap the stage brief calls out.
+        if connected?(socket), do: MeetingHooks.schedule_agent_activity_tick()
+
         # Auto-join on connected mount unless ?no_autojoin=true is set
         # (the e2e tests in stage 7 use that escape hatch so they can
         # assert the manual "Join" CTA path). `send(self(), :auto_join)`
@@ -1196,6 +1207,9 @@ defmodule PlatformWeb.MeetingLive do
     do: CalendarWindow.hour_window(meetings, time_zone)
 
   defp schedule_calendar_tick, do: Process.send_after(self(), :calendar_tick, 60_000)
+
+  defp schedule_agent_activity_tick_guest,
+    do: Process.send_after(self(), :agent_activity_tick_guest, AgentActivity.tick_interval_ms())
 
   # "Today" is the viewer's today, not the server's. Near midnight those
   # are different DATES, and opening the calendar to the wrong week is
@@ -3716,6 +3730,23 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, assign(socket, :calendar_now, now)}
   end
 
+  # The GUEST half of the two-surface agent-activity tick (task 01a06e07
+  # stage 3, correction 1). See `enter_guest_topics/2` for why this needs
+  # its own message name and its own clause here rather than reusing
+  # `MeetingHooks`' hook-owned `:agent_activity_tick`: `attach_guest/1`
+  # installs no `:meeting_info` hook, by existing design, so nothing but
+  # this module ever sees a guest socket's info messages.
+  #
+  # Same shape as `:calendar_tick` just above and the same reason it must
+  # actually reassign the clock rather than merely re-arm: LiveView diffs
+  # on assigns, and a beat that changes nothing produces nothing for the
+  # client to redraw. `MUST stay ABOVE the catch-all below — see that
+  # clause's own comment.
+  def handle_info(:agent_activity_tick_guest, socket) do
+    schedule_agent_activity_tick_guest()
+    {:noreply, assign(socket, :agent_activity_now, DateTime.utc_now())}
+  end
+
   # ── Intents-collapse live updates (task 019f70b8 stage 7) ────────────────
   #
   # MUST stay ABOVE the catch-all below — the catch-all swallows anything
@@ -4281,6 +4312,21 @@ defmodule PlatformWeb.MeetingLive do
         %{id: room_id} -> subscribe_room_once(socket, room_id)
         _ -> socket
       end
+
+    # THE GUEST HALF OF THE TWO-SURFACE AGENT-ACTIVITY TICK (task 01a06e07
+    # stage 3, correction 1). `MeetingHooks.attach_guest/1` deliberately
+    # installs NO `:meeting_info` hook (see its own @doc — the guest
+    # surface owns its presence/canvas handlers directly in THIS module),
+    # so the shared hook clause in `MeetingHooks` that drives
+    # `/meetings`-authenticated and the quickmeet never reaches a guest
+    # socket. This is the guest's own equivalent, under its own message
+    # name (`:agent_activity_tick_guest`, handled below) so it can never
+    # collide with the hook-owned `:agent_activity_tick` loop that
+    # `MeetingHooks.attach/2` would install on a socket that also happened
+    # to call `attach_guest/1` — which does not currently happen, but
+    # sharing one atom across two independent schedulers is exactly the
+    # kind of coincidence that becomes a double-speed clock later.
+    if connected?(socket), do: schedule_agent_activity_tick_guest()
 
     assign(socket, :guest_topic_subs, %{
       space_id: meeting.chat_space_id,

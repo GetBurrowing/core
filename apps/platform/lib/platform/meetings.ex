@@ -27,6 +27,7 @@ defmodule Platform.Meetings do
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.SpaceAccess
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript, Whiteboard}
+  alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.IntentRuntimeAdapter
@@ -5589,6 +5590,92 @@ defmodule Platform.Meetings do
     SayRegistry.ledger_count_room_since(room_name, since) >= @meeting_say_max_agent_chain
   end
 
+  # ── Reading the reply-budget refusals back (task 01a06e07 stage 2) ────────
+  #
+  # `say/4`'s `:reply_budget_exhausted` and `:agent_chain_too_deep` are
+  # returned to the AGENT'S OWN tool call and broadcast nowhere — nothing
+  # else in the system is ever told a `say/4` was refused. So a caller
+  # that wants to explain a stalled agent ("reply budget resets in Ns")
+  # cannot listen for that refusal; it has to read the same persisted
+  # ledger `check_say_rate/2` and `check_agent_chain/1` already consult
+  # and ask the identical question read-only, which is what these three
+  # functions do — they call the exact same private checks `say/4` gates
+  # on, so the two paths cannot drift apart. `Platform.Meetings.SayRegistry`
+  # is ETS, so every one of these is a synchronous, in-memory read: no
+  # DB call, safe to call from a render loop.
+
+  @doc """
+  Whether `agent`'s reply-rate budget in `room` is exhausted RIGHT NOW —
+  the same rule `say/4` enforces via `check_say_rate/2`, exposed
+  read-only. See the section above for why this has to re-derive the
+  answer rather than read a `say/4` refusal back: there is no refusal
+  to read, only the ledger both paths share.
+  """
+  @spec reply_budget_exhausted?(Room.t(), Agent.t()) :: boolean()
+  def reply_budget_exhausted?(%Room{} = room, %Agent{} = agent) do
+    match?({:error, :reply_budget_exhausted}, check_say_rate(room, agent))
+  end
+
+  @doc """
+  Seconds until `agent`'s reply budget in `room` next has room for one
+  more say — when the oldest say still counted in the trailing window
+  falls out of it. `0` when the budget is not exhausted right now, so a
+  caller does not need a separate `reply_budget_exhausted?/2` check
+  before reading this.
+  """
+  @spec reply_budget_reset_in_s(Room.t(), Agent.t()) :: non_neg_integer()
+  def reply_budget_reset_in_s(%Room{} = room, %Agent{} = agent) do
+    since = System.monotonic_time(:millisecond) - @meeting_say_window_ms
+
+    if SayRegistry.ledger_count_since(room.id, agent.id, since) >= @meeting_say_budget_per_minute do
+      case SayRegistry.ledger_oldest_since(room.id, agent.id, since) do
+        nil ->
+          0
+
+        oldest_ms ->
+          resets_at_ms = oldest_ms + @meeting_say_window_ms
+          remaining_ms = resets_at_ms - System.monotonic_time(:millisecond)
+          max(ceil(remaining_ms / 1000), 0)
+      end
+    else
+      0
+    end
+  end
+
+  @doc """
+  Whether the agent-chain rule (`say/4`'s `check_agent_chain/1`) would
+  refuse a say in `room` right now. Same "re-derive from the shared
+  ledger" reasoning as `reply_budget_exhausted?/2`.
+  """
+  @spec agent_chain_too_deep?(Room.t()) :: boolean()
+  def agent_chain_too_deep?(%Room{} = room) do
+    match?({:error, :agent_chain_too_deep}, check_agent_chain(room))
+  end
+
+  @doc """
+  Whether `agent`'s BRAIN runtime — the one
+  `IntentRuntimeAdapter.resolve_target/1` dispatches to, not the voice
+  worker `resolve_voice_target/1` resolves — is offline right now.
+
+  For the `AgentDelayReason` "agent went offline" cause. `true` for an
+  agent with no linked runtime at all: either way nothing is listening
+  for it. One `Repo.get/2` by primary key
+  (`Federation.get_runtime_for_agent/1`) plus an in-memory
+  `RuntimePresence.online?/1` check — the same shape of cost
+  `AgentActivity.hydrate/1` already pays at mount, and NOT the unbounded
+  cost `VoiceSeatCache` exists to bound.
+  """
+  @spec runtime_offline?(Agent.t()) :: boolean()
+  def runtime_offline?(%Agent{} = agent) do
+    case Federation.get_runtime_for_agent(agent) do
+      %AgentRuntime{runtime_id: runtime_id} when is_binary(runtime_id) ->
+        not RuntimePresence.online?(runtime_id)
+
+      _ ->
+        true
+    end
+  end
+
   defp say_ack_topic(utterance_id), do: "meetings:say:#{utterance_id}"
 
   # The tool surface calls `say/4` without options, so the only way a test
@@ -5836,7 +5923,7 @@ defmodule Platform.Meetings do
 
               true ->
                 case IntentRuntimeAdapter.resolve_target(agent) do
-                  {:ok, %{topic: topic}} ->
+                  {:ok, %{topic: topic, runtime_id: runtime_id}} ->
                     # NO `RuntimePresence.prove(_, "meeting_transcript")` here,
                     # and that omission is load-bearing. This is a frame core
                     # SENT. Whether the plugin on the far end has the
@@ -5853,7 +5940,7 @@ defmodule Platform.Meetings do
                     # observed. Adding a plugin-side ack is a
                     # `claude-code-suite-channel` change.
                     :ok = PlatformWeb.Endpoint.broadcast(topic, "meeting_transcript", payload)
-
+                    maybe_mark_heard(payload.meeting_id, agent.id, runtime_id)
                     {[agent.id | ok], skip}
 
                   {:error, reason} ->
@@ -5870,6 +5957,33 @@ defmodule Platform.Meetings do
         {:ok, %{delivered: Enum.reverse(delivered), skipped: Enum.reverse(skipped)}}
     end
   end
+
+  # `:heard` (task 01a06e07 stage 2), broadcast from the exact point that
+  # already knows a segment reached this agent's brain runtime — see
+  # `AgentActivity`'s moduledoc for the decay and honesty-limit contract.
+  #
+  # Gated on presence, not merely on the resolve above succeeding:
+  # `resolve_target/1` names a topic whether or not anything is listening
+  # on it, and `Phoenix.Endpoint.broadcast/3` returns `:ok` into an empty
+  # one. `RuntimePresence.online?/1` is the same in-memory check
+  # `resolve_voice_target/1` uses for its own presence gate — no DB call,
+  # no `prove/2`, no write to any runtime's `proven` map.
+  #
+  # `meeting_id` is `nil` whenever the space has no live `meetings` row
+  # (a bare LiveKit room with a transcript but no meeting entity). There
+  # is no shell topic to broadcast on in that case, so this is a silent
+  # no-op rather than a call `AgentActivity.broadcast/4` would reject —
+  # `deliver_transcript_segment/2` must never fail the append over a
+  # signal that is, at most, a UI nicety.
+  defp maybe_mark_heard(meeting_id, agent_id, runtime_id) when is_binary(meeting_id) do
+    if RuntimePresence.online?(runtime_id) do
+      AgentActivity.broadcast(meeting_id, :heard, agent_id, true)
+    end
+
+    :ok
+  end
+
+  defp maybe_mark_heard(_meeting_id, _agent_id, _runtime_id), do: :ok
 
   defp transcript_frame_payload(%Transcript{} = transcript, segment) do
     identity = segment["participant_identity"]

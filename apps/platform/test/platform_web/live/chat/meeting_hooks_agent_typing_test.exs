@@ -193,8 +193,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
       typing_html = render(view)
 
       # The process that took the broadcast is the process that answers.
+      #
+      # `=~`, not `==`: task 01a06e07 stage 3 appends an age counter (and,
+      # for this agent, a delay clause — it has no linked voice worker in
+      # this test's fixture) to the SAME word node, in the SAME slot the
+      # bare word used to occupy alone. The word itself is still the
+      # thing this test is about.
       assert Process.alive?(view.pid)
-      assert rail_activity_word(typing_html, presence.id) == "Writing"
+      assert rail_activity_word(typing_html, presence.id) =~ "Writing"
       assert rail_activity_state(typing_html, presence.id) == ["typing"]
       assert AgentActivity.for_agent(assigns(view).agent_activity, agent.id) == :typing
 
@@ -305,6 +311,90 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
       assert Process.alive?(view.pid)
       assert rail_activity_word(render(view), presence.id) == "Idle"
       assert has_element?(view, "#quickmeet-call-rail")
+    end
+  end
+
+  # Task 01a06e07 stage 3, correction 1: "A tick that lives only in
+  # MeetingLive leaves the quickmeet frozen." `join_call_shell/2` arms
+  # `MeetingHooks`' own `:agent_activity_tick` loop the moment a REAL
+  # quickmeet is joined (this file's `join/2`); these tests drive that
+  # real message through the real mounted `ChatLive` process rather than
+  # asserting on `participant_rail.ex` in isolation, because the trap this
+  # closes is specifically "the markup is right but nothing re-renders
+  # it".
+  describe "the quickmeet's agent-activity tick" do
+    test "a real :agent_activity_tick message advances @agent_activity_now on the LIVE process",
+         %{conn: conn, space: space, meeting: meeting} do
+      view = join(conn, space, meeting)
+
+      before = assigns(view).agent_activity_now
+      assert %DateTime{} = before
+
+      send(view.pid, :agent_activity_tick)
+      # `render/1` is a synchronous round trip through the SAME process
+      # mailbox `send/2` just enqueued onto — the process handles both in
+      # arrival order, so by the time this call returns, the tick's
+      # `handle_info/2` clause has already run.
+      _html = render(view)
+
+      after_tick = assigns(view).agent_activity_now
+
+      assert DateTime.compare(after_tick, before) == :gt,
+             "the tick fired but @agent_activity_now did not move — the clock " <>
+               "`<.participant_rail>` ages against would be frozen"
+    end
+
+    test "the tick is what turns a stuck agent's rail row into Couldn't on the quickmeet",
+         %{conn: conn, space: space, meeting: meeting} do
+      {presence, agent} = seat_agent_in_call(space, "Ticker")
+      view = join(conn, space, meeting)
+
+      :ok = AgentActivity.broadcast(meeting.id, :computing, agent.id, true)
+      html = render(view)
+      assert rail_activity_word(html, presence.id) =~ "Thinking"
+      refute html =~ "Couldn&#39;t"
+
+      # Backdate the stamp past `AgentActivity.ceiling_seconds/0` (120s)
+      # DIRECTLY on the live process's own struct — no clock is mocked, no
+      # process is restarted, this is the exact same `%AgentActivity{}`
+      # the running quickmeet already holds, just as if 121 real seconds
+      # had passed since the broadcast above.
+      #
+      # THROUGH `Phoenix.Component.assign/3`, not a bare `put_in` on the
+      # raw state: LiveView's diff engine decides whether to re-invoke a
+      # nested function component by consulting `socket.assigns.__changed__`
+      # — bookkeeping `assign/3` maintains and a raw mutation of
+      # `state.socket.assigns` bypasses. A `put_in` that skips it changes
+      # the VALUE but leaves `:agent_activity` looking untouched to the
+      # diff, and the next render silently reuses the pre-backdate content
+      # for that attribute — a real trap this test tripped over verifying
+      # itself, not something a production caller can hit (every real
+      # mutation of `:agent_activity` already goes through `assign/3` or
+      # `update/3`, in `MeetingHooks.apply_agent_activity/2`).
+      stale_at = DateTime.add(DateTime.utc_now(), -(AgentActivity.ceiling_seconds() + 1), :second)
+
+      :sys.replace_state(view.pid, fn state ->
+        activity = state.socket.assigns.agent_activity
+        backdated = %{activity | computing: Map.put(activity.computing, agent.id, stale_at)}
+        %{state | socket: Phoenix.Component.assign(state.socket, :agent_activity, backdated)}
+      end)
+
+      assert :sys.get_state(view.pid).socket.assigns.agent_activity.computing[agent.id] ==
+               stale_at
+
+      # The tick is load-bearing here: without a fresh `now` to cap
+      # against, `resolve_at/2` never gets asked again and the row would
+      # still read whatever it read at the last incidental re-render.
+      send(view.pid, :agent_activity_tick)
+      capped_html = render(view)
+
+      # The reason is "agent went offline", not the generic duration —
+      # this fixture's agent has no linked `AgentRuntime` at all, and
+      # `failed_reason/2` checks `Meetings.runtime_offline?/1` (a real,
+      # honest check) before falling back to "no response for <duration>".
+      assert rail_activity_word(capped_html, presence.id) =~ "Couldn't"
+      assert rail_activity_word(capped_html, presence.id) =~ "agent went offline"
+      assert rail_activity_state(capped_html, presence.id) == ["failed"]
     end
   end
 end

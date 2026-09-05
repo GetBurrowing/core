@@ -751,7 +751,50 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:cont, maybe_refresh_roster(socket, space_id)}
   end
 
+  # DISPLAY-ONLY re-render beat for `<.participant_rail>`'s ages and delay
+  # clauses (task 01a06e07 stage 3, correction 1 — see `join_call_shell/2`
+  # for why this is armed only for a real quickmeet, and
+  # `MeetingLive`'s own arming for why `/meetings` reaches this same
+  # clause too: this hook is attached there via `attach/2`).
+  #
+  # Updates and reschedules unconditionally — never guarded on
+  # `:quickmeet_meeting_id` or `:meeting`, unlike the agent-activity FOLD
+  # above. That guard exists because two surfaces could otherwise fold the
+  # same broadcast twice; there is no such collision here; each socket
+  # renders at most one rail, and `DateTime.utc_now/0` is the same honest
+  # answer regardless of which one it is. `{:cont, …}` so a message this
+  # clause consumes still reaches `MeetingLive`'s OWN `handle_info/2` —
+  # which has no clause for this atom, so it falls through to whatever
+  # catch-all it has, exactly like every other `{:cont, …}` here.
+  #
+  # `AgentActivity.resolve_at/2` and `resolve_for_render/2` are PURE
+  # reads — this handler writes nothing to `:agent_activity` itself, only
+  # to the clock the next render caps and ages against. That is the
+  # "never mutate state" half of the stage's tick contract; the other
+  # half ("every state must still be correct if a tick is missed") is
+  # `resolve_at/2`'s own, already proven in `agent_activity_test.exs`.
+  defp handle_info(:agent_activity_tick, socket) do
+    schedule_agent_activity_tick()
+    {:cont, assign(socket, :agent_activity_now, DateTime.utc_now())}
+  end
+
   defp handle_info(_msg, socket), do: {:cont, socket}
+
+  @doc """
+  Arm one `:agent_activity_tick` beat, `AgentActivity.tick_interval_ms/0`
+  from now.
+
+  Public so `MeetingLive`'s authenticated `/meetings` join can arm the
+  FIRST beat itself (task 01a06e07 stage 3) — `join_call_shell/2` above is
+  the quickmeet's own first-arm and is never reached from `/meetings` (its
+  `%{meeting: %{}}}` clause no-ops there). Once armed, `handle_info/2`'s
+  `:agent_activity_tick` clause re-arms itself every tick for BOTH
+  surfaces, since the hook that clause lives on is attached on both — so
+  this function is only ever called at the two joins, never in a loop.
+  """
+  @spec schedule_agent_activity_tick() :: reference()
+  def schedule_agent_activity_tick,
+    do: Process.send_after(self(), :agent_activity_tick, AgentActivity.tick_interval_ms())
 
   @doc """
   Fold an `active_speakers` push from the `MeetingRoom` JS hook into
@@ -1428,6 +1471,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign_new(:quickmeet_rail_open, fn -> false end)
     |> assign_new(:active_meeting_tab, fn -> "people" end)
     |> assign_new(:agent_activity, fn -> AgentActivity.new() end)
+    # The clock `<.participant_rail>` ages against (task 01a06e07 stage 3).
+    # `assign_new` so `/meetings` — which seeds this itself before calling
+    # `attach/2` — is not overwritten, matching every other assign in this
+    # function.
+    |> assign_new(:agent_activity_now, fn -> DateTime.utc_now() end)
     |> assign_new(:agents_by_id, fn -> %{} end)
     |> assign_new(:meeting_candidates, fn -> [] end)
     |> assign_new(:meeting_candidates_closed, fn -> [] end)
@@ -1462,6 +1510,20 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   defp join_call_shell(socket, %{id: meeting_id} = live_meeting) when is_binary(meeting_id) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Platform.PubSub, MeetingsPubSub.meeting_topic(meeting_id))
+
+      # THE QUICKMEET'S HALF OF THE TWO-SURFACE TICK (task 01a06e07 stage
+      # 3, correction 1). Without this the rail's markup still renders
+      # `Thinking · Ns`, but `N` is computed once at this render and never
+      # again — a frozen counter that LOOKS live and is not, and the 120s
+      # ceiling never fires because nothing ever asks `resolve_at/2` again
+      # either. `/meetings`'s half of this loop is armed in
+      # `MeetingLive`'s own `:show`/guest join paths; this function is the
+      # ONLY place a genuine quickmeet join runs (the `%{meeting: %{}}}`
+      # clause above is `/meetings`, which never reaches here), so one
+      # `Process.send_after/3` per real quickmeet join is correct, not a
+      # duplicate of anything /meetings arms. `handle_info/2` below
+      # re-arms itself every tick, so this is only ever the FIRST one.
+      schedule_agent_activity_tick()
     end
 
     participants = socket.assigns[:meeting_participants] || []

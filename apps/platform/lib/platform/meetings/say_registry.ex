@@ -218,6 +218,28 @@ defmodule Platform.Meetings.SayRegistry do
   end
 
   @doc """
+  The earliest `at_ms` among `agent_id`'s accepted says in `room_id`
+  strictly after `since_ms`, or `nil` when there are none.
+
+  Task 01a06e07 stage 2: lets a caller compute WHEN the rate window
+  (`ledger_count_since/3`'s window) next has room, without exposing the
+  raw ledger rows to something that only needs one number.
+  """
+  @spec ledger_oldest_since(binary(), binary(), integer()) :: integer() | nil
+  def ledger_oldest_since(room_id, agent_id, since_ms) when is_integer(since_ms) do
+    matches =
+      :ets.select(@ledger, [
+        {{:"$1", %{room_id: room_id, agent_id: agent_id, at_ms: :"$2"}},
+         [{:is_binary, :"$1"}, {:>, :"$2", since_ms}], [:"$2"]}
+      ])
+
+    case matches do
+      [] -> nil
+      at_ms_list -> Enum.min(at_ms_list)
+    end
+  end
+
+  @doc """
   Accepted says in the room `room_name` by ANY agent strictly after
   `since_ms`; `nil` counts every row for the room. The agent-chain rule.
   """

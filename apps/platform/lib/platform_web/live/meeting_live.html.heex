@@ -1711,6 +1711,7 @@
             agents_by_id={assigns[:agents_by_id] || %{}}
             meeting={@meeting}
             agent_activity={assigns[:agent_activity]}
+            now={assigns[:agent_activity_now]}
             invite_rows={assigns[:invite_rows] || []}
             invite_event={if is_binary(assigns[:user_id]), do: "meeting_invite_agent"}
             candidates={@meeting_candidates}

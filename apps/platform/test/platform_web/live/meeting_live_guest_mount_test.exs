@@ -188,6 +188,41 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert assigns.camera_enabled == true
       assert assigns.screen_share_enabled == false
     end
+
+    # Task 01a06e07 stage 3, correction 1: the tick has to drive the GUEST
+    # surface too, and it cannot reuse `MeetingHooks`' hook-owned
+    # `:agent_activity_tick` — `attach_guest/1` installs no `:meeting_info`
+    # hook by existing design (guest owns its own info handlers directly
+    # in `MeetingLive`), so this exercises the guest's OWN scheduler and
+    # its OWN `:agent_activity_tick_guest` clause end-to-end, the same way
+    # the quickmeet and authenticated `/meetings` tests prove their halves.
+    test "a real :agent_activity_tick_guest message advances @agent_activity_now",
+         %{conn: conn} do
+      meeting = create_meeting()
+
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Jane Doe")
+
+      {:ok, view, _html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      before = :sys.get_state(view.pid).socket.assigns.agent_activity_now
+      assert %DateTime{} = before
+
+      send(view.pid, :agent_activity_tick_guest)
+      # `render/1` is a synchronous round trip through the SAME mailbox
+      # `send/2` just enqueued onto, so by the time it returns the tick's
+      # `handle_info/2` clause has already run.
+      _ = render(view)
+
+      after_tick = :sys.get_state(view.pid).socket.assigns.agent_activity_now
+
+      assert DateTime.compare(after_tick, before) == :gt,
+             "the guest tick fired but @agent_activity_now did not move — a guest's " <>
+               "rail would read ages that never advance and a ceiling that never fires"
+    end
   end
 
   # ── Valid token with nil display_name → :name_entry ──────────────────────

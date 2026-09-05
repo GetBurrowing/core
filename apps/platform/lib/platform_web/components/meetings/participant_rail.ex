@@ -60,7 +60,12 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
 
   import PlatformWeb.AvatarComponents
 
+  alias Platform.Agents.Agent
+  alias Platform.Meetings
   alias Platform.Meetings.AgentActivity
+  alias Platform.Meetings.AgentDelayReason
+  alias Platform.Meetings.Room
+  alias Platform.Meetings.VoiceSeatCache
   alias PlatformWeb.MeetingLive
 
   attr(:participants, :list, required: true)
@@ -72,13 +77,43 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     doc: "%Platform.Meetings.AgentActivity{} (or a resolved map) for this meeting"
   )
 
+  attr(:now, :any,
+    default: nil,
+    doc: """
+    The clock the row ages are computed against (task 01a06e07 stage 3).
+    Threaded in from a `%DateTime{}` assign the caller's own `:tick`
+    updates every second (`AgentActivity.tick_interval_ms/0`) — a real,
+    top-level LiveView assign that changes, which is what makes LiveView
+    re-diff this component on the next tick. Reading `DateTime.utc_now/0`
+    INSIDE this function would recompute a fresh age on every call, but
+    nothing would tell the diff to re-render it, so ages would freeze at
+    whatever the last assign-driven render happened to compute. Defaults to
+    `DateTime.utc_now/0` only so a caller that renders this once (a test,
+    a static capture) still gets a correct — just not ticking — answer.
+    """
+  )
+
   def participant_rail(assigns) do
     {humans, agents} = MeetingLive.partition_participants(assigns.participants)
+    now = assigns[:now] || DateTime.utc_now()
+    resolved_activity = AgentActivity.resolve_for_render(assigns[:agent_activity], now)
+
+    # The Room lookup `delay_reason/3` needs (reply budget, agent chain) is
+    # a DB read. Skipping it whenever nobody in the row set is actually
+    # `:computing`/`:typing` keeps that cost bounded by "is anyone working
+    # right now", not paid on every idle-room tick — the same bounding
+    # instinct `Platform.Meetings.VoiceSeatCache`'s moduledoc argues for.
+    working? =
+      Enum.any?(resolved_activity, fn {_id, %{state: s}} -> s in [:computing, :typing] end)
+
+    room = if working?, do: room_for(assigns.meeting), else: nil
 
     assigns =
       assigns
       |> assign(:humans, humans)
       |> assign(:agents, agents)
+      |> assign(:resolved_activity, resolved_activity)
+      |> assign(:current_room, room)
 
     ~H"""
     <div data-component="participant-rail" class="flex flex-col">
@@ -211,8 +246,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  would give them two initials over the seeded human
                  palette and stamp them `data-avatar-kind="human"`.
                  `agent_activity_avatar/1` renders it internally. --%>
+            <% info = agent_row_info(@resolved_activity, p, @agents_by_id, @current_room) %>
             <.agent_activity_avatar
-              state={AgentActivity.for_agent(@agent_activity, agent_id_of(p))}
+              state={info.state}
               name={p.display_name || "Agent"}
               avatar_url={p.avatar_url}
             />
@@ -223,14 +259,24 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               >
                 {p.display_name || "Agent"}
               </div>
+              <%!-- Task 01a06e07 stage 3: the age and the delay/failure
+                   reason live HERE, in the same slot and colour the word
+                   already had — no new token, no new node kind. The word
+                   + age pairing is kept on one line (`whitespace-nowrap`);
+                   the trailing reason is its own span in the same
+                   `flex-wrap` row so it drops to a second line rather than
+                   being clipped — the node used to carry `truncate`, which
+                   is exactly the clip this stage removes. --%>
               <div
                 data-role="agent-activity-word"
-                class={[
-                  "truncate text-[11px] font-medium",
-                  activity_meta(@agent_activity, p).text
-                ]}
+                class={["flex flex-wrap items-baseline gap-x-1 text-[11px] font-medium", info.text]}
               >
-                {activity_meta(@agent_activity, p).word}
+                <span data-role="agent-activity-primary" class="whitespace-nowrap">
+                  {info.primary}
+                </span>
+                <span :if={info.reason} data-role="agent-activity-reason">
+                  {"· " <> info.reason}
+                </span>
               </div>
             </div>
 
@@ -238,7 +284,12 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  is this agent connected at all. It is a real signal, so
                  it moves to the row's trailing edge rather than being
                  dropped when the activity ring took over the avatar —
-                 matching the trailing dot on the human rows. --%>
+                 matching the trailing dot on the human rows. Deliberately
+                 still reads `@agent_activity` (the pre-ceiling struct/map),
+                 not `@resolved_activity`: this is a DIFFERENT fact
+                 (connected at all, not what it is doing), the same
+                 pre-ceiling `for_agent/2` `MeetingLive.agent_status_dot_class/3`
+                 always used, and out of this stage's scope. --%>
             <span
               class={[
                 "size-[7px] flex-shrink-0 rounded-full",
@@ -268,14 +319,118 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
 
   defp agent_id_of(_participant), do: nil
 
-  # The state word and its colour come from `AgentActivityBadge`'s own
-  # table — the same one that decides the ring and the glyph — so the
-  # word under the name cannot drift from the ring around the face.
-  # Rendering the badge component here just to scrape the word would
-  # put a second ring in the row, so the table is read directly.
-  defp activity_meta(agent_activity, participant) do
-    agent_activity
-    |> AgentActivity.for_agent(agent_id_of(participant))
-    |> AgentActivityBadge.activity_meta()
+  # ── Task 01a06e07 stage 3: the ceiling-aware render path ────────────────
+  #
+  # One resolved entry, one composed row — everything the template needs
+  # for one agent's word/ring/glyph, computed once instead of the three
+  # separate re-derivations the old `activity_meta/2` call sites implied.
+  #
+  # `resolved_activity` is `AgentActivity.resolve_for_render/2`'s output —
+  # already ceiling-capped for a real struct, or a synthetic `age_s: 0`
+  # entry for a bare test-fixture map (see that function's doc). Idle/
+  # absent agents fall back to the same `age_s: 0` shape so `compose_word/4`
+  # never has to special-case a missing entry.
+  defp agent_row_info(resolved_activity, participant, agents_by_id, room) do
+    agent_id = agent_id_of(participant)
+    entry = Map.get(resolved_activity, agent_id, %{state: :idle, entered_at: nil, age_s: 0})
+    meta = AgentActivityBadge.activity_meta(entry.state)
+    agent = Map.get(agents_by_id, agent_id)
+
+    {primary, reason} = compose_word(entry, meta, agent, room)
+
+    %{state: entry.state, text: meta.text, primary: primary, reason: reason}
   end
+
+  # `:computing` / `:typing` — the word carries the age IN THE SAME SLOT
+  # (`Thinking · 3s`), never a separate counter node, per the stage spec's
+  # "one working state, one word". The delay clause, when
+  # `AgentDelayReason.for_agent/1` has one, is a SEPARATE trailing span so
+  # it alone can wrap — see the template.
+  defp compose_word(%{state: state, age_s: age_s}, meta, agent, room)
+       when state in [:computing, :typing] do
+    {"#{meta.word} · #{age_s}s", delay_reason(agent, room, age_s)}
+  end
+
+  # `:failed` — the word carries NO counter (the stage spec: "Couldn't
+  # carries its reason, not a counter"); the reason is the same trailing
+  # span every other state's delay clause uses.
+  defp compose_word(%{state: :failed} = entry, meta, agent, _room) do
+    {meta.word, failed_reason(agent, entry)}
+  end
+
+  # `:idle`, `:heard`, and the unreachable `:listening` fallback: the bare
+  # word, no counter, no reason — matches the stage spec's "Heard and Idle
+  # carry NO counter" and `AgentActivityBadge`'s own refusal to draw
+  # `:listening` as anything but idle.
+  defp compose_word(_entry, meta, _agent, _room), do: {meta.word, nil}
+
+  # Why is a still-working agent taking a while, IF there is an honest
+  # thing to say (see `AgentDelayReason` — a specific cause shows
+  # immediately, the generic "still running a tool" only past its own
+  # age threshold, and `nil` when neither applies).
+  #
+  # A participant with no resolved `Agent{}` (guest surfaces pass
+  # `agents_by_id: %{}`; a bare test fixture has none) can only offer the
+  # `age_s` fact — every other fact needs the agent row `Meetings`/
+  # `VoiceSeatCache` read against, and reporting a specific cause we did
+  # not actually check would be a worse lie than reporting none.
+  defp delay_reason(nil, _room, age_s), do: AgentDelayReason.for_agent(%{age_s: age_s})
+
+  defp delay_reason(%Agent{} = agent, room, age_s) do
+    facts =
+      %{
+        age_s: age_s,
+        runtime_offline?: Meetings.runtime_offline?(agent),
+        no_voice_worker?: not VoiceSeatCache.seated?(agent)
+      }
+      |> Map.merge(room_facts(room, agent))
+
+    AgentDelayReason.for_agent(facts)
+  end
+
+  # Reply-budget and agent-chain facts need the LIVE CALL's `Room` (a
+  # different schema from the `Meeting` this component is handed — see
+  # `Platform.Meetings.reply_budget_exhausted?/2`'s @doc). `nil` room
+  # (no active call row, or nobody working this render — see
+  # `participant_rail/1`'s `working?` gate) means those two facts are
+  # simply not offered, not that they are false.
+  defp room_facts(%Room{} = room, %Agent{} = agent) do
+    %{
+      reply_budget_exhausted?: Meetings.reply_budget_exhausted?(room, agent),
+      reply_budget_reset_in_s: Meetings.reply_budget_reset_in_s(room, agent),
+      agent_chain_too_deep?: Meetings.agent_chain_too_deep?(room)
+    }
+  end
+
+  defp room_facts(_room, _agent), do: %{}
+
+  defp room_for(%{chat_space_id: space_id}) when is_binary(space_id),
+    do: Meetings.get_active_room(space_id)
+
+  defp room_for(_meeting), do: nil
+
+  # Why an agent past the ceiling `Couldn't` — one real, checkable cause
+  # (`Meetings.runtime_offline?/1`, the same fact `AgentDelayReason` offers
+  # for a still-working agent) ahead of the honest default: how long
+  # nothing has answered, from the SAME `age_s` the ceiling itself capped
+  # on. No `Agent{}` to check (guest surfaces, bare test fixtures) falls
+  # straight to the duration — see `delay_reason/3`'s identical reasoning.
+  defp failed_reason(nil, %{age_s: age_s}), do: "no response for " <> format_duration(age_s)
+
+  defp failed_reason(%Agent{} = agent, %{age_s: age_s}) do
+    if Meetings.runtime_offline?(agent) do
+      "agent went offline"
+    else
+      "no response for " <> format_duration(age_s)
+    end
+  end
+
+  # Only the ceiling's own reads ever pass an `age_s` big enough to need
+  # minutes (a `:computing`/`:typing` counter is always < 120 by
+  # construction — past that it has already become `:failed`), so seconds
+  # only shows below a minute and minutes above it; nothing here has ever
+  # needed to mix the two.
+  defp format_duration(age_s) when is_integer(age_s) and age_s < 60, do: "#{age_s}s"
+  defp format_duration(age_s) when is_integer(age_s), do: "#{div(age_s, 60)}m"
+  defp format_duration(_age_s), do: "0s"
 end

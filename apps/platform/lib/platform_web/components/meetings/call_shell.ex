@@ -141,6 +141,21 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   attr(:meeting, :any, default: nil)
   attr(:agent_activity, :any, default: nil)
 
+  attr(:now, :any,
+    default: nil,
+    doc: """
+    Forwarded verbatim to `ParticipantRail.participant_rail/1` (task
+    01a06e07 stage 3) — see that attr's doc. Both callers of `call_rail/1`
+    (`/meetings` and the quickmeet panel) own their own 1-second
+    `:agent_activity_tick` and should pass the `DateTime` assign it
+    maintains — that changing top-level assign is what makes LiveView
+    re-diff the rail on the next tick. A caller that omits it still
+    renders a correct rail (`participant_rail/1` falls back to
+    `DateTime.utc_now/0`); it just will not tick between unrelated
+    re-renders.
+    """
+  )
+
   attr(:invite_rows, :list,
     default: [],
     doc: """
@@ -252,6 +267,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               agents_by_id={@agents_by_id}
               meeting={@meeting}
               agent_activity={@agent_activity}
+              now={@now}
             />
             {render_slot(@people_extra)}
             <.invite_section

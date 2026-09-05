@@ -11475,9 +11475,115 @@ defmodule PlatformWeb.MeetingLiveTest do
       # green. Before it, `agent_status_dot_class/3` mapped every
       # non-idle state to `bg-success`, so this assertion could not tell
       # `:computing` from `:typing` from `:failed`.
+      #
+      # `=~`, not `==`: task 01a06e07 stage 3 appends an age counter (and,
+      # for this fixture — no linked voice worker — a delay clause) to the
+      # SAME word node the bare word used to occupy alone.
       assert rail_activity_state(busy_html, presence.id) == ["computing"]
-      assert rail_activity_word(busy_html, presence.id) == "Thinking"
+      assert rail_activity_word(busy_html, presence.id) =~ "Thinking"
       assert tile_activity(busy_html, agent_id) == ["computing"]
+    end
+
+    # Task 01a06e07 stage 3, correction 1 — "drive both surfaces" — and
+    # correction 2 — "the ceiling is currently inert on the render path".
+    # This is `/meetings`' own half of both: `MeetingHooks.schedule_agent_activity_tick/0`
+    # is armed directly from `MeetingLive`'s `:show` join (not through
+    # `join_call_shell/2`, which no-ops here), and the SAME
+    # `:agent_activity_tick` clause `meeting_hooks_agent_typing_test.exs`
+    # proves on the quickmeet handles it here too, since `MeetingHooks.attach/2`
+    # installs that hook on this surface as well.
+    test "a real :agent_activity_tick message advances the clock, and past the ceiling the row reads Couldn't",
+         %{conn: conn, meeting: meeting, space: space} do
+      {presence, agent_id} = seed_meeting_presence(space, "agent", "Ticker")
+
+      {:ok, row} = enqueue_intent(meeting, %{target_agent_id: agent_id})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      before = :sys.get_state(view.pid).socket.assigns.agent_activity_now
+      assert %DateTime{} = before
+
+      html = render(view)
+      assert rail_activity_word(html, presence.id) =~ "Thinking"
+
+      send(view.pid, :agent_activity_tick)
+      # `render/1` is a synchronous round trip through the SAME mailbox
+      # `send/2` just enqueued onto, so by the time it returns the tick's
+      # `handle_info/2` clause has already run.
+      _ = render(view)
+
+      after_tick = :sys.get_state(view.pid).socket.assigns.agent_activity_now
+
+      assert DateTime.compare(after_tick, before) == :gt,
+             "the tick fired but @agent_activity_now did not move — /meetings' rail " <>
+               "ages would be as frozen as the quickmeet's were before this stage"
+
+      # Backdate the SAME row's stamp past `AgentActivity.ceiling_seconds/0`
+      # (120s), through `Phoenix.Component.assign/3` rather than a bare
+      # state mutation — LiveView's diff engine gates a nested component's
+      # re-render on `socket.assigns.__changed__`, which only `assign/3`/
+      # `update/3` maintain; a raw `put_in` on the process state changes
+      # the VALUE but leaves the diff thinking `:agent_activity` never
+      # moved, and the next render silently reuses the pre-backdate HTML.
+      stale_at =
+        DateTime.add(
+          DateTime.utc_now(),
+          -(Platform.Meetings.AgentActivity.ceiling_seconds() + 1),
+          :second
+        )
+
+      :sys.replace_state(view.pid, fn state ->
+        activity = state.socket.assigns.agent_activity
+        backdated = %{activity | computing: Map.put(activity.computing, agent_id, stale_at)}
+        %{state | socket: Phoenix.Component.assign(state.socket, :agent_activity, backdated)}
+      end)
+
+      send(view.pid, :agent_activity_tick)
+      capped_html = render(view)
+
+      # Stage 1 (`61d4e616`) shipped `resolve_at/2`'s 120s ceiling
+      # unit-tested but never called from any render path — `for_agent/2`
+      # is what `participant_rail.ex` called, and it has no ceiling. This
+      # is the render-level proof the ceiling now actually reaches the
+      # screen, on the authenticated `/meetings` surface.
+      assert rail_activity_word(capped_html, presence.id) =~ "Couldn't"
+      assert rail_activity_state(capped_html, presence.id) == ["failed"]
+    end
+
+    # The stage spec's own example: "Thinking · 47s · reply budget resets
+    # in 13s". `Meetings.say/4`'s own path needs a minted LiveKit token and
+    # a resolved voice runtime, neither of which this test wires up — and
+    # the budget check happens BEFORE either, so seeding the exact ledger
+    # `Meetings.reply_budget_exhausted?/2` reads is the honest way to
+    # reach "exhausted" without faking a whole voice call.
+    test "a still-computing agent's row carries the SPECIFIC reply-budget clause",
+         %{conn: conn, meeting: meeting, space: space} do
+      {presence, agent_id} = seed_meeting_presence(space, "agent", "Budgeted")
+      room = Platform.Meetings.get_active_room(space.id)
+      now_ms = System.monotonic_time(:millisecond)
+
+      for _ <- 1..Platform.Meetings.meeting_say_budget_per_minute() do
+        Platform.Meetings.SayRegistry.ledger_put(Platform.Types.UUIDv7.generate(), %{
+          room_id: room.id,
+          room_name: room.livekit_room_name,
+          agent_id: agent_id,
+          at_ms: now_ms
+        })
+      end
+
+      {:ok, row} = enqueue_intent(meeting, %{target_agent_id: agent_id})
+      {:ok, _} = force_status(meeting, row, :dispatched)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = render(view)
+
+      # Same slot, same colour as the bare counter — the clause is
+      # appended to the SAME `data-role="agent-activity-word"` node, not a
+      # second one.
+      assert rail_activity_word(html, presence.id) =~ "Thinking"
+      assert rail_activity_word(html, presence.id) =~ "reply budget resets in"
+      assert rail_activity_state(html, presence.id) == ["computing"]
     end
 
     test "a socket that mounts AFTER the dispatch hydrates the in-flight state",

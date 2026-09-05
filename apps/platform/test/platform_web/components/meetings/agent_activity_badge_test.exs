@@ -119,4 +119,39 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadgeTest do
       assert badge(state) =~ ~s(data-activity-state="#{state}")
     end
   end
+
+  # `:heard` (task 01a06e07 stage 2 gave it a producer and a decay;
+  # stage 3 gives it a row in this ONE table, per the stage's own
+  # constraint — a second mapping was explicitly ruled out). Same shape
+  # of test as "render three DIFFERENT outputs" above: rendering one
+  # state and asserting its word appears would have been green even if
+  # `:heard` had silently fallen through to `:idle`'s presentation, which
+  # is exactly what it did before this row existed.
+  describe "the Heard receipt" do
+    test "renders its OWN word and glyph, distinct from every other state" do
+      heard = badge(:heard)
+      thinking = badge(:computing)
+      idle = badge(:idle)
+
+      assert heard =~ "Heard"
+      assert heard =~ ~s(data-activity-state="heard")
+      refute heard == idle
+      refute heard == thinking
+
+      assert MapSet.size(MapSet.new([heard, thinking, idle])) == 3
+    end
+
+    test "sits on the info slot, like Thinking and Writing — never warning" do
+      heard = badge(:heard)
+
+      assert heard =~ "border-info"
+      assert heard =~ "text-info"
+      refute heard =~ "warning"
+    end
+
+    test "its ring pulses, unlike Thinking's" do
+      assert badge(:heard) =~ "animate-pulse"
+      refute badge(:computing) =~ "animate-pulse"
+    end
+  end
 end

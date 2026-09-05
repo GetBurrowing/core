@@ -238,6 +238,28 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
       face_dim: false
     }
 
+  # `:heard` — a per-utterance receipt, not a resting badge (task
+  # `01a06e07` stage 2 gave it a producer and a decay in `resolve_at/2`;
+  # this row is what makes it visible — see `Platform.Meetings.AgentActivity`'s
+  # moduledoc for why it turns over rather than latching like `:listening`
+  # would have). Same `info` slot as Thinking/Writing: the agent is doing
+  # something FOR you, not asking anything OF you. `animate: true` reads as
+  # "one ring pulse" in practice, because the stamp itself only lives
+  # `AgentActivity.heard_decay_seconds/0` (2s) before `resolve_at/2` lets it
+  # fall back to whatever the agent's other signals say — there is no
+  # separate "single pulse" utility in this codebase's motion vocabulary,
+  # and adding one would be the second token this stage's own instructions
+  # forbid.
+  defp meta(:heard),
+    do: %{
+      ring: "border-info text-info",
+      text: "text-info",
+      glyph: "✓",
+      word: "Heard",
+      animate: true,
+      face_dim: false
+    }
+
   defp meta(:failed),
     do: %{
       ring: "border-error text-error",

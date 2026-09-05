@@ -504,4 +504,299 @@ defmodule Platform.Meetings.AgentActivityTest do
              |> Enum.all?(&(&1 != :listening))
     end
   end
+
+  # ── The read-time ceiling (task 01a06e07 stage 1) ──────────────────────────
+  #
+  # The stuck state this closes is the one this module's own moduledoc
+  # already described: a queue owner that stops mid-flight broadcasts no
+  # terminal, so a live socket held an agent `:computing` forever. The
+  # fix is a bound derived at READ time from `entered_at` and a `now`
+  # handed in — so every test here builds its aged value out of two
+  # `DateTime`s and runs with no timer, no sleep and no process.
+  describe "the read-time ceiling" do
+    setup do
+      # A bare id: `put_at/5` only requires `is_binary`, and using a real
+      # agent row here would suggest the ceiling consults one. It does not.
+      {:ok, t0: ~U[2026-09-04 12:00:00Z], agent_id: Platform.Types.UUIDv7.generate()}
+    end
+
+    # THE subtle one. `:computing` is mirrored from every intent-row
+    # transition and `:typing` from every producer toggle, so a working
+    # agent re-asserts the same signal repeatedly. If a repeat restamped,
+    # the age would reset on every repeat and the ceiling could never
+    # fire for a producer that is still emitting — it would only ever
+    # catch total silence.
+    #
+    # Asserted twice over: the stamp itself is unmoved, AND the
+    # consequence — the repeat has not bought another two minutes.
+    test "re-asserting a held signal does not restamp it", %{t0: t0, agent_id: agent_id} do
+      at_60 = DateTime.add(t0, 60, :second)
+      at_130 = DateTime.add(t0, 130, :second)
+
+      first = AgentActivity.put_at(AgentActivity.new(), :computing, agent_id, true, t0)
+      repeated = AgentActivity.put_at(first, :computing, agent_id, true, at_60)
+
+      assert %{^agent_id => %{state: :computing, entered_at: ^t0, age_s: 60}} =
+               AgentActivity.resolve_at(repeated, at_60)
+
+      assert %{^agent_id => %{state: :failed}} = AgentActivity.resolve_at(repeated, at_130)
+
+      # The control, and it is the SAME call sequence bar one `false`:
+      # an agent that actually LEFT the signal and re-entered it does
+      # take the new stamp, and so is still working at 130s. Without
+      # this pair, "never restamp" and "restamp on the false" both pass.
+      reentered =
+        first
+        |> AgentActivity.put_at(:computing, agent_id, false, at_60)
+        |> AgentActivity.put_at(:computing, agent_id, true, at_60)
+
+      assert %{^agent_id => %{state: :computing, entered_at: ^at_60, age_s: 70}} =
+               AgentActivity.resolve_at(reentered, at_130)
+    end
+
+    # The bound itself, on both working signals, either side of the edge.
+    test "under the ceiling still works; at and over it resolves :failed",
+         %{t0: t0, agent_id: agent_id} do
+      assert AgentActivity.ceiling_seconds() == 120
+
+      for signal <- [:computing, :typing] do
+        activity = AgentActivity.put_at(AgentActivity.new(), signal, agent_id, true, t0)
+
+        assert %{^agent_id => %{state: ^signal, age_s: 119}} =
+                 AgentActivity.resolve_at(activity, DateTime.add(t0, 119, :second))
+
+        assert %{^agent_id => %{state: :failed, age_s: 120}} =
+                 AgentActivity.resolve_at(activity, DateTime.add(t0, 120, :second))
+
+        assert %{^agent_id => %{state: :failed}} =
+                 AgentActivity.resolve_at(activity, DateTime.add(t0, 600, :second))
+      end
+    end
+
+    # `:failed`, NOT `:idle`. Idle agents are absent from the resolved
+    # map, so "expires to idle" and "expires to failed" differ in two
+    # ways — the key is still there, and its state names a fault. Both
+    # are asserted, because dropping the key is the failure mode that a
+    # `state == :failed` assertion alone would not catch.
+    test "an expired working signal is a fault, not a disappearance",
+         %{t0: t0, agent_id: agent_id} do
+      resolved =
+        AgentActivity.new()
+        |> AgentActivity.put_at(:computing, agent_id, true, t0)
+        |> AgentActivity.resolve_at(DateTime.add(t0, 300, :second))
+
+      assert Map.has_key?(resolved, agent_id)
+      assert resolved[agent_id].state == :failed
+      assert resolved[agent_id].age_s == 300
+    end
+
+    # `:failed` keeps its precedence, and is not itself aged out: an
+    # aged failure is still the last true thing that happened.
+    test ":failed outranks the working signals and never expires",
+         %{t0: t0, agent_id: agent_id} do
+      activity =
+        AgentActivity.new()
+        |> AgentActivity.put_at(:failed, agent_id, true, t0)
+        |> AgentActivity.put_at(:typing, agent_id, true, DateTime.add(t0, 200, :second))
+
+      assert %{^agent_id => %{state: :failed, entered_at: ^t0, age_s: 210}} =
+               AgentActivity.resolve_at(activity, DateTime.add(t0, 210, :second))
+    end
+
+    # Clock skew between the row that stamped and the socket that reads
+    # must not manufacture a failure.
+    test "a `now` that predates the stamp does not cap", %{t0: t0, agent_id: agent_id} do
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, agent_id, true, t0)
+
+      assert %{^agent_id => %{state: :computing, age_s: -30}} =
+               AgentActivity.resolve_at(activity, DateTime.add(t0, -30, :second))
+    end
+
+    # The no-process claim, made checkable rather than asserted in prose.
+    #
+    # A value round-tripped through `term_to_binary/1` carries no pid,
+    # no reference and no timer — anything scheduled would not survive
+    # the copy. That copy expires identically, so the ceiling is a
+    # function of the two `DateTime`s and nothing else.
+    test "the ceiling survives serialisation, so nothing live is behind it",
+         %{t0: t0, agent_id: agent_id} do
+      revived =
+        AgentActivity.new()
+        |> AgentActivity.put_at(:computing, agent_id, true, t0)
+        |> :erlang.term_to_binary()
+        |> :erlang.binary_to_term()
+
+      assert %{^agent_id => %{state: :failed}} =
+               AgentActivity.resolve_at(revived, DateTime.add(t0, 130, :second))
+
+      # And the module is still a value module. Turning it into a
+      # GenServer to sweep the ceiling is the change this forbids.
+      refute function_exported?(AgentActivity, :init, 1)
+      refute function_exported?(AgentActivity, :handle_info, 2)
+    end
+
+    # Through the REAL producer, and the reason the ceiling exists: an
+    # in-flight row whose queue owner never reports a terminal. The
+    # stamp comes off the row's `dispatched_at`, not off the hydrating
+    # socket's clock — otherwise a remount would reset the age and the
+    # stuck agent would stay `:computing` across every reconnect.
+    test "a hydrated in-flight row ages from the ROW's clock", %{meeting: meeting} do
+      agent = create_agent()
+      row = dispatch_intent(meeting, agent.id)
+
+      activity = AgentActivity.hydrate(meeting.id)
+
+      assert %{state: :computing} =
+               AgentActivity.resolve_at(activity, row.dispatched_at)[agent.id]
+
+      assert %{state: :failed} =
+               AgentActivity.resolve_at(activity, DateTime.add(row.dispatched_at, 130, :second))[
+                 agent.id
+               ]
+    end
+
+    # `resolve/1` and `for_agent/2` are the pre-ceiling reads and stay
+    # that way this stage; the render path moves later. Pinned so the
+    # move is a deliberate edit rather than a silent one.
+    test "resolve/1 and for_agent/2 are unchanged by the ceiling",
+         %{t0: t0, agent_id: agent_id} do
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, agent_id, true, t0)
+
+      assert AgentActivity.resolve(activity) == %{agent_id => :computing}
+      assert AgentActivity.for_agent(activity, agent_id) == :computing
+    end
+  end
+
+  # ── `:heard` (task 01a06e07 stage 2) ────────────────────────────────────────
+  #
+  # `:listening` was removed from this rail (canvas `01a05b11-54ff`, ratified
+  # by Harper 2026-09-03) because every agent in a call is always listening,
+  # so a badge on for everyone all the time takes a row from a state that
+  # actually turns over. `:heard` is legitimate only because it decays — the
+  # load-bearing test below is the one that pins that decay, not the ones
+  # that pin the badge lighting up in the first place.
+  describe ":heard" do
+    setup do
+      {:ok, t0: ~U[2026-09-04 12:00:00Z], agent_id: Platform.Types.UUIDv7.generate()}
+    end
+
+    # THE load-bearing test. If `:heard` ever stopped decaying — latched
+    # like `:computing`/`:typing`, or simply left out of `resolve_at/2`'s
+    # aging — this is `:listening` again, under a new name, and it would
+    # have to be removed a second time for the identical reason.
+    test "two seconds after the stamp the agent is NOT :heard", %{t0: t0, agent_id: agent_id} do
+      assert AgentActivity.heard_decay_seconds() == 2
+
+      activity = AgentActivity.put_at(AgentActivity.new(), :heard, agent_id, true, t0)
+
+      assert %{^agent_id => %{state: :heard, entered_at: ^t0, age_s: 0}} =
+               AgentActivity.resolve_at(activity, t0)
+
+      assert %{^agent_id => %{state: :heard, age_s: 1}} =
+               AgentActivity.resolve_at(activity, DateTime.add(t0, 1, :second))
+
+      resolved_at_2 = AgentActivity.resolve_at(activity, DateTime.add(t0, 2, :second))
+      refute match?(%{^agent_id => %{state: :heard}}, resolved_at_2)
+      # Nothing else is held, so the underlying state is idle — absent.
+      refute Map.has_key?(resolved_at_2, agent_id)
+
+      resolved_at_10 = AgentActivity.resolve_at(activity, DateTime.add(t0, 10, :second))
+      refute match?(%{^agent_id => %{state: :heard}}, resolved_at_10)
+    end
+
+    # `:heard` reverts to the agent's OTHER signal, not to idle
+    # unconditionally — decay REMOVES it from consideration rather than
+    # capping it to a fixed target, unlike the ceiling above.
+    test "after decay the agent reads as its underlying state, not idle",
+         %{t0: t0, agent_id: agent_id} do
+      activity =
+        AgentActivity.new()
+        |> AgentActivity.put_at(:computing, agent_id, true, t0)
+        |> AgentActivity.put_at(:heard, agent_id, true, t0)
+
+      assert %{^agent_id => %{state: :heard}} = AgentActivity.resolve_at(activity, t0)
+
+      assert %{^agent_id => %{state: :computing, entered_at: ^t0}} =
+               AgentActivity.resolve_at(activity, DateTime.add(t0, 2, :second))
+    end
+
+    # While live, `:heard` overlays even a `:failed` agent — it is a
+    # receipt about THIS delivery, not a claim that the agent's prior
+    # work succeeded. After decay the failure is exactly as it was.
+    test "while live, :heard overlays :failed; decayed, :failed is unchanged",
+         %{t0: t0, agent_id: agent_id} do
+      activity =
+        AgentActivity.new()
+        |> AgentActivity.put_at(:failed, agent_id, true, t0)
+        |> AgentActivity.put_at(:heard, agent_id, true, DateTime.add(t0, 5, :second))
+
+      assert %{^agent_id => %{state: :heard}} =
+               AgentActivity.resolve_at(activity, DateTime.add(t0, 5, :second))
+
+      assert %{^agent_id => %{state: :failed, entered_at: ^t0}} =
+               AgentActivity.resolve_at(activity, DateTime.add(t0, 8, :second))
+    end
+
+    # The opposite of the ceiling's no-restamp rule, and load-bearing for
+    # the opposite reason: `:heard` is a per-UTTERANCE event, so a second
+    # delivered segment arriving inside the first one's decay window must
+    # restart the window rather than being absorbed by it.
+    test "a second heard stamp before decay restarts the window",
+         %{t0: t0, agent_id: agent_id} do
+      at_1 = DateTime.add(t0, 1, :second)
+
+      activity =
+        AgentActivity.new()
+        |> AgentActivity.put_at(:heard, agent_id, true, t0)
+        |> AgentActivity.put_at(:heard, agent_id, true, at_1)
+
+      # Still heard at t0+2s (only 1s since the SECOND stamp).
+      assert %{^agent_id => %{state: :heard, entered_at: ^at_1, age_s: 1}} =
+               AgentActivity.resolve_at(activity, DateTime.add(t0, 2, :second))
+
+      # Decayed by t0+3s (2s since the second stamp).
+      refute match?(
+               %{^agent_id => %{state: :heard}},
+               AgentActivity.resolve_at(activity, DateTime.add(t0, 3, :second))
+             )
+    end
+
+    # `resolve/1` and `for_agent/2` — the pre-ceiling reads — never see
+    # `:heard` at all, on purpose: neither has a way to age it out, so
+    # surfacing it there would latch it forever the first time any agent
+    # heard anything. See `AgentActivity`'s moduledoc and the comment on
+    # `@precedence`.
+    test "resolve/1 and for_agent/2 never surface :heard", %{t0: t0, agent_id: agent_id} do
+      activity = AgentActivity.put_at(AgentActivity.new(), :heard, agent_id, true, t0)
+
+      assert AgentActivity.resolve(activity) == %{}
+      assert AgentActivity.for_agent(activity, agent_id) == :idle
+    end
+
+    test ":heard is in signals/0 and states/0, now that it has a producer" do
+      assert :heard in AgentActivity.signals()
+      assert :heard in AgentActivity.states()
+    end
+
+    # The generic shell-topic broadcast, exercised with :heard the same
+    # way the intent-transition tests above exercise :computing.
+    test "broadcasting :heard publishes on the meeting shell topic and folds via put/4",
+         %{meeting: meeting} do
+      agent = create_agent()
+      :ok = MeetingsPubSub.subscribe_meeting(meeting.id)
+
+      :ok = AgentActivity.broadcast(meeting.id, :heard, agent.id, true)
+
+      assert_receive {:agent_activity,
+                      %{meeting_id: meeting_id, agent_id: agent_id, signal: :heard, active?: true}}
+
+      assert meeting_id == meeting.id
+      assert agent_id == agent.id
+
+      folded = AgentActivity.put(AgentActivity.new(), :heard, agent.id, true)
+
+      assert %{^agent_id => %{state: :heard}} =
+               AgentActivity.resolve_at(folded, DateTime.utc_now())
+    end
+  end
 end

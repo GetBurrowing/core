@@ -1750,6 +1750,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         agents_by_id={@agents_by_id}
         meeting={@meeting}
         agent_activity={@agent_activity}
+        now={assigns[:agent_activity_now]}
         invite_rows={@invite_rows}
         invite_event="quickmeet_invite_agent"
         candidates={@candidates}
