@@ -11342,6 +11342,20 @@ defmodule PlatformWeb.MeetingLiveTest do
     |> String.trim()
   end
 
+  # The `:delayed` second line (task 01a07400 stage 3). A separate node
+  # from the word, deliberately: the reason is the protected line and it
+  # wraps rather than sharing the word's row.
+  defp rail_delay_reason(html, participant_row_id) do
+    html
+    |> frag()
+    |> LazyHTML.query(
+      ~s([data-component="participant-rail"] ) <>
+        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-delay-reason"])
+    )
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
   defp rail_dot_class(html, participant_row_id) do
     html
     |> frag()
@@ -11479,8 +11493,34 @@ defmodule PlatformWeb.MeetingLiveTest do
       # `=~`, not `==`: task 01a06e07 stage 3 appends an age counter (and,
       # for this fixture — no linked voice worker — a delay clause) to the
       # SAME word node the bare word used to occupy alone.
-      assert rail_activity_state(busy_html, presence.id) == ["computing"]
-      assert rail_activity_word(busy_html, presence.id) =~ "Thinking"
+      # CHANGED in task 01a07400 stage 3, and CORRECTED later in the same
+      # stage. `seed_meeting_presence/3` inserts a bare `%Agent{}` with NO
+      # `runtime_id` and no `agent_runtimes` row at all, so this fixture
+      # trips TWO specific causes at once and the only question was which
+      # one the `cond` reached first.
+      #
+      # It used to say "no voice worker in this room", because that clause
+      # sat above `runtime_offline?`. That clause is no longer promotable —
+      # a missing voice worker does not hold up computing, and `:speaking`
+      # is not even delayable, so it had no true configuration as a state
+      # (see `AgentDelayReason.specific_for_agent/1`). The row is still
+      # `:delayed`, now through the cause that IS true of this fixture: the
+      # agent has no reachable runtime whatsoever.
+      #
+      # The point of THIS test is untouched and is what the assertions
+      # below still prove: the row is derived from THIS MEETING, not from
+      # the global `agents.status` column. `:delayed` is a meeting-scoped
+      # reading exactly as `:computing` was — and, critically, it is not
+      # `:idle`, which is what the agent would read as if the meeting
+      # signal had been missed.
+      assert rail_activity_state(busy_html, presence.id) == ["delayed"]
+      assert rail_activity_word(busy_html, presence.id) =~ "Delayed"
+      refute rail_activity_word(busy_html, presence.id) =~ "Idle"
+      assert rail_delay_reason(busy_html, presence.id) =~ "agent went offline"
+
+      # The TILE surface is unchanged by stage 3 and still reads the
+      # underlying signal, which is the proof the meeting signal itself is
+      # `:computing` underneath the delay qualifying it.
       assert tile_activity(busy_html, agent_id) == ["computing"]
     end
 
@@ -11505,7 +11545,12 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert %DateTime{} = before
 
       html = render(view)
-      assert rail_activity_word(html, presence.id) =~ "Thinking"
+      # "Delayed", not "Thinking": this fixture seeds no voice runtime, so
+      # the row carries a specific delay cause, which task 01a07400 stage 2
+      # promotes to a state. What this test is about is the CLOCK, and the
+      # clock is unaffected — `:delayed` qualifies the working state without
+      # restarting its age, so the ceiling below still fires on schedule.
+      assert rail_activity_word(html, presence.id) =~ "Delayed"
 
       send(view.pid, :agent_activity_tick)
       # `render/1` is a synchronous round trip through the SAME mailbox
@@ -11578,12 +11623,28 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
       html = render(view)
 
-      # Same slot, same colour as the bare counter — the clause is
-      # appended to the SAME `data-role="agent-activity-word"` node, not a
-      # second one.
-      assert rail_activity_word(html, presence.id) =~ "Thinking"
-      assert rail_activity_word(html, presence.id) =~ "reply budget resets in"
-      assert rail_activity_state(html, presence.id) == ["computing"]
+      # CHANGED in task 01a07400 stage 3, and this is the canonical case
+      # for the change. An exhausted reply budget is one of the four
+      # SPECIFIC causes, and stage 2's `Delayed` promotes those from a
+      # trailing note to a state of their own: an agent whose budget has
+      # not reset is not merely slow, it is blocked, and the direction
+      # (canvas 01a07402-99e3) gives that its own word and its own line.
+      #
+      # The clause therefore moves OFF the word node and onto the protected
+      # second line — the one that "truncates last" — rather than being
+      # appended to the counter it used to share a row with.
+      assert rail_activity_word(html, presence.id) =~ "Delayed"
+      refute rail_activity_word(html, presence.id) =~ "reply budget resets in"
+      assert rail_delay_reason(html, presence.id) =~ "reply budget resets in"
+      assert rail_activity_state(html, presence.id) == ["delayed"]
+
+      # The delay QUALIFIES the working state rather than replacing what
+      # produced it: the socket's own pre-delay struct still reads the
+      # in-flight intent row underneath.
+      assert Platform.Meetings.AgentActivity.for_agent(
+               :sys.get_state(view.pid).socket.assigns.agent_activity,
+               agent_id
+             ) == :computing
     end
 
     test "a socket that mounts AFTER the dispatch hydrates the in-flight state",

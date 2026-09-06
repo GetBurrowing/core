@@ -94,6 +94,20 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     )
   end
 
+  # The state word as rendered, with the age clause it shares its node with
+  # — `"Thinking · 3s"`, `"Idle"`, `"Delayed"`. Read off the node rather
+  # than by `=~` on the whole row, because "Heard" appearing ANYWHERE in the
+  # row (a class, an aria string, the second line) would satisfy `=~` while
+  # the word itself said something else entirely, which is the exact
+  # confusion this stage exists to remove.
+  defp primary_word(row_html) do
+    row_html
+    |> Floki.parse_fragment!()
+    |> Floki.find(~s([data-role="agent-activity-primary"]))
+    |> Floki.text()
+    |> String.trim()
+  end
+
   # A rail carrying the two per-identity MapSets (task 01a0740c stage 3).
   # `:muted` / `:camera_off` are lists of LITERAL identity strings.
   defp media_rail(participants, opts \\ []) do
@@ -421,7 +435,21 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       refute agent_row(early, "a-1") == agent_row(later, "a-1")
     end
 
-    test "Heard renders with no counter, then resolves to Thinking once it decays" do
+    # CHANGED in task 01a07400 stage 3. This test used to assert
+    # `row =~ "Heard"` — that a heard receipt REPLACED the state word. Saru's
+    # design direction (canvas 01a07402-99e3) rules that out explicitly, and
+    # names this rail as "the one that is currently drawn wrong":
+    #
+    #   "`heard` must not swap the word. … If a 2s state replaces the word, a
+    #    rail of four agents strobes through Heard/Idle/Heard and becomes
+    #    unreadable exactly when the room is busiest. Draw it as a single
+    #    ring flash and leave the word alone."
+    #
+    # The DECAY itself is untouched and still asserted below, and the unit
+    # test that pins it (`agent_activity_test.exs`) is not modified by this
+    # stage at all. What changed is only which of the row's three channels
+    # the receipt is allowed to paint.
+    test "Heard flashes the ring and leaves the word alone, then the flash decays" do
       t0 = ~U[2026-01-01 00:00:00Z]
 
       heard_only = AgentActivity.put_at(AgentActivity.new(), :heard, "a-1", true, t0)
@@ -429,27 +457,36 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       just_heard = rail([agent("Listener", "a-1")], heard_only, DateTime.add(t0, 1, :second))
       row = agent_row(just_heard, "a-1")
 
+      # The RING is the heard reading...
       assert row =~ ~s(data-activity-state="heard")
-      assert row =~ "Heard"
-      # No counter on Heard, per the stage spec — "Heard and Idle carry
-      # NO counter."
-      refute row =~ "Heard ·"
+      assert row =~ "○"
 
-      # Heard AND computing at once: once the 2s heard window decays,
-      # `resolve_at/2` falls through to the still-live `:computing` signal
-      # underneath it, and the row picks that up on the very next render
-      # — no special-casing needed on this side, since the render always
-      # re-derives from scratch.
+      # ...and the WORD is the state underneath it, which for an agent with
+      # no other signal is idle. Not "Heard".
+      assert primary_word(row) == "Idle"
+
+      # An agent that is WORKING keeps saying so through the flash. This is
+      # the case the ruling is actually about: a human talking over a
+      # working agent delivers a segment to it, and the rail must not blank
+      # what it was doing for two seconds because of that.
       both =
         AgentActivity.new()
         |> AgentActivity.put_at(:computing, "a-1", true, t0)
         |> AgentActivity.put_at(:heard, "a-1", true, t0)
 
+      during =
+        agent_row(rail([agent("Listener", "a-1")], both, DateTime.add(t0, 1, :second)), "a-1")
+
+      assert during =~ ~s(data-activity-state="heard"), "the ring should carry the flash"
+      assert primary_word(during) == "Thinking · 1s", "the word must survive the flash"
+
+      # Once the 2s window decays the ring falls back too, and the row is
+      # exactly what it would have been if nothing had been heard.
       decayed = rail([agent("Listener", "a-1")], both, DateTime.add(t0, 3, :second))
       decayed_row = agent_row(decayed, "a-1")
 
       assert decayed_row =~ ~s(data-activity-state="computing")
-      assert decayed_row =~ "Thinking · 3s"
+      assert primary_word(decayed_row) == "Thinking · 3s"
       refute decayed_row =~ "Heard"
     end
 
@@ -496,6 +533,218 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.find(parsed, ~s([data-role="agent-activity-primary"])) != []
       assert Floki.find(parsed, ~s([data-role="agent-activity-reason"])) != []
       assert agent_row(html, "a-1") =~ "still running a tool"
+    end
+  end
+
+  # ── task 01a07400 stage 3: the two states core produces, on the rail ──────
+  #
+  # Stage 1 gave the AGENT two states it can declare; stage 2 gave CORE two
+  # it can assert. Neither had a pixel. This is the half that draws them,
+  # following Saru's design direction (canvas 01a07402-99e3).
+  describe "Speaking and Delayed" do
+    alias Platform.Meetings.AgentActivity.Delayed
+
+    # `:speaking` lives in an ETS table keyed by MEETING id, not in the
+    # struct, so it is only reachable through `resolve_at/3` — which is what
+    # this stage wires the rail onto. A unique meeting id per test keeps the
+    # shared table safe for `async: true`.
+    defp rail_for_meeting(participants, meeting_id, opts) do
+      render_component(
+        &ParticipantRail.participant_rail/1,
+        [
+          participants: participants,
+          agents_by_id: %{},
+          meeting: %{id: meeting_id, host_participant_id: "u-1"},
+          agent_activity: AgentActivity.new()
+        ] ++ opts
+      )
+    end
+
+    test "a live :speaking row reads Speaking, on success, with the amplitude ring" do
+      meeting_id = "m-speaking-#{System.unique_integer([:positive])}"
+      {:ok, _entry} = AgentActivity.mark_speaking(meeting_id, "a-1", "utt-1")
+
+      row =
+        [agent("Talker", "a-1")]
+        |> rail_for_meeting(meeting_id, now: DateTime.utc_now())
+        |> agent_row("a-1")
+
+      assert row =~ ~s(data-activity-state="speaking")
+      assert primary_word(row) == "Speaking"
+      assert row =~ "border-success"
+      assert row =~ "agent-activity-ring-speaking"
+      refute row =~ "warning"
+    end
+
+    # The state is store-backed and read at render time, so an agent with no
+    # row reads exactly as it did before this stage. Without this the test
+    # above would pass against a rail that painted every agent Speaking.
+    test "an agent with no speaking row is untouched by the state existing" do
+      meeting_id = "m-quiet-#{System.unique_integer([:positive])}"
+      {:ok, _entry} = AgentActivity.mark_speaking(meeting_id, "a-1", "utt-1")
+
+      row =
+        [agent("Talker", "a-1"), agent("Listener", "a-2")]
+        |> rail_for_meeting(meeting_id, now: DateTime.utc_now())
+        |> agent_row("a-2")
+
+      refute row =~ ~s(data-activity-state="speaking")
+      assert primary_word(row) == "Idle"
+    end
+
+    # ── The two-line row ────────────────────────────────────────────────
+    #
+    # "The row never changes shape as an agent works, EXCEPT for `delayed`,
+    # which earns a second line because it is the only state carrying
+    # information the first line cannot hold."
+    test ":delayed puts its reason on its own second line, below the word" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+
+      row =
+        [agent("Octavius", "a-1")]
+        |> rail_for_meeting("m-delayed-#{System.unique_integer([:positive])}",
+          agent_activity: activity,
+          now: DateTime.add(t0, 12, :second),
+          delays: %{"a-1" => Delayed.new!("waiting on GitHub")}
+        )
+        |> agent_row("a-1")
+
+      parsed = Floki.parse_fragment!(row)
+
+      assert row =~ ~s(data-activity-state="delayed")
+
+      # Line one: the word, and NOT the reason. The canvas's delayed wire
+      # carries no elapsed figure either.
+      assert primary_word(row) == "Delayed"
+      refute primary_word(row) =~ "waiting on GitHub"
+      refute primary_word(row) =~ "12s"
+
+      # Line two: its own node, carrying the reason.
+      [reason_node] = Floki.find(parsed, ~s([data-role="agent-activity-delay-reason"]))
+      assert Floki.text([reason_node]) |> String.trim() == "waiting on GitHub"
+    end
+
+    # TRUNCATION ORDER — "the reason is the point, so it truncates LAST".
+    # Implemented as the reason not truncating at all while the NAME keeps
+    # its `truncate`, which is that ordering in its strongest form. Asserted
+    # as a comparison between the two nodes, because asserting only that the
+    # reason lacks `truncate` would pass on a row whose name lacked it too —
+    # i.e. on a layout with no ordering at all.
+    test "the reason line never truncates, and the name is what yields first" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+
+      long =
+        "waiting on GitHub for a workflow run that has been queued for several minutes now"
+
+      parsed =
+        [agent("Octavius Bartholomew Winterbourne III", "a-1")]
+        |> rail_for_meeting("m-trunc-#{System.unique_integer([:positive])}",
+          agent_activity: activity,
+          now: DateTime.add(t0, 12, :second),
+          delays: %{"a-1" => Delayed.new!(long)}
+        )
+        |> agent_row("a-1")
+        |> Floki.parse_fragment!()
+
+      reason_class =
+        parsed
+        |> Floki.find(~s([data-role="agent-activity-delay-reason"]))
+        |> Floki.attribute("class")
+        |> List.first()
+
+      name_class =
+        parsed
+        |> Floki.find(~s([data-role="participant-name"]))
+        |> Floki.attribute("class")
+        |> List.first()
+
+      refute reason_class =~ "truncate",
+             "the reason must not clip — it is the most meaningful thing on the row"
+
+      assert reason_class =~ "break-words", "a long reason has to wrap rather than overflow"
+
+      assert name_class =~ "truncate",
+             "the name must yield before the reason does, or there is no ordering at all"
+
+      # And the reason survives intact, in full.
+      assert Floki.text(Floki.find(parsed, ~s([data-role="agent-activity-delay-reason"]))) =~ long
+    end
+
+    # "The `sr-only` line already present must carry the reason too:
+    # 'Octavius is delayed, waiting on GitHub', not just 'delayed'." This is
+    # the reduced-motion half of the design reaching a reader who gets no
+    # visual channel at all.
+    test "the accessible sentence carries the reason, not just the word" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+
+      row =
+        [agent("Octavius", "a-1")]
+        |> rail_for_meeting("m-sr-#{System.unique_integer([:positive])}",
+          agent_activity: activity,
+          now: DateTime.add(t0, 12, :second),
+          delays: %{"a-1" => Delayed.new!("waiting on GitHub")}
+        )
+        |> agent_row("a-1")
+
+      # MERGE NOTE (main @ 0da01c45, task 01a0740c stage 3): the row now
+      # carries a SECOND `sr-only` sentence — the mic/camera state summary,
+      # tagged `data-role="participant-state-summary"`. Selecting on
+      # `span.sr-only` alone therefore returns both nodes and concatenates
+      # their text. Reject the tagged one so this stays an equality on a
+      # single node; the `[sr_node] =` match also asserts there is exactly
+      # one activity sentence, which a substring match would not.
+      [sr_node] =
+        row
+        |> Floki.parse_fragment!()
+        |> Floki.find("span.sr-only")
+        |> Enum.reject(&(Floki.attribute([&1], "data-role") == ["participant-state-summary"]))
+
+      sr = [sr_node] |> Floki.text() |> String.trim()
+
+      assert sr == "Octavius is Delayed, waiting on GitHub"
+    end
+
+    # The hard-won rule: `warning` means a human is being asked for
+    # something, and a blocked agent asks nothing of anyone.
+    test ":delayed does not spend the warning slot, and does not spin" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+
+      row =
+        [agent("Octavius", "a-1")]
+        |> rail_for_meeting("m-warn-#{System.unique_integer([:positive])}",
+          agent_activity: activity,
+          now: DateTime.add(t0, 12, :second),
+          delays: %{"a-1" => Delayed.new!("agent went offline")}
+        )
+        |> agent_row("a-1")
+
+      refute row =~ "warning"
+      refute row =~ "animate-pulse"
+      refute row =~ "animate-spin"
+    end
+
+    # A delay only qualifies a WORKING state. An idle agent is not blocked,
+    # it is idle — so an injected delay must be ignored rather than drawn.
+    # Without this, `apply_delays/2`'s guard could be deleted and every test
+    # above would stay green.
+    test "an idle agent is never delayed, even when a delay is handed to the row" do
+      row =
+        [agent("Nobody", "a-1")]
+        |> rail_for_meeting("m-idle-#{System.unique_integer([:positive])}",
+          now: DateTime.utc_now(),
+          delays: %{"a-1" => Delayed.new!("waiting on GitHub")}
+        )
+        |> agent_row("a-1")
+
+      assert primary_word(row) == "Idle"
+      refute row =~ "waiting on GitHub"
+
+      assert Floki.find(Floki.parse_fragment!(row), ~s([data-role="agent-activity-delay-reason"])) ==
+               []
     end
   end
 

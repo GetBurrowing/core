@@ -19,9 +19,11 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
        per `participant_type == "agent"` carrying:
          * avatar
          * display name
-         * the state word ("Thinking" / "Writing" / "Couldn't" /
-           "Idle") as small text below the name, matching the ring
-           and corner glyph on the avatar
+         * the state word ("Thinking" / "Writing" / "Speaking" /
+           "Delayed" / "Couldn't" / "Idle") as small text below the
+           name, matching the ring and corner glyph on the avatar
+         * a second line, on `:delayed` and only on `:delayed`, carrying
+           the cause
          * status dot keyed off THIS MEETING's agent activity, with the
            global `agents.status` column only as an offline fallback
            (task 01a04a98)
@@ -73,6 +75,44 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   for something", and NOT `--color-success`, which is reserved for
   SPEAKING. The mic-on state used to be `text-success`; that was the
   violation, and replacing it is part of this stage.
+
+  ## Two readings of one activity value (task 01a07400 stage 3)
+
+  This component resolves its activity TWICE per render, and the reason
+  is a design ruling rather than an optimisation it forgot to make.
+
+  `:heard` — a two-second receipt that a transcript segment reached an
+  agent's runtime — is applied by `AgentActivity.resolve_at/2` as an
+  OVERLAY that replaces the state underneath it. Saru's design direction
+  (canvas `01a07402-99e3`) rules that on this rail it must not replace
+  the WORD:
+
+  > "`heard` must not swap the word. … If a 2s state replaces the word, a
+  > rail of four agents strobes through Heard/Idle/Heard and becomes
+  > unreadable exactly when the room is busiest."
+
+  So the ring and the word answer to different readings. `ring_activity`
+  is the heard-inclusive one and paints the avatar; `word_activity` comes
+  from `AgentActivity.without_heard/1` and chooses everything textual.
+  An agent that is Thinking when a human talks over it keeps saying
+  "Thinking" while its ring flashes — which is exactly the moment the
+  reading matters most.
+
+  Core makes the same call one layer down: stage 2 stopped `:heard` from
+  overlaying `:speaking` at all, so an agent whose own audio is playing
+  is never masked by a receipt for the voice talking over it.
+
+  ## Where the store-backed states enter
+
+  `:speaking` (asserted by core when it dispatches audio) and
+  `:thinking`/`:composing` (declared by the agent's own runtime) live in
+  ETS keyed by MEETING id, not in the `%AgentActivity{}` value. They are
+  reachable only through `AgentActivity.resolve_at/3`, which is why this
+  component resolves with a meeting id when it has one and falls back to
+  the pure `resolve_at/2` reading when it does not.
+
+  `:delayed` is applied on top of either, from facts gathered here — see
+  the `:delays` attr and `gather_delay_facts/4`.
 
   The human rows used to carry a server-side speaking ring driven by a
   speaking-ids assign that NOTHING ever wrote — it was `MapSet.new()`
@@ -163,26 +203,60 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     """
   )
 
+  attr(:delays, :any,
+    default: nil,
+    doc: """
+    `%{agent_id => Platform.Meetings.AgentActivity.Delayed.t()}`, overriding
+    the delays this component would otherwise infer (task 01a07400 stage 3).
+
+    `nil` — the production path — means gather the facts and infer. The
+    override exists because inferring a SPECIFIC cause is not possible
+    without touching the database: every one of
+    `AgentDelayReason.specific_for_agent/1`'s four clauses is derived from a
+    resolved `%Agent{}` (a runtime row, a voice seat, a say ledger), so a
+    component test holding a bare participant fixture can reach `:computing`
+    but can never reach `:delayed`. Passing the delays directly is what lets
+    the two-line row be proven without a sandbox, and it keeps the
+    inference — the expensive half — in one place a caller can opt out of.
+    """
+  )
+
   def participant_rail(assigns) do
     {humans, agents} = MeetingLive.partition_participants(assigns.participants)
     now = assigns[:now] || DateTime.utc_now()
-    resolved_activity = AgentActivity.resolve_for_render(assigns[:agent_activity], now)
 
-    # The Room lookup `delay_reason/3` needs (reply budget, agent chain) is
-    # a DB read. Skipping it whenever nobody in the row set is actually
-    # `:computing`/`:typing` keeps that cost bounded by "is anyone working
+    # TWO readings of the same value, for the reason `AgentActivity.
+    # without_heard/1` documents: `:heard` overwrites the state underneath
+    # it, and Saru's direction rules that a heard flash must not swap the
+    # word. `ring` paints the avatar; `word` chooses the word.
+    {ring, word} = resolve_both(assigns[:agent_activity], meeting_id_of(assigns.meeting), now)
+
+    # The Room lookup the delay facts need (reply budget, agent chain) is a
+    # DB read. Skipping it whenever nobody in the row set is in a state a
+    # delay could even qualify keeps that cost bounded by "is anyone working
     # right now", not paid on every idle-room tick — the same bounding
     # instinct `Platform.Meetings.VoiceSeatCache`'s moduledoc argues for.
+    # Gated on the WORD reading: an agent whose ring is mid-heard-flash is
+    # still working underneath, and must not lose its delay clause for two
+    # seconds because a transcript segment happened to land.
     working? =
-      Enum.any?(resolved_activity, fn {_id, %{state: s}} -> s in [:computing, :typing] end)
+      Enum.any?(word, fn {_id, %{state: s}} -> s in AgentActivity.delayable_states() end)
 
     room = if working?, do: room_for(assigns.meeting), else: nil
+    facts_by_agent = gather_delay_facts(agents, word, assigns.agents_by_id, room)
+
+    # `delays_from_facts/1` drops every agent with nothing SPECIFIC to say,
+    # so a `:delayed` that reaches the screen always carries a real cause —
+    # there is no reason-less one to write a fallback branch for.
+    delays = assigns[:delays] || AgentActivity.delays_from_facts(facts_by_agent)
 
     assigns =
       assigns
       |> assign(:humans, humans)
       |> assign(:agents, agents)
-      |> assign(:resolved_activity, resolved_activity)
+      |> assign(:ring_activity, AgentActivity.apply_delays(ring, delays))
+      |> assign(:word_activity, AgentActivity.apply_delays(word, delays))
+      |> assign(:delay_facts, facts_by_agent)
       |> assign(:current_room, room)
       |> assign(:muted, assigns[:muted_identities] || MapSet.new())
       |> assign(:camera_off, assigns[:camera_off_identities] || MapSet.new())
@@ -310,11 +384,12 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  would give them two initials over the seeded human
                  palette and stamp them `data-avatar-kind="human"`.
                  `agent_activity_avatar/1` renders it internally. --%>
-            <% info = agent_row_info(@resolved_activity, p, @agents_by_id, @current_room) %>
+            <% info = agent_row_info(assigns, p) %>
             <.agent_activity_avatar
-              state={info.state}
+              state={info.ring_state}
               name={p.display_name || "Agent"}
               avatar_url={p.avatar_url}
+              label={info.label}
             />
             <div class="min-w-0 flex-1">
               <div
@@ -338,9 +413,34 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 <span data-role="agent-activity-primary" class="whitespace-nowrap">
                   {info.primary}
                 </span>
-                <span :if={info.reason} data-role="agent-activity-reason">
-                  {"· " <> info.reason}
+                <span :if={info.note} data-role="agent-activity-reason">
+                  {"· " <> info.note}
                 </span>
+              </div>
+              <%!-- `:delayed` is the ONLY state that changes the row's shape,
+                   and Saru's direction (canvas 01a07402-99e3) says why it
+                   earns that: it is the one state carrying information the
+                   first line cannot hold. The reason gets the whole second
+                   line at the rail's ~224px rather than competing with the
+                   name for the first.
+
+                   TRUNCATION ORDER — "the reason truncates LAST" — is
+                   implemented by the reason not truncating AT ALL: no
+                   `truncate` here, and `break-words` so a long clause wraps
+                   instead of clipping or overflowing. The NAME above keeps
+                   its `truncate`, so the name is what yields first, which is
+                   the ordering the direction asks for in its strongest form.
+
+                   Colour is `base-content` at reduced opacity, NOT the
+                   state's own `info`: the direction calls this line "prose,
+                   subordinate to the name it explains", and it is the reason
+                   for a state whose word is already carrying the colour. --%>
+              <div
+                :if={info.delay_reason}
+                data-role="agent-activity-delay-reason"
+                class="break-words text-[11px] font-normal text-base-content/60"
+              >
+                {info.delay_reason}
               </div>
             </div>
 
@@ -530,73 +630,175 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
 
   defp agent_id_of(_participant), do: nil
 
-  # ── Task 01a06e07 stage 3: the ceiling-aware render path ────────────────
+  # ── Resolution: two readings of one value ───────────────────────────────
   #
-  # One resolved entry, one composed row — everything the template needs
-  # for one agent's word/ring/glyph, computed once instead of the three
-  # separate re-derivations the old `activity_meta/2` call sites implied.
+  # `ring` is the heard-INCLUSIVE reading and paints the avatar; `word` is
+  # the heard-FREE one and chooses the word under the name. See
+  # `AgentActivity.without_heard/1` for why the two cannot be one.
   #
-  # `resolved_activity` is `AgentActivity.resolve_for_render/2`'s output —
-  # already ceiling-capped for a real struct, or a synthetic `age_s: 0`
-  # entry for a bare test-fixture map (see that function's doc). Idle/
-  # absent agents fall back to the same `age_s: 0` shape so `compose_word/4`
-  # never has to special-case a missing entry.
-  defp agent_row_info(resolved_activity, participant, agents_by_id, room) do
-    agent_id = agent_id_of(participant)
-    entry = Map.get(resolved_activity, agent_id, %{state: :idle, entered_at: nil, age_s: 0})
-    meta = AgentActivityBadge.activity_meta(entry.state)
-    agent = Map.get(agents_by_id, agent_id)
-
-    {primary, reason} = compose_word(entry, meta, agent, room)
-
-    %{state: entry.state, text: meta.text, primary: primary, reason: reason}
+  # Store-backed states (`:speaking` from core, `:thinking`/`:composing`
+  # pushed by the agent) live in ETS keyed by MEETING id, so they are only
+  # reachable through `resolve_at/3`. A surface with no meeting id — a
+  # caller that has not loaded one yet — degrades to the pure `resolve_at/2`
+  # reading rather than guessing a key, which is the same answer this
+  # component gave before those states existed.
+  defp resolve_both(%AgentActivity{} = activity, meeting_id, now) do
+    {resolve_one(activity, meeting_id, now),
+     resolve_one(AgentActivity.without_heard(activity), meeting_id, now)}
   end
 
-  # `:computing` / `:typing` — the word carries the age IN THE SAME SLOT
+  # A caller holding an already-resolved map (test fixtures, and
+  # `resolve_for_render/2`'s documented "accepts either" contract) has no
+  # struct to strip and no timestamps to age, so the two readings are the
+  # same map. A `:heard` in such a fixture therefore still shows the word
+  # "Heard" — the fixture asserted a resolved state directly and there is no
+  # underlying one recorded for it to fall back to.
+  defp resolve_both(other, _meeting_id, now) do
+    resolved = AgentActivity.resolve_for_render(other, now)
+    {resolved, resolved}
+  end
+
+  defp resolve_one(activity, meeting_id, now) when is_binary(meeting_id),
+    do: AgentActivity.resolve_at(activity, meeting_id, now)
+
+  defp resolve_one(activity, _meeting_id, now), do: AgentActivity.resolve_at(activity, now)
+
+  defp meeting_id_of(%{id: id}) when is_binary(id), do: id
+  defp meeting_id_of(_meeting), do: nil
+
+  # ── Delay facts ─────────────────────────────────────────────────────────
+  #
+  # Gathered ONCE per render for the agents a delay could actually qualify,
+  # then used twice: `AgentActivity.delays_from_facts/1` promotes the four
+  # SPECIFIC causes to the `:delayed` state, and `AgentDelayReason.
+  # for_agent/1` renders whatever is left — in practice the generic "still
+  # running a tool" — as the trailing note it has always been.
+  #
+  # That split is `Delayed`'s own ruling, not this component's: an agent
+  # that is merely taking its time is working and slow, not blocked, and
+  # promoting it would put "Delayed" on every ordinary turn past ten
+  # seconds — the always-on badge shape canvas 01a05b11-54ff removed
+  # `:listening` for, under a different word.
+  defp gather_delay_facts(agents, word_activity, agents_by_id, room) do
+    Enum.reduce(agents, %{}, fn participant, acc ->
+      agent_id = agent_id_of(participant)
+      entry = agent_id && Map.get(word_activity, agent_id)
+
+      if entry && entry.state in AgentActivity.delayable_states() do
+        Map.put(acc, agent_id, delay_facts(Map.get(agents_by_id, agent_id), room, entry.age_s))
+      else
+        acc
+      end
+    end)
+  end
+
+  # ── One composed row ────────────────────────────────────────────────────
+  #
+  # Everything the template needs for one agent, computed once. Takes the
+  # whole `assigns` rather than five positional arguments because it now
+  # reads four of them and the call site is inside a template.
+  defp agent_row_info(assigns, participant) do
+    agent_id = agent_id_of(participant)
+    absent = %{state: :idle, entered_at: nil, age_s: 0}
+
+    ring_entry = Map.get(assigns.ring_activity, agent_id, absent)
+    word_entry = Map.get(assigns.word_activity, agent_id, absent)
+
+    meta = AgentActivityBadge.activity_meta(word_entry.state)
+    agent = Map.get(assigns.agents_by_id, agent_id)
+    facts = Map.get(assigns.delay_facts, agent_id, %{})
+
+    {primary, note} = compose_word(word_entry, meta, agent, facts)
+
+    # Present on `:delayed` entries and ONLY those — `apply_delays/2` puts
+    # it there from a `%Delayed{}`, which cannot exist without a reason. No
+    # nil-reason branch is written for it deliberately: a fallback here
+    # would be dead code that hides the guarantee rather than relying on it.
+    delay_reason = Map.get(word_entry, :reason)
+
+    %{
+      # The avatar follows the RING reading, so a heard flash paints it...
+      ring_state: ring_entry.state,
+      # ...while everything textual follows the WORD reading, so the flash
+      # does not swap what the row says.
+      state: word_entry.state,
+      text: meta.text,
+      primary: primary,
+      note: note,
+      delay_reason: delay_reason,
+      label: sr_label(participant, meta, delay_reason)
+    }
+  end
+
+  # The accessible sentence, composed HERE because this is the only place
+  # that holds the name, the word and the reason at once.
+  #
+  # Saru's direction rules it must carry the reason — "Octavius is delayed,
+  # waiting on GitHub", not just "delayed" — which is the whole point of
+  # making motion the liveness axis and then not stranding a reader who
+  # cannot perceive motion. It follows the WORD, not the ring, so a
+  # two-second receipt is never announced as the agent's state.
+  defp sr_label(participant, meta, nil),
+    do: "#{participant.display_name || "Agent"} is #{meta.word}"
+
+  defp sr_label(participant, meta, reason),
+    do: "#{participant.display_name || "Agent"} is #{meta.word}, #{reason}"
+
+  # `:delayed` — the bare word. The age counter is deliberately absent:
+  # the direction's delayed wire carries no elapsed figure, because the
+  # reason on the second line is the more useful answer to "how long has
+  # this been stuck" and two numbers-and-clauses on one row is the clutter
+  # the second line exists to avoid.
+  defp compose_word(%{state: :delayed}, meta, _agent, _facts), do: {meta.word, nil}
+
+  # The working states — the word carries the age IN THE SAME SLOT
   # (`Thinking · 3s`), never a separate counter node, per the stage spec's
-  # "one working state, one word". The delay clause, when
+  # "one working state, one word". The generic delay clause, when
   # `AgentDelayReason.for_agent/1` has one, is a SEPARATE trailing span so
   # it alone can wrap — see the template.
-  defp compose_word(%{state: state, age_s: age_s}, meta, agent, room)
-       when state in [:computing, :typing] do
-    {"#{meta.word} · #{age_s}s", delay_reason(agent, room, age_s)}
+  #
+  # `:thinking` and `:composing` join `:computing`/`:typing` here: they are
+  # working states with an age, and the only difference is who observed
+  # them.
+  defp compose_word(%{state: state, age_s: age_s}, meta, _agent, facts)
+       when state in [:computing, :typing, :thinking, :composing] do
+    {"#{meta.word} · #{age_s}s", AgentDelayReason.for_agent(facts)}
   end
 
   # `:failed` — the word carries NO counter (the stage spec: "Couldn't
   # carries its reason, not a counter"); the reason is the same trailing
   # span every other state's delay clause uses.
-  defp compose_word(%{state: :failed} = entry, meta, agent, _room) do
+  defp compose_word(%{state: :failed} = entry, meta, agent, _facts) do
     {meta.word, failed_reason(agent, entry)}
   end
 
-  # `:idle`, `:heard`, and the unreachable `:listening` fallback: the bare
-  # word, no counter, no reason — matches the stage spec's "Heard and Idle
-  # carry NO counter" and `AgentActivityBadge`'s own refusal to draw
-  # `:listening` as anything but idle.
-  defp compose_word(_entry, meta, _agent, _room), do: {meta.word, nil}
+  # `:idle`, `:heard`, `:speaking`, and the unreachable `:listening`
+  # fallback: the bare word, no counter, no reason. `:speaking` joins them
+  # because its duration is audible — a counter would caption something the
+  # reader is already hearing.
+  defp compose_word(_entry, meta, _agent, _facts), do: {meta.word, nil}
 
-  # Why is a still-working agent taking a while, IF there is an honest
-  # thing to say (see `AgentDelayReason` — a specific cause shows
-  # immediately, the generic "still running a tool" only past its own
-  # age threshold, and `nil` when neither applies).
+  # The facts behind "why is this agent taking a while" — gathered, not
+  # judged. `AgentDelayReason` turns them into a clause and
+  # `AgentActivity.Delayed` decides whether one is strong enough to be a
+  # state; this function's only job is to read them from the four places
+  # they live.
   #
   # A participant with no resolved `Agent{}` (guest surfaces pass
   # `agents_by_id: %{}`; a bare test fixture has none) can only offer the
   # `age_s` fact — every other fact needs the agent row `Meetings`/
   # `VoiceSeatCache` read against, and reporting a specific cause we did
-  # not actually check would be a worse lie than reporting none.
-  defp delay_reason(nil, _room, age_s), do: AgentDelayReason.for_agent(%{age_s: age_s})
+  # not actually check would be a worse lie than reporting none. Such an
+  # agent can therefore never reach `:delayed`, only the generic note.
+  defp delay_facts(nil, _room, age_s), do: %{age_s: age_s}
 
-  defp delay_reason(%Agent{} = agent, room, age_s) do
-    facts =
-      %{
-        age_s: age_s,
-        runtime_offline?: Meetings.runtime_offline?(agent),
-        no_voice_worker?: not VoiceSeatCache.seated?(agent)
-      }
-      |> Map.merge(room_facts(room, agent))
-
-    AgentDelayReason.for_agent(facts)
+  defp delay_facts(%Agent{} = agent, room, age_s) do
+    %{
+      age_s: age_s,
+      runtime_offline?: Meetings.runtime_offline?(agent),
+      no_voice_worker?: not VoiceSeatCache.seated?(agent)
+    }
+    |> Map.merge(room_facts(room, agent))
   end
 
   # Reply-budget and agent-chain facts need the LIVE CALL's `Room` (a

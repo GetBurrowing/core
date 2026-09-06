@@ -112,6 +112,16 @@ defmodule Platform.Application do
            # `resolve_voice_target/1`) and RuntimePresence, both already
            # started above.
            Platform.Meetings.VoiceSeatCache,
+           # Self-declared agent activity (task 01a07400 stage 1) — owns
+           # the :meeting_agent_pushed_state table and its ttl sweep. Same
+           # ETS-lifecycle-owner shape as the three above; no PubSub and no
+           # DB, so its position here is only about existing before a
+           # federated runtime can push a state. It is a SEPARATE module
+           # from the `%AgentActivity{}` value it stores state for, and a
+           # process, deliberately, so that `AgentActivity` itself stays a
+           # value module with no `init/1` — see that module's
+           # `pushed_table/0` and the store's own moduledoc.
+           Platform.Meetings.AgentActivity.Store,
            # Per-MEETING intent queues (task 019f70b8 stage 2) — one
            # on-demand GenServer per meeting, each owning an unnamed
            # ETS table that dies with it. No sweeper: cleanup is

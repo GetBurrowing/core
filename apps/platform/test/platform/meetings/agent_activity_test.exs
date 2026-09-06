@@ -799,4 +799,395 @@ defmodule Platform.Meetings.AgentActivityTest do
                AgentActivity.resolve_at(folded, DateTime.utc_now())
     end
   end
+
+  # ── Pushed state (task 01a07400 stage 1) ────────────────────────────────────
+  #
+  # `:thinking` and `:composing` are the only two states an agent may declare
+  # about itself, and the ONLY thing that makes declaring them safe is that
+  # the server expires them. Ticket `01a06e07` put it exactly right — "a state
+  # the agent must remember to emit is a state it will forget to clear" — so
+  # the load-bearing test in this block is not the one where a push shows up.
+  # It is `"a pushed state that is never refreshed expires to :idle"`: if that
+  # ever passes for the wrong reason, this feature is a badge that latches on
+  # the first crash and stays on.
+  #
+  # ## Why `@far_future` and not a time near today's
+  #
+  # These tests write to the REAL `:meeting_agent_pushed_state` table, which a
+  # live sweep is walking every `pushed_sweep_interval_ms/0` against
+  # `DateTime.utc_now/0`. A row stamped at a plausible "now" would be older
+  # than its ttl in wall-clock terms the moment it was written, and the sweep
+  # could delete it between the push and the read — which would make the
+  # expiry assertions pass with the read-path check deleted, i.e. vacuously.
+  # Stamping far in the future keeps every row live as far as the sweep is
+  # concerned (`live?/2` reads a negative age as live), so the only thing that
+  # can expire a row in these tests is the `now` the test hands the reader.
+  # The sweep gets its own test, which drives `sweep_pushed/1` directly.
+  describe "pushed state" do
+    setup do
+      {:ok,
+       far_future: ~U[2099-03-01 12:00:00Z],
+       agent_id: Platform.Types.UUIDv7.generate(),
+       other_agent_id: Platform.Types.UUIDv7.generate()}
+    end
+
+    # THE anti-vacuity test for this stage.
+    #
+    # The ttl is small (5s) and stated in the test rather than inherited from
+    # config, and the margins on both sides are wide on purpose: live is
+    # asserted at 1s against a 5s ttl, expiry at 60s — twelve times the ttl.
+    # A boundary-hugging assertion here would be measuring nothing but which
+    # side of a rounding step the clock landed on.
+    #
+    # The resolved state is asserted by IDENTITY (`== :idle`), not by
+    # `!= :thinking`. "Not what I pushed" is satisfied by a crash, a typo in
+    # the agent id, an empty map for any reason at all — every way of
+    # returning nothing passes it. `== :idle` is satisfied by exactly one
+    # outcome.
+    #
+    # Named mutation: delete the `live?/2` check from `pushed/3` and
+    # `pushed_all/2` (the read path) and this test goes red at the 60s
+    # assertion, while "a live pushed state resolves" below stays green.
+    test "a pushed state that is never refreshed expires to :idle",
+         %{meeting: meeting, far_future: t0, agent_id: agent_id} do
+      ttl_ms = 5_000
+
+      {:ok, entry} =
+        AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: ttl_ms, now: t0)
+
+      assert entry.ttl_ms == ttl_ms
+
+      # Well inside the ttl: one fifth of it.
+      assert pushed_state_of(meeting.id, agent_id, t0) == :thinking
+      assert pushed_state_of(meeting.id, agent_id, DateTime.add(t0, 1, :second)) == :thinking
+
+      # Nothing refreshes it. Nothing calls back. Nothing is cleaned up. The
+      # runtime, as far as this test is concerned, died.
+      at_60s = DateTime.add(t0, 60, :second)
+
+      assert pushed_state_of(meeting.id, agent_id, at_60s) == :idle
+      refute pushed_state_of(meeting.id, agent_id, at_60s) == :thinking
+
+      # The three readers agree, so the expiry cannot be hiding in one of them.
+      assert AgentActivity.pushed(meeting.id, agent_id, at_60s) == nil
+      assert AgentActivity.pushed_all(meeting.id, at_60s) == %{}
+      assert AgentActivity.resolve_at(AgentActivity.new(), meeting.id, at_60s) == %{}
+    end
+
+    # The green half of the mutation pair: a push read back inside its ttl
+    # resolves. If the mutation above also broke this, the red would not be
+    # evidence of anything.
+    test "a live pushed state resolves, with its reason and its own age",
+         %{meeting: meeting, far_future: t0, agent_id: agent_id} do
+      {:ok, _} =
+        AgentActivity.push(meeting.id, agent_id, :composing,
+          ttl_ms: 5_000,
+          reason: "drafting the summary",
+          now: t0
+        )
+
+      at_2s = DateTime.add(t0, 2, :second)
+
+      assert %{^agent_id => %{state: :composing, entered_at: ^t0, age_s: 2}} =
+               AgentActivity.resolve_at(AgentActivity.new(), meeting.id, at_2s)
+
+      assert %{state: :composing, reason: "drafting the summary", ttl_ms: 5_000} =
+               AgentActivity.pushed(meeting.id, agent_id, at_2s)
+    end
+
+    test "only :thinking and :composing can be pushed",
+         %{meeting: meeting, far_future: t0, agent_id: agent_id} do
+      assert AgentActivity.pushed_states() == [:thinking, :composing]
+
+      for state <- AgentActivity.pushed_states() do
+        assert {:ok, %{state: ^state}} =
+                 AgentActivity.push(meeting.id, agent_id, state, ttl_ms: 5_000, now: t0)
+      end
+
+      # Every other declared state is core's to observe, `:failed` most
+      # importantly: a runtime that could assert it could paint over the one
+      # reading that says something went wrong.
+      for state <- AgentActivity.states() -- AgentActivity.pushed_states() do
+        assert AgentActivity.push(meeting.id, agent_id, state, ttl_ms: 5_000, now: t0) ==
+                 {:error, {:unsupported_state, state}}
+      end
+
+      # And the refusal wrote nothing: the last accepted push still stands.
+      assert %{state: :composing} = AgentActivity.pushed(meeting.id, agent_id, t0)
+    end
+
+    # `put_at/5`'s no-restamp rule and this one are opposites, deliberately.
+    # There the age must survive a repeat or the 120s ceiling could never
+    # fire; here the repeat IS the liveness signal.
+    test "refreshing restarts the ttl; the absence of a refresh is what expires it",
+         %{meeting: meeting, far_future: t0, agent_id: agent_id} do
+      ttl_ms = 5_000
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: ttl_ms, now: t0)
+
+      at_4s = DateTime.add(t0, 4, :second)
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: ttl_ms, now: at_4s)
+
+      # 8s after the FIRST push — long past its ttl — but only 4s after the
+      # second, so the claim still stands and its age runs from the refresh.
+      at_8s = DateTime.add(t0, 8, :second)
+      assert pushed_state_of(meeting.id, agent_id, at_8s) == :thinking
+      assert %{pushed_at: ^at_4s} = AgentActivity.pushed(meeting.id, agent_id, at_8s)
+
+      # Then the refreshes stop, and 60s later — twelve ttls — it is gone.
+      assert pushed_state_of(meeting.id, agent_id, DateTime.add(t0, 64, :second)) == :idle
+    end
+
+    test "clear_pushed/2 withdraws a live declaration",
+         %{meeting: meeting, far_future: t0, agent_id: agent_id} do
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: 60_000, now: t0)
+      assert pushed_state_of(meeting.id, agent_id, t0) == :thinking
+
+      assert :ok == AgentActivity.clear_pushed(meeting.id, agent_id)
+      assert pushed_state_of(meeting.id, agent_id, t0) == :idle
+    end
+
+    test "a reason is trimmed, capped, and blank means absent",
+         %{meeting: meeting, far_future: t0, agent_id: agent_id} do
+      cap = AgentActivity.pushed_reason_max_chars()
+
+      {:ok, long} =
+        AgentActivity.push(meeting.id, agent_id, :thinking,
+          ttl_ms: 5_000,
+          reason: String.duplicate("x", cap + 50),
+          now: t0
+        )
+
+      assert String.length(long.reason) == cap
+
+      {:ok, blank} =
+        AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: 5_000, reason: "   ", now: t0)
+
+      assert blank.reason == nil
+    end
+
+    # ── Precedence ──────────────────────────────────────────────────────────
+    #
+    # `:failed` > `:typing` > pushed > `:computing`, with `:heard` overlaid.
+    # Each test below drives the pushed state AND the signal it is being
+    # ranked against, and asserts the pair resolves differently from the same
+    # pushed state alone — so a precedence rule that silently stopped being
+    # applied could not pass by resolving to the pushed state either way.
+
+    test "a pushed state outranks :computing", %{
+      meeting: meeting,
+      far_future: t0,
+      agent_id: agent_id
+    } do
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, agent_id, true, t0)
+
+      # Without the push, the same value resolves :computing.
+      assert %{^agent_id => %{state: :computing}} =
+               AgentActivity.resolve_at(activity, meeting.id, t0)
+
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: 60_000, now: t0)
+
+      assert %{^agent_id => %{state: :thinking}} =
+               AgentActivity.resolve_at(activity, meeting.id, t0)
+    end
+
+    test ":typing and :failed both outrank a pushed state", %{
+      meeting: meeting,
+      far_future: t0,
+      agent_id: agent_id,
+      other_agent_id: other_agent_id
+    } do
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :composing, ttl_ms: 60_000, now: t0)
+
+      {:ok, _} =
+        AgentActivity.push(meeting.id, other_agent_id, :thinking, ttl_ms: 60_000, now: t0)
+
+      activity =
+        AgentActivity.new()
+        |> AgentActivity.put_at(:typing, agent_id, true, t0)
+        |> AgentActivity.put_at(:failed, other_agent_id, true, t0)
+
+      resolved = AgentActivity.resolve_at(activity, meeting.id, t0)
+
+      assert %{^agent_id => %{state: :typing}} = resolved
+      assert %{^other_agent_id => %{state: :failed}} = resolved
+    end
+
+    test "a live :heard overlays a pushed state, and a decayed one does not", %{
+      meeting: meeting,
+      far_future: t0,
+      agent_id: agent_id
+    } do
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: 60_000, now: t0)
+      activity = AgentActivity.put_at(AgentActivity.new(), :heard, agent_id, true, t0)
+
+      assert %{^agent_id => %{state: :heard}} =
+               AgentActivity.resolve_at(activity, meeting.id, t0)
+
+      # Past `heard_decay_seconds/0` it falls back to the underlying state,
+      # which is now the pushed one rather than idle.
+      at_5s = DateTime.add(t0, 5, :second)
+      assert AgentActivity.heard_decay_seconds() < 5
+
+      assert %{^agent_id => %{state: :thinking}} =
+               AgentActivity.resolve_at(activity, meeting.id, at_5s)
+    end
+
+    # The point of the whole stage. A genuinely long turn stops reading as a
+    # failure — but only while the runtime keeps saying so.
+    test "a live pushed state pre-empts the 120-second ceiling; a lapsed one does not", %{
+      meeting: meeting,
+      far_future: t0,
+      agent_id: agent_id
+    } do
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, agent_id, true, t0)
+      past_ceiling = DateTime.add(t0, AgentActivity.ceiling_seconds() + 10, :second)
+
+      # Baseline: with nothing declared, the ceiling caps it.
+      assert %{^agent_id => %{state: :failed}} =
+               AgentActivity.resolve_at(activity, meeting.id, past_ceiling)
+
+      # Refreshed right up to the read, the agent reads as thinking instead.
+      {:ok, _} =
+        AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: 5_000, now: past_ceiling)
+
+      assert %{^agent_id => %{state: :thinking}} =
+               AgentActivity.resolve_at(activity, meeting.id, past_ceiling)
+
+      # And the reprieve is bounded by the ttl, not open-ended: 60s later,
+      # with no further push, the ceiling is back.
+      assert %{^agent_id => %{state: :failed}} =
+               AgentActivity.resolve_at(
+                 activity,
+                 meeting.id,
+                 DateTime.add(past_ceiling, 60, :second)
+               )
+    end
+
+    # `resolve/1`, `for_agent/2` and `resolve_at/2` take no meeting and no
+    # store. If a pushed state ever surfaced through them it could never be
+    # aged out by them — the identical latching argument that keeps `:heard`
+    # out of `@precedence`.
+    test "the store-blind readers never surface a pushed state", %{
+      meeting: meeting,
+      far_future: t0,
+      agent_id: agent_id
+    } do
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: 60_000, now: t0)
+
+      assert AgentActivity.resolve(AgentActivity.new()) == %{}
+      assert AgentActivity.for_agent(AgentActivity.new(), agent_id) == :idle
+      assert AgentActivity.resolve_at(AgentActivity.new(), t0) == %{}
+
+      # …while the store-aware reader does, so the difference is the reader
+      # and not an empty store.
+      assert %{^agent_id => %{state: :thinking}} =
+               AgentActivity.resolve_at(AgentActivity.new(), meeting.id, t0)
+    end
+
+    test "pushed_all/2 is meeting-scoped", %{
+      meeting: meeting,
+      space: space,
+      far_future: t0,
+      agent_id: agent_id
+    } do
+      other_meeting = create_meeting(space)
+
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: 60_000, now: t0)
+
+      {:ok, _} =
+        AgentActivity.push(other_meeting.id, agent_id, :composing, ttl_ms: 60_000, now: t0)
+
+      assert %{^agent_id => %{state: :thinking}} = AgentActivity.pushed_all(meeting.id, t0)
+      assert %{^agent_id => %{state: :composing}} = AgentActivity.pushed_all(other_meeting.id, t0)
+    end
+
+    # The other half of "expires on read AND sweep". The read path is already
+    # correct without this; what the sweep adds is that the row stops
+    # occupying the table.
+    #
+    # The RETURN COUNT is deliberately not asserted. `sweep_pushed/1` is
+    # global — it walks every meeting's rows, and this module is
+    # `async: true`, so a concurrent test's rows land in the same table and
+    # the number is whatever the scheduler produced. An earlier draft
+    # asserted `== 1` here and saw 13. A count that only holds when nothing
+    # else is running is not a measurement of this sweep.
+    #
+    # What IS asserted is deletion, and it is asserted at `t0` — a clock at
+    # which the lapsed row would still read as LIVE if it were still in the
+    # table. So its absence at `t0` cannot be the read-path expiry hiding
+    # it; the row is gone. That is the property the sweep is for, and it is
+    # independent of anything else in the table.
+    test "sweep_pushed/1 deletes lapsed rows and leaves live ones", %{
+      meeting: meeting,
+      far_future: t0,
+      agent_id: agent_id,
+      other_agent_id: other_agent_id
+    } do
+      {:ok, _} = AgentActivity.push(meeting.id, agent_id, :thinking, ttl_ms: 5_000, now: t0)
+
+      {:ok, _} =
+        AgentActivity.push(meeting.id, other_agent_id, :thinking, ttl_ms: 600_000, now: t0)
+
+      # Both rows are live at t0, and a sweep at t0 finds neither of them
+      # lapsed, so both survive it.
+      AgentActivity.sweep_pushed(t0)
+      assert %{^agent_id => _, ^other_agent_id => _} = AgentActivity.pushed_all(meeting.id, t0)
+
+      # 60s on, the 5s row has lapsed and the 600s row has not.
+      AgentActivity.sweep_pushed(DateTime.add(t0, 60, :second))
+
+      # Read back at t0, where a surviving 5s row would still be live.
+      assert AgentActivity.pushed(meeting.id, agent_id, t0) == nil
+      assert %{state: :thinking} = AgentActivity.pushed(meeting.id, other_agent_id, t0)
+      assert Map.keys(AgentActivity.pushed_all(meeting.id, t0)) == [other_agent_id]
+    end
+
+    # The structural half of the safety argument, made checkable.
+    #
+    # `agent_activity_test.exs`'s ceiling block already forbids
+    # `AgentActivity` from exporting `init/1` or `handle_info/2`; this
+    # states the other side of that split — the process exists, it is a
+    # different module, and it is what owns the table.
+    test "the table has a lifecycle owner, and it is not AgentActivity itself" do
+      refute function_exported?(AgentActivity, :init, 1)
+      assert function_exported?(AgentActivity.Store, :init, 1)
+
+      assert is_pid(Process.whereis(AgentActivity.Store))
+      assert :ets.info(AgentActivity.pushed_table()) != :undefined
+    end
+
+    test ":thinking and :composing are in states/0 but are not signals", %{} do
+      for state <- [:thinking, :composing] do
+        assert state in AgentActivity.states()
+        refute state in AgentActivity.signals()
+      end
+    end
+
+    # `:listening` is untouched by this stage, and must stay that way: it is
+    # deliberately unreachable (canvas `01a05b11-54ff`, ratified by Harper
+    # 2026-09-03), and giving a runtime a way to declare it would rebuild
+    # the always-on badge that decision removed.
+    test ":listening gained no producer here", %{
+      meeting: meeting,
+      far_future: t0,
+      agent_id: agent_id
+    } do
+      assert :listening in AgentActivity.states()
+      refute :listening in AgentActivity.signals()
+      refute :listening in AgentActivity.pushed_states()
+
+      assert AgentActivity.push(meeting.id, agent_id, :listening, now: t0) ==
+               {:error, {:unsupported_state, :listening}}
+    end
+  end
+
+  # `resolve_at/3` answers `:idle` by ABSENCE, as every reader in this module
+  # does. Collapsing that to the atom here is what lets the expiry assertions
+  # be identity comparisons rather than `refute match?`.
+  defp pushed_state_of(meeting_id, agent_id, now) do
+    case Map.get(AgentActivity.resolve_at(AgentActivity.new(), meeting_id, now), agent_id) do
+      %{state: state} -> state
+      nil -> :idle
+    end
+  end
 end

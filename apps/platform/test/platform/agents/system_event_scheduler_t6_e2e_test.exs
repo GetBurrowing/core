@@ -680,7 +680,13 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # into a meeting it was invited to, in its own voice. Not a T6 concern —
     # it adds no schedule, no trigger and no historian surface
     # (+meeting_say -> 103)
-    @t6_baseline_tool_count 103
+    # bumped by task 01a07400 stage 1 — `meeting_activity_push`, added to the
+    # existing `task` bundle beside the other two meeting tools. A federated
+    # runtime declaring `thinking` / `composing` about itself in a meeting,
+    # with a server-side ttl that expires the declaration on its own. Not a
+    # T6 concern — it adds no schedule, no trigger and no historian surface
+    # (+meeting_activity_push -> 104)
+    @t6_baseline_tool_count 104
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

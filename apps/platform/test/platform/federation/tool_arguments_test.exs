@@ -133,7 +133,15 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # (`:room_not_found`) before anything is broadcast. Neither is tolerated
   # absent: a say with no text has nothing to speak, and a say with no room
   # has nowhere to speak it.
-  @surveyed_required_count 144
+  # 146 with `meeting_activity_push`'s `meeting_id` + `state` (task 01a07400
+  # stage 1). Both HONEST. `meeting_id` is read under its declared key only
+  # and goes to `Meetings.get_meeting/1`, which answers `nil` for a missing
+  # or malformed id and is turned into a refusal before anything is written;
+  # `state` is looked up in a closed two-entry map with a catch-all clause
+  # that refuses every non-binary, including absence. Neither is tolerated
+  # absent, and neither may be: a declaration with no meeting has no rail to
+  # appear on, and one with no state is not a declaration.
+  @surveyed_required_count 146
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

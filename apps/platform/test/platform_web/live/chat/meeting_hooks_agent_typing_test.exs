@@ -161,6 +161,19 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
     |> String.trim()
   end
 
+  # The `:delayed` second line (task 01a07400 stage 3) — a node of its own,
+  # because the reason is the protected line rather than a clause sharing
+  # the word's row.
+  defp rail_delay_reason(html, presence_id) do
+    html
+    |> frag()
+    |> LazyHTML.query(
+      ~s(#{rail_row(html, presence_id)} [data-role="agent-activity-delay-reason"])
+    )
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
   # And the ring around the face — `data-activity-state` on the avatar.
   defp rail_activity_state(html, presence_id) do
     html
@@ -200,8 +213,27 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
       # bare word used to occupy alone. The word itself is still the
       # thing this test is about.
       assert Process.alive?(view.pid)
-      assert rail_activity_word(typing_html, presence.id) =~ "Writing"
-      assert rail_activity_state(typing_html, presence.id) == ["typing"]
+
+      # CHANGED in task 01a07400 stage 3, and CORRECTED later in the same
+      # stage. This fixture's agent has NO runtime row at all, which makes
+      # two specific causes true at once; the `cond` order decided which
+      # was shown. It used to read "no voice worker in this room"; that
+      # clause is no longer promotable to a state — it does not hold up
+      # typing, and `:speaking` is not delayable, so it had no true
+      # configuration as one (see `AgentDelayReason.specific_for_agent/1`).
+      # The row is still `:delayed`, now carrying the cause that IS true
+      # here: nothing is reachable for this agent.
+      #
+      # What this test is about — that the process which took the broadcast
+      # is the process that answers — is proved by the row CHANGING from
+      # the "Idle"/["idle"] pair asserted above, and by the signal read
+      # directly off the live socket's own struct below, which still says
+      # `:typing`. The delay qualifies that signal; it does not replace
+      # what produced it.
+      assert rail_activity_word(typing_html, presence.id) =~ "Delayed"
+      refute rail_activity_word(typing_html, presence.id) =~ "Idle"
+      assert rail_activity_state(typing_html, presence.id) == ["delayed"]
+      assert rail_delay_reason(typing_html, presence.id) =~ "agent went offline"
       assert AgentActivity.for_agent(assigns(view).agent_activity, agent.id) == :typing
 
       # The SAME broadcast still drives the composer on the same page —
@@ -351,7 +383,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
 
       :ok = AgentActivity.broadcast(meeting.id, :computing, agent.id, true)
       html = render(view)
-      assert rail_activity_word(html, presence.id) =~ "Thinking"
+      # "Delayed", not "Thinking" — this fixture seats no voice worker, and
+      # task 01a07400 stage 2 makes that a state rather than a note. The
+      # CLOCK is what this test is about, and `:delayed` keeps the age of
+      # the state it qualifies, so the ceiling below still fires unchanged.
+      assert rail_activity_word(html, presence.id) =~ "Delayed"
       refute html =~ "Couldn&#39;t"
 
       # Backdate the stamp past `AgentActivity.ceiling_seconds/0` (120s)

@@ -35,6 +35,7 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.SayRegistry
+  alias Platform.Meetings.SpeakingWindow
   alias Platform.Repo
   alias Platform.Tenancy.ExternalGrants
   alias Platform.Tenancy.PendingExternalGrant
@@ -5496,6 +5497,8 @@ defmodule Platform.Meetings do
               "room=#{room_name} utterance=#{utterance_id} chars=#{String.length(text)}"
           )
 
+          SpeakingWindow.dispatched(room, agent, utterance_id, text)
+
           await_say_ack(utterance_id, ack_topic, room_name, timeout)
 
         {:error, reason} ->
@@ -5774,6 +5777,8 @@ defmodule Platform.Meetings do
       %{system_time: System.system_time()},
       %{agent_id: agent_id, room_name: room_name, status: status}
     )
+
+    SpeakingWindow.acked(agent_id, utterance_id)
 
     if status == "spoken" do
       post_spoken_utterance(agent_id, utterance_id)

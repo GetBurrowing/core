@@ -2532,6 +2532,35 @@ body, .font-fabrikam {
   50%      { box-shadow: 0 0 0 3px var(--color-primary); }
 }
 
+/* ──────────────────────────────────────────────────────
+   An AGENT is speaking, on the participant rail (task 01a07400 stage 3).
+
+   Saru's design direction (canvas 01a07402-99e3) makes motion the liveness
+   axis and rules this state "amplitude, not a pulse" — the pulse is spent
+   on Writing, where it reads as the pen moving. Amplitude is a halo
+   breathing outward from the ring: audio spreading into the room.
+
+   Deliberately the same IDIOM as `.meeting-tile-speaking` directly above,
+   which is what a speaking HUMAN's tile already does, in the success slot
+   the ratified map assigns to live audio rather than that rule's primary.
+   Reusing the room's existing "someone is talking" motion at 28px is why
+   this is not a new motion token.
+
+   No `prefers-reduced-motion` block here, deliberately: the universal
+   reduce rule near the top of this file already flattens every animation
+   in the app, so this stops on its own. That is precisely why the glyph
+   carries the same distinction statically — see `motion_class/1` in
+   `agent_activity_badge.ex`.
+   ────────────────────────────────────────────────────── */
+.agent-activity-ring-speaking {
+  animation: agent-activity-speaking-amplitude 1.6s ease-in-out infinite;
+}
+
+@keyframes agent-activity-speaking-amplitude {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-success) 45%, transparent); }
+  50%      { box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-success) 20%, transparent); }
+}
+
 .meeting-tile-video {
   position: absolute;
   inset: 0;

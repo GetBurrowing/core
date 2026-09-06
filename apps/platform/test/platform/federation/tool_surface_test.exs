@@ -135,7 +135,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # `task` bundle beside `meeting_create` — an agent speaking arbitrary
       # text into a meeting it was invited into, in its own voice, with the
       # runtime's ack returned as `spoken` / `failed` / `no_ack`. No new bundle.
-      assert length(tools) == 103
+      # 104 as of task 01a07400 stage 1, which added `meeting_activity_push`
+      # to the `task` bundle beside the other two meeting tools — a runtime
+      # declaring `thinking` / `composing` about itself in a meeting, with a
+      # server-side ttl that expires the declaration whether or not the
+      # runtime survives to withdraw it. No new bundle.
+      assert length(tools) == 104
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -194,6 +199,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "stack_retry_member_merge" in tool_names
       assert "stack_assign_agents" in tool_names
       assert "meeting_create" in tool_names
+      # Task 01a07400 stage 1 — self-declared agent activity in a meeting.
+      assert "meeting_activity_push" in tool_names
       assert "plan_create" in tool_names
       assert "plan_get" in tool_names
       assert "plan_submit" in tool_names

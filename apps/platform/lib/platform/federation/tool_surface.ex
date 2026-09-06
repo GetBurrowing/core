@@ -45,6 +45,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Design.Brand
   alias Platform.Design.PreplanStep
   alias Platform.Meetings
+  alias Platform.Meetings.AgentActivity
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
   alias Platform.Orchestration.Diagnostics
@@ -2643,6 +2644,37 @@ defmodule Platform.Federation.ToolSurface do
           "You must be a current participant of the room — invited by a human from the meeting page and not yet dismissed. Being a member of the meeting's chat space is not enough. Text over 2000 characters is refused, not truncated. A reply budget applies: at most 6 says per minute per room (`reply_budget_exhausted`), and no say at all while the last 3 utterances in the room were agents — a human must speak before you may reply again (`agent_chain_too_deep`). `no_ack` is not a failure and not a success: the dispatch went out and nothing came back, and it still spends budget. Do not retry in a loop on `no_ack`; if it repeats, say so in chat instead.",
         when_to_use:
           "When you are in a meeting and want to say something specific out loud — an answer, a summary, a question — rather than waiting for the intent pipeline to prompt you."
+      },
+      %{
+        name: "meeting_activity_push",
+        description:
+          "Declare what YOU are doing in a meeting right now, so the meeting's agent rail shows it instead of showing you idle. Only two states can be declared — `thinking` (you are working on something) and `composing` (you are drafting a reply you have not started sending) — because those are the only two the meeting cannot already observe for itself; it already sees when you are typing, when an intent is in flight for you, when one failed, and when a transcript segment reached you. The declaration EXPIRES on its own after a ttl the server sets (returned as `ttl_ms`), so call this again on roughly half that interval for as long as the state holds. There is nothing to call to clear it: stop pushing and it lapses. That is deliberate — it means a state you declared still lapses correctly if your runtime crashes, is killed, or loses its socket mid-turn.",
+        parameters: %{
+          meeting_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The meeting to declare the state in. NOT a room name and not a chat space id."
+          },
+          state: %{
+            type: "string",
+            required: true,
+            description:
+              "Exactly `thinking` or `composing`. Any other value — including `idle`, `typing`, `computing`, `failed` or `heard` — is refused, not coerced."
+          },
+          reason: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional short note shown beside the state, e.g. \"reading the last ten minutes of transcript\". Truncated past 200 characters; blank is treated as absent."
+          }
+        },
+        returns:
+          "%{meeting_id, agent_id, state, reason, pushed_at, ttl_ms, expires_at}. `pushed_at` and `expires_at` are ISO8601 UTC; `expires_at` is when the declaration lapses if you do not push again.",
+        limitations:
+          "You must be an active participant of the meeting's live room — seated by a human and not yet departed. Being in the meeting's chat space is not enough, and neither is having been in the room earlier. The state applies to YOU: there is no parameter for declaring another agent's state. It cannot overwrite what the meeting observed directly — a failed intent still reads as failed, and output you are actually emitting still reads as typing — but it does take precedence over a merely in-flight intent, and it holds off the 120-second stall cap for as long as you keep refreshing. It does not make you speak, does not post to chat, and is not persisted: it is in-memory per node and gone after a restart.",
+        when_to_use:
+          "When you are about to spend more than a few seconds on something in a meeting that the meeting has no other way to see — a long tool chain, a document read, drafting a summary — and the humans in the room would otherwise be watching you sit there looking idle or, past two minutes, looking failed."
       }
     ]
   end
@@ -4305,6 +4337,56 @@ defmodule Platform.Federation.ToolSurface do
           {:error, reason} ->
             {:error, meeting_say_error(reason, room_name)}
         end
+    end
+  end
+
+  # ── meeting_activity_push (task 01a07400 stage 1) ───────────────────
+  # The agent declares its OWN state, in a meeting it is seated in. Three
+  # things this clause deliberately does not do:
+  #
+  #   * It does not take an agent_id parameter. The agent is always
+  #     `load_agent(context)`, so a runtime can only ever speak for itself
+  #     — `:thinking` on someone else's tile would be a lie core relayed.
+  #   * It does not `String.to_atom/1` the state. `@pushed_state_names`
+  #     is an explicit two-entry map, so an unknown string is a refusal
+  #     rather than a new atom on a public endpoint.
+  #   * It registers NOTHING to clean the push up — no monitor, no
+  #     terminate hook, no presence-drop handler. The whole safety
+  #     argument for pushed state is that the SERVER expires it; a
+  #     cleanup path here would work only when the runtime dies politely,
+  #     which is the case that does not need it.
+  def execute("meeting_activity_push", args, context) do
+    meeting_id = Map.get(args, "meeting_id")
+
+    with {:ok, %Agent{} = agent} <- activity_push_agent(context),
+         {:ok, state} <- activity_push_state(Map.get(args, "state")),
+         {:ok, meeting} <- activity_push_meeting(meeting_id),
+         :ok <- activity_push_seated(meeting, agent) do
+      case AgentActivity.push(meeting.id, agent.id, state, reason: Map.get(args, "reason")) do
+        {:ok, entry} ->
+          {:ok,
+           %{
+             meeting_id: meeting.id,
+             agent_id: agent.id,
+             state: Atom.to_string(entry.state),
+             reason: entry.reason,
+             pushed_at: DateTime.to_iso8601(entry.pushed_at),
+             ttl_ms: entry.ttl_ms,
+             expires_at:
+               entry.pushed_at
+               |> DateTime.add(entry.ttl_ms, :millisecond)
+               |> DateTime.to_iso8601()
+           }}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "meeting_activity_push: could not record the state (#{inspect(reason)})",
+             recoverable: true,
+             suggestion:
+               "The activity store was not available. Retry shortly; nothing was recorded."
+           }}
+      end
     end
   end
 
@@ -10207,6 +10289,89 @@ defmodule Platform.Federation.ToolSurface do
       recoverable: true,
       suggestion: "Retry once; if it repeats, report the error text in chat."
     }
+  end
+
+  # ── meeting_activity_push helpers (task 01a07400 stage 1) ───────────
+  #
+  # An explicit map rather than `String.to_atom/1`. This value arrives off
+  # a public federation endpoint, so casting it would let any caller mint
+  # atoms; and the closed set is the point of the feature — a runtime that
+  # could name `failed` could paint over a failure core recorded.
+  @pushed_state_names %{"thinking" => :thinking, "composing" => :composing}
+
+  defp activity_push_agent(context) do
+    case load_agent(context) do
+      %Agent{} = agent ->
+        {:ok, agent}
+
+      nil ->
+        {:error,
+         %{
+           error: "meeting_activity_push: no calling agent in context",
+           recoverable: false,
+           suggestion:
+             "This tool must be called from an agent runtime; the caller's agent could not be resolved."
+         }}
+    end
+  end
+
+  defp activity_push_state(state) when is_binary(state) do
+    case Map.fetch(@pushed_state_names, String.trim(state)) do
+      {:ok, atom} -> {:ok, atom}
+      :error -> {:error, unsupported_pushed_state(state)}
+    end
+  end
+
+  defp activity_push_state(state), do: {:error, unsupported_pushed_state(state)}
+
+  defp unsupported_pushed_state(state) do
+    allowed = AgentActivity.pushed_states() |> Enum.map_join(", ", &Atom.to_string/1)
+
+    %{
+      error: "meeting_activity_push: #{inspect(state)} is not a state you can declare",
+      recoverable: false,
+      suggestion:
+        "Pass exactly one of: #{allowed}. The other activity states are observed by the meeting itself and cannot be asserted by a runtime."
+    }
+  end
+
+  defp activity_push_meeting(meeting_id) do
+    case Meetings.get_meeting(meeting_id) do
+      %Meetings.Meeting{} = meeting ->
+        {:ok, meeting}
+
+      nil ->
+        {:error,
+         %{
+           error: "meeting_activity_push: no meeting #{inspect(meeting_id)}",
+           recoverable: false,
+           suggestion:
+             "Pass the meeting_id, not a room name or a chat space id. Your meeting_join payload carries both."
+         }}
+    end
+  end
+
+  # The seat guard. `active_participants_for_space/1` resolves the
+  # meeting's ACTIVE room and its un-departed participants, which is the
+  # same "seated right now" the rail renders — so an agent can only
+  # declare a state on a surface that would actually show it.
+  defp activity_push_seated(%Meetings.Meeting{} = meeting, %Agent{} = agent) do
+    seated? =
+      meeting.chat_space_id
+      |> Meetings.active_participants_for_space()
+      |> Enum.any?(&(&1.agent_id == agent.id))
+
+    if seated? do
+      :ok
+    else
+      {:error,
+       %{
+         error: "meeting_activity_push: you are not seated in meeting #{meeting.id}",
+         recoverable: false,
+         suggestion:
+           "A human has to invite you into the meeting's room first. Being a member of the meeting's chat space is not enough."
+       }}
+    end
   end
 
   defp load_agent(context) when is_map(context) do

@@ -154,4 +154,165 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadgeTest do
       refute badge(:computing) =~ "animate-pulse"
     end
   end
+
+  # ── task 01a07400 stage 3: Speaking, Delayed, and the reduced-motion half ──
+  #
+  # Saru's design direction (canvas 01a07402-99e3) makes MOTION the liveness
+  # axis — "colour answers does this need me, motion answers is it
+  # progressing" — and then rules that the design must not collapse for a
+  # reader who has asked for less of it. These tests are that ruling.
+  describe "the states this stage adds" do
+    # The glyph inside the ring node, as rendered.
+    defp glyph_of(state) do
+      state
+      |> badge()
+      |> Floki.parse_fragment!()
+      |> Floki.find(~s([data-role="agent-activity-ring"]))
+      |> Floki.text()
+      |> String.trim()
+    end
+
+    # ── THE ANTI-VACUITY TEST ────────────────────────────────────────────
+    #
+    # `app.css` disables every animation in the app under
+    # `prefers-reduced-motion`, so under that preference this component
+    # renders the SAME markup with the motion inert. A test that asserted
+    # "no animation class is present" would therefore be worthless twice
+    # over: it describes a branch that does not exist, and it passes just as
+    # happily on a row that renders nothing at all.
+    #
+    # What actually has to hold is that the glyph — the channel that still
+    # works when motion is off — tells the states apart on its own. So this
+    # asserts the glyphs are pairwise DISTINCT and each non-empty. It fails
+    # if any two states share a mark, which was verified by mutation: giving
+    # `:delayed` `:speaking`'s `●` turns it red.
+    test "every distinguishable state carries a DIFFERENT, non-empty glyph" do
+      # `:idle` is excluded and only `:idle`: its glyph is deliberately the
+      # empty string (an idle agent carries no mark), which is itself the
+      # distinction. `:listening` is excluded because it has no producer and
+      # must not gain a clause — canvas 01a07402-99e3 says so in as many
+      # words. Everything else that can reach a screen is in this list.
+      states = [:computing, :typing, :heard, :speaking, :delayed, :failed]
+      glyphs = Enum.map(states, &glyph_of/1)
+
+      assert length(glyphs) == 6,
+             "a state was added or dropped without updating the reduced-motion guard"
+
+      for {state, glyph} <- Enum.zip(states, glyphs) do
+        refute glyph == "",
+               "#{inspect(state)} has no glyph, so it is invisible under prefers-reduced-motion"
+      end
+
+      assert Enum.uniq(glyphs) == glyphs,
+             "two states share a glyph, so reduced motion cannot tell them apart: " <>
+               inspect(Enum.zip(states, glyphs))
+    end
+
+    # The pair the axis would otherwise be ALONE in separating: both are
+    # live-ish working readings, and the difference between them under
+    # normal motion is that one moves and one has stopped. Called out on its
+    # own because it is the case the set-level assertion above exists for,
+    # and a set assertion can drift into passing for unrelated reasons.
+    test "Speaking and Delayed are told apart without motion at all" do
+      refute glyph_of(:speaking) == glyph_of(:delayed)
+
+      # ...and not only by the glyph: the ring colour differs too, so the
+      # two static channels agree rather than resting on one.
+      assert badge(:speaking) =~ "border-success"
+      assert badge(:delayed) =~ "border-base-content/25"
+    end
+
+    test "Speaking takes the success slot the ratified map assigns to live audio" do
+      speaking = badge(:speaking)
+
+      assert speaking =~ "Speaking"
+      assert speaking =~ "border-success"
+      assert speaking =~ "text-success"
+      refute speaking =~ "warning"
+    end
+
+    # "Amplitude, not a pulse" — the canvas reserves the pulse for Writing,
+    # where it reads as the pen moving. Asserting the two motions DIFFER is
+    # the assertion; asserting one class is present would pass with both
+    # states on the same animation.
+    test "Speaking moves by amplitude, and Writing's pulse is not reused for it" do
+      speaking = badge(:speaking)
+
+      assert speaking =~ "agent-activity-ring-speaking"
+      refute speaking =~ "animate-pulse"
+      assert badge(:typing) =~ "animate-pulse"
+      refute badge(:typing) =~ "agent-activity-ring-speaking"
+    end
+
+    # The one state that splits its two colour slots, which is the whole
+    # idea: still working (word keeps `info`), not progressing (ring drains
+    # to the neutral value `:idle` uses).
+    test "Delayed keeps info for its word and drains its ring to neutral" do
+      delayed = badge(:delayed)
+      parsed = Floki.parse_fragment!(delayed)
+
+      word_class =
+        parsed
+        |> Floki.find(~s([data-role="agent-activity-word"]))
+        |> Floki.attribute("class")
+        |> List.first()
+
+      ring_class =
+        parsed
+        |> Floki.find(~s([data-role="agent-activity-ring"]))
+        |> Floki.attribute("class")
+        |> List.first()
+
+      assert delayed =~ "Delayed"
+      assert word_class =~ "text-info", "the word must stay on the working family's slot"
+      refute ring_class =~ "border-info", "the ring is the liveness channel and must drain"
+      assert ring_class =~ "border-base-content/25"
+    end
+
+    # The hard-won rule on this surface: `warning` means a human is being
+    # asked for something, and a blocked agent asks nothing of anyone.
+    # Settled after five stages reported it open, so it gets its own guard.
+    test "Delayed refuses the warning slot, and refuses to spin" do
+      delayed = badge(:delayed)
+
+      refute delayed =~ "warning"
+      refute delayed =~ "animate-pulse"
+      refute delayed =~ "animate-spin"
+      refute delayed =~ "agent-activity-ring-speaking"
+    end
+
+    # `:thinking` and `:composing` are what a federated runtime declares
+    # about ITSELF (task 01a07400 stage 1). They are drawn as exact aliases
+    # of the states core observes for the same message, because the canvas
+    # gives one appearance per message and the reader cannot act on which
+    # side produced it.
+    #
+    # Asserting equality of the WHOLE rendered fragment except the state
+    # attribute is deliberate: it detonates if either row drifts, which a
+    # per-field assertion would not.
+    test "the two pushed states render exactly as the observed states they mirror" do
+      assert String.replace(badge(:thinking), ~s(state="thinking"), ~s(state="computing")) ==
+               badge(:computing)
+
+      assert String.replace(badge(:composing), ~s(state="composing"), ~s(state="typing")) ==
+               badge(:typing)
+    end
+
+    # ...but they must stay TELLABLE APART in the DOM, or a screenshot diff
+    # and a test both lose the ability to say which producer spoke. This is
+    # what keeps the clause above an alias rather than a silent collapse.
+    test "the pushed states stay identifiable in the DOM despite rendering alike" do
+      assert badge(:thinking) =~ ~s(data-activity-state="thinking")
+      assert badge(:composing) =~ ~s(data-activity-state="composing")
+    end
+
+    # `:listening` is the trap this ticket names by hand. It has no producer,
+    # it was removed from the rail by a ratified decision, and canvas
+    # 01a07402-99e3 WITHDREW its own earlier suggestion to restore it: "Do
+    # not add a `meta(:listening)` clause as part of this work."
+    test "Listening still has no visual of its own" do
+      assert String.replace(badge(:listening), ~s(state="listening"), ~s(state="idle")) ==
+               badge(:idle)
+    end
+  end
 end
