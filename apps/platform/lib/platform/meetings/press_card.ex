@@ -19,7 +19,7 @@ defmodule Platform.Meetings.PressCard do
 
   Task `01a03f4e-78b1` owns how a candidate card looks and shipped that
   in #872: `PlatformWeb.Meetings.CandidateRail`, `CandidateDisplay` and
-  the `CandidateRing` hook. This module inserts a `meeting_candidates`
+  the `CandidateClock` hook. This module inserts a `meeting_candidates`
   row and stops. The board already renders every open candidate for the
   meeting, so the card shows up — to every participant, not only the one
   who pressed — without a line of markup here. Two tasks meet at the

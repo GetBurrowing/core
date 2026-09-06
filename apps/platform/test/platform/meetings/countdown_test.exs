@@ -165,6 +165,25 @@ defmodule Platform.Meetings.CountdownTest do
     end
   end
 
+  describe "Countdown.warning_seconds/0" do
+    test "is 5, and sits strictly inside the countdown" do
+      # Pinned as a literal for the same reason 30 is: the threshold is a
+      # design decision (task 01a0740e stage 3), not an implementation
+      # detail, and a silent edit must redden here.
+      assert Countdown.warning_seconds() == 5
+
+      # The relation that makes the step a STEP. At or above the
+      # countdown, every card is amber from the moment it is armed and
+      # the warning stops distinguishing anything — which is exactly the
+      # mutation `candidate_rail_test.exs` runs against the rail. The
+      # module raises at compile time on the same condition; this is the
+      # runtime half, so the invariant is stated where a reader of the
+      # tests can see it.
+      assert Countdown.warning_seconds() < Countdown.countdown_seconds()
+      assert Countdown.warning_seconds() > 0
+    end
+  end
+
   # ── S1: automation_mode ───────────────────────────────────────────────────
 
   describe "Meetings.automation_mode/1 and set_automation_mode/2" do

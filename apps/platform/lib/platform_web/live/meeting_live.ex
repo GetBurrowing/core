@@ -217,6 +217,7 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
 
   alias PlatformWeb.Components.Meetings.CallShell
+  alias PlatformWeb.Components.Meetings.CandidateRail
 
   import PlatformWeb.Components.Meetings.IntentsCollapse,
     only: [intents_collapse: 1, intents_overlays: 1]
@@ -237,6 +238,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Meetings.Archive
   alias Platform.Meetings.CandidateEvents
   alias Platform.Meetings.Candidates
+  alias Platform.Meetings.Countdown
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.AgentActivity
@@ -731,6 +733,12 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:meeting_candidates_closed, [])
     |> assign(:meeting_candidate_events, %{})
     |> assign(:candidate_error, nil)
+    |> assign(:candidate_order, nil)
+    # The ten-second undo left behind by THIS socket's own stop, or nil.
+    # It is per-socket on purpose: the undo belongs to the participant
+    # who pressed the button, and everybody else correctly sees the card
+    # move to Closed. See `apply_candidate_stop/2`.
+    |> assign(:candidate_undo, nil)
   end
 
   @impl true
@@ -3227,6 +3235,37 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, socket}
   end
 
+  # The rail freezes its order while a pointer is over it (task 01a0740e
+  # stage 4). The rail sorts by deadline, so a card CAN move under a
+  # cursor already on its way to `Stop` — rarely, on one of three
+  # discrete events, and once is enough to stop the wrong card.
+  #
+  # The captured order is re-derived HERE from `:meeting_candidates`
+  # through `CandidateRail.display_order/1`, the same sort the render
+  # runs. The push carries no ids at all: a payload of card ids would let
+  # a crafted event dictate the sequence of somebody's rail, or name a
+  # row from another meeting, for no gain over reading the list this
+  # socket already holds.
+  #
+  # This clause serves the GUEST ingress. An authenticated session on
+  # this route also runs `MeetingHooks.attach/2`, whose own clause halts
+  # the event before it reaches here; a guest runs `attach_guest/1`,
+  # whose `handle_guest_event/3` falls through to this module. Both are
+  # live paths, and deleting either as a duplicate crashes one of the two
+  # surfaces on a hover.
+  def handle_event("candidate_rail_freeze", _params, socket) do
+    order = CandidateRail.display_order(socket.assigns[:meeting_candidates] || [])
+
+    {:noreply, assign(socket, :candidate_order, order)}
+  end
+
+  # Cleared, never expired on a timer. A frozen rail is a rail that has
+  # stopped telling the truth about urgency, so the only thing allowed to
+  # hold one is a pointer that is still there.
+  def handle_event("candidate_rail_thaw", _params, socket) do
+    {:noreply, assign(socket, :candidate_order, nil)}
+  end
+
   # Stop this candidate's countdown (task 01a03fba stage 4).
   #
   # Deliberately NOT wrapped in `with_intents_gate/2`. That gate resolves
@@ -3260,6 +3299,39 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def handle_event("stop_candidate", _params, socket), do: {:noreply, socket}
+
+  # Take that stop back (task 01a0740e stage 5).
+  #
+  # Ungated for the SAME documented reason `stop_candidate` is: a guest
+  # holds `"meeting:{id}"` and not `"meeting:{id}:intents"`, and the
+  # requirement is that any participant can work the board. Undoing a
+  # stop is strictly less powerful than making one — it hands the card
+  # back to an explicit human decision rather than letting it act.
+  #
+  # The participant id is read off THIS socket and never from the click
+  # payload, so a crafted `phx-value-` cannot attribute somebody else's
+  # undo, and the candidate is RE-READ from the database rather than
+  # taken from the assign — the assign was loaded before the stop, so
+  # its `state` is stale by construction on this path.
+  def handle_event("undo_stop_candidate", %{"candidate_id" => candidate_id}, socket)
+      when is_binary(candidate_id) do
+    meeting_id = socket.assigns[:meeting] && socket.assigns.meeting.id
+
+    socket =
+      case Candidates.get(candidate_id) do
+        %{meeting_id: ^meeting_id} = candidate when is_binary(meeting_id) ->
+          apply_candidate_undo_stop(socket, candidate)
+
+        # Not this meeting's candidate, or no such row. Nothing written
+        # and nothing said, matching `stop_candidate`.
+        _ ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("undo_stop_candidate", _params, socket), do: {:noreply, socket}
 
   # The human gate on a card that is NOT counting down (task
   # 01a03f4e-78b1). `Go ahead` and `Not now` are the review half of the
@@ -5001,6 +5073,7 @@ defmodule PlatformWeb.MeetingLive do
       {:ok, _stopped} ->
         socket
         |> assign(:candidate_error, nil)
+        |> assign(:candidate_undo, undo_stash(candidate))
         |> assign_candidate_board(candidate.meeting_id)
 
       # The sweeper won the race. Said out loud rather than swallowed:
@@ -5013,6 +5086,62 @@ defmodule PlatformWeb.MeetingLive do
 
       {:error, _reason} ->
         assign(socket, :candidate_error, "Could not stop this one.")
+    end
+  end
+
+  # WHERE THE CARD WAS, and until when.
+  #
+  # `do_stop/3` nulls `acts_at` as part of the UPDATE that wins the race
+  # against the sweeper, so once the write has landed the card's sort
+  # position no longer exists anywhere. The struct this function is
+  # handed was read BEFORE that write, and its `acts_at` is the only
+  # surviving copy of the deadline the rail sorted on — which is why the
+  # stash is taken here and not from the row `stop/3` returns, and why
+  # no column was added to preserve it.
+  #
+  # Stashed only for a stop that this click actually made. `stop/3` is
+  # idempotent and answers `{:ok, _}` for an already-closed card, so a
+  # double-click would otherwise replace a real stash with one whose
+  # `acts_at` is nil — an undo row with no slot to sit in.
+  defp undo_stash(%{id: id, acts_at: %DateTime{} = acts_at, state: state})
+       when state != :closed do
+    %{
+      id: id,
+      acts_at: acts_at,
+      expires_at: DateTime.add(DateTime.utc_now(), Countdown.undo_seconds(), :second)
+    }
+  end
+
+  defp undo_stash(_candidate), do: nil
+
+  defp apply_candidate_undo_stop(socket, candidate) do
+    result =
+      Candidates.reopen(candidate, participant_id(socket.assigns[:current_participant]))
+
+    # The stash is cleared on EVERY outcome. It is a ten-second offer
+    # about one click; whether the offer was taken or refused, leaving
+    # the row up would invite a second press against a card that has
+    # already answered.
+    socket = assign(socket, :candidate_undo, nil)
+
+    case result do
+      {:ok, _reopened} ->
+        socket
+        |> assign(:candidate_error, nil)
+        |> assign_candidate_board(candidate.meeting_id)
+
+      # The sweeper won the race after all, or somebody graduated the
+      # card from another session. Same sentence `stop_candidate` uses,
+      # because it is the same fact: the deliverable exists.
+      {:error, :already_fired} ->
+        socket
+        |> assign(:candidate_error, "Too late — this one already went ahead.")
+        |> assign_candidate_board(candidate.meeting_id)
+
+      {:error, _reason} ->
+        socket
+        |> assign(:candidate_error, "Could not bring this one back.")
+        |> assign_candidate_board(candidate.meeting_id)
     end
   end
 

@@ -601,6 +601,108 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
       assert far_remaining > near_remaining
     end
 
+    test "ONE ticker: the hook is on the RAIL, and on none of the cards",
+         %{conn: conn, meeting: meeting} do
+      # The JS suite counts `setInterval` calls and proves the hook opens
+      # one timer per mount. It cannot see this file, so it cannot tell
+      # how many times the hook is MOUNTED — that is decided here, by
+      # which element carries `phx-hook`. Put the attribute back on
+      # `.candidate-foot` and every JS assertion still passes while the
+      # browser runs one interval per armed card again.
+      now = DateTime.utc_now()
+
+      for quote <- [
+            "we should add a CSV export",
+            "rotate the staging secrets",
+            "book the offsite venue"
+          ] do
+        candidate!(meeting, %{
+          evidence_quote: quote,
+          acts_at: DateTime.add(now, 20, :second)
+        })
+      end
+
+      {_view, html} = mount_board(conn, meeting)
+      rail = html |> doc() |> LazyHTML.query("[data-role='meeting-candidate-countdown-rail']")
+      feet = LazyHTML.query(rail, "[data-role='meeting-candidate-countdown']")
+
+      # Positive control FIRST. Three armed cards have to actually be on
+      # the page, or "no hook on the cards" is true because there are no
+      # cards and this test measures nothing.
+      assert length(LazyHTML.attribute(feet, "data-acts-at")) == 3
+
+      # The ticker is on the section, once.
+      assert attr(rail, "phx-hook") == "CandidateClock"
+
+      # And it has a DOM id, without which LiveView never runs the hook at
+      # all — a silent failure that looks exactly like a working page with
+      # a frozen number.
+      assert attr(rail, "id") not in [nil, ""]
+
+      # Zero hooks below it. A count, not a spot check: three armed cards
+      # and an empty list is the assertion, so a hook left on one card
+      # fails it.
+      assert LazyHTML.attribute(feet, "phx-hook") == []
+    end
+
+    test "THE LADDER: three cards at different remainings render three different bars",
+         %{conn: conn, meeting: meeting} do
+      # The reason this ticket is one ticket and not one card's polish.
+      # Every armed card drains at the same rate, so several open at once
+      # form a ladder of bar lengths, and the ladder is the concurrency
+      # picture. One card cannot show it, and neither can a test that
+      # renders one card.
+      now = DateTime.utc_now()
+
+      cards =
+        for {quote, secs} <- [
+              {"we should add a CSV export", 3},
+              {"rotate the staging secrets", 15},
+              {"book the offsite venue", 28}
+            ] do
+          candidate!(meeting, %{evidence_quote: quote, acts_at: DateTime.add(now, secs, :second)})
+        end
+
+      {_view, html} = mount_board(conn, meeting)
+
+      widths =
+        for c <- cards do
+          html
+          |> card(c)
+          |> LazyHTML.query("[data-role='meeting-candidate-drain']")
+          |> attr("style")
+        end
+
+      # Positive control: three bars actually rendered. Without it,
+      # "they differ" is a claim about a list of three nils.
+      assert Enum.all?(widths, &is_binary/1)
+      assert length(Enum.uniq(widths)) == 3
+
+      parsed =
+        Enum.map(widths, fn "width: " <> pct ->
+          pct |> String.trim_trailing("%") |> String.to_float()
+        end)
+
+      # ASCENDING, matching ascending remaining. A bar wired to the
+      # elapsed fraction would render three different widths in exactly
+      # the wrong order and pass "they differ".
+      assert parsed == Enum.sort(parsed)
+
+      # And only the card inside the threshold is stepped to amber, on the
+      # real route rather than in a component render.
+      [urgent, mid, far] = cards
+
+      assert card(html, urgent)
+             |> LazyHTML.query("[data-role='meeting-candidate-drain']")
+             |> attr("class") =~ "candidate-drain--warning"
+
+      for calm <- [mid, far] do
+        refute card(html, calm)
+               |> LazyHTML.query("[data-role='meeting-candidate-drain']")
+               |> attr("class") =~ "candidate-drain--warning"
+      end
+    end
+
     test "a disarmed card renders no countdown and no stop button",
          %{conn: conn, meeting: meeting} do
       armed =
@@ -756,6 +858,98 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
       # And the lines are the mapped copy, not the kind atom.
       assert text_of(card(html, busy), "[data-role='meeting-candidate-log']") =~
                "Worked out what it is"
+    end
+  end
+
+  # ── The rail's order, on the real route (task 01a0740e stage 4) ───────
+
+  describe "rail order and the pointer freeze" do
+    defp rail_order(html) do
+      html |> cards() |> LazyHTML.attribute("data-candidate-id")
+    end
+
+    # THE WHOLE CHAIN, in one test, because every link in it is silent
+    # when it breaks. `candidate_rail/1`'s own tests prove the sort; what
+    # they cannot prove is that `CallShell.call_rail/1` forwards the
+    # `order` attr, that `MeetingLive` seeds and clears the assign, or
+    # that the two events the hook pushes are handled at all. An
+    # unforwarded attr renders a perfectly correct rail — it just never
+    # freezes, and nothing anywhere says so.
+    test "cards read soonest-to-fire first, and a hovered rail holds its order",
+         %{conn: conn, meeting: meeting} do
+      now = DateTime.utc_now()
+
+      # Created NEAR first, FAR second, so arrival order and deadline
+      # order disagree from the outset and "the sort ran" is not
+      # satisfiable by the insertion sequence.
+      near =
+        candidate!(meeting, %{
+          evidence_quote: "rotate the staging secrets",
+          acts_at: DateTime.add(now, 20, :second)
+        })
+
+      far =
+        candidate!(meeting, %{
+          evidence_quote: "book the offsite venue",
+          acts_at: DateTime.add(now, 25, :second)
+        })
+
+      {view, html} = mount_board(conn, meeting)
+
+      assert rail_order(html) == [near.id, far.id]
+
+      # A pointer arrives. The freeze captures what is on screen; with
+      # nothing yet changed this render is the CONTROL — it says the
+      # captured order is the displayed one and not, say, an empty list
+      # that would silently render nothing.
+      frozen = render_hook(view, "candidate_rail_freeze", %{})
+      assert rail_order(frozen) == [near.id, far.id]
+
+      # Now the thing the freeze exists for: a card arrives that would
+      # otherwise jump to the top, under a cursor already on its way to
+      # `Stop`.
+      soonest =
+        candidate!(meeting, %{
+          evidence_quote: "we should add a CSV export",
+          acts_at: DateTime.add(now, 2, :second)
+        })
+
+      send(view.pid, {:candidate_event, %{meeting_id: meeting.id}})
+      held = render(view)
+
+      # Held, and APPENDED rather than hidden. A frozen rail that dropped
+      # new cards would hide the very card most likely to fire next.
+      assert rail_order(held) == [near.id, far.id, soonest.id]
+
+      # The pointer leaves and the truth reasserts. This is the load-
+      # bearing half: without it, "the order did not change" is equally
+      # satisfied by a rail that never sorts at all.
+      thawed = render_hook(view, "candidate_rail_thaw", %{})
+      assert rail_order(thawed) == [soonest.id, near.id, far.id]
+    end
+
+    test "an unarmed card sits below every armed one on the route",
+         %{conn: conn, meeting: meeting} do
+      now = DateTime.utc_now()
+
+      # Created FIRST and left at `:heard`, so arrival order and stage
+      # order both put it on top. Only the deadline rule moves it down.
+      review =
+        candidate!(meeting, %{
+          evidence_quote: "maybe we redo the pricing page",
+          classified_intent: "action_item",
+          acts_at: nil
+        })
+
+      armed =
+        candidate!(meeting, %{
+          evidence_quote: "rotate the staging secrets",
+          acts_at: DateTime.add(now, 12, :second)
+        })
+
+      {_view, html} = mount_board(conn, meeting)
+
+      assert rail_order(html) == [armed.id, review.id]
     end
   end
 

@@ -70,7 +70,14 @@ defmodule Platform.Meetings.MeetingCandidateEvent do
     # writes nothing else on this stream describes — a human pressing
     # stop, and the sweeper acting with nobody watching.
     :countdown_stopped,
-    :countdown_fired
+    :countdown_fired,
+    # The undo (task 01a0740e stage 5). A stop can be taken back for ten
+    # seconds, and that reversal is its own write: without a kind of its
+    # own the log would show a stop that the row no longer agrees with,
+    # which is the same untruth as a derived line. `kind` is a plain
+    # `:string` column (see the create migration), so a new member here
+    # needs no migration.
+    :countdown_undone
   ]
 
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}

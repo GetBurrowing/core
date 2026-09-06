@@ -380,6 +380,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
   def event_line(:closed, detail), do: closed_line(detail)
   def event_line(:countdown_stopped, _detail), do: "Stopped by a participant"
   def event_line(:countdown_fired, _detail), do: "Went ahead on its own"
+  def event_line(:countdown_undone, _detail), do: "Stop taken back — waiting on a decision"
 
   # `detail["to"]` is the state the write moved TO. It comes back from
   # jsonb as a string, so it is mapped through the same display table as

@@ -73,6 +73,7 @@ defmodule Platform.Meetings.Candidates do
   alias Platform.Meetings.IntentRouting
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingCandidate
+  alias Platform.Meetings.MeetingCandidateEvent
   alias Platform.Meetings.ThreadResolver
   alias Platform.Repo
 
@@ -1124,6 +1125,136 @@ defmodule Platform.Meetings.Candidates do
   defp stop_note(nil), do: "Stopped by a participant"
   defp stop_note(name) when is_binary(name), do: "Stopped by #{name}"
   defp stop_note(_), do: "Stopped by a participant"
+
+  @doc """
+  Take a stop back, and put the card back where it was (task 01a0740e
+  stage 5).
+
+  This is the server side of the ten-second `Undo` the rail leaves in
+  the slot a stopped card occupied. It is the ONLY thing in this module
+  that un-sets `closed_reason`, and every guard below is a reason it is
+  allowed to exist at all:
+
+    * **It graduated.** `disposition == :accepted` is written by
+      `graduate/2` and by nothing on this path — the same fact `stop/3`
+      reads to answer `{:error, :already_fired}`. A graduated card has a
+      task or a canvas behind it; there is nothing to undo and reopening
+      the row would leave a live card pointing at a deliverable that
+      already exists.
+    * **It was not stopped.** Undo reverses a stop and nothing else.
+      `:duplicate`, `:vetoed` and `:done` are judgements somebody or
+      something else made, and a control that could un-close them would
+      be a general resurrection tool wearing an undo label. The fact
+      that separates a stop from every other `:dismissed` close is the
+      `:countdown_stopped` event: `Not now` (`decline_candidate`) writes
+      the same `closed_reason` through `close/2` and emits no such
+      event, so the reason column alone cannot tell them apart.
+    * **A stop that has already been undone.** The most recent of the
+      `:countdown_stopped` / `:countdown_undone` pair has to be the
+      stop, or this is a second undo of a reversal that already
+      happened.
+
+  The card comes back DISARMED. `acts_at` stays nil, so it lands in the
+  rail's review mode (`Not now` / `Go ahead`) rather than resuming a
+  countdown. Restoring the old deadline would resurrect a moment that
+  has usually already passed and fire the card instantly, which is the
+  opposite of an undo; minting a fresh thirty seconds would invent a
+  consent nobody gave. Once a human has intervened, silence stops being
+  consent.
+
+  `state` is restored from the `:countdown_stopped` event's `"from"`
+  detail, which `do_stop/3` writes for exactly this purpose. An event
+  that cannot name a valid state is not a stop this function can
+  reverse, and it answers `{:error, :not_stopped}` rather than
+  inventing one.
+
+  Returns `{:ok, candidate}`, `{:error, :already_fired}`,
+  `{:error, :not_stopped}`, `{:error, :not_found}`, or a changeset
+  error.
+  """
+  @spec reopen(MeetingCandidate.t() | binary(), binary() | nil) ::
+          {:ok, MeetingCandidate.t()}
+          | {:error, :already_fired | :not_stopped | :not_found | Ecto.Changeset.t()}
+  def reopen(candidate_or_id, participant_id \\ nil) do
+    # RE-READ, never the struct handed in — the same discipline `stop/3`
+    # records in its own doc, and for the same reason: the struct an undo
+    # click arrives with came out of an assign that was loaded before the
+    # stop, so its `state` and `disposition` are both stale by
+    # construction on this path.
+    with {:ok, %MeetingCandidate{id: id}} <- fetch(candidate_or_id),
+         {:ok, %MeetingCandidate{} = candidate} <- fetch(id) do
+      cond do
+        candidate.disposition == :accepted -> {:error, :already_fired}
+        candidate.state != :closed -> {:error, :not_stopped}
+        candidate.closed_reason != :dismissed -> {:error, :not_stopped}
+        true -> reopen_stopped(candidate, participant_id)
+      end
+    end
+  end
+
+  defp reopen_stopped(candidate, participant_id) do
+    case restorable_stop(candidate.id) do
+      {:ok, event, state} ->
+        candidate
+        |> MeetingCandidate.changeset(%{
+          state: state,
+          closed_reason: nil,
+          closed_at: nil,
+          closed_note: nil,
+          closed_by_participant_id: nil
+        })
+        |> Repo.update()
+        |> emit(:countdown_undone, fn reopened ->
+          %{
+            "to" => reopened.state,
+            "undone_by_participant_id" => uuid_or_nil(participant_id),
+            "stopped_seq" => event.seq
+          }
+        end)
+
+      :error ->
+        {:error, :not_stopped}
+    end
+  end
+
+  # The most recent of this card's stop/undo pair, and the state it says
+  # to go back to. Answers `:error` unless that most recent event is a
+  # STOP carrying a `"from"` this schema recognises.
+  #
+  # Ordered by `seq` for the reason the events moduledoc gives: a stop
+  # and its undo can land in the same microsecond, and `seq` is the only
+  # strict order these rows have.
+  defp restorable_stop(candidate_id) do
+    event =
+      MeetingCandidateEvent
+      |> where([e], e.candidate_id == ^candidate_id)
+      |> where([e], e.kind in [:countdown_stopped, :countdown_undone])
+      |> order_by([e], desc: e.seq)
+      |> limit(1)
+      |> Repo.one()
+
+    case event do
+      %MeetingCandidateEvent{kind: :countdown_stopped, detail: detail} = event ->
+        case restored_state(detail) do
+          nil -> :error
+          state -> {:ok, event, state}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  # `"from"` comes back from jsonb as a STRING. Matched against
+  # `MeetingCandidate.states/0` rather than converted with
+  # `String.to_existing_atom/1`, so a value that is a real atom somewhere
+  # else in the system still cannot be written into this column.
+  defp restored_state(detail) when is_map(detail) do
+    from = Map.get(detail, "from")
+    Enum.find(MeetingCandidate.states(), &(to_string(&1) == to_string(from)))
+  end
+
+  defp restored_state(_detail), do: nil
 
   @doc """
   Atomically claim every candidate whose countdown is due, and return

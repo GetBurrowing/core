@@ -5595,7 +5595,11 @@ body, .font-fabrikam {
    `data-theme` wins over the OS preference. */
 :root {
   --cc-bg: #ffffff;
-  --cc-border: #e2e5ec;
+  /* The neutral card edge is the app's own edge token (FE-1, task
+     01a0740b). The four EARNED borders below keep their literal values:
+     they carry the rail's "colour is earned, never given" ladder and are
+     not the same job. */
+  --cc-border: var(--edge);
   --cc-border-thinking: #cfd4de;
   --cc-border-shaping: #9db4dc;
   --cc-bg-shaping: linear-gradient(180deg, #eef3fc 0%, #f8fafd 100%);
@@ -5621,10 +5625,50 @@ body, .font-fabrikam {
   --cc-go-bg: #2f57a0;
   --cc-go-border: #3a68bd;
   --cc-go-fg: #ffffff;
-  --cc-ring-track: #d8e6dd;
-  --cc-ring-progress: #2f9e63;
-  --cc-ring-secs: #2c7d51;
-  --cc-foot-fg: #2c7d51;
+  /* ── The commit window (task 01a0740e stage 3) ──
+     MEASURED, not assumed, against this theme's card ground (--cc-bg,
+     #ffffff) and against the shaping/acting gradient bottoms an armed
+     card can also carry. The count is TEXT (WCAG AA, 4.5:1); the 2px
+     drain is a GRAPHICAL OBJECT carrying information (WCAG 1.4.11,
+     3:1). One value serves both, so they can never disagree.
+
+     `--color-warning` is oklch(76% 0.17 70) and lands at 2.21:1 on a
+     white card. That fails AA as text AND fails 1.4.11 as a graphic, so
+     "keep the token on the bar" was not available either. Darkened here
+     with color-mix rather than retyped as a hex, so a brand re-tune of
+     --color-warning still carries through. NO app-level token value is
+     changed by this block.
+
+       rest  --color-neutral            #5A5355  7.48:1  (worst 7.15:1)
+       warn  --color-warning @ 70%      #975E00  5.37:1  (worst 5.14:1) */
+  --cc-countdown-rest: var(--color-neutral);
+  --cc-countdown-warn: color-mix(in oklch, var(--color-warning) 70%, black);
+  /* Stop is red only on hover/focus, and its label sits on --cc-btn-bg
+     (#f4f5f8), where raw --color-error is 3.57:1 — under AA for an
+     11.5px label. 5.21:1 here, still unmistakably red. */
+  --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, black);
+  /* ── The spent row (task 01a0740e stage 5) ──
+     A stop leaves a dimmed row in the slot its card held, carrying
+     `Stopped` and `Undo`. "Dimmed" is a CONTRAST REDUCTION and it is
+     measured here rather than assumed, against this theme's spent-row
+     ground (--cc-bg-closed, #f4f5f7) — the same discipline the commit
+     window above needed, and the same failure it found.
+
+     No `opacity` on the row. An opacity that looks right on one theme
+     compounds against the other's ground and lands under AA, which is
+     twice what has already gone wrong on this card; one token that has
+     been measured cannot drift that way.
+
+     No --color-success and no --color-warning anywhere on this row.
+     Success is SPEAKING's colour on this screen and warning means a
+     human is being asked for something; the spent row is telling them
+     something is already done. Neutral, plus the hover-only error on
+     the Undo control, and nothing else.
+
+       Stopped  --color-neutral @ 90%  #696364  5.39:1  (title is 14.23:1)
+       Undo     --cc-btn-fg           #3D4453  8.96:1  on --cc-btn-bg
+       Undo hover --cc-stop-hover     #C22B30  5.23:1  on --cc-btn-bg */
+  --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 90%, white);
   --cc-skeleton-a: #eceef2;
   --cc-skeleton-b: #dcdfe7;
   --cc-log-dot: #b9bfcc;
@@ -5638,7 +5682,7 @@ body, .font-fabrikam {
 /* The mockup's own values. */
 [data-theme="dark"] {
   --cc-bg: #161a23;
-  --cc-border: #232838;
+  --cc-border: var(--edge);
   --cc-border-thinking: #2b3244;
   --cc-border-shaping: #3a4a6b;
   --cc-bg-shaping: linear-gradient(180deg, #182033 0%, #161b26 100%);
@@ -5664,10 +5708,34 @@ body, .font-fabrikam {
   --cc-go-bg: #2f57a0;
   --cc-go-border: #3a68bd;
   --cc-go-fg: #ffffff;
-  --cc-ring-track: #233026;
-  --cc-ring-progress: #43c07a;
-  --cc-ring-secs: #7fd4a0;
-  --cc-foot-fg: #89c9a4;
+  /* Same measurement, opposite failure. Dark --color-neutral is
+     oklch(40% 0.01 0) and lands at 1.88:1 on a #161a23 card — the FE-1
+     hairline defect exactly, and the drain spends 25 of its 30 seconds
+     in this colour. Lightened with color-mix against the same token.
+     The amber needs no correction on this ground.
+
+       rest  --color-neutral @ 60%   #8F8B8C  5.16:1  (worst 5.11:1)
+       warn  --color-warning         #F49A00  7.86:1  (worst 7.78:1) */
+  --cc-countdown-rest: color-mix(in oklch, var(--color-neutral) 60%, white);
+  --cc-countdown-warn: var(--color-warning);
+  /* Raw --color-error is 4.23:1 on --cc-btn-bg (#1a1f2b), under AA.
+     5.36:1 here. */
+  --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, white);
+  /* Same measurement on this theme's spent-row ground (#12151c), and
+     the mix is a DIFFERENT one because the ground is: raw
+     --color-neutral is oklch(40% 0.01 0) and lands at 1.99:1 here.
+     Lightened to the same PERCEIVED dimness the light theme gets, which
+     is what "dimmed survives both themes" has to mean.
+
+       Stopped  --color-neutral @ 60%  #8F8B8C  5.43:1  (title is 14.21:1)
+       Undo     --cc-btn-fg           #AEB6C6  8.08:1  on --cc-btn-bg
+       Undo hover --cc-stop-hover     #F8605C  5.35:1  on --cc-btn-bg
+
+     The 60% here is the same figure --cc-countdown-rest arrived at from
+     the same starting token; they are kept as two tokens because they
+     are two claims and a re-tune of one must not silently move the
+     other. */
+  --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 60%, white);
   --cc-skeleton-a: #1d2230;
   --cc-skeleton-b: #2b3244;
   --cc-log-dot: #39415a;
@@ -5681,7 +5749,7 @@ body, .font-fabrikam {
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --cc-bg: #161a23;
-    --cc-border: #232838;
+    --cc-border: var(--edge);
     --cc-border-thinking: #2b3244;
     --cc-border-shaping: #3a4a6b;
     --cc-bg-shaping: linear-gradient(180deg, #182033 0%, #161b26 100%);
@@ -5707,10 +5775,10 @@ body, .font-fabrikam {
     --cc-go-bg: #2f57a0;
     --cc-go-border: #3a68bd;
     --cc-go-fg: #ffffff;
-    --cc-ring-track: #233026;
-    --cc-ring-progress: #43c07a;
-    --cc-ring-secs: #7fd4a0;
-    --cc-foot-fg: #89c9a4;
+    --cc-countdown-rest: color-mix(in oklch, var(--color-neutral) 60%, white);
+    --cc-countdown-warn: var(--color-warning);
+    --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, white);
+    --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 60%, white);
     --cc-skeleton-a: #1d2230;
     --cc-skeleton-b: #2b3244;
     --cc-log-dot: #39415a;
@@ -5737,6 +5805,53 @@ body, .font-fabrikam {
   padding: 13px 14px;
   border: 1px solid var(--cc-border);
   background: var(--cc-bg);
+  /* `.candidate-drain` is absolutely positioned to the card's own
+     bottom edge with no inset, so the card has to clip it or the bar
+     squares off the 12px corners. */
+  overflow: hidden;
+}
+
+/* ── Arrival and departure ──
+   The rail is ordered by deadline (task 01a0740e stage 4), so cards
+   enter, leave, and occasionally swap places. These two cover the enter
+   and the leave, which are two of the three events that can change the
+   order; the third — a reorder — is deliberately NOT animated, because a
+   true position animation means measuring every card on every patch in
+   JS. `JS.transition/2` adds the class for the duration and takes it off
+   again, so nothing here is a resting style.
+
+   4px and 200ms: enough to read as motion at the top of a 312px rail,
+   short enough that a card arriving mid-sentence is not something you
+   wait for. Dropped entirely under reduced motion, the same posture as
+   `.candidate-skeleton`. */
+.candidate-card--enter {
+  animation: candidate-card-in 200ms ease-out;
+}
+
+.candidate-card--leave {
+  animation: candidate-card-out 200ms ease-in forwards;
+}
+
+@keyframes candidate-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes candidate-card-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
 }
 
 /* Colour is earned. `heard` and `thinking` inherit the neutral base above
@@ -5760,6 +5875,59 @@ body, .font-fabrikam {
   background: var(--cc-bg-closed);
   border-color: var(--cc-border-closed);
   opacity: 0.72;
+}
+
+/* ── The spent row (task 01a0740e stage 5) ──
+   What a stop leaves in the slot the card was in, for ten seconds. It
+   is a ROW and not a card: one line, one control, and a height that
+   says the thing it replaced is gone.
+
+   The closed ground and border, because that is what this is — the
+   difference from a card in the Closed disclosure is only that this one
+   is still reversible. Deliberately NO `opacity`: `.candidate-card--closed`
+   carries 0.72 and that is exactly the mechanism that put two of this
+   card's colours under AA earlier in this ticket. The dim is one
+   measured token (--cc-spent-fg); see its note in the token block.
+
+   No bar, no count, no stop control. The countdown it stands in for is
+   over. */
+.candidate-card--spent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px 9px 14px;
+  background: var(--cc-bg-closed);
+  border-color: var(--cc-border-closed);
+}
+
+/* Hidden by the rail's one ticker when `data-expires-at` passes — see
+   `CandidateClock._paintSpent`. Written as an author rule because
+   `display: flex` above would otherwise beat the UA sheet's
+   `[hidden] { display: none }`. */
+.candidate-card--spent[hidden] {
+  display: none;
+}
+
+.candidate-spent__label {
+  font-size: 11.5px;
+  color: var(--cc-spent-fg);
+}
+
+/* Undo is a SAFE action — it REVERSES a stop and destroys nothing — so
+   it is not destructive-styled at rest. A permanently red control on a
+   row whose entire job is reassurance reads as a second alarm.
+
+   Red on hover and focus only, and the value is --cc-stop-hover because
+   it is the same hue on the same button ground: a second token would be
+   the same measurement written twice and free to drift.
+
+   Plain `:hover, :focus-visible` selectors and NOT Tailwind's `hover:`
+   variant, which compiles to a `(hover: hover)` media query and does
+   nothing at all on touch. */
+.candidate-btn--undo:hover,
+.candidate-btn--undo:focus-visible {
+  color: var(--cc-stop-hover);
+  border-color: var(--cc-stop-hover);
 }
 
 /* A card that is still being worked out is drawn DASHED — the same
@@ -5935,6 +6103,21 @@ body, .font-fabrikam {
   font-weight: 600;
 }
 
+/* Stop is the SAFE action — it prevents something — so it is not
+   destructive-styled at rest. A permanently red control on a rail of
+   five cards reads as five problems, and it marks the cautious choice
+   as the dangerous one.
+
+   Plain `:hover, :focus-visible` selectors and NOT Tailwind's `hover:`
+   variant, which compiles to a `(hover: hover)` media query and does
+   nothing at all on touch. The focus half is the keyboard's, and it is
+   why this is two selectors rather than one. */
+.candidate-btn--stop:hover,
+.candidate-btn--stop:focus-visible {
+  color: var(--cc-stop-hover);
+  border-color: var(--cc-stop-hover);
+}
+
 /* ── Skeleton ──
    Two bars at the mockup's widths. The shimmer is a background-position
    sweep rather than an opacity pulse so it reads as "arriving" rather than
@@ -6016,7 +6199,12 @@ body, .font-fabrikam {
   background: var(--cc-log-dot);
 }
 
-/* ── Countdown foot ── */
+/* ── Countdown foot ──
+   The ring is gone (task 01a0740e stage 3): it and the drain were the
+   same continuous proportional encoding of one number, it rendered in
+   `--cc-ring-progress` green when green means SPEAKING on this screen,
+   and `01a03fbb`'s floor lease needs the ring shape to stay distinct
+   from this clock. What is left is a count and a bar. */
 .candidate-foot {
   display: flex;
   align-items: center;
@@ -6024,55 +6212,71 @@ body, .font-fabrikam {
   margin-top: 12px;
 }
 
-.candidate-ring {
-  position: relative;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
+/* BARE SECONDS, mono and tabular. This number is repainted every second
+   on every armed card at once; in a proportional face the digit widths
+   shift and the whole rail jitters instead of ticking. `--font-mono` is
+   the self-hosted JetBrains Mono already wired at the top of this file.
+
+   `flex: 0 0 auto` is the `shrink-0`: whatever else on the row gives
+   way, the number does not. */
+.candidate-count {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--cc-countdown-rest);
 }
 
-/* -90deg so the drain starts at twelve o'clock. */
-.candidate-ring__svg {
-  width: 32px;
-  height: 32px;
-  transform: rotate(-90deg);
+/* THE STEP. No transition on `color` anywhere in this pair, and that is
+   the design: a fade spends thirty seconds slowly becoming alarming and
+   leaves the threshold unfindable, whereas a step at T−5 is an EVENT,
+   and an event is the only thing peripheral vision reliably catches. */
+.candidate-count--warning {
+  color: var(--cc-countdown-warn);
 }
 
-.candidate-ring__track {
-  fill: none;
-  stroke: var(--cc-ring-track);
-  stroke-width: 3;
-}
+/* THE DRAIN. Absolutely positioned to the card's bottom edge, full
+   bleed left and right with no inset and no radius of its own, so it
+   reads as the card's remaining life rather than as a widget inside it.
+   The card's `overflow: hidden` clips it to the corner radius.
 
-/* No CSS animation on the progress arc: `stroke-dashoffset` is set by the
-   server on render and by the `CandidateRing` hook every second, both from
-   the same `acts_at`. A keyframe animation here would be a third clock,
-   started at paint, drifting away from the deadline the sweeper fires on —
-   which is the "timer that lies" this feature exists to remove. */
-.candidate-ring__progress {
-  fill: none;
-  stroke: var(--cc-ring-progress);
-  stroke-width: 3;
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.9s linear;
-}
-
-.candidate-ring__secs {
+   Height is 2px and the colour is measured against the card ground in
+   both themes — see the token block above. A 2px hairline nobody can
+   see is a drain that does not drain. */
+.candidate-drain {
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--cc-ring-secs);
-  font-variant-numeric: tabular-nums;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--cc-countdown-rest);
+  /* WIDTH ONLY. The server sets the width on render and the
+     `CandidateClock` hook sets it every second, both from the same
+     `acts_at`; easing it over 0.9s makes the drain continuous instead
+     of a once-a-second jump. `background-color` is deliberately NOT in
+     this list — transitioning it would turn the amber step back into
+     the fade it exists instead of. */
+  transition: width 0.9s linear;
 }
 
-.candidate-foot__txt {
-  font-size: 11.5px;
-  color: var(--cc-foot-fg);
-  font-variant-numeric: tabular-nums;
+/* TWO CHANNELS, ONE EVENT. The colour flip alone is not enough, and the
+   reason is the same physiology the step exists to exploit: peripheral
+   vision is poor at hue and good at LUMINANCE, and both drain colours had
+   to be tuned for contrast against the CARD, which left them close in
+   luminance TO EACH OTHER — 1.39:1 apart on light, 1.52:1 on dark, well
+   under the 3:1 a non-text distinction needs to be reliably perceptible.
+   On light the bar even gets LIGHTER as it becomes urgent, which is
+   backwards. Each colour is legible against the card; the transition
+   between them is not legible as an event.
+
+   So the bar also grows, 2px to 3px. A 50% height change survives
+   colour-blindness, low-contrast displays and peripheral vision, none of
+   which the hue shift does. It costs no layout: the bar is out of flow on
+   the card's bottom edge, so it grows UPWARD and reflows nothing. */
+.candidate-drain--warning {
+  background: var(--cc-countdown-warn);
+  height: 3px;
 }
 
 /* ── Closed disclosure ──
@@ -6098,8 +6302,17 @@ body, .font-fabrikam {
     animation: none;
   }
 
-  .candidate-ring__progress {
+  .candidate-drain {
     transition: none;
+  }
+
+  /* A card still appears and still disappears; only the movement goes.
+     The universal reduce rule above already collapses the duration, and
+     this is written out anyway so the intent is legible at the one place
+     a reader looks for it. */
+  .candidate-card--enter,
+  .candidate-card--leave {
+    animation: none;
   }
 }
 

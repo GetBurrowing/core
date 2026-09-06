@@ -39,7 +39,10 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
   import Phoenix.LiveViewTest
 
+  alias Platform.Meetings.Countdown
   alias Platform.Meetings.MeetingCandidate
+  alias Platform.Meetings.MeetingCandidateEvent
+  alias PlatformWeb.Components.Meetings.CandidateDisplay
   alias PlatformWeb.Components.Meetings.CandidateRail
 
   @now ~U[2026-09-01 12:00:00.000000Z]
@@ -93,7 +96,103 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
     |> LazyHTML.attribute("data-role")
   end
 
+  # ── Commit-window helpers (task 01a0740e stage 3) ──
+  #
+  # `armed/1` puts a card exactly `secs` from firing. `rail/1` passes
+  # `now: @now`, so `remaining` is that number and not "about" it, and
+  # every commit-window assertion is exact rather than bracketed.
+  defp armed(secs), do: candidate(%{acts_at: DateTime.add(@now, secs, :second)})
+
+  defp foot(html, candidate) do
+    LazyHTML.query(node(html, candidate), "[data-role='meeting-candidate-countdown']")
+  end
+
+  defp classes(html, candidate, selector) do
+    html
+    |> node(candidate)
+    |> LazyHTML.query(selector)
+    |> LazyHTML.attribute("class")
+    |> Enum.join(" ")
+  end
+
+  defp drain_width(html, candidate) do
+    html
+    |> node(candidate)
+    |> LazyHTML.query("[data-role='meeting-candidate-drain']")
+    |> LazyHTML.attribute("style")
+    |> List.first()
+  end
+
   defp index_of(roles, role), do: Enum.find_index(roles, &(&1 == role))
+
+  # ── Rail-order helpers (task 01a0740e stage 4) ──
+  #
+  # `rail/2` is `rail/1` plus the FROZEN `order` attr. `rail_order/1`
+  # reads the OPEN cards' ids in document order — the actual sequence a
+  # participant sees. Deliberately keyed on `meeting-candidate-card`, so
+  # the Closed disclosure (`meeting-candidate-closed-card`, sorted by
+  # `closed_at` and untouched by this stage) cannot pad the list.
+  defp rail(candidates, order) do
+    render_component(&CandidateRail.candidate_rail/1,
+      candidates: candidates,
+      closed: [],
+      events: %{},
+      now: @now,
+      order: order
+    )
+  end
+
+  defp rail_order(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("[data-role='meeting-candidate-card']")
+    |> LazyHTML.attribute("data-candidate-id")
+  end
+
+  # The rail with a stop's ten-second undo stashed on the socket that
+  # made it (task 01a0740e stage 5).
+  defp rail(candidates, order, undo) do
+    render_component(&CandidateRail.candidate_rail/1,
+      candidates: candidates,
+      closed: [],
+      events: %{},
+      now: @now,
+      order: order,
+      undo: undo
+    )
+  end
+
+  # Every ROW the rail draws, live cards and spent rows alike, in
+  # document order. `rail_order/1` above sees only cards on purpose —
+  # this is the query that can catch a spent row appended below the list
+  # instead of placed in the slot its card held.
+  defp row_order(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(
+      "[data-role='meeting-candidate-card'], [data-role='meeting-candidate-spent']"
+    )
+    |> LazyHTML.attribute("data-candidate-id")
+  end
+
+  defp spent_node(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("[data-role='meeting-candidate-spent']")
+  end
+
+  defp ids(candidates), do: Enum.map(candidates, & &1.id)
+
+  # Armed `secs` from firing and inserted `arrived` seconds into the
+  # meeting. Two axes, set independently, because every test below turns
+  # on the two DISAGREEING.
+  defp armed(secs, arrived) do
+    candidate(%{
+      state: :acting,
+      acts_at: DateTime.add(@now, secs, :second),
+      inserted_at: DateTime.add(@now, arrived, :second)
+    })
+  end
 
   # ── 1. FORMING ────────────────────────────────────────────────────────
 
@@ -572,6 +671,371 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
       assert reading_order(html, probe) == ["byline", "quote", "assignment"]
       assert reading_order(inverted, probe) == ["assignment", "byline", "quote"]
+    end
+  end
+
+  # ── 6. THE COMMIT WINDOW ──────────────────────────────────────────────
+
+  describe "the commit window" do
+    test "the ring is GONE, and so is the prose that restated its number" do
+      card = armed(20)
+      html = rail([card])
+
+      # The positive control FIRST. A countdown has to be on this page,
+      # or every refute below is true because the foot never rendered
+      # and this test measures nothing.
+      assert foot(html, card) != []
+      assert text_of(node(html, card), "[data-role='meeting-candidate-remaining']") == "20"
+
+      # Three encodings of one number became two. The ring and the bar
+      # were both continuous proportional encodings of `remaining`; the
+      # ring is the one FE-14's floor lease needs, and it rendered in
+      # `--cc-ring-progress` green, which is SPEAKING's colour.
+      refute present?(node(html, card), "[data-role='meeting-candidate-ring-progress']")
+      refute present?(node(html, card), "[data-role='meeting-candidate-ring']")
+      refute present?(node(html, card), "svg")
+
+      # `Starting in 20s` — a third statement of the same number, in
+      # prose, on a card that already shows it twice.
+      refute present?(node(html, card), "[data-role='meeting-candidate-remaining-word']")
+      refute html =~ "Starting in"
+
+      # The geometry the ring needed goes with it. Left behind, it is an
+      # attribute the ticker no longer reads and the next reader has to
+      # work out is dead.
+      assert LazyHTML.attribute(foot(html, card), "data-circumference") == []
+    end
+
+    test "the count is BARE SECONDS — not `0:20`, not `20s`" do
+      card = armed(20)
+      html = rail([card])
+
+      count = text_of(node(html, card), "[data-role='meeting-candidate-remaining']")
+
+      assert count == "20"
+      refute count =~ ":"
+      refute count =~ "s"
+
+      # `data-remaining` is what the ticker and the board test read, and
+      # it must agree with the glyph a human sees.
+      assert node(html, card)
+             |> LazyHTML.query("[data-role='meeting-candidate-remaining']")
+             |> LazyHTML.attribute("data-remaining") == ["20"]
+    end
+
+    test "the drain's width is the REMAINING fraction, not the elapsed one" do
+      full = armed(30)
+      half = armed(15)
+      spent = armed(0)
+
+      html = rail([full, half, spent])
+
+      # Wired to the wrong end of the fraction, a bar looks entirely
+      # plausible and counts backwards: it would grow as the card ran
+      # out. Three points pin the direction as well as the scale.
+      assert drain_width(html, full) == "width: 100.0%"
+      assert drain_width(html, half) == "width: 50.0%"
+      assert drain_width(html, spent) == "width: 0.0%"
+    end
+
+    test "the threshold is published to the client rather than duplicated in it" do
+      card = armed(20)
+      html = rail([card])
+
+      assert LazyHTML.attribute(foot(html, card), "data-warning-seconds") ==
+               [to_string(Countdown.warning_seconds())]
+
+      assert LazyHTML.attribute(foot(html, card), "data-total-seconds") ==
+               [to_string(Countdown.countdown_seconds())]
+    end
+
+    # THE TWO-SIDED ASSERTION, and it has to be two-sided or it is
+    # vacuous: a card that is amber at every value passes "amber appears
+    # at 5" without the threshold existing at all. The refute at 6 is
+    # what makes the assert at 5 mean something.
+    #
+    # MUTATION RUN (2026-09-06): `warning?/1` forced to `true` for every
+    # remaining value, so every armed card is amber. The 6-second refutes
+    # below go red; the 5- and 1-second asserts stay green. A one-sided
+    # test survives that mutation untouched.
+    test "grey at 6 seconds, amber at 5 and at 1 — both sides, count and drain" do
+      grey = armed(6)
+      edge = armed(5)
+      last = armed(1)
+
+      html = rail([grey, edge, last])
+
+      count = "[data-role='meeting-candidate-remaining']"
+      drain = "[data-role='meeting-candidate-drain']"
+
+      # Positive controls. All three cards must be armed and rendering
+      # both elements, or the refutes pass on absent markup.
+      for card <- [grey, edge, last] do
+        assert present?(node(html, card), count)
+        assert present?(node(html, card), drain)
+      end
+
+      # ABOVE the threshold: neither element is warned.
+      refute classes(html, grey, count) =~ "candidate-count--warning"
+      refute classes(html, grey, drain) =~ "candidate-drain--warning"
+
+      # AT the threshold, and inside it. `<=`, so 5 is amber.
+      assert classes(html, edge, count) =~ "candidate-count--warning"
+      assert classes(html, edge, drain) =~ "candidate-drain--warning"
+
+      assert classes(html, last, count) =~ "candidate-count--warning"
+      assert classes(html, last, drain) =~ "candidate-drain--warning"
+    end
+
+    test "a fired card is still amber at zero rather than falling back to rest" do
+      # A card past its deadline waits for the sweeper, and during that
+      # window it is the most committed thing on the rail. `remaining <=
+      # warning` covers zero; a range check written `in 1..5` would drop
+      # it back to grey at the last instant.
+      spent = armed(0)
+      html = rail([spent])
+
+      assert text_of(node(html, spent), "[data-role='meeting-candidate-remaining']") == "0"
+
+      assert classes(html, spent, "[data-role='meeting-candidate-remaining']") =~
+               "candidate-count--warning"
+    end
+
+    test "a DISARMED card has no count and no drain at all" do
+      armed_card = armed(20)
+      disarmed = candidate(%{acts_at: nil})
+
+      html = rail([armed_card, disarmed])
+
+      # The control: this page does render a drain.
+      assert present?(node(html, armed_card), "[data-role='meeting-candidate-drain']")
+
+      refute present?(node(html, disarmed), "[data-role='meeting-candidate-drain']")
+      refute present?(node(html, disarmed), "[data-role='meeting-candidate-remaining']")
+    end
+  end
+
+  # ── 8. The rail is ordered by deadline (task 01a0740e stage 4) ────────
+
+  describe "rail order" do
+    # THE DERANGEMENT, and it is the whole point of the fixture.
+    #
+    # Insertion order is [a, b, c]; deadline order is [c, a, b]. The two
+    # disagree at EVERY position, so a sort that quietly fell back to
+    # `inserted_at` — the old `stage_rank/1` tie-break, and the exact
+    # regression this stage exists to prevent — cannot coincidentally
+    # pass. Neither can "no sort at all": the list is handed in as
+    # [b, c, a], which is a third order again.
+    #
+    # Every card is `:acting`, so the stage axis is CONSTANT. Under the
+    # old rule these three sorted purely by arrival, which is the
+    # behaviour being overturned.
+    defp deranged do
+      a = armed(10, 0)
+      b = armed(20, 1)
+      c = armed(5, 2)
+      {a, b, c}
+    end
+
+    test "armed cards read soonest-to-fire first, not first-arrived first" do
+      {a, b, c} = deranged()
+
+      order = rail_order(rail([b, c, a]))
+
+      # Positive control: three cards actually rendered. Without it every
+      # assertion below is a claim about an empty list.
+      assert length(order) == 3
+
+      assert order == ids([c, a, b])
+
+      # The two mutations named in the stage notes, refuted explicitly
+      # rather than left to the equality above: arrival order, and the
+      # order the caller happened to pass in.
+      refute order == ids([a, b, c])
+      refute order == ids([b, c, a])
+    end
+
+    test "an UNARMED open card sits below every armed one" do
+      # Stacked against the new rule on both of the old axes: it arrived
+      # BEFORE either armed card, and `:heard` is stage rank 0. Arrival
+      # order and stage order both put it on top; only the deadline rule
+      # puts it at the bottom.
+      unarmed =
+        candidate(%{
+          state: :heard,
+          acts_at: nil,
+          inserted_at: DateTime.add(@now, -30, :second)
+        })
+
+      soon = armed(5, 0)
+      later = armed(25, 1)
+
+      order = rail_order(rail([unarmed, later, soon]))
+
+      assert length(order) == 3
+      assert order == ids([soon, later, unarmed])
+
+      # Stated as a relation too, so the claim survives a fixture edit:
+      # a card with no deadline is below every card that has one.
+      assert Enum.find_index(order, &(&1 == unarmed.id)) == 2
+    end
+
+    test "a frozen `order` holds a stale sequence that an unfrozen render does not" do
+      {a, b, c} = deranged()
+      cards = [b, c, a]
+
+      # The frozen sequence is a real stale reading — what the rail
+      # showed before the deadlines moved — and it is neither the live
+      # order nor the arrival order.
+      stale = ids([b, a, c])
+
+      assert rail_order(rail(cards, stale)) == stale
+
+      # THE CONTROL, and it is the load-bearing half. The same list, the
+      # same render, no freeze: a rail that ignored `order` entirely
+      # would pass the line above only if the fixture happened to agree
+      # with the live sort. It does not.
+      assert rail_order(rail(cards, nil)) == ids([c, a, b])
+      refute rail_order(rail(cards, nil)) == stale
+    end
+
+    test "a card that arrived after the freeze is appended below the frozen ones" do
+      {a, b, c} = deranged()
+
+      # Soonest to fire of all four. Under the live sort it would be
+      # first; a frozen rail must still SHOW it, and must not let it
+      # jump the cards the reader is looking at.
+      arrived = armed(1, 3)
+
+      stale = ids([b, a, c])
+      order = rail_order(rail([arrived, b, c, a], stale))
+
+      assert length(order) == 4
+      assert order == stale ++ [arrived.id]
+    end
+
+    test "display_order/1 answers exactly what the rail draws" do
+      # The seam the freeze is captured through: the LiveView calls this
+      # instead of trusting ids from the browser, so it has to be the
+      # same sort the render runs. Asserted against the DOM rather than
+      # against a hand-written list, which is what makes it a comparison
+      # and not a second copy of the rule.
+      {a, b, c} = deranged()
+      unarmed = candidate(%{state: :heard, acts_at: nil, inserted_at: @now})
+
+      cards = [b, unarmed, c, a]
+
+      assert CandidateRail.display_order(cards) == rail_order(rail(cards))
+      assert length(CandidateRail.display_order(cards)) == 4
+    end
+  end
+
+  describe "the spent row a stop leaves behind" do
+    # `do_stop/3` nulls `acts_at` as part of the UPDATE that wins the
+    # race against the sweeper, so by the time the rail re-renders the
+    # stopped card's sort position no longer exists on the row. The
+    # stash carries it, and these tests are about the rail putting it
+    # back in that slot rather than at the end of the list.
+    defp undo(candidate, secs \\ 10) do
+      %{
+        id: candidate.id,
+        acts_at: candidate.acts_at,
+        expires_at: DateTime.add(@now, secs, :second)
+      }
+    end
+
+    test "it renders IN the slot the card held, not appended below the rail" do
+      # Deadlines 5s and 20s apart, so the stopped card belongs at the
+      # TOP. An implementation that appends the spent row — the obvious
+      # one, and the one this test exists to fail — puts it second.
+      soonest = armed(5, 0)
+      later = armed(20, 1)
+
+      html = rail([later], nil, undo(soonest))
+
+      assert row_order(html) == [soonest.id, later.id]
+
+      # The control: the same two cards with no stop at all put the
+      # soonest FIRST too, so the assertion above is about placement and
+      # not about a spent row that happens to sort to the top always.
+      assert rail_order(rail([soonest, later])) == [soonest.id, later.id]
+    end
+
+    test "and BELOW a card that was armed sooner than the one that was stopped" do
+      # The mirror of the test above. Together they rule out a spent row
+      # pinned to either end of the rail: one of the two would fail.
+      soonest = armed(5, 0)
+      stopped = armed(20, 1)
+
+      assert row_order(rail([soonest], nil, undo(stopped))) == [soonest.id, stopped.id]
+    end
+
+    test "it offers NO stop control, no count and no drain" do
+      stopped = armed(12, 0)
+      html = rail([], nil, undo(stopped))
+
+      row = spent_node(html)
+
+      # The card this row replaces carried all three. The POSITIVE
+      # control is the same fixture drawn as a live card: without it
+      # every `refute` below would also pass against a rail that drew
+      # nothing at all.
+      live = LazyHTML.from_fragment(rail([stopped]))
+      assert present?(live, "[data-role='meeting-candidate-stop']")
+      assert present?(live, "[data-role='meeting-candidate-remaining']")
+      assert present?(live, "[data-role='meeting-candidate-drain']")
+
+      assert Enum.any?(row)
+      refute present?(row, "[data-role='meeting-candidate-stop']")
+      refute present?(row, "[data-role='meeting-candidate-remaining']")
+      refute present?(row, "[data-role='meeting-candidate-drain']")
+
+      # What it DOES carry.
+      assert LazyHTML.text(row) =~ "Stopped"
+      assert present?(row, "[data-role='meeting-candidate-undo']")
+    end
+
+    test "the undo control is wired to the server, not to a class name" do
+      stopped = armed(12, 0)
+      row = spent_node(rail([], nil, undo(stopped)))
+
+      button = LazyHTML.query(row, "[data-role='meeting-candidate-undo']")
+
+      assert LazyHTML.attribute(button, "phx-click") == ["undo_stop_candidate"]
+      assert LazyHTML.attribute(button, "phx-value-candidate_id") == [stopped.id]
+    end
+
+    test "it publishes its own expiry, and is GONE once that instant has passed" do
+      stopped = armed(12, 0)
+
+      row = spent_node(rail([], nil, undo(stopped, 10)))
+      expires_at = DateTime.add(@now, 10, :second)
+      assert LazyHTML.attribute(row, "data-expires-at") == [DateTime.to_iso8601(expires_at)]
+
+      # The SERVER re-checks the same instant, so a reload after the
+      # window does not bring the row back — the client ticker is the
+      # belt and this is the braces.
+      assert rail([], nil, undo(stopped, -1)) |> spent_node() |> Enum.empty?()
+    end
+
+    test "no undo stash means no spent row" do
+      assert rail([armed(12, 0)], nil, nil) |> spent_node() |> Enum.empty?()
+    end
+  end
+
+  describe "the activity log covers every kind that can be written" do
+    test "every MeetingCandidateEvent kind has a line" do
+      # `event_line/2` has one clause per kind and NO catch-all, which is
+      # deliberate — a derived or invented line is the defect the log
+      # exists to remove. The cost of that choice is that a new kind
+      # raises FunctionClauseError on a real rail, so the set is walked
+      # here and this test is what fails first.
+      for kind <- MeetingCandidateEvent.kinds() do
+        line = CandidateDisplay.event_line(kind, %{})
+
+        assert is_binary(line) and line != "",
+               "no activity-log line for the #{inspect(kind)} event kind"
+      end
     end
   end
 end

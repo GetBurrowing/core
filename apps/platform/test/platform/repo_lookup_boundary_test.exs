@@ -882,6 +882,19 @@ defmodule Platform.RepoLookupBoundaryTest do
     # nothing rather than dropping the filter. The remaining clauses pin no id
     # (`m.status in`) or a value read from a persisted row.
     "platform/meetings/archive.ex" => 1,
+    # 0 → 1 for task 01a0740e stage 5's `restorable_stop/1`, the read behind
+    # `Candidates.reopen/2` that answers "was this close a stop, and what state
+    # did it come from". Triaged by hand as this map asks: the `where:` clause
+    # DOES pin an id (`e.candidate_id == ^candidate_id`), and it is nonetheless
+    # unreachable from a boundary. `reopen/2` calls `fetch/1` twice before it
+    # gets here — once on whatever it was handed, then a SECOND time on the
+    # `id` off the struct that came back — and the second `fetch/1` goes
+    # through `Candidates.get/1`, which is already `Platform.UUID.valid?/1`
+    # guarded (one of this file's seven `:platform_uuid_guard` entries for
+    # candidates.ex). So the value pinned here is a uuid Postgres itself
+    # returned on a row it selected, never a `phx-value-` payload, and no
+    # `Ecto.Query.CastError` is reachable. No further guard applies.
+    "platform/meetings/candidates.ex" => 1,
     "platform/meetings/intent_corrections.ex" => 1,
     # Task 019fb955 stage 2 — `SenderSeed.get/0`. Triaged by hand as this map
     # asks: the `where:` clause is `a.slug == ^@slug and is_nil(a.workspace_id)`,

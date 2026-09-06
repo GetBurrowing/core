@@ -1,6 +1,6 @@
 import AppBadge from "./app_badge"
 import ButtonLoading from "./button_loading"
-import CandidateRing from "./candidate_ring"
+import CandidateClock from "./candidate_clock"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
 import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
@@ -55,7 +55,7 @@ import UploadButton from "./upload_button"
 export default {
   AppBadge,
   ButtonLoading,
-  CandidateRing,
+  CandidateClock,
   CanvasSidebarResize,
   ChannelMembershipDrag,
   ChannelPicker,

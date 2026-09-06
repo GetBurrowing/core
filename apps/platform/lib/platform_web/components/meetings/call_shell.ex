@@ -190,6 +190,17 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   attr(:candidate_events, :map, default: %{})
   attr(:candidate_error, :string, default: nil)
 
+  # The rail's FROZEN order while a pointer is over it (task 01a0740e
+  # stage 4). `nil` — the default — means "sort live", which is what
+  # every caller that has not wired the freeze gets.
+  attr(:candidate_order, :list, default: nil)
+
+  # The ten-second undo this socket's own stop left behind (task
+  # 01a0740e stage 5), or nil. `nil` — the default — is what the
+  # in-chat quickmeet gets: `ChatLive` renders this rail but carries no
+  # `stop_candidate` handler, so there is no stop of its own to undo.
+  attr(:candidate_undo, :map, default: nil)
+
   # ── Transcript pane ──────────────────────────────────────────────
   attr(:captions_available, :boolean,
     default: true,
@@ -290,10 +301,13 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             />
           <% "canvas" -> %>
             <.candidate_rail
+              id={"#{@id}-candidate-rail"}
               candidates={@candidates}
               closed={@candidates_closed}
               events={@candidate_events}
               error={@candidate_error}
+              order={@candidate_order}
+              undo={@candidate_undo}
             />
             <%!-- Honest empty state (task 01a05b14 stage 5). `candidate_rail`
                  renders NOTHING when it has no open card, no closed card

@@ -93,6 +93,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   alias Platform.Meetings.Room
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Tenancy
+  alias PlatformWeb.Components.Meetings.CandidateRail
   alias PlatformWeb.SpaceTopics
 
   @doc """
@@ -519,6 +520,25 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       |> maybe_refresh_roster(space_id)
 
     {:halt, socket}
+  end
+
+  # The quickmeet rail's pointer freeze (task 01a0740e stage 4). Halted
+  # for the same reason `quickmeet_invite_agent` is: `ChatLive` has no
+  # clause for these events, and the rail's own `CandidateClock` hook
+  # pushes them from the chat panel as readily as from `/meetings`, so
+  # letting them fall through is a `FunctionClauseError` on a hover.
+  #
+  # `CandidateRail.display_order/1` is the same sort the render runs, so
+  # what is captured is what was on screen; the push itself carries
+  # nothing but the fact that a pointer arrived.
+  defp handle_event("candidate_rail_freeze", _params, socket) do
+    order = CandidateRail.display_order(socket.assigns[:meeting_candidates] || [])
+
+    {:halt, assign(socket, :candidate_order, order)}
+  end
+
+  defp handle_event("candidate_rail_thaw", _params, socket) do
+    {:halt, assign(socket, :candidate_order, nil)}
   end
 
   defp handle_event("meeting_tab_select", %{"tab" => tab}, socket) when is_binary(tab) do
@@ -1559,6 +1579,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign_new(:meeting_candidates_closed, fn -> [] end)
     |> assign_new(:meeting_candidate_events, fn -> %{} end)
     |> assign_new(:candidate_error, fn -> nil end)
+    |> assign_new(:candidate_order, fn -> nil end)
     |> assign_new(:speaking_identities, fn -> MapSet.new() end)
     |> assign_new(:muted_identities, fn -> MapSet.new() end)
     |> assign_new(:camera_off_identities, fn -> MapSet.new() end)

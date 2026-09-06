@@ -1377,6 +1377,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:candidates, :list, default: [])
   attr(:candidates_closed, :list, default: [])
   attr(:candidate_events, :map, default: %{})
+  attr(:candidate_order, :list, default: nil)
   attr(:candidate_error, :string, default: nil)
   attr(:captions_available, :boolean, default: true)
 
@@ -1756,6 +1757,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         candidates={@candidates}
         candidates_closed={@candidates_closed}
         candidate_events={@candidate_events}
+        candidate_order={@candidate_order}
         candidate_error={@candidate_error}
         captions_available={@captions_available}
       />

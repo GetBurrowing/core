@@ -84,6 +84,34 @@ defmodule Platform.Meetings.Countdown do
   # override.
   @countdown_seconds 30
 
+  # The last 5 seconds, in which the card's drain and its count STEP to
+  # `--color-warning` (task 01a0740e stage 3).
+  #
+  # It lives here rather than in the rail because two independent things
+  # have to agree about it and neither may hold its own copy: the server
+  # renders the threshold class at first paint, and `CandidateClock`
+  # re-decides it every second in the browser. The rail reads this
+  # number into `data-warning-seconds` and the ticker reads it back out,
+  # so a change here moves both. A constant duplicated in the hook is
+  # the version where a card is amber on render and grey a second later.
+  #
+  # A STEP and not a ramp: a card gradually becoming alarming over
+  # thirty seconds has no findable threshold, and peripheral vision
+  # catches events rather than gradients. The step is also the only
+  # version a test can assert two-sidedly, which
+  # `candidate_rail_test.exs` does — grey at 6, amber at 5 and at 1.
+  @warning_seconds 5
+
+  # A compile-time assertion, same posture as the provider one below.
+  # A warning window at or above the countdown means every card is amber
+  # from the instant it is armed, which is the "always on" failure the
+  # two-sided test exists to catch — caught here at compile time as well
+  # so it cannot be introduced by editing this file alone.
+  if @warning_seconds >= @countdown_seconds do
+    raise "warning window (#{@warning_seconds}s) must sit INSIDE the countdown " <>
+            "(#{@countdown_seconds}s) — otherwise every armed card renders amber"
+  end
+
   # The number this one is INVERTED against, stated here so the next
   # person does not have to rediscover it (task 01a06575 round 3).
   #
@@ -107,6 +135,27 @@ defmodule Platform.Meetings.Countdown do
   # `receive_timeout_ms/0`, so the two cannot drift apart silently.
   @provider_receive_timeout_ms 60_000
 
+  # THE UNDO WINDOW (task 01a0740e stage 5). A stop leaves a spent row in
+  # the slot the card occupied, carrying `Undo`, and the row disappears
+  # when this many seconds have passed.
+  #
+  # Ten, and the two bounds are both real. Long enough that a mis-click
+  # noticed mid-sentence can still be taken back — a participant who
+  # pressed the wrong card is usually still talking when they realise.
+  # Short enough that a busy rail is not carrying spent rows for every
+  # card somebody has stopped; the rail is ordered by urgency and a
+  # column of dead rows pushes the live cards down.
+  #
+  # It is deliberately much shorter than @countdown_seconds. The undo is
+  # a correction to a click, not a second review window — the review
+  # window is what the restored card gets when it comes back disarmed.
+  @undo_seconds 10
+
+  if @undo_seconds >= @countdown_seconds do
+    raise "the undo window (#{@undo_seconds}s) must be shorter than the countdown " <>
+            "(#{@countdown_seconds}s) — see the @undo_seconds note in #{__MODULE__}"
+  end
+
   # A compile-time assertion, not a comment. If somebody ever makes the
   # countdown longer than a model call is allowed to take, the reasoning
   # above stops being true and this file must be re-read.
@@ -121,6 +170,27 @@ defmodule Platform.Meetings.Countdown do
   """
   @spec countdown_seconds() :: pos_integer()
   def countdown_seconds, do: @countdown_seconds
+
+  @doc """
+  The seconds remaining at or below which a card is in its warning step.
+
+  Read by `PlatformWeb.Components.Meetings.CandidateRail` on render and
+  published to the client as `data-warning-seconds`, so the server's
+  first paint and the ticker's every subsequent one apply the same rule.
+  """
+  @spec warning_seconds() :: pos_integer()
+  def warning_seconds, do: @warning_seconds
+
+  @doc """
+  How long a stopped card's `Undo` stays on the rail, in seconds.
+
+  Read by `PlatformWeb.MeetingLive` when it stamps the spent row's
+  `expires_at`, and by the rail when it decides whether to draw that row
+  at all. The client ticker enforces the same instant from
+  `data-expires-at`, so there is one number and no second clock.
+  """
+  @spec undo_seconds() :: pos_integer()
+  def undo_seconds, do: @undo_seconds
 
   @doc """
   The per-call model receive timeout this countdown is inverted against,
@@ -151,7 +221,8 @@ defmodule Platform.Meetings.Countdown do
 
   @doc """
   Seconds remaining before `acts_at`, floored at zero, or `nil` for a
-  disarmed card. What the ring on `01a03f4e-78b1` renders.
+  disarmed card. What the card's count and drain on `01a03f4e-78b1`
+  render (the ring they replaced was dropped by task 01a0740e).
   """
   @spec remaining_seconds(DateTime.t() | nil, DateTime.t()) :: non_neg_integer() | nil
   def remaining_seconds(acts_at, now \\ DateTime.utc_now())
