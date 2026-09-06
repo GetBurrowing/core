@@ -11957,16 +11957,31 @@ defmodule PlatformWeb.MeetingLiveTest do
   # `render_hook(view, ...)` (root-targeted) is the honest simulation.
   #
   # ANTI-VACUITY. Rendering `<.video_tile audio_muted?={true}>` and
-  # asserting the overlay appears proves the COMPONENT, which was never
+  # asserting the indicator appears proves the COMPONENT, which was never
   # broken, and passes on `origin/main` today. What was broken is the two
   # bindings that fed it, and both answered the same for EVERYBODY: the
   # gallery hardcoded `false` (nobody ever muted) and the strip read
   # `attention_config["mic_on"]`, a key no writer exists for, so every
   # human carried the overlay permanently. So these tests drive the real
-  # push and assert PER IDENTITY plus an exact overlay count — a binding
-  # that answers uniformly cannot pass either.
-  defp mute_indicator?(html, scope, identity) do
-    count(html, ~s(#{scope} [data-participant="#{identity}"] [data-mute-indicator])) > 0
+  # push and assert PER IDENTITY plus an exact count — a binding that
+  # answers uniformly cannot pass either.
+  #
+  # ── Task 01a0740d stage 1 rewrote what these read ───────────────────────
+  #
+  # `[data-mute-indicator]` no longer exists. The tile's corner badge and
+  # its separate name label became ONE `[data-tile-name-bar]` carrying the
+  # name and both state slots, and the mic slot now renders in BOTH states
+  # with `data-mic-state="on"|"off"`. So "is this tile muted" stopped being
+  # a presence question and became a value question, which is strictly
+  # stronger: an element that is always absent and an element that is
+  # always present both fail a value assertion, and only the first fails a
+  # presence one.
+  defp tile_mic_state(html, scope, identity) do
+    html
+    |> frag()
+    |> LazyHTML.query(~s(#{scope} [data-participant="#{identity}"] [data-role="mic-indicator"]))
+    |> LazyHTML.attribute("data-mic-state")
+    |> List.first()
   end
 
   defp tile_rendered?(html, scope, identity) do
@@ -11996,6 +12011,38 @@ defmodule PlatformWeb.MeetingLiveTest do
       |> Floki.attribute(~s([data-role="camera-indicator"]), "data-camera-state")
       |> List.first()
     }
+  end
+
+  # The gallery TILE for `identity`, as a `{mic_state, camera_state}` pair,
+  # mirroring `roster_states/2` one surface over (task 01a0740d stage 1).
+  #
+  # The camera slot renders ONLY when the camera is off — a tile with no
+  # video already says so, and drawing "camera on" on every face spends
+  # attention on the state nobody acts on. So ABSENCE is how the tile says
+  # "camera on", and reading absence as a state is exactly the shape that
+  # lets an assertion pass on a tile that never rendered at all. The mic
+  # slot renders in BOTH states, so its presence is a real liveness check:
+  # this helper flunks unless it finds one, and only then is the camera
+  # slot's absence allowed to mean anything.
+  defp tile_states(html, identity) do
+    scope = "[data-gallery-grid]"
+
+    mic = tile_mic_state(html, scope, identity)
+
+    if is_nil(mic) do
+      flunk("no gallery tile with a mic slot for identity #{identity}")
+    end
+
+    camera =
+      html
+      |> frag()
+      |> LazyHTML.query(
+        ~s(#{scope} [data-participant="#{identity}"] [data-role="camera-indicator"])
+      )
+      |> LazyHTML.attribute("data-camera-state")
+      |> List.first()
+
+    {mic, camera || "on"}
   end
 
   defp identity_for(view, display_name) do
@@ -12034,22 +12081,31 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert tile_rendered?(html, "[data-gallery-grid]", ada)
       assert tile_rendered?(html, "[data-gallery-grid]", bo)
 
-      # DIRECTION CONTROL: no overlay anywhere on mount, so the assertion
-      # below cannot pass on a tile that always carried one.
-      assert count(html, "[data-gallery-grid] [data-mute-indicator]") == 0
+      # DIRECTION CONTROL: every tile reads "on" at mount, so the assertion
+      # below cannot pass on a tile that was already drawn muted.
+      assert tile_states(html, ada) == {"on", "on"}
+      assert tile_states(html, bo) == {"on", "on"}
 
       muted = render_hook(view, "media_states", %{"muted" => [ada], "camera_off" => []})
 
-      assert mute_indicator?(muted, "[data-gallery-grid]", ada)
-      refute mute_indicator?(muted, "[data-gallery-grid]", bo)
+      assert tile_states(muted, ada) == {"off", "on"}
+      assert tile_states(muted, bo) == {"on", "on"}
 
-      # EXACTLY one, which is the claim a per-identity read has to make and
-      # a uniform one cannot: it covers Bo, the local viewer's own tile,
-      # and anyone else presence adds while the test runs.
-      assert count(muted, "[data-gallery-grid] [data-mute-indicator]") == 1
+      # EXACTLY one tile reading "off", which is the claim a per-identity
+      # read has to make and a uniform one cannot: it covers Bo, the local
+      # viewer's own tile, and anyone else presence adds while the test
+      # runs. The mic slot is on EVERY tile now, so this counts the ones
+      # whose VALUE flipped rather than the ones that exist.
+      assert count(muted, ~s([data-gallery-grid] [data-mic-state="off"])) == 1
 
       cleared = render_hook(view, "media_states", %{"muted" => [], "camera_off" => []})
-      assert count(cleared, "[data-gallery-grid] [data-mute-indicator]") == 0
+      assert tile_states(cleared, ada) == {"on", "on"}
+      assert count(cleared, ~s([data-gallery-grid] [data-mic-state="off"])) == 0
+
+      # Anti-vacuity for that zero: the slots are all still there, reading
+      # "on". A count of zero "off" tiles would also be what a gallery that
+      # stopped rendering mic slots entirely produces.
+      assert count(cleared, ~s([data-gallery-grid] [data-mic-state="on"])) > 0
     end
 
     test "the bottom strip answers per identity too, not `true` for everyone",
@@ -12065,35 +12121,55 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert tile_rendered?(strip, ~s([data-pane="bottom-strip"]), ada)
       assert tile_rendered?(strip, ~s([data-pane="bottom-strip"]), bo)
 
-      # THE DEFECT, stated as a control: on `origin/main` this count equals
-      # the number of humans in the strip before any push arrives, because
-      # `!Map.get(attention_config, "mic_on", false)` is true for every row
-      # `MeetingLive` builds.
-      assert count(strip, ~s([data-pane="bottom-strip"] [data-mute-indicator])) == 0
+      # THE DEFECT, stated as a control: on the commit before task 01a0740c
+      # this count equalled the number of humans in the strip before any
+      # push arrived, because `!Map.get(attention_config, "mic_on", false)`
+      # was true for every row `MeetingLive` builds.
+      assert count(strip, ~s([data-pane="bottom-strip"] [data-mic-state="off"])) == 0
+      assert tile_mic_state(strip, ~s([data-pane="bottom-strip"]), ada) == "on"
+      assert tile_mic_state(strip, ~s([data-pane="bottom-strip"]), bo) == "on"
 
       # No `camera_off` key at all — a partial payload must fold what it has.
       muted = render_hook(view, "media_states", %{"muted" => [ada]})
 
-      assert mute_indicator?(muted, ~s([data-pane="bottom-strip"]), ada)
-      refute mute_indicator?(muted, ~s([data-pane="bottom-strip"]), bo)
-      assert count(muted, ~s([data-pane="bottom-strip"] [data-mute-indicator])) == 1
+      assert tile_mic_state(muted, ~s([data-pane="bottom-strip"]), ada) == "off"
+      assert tile_mic_state(muted, ~s([data-pane="bottom-strip"]), bo) == "on"
+      assert count(muted, ~s([data-pane="bottom-strip"] [data-mic-state="off"])) == 1
     end
 
-    test "camera_off folds into its own assign and adds no badge to the tile",
+    test "camera_off folds into its own assign AND reaches the tile's camera slot",
          %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      # THE OLD RULE, REWRITTEN. This test used to assert that camera_off
+      # folded into its assign and added NO badge to the tile, on the
+      # argument that the full-frame avatar already says "camera off" and a
+      # corner badge would restate it. Task 01a0740d changed the premise
+      # rather than the reasoning: the tile's two competing bottom overlays
+      # became ONE name bar, so a camera slot inside it costs no new
+      # overlay and no pixels fighting the video — it sits beside the name,
+      # which the eye is already reading. The avatar fallback is untouched,
+      # so the pair reads as "this person has their camera down" rather
+      # than as a failed feed.
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
       ada = identity_for(view, "Ada Muted")
+      bo = identity_for(view, "Bo Loud")
 
-      html = render_hook(view, "media_states", %{"muted" => [], "camera_off" => [ada]})
+      # DIRECTION CONTROL: no camera slot anywhere at mount.
+      assert tile_states(html, ada) == {"on", "on"}
+      assert count(html, ~s([data-gallery-grid] [data-role="camera-indicator"])) == 0
 
-      # The tile already swaps to a full-frame avatar when the camera is
-      # off, so it IS the camera indicator; a corner badge would restate
-      # something occupying the whole frame. The assign exists because the
-      # stage-3 roster consumes it.
+      dark = render_hook(view, "media_states", %{"muted" => [], "camera_off" => [ada]})
+
       assert :sys.get_state(view.pid).socket.assigns.camera_off_identities ==
                MapSet.new([ada])
 
-      assert count(html, "[data-gallery-grid] [data-mute-indicator]") == 0
+      assert tile_states(dark, ada) == {"on", "off"}
+      assert tile_states(dark, bo) == {"on", "on"}
+
+      # EXACTLY one, so a binding that answered uniformly cannot pass.
+      assert count(dark, ~s([data-gallery-grid] [data-role="camera-indicator"])) == 1
+
+      # And the avatar fallback is still there — the camera slot ADDS to it.
+      assert count(dark, "[data-gallery-grid] [data-avatar-fallback]") > 0
     end
 
     test "the ROSTER row for the pushed identity flips, and only that row",
@@ -12126,11 +12202,14 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert roster_states(cleared, ada) == {"on", "on"}
     end
 
-    test "camera_off reaches the roster's camera slot, which the tile has no badge for",
+    test "camera_off reaches the roster's camera slot AND the tile's, from one push",
          %{conn: conn, meeting: meeting} do
-      # Stage 1 asserted `camera_off` folds into its assign and adds NO
-      # badge to the tile, and left the reader to take on faith that
-      # something would consume it. The roster is that consumer.
+      # THE OLD RULE, REWRITTEN. The second half of this test's name used
+      # to be "which the tile has no badge for", and that clause is now
+      # false — see the rewritten test above. What survives is the claim
+      # worth making: ONE `media_states` push feeds BOTH surfaces, and the
+      # two agree about the same identity. Two readers that disagree about
+      # whether Ada's camera is off is the drift this asserts against.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       ada = identity_for(view, "Ada Muted")
@@ -12140,6 +12219,9 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert roster_states(html, ada) == {"on", "off"}
       assert roster_states(html, bo) == {"on", "on"}
+
+      assert tile_states(html, ada) == roster_states(html, ada)
+      assert tile_states(html, bo) == roster_states(html, bo)
     end
 
     test "the viewer's own roster row follows their own mic and camera buttons",
@@ -12188,6 +12270,80 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       back = render_click(view, "meeting_toggle_mic")
       assert roster_states(back, me) == {"on", "off"}
+    end
+
+    test "the viewer's own TILE follows their own mic and camera buttons too",
+         %{conn: conn, meeting: meeting, space: space} do
+      # Task 01a0740d stage 1. The same fold as the roster test above, one
+      # surface over, and it became load-bearing at exactly the moment the
+      # name bar started showing mic state on EVERY tile. Before that the
+      # tile only drew an indicator for muted people, so a viewer whose own
+      # mute was missing from `:muted_identities` simply saw nothing. Now
+      # the absent fold does not omit a signal — it renders the WRONG one:
+      # the viewer's own tile would say "unmuted" in so many words while
+      # they are muted, which is worse than saying nothing.
+      #
+      # `room.remoteParticipants` excludes the local participant by
+      # construction, so no `media_states` push can ever carry the viewer.
+      # Only `MeetingLive.roster_off_set/3`, folding their own
+      # `:mic_enabled` / `:camera_enabled`, can make their tile honest.
+      {:ok, probe, _} = live(conn, ~p"/meetings/#{meeting.slug}")
+      user_id = :sys.get_state(probe.pid).socket.assigns.user_id
+
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user_id,
+        display_name: "Meeting Test User",
+        joined_at: DateTime.utc_now()
+      })
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      me =
+        PlatformWeb.MeetingLive.viewer_gallery_identity(:sys.get_state(view.pid).socket.assigns)
+
+      refute me == "user:unknown", "the viewer has no resolvable identity in this fixture"
+
+      # DIRECTION CONTROL: the viewer's own tile starts unmuted, camera on.
+      assert tile_states(html, me) == {"on", "on"}
+
+      muted = render_click(view, "meeting_toggle_mic")
+      assert tile_states(muted, me) == {"off", "on"}
+
+      # And nobody else moved: the fold is one identity wide.
+      assert tile_states(muted, identity_for(view, "Ada Muted")) == {"on", "on"}
+
+      dark = render_click(view, "meeting_toggle_camera")
+      assert tile_states(dark, me) == {"off", "off"}
+
+      back = render_click(view, "meeting_toggle_mic")
+      assert tile_states(back, me) == {"on", "off"}
+
+      # The two surfaces stay in step: one fold, read the same way twice.
+      assert tile_states(back, me) == roster_states(back, me)
+
+      # THE BOTTOM STRIP TAKES THE SAME FOLD, and nothing above proves it.
+      # Measured, not assumed: deleting `roster_off_set/3` from the STRIP
+      # call site while leaving the gallery's intact left this entire file
+      # green (417 tests, 0 failures). The gallery fold was covered and the
+      # strip fold was not, so the strip could have been reverted by a
+      # later refactor without a single test noticing. The strip renders
+      # humans only outside gallery mode, hence the mode switch.
+      strip = render_click(view, "set_stage_mode", %{"mode" => "canvas"})
+      scope = ~s([data-pane="bottom-strip"])
+
+      # DIRECTION CONTROL: the last click above turned the mic back ON, so
+      # the strip must say "on" BEFORE the flip below. `tile_mic_state/3`
+      # returns nil when no tile matches, so this also proves the viewer
+      # actually has a tile in the strip rather than silently comparing
+      # nothing.
+      assert tile_mic_state(strip, scope, me) == "on"
+
+      remuted = render_click(view, "meeting_toggle_mic")
+      assert tile_mic_state(remuted, scope, me) == "off"
+
+      # One identity wide here too.
+      assert tile_mic_state(remuted, scope, identity_for(view, "Ada Muted")) == "on"
     end
 
     test "a malformed payload is ignored rather than crashing the LV",

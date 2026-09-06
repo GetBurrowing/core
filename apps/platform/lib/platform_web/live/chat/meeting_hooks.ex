@@ -858,10 +858,23 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   (the hook dedupes, but a crash-remount loop loses every transient
   assign the surface holds).
 
-  `:camera_off_identities` has no reader on the tile — the tile already
-  swaps to a full-frame avatar when the camera is off, so a corner badge
-  would restate something occupying the whole frame. The roster in stage
-  3 is what consumes it; it is folded here so that stage has the data.
+  BOTH sets are read on the tile as of task 01a0740d stage 1, and the
+  claim this paragraph used to make is now false in both halves. It said
+  `:camera_off_identities` had no reader on the tile, and that a badge
+  would restate what the full-frame avatar already says. What changed:
+  the tile's two separate bottom overlays became ONE `[data-tile-name-bar]`
+  carrying the name and both state slots on a shared ground, and inside
+  that bar a camera-off slot costs no new overlay and no new pixels
+  competing with the video — it sits beside the name, which the eye is
+  already reading. The avatar fallback is unchanged, so the two together
+  read as "this person has their camera down" rather than as a failed
+  feed. The roster (`ParticipantRail`) still consumes both sets too.
+
+  Both readers fold the VIEWER'S OWN state on top of these sets before
+  rendering, via `MeetingLive.roster_off_set/3`. `room.remoteParticipants`
+  excludes the local participant by construction, so neither set here can
+  ever name the viewer — but both surfaces draw the viewer's own row and
+  own tile, which is the one they look at most.
   """
   @spec apply_media_states(Phoenix.LiveView.Socket.t(), term()) ::
           Phoenix.LiveView.Socket.t()

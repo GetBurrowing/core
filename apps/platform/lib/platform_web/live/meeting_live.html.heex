@@ -1330,6 +1330,15 @@
                          `_detach` runs cleanly on the old tile,
                          `_syncExistingTrack` rebinds the live track on the
                          freshly mounted tile in the new location. --%>
+                          <%!-- The media attrs read `roster_off_set/3`, not the
+                         raw sets. LiveKit's `remoteParticipants` never contains
+                         the viewer, so `@muted_identities` can never name them
+                         — and now that the name bar shows mic state on EVERY
+                         tile, the viewer's own tile would tell them they are
+                         unmuted while they are muted. FE-3 solved this one
+                         component over for the roster; the same helper, folding
+                         the viewer's own `:mic_enabled` / `:camera_enabled`
+                         buttons, is what keeps the tile honest. --%>
                           <.video_tile
                             id_prefix="gallery-tile"
                             participant={
@@ -1339,7 +1348,26 @@
                               }
                             }
                             video_track={false}
-                            audio_muted?={MapSet.member?(@muted_identities, gallery_identity(p))}
+                            audio_muted?={
+                              MapSet.member?(
+                                roster_off_set(
+                                  @muted_identities,
+                                  viewer_gallery_identity(assigns),
+                                  @mic_enabled
+                                ),
+                                gallery_identity(p)
+                              )
+                            }
+                            camera_off?={
+                              MapSet.member?(
+                                roster_off_set(
+                                  @camera_off_identities,
+                                  viewer_gallery_identity(assigns),
+                                  @camera_enabled
+                                ),
+                                gallery_identity(p)
+                              )
+                            }
                             speaking?={MapSet.member?(@speaking_identities, gallery_identity(p))}
                             avatar_url={Map.get(p, :avatar_url)}
                             layout={:gallery}
@@ -2022,6 +2050,9 @@
             <%!-- `id_prefix="strip-tile"` mirrors `gallery-tile` above; see the
                rationale on the gallery `<.video_tile>` for why we deliberately
                give the two surfaces DIFFERENT dom ids per participant. --%>
+            <%!-- The media attrs take the same `roster_off_set/3` viewer fold
+               as the gallery tile, for the same reason: the strip draws the
+               viewer's own tile too. --%>
             <PlatformWeb.Components.Meeting.VideoTile.video_tile
               id_prefix="strip-tile"
               participant={
@@ -2031,7 +2062,26 @@
                 }
               }
               video_track={false}
-              audio_muted?={MapSet.member?(@muted_identities, gallery_identity(participant))}
+              audio_muted?={
+                MapSet.member?(
+                  roster_off_set(
+                    @muted_identities,
+                    viewer_gallery_identity(assigns),
+                    @mic_enabled
+                  ),
+                  gallery_identity(participant)
+                )
+              }
+              camera_off?={
+                MapSet.member?(
+                  roster_off_set(
+                    @camera_off_identities,
+                    viewer_gallery_identity(assigns),
+                    @camera_enabled
+                  ),
+                  gallery_identity(participant)
+                )
+              }
               speaking?={MapSet.member?(@speaking_identities, gallery_identity(participant))}
               avatar_url={participant.avatar_url}
               data-local-dock={local? && "true"}

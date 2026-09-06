@@ -36,10 +36,97 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
       published. When `nil`/`false`, the avatar fallback renders instead.
       The video element itself is attached by JS; this flag only drives which
       visual state the server renders.
-    * `:audio_muted?` — when `true`, a `hero-microphone-slash` overlay shows.
+    * `:audio_muted?` — the participant's mic state. Drives the mic slot in
+      the name bar, which renders in BOTH states (see "The name bar" below).
+    * `:camera_off?` — the participant's camera state. Drives a camera slot in
+      the name bar that renders ONLY when off.
     * `:speaking?` — when `true`, the tile gets a `ring-2 ring-primary` active
       speaker treatment.
     * `:avatar_url` — optional avatar image URL for the camera-off fallback.
+
+  ## The name bar (task 01a0740d stage 1)
+
+  The name and both state indicators are ONE absolutely-positioned child,
+  `[data-tile-name-bar]`, and the tile has exactly three absolutely-
+  positioned children in total: the video slot, the avatar fallback, and
+  the bar, in that order, with the bar LAST.
+
+  That count is the fix, not a tidiness preference. This component used to
+  carry TWO independent bottom overlays — a 19px `[data-mute-indicator]`
+  chip at `bottom-1 left-1` and a full-width name label at `inset-x-0
+  bottom-0` — neither setting a `z-index`, both claiming the same pixels.
+  FE-3 stage 3 measured it live: `document.elementFromPoint` at the badge's
+  own centre returned the NAME LABEL, because the label came later in DOM
+  order. The badge rendered, reported `display: block, opacity: 1,
+  visibility: visible`, and passed every DOM assertion written against it.
+  Harper still could not see it.
+
+  Relocating that chip would not have fixed it. At 19px on a 155x218 tile
+  it is 361px² of 33,790px², about 1% of the tile, competing with moving
+  video — invisible in any corner. What makes state readable is a band with
+  its own ground, which the eye already lands on because the name lives
+  there. So the scrim IS the bar's container rather than a fourth overlay,
+  and one element means the name and the icons cannot overlap each other by
+  layout at all.
+
+  `overflow-hidden` on the tile gives the scrim the tile's corner radius,
+  so the bar needs no radius of its own and no inset.
+
+  NOTHING HERE MAY TAKE `pointer-events-none`. It would suppress the
+  `title` tooltips, and it would make `document.elementFromPoint` return
+  the tile instead of the icon — which would make the occlusion check that
+  caught the original defect pass on a broken build. An instrument that
+  cannot see the hazard is worse than no instrument.
+
+  ## Two icons, two rules
+
+  The state vocabulary mirrors
+  `PlatformWeb.Components.Meetings.ParticipantRail` (`mic_state/1`,
+  `camera_state/1`, `well_class/1`, `glyph_tone/1`, `state_sentence/3`) so
+  the roster and the tile cannot drift, with ONE deliberate divergence: on
+  the tile the ON state has NO well.
+
+    * Mic renders in BOTH states. An unmuted mic has no other tell on a
+      tile, so an empty slot would be ambiguous with "we forgot to draw it".
+    * ON is deliberately weak — a bare 16px glyph, no well, white at 45%.
+      Nine unmuted people is nine icons; at full strength the one muted
+      person stops standing out and the feature inverts. The meaning lives
+      in the CONTRAST between the two states, not in either alone.
+    * OFF gets the full treatment: `--color-error` glyph in an
+      `--color-error`-tinted well.
+    * Camera renders ONLY when off. A tile with no video already says so,
+      and the avatar fallback is untouched, so a camera-off tile reads as a
+      person with their camera down rather than as a failed feed.
+
+  Never `--color-warning`: on this screen warning means a human is being
+  asked for something, and a muted person asks nothing of anyone. Never
+  `--color-success`: reserved for SPEAKING, a later ticket that will want
+  the tile border. That channel is left unspent.
+
+  ### Why `text-white` and not `--color-base-content`
+
+  The design canvas assigns `--color-base-content` to the name and to the
+  ON glyph. That is wrong on this surface: in light theme
+  `--color-base-content` is `oklch(0% 0 0)`, pure black (`app.css`), and
+  the scrim is black in BOTH themes, so the name would be black on black in
+  light mode. The canvas got the reasoning right one row above, for the
+  scrim itself, and did not carry it down to the content sitting on that
+  ground. The shipped name label already used `text-white` over
+  `from-black/60`, so this follows the existing precedent.
+  `--color-error` is `oklch(63% 0.22 25)` in both themes and keeps its
+  semantic token unchanged.
+
+  ### The mic glyph is currently blank, deliberately
+
+  `hero-microphone-slash` generates NO CSS: `assets/vendor/heroicons.js`
+  emits one class per file in `deps/heroicons/optimized`, and Heroicons
+  ships `microphone.svg` with no `microphone-slash.svg` at any size. So a
+  muted mic currently paints its red well around an empty centre. The class
+  is kept, not swapped, so FE-19
+  (`01a07486-7985-7001-87ce-277681791f52`) fixes every call site at once
+  with one vendored file. `hero-video-camera-slash` DOES ship and compile,
+  so camera-off draws its slash for real. Two independent causes made the
+  same indicator invisible; fixing either alone leaves it invisible.
   """
 
   use Phoenix.Component
@@ -48,7 +135,17 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
 
   attr(:participant, :map, required: true, doc: "participant with :identity and :name")
   attr(:video_track, :any, default: nil, doc: "truthy when a video track is published")
-  attr(:audio_muted?, :boolean, default: false, doc: "renders mute overlay when true")
+
+  attr(:audio_muted?, :boolean,
+    default: false,
+    doc: "mic state for the name bar's mic slot, which renders in BOTH states"
+  )
+
+  attr(:camera_off?, :boolean,
+    default: false,
+    doc: "renders the name bar's camera slot when true; the slot is absent when false"
+  )
+
   attr(:speaking?, :boolean, default: false, doc: "renders active-speaker ring when true")
   attr(:avatar_url, :string, default: nil, doc: "avatar image for camera-off fallback")
   attr(:class, :any, default: nil, doc: "extra classes for the outer tile element")
@@ -77,6 +174,8 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
       |> assign(:identity, identity)
       |> assign(:name, name)
       |> assign(:has_video?, !!assigns.video_track)
+      |> assign(:mic_state, mic_state(assigns.audio_muted?))
+      |> assign(:camera_state, camera_state(assigns.camera_off?))
 
     ~H"""
     <div
@@ -153,24 +252,136 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
         <.human_avatar name={@name} avatar_url={@avatar_url} seed={@identity} size="lg" />
       </div>
 
-      <%!-- Mute indicator: hero-microphone-slash in the corner. --%>
+      <%!-- Name bar: name + both state slots, ONE overlay, LAST child.
+           See the moduledoc — the count of absolutely-positioned children
+           is the fix, and the scrim is this element's own background
+           rather than a fourth overlay stacked under it. No
+           `pointer-events-none` anywhere inside: it would suppress the
+           `title` tooltips and blind `elementFromPoint`. --%>
       <div
-        :if={@audio_muted?}
-        data-mute-indicator
-        class="absolute bottom-1 left-1 rounded-full bg-base-100/80 p-1 text-error shadow"
-        title={"#{@name} is muted"}
+        data-tile-name-bar
+        class="absolute inset-x-0 bottom-0 flex h-[40%] min-h-7 items-end bg-gradient-to-t from-black/[0.72] to-transparent"
       >
-        <span class="hero-microphone-slash block size-3.5" aria-hidden="true" />
-        <span class="sr-only">{@name} is muted</span>
-      </div>
+        <div class="flex h-7 w-full items-center gap-1.5 px-2">
+          <span
+            data-role="tile-name"
+            class="min-w-0 flex-1 truncate text-[13px] font-medium leading-none text-white"
+          >
+            {@name}
+          </span>
 
-      <%!-- Name label. --%>
-      <div class="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/60 to-transparent px-1.5 pb-0.5 pt-2 text-[10px] font-medium text-white">
-        {@name}
+          <%!-- Mic: BOTH states. ON is the bare glyph with no well, so a
+               grid of unmuted people recedes and the muted one reads. --%>
+          <span
+            class={["grid flex-shrink-0 place-items-center", well_class(@mic_state)]}
+            role="img"
+            aria-label={mic_label(@mic_state)}
+            title={mic_title(@mic_state)}
+            data-role="mic-indicator"
+            data-mic-state={to_string(@mic_state)}
+          >
+            <span class={[glyph_size(@mic_state), mic_glyph(@mic_state), glyph_tone(@mic_state)]}>
+            </span>
+          </span>
+
+          <%!-- Camera: OFF only. A tile with no video already says the
+               camera is off; drawing "camera on" everywhere spends
+               attention on the state nobody acts on. --%>
+          <span
+            :if={@camera_off?}
+            class={["grid flex-shrink-0 place-items-center", well_class(:off)]}
+            role="img"
+            aria-label={camera_label(:off)}
+            title={camera_title(:off)}
+            data-role="camera-indicator"
+            data-camera-state="off"
+          >
+            <span class={[glyph_size(:off), camera_glyph(:off), glyph_tone(:off)]}></span>
+          </span>
+        </div>
+
+        <%!-- The icons ARE the payload of this feature, so a screen reader
+             that only gets the name gets nothing. `sr-only` is
+             `position: absolute`, so this is not a flex item and adds no
+             gap to the row above it — the same trick `participant_rail.ex`
+             documents. The per-icon `aria-label`s stay alongside it so the
+             two are also reachable one at a time. --%>
+        <span class="sr-only" data-role="tile-state-summary">
+          {state_sentence(@name, @mic_state, @camera_state)}
+        </span>
       </div>
     </div>
     """
   end
+
+  # ── Name-bar state vocabulary (task 01a0740d stage 1) ──────────────────────
+  #
+  # Deliberately the same function names, the same atoms and the same
+  # tokens as `PlatformWeb.Components.Meetings.ParticipantRail`, so the
+  # roster and the tile cannot drift apart on what "off" looks like. The
+  # ONE divergence is `well_class(:on)`, and it is argued in the moduledoc:
+  # the rail draws one row per person in a scanned column where a neutral
+  # well helps alignment, while the tile draws one icon per FACE in a grid
+  # of moving video, where nine equally-weighted wells would drown the one
+  # that matters.
+
+  defp mic_state(true), do: :off
+  defp mic_state(_muted?), do: :on
+
+  defp camera_state(true), do: :off
+  defp camera_state(_off?), do: :on
+
+  # OFF gets a tinted well; ON gets NO well at all — not a neutral one.
+  # `bg-base-300` over arbitrary video would be a small opaque box on a
+  # moving image, which is the corner-badge failure mode again.
+  defp well_class(:off), do: "size-5 rounded-md bg-error/15"
+  defp well_class(_state), do: "size-4"
+
+  # The glyph is bigger in the weak state than in the strong one: the ON
+  # glyph is the whole slot (16px, no well), while OFF is 14px INSIDE a
+  # 20px well, so the well is what carries OFF's extra weight.
+  defp glyph_size(:off), do: "size-3.5"
+  defp glyph_size(_state), do: "size-4"
+
+  # `text-white`, not `text-base-content`: the scrim is black in both
+  # themes and `--color-base-content` is pure black in light theme. See
+  # the moduledoc. `--color-error` is the same in both themes and keeps
+  # its semantic token.
+  defp glyph_tone(:off), do: "text-error"
+  defp glyph_tone(_state), do: "text-white/45"
+
+  # `hero-microphone-slash` COMPILES TO NOTHING — see the moduledoc. Kept
+  # unchanged so FE-19 fixes every call site with one vendored file.
+  defp mic_glyph(:off), do: "hero-microphone-slash"
+  defp mic_glyph(_state), do: "hero-microphone"
+
+  # `hero-video-camera-slash` DOES compile, in all four Heroicons sizes.
+  defp camera_glyph(_state), do: "hero-video-camera-slash"
+
+  defp mic_label(:off), do: "Microphone muted"
+  defp mic_label(_state), do: "Microphone on"
+
+  defp mic_title(:off), do: "Muted"
+  defp mic_title(_state), do: "Mic on"
+
+  defp camera_label(_state), do: "Camera off"
+
+  defp camera_title(_state), do: "Camera off"
+
+  # The whole tile state in plain words, for the `sr-only` line only. The
+  # visible bar says this with icons; nine tiles reading "unmuted, camera
+  # on" would be a wall of text announcing that nothing happened. Same
+  # sentence shape as the rail's, so a viewer hears the same words on
+  # both surfaces.
+  defp state_sentence(name, mic_state, camera_state) do
+    "#{name}, #{mic_word(mic_state)}, #{camera_word(camera_state)}"
+  end
+
+  defp mic_word(:off), do: "muted"
+  defp mic_word(_state), do: "unmuted"
+
+  defp camera_word(:off), do: "camera off"
+  defp camera_word(_state), do: "camera on"
 
   # ── Sizing strategy ────────────────────────────────────────────────────────
   # :strip is the original bottom-strip contract — the caller provides a

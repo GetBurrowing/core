@@ -4121,6 +4121,73 @@ body, .font-fabrikam {
   height: 100%;
 }
 
+/* ── The video tile is its own query container (task 01a0740d stage 2) ──
+   Below a tile width threshold the NAME is dropped and the state icons
+   stay. `Mar…` costs the same horizontal space as `Mariah`, reads as a
+   rendering fault, and the avatar underneath already identifies the
+   person. The icons cannot be recovered from anywhere else on the tile,
+   so the icons are what survives: at tile scale the state outranks the
+   name.
+
+   THE MEASUREMENT IS THE TILE'S WIDTH, NOT THE CELL'S. `[data-gallery-cell]`
+   above is already a `container-type: size` container, and reusing it here
+   would be wrong twice over. It measures the CELL, and the tile is sized to
+   the cell by the rule above, so on a cell whose box differs from the tile's
+   the two numbers differ. More decisively, the BOTTOM STRIP has no
+   `[data-gallery-cell]` ancestor at all (`meeting_live.html.heex`, the
+   `#meeting-bottom-strip` footer), so a cell-keyed rule would never fire on
+   half the surfaces this component renders on. One container on the tile
+   itself covers gallery and strip with a single rule.
+
+   `container-type: inline-size` applies inline-axis size containment plus
+   layout and style containment, which makes the tile a containing block for
+   its absolutely-positioned descendants and A NEW STACKING CONTEXT. The tile
+   is already `relative`, so the containing block does not move; the stacking
+   context is new. It does not reorder the tile's three absolute children
+   among themselves (all keep `z-index: auto`, so DOM order still decides,
+   and the name bar is still last), and it is not `paint` containment, so the
+   speaking `ring-2` box-shadow is not clipped. Verified in a headless
+   Chrome against the built stylesheet rather than reasoned from the spec:
+   `elementFromPoint` at the mic icon's own centre returns the icon on both
+   surfaces, which is the check that caught the original defect.
+
+   120px IS MEASURED, NOT REASONED. This shipped at 140px, which came from a
+   single 155x218 gallery-tile measurement on the design canvas and was never
+   tested. Two gates measured it independently on 2026-09-03, the stage-3
+   manual gate and the behavioural e2e gate: both suspended this query and
+   read what seven real names ACTUALLY render as. A truncated name still
+   reads while the complete given name still fits, and that holds down to a
+   tile of 112-115px (name box 74-77px). Below that the given name itself
+   breaks, and `Mar...` costs the same horizontal space as `Mariah`. 120px is
+   that measured floor plus about 5px of headroom. It cannot be a custom
+   property: a container-query condition does not accept `var()`, so this
+   literal is the single place the number lives.
+
+   WHAT THE MOVE BUYS, AND WHAT IT DOES NOT. It buys the gallery band between
+   about 115px and 140px, where the old threshold threw the name away while
+   it would still have read. That band is desktop and tablet: the gallery is
+   `grid-cols-2/3/4` with no minimum track (`gallery_grid_class/1` in
+   `meeting_live.ex`), so tile width is stage width over column count and
+   lands inside the band on a narrow stage at three or four columns. It does
+   NOT rescue the mobile bottom strip. The ~140x79 strip tile that made 140px
+   look borderline was measured at `env(safe-area-inset-bottom): 0`, which is
+   what headless Chromium reports; at a real iPhone's 34px home indicator the
+   strip tile collapses to 80x45 and the name is hidden at 120px exactly as
+   it was at 140px. Suite mobile is an installed PWA, so 34px is the ordinary
+   case. The strip's actual defect is the footer's fixed `h-[96px]` being
+   CONSUMED by safe-area padding instead of extended by it; that is its own
+   ticket and is deliberately not fixed here. */
+.meeting-video-tile {
+  container-type: inline-size;
+  container-name: video-tile;
+}
+
+@container video-tile (max-width: 120px) {
+  [data-role="tile-name"] {
+    display: none;
+  }
+}
+
 /* ── Sectioned channel rail (chat plan v2 Stage 2) ─────────────────────
    Per-section container + header + row affordances. The rail is desktop
    only; mobile uses the existing flat browser overlay (see
