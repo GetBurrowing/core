@@ -195,6 +195,14 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_lifecycle_step_registry,
     :start_security_sweeper,
     :start_space_purger,
+    # Task 01a07402 stage 3 — the canvas body search backfill's boot-time
+    # one-shot. A `Task`, not a ticker, but the same hazard: left on it would
+    # run `CanvasSearchBackfill.run/1` from its own process at suite boot,
+    # touching Repo outside every sandbox and writing `chat_canvas_search`
+    # rows for fixture canvases the suite is about to roll back — including
+    # in the tests that assert an index row is ABSENT. Tests call `run/1`
+    # directly inside the DataCase sandbox.
+    :start_canvas_search_backfill,
     # Task 019f4eaa — container retention purger. Sibling of
     # :start_space_purger (which is channel-specific by contract); this one
     # hard-deletes deletion-scheduled projects and the cascade-hidden

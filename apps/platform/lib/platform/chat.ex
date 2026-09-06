@@ -57,6 +57,7 @@ defmodule Platform.Chat do
   }
 
   alias Platform.Chat.CanvasAccess
+  alias Platform.Chat.CanvasSearchIndex
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.MessageVersions
@@ -2626,6 +2627,183 @@ defmodule Platform.Chat do
     end
   end
 
+  @typedoc """
+  One `search_canvases/3` hit.
+
+  `snippet` is `nil` unless the BODY matched and the TITLE did not — see
+  `search_canvases/3`. It carries `<mark>` markup and is **not** HTML-safe;
+  render it through the same sanitising path the message search headline
+  already uses, never `raw/1`.
+  """
+  @type canvas_search_hit :: %{
+          canvas: Canvas.t(),
+          title_matched?: boolean(),
+          body_matched?: boolean(),
+          snippet: String.t() | nil,
+          rank: float()
+        }
+
+  @doc """
+  Full-text search canvases across `space_ids`, over TITLE **and** BODY.
+
+  Returns up to `:limit` (default 25) `t:canvas_search_hit/0` maps, best-first.
+  A blank or non-binary query returns `[]` without touching the database.
+
+  ## The left join is load-bearing
+
+  `chat_canvases.title_search_vector` has shipped since task `019fb954-c848`;
+  `chat_canvas_search` is new in task `01a07402` and is populated by a backfill
+  that may not have reached every row yet. An INNER join here would drop every
+  canvas without an index row — **including from title search, which works
+  today** — turning a partial backfill into a regression of shipped behaviour.
+  Hence `left_join` plus `coalesce(?, ''::tsvector)` on the body side, and
+  `canvas_search_test.exs`'s "unindexed title match" test.
+
+  ## Ranking comes from the stored weights, not from bespoke scoring
+
+  The title vector is weight `B` and the body vector is weight `D`, so
+  `ts_rank_cd` over `title || body` scores a title hit 0.4 against a body hit's
+  0.1 with no scoring factor of our own. That is a per-occurrence comparison,
+  not a guarantee: `ts_rank_cd` with the default `normalization = 0` SUMS cover
+  densities, so a body repeating the term many times does outrank a
+  single-occurrence title (measured: ~6 occurrences draws level, 20 wins
+  outright). That is ordinary term-frequency behaviour and is deliberately left
+  alone — bending it back would mean inventing exactly the bespoke scoring the
+  weights exist to avoid.
+
+  `c.updated_at` desc is the tiebreak, so equal-rank rows have a stable order.
+
+  ## `snippet` is suppressed on a title match
+
+  Per the design canvas: a caller must not be able to render a body fragment
+  next to a title hit, so the rule is *nil unless `body_matched? and not
+  title_matched?`*, applied in Elixir after the query. The both-matched case
+  collapses into "title matched -> no snippet" by the canvas author's explicit
+  sanction, rather than growing a third rendering mode.
+  """
+  @spec search_canvases([binary()], String.t(), keyword()) :: [canvas_search_hit()]
+  def search_canvases(space_ids, query, opts \\ [])
+
+  def search_canvases(_space_ids, query, _opts) when not is_binary(query), do: []
+
+  def search_canvases(space_ids, query, opts) when is_list(space_ids) do
+    trimmed_query = String.trim(query)
+
+    if space_ids == [] or trimmed_query == "" do
+      []
+    else
+      limit = Keyword.get(opts, :limit, 25)
+
+      from(c in Canvas,
+        left_join: s in CanvasSearchIndex,
+        on: s.canvas_id == c.id,
+        where: c.space_id in ^space_ids and is_nil(c.deleted_at),
+        where:
+          fragment(
+            "(? @@ websearch_to_tsquery('english', ?)) OR (coalesce(?, ''::tsvector) @@ websearch_to_tsquery('english', ?))",
+            c.title_search_vector,
+            ^trimmed_query,
+            s.body_search_vector,
+            ^trimmed_query
+          ),
+        order_by: [
+          desc:
+            fragment(
+              "ts_rank_cd(? || coalesce(?, ''::tsvector), websearch_to_tsquery('english', ?))",
+              c.title_search_vector,
+              s.body_search_vector,
+              ^trimmed_query
+            ),
+          desc: c.updated_at
+        ],
+        limit: ^limit,
+        select: %{
+          canvas: c,
+          title_matched?:
+            fragment(
+              "(? @@ websearch_to_tsquery('english', ?))",
+              c.title_search_vector,
+              ^trimmed_query
+            ),
+          body_matched?:
+            fragment(
+              "(coalesce(?, ''::tsvector) @@ websearch_to_tsquery('english', ?))",
+              s.body_search_vector,
+              ^trimmed_query
+            ),
+          rank:
+            fragment(
+              "ts_rank_cd(? || coalesce(?, ''::tsvector), websearch_to_tsquery('english', ?))",
+              c.title_search_vector,
+              s.body_search_vector,
+              ^trimmed_query
+            ),
+          # `body_text` rides along so the ellipsis rule below can ask where in
+          # the document the headline came from. Bounded by `:limit` rows.
+          body_text: s.body_text,
+          headline:
+            fragment(
+              "ts_headline('english', coalesce(?, ''), websearch_to_tsquery('english', ?), 'StartSel=<mark>, StopSel=</mark>, MaxWords=18, MinWords=8, MaxFragments=1')",
+              s.body_text,
+              ^trimmed_query
+            )
+        }
+      )
+      |> Repo.all()
+      |> Enum.map(&canvas_search_hit/1)
+    end
+  end
+
+  defp canvas_search_hit(row) do
+    %{
+      canvas: row.canvas,
+      title_matched?: row.title_matched?,
+      body_matched?: row.body_matched?,
+      rank: row.rank,
+      snippet: canvas_search_snippet(row)
+    }
+  end
+
+  # The design rule, enforced HERE rather than in the query: a title match
+  # never carries a body fragment.
+  defp canvas_search_snippet(%{body_matched?: true, title_matched?: false} = row) do
+    ellipsised_headline(row.headline, row.body_text)
+  end
+
+  defp canvas_search_snippet(_row), do: nil
+
+  # Mark a fragment as a fragment.
+  #
+  # `ts_headline/4` returns a verbatim slice of its input with `<mark>` tags
+  # inserted, so the source text is recoverable by stripping the markup — and
+  # that stripped slice is then a literal prefix / suffix of `body_text` exactly
+  # when the fragment reaches that end of the document. Both sides are trimmed
+  # first because `ts_headline` drops leading non-token characters (the `# ` of
+  # a markdown heading, a leading blank line) that would otherwise read as
+  # "started late".
+  #
+  # Anything the comparison cannot recognise falls through to BOTH ellipses,
+  # which is the conservative direction: an over-marked fragment understates
+  # what the reader is being shown, whereas a missing leading ellipsis would
+  # claim a mid-document match is the document's opening line.
+  defp ellipsised_headline(nil, _body_text), do: nil
+
+  defp ellipsised_headline(headline, body_text) do
+    fragment_text = String.trim(headline)
+
+    stripped =
+      fragment_text
+      |> String.replace("<mark>", "")
+      |> String.replace("</mark>", "")
+
+    body = String.trim(body_text || "")
+
+    prefix = if String.starts_with?(body, stripped), do: "", else: "… "
+    suffix = if String.ends_with?(body, stripped), do: "", else: " …"
+
+    prefix <> fragment_text <> suffix
+  end
+
   @doc "Edit a message's content. Sets `edited_at` to now."
   @spec edit_message(Message.t(), String.t()) ::
           {:ok, Message.t()} | {:error, Ecto.Changeset.t()}
@@ -3453,6 +3631,7 @@ defmodule Platform.Chat do
     multi =
       Multi.new()
       |> Multi.insert(:canvas, Canvas.changeset(%Canvas{}, attrs))
+      |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
       |> Multi.merge(fn %{canvas: canvas} ->
         version_revision = canvas_version_revision(canvas)
 
@@ -3509,6 +3688,7 @@ defmodule Platform.Chat do
         |> then(&Canvas.changeset(%Canvas{}, &1))
         |> repo.insert()
       end)
+      |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
       |> Multi.run(:message, fn repo, %{canvas: canvas} ->
         message_attrs =
           %{
@@ -3635,20 +3815,30 @@ defmodule Platform.Chat do
     end
   end
 
+  # `:document` is in `Canvas.changeset/2`'s cast list, so this is a body-write
+  # path even though every in-tree caller today goes through the canvas server.
+  # The bare `Repo.update/1` this used to be became a `Multi` so the search
+  # index write shares its transaction: a failed index write has to fail the
+  # save rather than leave a canvas whose body search text is stale.
   defp do_update_canvas(%Canvas{} = canvas, attrs) do
     attrs = stringify_canvas_payload(attrs)
 
-    result =
-      canvas
-      |> Canvas.changeset(attrs)
-      |> Repo.update()
+    multi =
+      Multi.new()
+      |> Multi.update(:canvas, Canvas.changeset(canvas, attrs))
+      |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
 
-    case result do
-      {:ok, updated} -> publish_canvas_updated(updated)
-      _ -> :ok
+    case Repo.transaction(multi) do
+      {:ok, %{canvas: updated}} ->
+        publish_canvas_updated(updated)
+        {:ok, updated}
+
+      {:error, :canvas, %Ecto.Changeset{} = changeset, _} ->
+        {:error, changeset}
+
+      {:error, _step, reason, _} ->
+        {:error, reason}
     end
-
-    result
   end
 
   @doc """

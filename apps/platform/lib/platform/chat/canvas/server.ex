@@ -46,7 +46,7 @@ defmodule Platform.Chat.Canvas.Server do
 
   alias Ecto.Multi
   alias Platform.Chat
-  alias Platform.Chat.{Canvas, CanvasDocument, CanvasPatch}
+  alias Platform.Chat.{Canvas, CanvasDocument, CanvasPatch, CanvasSearchIndex}
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
@@ -428,6 +428,11 @@ defmodule Platform.Chat.Canvas.Server do
         multi =
           Multi.new()
           |> Multi.update(:canvas, Canvas.changeset(canvas, %{"document" => document}))
+          # Same transaction as the canvas write, deliberately: this is the hot
+          # path (every patch, autosave, agent `canvas.patch`, and version
+          # restore lands here), so an index write that could fail on its own
+          # would be a silently unindexed canvas nobody ever hears about.
+          |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
           |> CanvasVersions.multi_insert(
             :canvas_version,
             canvas_id,

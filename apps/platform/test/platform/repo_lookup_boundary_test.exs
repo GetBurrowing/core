@@ -224,6 +224,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "mention_names/1 guards the agent-name fallback lookup: agent_id is read off a %Participant{} row, and the guard folds a malformed value into `no mention` rather than raising inside the routing pipeline"},
     {"platform/chat/canvas/server.ex", :get, "Canvas", 1, :safe_internal,
      "`do_persist/1` uses the canvas_id the `CanvasServer` was started with, which `Chat.get_canvas/1` already resolved to a row"},
+    {"platform/chat/canvas_search_index.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "unindexed_count/1 filters the space_ids list through Platform.UUID.valid?/1 before `where: c.space_id in ^ids`, which raises the same Ecto.Query.CastError as Repo.get/2 on a non-uuid. The ids arrive from whatever spaces the caller is rendering (task 01a07402 stage 5's partial-index line), so a malformed one folds into a 0 count instead of taking the render down"},
     {"platform/chat/canvas_access.ex", :get, "Canvas", 1, :safe_internal,
      "fetch_for_viewer/3 checks Platform.UUID.valid?/1 on the /canvases/:id URL path segment before the lookup, folding a malformed id into the existing {:error, :not_found}"},
     {"platform/chat/dispatch_membership.ex", :platform_uuid_guard, "-", 2, :safe_internal,
@@ -672,6 +674,16 @@ defmodule Platform.RepoLookupBoundaryTest do
     # file's guidance requires. A malformed id degrades to "no mention"
     # instead of raising `Ecto.Query.CastError` inside the routing pipeline.
     "platform/chat/attention_router.ex" => 1,
+    # 0 → 1 for task 01a07402 stage 3's `CanvasSearchIndex.unindexed_count/1`,
+    # the single source of truth for "is this space's canvas body index still
+    # partial". Triaged by hand: the `where:` clause DOES pin ids
+    # (`c.space_id in ^ids`) and they arrive from the caller's current view
+    # rather than from code, so it is boundary-reachable — the list is
+    # therefore filtered through `Platform.UUID.valid?/1` first, exactly as
+    # this file's guidance requires. A malformed id degrades to "nothing
+    # unindexed there" instead of raising `Ecto.Query.CastError` inside a
+    # page render.
+    "platform/chat/canvas_search_index.ex" => 1,
     # 10 → 11 for task 019fa1cc stage 3's `pending_bytes_in_range/4`.
     # Triaged by hand: the new call is `Repo.one` over a subquery of
     # `per_day_bytes_query/4`, whose `where:` clause pins only two

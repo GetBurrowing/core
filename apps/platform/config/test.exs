@@ -135,6 +135,12 @@ config :platform, :task_router_watcher_reconcile, false
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_space_purger, false
 
+# Canvas body search backfill (task 01a07402 stage 3): tests call `run/1`
+# directly inside the DataCase sandbox. Left on at boot it would run against
+# the real test database from outside every sandbox, indexing rows the suite
+# is about to roll back and racing the tests that assert on absent index rows.
+config :platform, :start_canvas_search_backfill, false
+
 # ContainerPurger (task 019f4eaa stage 4): tests call `sweep/0` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_container_purger, false

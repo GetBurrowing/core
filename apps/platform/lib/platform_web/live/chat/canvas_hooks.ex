@@ -5,10 +5,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   Owns:
 
     * Assigns: `:canvases`, `:canvases_by_id`, `:active_canvas`,
-      `:show_canvases`, `:new_canvas_form`
+      `:show_canvases`, `:new_canvas_form`, `:canvas_search_query`,
+      `:canvas_search_results`, `:canvas_unindexed_count`
     * Events:  `"canvas_panel_toggle"`, `"canvas_close"`,
       `"canvas_open_mobile"`, `"canvas_patch"`, `"canvas_action_click"`,
-      `"canvas_form_submit"`
+      `"canvas_form_submit"`, `"canvas_search"`
     * Info:    `{:canvas_created, canvas}`, `{:canvas_updated, canvas}`
 
   Per-type LiveView event handlers (canvas_save_form, canvas_save_code,
@@ -26,6 +27,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.CanvasAccess
+  alias Platform.Chat.CanvasSearchIndex
   alias Platform.Chat.Presence
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias PlatformWeb.ChatLive.MessagesHooks
@@ -44,6 +46,22 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     "inserted_asc" => :inserted_asc,
     "title_asc" => :title_asc
   }
+
+  @doc """
+  Is the drawer in RESULTS mode rather than LIST mode?
+
+  The single predicate both the handler and the template ask, so the branch
+  that decides whether to RUN a search and the branch that decides whether to
+  RENDER results can never disagree. Split in two, a blank query could clear
+  the results assign while the template still showed a results pane, or run a
+  search whose output nothing displayed.
+
+  Blank (or non-binary) means list mode: the drawer shows its existing sorted
+  list, untouched.
+  """
+  @spec search_active?(term()) :: boolean()
+  def search_active?(query) when is_binary(query), do: String.trim(query) != ""
+  def search_active?(_query), do: false
 
   @doc "The sort options offered in the canvases drawer, in display order."
   @spec sort_options() :: [{String.t(), String.t()}]
@@ -65,6 +83,9 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
     |> assign(:canvas_sort, @default_sort)
+    |> assign(:canvas_search_query, "")
+    |> assign(:canvas_search_results, [])
+    |> assign(:canvas_unindexed_count, 0)
     |> assign(:recent_canvas_events, [])
     |> assign(:show_versions_panel, false)
     |> assign(:canvas_versions, [])
@@ -89,6 +110,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
     |> assign(:canvas_sort, sort)
+    # A search is scoped to the space it was typed in, so switching spaces
+    # clears it rather than carrying a query — and its results, which are rows
+    # from the space you just left — into the new one.
+    |> assign(:canvas_search_query, "")
+    |> assign(:canvas_search_results, [])
+    |> assign(:canvas_unindexed_count, CanvasSearchIndex.unindexed_count([space_id]))
     |> assign_new_form()
   end
 
@@ -252,8 +279,64 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     end
   end
 
+  defp handle_event("canvas_search", %{"query" => query}, socket) when is_binary(query) do
+    # WHERE THE SPACE ID COMES FROM, because it decides whether this query can
+    # be handed a malformed id. `Chat.search_canvases/3` is NOT cast-safe —
+    # `where: c.space_id in ^space_ids` raises `Ecto.Query.CastError` on a
+    # value that is not a UUID, and stage 4 deliberately left it that way on
+    # the assumption that stage 5 would pass a DB-derived id. This is that
+    # assumption, discharged: the id is read from `:active_space`, which
+    # `ChatLive.handle_params/3` assigns only from a `Chat.get_space/1` row
+    # (a nil lookup redirects before any assign happens). It is never read
+    # from `params` here. The QUERY is client-supplied and that is fine — it
+    # is bound as text, and a non-binary is refused by this clause's guard.
+    #
+    # Do not "simplify" this to take a space id off the event payload. That is
+    # the shape of open ticket `01a06e20-78df` (`toggle_pinned` passing a
+    # client `space_id` straight into a query with no check), and it would
+    # turn a malformed value into a crashed LiveView rather than a miss.
+    case socket.assigns[:active_space] do
+      %{id: space_id} when is_binary(space_id) ->
+        results =
+          if search_active?(query) do
+            Chat.search_canvases([space_id], query)
+          else
+            []
+          end
+
+        {:halt,
+         socket
+         |> assign(:canvas_search_query, query)
+         |> assign(:canvas_search_results, results)
+         # Re-read per keystroke rather than only on space entry: the backfill
+         # runs while the drawer is open, so a line that was true at mount
+         # would otherwise stay up for the whole session after the count hit
+         # zero. `phx-debounce` bounds how often this runs.
+         |> assign(:canvas_unindexed_count, CanvasSearchIndex.unindexed_count([space_id]))}
+
+      _ ->
+        {:halt,
+         socket
+         |> assign(:canvas_search_query, query)
+         |> assign(:canvas_search_results, [])}
+    end
+  end
+
   defp handle_event("canvas_panel_toggle", _params, socket) do
-    {:halt, assign(socket, :show_canvases, !socket.assigns.show_canvases)}
+    show? = !socket.assigns.show_canvases
+    socket = assign(socket, :show_canvases, show?)
+
+    # Refresh the partial-index count as the drawer OPENS (task 01a07402
+    # stage 6). Before this it was read on space entry and then only by
+    # `"canvas_search"`, which was survivable while the line rendered in
+    # results mode alone — you could not see it without typing, and typing
+    # refreshed it. The line now renders in list mode too, where nobody types,
+    # so a backfill that finished mid-visit left the line lit for the rest of
+    # the space visit.
+    #
+    # Only on the OPEN half: closing the drawer unrenders the line, so a count
+    # taken there is a query whose answer is thrown away.
+    {:halt, if(show?, do: refresh_unindexed_count(socket), else: socket)}
   end
 
   defp handle_event("canvas_close", _params, socket) do
@@ -772,6 +855,54 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # now-removed `chat_canvases.message_id` column.
   defp build_map(canvases) do
     Map.new(canvases, fn canvas -> {canvas.id, canvas} end)
+  end
+
+  # ── The partial-index count's refresh path (task 01a07402 stage 6) ────────
+  #
+  # `:canvas_unindexed_count` drives the "older canvases are still being
+  # indexed" line in `Conversation.canvases_drawer/1`. It is recomputed at
+  # exactly THREE moments, and this is the list:
+  #
+  #   1. Space entry — `load_for_space/2`, inline, because `:active_space` is
+  #      not assigned yet at that point and the id arrives as an argument.
+  #   2. Drawer open — the `"canvas_panel_toggle"` handler, via this function.
+  #   3. Each (300ms-debounced) search — the `"canvas_search"` handler.
+  #
+  # NOT in the render path, deliberately. `CanvasSearchIndex.unindexed_count/1`
+  # is a `COUNT` over `chat_canvases` LEFT JOINed against `chat_canvas_search`;
+  # `ChatLive` is the busiest LiveView in the app, so computing it while
+  # rendering would run that query on every keystroke, every message stream
+  # insert and every unrelated assign change, to keep one advisory line honest.
+  #
+  # WHAT IS THEREFORE STALE, stated rather than implied: a drawer left OPEN
+  # while the backfill finishes underneath it keeps showing the line until the
+  # reader types, closes and reopens the drawer, or re-enters the space. That
+  # is accepted, for one reason — the single action a stale line could mislead
+  # anyone about is searching and finding nothing, and searching is itself a
+  # recompute point, so the line is corrected by the act it exists to qualify.
+  # Nothing else in the drawer reads the count.
+  #
+  # The reverse staleness barely exists: a canvas created while the drawer is
+  # open does not raise the count, because `Chat.create_canvas/1` writes the
+  # index row in the SAME `Ecto.Multi` as the canvas row (`chat.ex`, and the
+  # same for the update and restore writers). A count taken here goes out of
+  # date by falling, not by rising, short of a direct database insert.
+  #
+  # A push-based refresh — the backfill broadcasting completion into the
+  # space — is the real fix and belongs with the backfill, not here.
+  defp refresh_unindexed_count(socket) do
+    # `:active_space` only ever holds a `Chat.get_space/1` row (see the longer
+    # note in the `"canvas_search"` handler); an id is never taken from event
+    # params here. `unindexed_count/1` additionally filters through
+    # `Platform.UUID.valid?/1`, so a malformed id folds into 0 rather than
+    # raising `Ecto.Query.CastError` and taking the drawer down.
+    case socket.assigns[:active_space] do
+      %{id: space_id} when is_binary(space_id) ->
+        assign(socket, :canvas_unindexed_count, CanvasSearchIndex.unindexed_count([space_id]))
+
+      _ ->
+        socket
+    end
   end
 
   defp register_canvas_engagement(socket, canvas, engagement) do

@@ -165,6 +165,7 @@ defmodule Platform.Application do
       |> maybe_add_file_purger()
       |> maybe_add_catalog_emitter()
       |> maybe_add_deploy_merge_reconciler()
+      |> maybe_add_canvas_search_backfill()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -260,6 +261,37 @@ defmodule Platform.Application do
         [
           Supervisor.child_spec({Task, fn -> Platform.Meetings.SenderSeed.ensure!() end},
             id: :meetings_sender_seed,
+            restart: :transient
+          )
+        ]
+    else
+      children
+    end
+  end
+
+  # Canvas body search backfill (task 01a07402 stage 3). Modelled on
+  # `maybe_add_meetings_sender_seed/1` above: a one-shot `Task`, appended so
+  # it runs after `Platform.Repo`, `restart: :transient` so a normal exit
+  # does not restart it.
+  #
+  # The entry point is `run_at_boot/0`, NOT `run/1`, and that difference is
+  # load-bearing. `:transient` restarts on *abnormal* exit, so a backfill
+  # that raised on production data would be restarted, raise again, and trip
+  # this supervisor's max-restart intensity — taking the whole application
+  # down over an unindexed canvas. `run_at_boot/0` catches everything and
+  # returns `:ok`, so this child either finishes or logs and exits normally;
+  # it can never crash-loop the tree. Per-row failures never get that far —
+  # `run/1` skips them and reports them in `:remaining`.
+  #
+  # Disabled in config/test.exs — tests call `run/1` directly inside the
+  # DataCase sandbox, the way the purgers' tests call `sweep/0`.
+  defp maybe_add_canvas_search_backfill(children) do
+    if Application.get_env(:platform, :start_canvas_search_backfill, true) do
+      children ++
+        [
+          Supervisor.child_spec(
+            {Task, fn -> Platform.Chat.CanvasSearchBackfill.run_at_boot() end},
+            id: :canvas_search_backfill,
             restart: :transient
           )
         ]

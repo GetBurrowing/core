@@ -6072,3 +6072,34 @@ body, .font-fabrikam {
 .agent-tile-activity [data-role="agent-activity-word"] {
   display: none;
 }
+
+/* Canvas search snippet — the matched term (task 01a07402 stage 5).
+
+   `Chat.search_canvases/3` returns a `ts_headline` fragment wrapping the match
+   in <mark>. Without a rule here the browser's UA stylesheet renders that as
+   black-on-yellow, which is both off-brand and a semantic colour in a row the
+   design canvas says carries none.
+
+   The design is a TRANSLUCENT --color-primary WASH behind UNCHANGED
+   body-coloured text, never coloured text: the brand rule is that cyan is
+   never used for text on white. So `background-color` gets the primary tint
+   and `color` is pinned back to `--color-base-content`, which is what <mark>'s
+   UA `color` would otherwise override.
+
+   BOTH THEMES COME FREE, and that is the reason it is written with the tokens
+   rather than with literal oklch values: `--color-primary` and
+   `--color-base-content` are both redefined by the [data-theme=dark] block
+   above, so this single rule resolves to cyan-on-near-white in light and to
+   the dark theme's brighter cyan on near-white text in dark, with no second
+   selector to keep in step. Verified by screenshotting the drawer in both
+   themes, not by assuming.
+
+   Scoped to the snippet, so the message-search headline (which also emits
+   <mark>, via the same `marked_text/1`) is left exactly as it renders today.
+   Widening this to a bare `mark` would be a silent restyle of that surface. */
+[data-role="canvas-result-snippet"] mark {
+  background-color: color-mix(in oklch, var(--color-primary) 25%, transparent);
+  color: var(--color-base-content);
+  border-radius: 0.1875rem;
+  padding-inline: 0.125em;
+}

@@ -327,7 +327,27 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
         true -> "No searchable text"
       end
 
-    headline
+    marked_text(headline)
+  end
+
+  @doc """
+  Render a Postgres `ts_headline` fragment as safe HTML.
+
+  The one sanitising path for any string that carries `<mark>` markup from
+  Postgres and nothing else it is allowed to emit: escape the WHOLE string,
+  then re-enable exactly the two tags we asked `ts_headline` for. The
+  surrounding text is user-written — a canvas body, a message — so this is
+  never `raw/1` on the input, only on a string every other tag has already
+  been escaped out of.
+
+  Extracted from `search_headline/1` when task `01a07402` stage 5 needed the
+  same treatment for the canvas search snippet. It is one function rather than
+  two so a change to what `ts_headline` is allowed to emit cannot be applied
+  to message search and forgotten on canvas search.
+  """
+  @spec marked_text(String.t()) :: Phoenix.HTML.safe()
+  def marked_text(text) when is_binary(text) do
+    text
     |> Phoenix.HTML.html_escape()
     |> Phoenix.HTML.safe_to_string()
     |> String.replace("&lt;mark&gt;", "<mark>")
