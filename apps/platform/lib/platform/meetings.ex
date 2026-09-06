@@ -35,7 +35,9 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.SayRegistry
+  alias Platform.Meetings.SayTelemetry
   alias Platform.Meetings.SpeakingWindow
+  alias Platform.Meetings.TranscriptTelemetry
   alias Platform.Repo
   alias Platform.Tenancy.ExternalGrants
   alias Platform.Tenancy.PendingExternalGrant
@@ -5477,6 +5479,15 @@ defmodule Platform.Meetings do
       # Subscribe-then-send. See the "Subscribe, then send" note above.
       :ok = Phoenix.PubSub.subscribe(Platform.PubSub, ack_topic)
 
+      # Observation only (task 01a07400 stage 1). Deliberately BELOW the
+      # subscribe: see `Platform.Meetings.SayTelemetry`. Never move it above.
+      SayTelemetry.dispatch(utterance_id, agent.id, room_name)
+
+      # Task 01a07400 stage 2. Emits only if this agent had a transcript
+      # frame outstanding in THIS room; an unprompted say is not a response
+      # and gets no number. See `Platform.Meetings.TranscriptTelemetry`.
+      TranscriptTelemetry.responded(agent.id, room_name, utterance_id)
+
       payload = %{
         utterance_id: utterance_id,
         room_name: room_name,
@@ -5778,6 +5789,10 @@ defmodule Platform.Meetings do
       %{agent_id: agent_id, room_name: room_name, status: status}
     )
 
+    # Task 01a07400 stage 1. `status` is handed over verbatim — the audit
+    # row records what the runtime said, not what this branch concluded.
+    SayTelemetry.ack(utterance_id, agent_id, room_name, status, ack.duration_s)
+
     SpeakingWindow.acked(agent_id, utterance_id)
 
     if status == "spoken" do
@@ -5850,6 +5865,10 @@ defmodule Platform.Meetings do
                    "spoken_at_source" => "dispatch"
                  }
                }) do
+          # Task 01a07400 stage 1. Emitted here, not at the function head,
+          # so `:posted` means the chat row committed — the four ways a
+          # "spoken" ack posts nothing must not look like a post.
+          SayTelemetry.posted(utterance_id, agent_id, room_name)
           :ok
         else
           {:error, reason} ->
@@ -5974,6 +5993,10 @@ defmodule Platform.Meetings do
                     # observed. Adding a plugin-side ack is a
                     # `claude-code-suite-channel` change.
                     :ok = PlatformWeb.Endpoint.broadcast(topic, "meeting_transcript", payload)
+                    # Task 01a07400 stage 2, one emit per RECIPIENT. Means
+                    # core sent the frame, not that anything heard it — the
+                    # same limit the paragraph above draws.
+                    TranscriptTelemetry.delivered(payload, agent.id)
                     maybe_mark_heard(payload.meeting_id, agent.id, runtime_id)
                     {[agent.id | ok], skip}
 

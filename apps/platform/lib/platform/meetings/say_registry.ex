@@ -63,12 +63,37 @@ defmodule Platform.Meetings.SayRegistry do
   Both shapes age out under `ttl_ms/0`; five minutes comfortably covers the
   one-minute rate window, and a `last_human` marker that old is stale by
   definition (any say rows it would have fenced off are gone too).
+
+  ## Delivered transcript frames (task 01a07400 stage 2)
+
+  A THIRD table, `:meeting_transcript_frames`, owned by the same process and
+  swept on the same schedule, holding one row per `{meeting_id, agent_id}`:
+
+      {{meeting_id, agent_id}, %{meeting_id, room_name, segment_id, at_ms}}
+
+  Written by `Platform.Meetings.TranscriptTelemetry.delivered/2` every time a
+  final transcript segment is broadcast to that agent's brain runtime, and
+  OVERWRITTEN each time — only the most recent frame is of interest.
+  `take_delivered_frame/2` reads and removes it when the agent next dispatches
+  a say in that room, which is what turns two independent events into one
+  `response_ms` measurement.
+
+  It lives here rather than in a store of its own for three reasons: the
+  ceiling is the same `@ttl_ms` rather than a second number that can drift
+  from it, the sweep is the same tick, and the lifetime rule is identical —
+  a correlation that spanned a restart would be measuring against a frame
+  this node has no other record of.
+
+  This is diagnostic state and must not become durable. There is no schema,
+  no migration and no Postgres table behind it: losing a row costs one
+  measurement, and nothing reads it to make a decision.
   """
 
   use GenServer
 
   @table :meeting_say_registry
   @ledger :meeting_say_ledger
+  @frames :meeting_transcript_frames
 
   # Entries older than this are swept. Chosen to cover any late ack that
   # the 15 s default rendezvous would have missed, with margin.
@@ -97,7 +122,7 @@ defmodule Platform.Meetings.SayRegistry do
 
   @impl true
   def init(_opts) do
-    for table <- [@table, @ledger] do
+    for table <- [@table, @ledger, @frames] do
       case :ets.info(table) do
         :undefined ->
           :ets.new(table, [:named_table, :public, :set, read_concurrency: true])
@@ -117,6 +142,7 @@ defmodule Platform.Meetings.SayRegistry do
     cutoff = System.monotonic_time(:millisecond) - @ttl_ms
     sweep(cutoff)
     ledger_sweep(cutoff)
+    frames_sweep(cutoff)
     schedule_sweep()
     {:noreply, state}
   end
@@ -315,5 +341,83 @@ defmodule Platform.Meetings.SayRegistry do
       ])
 
     says + markers
+  end
+
+  # ── Delivered transcript frames ────────────────────────────────────────────
+
+  @doc """
+  Note that a final transcript segment was broadcast to `agent_id`'s brain
+  runtime in `meeting_id` (task 01a07400 stage 2). Overwrites any earlier
+  row for the pair: only the most recent frame can be the one an agent is
+  answering.
+
+  `segment_id` is carried so the later `response_ms` can name the frame it
+  was measured from — a number with no referent cannot be checked.
+  """
+  @spec note_delivered_frame(binary(), binary(), %{
+          room_name: String.t(),
+          segment_id: term()
+        }) :: :ok
+  def note_delivered_frame(meeting_id, agent_id, %{room_name: room_name, segment_id: segment_id})
+      when is_binary(meeting_id) and is_binary(agent_id) and is_binary(room_name) do
+    entry = %{
+      meeting_id: meeting_id,
+      room_name: room_name,
+      segment_id: segment_id,
+      at_ms: System.monotonic_time(:millisecond)
+    }
+
+    true = :ets.insert(@frames, {{meeting_id, agent_id}, entry})
+    :ok
+  end
+
+  @doc """
+  The most recent delivered frame for `agent_id` in `room_name`, REMOVED as
+  it is read, or `nil` when there is none.
+
+  Looked up by `{agent_id, room_name}` rather than by the key because
+  `Platform.Meetings.say/4` knows the room it is speaking into and not which
+  `meetings` row is live for it; the key stays `{meeting_id, agent_id}` so
+  one agent cannot hold two competing marks for the same conversation.
+
+  The removal is the point, not a tidy-up. A frame is answered at most once:
+  without it, every say the agent made for the next five minutes would be
+  reported as a response to a frame it had already answered, and an
+  unprompted say would inherit a number from whatever was last said near it.
+  `:ets.take/2` does the removal atomically, so two concurrent says race for
+  the mark and exactly one of them wins it.
+  """
+  @spec take_delivered_frame(binary(), String.t()) :: map() | nil
+  def take_delivered_frame(agent_id, room_name)
+      when is_binary(agent_id) and is_binary(room_name) do
+    @frames
+    |> :ets.select([
+      {{{:"$1", agent_id}, %{room_name: room_name, at_ms: :"$2"}}, [], [{{:"$1", :"$2"}}]}
+    ])
+    |> case do
+      [] ->
+        nil
+
+      matches ->
+        {meeting_id, _at_ms} = Enum.max_by(matches, fn {_meeting_id, at_ms} -> at_ms end)
+
+        case :ets.take(@frames, {meeting_id, agent_id}) do
+          [{_key, entry}] -> entry
+          [] -> nil
+        end
+    end
+  end
+
+  def take_delivered_frame(_agent_id, _room_name), do: nil
+
+  @doc """
+  Drop every delivered-frame row at or before `cutoff_ms`. Public for the
+  same reason `sweep/1` is.
+  """
+  @spec frames_sweep(integer()) :: non_neg_integer()
+  def frames_sweep(cutoff_ms) when is_integer(cutoff_ms) do
+    :ets.select_delete(@frames, [
+      {{{:_, :_}, %{at_ms: :"$1"}}, [{:"=<", :"$1", cutoff_ms}], [true]}
+    ])
   end
 end

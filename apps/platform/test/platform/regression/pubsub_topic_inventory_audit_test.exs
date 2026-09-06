@@ -217,18 +217,27 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # Phoenix.PubSub has no wildcard subscribe, so nothing ever subscribes to
     # this string; broadcast_meeting_finished/2 mirrors per-room to canonical
     # instead. Recorded because it reads exactly like a topic.
-    {"meeting:finished:*", :not_a_topic},
-    # The LiveKit participant identity `"agent:\#{agent.slug}"` in
-    # `Meetings.say/4`'s dispatch payload. It sits inside the scan window
-    # after the `PubSub.subscribe(` anchor for the ack rendezvous, so the
-    # scanner reads it as a topic. Nothing subscribes to or broadcasts on it;
-    # the same literal in `dispatch_meeting_join/3` is out of any window.
+    {"meeting:finished:*", :not_a_topic}
+
+    # GONE (task 01a07400 stage 1): `{"agent:<id>", :not_a_topic}`. That entry
+    # classified the LiveKit participant identity `"agent:" <> agent.slug` in
+    # `Meetings.say/4`'s dispatch payload, which was never a topic — it was in
+    # the inventory only because it sat inside the 260-character
+    # `@anchor_window` after the `PubSub.subscribe(` anchor for the ack
+    # rendezvous, and the scanner therefore read it as one. The `say` dispatch
+    # telemetry emit now sits between that subscribe and the payload, which
+    # pushes the identity past the end of the window, so the scan no longer
+    # discovers it and the entry went stale. The same literal in
+    # `dispatch_meeting_join/3` was already out of any window. Nothing about
+    # the identity itself changed. If a later edit shortens that region again
+    # the shape comes back as UNCLASSIFIED, which is the signal to restore
+    # this entry rather than to widen the window.
+    #
     # The rendezvous topic itself, `"meetings:say:<utterance_id>"`, is built
     # by `say_ack_topic/1` and reaches PubSub only through a variable, so the
     # scanner never sees it: one subscriber (the calling process, for at
     # most 15 s) and one publisher (`record_agent_say_ack/2`), payload is
     # the ack status and duration, never the text.
-    {"agent:<id>", :not_a_topic}
   ]
 
   # Topics with NO string literal in lib, so `scan_topic_shapes/0` cannot see

@@ -232,6 +232,43 @@ defmodule Platform.Audit.TelemetryHandler do
     # the endpoint isn't ready. Metadata carries agent_id, reason atom,
     # actor_type: "system", resource_type: "agent", resource_id.
     [:platform, :meetings, :triage_dispatch, :assignee_unresolvable],
+    # Task 01a07400 stage 1 — the `meeting_say` trace. Emitted by
+    # `Platform.Meetings.SayTelemetry` from three points in
+    # `Platform.Meetings`: `say/4` (immediately after the ack subscribe and
+    # before the broadcast), `record_agent_say_ack/2` (whatever status the
+    # runtime sent, verbatim), and `post_spoken_utterance/2`'s success
+    # branch (the chat row committed). All three carry utterance_id,
+    # agent_id and room_name; the ack adds `status` metadata plus
+    # `latency_ms` / `duration_s` measurements. actor_type "agent",
+    # actor_id the agent, resource_type "meeting_utterance", resource_id
+    # the utterance_id. Sync (default handle_event clause) — a say is
+    # capped at six a minute per agent, so the volume does not warrant the
+    # historian's async path, and a test can assert the row immediately.
+    # Registration here is load-bearing: an emit with no matching @events
+    # entry fails SILENTLY (nothing raises, the audit row simply never
+    # appears).
+    [:platform, :meetings, :say, :dispatch],
+    [:platform, :meetings, :say, :ack],
+    [:platform, :meetings, :say, :posted],
+    # Task 01a07400 stage 2 — how long after a transcript frame the agent
+    # first spoke. Emitted by `Platform.Meetings.TranscriptTelemetry` from
+    # `say/4`, at the same instant as `:say, :dispatch` above, and ONLY when
+    # that agent had an outstanding frame in the room. Measurement
+    # `response_ms`; metadata carries the `segment_id` it was measured from
+    # so the number has a referent. actor_type "agent", resource_type
+    # "meeting_utterance", resource_id the utterance_id — same shape as the
+    # say trace, and the same volume envelope (a say is capped at six a
+    # minute per agent), which is why it can share the sync path.
+    #
+    # `response_ms` is frame-delivery to first say DISPATCH. It is not a
+    # first-token time and must not be reported as one: the agent is
+    # federated and core observes its actions, never its tokens. See that
+    # module's moduledoc.
+    #
+    # Its sibling `[:platform, :meetings, :transcript, :delivered]` is
+    # deliberately absent from this list: it fires per recipient agent per
+    # final segment, uncapped, and does not belong in an audit log.
+    [:platform, :meetings, :agent, :responded],
     # Task 019f7cb0 stage 2 — file soft-delete lifecycle. Emitted by
     # `Platform.Files.delete_file/2` and `restore_file/2` after the DB
     # write commits. Metadata carries actor_id, actor_type: "user",
