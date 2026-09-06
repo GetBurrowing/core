@@ -1697,8 +1697,17 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     update(socket, :msg_day_labels, &Map.delete(&1 || %{}, msg_id))
   end
 
-  defp message_day(%{inserted_at: %DateTime{} = dt}) do
-    dt |> DateTime.to_date() |> Date.to_iso8601()
+  # The day a message belongs to is read off `Chat.message_ordered_at/1`, the
+  # same key the stream is ORDERED by — not off `inserted_at`. They differ
+  # only for an agent's spoken line in a meeting whose ack came back late
+  # (task 01a07401), and only there can they differ enough to cross
+  # midnight; when they do, labelling by insert time would print a
+  # separator for a day the row does not sit in.
+  defp message_day(%{inserted_at: %DateTime{}} = msg) do
+    case Chat.message_ordered_at(msg) do
+      %DateTime{} = dt -> dt |> DateTime.to_date() |> Date.to_iso8601()
+      _ -> nil
+    end
   end
 
   defp message_day(_), do: nil

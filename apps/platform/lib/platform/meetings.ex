@@ -5724,7 +5724,11 @@ defmodule Platform.Meetings do
   2. `[:platform, :meetings, :agent_say_ack]` telemetry, mirroring the join
      ack's event.
   3. On `"spoken"` ONLY, the text core dispatched is posted into the room's
-     chat space as the agent, so the transcript shows what was said.
+     chat space as the agent, so the transcript shows what was said. That
+     row's `metadata["spoken_at"]` is the utterance's DISPATCH time, not its
+     insert time, so a late ack does not reorder the meeting (task 01a07401
+     stage 1); `metadata["spoken_at_source"]` records that it is dispatch
+     time and not a worker-reported playback start.
 
   ## What does NOT post
 
@@ -5799,10 +5803,33 @@ defmodule Platform.Meetings do
             "agent=#{inspect(agent_id)} but dispatched for agent=#{owner} — not posted"
         )
 
-      %{text: text, space_id: space_id, room_name: room_name} ->
+      %{text: text, space_id: space_id, room_name: room_name, dispatched_at: dispatched_at} ->
         # Consumed on the first matching ack so a replay cannot post twice.
         SayRegistry.delete(utterance_id)
 
+        # ── The ordering key ────────────────────────────────────────────
+        #
+        # `inserted_at` on this row is when the ACK came back, which can be
+        # seconds or (via the registry's 5-minute back-fill window) minutes
+        # after the line was actually said. Sorting a meeting's chat by it
+        # puts a slowly-acked agent line after everything that was said
+        # while it was in flight. So the row also carries `spoken_at`, and
+        # that is what a reader should order agent speech by.
+        #
+        # `spoken_at` HERE IS AN APPROXIMATION, DELIBERATELY CHOSEN:
+        # it is `SayRegistry`'s `dispatched_at`, the wall clock at which
+        # core handed the utterance to the agent's runtime — NOT when the
+        # runtime began playing it. The truthful value is playback start,
+        # and only the voice worker knows it; today the worker does not
+        # report one, and teaching it to is out of scope for this task.
+        # Dispatch time is available with no worker change and is wrong in
+        # one direction only, by the runtime's TTS latency (well under a
+        # second), which is far smaller than the ack skew it fixes.
+        #
+        # `spoken_at_source` says which of the two this is, so the day the
+        # worker starts reporting playback start the key keeps its name and
+        # only the source flips — and until then nothing downstream can
+        # mistake an estimate for a measurement.
         with {:ok, participant} <- SpaceAccess.authorize_writer(space_id, {:agent, agent_id}),
              {:ok, _msg} <-
                Chat.post_message(%{
@@ -5813,7 +5840,9 @@ defmodule Platform.Meetings do
                  metadata: %{
                    "source" => "meetings.say",
                    "utterance_id" => utterance_id,
-                   "room_name" => room_name
+                   "room_name" => room_name,
+                   "spoken_at" => DateTime.to_iso8601(dispatched_at),
+                   "spoken_at_source" => "dispatch"
                  }
                }) do
           :ok

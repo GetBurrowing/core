@@ -1958,14 +1958,146 @@ defmodule Platform.Chat do
     end
   end
 
+  # ── The scrollback ordering key ────────────────────────────────────────
+  #
+  # An agent's spoken line in a meeting is posted as a chat message when
+  # the runtime ACKS the utterance, which can be seconds — or, through
+  # `Platform.Meetings.SayRegistry`'s five-minute back-fill window,
+  # minutes — after the line was actually said. `inserted_at` on that row
+  # is therefore ACK time, and ordering a room by it files a slowly-acked
+  # agent line after everything that was said while it was still in
+  # flight (task 01a07401).
+  #
+  # Stage 1 of that task stamps the dispatch instant onto the row as
+  # `metadata["spoken_at"]` (ISO 8601 UTC), with `metadata["spoken_at_source"]`
+  # recording that it is dispatch time and not a worker-reported playback
+  # start. That is the key a scrollback sorts by; `m.id` stays as the
+  # tiebreaker for the same reason it always was (see `list_messages/2`).
+  #
+  # COMPATIBILITY — the rows that have no stamp. Every message posted
+  # before stage 1 shipped, and every message that is not agent speech
+  # (which is nearly all of them, in every space in the product), has no
+  # `spoken_at`. `coalesce` falls those rows back to their own
+  # `inserted_at`, so an unstamped row sorts exactly where it sorts
+  # today — at its own place in the room, NOT hoisted to the top of it or
+  # dumped at the bottom. That is why no backfill is needed, and it is
+  # just as well: the dispatch instant of a historical utterance was
+  # never recorded anywhere, so a backfill is not possible even in
+  # principle. A room of purely historical messages is bit-for-bit the
+  # same order it was before this shipped.
+  #
+  # On the SQL: `->>` already yields NULL for a missing key, and
+  # `nullif(…, '')` extends that to a present-but-empty value so the cast
+  # cannot see one. The cast itself is unguarded because
+  # `Platform.Meetings.post_spoken_utterance/2` is the only writer of this
+  # key anywhere in the tree and it always writes `DateTime.to_iso8601/1`
+  # output. `inserted_at` is `:utc_datetime_usec`, which Postgres stores
+  # as `timestamp` (no zone), so the cast target is `timestamp` too — an
+  # ISO 8601 UTC string's trailing `Z` is dropped against a column that is
+  # already UTC, which is what makes the two arms of the `coalesce`
+  # comparable at all.
+  defmacrop ordering_key(m) do
+    quote do
+      fragment(
+        "coalesce(nullif(?->>'spoken_at', '')::timestamp, ?)",
+        unquote(m).metadata,
+        unquote(m).inserted_at
+      )
+    end
+  end
+
+  @doc """
+  The instant a message sorts at in a room's scrollback: the `spoken_at`
+  its metadata carries when it has one, else its `inserted_at`.
+
+  The Elixir mirror of the SQL ordering key `list_messages/2` sorts by, for
+  the callers that have a `%Message{}` in hand and need to agree with the
+  order it came back in — the day separators and the per-row clock in the
+  chat stream. A malformed or missing stamp falls back to `inserted_at`,
+  matching the `coalesce` in the query.
+  """
+  @spec message_ordered_at(map()) :: DateTime.t() | nil
+  def message_ordered_at(%{metadata: metadata, inserted_at: inserted_at})
+      when is_map(metadata) do
+    with raw when is_binary(raw) <- Map.get(metadata, "spoken_at"),
+         {:ok, %DateTime{} = spoken_at, _offset} <- DateTime.from_iso8601(raw) do
+      spoken_at
+    else
+      _ -> inserted_at
+    end
+  end
+
+  def message_ordered_at(%{inserted_at: inserted_at}), do: inserted_at
+
+  # Keyset cursors compare on the ORDERING key, not on `id` alone.
+  #
+  # `id` is UUIDv7 and so agrees with insertion order — which is exactly
+  # what the ordering key no longer does for an agent's spoken line. With
+  # an `id`-only cursor, a page whose oldest row (by spoken time) carries a
+  # LATE id would hand the next page a cursor above rows it had already
+  # rendered, and the reader would see them twice; derive the cursor the
+  # other way and rows go missing instead. So the cursor row's own
+  # ordering key is resolved (a primary-key lookup) and the comparison is
+  # the (key, id) pair the query is ordered by.
+  #
+  # A cursor naming a row that no longer exists falls back to the plain
+  # `id` comparison, which is what this did before and still the only
+  # sensible reading of "everything before a row that is gone".
+  # `Platform.UUID.valid?/1` before the lookup, not after: `before_id` /
+  # `after_id` arrive from the MCP `space_get_messages` tool and from
+  # `phx-value-` params, and `where: m.id == ^value` raises the same
+  # `Ecto.Query.CastError` a bare `Repo.get/2` would. Returning nil for a
+  # malformed cursor drops through to the plain `id` comparison below,
+  # which is what this path did before and still raises exactly where it
+  # always did — this lookup does not add a new failure mode of its own.
+  defp cursor_ordered_at(id) do
+    if Platform.UUID.valid?(id) do
+      Repo.one(from(m in Message, where: m.id == ^id, select: ordering_key(m)))
+    end
+  end
+
+  defp keyset_before(query, nil), do: query
+
+  defp keyset_before(query, before_id) do
+    case cursor_ordered_at(before_id) do
+      nil ->
+        where(query, [m], m.id < ^before_id)
+
+      key ->
+        where(
+          query,
+          [m],
+          ordering_key(m) < type(^key, :naive_datetime_usec) or
+            (ordering_key(m) == type(^key, :naive_datetime_usec) and m.id < ^before_id)
+        )
+    end
+  end
+
+  defp keyset_after(query, nil), do: query
+
+  defp keyset_after(query, after_id) do
+    case cursor_ordered_at(after_id) do
+      nil ->
+        where(query, [m], m.id > ^after_id)
+
+      key ->
+        where(
+          query,
+          [m],
+          ordering_key(m) > type(^key, :naive_datetime_usec) or
+            (ordering_key(m) == type(^key, :naive_datetime_usec) and m.id > ^after_id)
+        )
+    end
+  end
+
   @doc """
   List non-deleted messages in a space, newest first.
 
   ## Options
 
     * `:limit`     — max number of messages (default: 50)
-    * `:before_id` — keyset cursor — only messages with `id < before_id`
-    * `:after_id`  — keyset cursor — only messages with `id > after_id`
+    * `:before_id` — keyset cursor — only messages ordered before that row
+    * `:after_id`  — keyset cursor — only messages ordered after that row
     * `:thread_id` — filter to a specific thread
     * `:top_level_only` — when `true`, include only messages where `thread_id` is `NULL`
     * `:order` — `:desc` (default, newest first) | `:asc` (oldest first)
@@ -2012,7 +2144,13 @@ defmodule Platform.Chat do
         # `id` is `Platform.Types.UUIDv7`, which is time-ordered, so it agrees
         # with insertion order rather than fighting it. Same defect and same
         # remedy as the task-paging fix in #864.
-        order_by: [{^order, m.inserted_at}, {^order, m.id}],
+        #
+        # The leading key is `ordering_key/1`, NOT `inserted_at` — see the
+        # comment on that macro. It is `inserted_at` for every row that has
+        # no `spoken_at`, which is every row this product had before task
+        # 01a07401 and nearly every row it has now, so the tiebreaker
+        # reasoning above is untouched.
+        order_by: [{^order, ordering_key(m)}, {^order, m.id}],
         limit: ^limit
       )
 
@@ -2023,8 +2161,8 @@ defmodule Platform.Chat do
         true -> base
       end
 
-    base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
-    base = if after_id, do: where(base, [m], m.id > ^after_id), else: base
+    base = keyset_before(base, before_id)
+    base = keyset_after(base, after_id)
 
     base
     |> ExternalScope.scope_by_space_id(scope)
@@ -2038,7 +2176,7 @@ defmodule Platform.Chat do
 
   ## Options
 
-    * `:before_id`       — keyset cursor — only counts messages with `id < before_id`
+    * `:before_id`       — keyset cursor — only counts messages ordered before that row
     * `:thread_id`       — filter to a specific thread
     * `:top_level_only`  — when `true`, include only messages where `thread_id` is `NULL`
   """
@@ -2063,7 +2201,7 @@ defmodule Platform.Chat do
         true -> base
       end
 
-    base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
+    base = keyset_before(base, before_id)
 
     base
     |> ExternalScope.scope_by_space_id(scope)
@@ -2078,7 +2216,7 @@ defmodule Platform.Chat do
 
   ## Options
 
-    * `:after_id`        — keyset cursor — only counts messages with `id > after_id`
+    * `:after_id`        — keyset cursor — only counts messages ordered after that row
     * `:thread_id`       — filter to a specific thread
     * `:top_level_only`  — when `true`, include only messages where `thread_id` is `NULL`
   """
@@ -2103,7 +2241,7 @@ defmodule Platform.Chat do
         true -> base
       end
 
-    base = if after_id, do: where(base, [m], m.id > ^after_id), else: base
+    base = keyset_after(base, after_id)
 
     base
     |> ExternalScope.scope_by_space_id(scope)

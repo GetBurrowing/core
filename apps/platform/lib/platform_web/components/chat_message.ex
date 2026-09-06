@@ -68,7 +68,10 @@ defmodule PlatformWeb.Components.ChatMessage do
         end
       }
       data-participant-id={@msg.participant_id}
-      data-date={@msg.inserted_at && DateTime.to_date(@msg.inserted_at) |> Date.to_iso8601()}
+      data-date={
+        @msg.inserted_at &&
+          Platform.Chat.message_ordered_at(@msg) |> DateTime.to_date() |> Date.to_iso8601()
+      }
       data-message-id={@msg.id}
       data-is-own-message={
         if(@current_participant && @msg.participant_id == @current_participant.id,
@@ -142,9 +145,17 @@ defmodule PlatformWeb.Components.ChatMessage do
                 AI
               </span>
             </span>
+            <%!-- The clock on a row is the instant it SORTS at, not the
+                 instant the row was written: for an agent's spoken line in a
+                 meeting those differ by the ack delay, and a row moved up
+                 into its spoken position while still printing its ack time
+                 reads as a scrollback that is simply out of order (task
+                 01a07401). For every row without a `spoken_at` — which is
+                 every row outside a meeting — this is `inserted_at`
+                 unchanged. --%>
             <.local_time
               id={"message-time-#{@msg.id}"}
-              timestamp={@msg.inserted_at}
+              timestamp={Platform.Chat.message_ordered_at(@msg)}
               class="text-[10px] text-base-content/40"
             />
             <%!-- (edited) affix per contract Section D.1 — visible only on

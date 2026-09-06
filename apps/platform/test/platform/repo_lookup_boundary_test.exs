@@ -607,8 +607,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "Accounts.get_user/1's guard, added by stage 2 of task 019fa129. Tracked as its own key so re-simplifying it back to a bare cast trips BOTH the unclassified-site test and the count-drift test"},
     {"platform/changelog.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "Changelog.get_entry/1's guard on an entry id with no in-repo caller pinning its provenance"},
-    {"platform/chat.ex", :platform_uuid_guard, "-", 14, :safe_internal,
-     "guards on get_space/2 (the PR #613 site), get_message/2, get_thread/1, get_canvas/2, get_canvas_with_deleted/2, get_attachment/2, get_agent_participant/2 (both columns), add_agent_participant/3, do_unpin_message/2, resolve_agent/1 and space_for_path_segment/1 (the url-segment resolver, which must NOT treat a 16-character channel slug as a raw binary uuid). Count 12 -> 14 with task 01a00066 stage 1: `message_read_by_user?/2` guards BOTH its message_id and its user_id before the two `Repo.one` reads recorded below. Both arrive from an inbox row's `source_id` / `user_id` columns via the staleness reconciler, so neither is proven to be a uuid at the call site, and the predicate's contract is a boolean — an unguarded bad value would raise Ecto.Query.CastError out of a read whose whole job is to answer false"},
+    {"platform/chat.ex", :platform_uuid_guard, "-", 15, :safe_internal,
+     "guards on get_space/2 (the PR #613 site), get_message/2, get_thread/1, get_canvas/2, get_canvas_with_deleted/2, get_attachment/2, get_agent_participant/2 (both columns), add_agent_participant/3, do_unpin_message/2, resolve_agent/1 and space_for_path_segment/1 (the url-segment resolver, which must NOT treat a 16-character channel slug as a raw binary uuid). Count 12 -> 14 with task 01a00066 stage 1: `message_read_by_user?/2` guards BOTH its message_id and its user_id before the two `Repo.one` reads recorded below. Both arrive from an inbox row's `source_id` / `user_id` columns via the staleness reconciler, so neither is proven to be a uuid at the call site, and the predicate's contract is a boolean — an unguarded bad value would raise Ecto.Query.CastError out of a read whose whole job is to answer false. 14 -> 15 with task 01a07401 stage 2: `cursor_ordered_at/1` guards the keyset cursor id before resolving that row's ordering key, because `before_id` / `after_id` reach `list_messages/2` from the MCP `space_get_messages` tool and from `phx-value-` params. The classification is unchanged — the guard is what keeps it :safe_internal"},
     {"platform/chat/attachments/tool_handlers.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "finalize_pending/2's guard on the attachment_id supplied by the MCP attachment tool payload"},
     {"platform/chat/canvas_access.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -739,7 +739,17 @@ defmodule Platform.RepoLookupBoundaryTest do
     # earlier as `:agent_not_found` / `:user_not_found`. Keep the resolve-then-
     # query order; passing the raw arguments straight through would make this
     # `:must_cast`.
-    "platform/chat.ex" => 18,
+    #
+    # 18 -> 19 for task 01a07401 stage 2's `cursor_ordered_at/1`, which resolves
+    # a keyset cursor's own ordering key so `list_messages/2` can page a room
+    # that no longer sorts by `id`. Triaged by hand as this map asks: its
+    # `where:` clause pins `m.id == ^id`, and that id IS boundary-reachable —
+    # `before_id` / `after_id` arrive from the MCP `space_get_messages` tool and
+    # from `phx-value-` params — so the call is wrapped in a
+    # `Platform.UUID.valid?/1` guard. A malformed cursor returns nil and drops
+    # through to the plain `m.id < ^before_id` comparison that path already
+    # had, so this lookup adds no failure mode the caller did not already have.
+    "platform/chat.ex" => 19,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,
     # Task 019e2c4b stage 1 — `CanvasAccess.org_readable_space?/2`. Triaged by

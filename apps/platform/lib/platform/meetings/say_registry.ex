@@ -84,7 +84,8 @@ defmodule Platform.Meetings.SayRegistry do
           room_name: String.t(),
           space_id: binary(),
           agent_id: binary(),
-          inserted_at_ms: integer()
+          inserted_at_ms: integer(),
+          dispatched_at: DateTime.t()
         }
 
   # ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -136,11 +137,28 @@ defmodule Platform.Meetings.SayRegistry do
   Record an utterance that is about to be dispatched. Called by `say/4`
   BEFORE the broadcast, so an ack can never arrive for an id that is not
   yet registered.
+
+  Two clocks are stamped here, and they are not interchangeable:
+
+    * `inserted_at_ms` — monotonic milliseconds, what `sweep/1` ages rows
+      against. Meaningless as a point in time and never leaves this module.
+    * `dispatched_at` — wall clock UTC, the moment core handed the utterance
+      to the agent's runtime. This is the ordering key
+      `Platform.Meetings.post_spoken_utterance/2` stamps onto the chat
+      message when the ack comes back (task 01a07401 stage 1), so a line
+      whose ack was slow still sorts where it was said rather than where it
+      was acknowledged. See that function for why dispatch time and not
+      playback-start time.
   """
   @spec put(binary(), map()) :: :ok
   def put(utterance_id, %{text: _, room_id: _, room_name: _, space_id: _, agent_id: _} = entry)
       when is_binary(utterance_id) do
-    row = Map.put(entry, :inserted_at_ms, System.monotonic_time(:millisecond))
+    row =
+      Map.merge(entry, %{
+        inserted_at_ms: System.monotonic_time(:millisecond),
+        dispatched_at: DateTime.utc_now()
+      })
+
     true = :ets.insert(@table, {utterance_id, row})
     :ok
   end
