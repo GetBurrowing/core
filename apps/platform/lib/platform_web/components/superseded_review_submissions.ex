@@ -48,7 +48,7 @@ defmodule PlatformWeb.Components.SupersededReviewSubmissions do
   def superseded_review_submissions(assigns) do
     ~H"""
     <div data-role="superseded-reviews" class="space-y-2">
-      <div class="border-t border-base-300"></div>
+      <div class="border-t border-edge"></div>
       <button
         type="button"
         class="flex items-center gap-1 text-xs text-base-content/60"
@@ -65,7 +65,7 @@ defmodule PlatformWeb.Components.SupersededReviewSubmissions do
         <div
           :for={review <- @reviews}
           data-role="superseded-review"
-          class="rounded-lg border border-base-300 p-3 space-y-1 text-base-content/60"
+          class="rounded-lg border border-edge p-3 space-y-1 text-base-content/60"
         >
           <div :for={item <- review.items} class="text-sm">{item.label}</div>
           <div class="text-xs">{superseded_timestamps(review)}</div>

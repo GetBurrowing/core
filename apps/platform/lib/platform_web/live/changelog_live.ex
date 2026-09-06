@@ -86,7 +86,7 @@ defmodule PlatformWeb.ChangelogLive do
     ~H"""
     <div class="flex h-full flex-col">
       <%!-- Header --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-6 py-4">
+      <div class="flex items-center justify-between border-b border-edge px-6 py-4">
         <div>
           <h1 class="text-xl font-bold">Changelog</h1>
           <p class="text-sm text-base-content/60">Recent changes merged to main</p>
@@ -149,7 +149,7 @@ defmodule PlatformWeb.ChangelogLive do
 
   defp changelog_entry(assigns) do
     ~H"""
-    <div class="rounded-lg border border-base-300 bg-base-100 p-4 transition-colors hover:bg-base-200/50">
+    <div class="rounded-lg border border-edge bg-base-100 p-4 transition-colors hover:bg-base-200/50">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0 flex-1">
           <%!-- Title + tags --%>

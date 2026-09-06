@@ -101,7 +101,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     <div class="flex h-full flex-col overflow-hidden lg:hidden" data-role="mobile-shell">
       <%!-- Slim app-bar: menu left, contextual icon right, no title --%>
       <div
-        class="flex h-11 shrink-0 items-center justify-between border-b border-base-300 bg-base-200/40 px-1"
+        class="flex h-11 shrink-0 items-center justify-between border-b border-edge bg-base-200/40 px-1"
         data-role="mobile-app-bar"
       >
         <button
@@ -125,7 +125,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
 
       <%!-- Segmented section switcher --%>
       <div
-        class="flex shrink-0 items-center gap-1 border-b border-base-300 bg-base-200/40 px-2 py-2"
+        class="flex shrink-0 items-center gap-1 border-b border-edge bg-base-200/40 px-2 py-2"
         role="tablist"
         data-role="mobile-tabs"
       >
@@ -158,7 +158,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
            Search (which swaps in the search input + facets in stage 5). --%>
       <div
         :if={@view_mode in [:pages, :journal, :proposals]}
-        class="flex shrink-0 items-stretch overflow-x-auto border-b border-base-300 bg-base-100 px-2 font-mono text-sm"
+        class="flex shrink-0 items-stretch overflow-x-auto border-b border-edge bg-base-100 px-2 font-mono text-sm"
         data-role="mobile-path-chip"
       >
         <button
@@ -262,7 +262,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       <% @page -> %>
         <div class="flex flex-col" data-role="mobile-page-viewer">
           <%!-- Toolbar: icon + mono file key + edit / delete affordances --%>
-          <div class="flex items-center gap-1 border-b border-base-300 px-3 py-2">
+          <div class="flex items-center gap-1 border-b border-edge px-3 py-2">
             <span class={[file_icon(@page.file_key), "size-5 shrink-0 text-primary"]}></span>
             <h1 class="min-w-0 flex-1 truncate font-mono text-sm font-semibold">
               {@page.file_key}
@@ -285,7 +285,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               </button>
               <div
                 :if={@confirm_delete == @page.file_key}
-                class="absolute right-0 top-full z-50 mt-1 w-60 rounded-lg border border-base-300 bg-base-100 p-3 shadow-lg"
+                class="absolute right-0 top-full z-50 mt-1 w-60 rounded-lg border border-edge bg-base-100 p-3 shadow-lg"
               >
                 <p class="mb-1 text-sm font-medium">Delete {@page.file_key}?</p>
                 <p class="mb-3 text-xs text-base-content/50">This action cannot be undone.</p>
@@ -347,7 +347,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   defp mobile_editor(assigns) do
     ~H"""
     <div class="flex min-h-0 flex-1 flex-col" data-role="mobile-page-editor">
-      <div class="flex items-center gap-1 border-b border-base-300 px-3 py-2">
+      <div class="flex items-center gap-1 border-b border-edge px-3 py-2">
         <span class={[file_icon(@page.file_key), "size-5 shrink-0 text-warning"]}></span>
         <h1 class="min-w-0 flex-1 truncate font-mono text-sm font-semibold">
           Editing {@page.file_key}
@@ -388,7 +388,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
 
   defp mobile_details(assigns) do
     ~H"""
-    <details class="group border-t border-base-300" data-role="mobile-details">
+    <details class="group border-t border-edge" data-role="mobile-details">
       <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 text-sm font-medium text-base-content/70 marker:content-none [&::-webkit-details-marker]:hidden">
         <.icon
           name="hero-chevron-right"
@@ -482,7 +482,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
         id="m-org-memory-journal-form"
         phx-submit="append_journal"
         phx-change="update_journal_draft"
-        class="group shrink-0 border-b border-base-300 px-3 py-2"
+        class="group shrink-0 border-b border-edge px-3 py-2"
       >
         <textarea
           name="content"
@@ -522,7 +522,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
                 ]}>
                   {format_journal_date(date)}
                 </span>
-                <div class="flex-1 border-t border-base-300"></div>
+                <div class="flex-1 border-t border-edge"></div>
                 <span class="font-mono text-xs text-base-content/30">
                   {length(entries)} {pluralize(length(entries), "entry", "entries")}
                 </span>
@@ -533,7 +533,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
                   :for={entry <- entries}
                   class={[
                     "rounded-lg border bg-base-100 p-3",
-                    if(@focus_date == date, do: "border-primary/40", else: "border-base-300")
+                    if(@focus_date == date, do: "border-primary/40", else: "border-edge")
                   ]}
                 >
                   <div class="mb-1 flex items-center gap-2">
@@ -585,7 +585,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
           class="flex flex-1 items-center justify-center px-6 py-16"
           data-role="mobile-proposals-empty"
         >
-          <div class="max-w-xs rounded-xl border border-base-300 bg-base-100 p-6 text-center">
+          <div class="max-w-xs rounded-xl border border-edge bg-base-100 p-6 text-center">
             <span class="hero-sparkles mx-auto mb-3 block size-12 text-base-content/30"></span>
             <h3 class="text-base font-medium text-base-content/70">
               Nothing to review — the Historian's dreaming is quiet.
@@ -601,7 +601,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
           <div
             :for={proposal <- @proposals}
             data-mobile-proposal-id={proposal.id}
-            class="rounded-xl border border-base-300 bg-base-100 p-3"
+            class="rounded-xl border border-edge bg-base-100 p-3"
           >
             <%!-- category + confidence badges + age --%>
             <div class="mb-2 flex flex-wrap items-center gap-1.5">
@@ -634,7 +634,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             <div class="relative">
               <div
                 class={[
-                  "whitespace-pre-wrap break-words rounded-lg border border-base-300 bg-base-200/40 p-2 font-mono text-xs leading-relaxed",
+                  "whitespace-pre-wrap break-words rounded-lg border border-edge bg-base-200/40 p-2 font-mono text-xs leading-relaxed",
                   if(long? and not expanded?,
                     do: "max-h-64 overflow-hidden",
                     else: "overflow-x-auto"
@@ -781,7 +781,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       <form
         id="m-org-memory-search-form"
         phx-submit="search_memory"
-        class="shrink-0 border-b border-base-300 px-3 py-2"
+        class="shrink-0 border-b border-edge px-3 py-2"
       >
         <input type="hidden" name="corpus" value={@corpus} />
         <input type="hidden" name="namespace" value={@namespace} />
@@ -876,7 +876,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     <button
       phx-click="open_result_page"
       phx-value-file_key={@hit.path}
-      class="w-full rounded-lg border border-base-300 bg-base-100 p-3 text-left transition-colors hover:border-primary"
+      class="w-full rounded-lg border border-edge bg-base-100 p-3 text-left transition-colors hover:border-primary"
     >
       <.mobile_result_meta hit={@hit} />
       <p class="mt-1 truncate font-mono text-sm font-medium">{@hit.path}</p>
@@ -892,7 +892,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     <button
       phx-click="open_result_journal"
       phx-value-date={@hit.date_or_inserted_at}
-      class="w-full rounded-lg border border-base-300 bg-base-100 p-3 text-left transition-colors hover:border-primary"
+      class="w-full rounded-lg border border-edge bg-base-100 p-3 text-left transition-colors hover:border-primary"
     >
       <.mobile_result_meta hit={@hit} />
       <p class="mt-1 truncate font-mono text-sm font-medium">{@hit.path}</p>
@@ -907,7 +907,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     ~H"""
     <a
       href={"/chat/#{@hit.space_id}"}
-      class="block w-full rounded-lg border border-base-300 bg-base-100 p-3 text-left transition-colors hover:border-primary"
+      class="block w-full rounded-lg border border-edge bg-base-100 p-3 text-left transition-colors hover:border-primary"
     >
       <.mobile_result_meta hit={@hit} />
       <p class="mt-1 line-clamp-3 break-words text-xs text-base-content/60">
@@ -919,7 +919,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
 
   defp mobile_result_hit(assigns) do
     ~H"""
-    <div class="w-full rounded-lg border border-base-300 bg-base-100 p-3">
+    <div class="w-full rounded-lg border border-edge bg-base-100 p-3">
       <.mobile_result_meta hit={@hit} />
       <p class="mt-1 line-clamp-3 break-words text-xs text-base-content/60">
         {snippet(@hit.content)}

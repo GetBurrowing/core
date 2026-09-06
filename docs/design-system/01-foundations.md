@@ -280,7 +280,9 @@ Mapping:
 | `border-2`   | `border-2`     | Focus ring base; emphasized boundary                                |
 | `border-3`   | `border-[3px]` | Focus-ring with offset (specific to `04-accessibility.md` focus spec) |
 
-Border colors source from `--color-base-300` (subtle) or `--color-primary` (focus / accent).
+Border colors source from `--edge` (subtle, via the `border-edge` class) or `--color-primary` (focus / accent).
+
+`--color-base-300` is a FILL token only. Do not use it for borders. On the dark theme it is darker than `--color-base-100`, so a `base-300` border on a card surface measured 1.0478:1 and could not be seen (task 01a0740b). Retuning the token could not fix that, because base-300 is also the raised fill on the near-black `base-200` sidebar, where it has to stay lighter than `base-200` while sitting darker than `base-100`. One token, two jobs, opposite requirements. The border job therefore moved to `--edge`, which is lighter than `base-100` on dark and identical to the shipped light value on light.
 
 ---
 

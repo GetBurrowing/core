@@ -250,7 +250,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
       phx-change="delete_modal_change"
       phx-submit="confirm_schedule_deletion"
     >
-      <div class="border-b border-base-300 p-6 pb-4">
+      <div class="border-b border-edge p-6 pb-4">
         <h2 id="schedule-delete-title" class="text-base font-semibold text-base-content">
           Delete {@resource.name} permanently?
         </h2>
@@ -290,7 +290,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
       <ul
         :if={@item_count > 0}
         data-role="purge-checklist"
-        class="min-h-0 flex-1 overflow-y-auto border-y border-base-300"
+        class="min-h-0 flex-1 overflow-y-auto border-y border-edge"
       >
         <.purge_row
           :for={item <- @resource.items}
@@ -344,7 +344,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
     <li
       data-role="purge-item"
       data-id={@item.id}
-      class="grid grid-cols-[1.25rem_1fr_auto_auto] items-center gap-3 border-b border-base-300/60 px-6 py-2.5 last:border-0"
+      class="grid grid-cols-[1.25rem_1fr_auto_auto] items-center gap-3 border-b border-edge/60 px-6 py-2.5 last:border-0"
     >
       <input
         type="checkbox"
@@ -480,7 +480,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
         aria-describedby="restore-all-body"
         phx-click-away="close_restore_modal"
       >
-        <div class="border-b border-base-300 p-6 pb-4">
+        <div class="border-b border-edge p-6 pb-4">
           <h2 id="restore-all-title" class="text-base font-semibold text-base-content">
             Restore {@restore.org.name}?
           </h2>
@@ -492,13 +492,13 @@ defmodule PlatformWeb.Components.LifecycleControls do
 
         <ul
           data-role="keep-scheduled-list"
-          class="min-h-0 flex-1 overflow-y-auto border-b border-base-300"
+          class="min-h-0 flex-1 overflow-y-auto border-b border-edge"
         >
           <li
             :for={child <- @restore.children}
             data-role="keep-scheduled-item"
             data-id={child.id}
-            class="grid grid-cols-[1.25rem_1fr_auto_auto] items-center gap-3 border-b border-base-300/60 px-6 py-2.5 last:border-0"
+            class="grid grid-cols-[1.25rem_1fr_auto_auto] items-center gap-3 border-b border-edge/60 px-6 py-2.5 last:border-0"
           >
             <input
               type="checkbox"

@@ -100,7 +100,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
         Full focus management lands in PR B (search + a11y feature pass).
       --%>
       <div
-        class="reaction-picker-panel rounded-lg border border-base-300 bg-base-100 p-3 shadow-xl"
+        class="reaction-picker-panel rounded-lg border border-edge bg-base-100 p-3 shadow-xl"
         role="dialog"
         aria-label="Add reaction"
       >
@@ -373,7 +373,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
             <span class="hero-plus size-5"></span>
           </button>
         </div>
-        <div class="border-t border-base-300" aria-hidden="true"></div>
+        <div class="border-t border-edge" aria-hidden="true"></div>
         <button
           type="button"
           phx-click={
@@ -456,7 +456,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       <%!-- Sheet / dialog --%>
       <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[90vh] overflow-y-auto">
         <%!-- Header --%>
-        <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <div class="flex items-center justify-between border-b border-edge px-4 py-3">
           <div class="min-w-0">
             <h2 class="text-base font-semibold">Roll back this batch</h2>
             <p class="mt-0.5 text-xs text-base-content/60">

@@ -76,10 +76,20 @@
   /* Fabrikam surfaces */
   --color-base-100: oklch(100% 0 0);          /* #FFFFFF */
   --color-base-200: oklch(96% 0 0);           /* #F5F5F5 */
-  --color-base-300: oklch(88% 0 0);           /* #E0E0E0 */
+  --color-base-300: oklch(88% 0 0);           /* #D7D7D7 */
+  /* Border/edge slot. Byte-identical to --color-base-300 above, and that
+     identity is deliberate: light --color-base-100 is pure white, so the
+     light theme never had the invisible-border defect (light base-300 on
+     white is already 1.4393:1, a visible edge). Declaring the same value
+     here is what keeps light pixel-identical to what shipped. Kept as the
+     same oklch text rather than transcribed to a hex so that no rounding
+     difference between a converter and the browser can shift the light edge
+     by a hair. If base-300 is ever re-tuned, decide explicitly whether this
+     follows it; do not assume. */
+  --edge: oklch(88% 0 0);
   --color-base-content: oklch(0% 0 0);        /* #000000 */
   /* Fabrikam cyan primary */
-  --color-primary: oklch(82% 0.12 207);      /* #06D5ED */
+  --color-primary: oklch(82% 0.12 207);      /* #4EDAEB */
   --color-primary-content: oklch(0% 0 0);     /* black text on cyan */
   --color-secondary: oklch(30% 0.01 0);       /* #4A4A4A */
   --color-secondary-content: oklch(100% 0 0);
@@ -124,8 +134,28 @@
   /* Fabrikam dark surfaces — merge the comp-aligned chat pane with the newer
      deeper sidebar/input treatment already on main. */
   --color-base-100: #171b25;                  /* Chat Pane */
-  --color-base-200: oklch(9% 0.018 240);      /* ~#0a0f14 — sidebar */
-  --color-base-300: oklch(20% 0.028 240);     /* ~#1a2332 — raised, input bar */
+  --color-base-200: oklch(9% 0.018 240);      /* #000306 — sidebar */
+  --color-base-300: oklch(20% 0.028 240);     /* #091821 — raised, input bar */
+  /* Border/edge slot, split out of --color-base-300 (task 01a0740b).
+
+     base-300 renders #091821, which is DARKER than this theme's
+     --color-base-100 (#171b25): 1.0478:1, an edge nobody can see. Cards,
+     inputs and panels shipped with borders that are not there.
+
+     base-300 could not simply be retuned, because it also serves as a
+     raised fill on the near-black --color-base-200 (#000306), where being
+     darker than what surrounds it is correct (1.1463:1 the other way). One
+     token, two jobs, opposite requirements. So the border job moved here.
+
+     This value is LIGHTER than the surface, which is the entire point of
+     the ticket: #232A38 against --color-base-100 #171b25 is 1.1966:1. A hex
+     literal is used deliberately, matching --color-base-100 above: a hex
+     cannot drift from its own comment, which is exactly the defect the four
+     comment corrections in this file were fixing.
+
+     Direction, not value, is what is pinned. See
+     test/platform/design/border_token_direction_test.exs. */
+  --edge: #232A38;
   --color-base-content: oklch(95% 0 0);       /* near-white text */
   /* Fabrikam cyan — matching comp #00bcd4 */
   --color-primary: oklch(78% 0.14 200);       /* ~#00bcd4 bright cyan */
@@ -157,6 +187,32 @@
   --depth: 0;
   --noise: 0;
   --font-sans: "Public Sans", system-ui, sans-serif;
+}
+
+/* Register --edge as a Tailwind colour key, so that `border-edge` exists as
+   a utility at all.
+
+   THIS IS LOAD-BEARING. The vendored assets/vendor/daisyui-theme.js plugin
+   only calls addBase: it writes the keys it is handed as plain custom
+   properties under the [data-theme=...] selector and registers NOTHING with
+   Tailwind's theme. That is why --color-pipeline-human, declared in both
+   theme blocks above, is consumed by pipeline_live.ex as an inline
+   var(--color-pipeline-human) and has no bg-pipeline-human utility anywhere
+   in the repo. Declaring --edge in the theme blocks alone does NOT create a
+   border-edge utility; without this block every call site using it falls
+   back to currentColor, a failure that looks like a styling opinion rather
+   than a bug.
+
+   `inline` is load-bearing too. It makes the utility emit
+   `border-color: var(--edge)`, which resolves per theme at the element.
+   Plain @theme would freeze the value at :root and one theme's edge would be
+   painted under both.
+
+   The theme blocks must declare --edge, never --color-edge: naming it
+   --color-edge there makes the mapping below self-referential and it
+   breaks. */
+@theme inline {
+  --color-edge: var(--edge);
 }
 
 /* Add variants based on LiveView classes */
@@ -4049,7 +4105,7 @@ body, .font-fabrikam {
    --------------------------------------------------------------------- */
 @layer components {
   .channel-section {
-    @apply px-2 py-2 border-b border-base-300/60;
+    @apply px-2 py-2 border-b border-edge/60;
   }
 
   .channel-section-header {
@@ -4072,7 +4128,7 @@ body, .font-fabrikam {
      in a half-second, and a truncated mode label is worse than no label. Two
      short lines cost a few pixels of rail height once per session. */
   .channel-mask-strip {
-    @apply flex flex-shrink-0 items-center gap-2 border-b border-base-300 px-2 py-1.5;
+    @apply flex flex-shrink-0 items-center gap-2 border-b border-edge px-2 py-1.5;
     @apply bg-warning text-xs font-semibold leading-tight text-warning-content;
   }
 
@@ -4895,7 +4951,7 @@ body, .font-fabrikam {
      expanded (93px of text into an 83px box). A row whose name you cannot read
      is a poor reward for keeping it on screen. */
   .channel-ajar-group {
-    @apply ml-1 border-l-2 border-base-300;
+    @apply ml-1 border-l-2 border-edge;
   }
 
   /* The only new type in the feature: xs at 60% base-content, quiet enough to
@@ -5048,10 +5104,11 @@ body, .font-fabrikam {
      *reported* a figure and changed nothing here — do not bisect to either).
 
      The pair that matters is chip FILL vs CARD SURFACE, both `--color-base-100`
-     derivatives. It is NOT the chip against `--color-base-300`: base-300 is the
-     card's own 1px border token (`border border-base-300 bg-base-100`,
-     board_component.ex kanban card and compact row), and a chip is inset by the
-     card's padding, so its edge never abuts base-300 anywhere it renders. And
+     derivatives. It is NOT the chip against `--color-base-300`: base-300 was the
+     card's own 1px border token (`border border-edge bg-base-100` since task
+     01a0740b moved the border job to the `--edge` slot; board_component.ex
+     kanban card and compact row), and a chip is inset by the card's padding, so
+     its edge abuts neither the old token nor the new one where it renders. And
      `background-clip` is left at its `border-box` default here — no rule in this
      file or utility at any call site overrides it — so the 25%-alpha border
      composites over the chip's OWN fill, not over the card surface.

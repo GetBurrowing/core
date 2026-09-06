@@ -771,7 +771,7 @@ defmodule PlatformWeb.OrgMemoryLive do
   defp tab_strip(assigns) do
     ~H"""
     <div
-      class="flex items-center gap-1 border-b border-base-300 bg-base-200/40 px-4 pt-2"
+      class="flex items-center gap-1 border-b border-edge bg-base-200/40 px-4 pt-2"
       data-role="tab-strip"
       role="tablist"
     >
@@ -792,7 +792,7 @@ defmodule PlatformWeb.OrgMemoryLive do
         class={[
           "flex items-center gap-1.5 rounded-t-lg border-x border-t px-4 py-1.5 text-sm transition-colors",
           if(Atom.to_string(@view_mode) == tab,
-            do: "border-base-300 bg-base-100 font-medium text-base-content",
+            do: "border-edge bg-base-100 font-medium text-base-content",
             else:
               "border-transparent text-base-content/50 hover:bg-base-300/60 hover:text-base-content"
           )
@@ -821,7 +821,7 @@ defmodule PlatformWeb.OrgMemoryLive do
     ~H"""
     <div class="flex flex-1 flex-col overflow-hidden">
       <%!-- Header --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-6 py-3">
+      <div class="flex items-center justify-between border-b border-edge px-6 py-3">
         <div>
           <h1 class="text-lg font-bold">Create Memory Page</h1>
           <p class="text-xs text-base-content/40">Choose a template or create a custom page</p>
@@ -846,8 +846,8 @@ defmodule PlatformWeb.OrgMemoryLive do
               class={[
                 "flex flex-col items-start rounded-lg border p-4 text-left transition-colors",
                 if(existing,
-                  do: "border-base-300 bg-base-200/50 opacity-50 cursor-not-allowed",
-                  else: "border-base-300 hover:border-primary hover:bg-primary/5 cursor-pointer"
+                  do: "border-edge bg-base-200/50 opacity-50 cursor-not-allowed",
+                  else: "border-edge hover:border-primary hover:bg-primary/5 cursor-pointer"
                 ),
                 if(@new_file_key == key,
                   do: "border-primary bg-primary/5 ring-1 ring-primary",

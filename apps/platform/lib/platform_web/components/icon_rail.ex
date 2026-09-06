@@ -145,7 +145,7 @@ defmodule PlatformWeb.Components.IconRail do
     <nav
       id="shell-sidebar"
       class={[
-        "icon-rail hidden lg:flex flex-col gap-2 border-r border-base-300 bg-base-200 pb-4 px-2 transition-[width] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+        "icon-rail hidden lg:flex flex-col gap-2 border-r border-edge bg-base-200 pb-4 px-2 transition-[width] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
         if(@sidebar_collapsed, do: "lg:w-14", else: "w-56")
       ]}
       role="navigation"
@@ -159,7 +159,7 @@ defmodule PlatformWeb.Components.IconRail do
            and never drops into the icon column to read as a nav destination.
            -mx-2/px-2 lets the hairline span the full rail width despite the
            nav's px-2 inset. --%>
-      <div class="icon-rail-header -mx-2 flex h-12 flex-shrink-0 items-center border-b border-base-300 px-2">
+      <div class="icon-rail-header -mx-2 flex h-12 flex-shrink-0 items-center border-b border-edge px-2">
         <div
           :if={!@sidebar_collapsed}
           class="flex size-10 flex-shrink-0 items-center justify-center"
@@ -225,7 +225,7 @@ defmodule PlatformWeb.Components.IconRail do
         <%!-- Admin cluster keeps its pinned-bottom position and a hairline
              separator in both rail states, but no "Admin" eyebrow label
              (task 019f575e v2, 2026-07-14). --%>
-        <hr class="icon-rail-divider border-base-300 my-2" aria-hidden="true" />
+        <hr class="icon-rail-divider border-edge my-2" aria-hidden="true" />
         <.rail_cluster
           destinations={@admin_destinations}
           cluster="admin"
@@ -251,7 +251,7 @@ defmodule PlatformWeb.Components.IconRail do
     <div :if={!@sidebar_collapsed} class="icon-rail-eyebrow">{@label}</div>
     <hr
       :if={@sidebar_collapsed and @collapsed_divider}
-      class="icon-rail-divider border-base-300 my-2"
+      class="icon-rail-divider border-edge my-2"
     />
     """
   end

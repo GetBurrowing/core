@@ -87,11 +87,11 @@ defmodule PlatformWeb.Components.ChatMessage do
         class="js-date-separator flex items-center gap-3 my-4 -mx-2"
         data-date={@msg.day_label}
       >
-        <div class="flex-1 border-t border-base-300"></div>
+        <div class="flex-1 border-t border-edge"></div>
         <span class="text-[11px] uppercase tracking-widest text-base-content/40 font-semibold px-2">
           {format_day_label(@msg.day_label)}
         </span>
-        <div class="flex-1 border-t border-base-300"></div>
+        <div class="flex-1 border-t border-edge"></div>
       </div>
 
       <%!-- `message-row-inner` is the padding box. It carries a stable class
@@ -469,7 +469,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 "reaction-pill flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
                 "hover:bg-base-300",
                 r.reacted_by_me && "border-primary bg-primary/10 text-primary",
-                !r.reacted_by_me && "border-base-300 text-base-content/60"
+                !r.reacted_by_me && "border-edge text-base-content/60"
               ]}
             >
               <span>{r.emoji}</span>

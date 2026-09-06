@@ -267,7 +267,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   def invite_control(assigns) do
     ~H"""
     <div class="relative" data-role="meeting-invite-control" data-mode={@mode}>
-      <label class="flex items-center gap-2 rounded-lg border border-base-300 bg-base-100 px-3 min-h-11 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+      <label class="flex items-center gap-2 rounded-lg border border-edge bg-base-100 px-3 min-h-11 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
         <span class="hero-magnifying-glass size-4 shrink-0 text-base-content/40" aria-hidden="true">
         </span>
         <input
@@ -313,7 +313,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         type="button"
         data-role="meeting-invite-candidate"
         data-user-id={user.id}
-        class="flex w-full items-center gap-2.5 border-b border-base-300 px-3 py-2 text-left last:border-b-0 min-h-[52px] sm:min-h-11 hover:bg-base-200"
+        class="flex w-full items-center gap-2.5 border-b border-edge px-3 py-2 text-left last:border-b-0 min-h-[52px] sm:min-h-11 hover:bg-base-200"
         phx-click={event(@mode, :stage)}
         phx-value-kind="user"
         phx-value-id={user.id}
@@ -362,7 +362,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         data-role="meeting-invite-option"
         data-option="guest"
         data-default="true"
-        class="flex w-full items-center gap-2.5 border-b border-base-300 bg-primary/10 px-3 py-2 text-left min-h-[52px] sm:min-h-11 hover:bg-primary/15"
+        class="flex w-full items-center gap-2.5 border-b border-edge bg-primary/10 px-3 py-2 text-left min-h-[52px] sm:min-h-11 hover:bg-primary/15"
         phx-click={event(@mode, :stage)}
         phx-value-kind="guest"
         phx-value-email={@email_option}
@@ -388,7 +388,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
             </span>
           </span>
         </span>
-        <kbd class="hidden shrink-0 rounded border border-base-300 px-1.5 py-0.5 font-mono text-[10px] text-base-content/40 sm:inline-block">
+        <kbd class="hidden shrink-0 rounded border border-edge px-1.5 py-0.5 font-mono text-[10px] text-base-content/40 sm:inline-block">
           ⏎
         </kbd>
       </button>
@@ -435,11 +435,11 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   # whether the list is clipped by an ancestor's cap. Everything else is
   # shared so the two positions cannot drift in any other respect.
   defp dropdown_class(:inline),
-    do: "mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100"
+    do: "mt-1 overflow-hidden rounded-lg border border-edge bg-base-100"
 
   defp dropdown_class(:floating),
     do:
-      "mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100 " <>
+      "mt-1 overflow-hidden rounded-lg border border-edge bg-base-100 " <>
         "sm:absolute sm:z-20 sm:w-full sm:shadow-lg"
 
   # ── invite_row/1 ───────────────────────────────────────────────────────
@@ -472,7 +472,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
 
     ~H"""
     <div
-      class="mb-1.5 flex items-center gap-2 rounded-lg border border-base-300 bg-base-200/40 px-2 py-1.5 min-h-11"
+      class="mb-1.5 flex items-center gap-2 rounded-lg border border-edge bg-base-200/40 px-2 py-1.5 min-h-11"
       data-role="meeting-invite-row"
       data-entry-id={@entry.id}
       data-tag={@tag}
@@ -596,7 +596,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         :if={@mode == :live}
         type="button"
         data-role="meeting-invite-add-people"
-        class="flex w-full items-center gap-2 rounded-lg border border-dashed border-base-300 px-2 py-1.5 text-left text-sm font-medium text-primary min-h-11 hover:bg-primary/5"
+        class="flex w-full items-center gap-2 rounded-lg border border-dashed border-edge px-2 py-1.5 text-left text-sm font-medium text-primary min-h-11 hover:bg-primary/5"
         phx-click={event(@mode, :add_people)}
         phx-target={@target}
       >

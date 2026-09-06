@@ -117,7 +117,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
 
   def namespace_tree(assigns) do
     ~H"""
-    <aside class="flex min-h-0 flex-col overflow-hidden border-r border-base-300 bg-base-200/40">
+    <aside class="flex min-h-0 flex-col overflow-hidden border-r border-edge bg-base-200/40">
       <div class="flex items-center justify-between px-4 py-3">
         <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/50">
           Pages
@@ -157,7 +157,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
         <% end %>
       </div>
 
-      <div class="border-t border-base-300 px-4 py-3">
+      <div class="border-t border-edge px-4 py-3">
         <button
           phx-click="seed_defaults"
           class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content/60 transition-colors"

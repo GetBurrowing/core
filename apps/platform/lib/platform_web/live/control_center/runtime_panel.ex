@@ -18,7 +18,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
   def stat_card(assigns) do
     ~H"""
-    <div class="rounded-2xl border border-base-300 bg-base-200/40 px-4 py-3">
+    <div class="rounded-2xl border border-edge bg-base-200/40 px-4 py-3">
       <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">{@label}</p>
       <p class="mt-2 text-2xl font-semibold text-base-content">{@value}</p>
       <p :if={@detail} class="mt-1 text-xs text-base-content/55">{@detail}</p>
@@ -32,7 +32,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
   def credential_row(assigns) do
     ~H"""
-    <div class="rounded-2xl border border-base-300 px-3 py-3 text-sm">
+    <div class="rounded-2xl border border-edge px-3 py-3 text-sm">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="min-w-0">
           <p class="truncate font-semibold text-base-content">
@@ -68,7 +68,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
     ~H"""
     <div :if={@fed_runtime} class="mt-4 space-y-3">
-      <div class="rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm">
+      <div class="rounded-2xl border border-edge bg-base-200/40 p-4 text-sm">
         <div class="flex items-center justify-between gap-3">
           <span>Connection</span>
           <span class={[
@@ -111,7 +111,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
       </div>
 
       <%!-- Allowed bundles editor --%>
-      <div class="rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm">
+      <div class="rounded-2xl border border-edge bg-base-200/40 p-4 text-sm">
         <div class="flex items-center justify-between gap-3">
           <span class="font-semibold">Allowed capability bundles</span>
           <span class="text-[11px] uppercase tracking-widest text-base-content/50">
@@ -203,7 +203,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
     <div
       :if={is_nil(@fed_runtime)}
-      class="mt-4 rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
+      class="mt-4 rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-base-content/50"
     >
       Runtime record not found.
     </div>

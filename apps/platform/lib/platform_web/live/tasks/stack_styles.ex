@@ -126,21 +126,31 @@ defmodule PlatformWeb.Tasks.StackStyles do
 
   Varies by status per mock canvas 019e1a16 rev 2: done → success tint,
   in_review → warning tint, stack_pending / backlog → dashed gray,
-  everything else → neutral base-300 ring.
+  everything else → neutral edge ring.
+
+  The two dashed variants below were `border-base-300` over `bg-base-300` until
+  task 01a0740b stage 2: border and fill the same colour, so the dash pattern
+  rendered and nobody could see it. They are REPOINTED and the new ring is
+  intended: this docstring already promised a "dashed gray" node, and all three
+  sibling statuses draw a visible ring (success/40, warning/40, edge over
+  base-200). The dashed pair was the odd one out only because of the colour
+  collision, which is exactly the defect this task closes.
   """
   def member_node_class("done"), do: "bg-success/20 text-success border border-success/40"
 
   def member_node_class("in_review"),
     do: "bg-warning/20 text-warning border border-warning/40"
 
+  # Repointed. Ring intended, see the @doc above.
   def member_node_class("stack_pending"),
-    do: "bg-base-300 text-base-content/40 border border-base-300 border-dashed"
+    do: "bg-base-300 text-base-content/40 border border-edge border-dashed"
 
+  # Repointed. Ring intended, see the @doc above.
   def member_node_class("backlog"),
-    do: "bg-base-300 text-base-content/40 border border-base-300 border-dashed"
+    do: "bg-base-300 text-base-content/40 border border-edge border-dashed"
 
   def member_node_class(_),
-    do: "bg-base-200 text-base-content/70 border border-base-300"
+    do: "bg-base-200 text-base-content/70 border border-edge"
 
   @doc """
   Colour tone for the stack status meta-cell value text.

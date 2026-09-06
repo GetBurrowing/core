@@ -39,7 +39,7 @@ defmodule Platform.Chat.Canvas.Kinds.Card do
 
     ~H"""
     <div class={[
-      "rounded-xl border border-base-300 bg-base-200 p-3 flex flex-col gap-2",
+      "rounded-xl border border-edge bg-base-200 p-3 flex flex-col gap-2",
       @props["class_overrides"]
     ]}>
       <p

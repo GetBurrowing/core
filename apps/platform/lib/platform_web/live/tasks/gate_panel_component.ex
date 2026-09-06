@@ -153,7 +153,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
 
           <div
             :for={item <- review.items}
-            class="rounded-lg border border-base-300 bg-base-100 p-3 space-y-2"
+            class="rounded-lg border border-edge bg-base-100 p-3 space-y-2"
           >
             <div class="flex items-center justify-between">
               <span class="text-sm font-medium">{item.label}</span>
@@ -271,8 +271,8 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
            here now so the canvas assign has exactly one owner. --%>
       <div :if={@gate_canvas} class="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
         <div class="absolute inset-0 bg-black/50" phx-click="gate_canvas_close" phx-target={@myself} />
-        <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-2xl">
-          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-edge bg-base-100 shadow-2xl">
+          <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div class="min-w-0">
               <div class="truncate text-sm font-semibold">
                 {@gate_canvas.title || "Review canvas"}

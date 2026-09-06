@@ -32,7 +32,7 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
     ~H"""
     <div class="flex flex-1 flex-col overflow-hidden" data-role="journal-pane">
       <%!-- Header --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-6 py-3">
+      <div class="flex items-center justify-between border-b border-edge px-6 py-3">
         <div>
           <h1 class="text-lg font-bold">Journal</h1>
           <p class="text-xs text-base-content/40">
@@ -47,7 +47,7 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
         id="org-memory-journal-form"
         phx-submit="append_journal"
         phx-change="update_journal_draft"
-        class="border-b border-base-300 px-6 py-4"
+        class="border-b border-edge px-6 py-4"
       >
         <textarea
           name="content"
@@ -88,7 +88,7 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
                 <span class="text-sm font-semibold text-base-content/70">
                   {format_journal_date(date)}
                 </span>
-                <div class="flex-1 border-t border-base-300"></div>
+                <div class="flex-1 border-t border-edge"></div>
                 <span class="text-xs text-base-content/30">
                   {length(entries)} {if length(entries) == 1, do: "entry", else: "entries"}
                 </span>
@@ -102,7 +102,7 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
                     "rounded-lg border bg-base-100 p-4",
                     if(@focus_date == date,
                       do: "border-primary/40 ring-1 ring-primary/20",
-                      else: "border-base-300"
+                      else: "border-edge"
                     )
                   ]}
                 >

@@ -197,7 +197,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
       data-declared-height={@declared_height}
       data-min-scale={@min_scale}
       data-srcdoc={@srcdoc}
-      class="group relative overflow-hidden rounded-xl border border-base-300"
+      class="group relative overflow-hidden rounded-xl border border-edge"
       style={@wrapper_style}
     >
       <iframe srcdoc={@srcdoc} sandbox="" style={@iframe_style}></iframe>

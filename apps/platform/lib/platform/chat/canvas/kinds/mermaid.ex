@@ -30,7 +30,7 @@ defmodule Platform.Chat.Canvas.Kinds.Mermaid do
       phx-update="ignore"
       data-source={@props["source"] || ""}
       class={[
-        "rounded-xl border border-base-300 bg-base-100 p-3 overflow-x-auto",
+        "rounded-xl border border-edge bg-base-100 p-3 overflow-x-auto",
         @props["class_overrides"]
       ]}
     >

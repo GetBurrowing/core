@@ -530,7 +530,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             </span>
           </button>
         </li>
-        <li class="border-t border-base-300">
+        <li class="border-t border-edge">
           <button
             type="button"
             class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
@@ -542,7 +542,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             <span>Hide from my rail</span>
           </button>
         </li>
-        <li :if={@target && @target.closeable} class="border-t border-base-300">
+        <li :if={@target && @target.closeable} class="border-t border-edge">
           <button
             type="button"
             class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
@@ -814,7 +814,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                 <span>{if @target.pinned, do: "Unpin", else: "Pin"}</span>
               </button>
             </li>
-            <li :if={@target.hideable} class="border-t border-base-300">
+            <li :if={@target.hideable} class="border-t border-edge">
               <button
                 type="button"
                 class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
@@ -831,7 +831,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                  destination chooser never opens on top of it. Same shape as
                  the drawer's `new_conversation_open |> close_mobile_browser`
                  pair; no new server event. --%>
-            <li :if={@fabrikam_admin? and @target.movable} class="border-t border-base-300">
+            <li :if={@fabrikam_admin? and @target.movable} class="border-t border-edge">
               <button
                 type="button"
                 class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
@@ -851,7 +851,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                  SHOWS rather than what the conversation IS, so it sits below
                  the operations on the conversation itself rather than among
                  them. --%>
-            <li :if={@target.closeable} class="border-t border-base-300">
+            <li :if={@target.closeable} class="border-t border-edge">
               <button
                 type="button"
                 class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
@@ -1111,7 +1111,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       :if={@canvas}
       id="canvas-sidebar"
       phx-hook="CanvasSidebarResize"
-      class="hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100 relative"
+      class="hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-edge bg-base-100 relative"
     >
       <div
         class="absolute left-0 inset-y-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
@@ -1124,7 +1124,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         aria-valuenow="384"
         tabindex="0"
       />
-      <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
+      <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4">
         <div class="min-w-0 flex items-center gap-2">
           <div class="min-w-0">
             <p class="text-sm font-semibold">Live Canvas</p>
@@ -1160,7 +1160,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     </div>
 
     <div :if={@canvas} class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden safe-area-x">
-      <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
+      <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4 safe-area-top">
         <div class="min-w-0 flex items-center gap-2">
           <div class="min-w-0">
             <p class="text-sm font-semibold">Live Canvas</p>
@@ -1208,11 +1208,11 @@ defmodule PlatformWeb.ChatLive.Partials do
     <div
       id={"canvas-versions-panel-#{(@mobile && "mobile") || "desktop"}-#{@canvas.id}"}
       class={[
-        "absolute inset-y-0 right-0 z-30 flex w-80 flex-col border-l border-base-300 bg-base-100 shadow-xl transition-transform",
+        "absolute inset-y-0 right-0 z-30 flex w-80 flex-col border-l border-edge bg-base-100 shadow-xl transition-transform",
         @mobile && "fixed top-12 bottom-[var(--bottom-nav-height,0px)]"
       ]}
     >
-      <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
+      <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4">
         <p class="text-sm font-semibold">Version history</p>
         <button
           phx-click="canvas_versions_close"
@@ -1385,9 +1385,9 @@ defmodule PlatformWeb.ChatLive.Partials do
     <div
       :if={@in_meeting}
       id="meeting-panel"
-      class="relative hidden lg:flex w-80 min-w-0 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
+      class="relative hidden lg:flex w-80 min-w-0 flex-shrink-0 flex-col border-l border-edge bg-base-100"
     >
-      <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
+      <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4">
         <div class="flex items-center gap-2 min-w-0">
           <span class="bg-success rounded-full w-2 h-2 animate-pulse flex-shrink-0"></span>
           <p class="text-sm font-semibold truncate">
@@ -1502,7 +1502,7 @@ defmodule PlatformWeb.ChatLive.Partials do
            not the id. Dropping either would leave a Share button that
            silently fails only in a real browser. --%>
       <CallShell.call_controls
-        class="h-[46px] shrink-0 justify-center gap-2 border-t border-base-300 px-2"
+        class="h-[46px] shrink-0 justify-center gap-2 border-t border-edge px-2"
         mic_event="meeting_toggle_mic"
         camera_event="meeting_toggle_camera"
         share_event="meeting_toggle_screen_share"
@@ -1535,7 +1535,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       data-role="quickmeet-mobile-overlay"
       class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden safe-area-x"
     >
-      <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
+      <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4 safe-area-top">
         <div class="flex items-center gap-2 min-w-0">
           <span class="bg-success rounded-full w-2 h-2 animate-pulse flex-shrink-0"></span>
           <p class="text-sm font-semibold truncate">
@@ -1638,7 +1638,7 @@ defmodule PlatformWeb.ChatLive.Partials do
            and the bottom-nav clearance stay on the control row: this is
            the primary action row at 375px. --%>
       <CallShell.call_controls
-        class="min-h-[46px] shrink-0 justify-center gap-2 border-t border-base-300 px-3 py-2 safe-area-bottom"
+        class="min-h-[46px] shrink-0 justify-center gap-2 border-t border-edge px-3 py-2 safe-area-bottom"
         mic_event="meeting_toggle_mic"
         camera_event="meeting_toggle_camera"
         share_event="meeting_toggle_screen_share"
@@ -1727,7 +1727,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       <%!-- Mobile-only dismissal. The header toggle that opened the
            sheet is behind it once it is up, so without this the sheet
            has no close affordance at all. --%>
-      <div class="flex flex-shrink-0 justify-end border-b border-l border-base-300 bg-base-200/40 px-2 py-1 lg:hidden">
+      <div class="flex flex-shrink-0 justify-end border-b border-l border-edge bg-base-200/40 px-2 py-1 lg:hidden">
         <button
           type="button"
           phx-click="quickmeet_toggle_rail"
@@ -1914,7 +1914,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       >
         <span class="hero-musical-note size-4"></span>
       </button>
-      <div class="hidden group-hover:block group-focus-within:block absolute top-full right-0 mt-1 w-56 bg-base-200 border border-base-300 rounded-lg p-3 shadow-lg z-20">
+      <div class="hidden group-hover:block group-focus-within:block absolute top-full right-0 mt-1 w-56 bg-base-200 border border-edge rounded-lg p-3 shadow-lg z-20">
         <p class="text-xs font-semibold mb-2 text-base-content/70">
           Press 1–7 during a call
         </p>
@@ -1927,7 +1927,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           <kbd class="kbd kbd-xs">6</kbd><span>Shocked</span>
           <kbd class="kbd kbd-xs">7</kbd><span>Suspense</span>
         </div>
-        <label class="mt-3 pt-2 border-t border-base-300 flex items-center gap-2 text-xs cursor-pointer">
+        <label class="mt-3 pt-2 border-t border-edge flex items-center gap-2 text-xs cursor-pointer">
           <input
             type="checkbox"
             class="checkbox checkbox-xs"

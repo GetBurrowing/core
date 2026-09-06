@@ -4,7 +4,7 @@
 
   Meetings UI inherits the shell theme (`data-theme` is set on `<html>`
   by the layout in `root.html.heex`). All chrome tokens are semantic
-  DaisyUI (`bg-base-100`, `text-base-content`, `border-base-300`).
+  DaisyUI (`bg-base-100`, `text-base-content`, `border-edge`).
   Video-tile gradients stay dark inside the tiles — those represent
   video feeds, not chrome.
 
@@ -314,7 +314,7 @@
          while `[data-role="meeting-controls"]` keeps `flex-shrink-0` and its
          44px touch targets. Acceptance bar: no horizontal PAGE scroll at
          390px, every control reachable, and no element at width 0. --%>
-      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/60 px-3 sm:gap-3">
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-200/60 px-3 sm:gap-3">
         <%!-- Meeting name. `grow basis-[50%] min-w-0` replaces the old
            auto-width box + `flex-1` spacer pair: same right-alignment for
            everything after it, but the title now has a proportional share of
@@ -698,7 +698,7 @@
             data-stage-mode-button={mode}
             data-active={to_string(@current_stage_mode == mode)}
             class={[
-              "join-item btn btn-sm relative min-h-11 gap-1.5 border-base-300",
+              "join-item btn btn-sm relative min-h-11 gap-1.5 border-edge",
               if(@current_stage_mode == mode,
                 do: "bg-base-200 text-primary",
                 else: "btn-ghost text-base-content/60"
@@ -982,7 +982,7 @@
                     data-role="canvas-picker"
                     data-canvas-count={length(@meeting_canvases)}
                   >
-                    <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg border border-base-300 bg-base-200 px-3 text-left">
+                    <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg border border-edge bg-base-200 px-3 text-left">
                       <span
                         class="hero-rectangle-stack size-4 shrink-0 text-base-content/60"
                         aria-hidden="true"
@@ -1006,7 +1006,7 @@
                     </summary>
 
                     <ul
-                      class="mt-1 max-h-64 overflow-y-auto rounded-lg border border-base-300 bg-base-100 py-1"
+                      class="mt-1 max-h-64 overflow-y-auto rounded-lg border border-edge bg-base-100 py-1"
                       aria-label="Choose a canvas"
                     >
                       <li :for={c <- @meeting_canvases}>
@@ -1085,7 +1085,7 @@
                  surface a single CTA that mints one in the bound chat
                  space and assigns it as the active meeting canvas. --%>
                 <div
-                  class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/50"
+                  class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/50"
                   data-placeholder="center-stage"
                   data-empty-state="canvas"
                 >
@@ -1113,7 +1113,7 @@
                  the `data-coming-soon="whiteboard"` marker is gone on
                  purpose, and its absence is asserted in meeting_live_test. --%>
                 <div
-                  class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
+                  class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/40"
                   data-placeholder="center-stage"
                   data-whiteboard-fallback
                 >
@@ -1210,7 +1210,7 @@
                   }
                 >
                   <%= if gallery_participants(assigns[:participants] || [], @speaking_identities) == [] do %>
-                    <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40">
+                    <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/40">
                       <span class="hero-squares-2x2 size-10"></span>
                       <p class="mt-2 text-sm font-medium text-base-content/70">
                         No participants yet
@@ -1657,7 +1657,7 @@
              behind the backdrop once the drawer is open, so without this
              the only dismissal is a backdrop tap — which is not
              discoverable and is unreachable when the drawer is wide. --%>
-          <div class="flex flex-shrink-0 justify-end border-b border-l border-base-300 bg-base-200/40 px-2 py-1 lg:hidden">
+          <div class="flex flex-shrink-0 justify-end border-b border-l border-edge bg-base-200/40 px-2 py-1 lg:hidden">
             <button
               type="button"
               phx-click="toggle_call_rail"
@@ -1673,7 +1673,7 @@
              a guest has no persisted pane state to collapse against. --%>
           <div
             :if={@shell?}
-            class="flex flex-shrink-0 justify-end border-b border-l border-base-300 bg-base-200/40 px-2 py-1"
+            class="flex flex-shrink-0 justify-end border-b border-l border-edge bg-base-200/40 px-2 py-1"
           >
             <button
               type="button"
@@ -1771,7 +1771,7 @@
           class={
             [
               # Shared
-              "flex flex-col border-l border-base-300 bg-base-100",
+              "flex flex-col border-l border-edge bg-base-100",
               # Mobile drawer (default <lg). Fixed slide-in from right with
               # safe-area-aware bottom edge (mirrors PR #335 / tasks_live
               # pattern). z-40 above the backdrop (z-30). max-w caps so a
@@ -1805,7 +1805,7 @@
              is preserved on the body wrapper below so a future intent-
              panel swap-out can still find this surface with `rg`. --%>
           <header
-            class="flex flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2"
+            class="flex flex-shrink-0 items-center gap-2 border-b border-edge bg-base-200/40 px-3 py-2"
             data-pane-section="header"
           >
             <span class="hero-chat-bubble-left-right size-4 flex-shrink-0 text-base-content/60">
@@ -1888,7 +1888,7 @@
            that is what the desktop right column holds. --%>
         <aside
           :if={@chat_panel_collapsed}
-          class="hidden w-12 flex-shrink-0 flex-col items-center border-l border-base-300 bg-base-200/40 py-2 lg:flex"
+          class="hidden w-12 flex-shrink-0 flex-col items-center border-l border-edge bg-base-200/40 py-2 lg:flex"
           data-pane="call-rail"
           data-pane-collapsed="true"
         >
@@ -1974,7 +1974,7 @@
           "flex flex-shrink-0 items-stretch gap-2 overflow-x-auto overscroll-contain",
           "bg-base-200/40 px-2 py-2",
           "pb-[calc(0.5rem+env(safe-area-inset-bottom))]",
-          "border-t border-base-300 h-[96px] lg:h-[120px]"
+          "border-t border-edge h-[96px] lg:h-[120px]"
         ]}
         data-pane="bottom-strip"
         data-tile-count-humans={length(strip_humans(assigns[:participants]))}
@@ -2052,7 +2052,7 @@
         >
           <div
             :if={strip_humans(assigns[:participants]) != []}
-            class="h-full w-px flex-shrink-0 self-stretch border-l border-base-300"
+            class="h-full w-px flex-shrink-0 self-stretch border-l border-edge"
             data-role="strip-canvas-divider"
             aria-hidden="true"
           >
@@ -2189,7 +2189,7 @@
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"
     >
-      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/60 px-3 sm:gap-3">
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-200/60 px-3 sm:gap-3">
         <div class="flex min-w-0 items-center gap-2">
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">Meetings</h1>
@@ -2203,7 +2203,7 @@
            `Cal` on phones per the mobile frame; both segments are 44px
            tall at every width. --%>
         <div
-          class="flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-base-300 bg-base-100 p-0.5"
+          class="flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-edge bg-base-100 p-0.5"
           data-role="meetings-view-toggle"
           role="group"
           aria-label="Meetings view"
@@ -2338,11 +2338,11 @@
            the same reason. Everything lands in `handle_params/3`, so a
            result set is a URL somebody else can open. --%>
         <form
-          class="flex flex-shrink-0 flex-col gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2 sm:flex-row sm:items-center sm:px-4"
+          class="flex flex-shrink-0 flex-col gap-2 border-b border-edge bg-base-200/40 px-3 py-2 sm:flex-row sm:items-center sm:px-4"
           phx-change="archive_filter"
           phx-submit="archive_filter"
         >
-          <label class="flex min-h-11 flex-shrink-0 items-center gap-2 rounded-lg border border-base-300 bg-base-100 px-3 sm:w-72">
+          <label class="flex min-h-11 flex-shrink-0 items-center gap-2 rounded-lg border border-edge bg-base-100 px-3 sm:w-72">
             <span class="hero-magnifying-glass size-4 flex-shrink-0 text-base-content/40"></span>
             <input
               type="search"
@@ -2374,7 +2374,7 @@
                 "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
                 type in @archive_types && "border-primary bg-primary text-primary-content",
                 type not in @archive_types &&
-                  "border-base-300 bg-base-100 text-base-content/60 hover:text-base-content"
+                  "border-edge bg-base-100 text-base-content/60 hover:text-base-content"
               ]}
             >
               <span class={[archive_type_icon(type), "size-3.5 flex-shrink-0"]}></span>
@@ -2397,7 +2397,7 @@
                 "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
                 @archive_person_id && "border-primary bg-primary text-primary-content",
                 is_nil(@archive_person_id) &&
-                  "border-base-300 bg-base-100 text-base-content/60 hover:text-base-content"
+                  "border-edge bg-base-100 text-base-content/60 hover:text-base-content"
               ]}
             >
               <span class="hero-user size-3.5 flex-shrink-0"></span>
@@ -2407,7 +2407,7 @@
             <label class={[
               "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
               @archive_project_id && "border-primary bg-primary text-primary-content",
-              is_nil(@archive_project_id) && "border-base-300 bg-base-100 text-base-content/60"
+              is_nil(@archive_project_id) && "border-edge bg-base-100 text-base-content/60"
             ]}>
               <span class="hero-folder size-3.5 flex-shrink-0"></span>
               <select
@@ -2489,7 +2489,7 @@
               <.link
                 patch={archive_clear_path(assigns)}
                 data-action="archive-clear-filters"
-                class="mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-base-300 bg-base-100 px-4 text-sm font-medium hover:border-primary hover:text-primary"
+                class="mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-edge bg-base-100 px-4 text-sm font-medium hover:border-primary hover:text-primary"
               >
                 <span class="hero-arrow-uturn-left size-4 flex-shrink-0"></span>
                 <span>Clear search and filters</span>
@@ -2518,7 +2518,7 @@
                         artifacts = archive_artifacts(@archive_artifacts, entry) do %>
                     <article
                       class={[
-                        "flex gap-3 rounded-lg border border-base-300 bg-base-100 p-2.5",
+                        "flex gap-3 rounded-lg border border-edge bg-base-100 p-2.5",
                         section.dim? && "opacity-60"
                       ]}
                       data-role="archive-row"
@@ -2528,7 +2528,7 @@
                       <%!-- Date gutter — desktop only. The phone folds the
                          date into the subtitle instead. --%>
                       <div
-                        class="hidden w-11 flex-shrink-0 border-r border-base-300 pr-2.5 text-center sm:block"
+                        class="hidden w-11 flex-shrink-0 border-r border-edge pr-2.5 text-center sm:block"
                         data-role="archive-row-date"
                       >
                         <div class="text-[9px] uppercase tracking-wide text-base-content/40">
@@ -2600,7 +2600,7 @@
 
                           <span
                             :if={artifacts.chips == []}
-                            class="inline-flex min-h-11 items-center rounded border border-base-300 bg-base-200 px-2 font-mono text-[10px] text-base-content/40 sm:min-h-0 sm:py-0.5"
+                            class="inline-flex min-h-11 items-center rounded border border-edge bg-base-200 px-2 font-mono text-[10px] text-base-content/40 sm:min-h-0 sm:py-0.5"
                             data-role="archive-no-artifacts"
                           >
                             no artifacts
@@ -2858,14 +2858,14 @@
            and no pixel arithmetic reaches the day cells. --%>
           <div
             data-role="calendar-week-grid"
-            class="hidden overflow-hidden rounded-lg border border-base-300 bg-base-100 lg:grid"
+            class="hidden overflow-hidden rounded-lg border border-edge bg-base-100 lg:grid"
             style="grid-template-columns: 3.25rem repeat(7, minmax(0, 1fr))"
           >
             <%!-- Header row: the gutter's corner, then seven day headings. --%>
-            <div class="border-b border-base-300 bg-base-200/40"></div>
+            <div class="border-b border-edge bg-base-200/40"></div>
             <div
               :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
-              class="flex flex-col items-center gap-1 border-b border-l border-base-300 bg-base-200/40 py-2"
+              class="flex flex-col items-center gap-1 border-b border-l border-edge bg-base-200/40 py-2"
               data-role="calendar-week-day-heading"
               data-date={Date.to_iso8601(day.date)}
             >
@@ -2896,7 +2896,7 @@
 
             <div
               :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
-              class="relative border-l border-base-300"
+              class="relative border-l border-edge"
               style={calendar_hour_rules_style(:week)}
               data-role="calendar-day-column"
               data-date={Date.to_iso8601(day.date)}
@@ -3027,7 +3027,7 @@
            does nothing is worse than no test. --%>
           <div
             data-role="calendar-week-strip"
-            class="grid grid-cols-7 overflow-hidden rounded-t-lg border border-base-300 bg-base-200 lg:hidden"
+            class="grid grid-cols-7 overflow-hidden rounded-t-lg border border-edge bg-base-200 lg:hidden"
           >
             <button
               :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
@@ -3075,7 +3075,7 @@
            day actually being drawn rather than a week-wide total the
            single column cannot show. --%>
           <div
-            class="flex items-baseline gap-1.5 border-x border-b border-base-300 bg-base-200/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-base-content/50 lg:hidden"
+            class="flex items-baseline gap-1.5 border-x border-b border-edge bg-base-200/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-base-content/50 lg:hidden"
             data-role="calendar-day-heading"
             data-date={Date.to_iso8601(@calendar_selected_date)}
           >
@@ -3131,7 +3131,7 @@
            tall, so without this the last hour sits under it. --%>
           <div
             data-role="calendar-day-view"
-            class="mb-20 grid overflow-hidden rounded-b-lg border-x border-b border-base-300 bg-base-100 lg:hidden"
+            class="mb-20 grid overflow-hidden rounded-b-lg border-x border-b border-edge bg-base-100 lg:hidden"
             style="grid-template-columns: 2.75rem 1fr"
           >
             <div class="flex flex-col bg-base-200/20">
@@ -3145,7 +3145,7 @@
             </div>
 
             <div
-              class="relative border-l border-base-300"
+              class="relative border-l border-edge"
               style={calendar_hour_rules_style(:day)}
               data-role="calendar-day-body"
               data-date={Date.to_iso8601(@calendar_selected_date)}
@@ -3252,11 +3252,11 @@
            that grows without bound. --%>
         <aside
           :if={detail_meeting}
-          class="hidden w-[20.125rem] flex-none flex-col overflow-hidden border-l border-base-300 bg-base-100 lg:flex"
+          class="hidden w-[20.125rem] flex-none flex-col overflow-hidden border-l border-edge bg-base-100 lg:flex"
           data-role="meeting-detail-panel"
           aria-label="Meeting detail"
         >
-          <div class="flex flex-none items-center gap-2 border-b border-base-300 px-4 py-3">
+          <div class="flex flex-none items-center gap-2 border-b border-edge px-4 py-3">
             <h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Meeting detail</h2>
             <button
               type="button"
@@ -3287,7 +3287,7 @@
           </div>
 
           <div
-            class="flex-none border-t border-base-300 px-4 py-3"
+            class="flex-none border-t border-edge px-4 py-3"
             data-role="meeting-detail-panel-footer"
           >
             <.meeting_detail_actions meeting={detail_meeting} />
@@ -3335,7 +3335,7 @@
             </span>
           </div>
 
-          <div class="flex flex-none items-center gap-2 border-b border-base-300 px-4 py-3">
+          <div class="flex flex-none items-center gap-2 border-b border-edge px-4 py-3">
             <h2
               id="meeting-detail-sheet-title"
               class="min-w-0 flex-1 truncate text-sm font-semibold"
@@ -3371,7 +3371,7 @@
           </div>
 
           <div
-            class="flex-none border-t border-base-300 px-4 py-3"
+            class="flex-none border-t border-edge px-4 py-3"
             data-role="meeting-detail-sheet-footer"
           >
             <.meeting_detail_actions meeting={detail_meeting} />
@@ -3490,7 +3490,7 @@
           <%!-- Header. Below `sm` the primary action lives HERE (mobile
                frame 3): the footer bar is the first thing a soft keyboard
                covers, so the commit control has to be reachable above it. --%>
-          <div class="flex-none flex items-center justify-between gap-2 border-b border-base-300 px-4 py-3">
+          <div class="flex-none flex items-center justify-between gap-2 border-b border-edge px-4 py-3">
             <div class="flex items-center gap-2 min-w-0">
               <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
               <h2 id="start-meeting-sheet-title" class="text-base font-semibold">
@@ -3686,7 +3686,7 @@
                  body and `flex-none`, so a long staged-invite list scrolls
                  under it instead of pushing it off the panel. --%>
             <div
-              class="hidden flex-none items-center justify-end gap-2 border-t border-base-300 px-4 py-3 min-h-11 sm:flex"
+              class="hidden flex-none items-center justify-end gap-2 border-t border-edge px-4 py-3 min-h-11 sm:flex"
               data-role="meeting-create-footer"
             >
               <button

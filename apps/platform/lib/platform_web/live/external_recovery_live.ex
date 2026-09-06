@@ -385,7 +385,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
       </div>
 
       <div
-        class="max-h-72 overflow-y-auto rounded-lg border border-base-300 bg-base-100"
+        class="max-h-72 overflow-y-auto rounded-lg border border-edge bg-base-100"
         data-role="channel-checklist"
       >
         <p

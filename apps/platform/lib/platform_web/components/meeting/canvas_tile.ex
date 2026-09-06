@@ -192,7 +192,7 @@ defmodule PlatformWeb.Components.Meeting.CanvasTile do
       </div>
 
       <%!-- Name plate. The title yields space; the timestamp never does. --%>
-      <div class="flex shrink-0 items-center gap-1.5 border-t border-base-300 px-2 py-1">
+      <div class="flex shrink-0 items-center gap-1.5 border-t border-edge px-2 py-1">
         <span data-role="canvas-tile-title" class="min-w-0 truncate text-xs text-neutral">
           {@title}
         </span>

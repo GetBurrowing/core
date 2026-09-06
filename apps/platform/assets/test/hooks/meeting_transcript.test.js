@@ -148,7 +148,7 @@ const headerCount = (hook) =>
   (hook.el.innerHTML.match(/data-role="transcript-speaker"/g) || []).length
 
 const hairlineCount = (hook) =>
-  (hook.el.innerHTML.match(/border-t border-base-300/g) || []).length
+  (hook.el.innerHTML.match(/border-t border-edge/g) || []).length
 
 const pillHtml = (hook) => {
   const m = hook.el.innerHTML.match(/<button[^>]*data-role="transcript-jump-live"[^>]*>([\s\S]*?)<\/button>/)

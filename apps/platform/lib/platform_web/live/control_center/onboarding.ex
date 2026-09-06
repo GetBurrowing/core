@@ -29,7 +29,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-base-300/80 backdrop-blur-sm"
     >
       <div class="w-full max-w-2xl px-4 py-8 sm:py-16">
-        <div class="rounded-3xl border border-base-300 bg-base-100 p-6 shadow-xl sm:p-8">
+        <div class="rounded-3xl border border-edge bg-base-100 p-6 shadow-xl sm:p-8">
           <div class="flex items-center justify-between">
             <h2 class="text-xl font-semibold text-base-content">
               {cond do
@@ -99,7 +99,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="template"
-        class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
+        class="group flex flex-col items-center gap-3 rounded-2xl border border-edge bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
       >
         <span class="hero-briefcase h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">From a Template</span>
@@ -112,7 +112,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="federate"
-        class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
+        class="group flex flex-col items-center gap-3 rounded-2xl border border-edge bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
       >
         <span class="hero-globe-alt h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Federate</span>
@@ -125,7 +125,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="import"
-        class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
+        class="group flex flex-col items-center gap-3 rounded-2xl border border-edge bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
       >
         <span class="hero-arrow-down-tray h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Import</span>
@@ -136,7 +136,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="create"
-        class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
+        class="group flex flex-col items-center gap-3 rounded-2xl border border-edge bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
       >
         <span class="hero-wrench-screwdriver h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Create Custom</span>
@@ -175,7 +175,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           type="button"
           phx-click="select_template"
           phx-value-template_id={tmpl.id}
-          class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+          class="flex flex-col items-center gap-2 rounded-2xl border border-edge bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
         >
           <span class={"#{tmpl.icon} h-6 w-6 text-primary"} />
           <span class="text-sm font-semibold text-base-content">{tmpl.name}</span>
@@ -194,7 +194,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         phx-submit="create_from_template"
         class="space-y-4"
       >
-        <div class="rounded-2xl border border-base-300 bg-base-200/40 px-4 py-3">
+        <div class="rounded-2xl border border-edge bg-base-200/40 px-4 py-3">
           <div class="flex items-center gap-3">
             <span class={"#{@selected_template.icon} h-6 w-6 text-primary"} />
             <div>
@@ -373,7 +373,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
     <div class="mt-6">
       <div
         :if={@import_agents == []}
-        class="rounded-2xl border border-dashed border-base-300 px-4 py-6 text-center text-sm text-base-content/55"
+        class="rounded-2xl border border-dashed border-edge px-4 py-6 text-center text-sm text-base-content/55"
       >
         No workspace agents found. Mount an OpenClaw workspace with an <code>openclaw.json</code>
         to import agents.
@@ -386,7 +386,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               "flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition",
               MapSet.member?(@import_selected, agent.id) && "border-primary bg-primary/5",
               !MapSet.member?(@import_selected, agent.id) &&
-                "border-base-300 hover:border-primary/30"
+                "border-edge hover:border-primary/30"
             ]}
           >
             <input
@@ -527,7 +527,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               <span
                 class={[
                   "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
-                  "peer-checked:border-current border-transparent hover:border-base-300"
+                  "peer-checked:border-current border-transparent hover:border-edge"
                 ]}
                 style={"color: #{color.accent};"}
               >
@@ -701,7 +701,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               />
               <span class={[
                 "inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition",
-                "border-base-300 bg-base-100 text-base-content/70 hover:border-primary/50",
+                "border-edge bg-base-100 text-base-content/70 hover:border-primary/50",
                 "peer-checked:border-primary peer-checked:bg-primary/10 peer-checked:text-primary"
               ]}>
                 {behavior_label(behavior)}
@@ -749,7 +749,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           <div :if={@vault_mode == "from_vault"} class="space-y-2">
             <div
               :if={@vault_options == []}
-              class="rounded-lg border border-dashed border-base-300 bg-base-200/30 px-3 py-3 text-xs text-base-content/55"
+              class="rounded-lg border border-dashed border-edge bg-base-200/30 px-3 py-3 text-xs text-base-content/55"
             >
               No vault credentials yet — switch to Paste new.
             </div>
@@ -884,7 +884,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
     ~H"""
     <div
       id="external-agent-connection-status"
-      class="rounded-2xl border border-base-300 bg-base-200/40 p-4"
+      class="rounded-2xl border border-edge bg-base-200/40 p-4"
     >
       <p class="mb-3 text-xs font-semibold uppercase tracking-widest text-base-content/50">
         Connection Status

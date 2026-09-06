@@ -45,7 +45,7 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
     ~H"""
     <div class="flex flex-1 flex-col overflow-hidden" data-role="proposals-pane">
       <%!-- Header --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-6 py-3">
+      <div class="flex items-center justify-between border-b border-edge px-6 py-3">
         <div>
           <h1 class="text-lg font-bold">Proposals</h1>
           <p class="text-xs text-base-content/40">
@@ -61,7 +61,7 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
         <%= if @proposals == [] do %>
           <div class="flex flex-col items-center justify-center py-16 px-6">
             <div
-              class="max-w-md rounded-xl border border-base-300 bg-base-100 p-8 text-center"
+              class="max-w-md rounded-xl border border-edge bg-base-100 p-8 text-center"
               data-role="proposals-empty-state"
             >
               <span class="hero-sparkles mb-3 size-12 text-base-content/30 block mx-auto"></span>
@@ -96,7 +96,7 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
                   id={"proposal-row-#{proposal.id}"}
                   data-proposal-id={proposal.id}
                   class={[
-                    "border-b border-base-300 transition-colors hover:bg-base-200",
+                    "border-b border-edge transition-colors hover:bg-base-200",
                     "md:even:bg-base-100/50",
                     @show_reject_form_for == proposal.id &&
                       "bg-warning/5 border-l-2 border-l-warning"
@@ -162,7 +162,7 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
                   :if={@show_reject_form_for == proposal.id}
                   id={"proposal-reject-row-#{proposal.id}"}
                   data-role="reject-form-row"
-                  class="bg-warning/5 border-b border-base-300"
+                  class="bg-warning/5 border-b border-edge"
                 >
                   <td colspan="6" class="px-4 py-4">
                     <form

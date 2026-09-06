@@ -63,7 +63,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
       <ul :if={!@show_role_advanced} class="flex flex-col gap-3">
         <li
           :for={role <- @roles}
-          class="flex items-start gap-4 rounded-2xl border border-base-300 bg-base-100 px-4 py-4"
+          class="flex items-start gap-4 rounded-2xl border border-edge bg-base-100 px-4 py-4"
         >
           <span class={"#{role.icon} h-7 w-7 shrink-0 text-primary"} aria-hidden="true" />
 
@@ -112,7 +112,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
         <ul class="flex flex-col gap-2">
           <li
             :for={row <- @responsibility_rows}
-            class="flex flex-col gap-2 rounded-xl border border-base-300 bg-base-100 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3"
+            class="flex flex-col gap-2 rounded-xl border border-edge bg-base-100 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3"
           >
             <div class="flex min-w-0 flex-1 flex-col gap-1">
               <div class="flex flex-wrap items-center gap-2">

@@ -481,7 +481,7 @@ defmodule PlatformWeb.RecoveryLive do
       data-id={@row.id}
       data-status={@row.status}
       class={[
-        "border-b border-base-300/50 last:border-0 transition-colors hover:bg-base-200/40",
+        "border-b border-edge/50 last:border-0 transition-colors hover:bg-base-200/40",
         @row.type == :org && "bg-base-200/40",
         @indent && "bg-base-200/20"
       ]}

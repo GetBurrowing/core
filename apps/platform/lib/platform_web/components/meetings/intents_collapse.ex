@@ -360,12 +360,12 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
 
     ~H"""
     <section
-      class="intents-collapse flex flex-shrink-0 flex-col border-b border-base-300 bg-base-100"
+      class="intents-collapse flex flex-shrink-0 flex-col border-b border-edge bg-base-100"
       data-role="intents-collapse"
       data-intent-count={length(@intents)}
     >
       <header
-        class="intents-collapse__header flex items-center gap-1 border-b border-base-300 bg-base-200/40 pr-1 pl-1"
+        class="intents-collapse__header flex items-center gap-1 border-b border-edge bg-base-200/40 pr-1 pl-1"
         data-role="intents-collapse-header"
       >
         <button
@@ -480,7 +480,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
       >
         <p
           :if={@error}
-          class="border-b border-base-300 bg-error/10 px-3 py-2 text-xs text-error"
+          class="border-b border-edge bg-error/10 px-3 py-2 text-xs text-error"
           data-role="intents-error"
         >
           {@error}
@@ -548,7 +548,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
        is the widest viewport and the worst rendering: intent labels
        truncate to a couple of characters. Two lines everywhere. --%>
     <li
-      class="intents-collapse__row flex min-h-11 flex-col gap-1 border-b border-base-300/60 px-2 py-1.5 last:border-b-0"
+      class="intents-collapse__row flex min-h-11 flex-col gap-1 border-b border-edge/60 px-2 py-1.5 last:border-b-0"
       data-role="intent-row"
       data-intent-id={@intent.id}
       data-intent-status={@intent.status}
@@ -565,7 +565,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           {@intent.classified_intent || "—"}
         </span>
         <span
-          class="flex-shrink-0 truncate rounded-full border border-base-300 bg-base-200/60 px-2 py-0.5 text-[10px] text-base-content/70"
+          class="flex-shrink-0 truncate rounded-full border border-edge bg-base-200/60 px-2 py-0.5 text-[10px] text-base-content/70"
           data-role="intent-target"
         >
           @{@intent.target_agent_slug || @intent.target_role || "unassigned"}
@@ -667,7 +667,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
          actually stated. --%>
       <ul
         :if={@reason_picker_open}
-        class="mt-1 flex flex-col rounded-box border border-base-300 bg-base-200/60 p-1"
+        class="mt-1 flex flex-col rounded-box border border-edge bg-base-200/60 p-1"
         role="menu"
         data-role="intent-reason-picker"
         data-intent-id={@intent.id}
@@ -712,8 +712,8 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       data-role="intents-expanded"
     >
-      <div class="flex max-h-[80vh] w-full max-w-5xl flex-col rounded-box border border-base-300 bg-base-100 shadow-xl">
-        <header class="flex flex-shrink-0 items-center gap-2 border-b border-base-300 px-4 py-3">
+      <div class="flex max-h-[80vh] w-full max-w-5xl flex-col rounded-box border border-edge bg-base-100 shadow-xl">
+        <header class="flex flex-shrink-0 items-center gap-2 border-b border-edge px-4 py-3">
           <span class="hero-bolt size-4 flex-shrink-0 text-primary" aria-hidden="true"></span>
           <h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
             Intent queue — {length(@intents)} rows
@@ -809,8 +809,8 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
       data-role="intent-edit-modal"
       data-intent-id={@row.id}
     >
-      <div class="w-full max-w-md rounded-box border border-base-300 bg-base-100 shadow-xl">
-        <header class="flex items-center gap-2 border-b border-base-300 px-4 py-3">
+      <div class="w-full max-w-md rounded-box border border-edge bg-base-100 shadow-xl">
+        <header class="flex items-center gap-2 border-b border-edge px-4 py-3">
           <span class="hero-pencil-square size-4 text-primary" aria-hidden="true"></span>
           <h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Correct this intent</h2>
           <button

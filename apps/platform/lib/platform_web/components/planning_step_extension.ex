@@ -431,7 +431,7 @@ defmodule PlatformWeb.Components.PlanningStepExtension do
       aria-label={@aria_label}
       class={[
         "focus-visible-ring flex w-full items-center gap-1.5 overflow-hidden rounded-t-md",
-        "border border-b-0 border-base-300 bg-base-100 px-2 py-1 text-left text-[10px]",
+        "border border-b-0 border-edge bg-base-100 px-2 py-1 text-left text-[10px]",
         @class
       ]}
     >

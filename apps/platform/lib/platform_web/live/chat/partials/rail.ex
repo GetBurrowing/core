@@ -512,7 +512,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         data-admin-edit="false"
       >
         <section
-          class="channel-section group border-b border-base-300 pb-2 mb-2"
+          class="channel-section group border-b border-edge pb-2 mb-2"
           data-section-key="pinned"
           data-section-reorderable="false"
           data-row-reorderable="true"

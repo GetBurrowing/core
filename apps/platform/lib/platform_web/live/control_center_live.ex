@@ -591,11 +591,11 @@ defmodule PlatformWeb.ControlCenterLive do
         <aside
           id="agent-directory"
           class={[
-            "flex min-h-0 w-full flex-col overflow-hidden border-base-300 bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-r",
+            "flex min-h-0 w-full flex-col overflow-hidden border-edge bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-r",
             @selected_agent && "hidden lg:flex"
           ]}
         >
-          <div class="border-b border-base-300 px-4 py-4 sm:px-5">
+          <div class="border-b border-edge px-4 py-4 sm:px-5">
             <div class="flex items-start justify-between gap-3">
               <div>
                 <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
@@ -644,7 +644,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="template"
-                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-edge bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
                 >
                   <span class="hero-briefcase h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Template</span>
@@ -653,7 +653,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="federate"
-                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-edge bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
                 >
                   <span class="hero-globe-alt h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Federate</span>
@@ -662,7 +662,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="import"
-                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-edge bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
                 >
                   <span class="hero-arrow-down-tray h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Import</span>
@@ -671,7 +671,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="create"
-                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-edge bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
                 >
                   <span class="hero-wrench-screwdriver h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Custom</span>

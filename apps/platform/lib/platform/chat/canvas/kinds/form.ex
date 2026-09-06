@@ -72,7 +72,7 @@ defmodule Platform.Chat.Canvas.Kinds.Form do
     ~H"""
     <form
       class={[
-        "rounded-xl border border-base-300 bg-base-100 p-4 flex flex-col gap-3",
+        "rounded-xl border border-edge bg-base-100 p-4 flex flex-col gap-3",
         @props["class_overrides"]
       ]}
       phx-submit="canvas_form_submit"

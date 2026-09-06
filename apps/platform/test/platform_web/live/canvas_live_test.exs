@@ -216,7 +216,7 @@ defmodule PlatformWeb.CanvasLiveTest do
 
       bar_class = class_of(view, "canvas-provenance-bar")
       assert bar_class =~ "bg-base-200"
-      assert bar_class =~ "border-base-300"
+      assert bar_class =~ "border-edge"
       assert bar_class =~ "sticky"
 
       # The content column carries no card and no grey backdrop — the

@@ -636,7 +636,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
                "row-actions-close"
              ]
 
-      assert item_wrapper_class(dm_menu, "rail-row-actions-close") == "border-t border-base-300",
+      assert item_wrapper_class(dm_menu, "rail-row-actions-close") == "border-t border-edge",
              "the Close item has no hairline above it"
 
       close = button_by_role(dm_menu, "rail-row-actions-close")
@@ -675,7 +675,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
                "row-actions-close-dm"
              ]
 
-      assert item_wrapper_class(dm_sheet, "row-actions-close-dm") == "border-t border-base-300",
+      assert item_wrapper_class(dm_sheet, "row-actions-close-dm") == "border-t border-edge",
              "the sheet's Close item has no hairline above it"
 
       assert visible_text(sheet_close) == "Close"

@@ -15,7 +15,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
            `participant.id == meeting.host_participant_id`
 
     2. **Agents** (bottom) — separated from section 1 by a
-       `border-base-300` divider with a small "Agents" label. One row
+       `border-edge` divider with a small "Agents" label. One row
        per `participant_type == "agent"` carrying:
          * avatar
          * display name
@@ -212,7 +212,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       <section
         :if={@agents != []}
         data-section="agents"
-        class="border-t border-base-300 px-2 pb-2 pt-2"
+        class="border-t border-edge px-2 pb-2 pt-2"
       >
         <div class="flex items-center gap-1.5 px-2 pb-1.5">
           <span class="hero-cpu-chip size-3.5 text-base-content/50"></span>

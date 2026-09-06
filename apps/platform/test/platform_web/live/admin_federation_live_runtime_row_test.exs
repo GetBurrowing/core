@@ -169,7 +169,7 @@ defmodule PlatformWeb.AdminFederationLiveRuntimeRowTest do
       {:ok, view, _html} = live(admin_conn(conn), ~p"/admin/federation")
 
       assert has_element?(view, ~s|#{row(runtime_id)} [data-proof-list] [data-proof-value]|)
-      assert has_element?(view, ~s|#{row(runtime_id)} [data-proof-rule].border-base-300|)
+      assert has_element?(view, ~s|#{row(runtime_id)} [data-proof-rule].border-edge|)
 
       assert has_element?(
                view,

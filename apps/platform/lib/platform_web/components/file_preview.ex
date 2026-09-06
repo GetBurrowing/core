@@ -121,7 +121,7 @@ defmodule PlatformWeb.Components.FilePreview do
           <img
             src={@blob_url}
             alt={@file.original_filename}
-            class="mx-auto max-h-[80vh] max-w-full rounded border border-base-300 object-contain"
+            class="mx-auto max-h-[80vh] max-w-full rounded border border-edge object-contain"
             data-role={@scope <> "-image"}
           />
         <% :pdf -> %>
@@ -135,7 +135,7 @@ defmodule PlatformWeb.Components.FilePreview do
         <% :html -> %>
           <%= if @interactive? do %>
             <div
-              class="overflow-hidden rounded-box border border-base-300 bg-base-100"
+              class="overflow-hidden rounded-box border border-edge bg-base-100"
               data-role={@scope <> "-html-interactive"}
             >
               <.interactive_attribution_bar file={@file} scope={@scope} />
@@ -159,7 +159,7 @@ defmodule PlatformWeb.Components.FilePreview do
                 </iframe>
               </div>
               <div
-                class="flex items-center justify-between gap-3 border-t border-base-300 px-3 py-2 text-sm text-base-content"
+                class="flex items-center justify-between gap-3 border-t border-edge px-3 py-2 text-sm text-base-content"
                 data-role={@scope <> "-html-notice"}
               >
                 <span>Interactive prototype. Never enter a password here.</span>
@@ -173,7 +173,7 @@ defmodule PlatformWeb.Components.FilePreview do
               </div>
             </div>
           <% else %>
-            <div class="rounded border border-base-300 bg-base-100">
+            <div class="rounded border border-edge bg-base-100">
               <div class="overflow-x-auto">
                 <iframe
                   src={FilesLive.file_preview_frame_url(@file)}
@@ -186,7 +186,7 @@ defmodule PlatformWeb.Components.FilePreview do
                 </iframe>
               </div>
               <div
-                class="flex items-center justify-between gap-3 border-t border-base-300 px-3 py-2 text-sm text-base-content"
+                class="flex items-center justify-between gap-3 border-t border-edge px-3 py-2 text-sm text-base-content"
                 data-role={@scope <> "-html-notice"}
               >
                 <span>Scripts are off in preview.</span>
@@ -203,7 +203,7 @@ defmodule PlatformWeb.Components.FilePreview do
         <% :markdown -> %>
           <div
             :if={@text}
-            class="prose prose-sm max-w-none rounded border border-base-300 bg-base-100 p-3"
+            class="prose prose-sm max-w-none rounded border border-edge bg-base-100 p-3"
             data-role={@scope <> "-markdown"}
           >
             {FilesLive.render_markdown_text(@text)}
@@ -212,14 +212,14 @@ defmodule PlatformWeb.Components.FilePreview do
         <% :text -> %>
           <pre
             :if={@text}
-            class="whitespace-pre-wrap break-words rounded border border-base-300 bg-base-200 p-3 text-xs"
+            class="whitespace-pre-wrap break-words rounded border border-edge bg-base-200 p-3 text-xs"
             data-role={@scope <> "-text"}
           >{@text}</pre>
           <.no_text_yet :if={!@text} scope={@scope} />
         <% :document -> %>
           <div
             :if={@text}
-            class="prose prose-sm max-w-none whitespace-pre-wrap break-words rounded border border-base-300 bg-base-100 p-3"
+            class="prose prose-sm max-w-none whitespace-pre-wrap break-words rounded border border-edge bg-base-100 p-3"
             data-role={@scope <> "-document"}
           >
             {@text}
@@ -227,7 +227,7 @@ defmodule PlatformWeb.Components.FilePreview do
           <.no_text_yet :if={!@text} scope={@scope} />
         <% :unknown -> %>
           <div
-            class="rounded border border-base-300 bg-base-200 p-4 text-sm text-base-content/70"
+            class="rounded border border-edge bg-base-200 p-4 text-sm text-base-content/70"
             data-role={@scope <> "-unknown"}
           >
             <p>Cannot preview this file type ({@file.content_type}) in the browser.</p>
@@ -278,7 +278,7 @@ defmodule PlatformWeb.Components.FilePreview do
   defp interactive_attribution_bar(assigns) do
     ~H"""
     <div
-      class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-base-300 bg-base-200 px-3 py-2"
+      class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-edge bg-base-200 px-3 py-2"
       data-role={@scope <> "-html-attribution-bar"}
     >
       <span
@@ -359,8 +359,8 @@ defmodule PlatformWeb.Components.FilePreview do
       data-role="files-preview-fullscreen"
     >
       <div class="absolute inset-0 bg-black/50" phx-click="close_preview_fullscreen" />
-      <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-2xl max-sm:h-full max-sm:max-h-none max-sm:rounded-none">
-        <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+      <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-edge bg-base-100 shadow-2xl max-sm:h-full max-sm:max-h-none max-sm:rounded-none">
+        <div class="flex items-center justify-between border-b border-edge px-4 py-3">
           <div class="min-w-0">
             <div class="truncate text-sm font-semibold">
               {@file.name || @file.original_filename || "File"}

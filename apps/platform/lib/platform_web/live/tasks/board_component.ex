@@ -233,7 +233,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             phx-click="sidebar_select_epic"
             phx-target="#tasks-sidebar"
             phx-value-id={epic.id}
-            class={"card card-compact min-w-[180px] max-w-[220px] shrink-0 cursor-pointer border bg-base-100 shadow-sm transition-all hover:shadow-md #{if @selected_epic_id == epic.id, do: "border-primary ring-2 ring-primary", else: "border-base-300"}"}
+            class={"card card-compact min-w-[180px] max-w-[220px] shrink-0 cursor-pointer border bg-base-100 shadow-sm transition-all hover:shadow-md #{if @selected_epic_id == epic.id, do: "border-primary ring-2 ring-primary", else: "border-edge"}"}
           >
             <div class="card-body gap-1 p-3">
               <div class="flex items-center justify-between gap-2">
@@ -372,7 +372,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                       data-expanded={
                         if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
                       }
-                      class="flex flex-col rounded-box border-l-4 border-violet-500 border border-base-300 bg-base-100"
+                      class="flex flex-col rounded-box border-l-4 border-violet-500 border border-edge bg-base-100"
                     >
                       <%!-- T8 stage 1: header opens the stack detail
                          panel. Chevron is split into its own sibling
@@ -588,7 +588,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                         phx-click="select_task"
                         phx-value-id={task.id}
                         class={[
-                          "flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring",
+                          "flex flex-col gap-1.5 rounded-box border border-edge bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring",
                           PlanningStepExtension.visible?(task) && "rounded-t-none"
                         ]}
                         data-task-id={task.id}
@@ -853,7 +853,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                     data-expanded={
                       if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
                     }
-                    class="group card card-compact border-l-4 border-violet-500 border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md"
+                    class="group card card-compact border-l-4 border-violet-500 border border-edge bg-base-100 shadow-sm transition-all hover:shadow-md"
                   >
                     <%!-- T8 stage 1: header opens the stack detail panel.
                        Chevron is split into its own SIBLING button so
@@ -1071,7 +1071,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                       data-task-id={task.id}
                       draggable="true"
                       class={[
-                        "group card card-compact cursor-grab border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing",
+                        "group card card-compact cursor-grab border border-edge bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing",
                         PlanningStepExtension.visible?(task) && "rounded-t-none"
                       ]}
                       phx-click="select_task"

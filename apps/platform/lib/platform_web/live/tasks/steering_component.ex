@@ -172,11 +172,11 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
             id="execution-log-scroll"
             phx-hook="ExecutionLogScroll"
             phx-drop-target={@uploads.steering_attachments.ref}
-            class="max-h-72 overflow-y-auto rounded-box border border-base-300 bg-base-200/30 p-2 space-y-1"
+            class="max-h-72 overflow-y-auto rounded-box border border-edge bg-base-200/30 p-2 space-y-1"
           >
             <div
               :for={msg <- @execution_log}
-              class={"flex flex-col gap-0.5 text-xs #{if msg.log_only, do: "opacity-50", else: ""} #{if msg.content_type == "system", do: "border-l-2 border-base-300 pl-2", else: ""} #{if msg.sender_type == "user", do: "border-l-2 border-primary pl-2", else: ""}"}
+              class={"flex flex-col gap-0.5 text-xs #{if msg.log_only, do: "opacity-50", else: ""} #{if msg.content_type == "system", do: "border-l-2 border-edge pl-2", else: ""} #{if msg.sender_type == "user", do: "border-l-2 border-primary pl-2", else: ""}"}
             >
               <div class="flex items-start gap-2">
                 <span class="text-base-content/40 whitespace-nowrap shrink-0">
@@ -203,7 +203,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                       <img
                         src={~p"/chat/attachments/#{att.id}"}
                         alt={att.filename}
-                        class="max-h-40 rounded border border-base-300 hover:border-primary transition-colors"
+                        class="max-h-40 rounded border border-edge hover:border-primary transition-colors"
                         loading="lazy"
                       />
                     </a>
@@ -211,7 +211,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                     <a
                       href={~p"/chat/attachments/#{att.id}"}
                       target="_blank"
-                      class="inline-flex items-center gap-1 rounded-lg border border-base-300 bg-base-200 px-2 py-1 text-xs hover:border-primary transition-colors"
+                      class="inline-flex items-center gap-1 rounded-lg border border-edge bg-base-200 px-2 py-1 text-xs hover:border-primary transition-colors"
                     >
                       <span class="hero-document size-3.5 text-base-content/50"></span>
                       <span class="truncate max-w-[120px]">{att.filename}</span>
@@ -230,7 +230,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
             phx-target={@myself}
             phx-submit="send_steering_message"
             phx-change="steering_changed"
-            class="mt-2 border-t border-base-300 pt-2"
+            class="mt-2 border-t border-edge pt-2"
           >
             <%!-- Upload previews --%>
             <div
@@ -245,10 +245,10 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                 <%= if String.starts_with?(entry.client_type, "image/") do %>
                   <.live_img_preview
                     entry={entry}
-                    class="w-16 h-16 object-cover rounded-lg border border-base-300"
+                    class="w-16 h-16 object-cover rounded-lg border border-edge"
                   />
                 <% else %>
-                  <div class="w-16 h-16 rounded-lg border border-base-300 bg-base-200 flex flex-col items-center justify-center gap-0.5 px-1">
+                  <div class="w-16 h-16 rounded-lg border border-edge bg-base-200 flex flex-col items-center justify-center gap-0.5 px-1">
                     <span class="hero-document size-5 text-base-content/40"></span>
                     <span class="text-[8px] text-base-content/60 truncate w-full text-center">
                       {entry.client_name}
@@ -286,7 +286,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                 :if={@uploads.steering_attachments.entries == []}
                 class="relative group"
               >
-                <div class="w-16 h-16 rounded-lg border border-base-300 bg-base-200 flex flex-col items-center justify-center gap-0.5 px-1">
+                <div class="w-16 h-16 rounded-lg border border-edge bg-base-200 flex flex-col items-center justify-center gap-0.5 px-1">
                   <span class={[
                     "size-5 text-base-content/40",
                     String.starts_with?(entry.client_type, "image/") && "hero-photo",
@@ -402,7 +402,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                 placeholder="Steer the agent..."
                 autocomplete="off"
                 rows="1"
-                class="min-w-0 flex-1 rounded-xl text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors"
+                class="min-w-0 flex-1 rounded-xl text-sm resize-none bg-base-100 border border-edge focus:border-primary focus:outline-none transition-colors"
                 style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
                 phx-hook="ComposeInput"
                 data-mention-target={"##{@id}"}
@@ -461,7 +461,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
         <div :if={@output_canvases != []} class="space-y-3">
           <div
             :for={canvas <- Enum.reverse(@output_canvases)}
-            class="rounded-box border border-base-300 bg-base-100 p-3 space-y-2"
+            class="rounded-box border border-edge bg-base-100 p-3 space-y-2"
           >
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">

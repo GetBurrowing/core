@@ -16,7 +16,7 @@ defmodule PlatformWeb.ControlCenter.AgentCard do
       "mb-3 rounded-2xl border px-3 py-3 transition-colors",
       @selected_slug == @agent.slug && "border-primary bg-primary/5 shadow-sm",
       @selected_slug != @agent.slug &&
-        "border-base-300 bg-base-100 hover:border-primary/30 hover:bg-base-100/80"
+        "border-edge bg-base-100 hover:border-primary/30 hover:bg-base-100/80"
     ]}>
       <.link patch={~p"/control/#{@agent.slug}"} class="block text-left">
         <div class="flex items-start justify-between gap-3">

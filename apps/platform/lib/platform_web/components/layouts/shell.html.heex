@@ -115,7 +115,7 @@
          own comment for the measurement. --%>
     <header
       id="utility-bar"
-      class="relative flex h-10 items-center justify-between border-b border-base-300 bg-base-200/60 px-4"
+      class="relative flex h-10 items-center justify-between border-b border-edge bg-base-200/60 px-4"
     >
       <div class="flex items-center gap-2">
         <%!-- Mobile primary nav is the bottom-nav from #13; the original
@@ -216,7 +216,7 @@
                    375px, and grows from there. --%>
               <div
                 :if={assigns[:roster_open] && @roster_open}
-                class="absolute right-4 top-full mt-1 z-50 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-base-300 bg-base-200 shadow-lg"
+                class="absolute right-4 top-full mt-1 z-50 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-edge bg-base-200 shadow-lg"
                 data-test-id="shell-roster-panel"
               >
                 <div class="p-3 space-y-1">
@@ -359,7 +359,7 @@
 
             <div
               :if={assigns[:show_presence_panel] && @show_presence_panel}
-              class="absolute right-0 top-full mt-1 z-50 w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-100 shadow-lg p-2"
+              class="absolute right-0 top-full mt-1 z-50 w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-edge bg-base-100 shadow-lg p-2"
             >
               <div class="text-[10px] uppercase tracking-widest text-base-content/40 px-2 mb-1">
                 Participants

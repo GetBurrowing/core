@@ -39,7 +39,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     ~H"""
     <div class="flex flex-1 flex-col overflow-hidden" data-role="search-pane">
       <%!-- Header --%>
-      <div class="border-b border-base-300 px-6 py-3">
+      <div class="border-b border-edge px-6 py-3">
         <h1 class="text-lg font-bold">Search</h1>
         <p class="text-xs text-base-content/40">
           Hybrid search across pages, journal entries, and messages
@@ -50,7 +50,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
       <form
         id="org-memory-search-form"
         phx-submit="search_memory"
-        class="flex flex-wrap items-end gap-3 border-b border-base-300 px-6 py-4"
+        class="flex flex-wrap items-end gap-3 border-b border-edge px-6 py-4"
       >
         <div class="min-w-48 flex-1">
           <label class="mb-1 block text-xs text-base-content/50">Query</label>
@@ -122,7 +122,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     <button
       phx-click="open_result_page"
       phx-value-file_key={@hit.path}
-      class="w-full rounded-lg border border-base-300 bg-base-100 p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
+      class="w-full rounded-lg border border-edge bg-base-100 p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
     >
       <.result_meta hit={@hit} />
       <p class="mt-1 truncate font-mono text-sm font-medium">{@hit.path}</p>
@@ -136,7 +136,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     <button
       phx-click="open_result_journal"
       phx-value-date={@hit.date_or_inserted_at}
-      class="w-full rounded-lg border border-base-300 bg-base-100 p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
+      class="w-full rounded-lg border border-edge bg-base-100 p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
     >
       <.result_meta hit={@hit} />
       <p class="mt-1 truncate font-mono text-sm font-medium">{@hit.path}</p>
@@ -149,7 +149,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     ~H"""
     <a
       href={"/chat/#{@hit.space_id}"}
-      class="block w-full rounded-lg border border-base-300 bg-base-100 p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
+      class="block w-full rounded-lg border border-edge bg-base-100 p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
     >
       <.result_meta hit={@hit} />
       <p class="mt-1 line-clamp-3 text-xs text-base-content/60">{snippet(@hit.content)}</p>
@@ -160,7 +160,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
   # Unknown source tags render inert (no click-through).
   defp result_hit(assigns) do
     ~H"""
-    <div class="w-full rounded-lg border border-base-300 bg-base-100 p-4">
+    <div class="w-full rounded-lg border border-edge bg-base-100 p-4">
       <.result_meta hit={@hit} />
       <p class="mt-1 line-clamp-3 text-xs text-base-content/60">{snippet(@hit.content)}</p>
     </div>

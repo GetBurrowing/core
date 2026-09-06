@@ -213,14 +213,14 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     <aside
       id={@id}
       class={[
-        "flex flex-shrink-0 flex-col border-l border-base-300 bg-base-200/40",
+        "flex flex-shrink-0 flex-col border-l border-edge bg-base-200/40",
         @width_class,
         @class
       ]}
       data-component="call-rail"
       data-active-tab={@active}
     >
-      <div class="flex border-b border-base-300" role="tablist" data-role="call-rail-tabs">
+      <div class="flex border-b border-edge" role="tablist" data-role="call-rail-tabs">
         <button
           :for={{id, label} <- tabs()}
           type="button"
@@ -489,7 +489,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
         <li
           :if={@invite_rows == []}
-          class="rounded-box border border-dashed border-base-300 px-3 py-2.5 text-[11px] leading-relaxed text-base-content/50"
+          class="rounded-box border border-dashed border-edge px-3 py-2.5 text-[11px] leading-relaxed text-base-content/50"
           data-role="meeting-agent-invite-empty"
         >
           No active agents yet. Every active agent appears here, whether or not it is already in
@@ -627,7 +627,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         data-on={to_string(@mic_on)}
         aria-pressed={to_string(!@mic_on)}
         aria-label={if @mic_on, do: "Mute microphone", else: "Unmute microphone"}
-        class="btn btn-sm rounded-field gap-2 border-base-300 bg-base-200 font-normal text-base-content/80"
+        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
       >
         <span
           class={["size-4", if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash")]}
@@ -645,7 +645,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         data-on={to_string(@camera_on)}
         aria-pressed={to_string(!@camera_on)}
         aria-label={if @camera_on, do: "Turn camera off", else: "Turn camera on"}
-        class="btn btn-sm rounded-field gap-2 border-base-300 bg-base-200 font-normal text-base-content/80"
+        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
       >
         <span
           class={["size-4", if(@camera_on, do: "hero-video-camera", else: "hero-video-camera-slash")]}
@@ -665,7 +665,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         data-on={to_string(@sharing)}
         aria-pressed={to_string(@sharing)}
         aria-label={if @sharing, do: "Stop sharing your screen", else: "Share your screen"}
-        class="btn btn-sm rounded-field gap-2 border-base-300 bg-base-200 font-normal text-base-content/80"
+        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
       >
         <span class="hero-arrow-up-tray size-4" aria-hidden="true"></span>
         <span class="call-control-label">{if @sharing, do: "Stop sharing", else: "Share"}</span>

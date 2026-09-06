@@ -75,10 +75,10 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
       :if={@external?}
       id="chat-external-rail"
       data-role="external-rail"
-      class="hidden lg:flex w-72 max-w-[80vw] flex-shrink-0 flex-col border-r border-base-300 bg-base-200 lg:w-64"
+      class="hidden lg:flex w-72 max-w-[80vw] flex-shrink-0 flex-col border-r border-edge bg-base-200 lg:w-64"
     >
       <header
-        class="flex-shrink-0 border-b border-base-300"
+        class="flex-shrink-0 border-b border-edge"
         style="padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left);"
         data-role="external-rail-header"
       >
@@ -103,7 +103,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
              §7). --%>
         <div
           :if={@external_user}
-          class="flex items-center gap-2 border-t border-base-300 px-3 py-2"
+          class="flex items-center gap-2 border-t border-edge px-3 py-2"
           data-role="external-identity"
         >
           <.human_avatar
@@ -170,7 +170,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         phx-click="new_conversation_open"
         aria-label="New conversation"
         data-role="external-new-conversation"
-        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-300 px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors"
+        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors"
         style="padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));"
       >
         <span class="hero-plus size-4"></span>
@@ -223,7 +223,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         data-role="external-mobile-switcher"
         class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden safe-area-x"
       >
-        <header class="flex-shrink-0 border-b border-base-300 safe-area-top">
+        <header class="flex-shrink-0 border-b border-edge safe-area-top">
           <div class="flex h-12 items-center justify-between px-4">
             <div class="flex items-center gap-2 min-w-0" data-role="brand-chip">
               <img src={~p"/images/logo.svg"} alt="Fabrikam" class="size-6 flex-shrink-0" />
@@ -254,7 +254,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
           </div>
           <div
             :if={@external_user}
-            class="flex items-center gap-2 border-t border-base-300 px-4 py-2"
+            class="flex items-center gap-2 border-t border-edge px-4 py-2"
             data-role="external-identity"
           >
             <.human_avatar
@@ -275,7 +275,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
              blocks auto-zoom). Stable `drawer-search-input` id is shared with the
              internal overlay, which is `!@external?`-gated so only one is ever in
              the DOM. --%>
-        <div class="flex-shrink-0 px-4 py-2 border-b border-base-300" role="search">
+        <div class="flex-shrink-0 px-4 py-2 border-b border-edge" role="search">
           <form class="relative" phx-change="drawer_search" phx-submit="drawer_search">
             <span
               class="hero-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 size-4 text-base-content/40"
@@ -364,7 +364,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
           phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
           aria-label="New conversation"
           data-role="external-new-conversation"
-          class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-300 px-4 pt-3 text-sm text-base-content/70 hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
+          class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-4 pt-3 text-sm text-base-content/70 hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
         >
           <span class="hero-plus size-5"></span>
           <span>New conversation</span>

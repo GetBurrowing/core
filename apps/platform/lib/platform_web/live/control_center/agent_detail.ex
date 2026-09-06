@@ -25,7 +25,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   def header(assigns) do
     ~H"""
-    <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+    <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div class="min-w-0">
           <.link patch={~p"/control"} class="btn btn-ghost btn-sm mb-3 w-fit lg:hidden">
@@ -249,7 +249,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     <%!-- Federation connection section --%>
     <section
       :if={@agent.runtime_id}
-      class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm"
+      class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm"
     >
       <h2 class="text-lg font-semibold text-base-content">
         <span class="hero-globe-alt mr-1 inline-block h-5 w-5 align-text-bottom" />
@@ -287,7 +287,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       class="flex flex-col gap-6"
     >
       <%!-- Identity section --%>
-      <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+      <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
         <h2 class="text-lg font-semibold text-base-content">
           <span class="hero-identification mr-1 inline-block h-5 w-5 align-text-bottom" /> Identity
         </h2>
@@ -327,7 +327,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                 <span
                   class={[
                     "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
-                    "peer-checked:border-current border-transparent hover:border-base-300"
+                    "peer-checked:border-current border-transparent hover:border-edge"
                   ]}
                   style={"color: #{color.accent};"}
                 >
@@ -350,7 +350,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     </.form>
 
     <%!-- Spaces section --%>
-    <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+    <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <h2 class="text-lg font-semibold text-base-content">
         <span class="hero-chat-bubble-left-right mr-1 inline-block h-5 w-5 align-text-bottom" />
         Spaces
@@ -361,7 +361,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <div class="mt-4 space-y-2">
         <div
           :for={space <- @federation_spaces}
-          class="flex items-center justify-between rounded-2xl border border-base-300 px-4 py-3 text-sm"
+          class="flex items-center justify-between rounded-2xl border border-edge px-4 py-3 text-sm"
         >
           <div>
             <p class="font-semibold text-base-content">{space.space_name}</p>
@@ -373,7 +373,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
         <div
           :if={@federation_spaces == []}
-          class="rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
+          class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-base-content/50"
         >
           Not participating in any spaces yet.
         </div>
@@ -392,7 +392,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       :if={@show_add_space_modal}
       class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60"
     >
-      <div class="w-full max-w-md rounded-2xl border border-base-300 bg-base-100 p-6 shadow-xl">
+      <div class="w-full max-w-md rounded-2xl border border-edge bg-base-100 p-6 shadow-xl">
         <h3 class="mb-4 text-base font-semibold">Add Agent to Space</h3>
         <form phx-submit="add_agent_to_space">
           <div class="form-control mb-4">
@@ -465,8 +465,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
         Avatar
       </span>
-      <div class="flex flex-wrap items-center gap-4 rounded-2xl border border-base-300 bg-base-200/50 p-4">
-        <div class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-base-300 bg-base-100">
+      <div class="flex flex-wrap items-center gap-4 rounded-2xl border border-edge bg-base-200/50 p-4">
+        <div class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-edge bg-base-100">
           <img
             :if={@agent.avatar_url}
             src={@agent.avatar_url}
@@ -578,7 +578,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   def config_form(assigns) do
     ~H"""
-    <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+    <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <div class="flex items-start justify-between gap-4">
         <div>
           <h2 class="text-lg font-semibold text-base-content">Config + model routing</h2>
@@ -726,7 +726,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               <span
                 class={[
                   "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
-                  "peer-checked:border-current border-transparent hover:border-base-300"
+                  "peer-checked:border-current border-transparent hover:border-edge"
                 ]}
                 style={"color: #{color.accent};"}
               >
@@ -744,12 +744,12 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             @selected_agent_directory_entry &&
               @selected_agent_directory_entry.workspace_managed?
           }
-          class="rounded-2xl border border-base-300 bg-base-200/50 px-3 py-2 text-sm text-base-content/65"
+          class="rounded-2xl border border-edge bg-base-200/50 px-3 py-2 text-sm text-base-content/65"
         >
           This agent is sourced from the mounted workspace config. Use the workspace to remove it permanently.
         </p>
 
-        <div class="rounded-2xl border border-base-300 bg-base-200/50 p-4">
+        <div class="rounded-2xl border border-edge bg-base-200/50 p-4">
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
             Resolved model chain
           </p>
@@ -860,7 +860,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     ~H"""
     <section
       data-role="agent-voice-card"
-      class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm"
+      class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm"
     >
       <h2 class="text-[13px] font-semibold text-base-content">
         <span class="hero-speaker-wave mr-1 inline-block h-4 w-4 align-text-bottom" /> Voice
@@ -869,7 +869,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <%!-- The signature element: what this agent ACTUALLY speaks with right
       now, read back from the stored row. Everything below stays quiet so this
       line reads first. --%>
-      <div class="mt-3 border-b border-base-300 pb-3">
+      <div class="mt-3 border-b border-edge pb-3">
         <p
           :if={is_nil(@effective_voice)}
           data-role="agent-voice-effective"
@@ -1016,7 +1016,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   def workspace_editor(assigns) do
     ~H"""
-    <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+    <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 class="text-lg font-semibold text-base-content">Workspace files</h2>
@@ -1041,7 +1041,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               @selected_file_key == workspace_file.file_key &&
                 "border-primary bg-primary/5 text-primary",
               @selected_file_key != workspace_file.file_key &&
-                "border-base-300 bg-base-100 hover:border-primary/30"
+                "border-edge bg-base-100 hover:border-primary/30"
             ]}
           >
             <p class="truncate text-sm font-semibold">{workspace_file.file_key}</p>
@@ -1050,7 +1050,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
           <div
             :if={@workspace_files == []}
-            class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
+            class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/50"
           >
             No files yet.
           </div>
@@ -1076,7 +1076,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             />
             <div
               :if={@selected_workspace_file}
-              class="rounded-2xl border border-base-300 bg-base-200/50 px-3 py-2 text-sm text-base-content/70"
+              class="rounded-2xl border border-edge bg-base-200/50 px-3 py-2 text-sm text-base-content/70"
             >
               {@selected_workspace_file.file_key}
               <input
@@ -1120,7 +1120,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   def memory_browser(assigns) do
     ~H"""
-    <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+    <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 class="text-lg font-semibold text-base-content">Memory browser</h2>
@@ -1178,7 +1178,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           <div class="space-y-3">
             <article
               :for={memory <- @recent_memories}
-              class="rounded-2xl border border-base-300 bg-base-100 px-4 py-3"
+              class="rounded-2xl border border-edge bg-base-100 px-4 py-3"
             >
               <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
                 <span>{humanize_memory_type(memory.memory_type)}</span>
@@ -1192,7 +1192,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
             <div
               :if={@recent_memories == []}
-              class="rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
+              class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-base-content/50"
             >
               Nothing matched this memory filter.
             </div>
@@ -1203,7 +1203,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           for={@memory_form}
           id="memory-entry-form"
           phx-submit="append_memory"
-          class="space-y-3 rounded-2xl border border-base-300 bg-base-200/40 p-4"
+          class="space-y-3 rounded-2xl border border-edge bg-base-200/40 p-4"
         >
           <div>
             <p class="text-sm font-semibold text-base-content">Add memory</p>
@@ -1270,13 +1270,13 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   def runtime_monitor(assigns) do
     ~H"""
-    <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+    <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <h2 class="text-lg font-semibold text-base-content">Runtime + sessions</h2>
       <p class="mt-1 text-sm text-base-content/60">
         Monitoring reads the real AgentServer state plus persisted session history.
       </p>
 
-      <div class="mt-4 rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm text-base-content/75">
+      <div class="mt-4 rounded-2xl border border-edge bg-base-200/40 p-4 text-sm text-base-content/75">
         <div class="flex items-center justify-between gap-3">
           <span>Status</span>
           <span class={runtime_badge_class(@runtime.status)}>
@@ -1300,7 +1300,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <div class="mt-4 space-y-3">
         <article
           :for={session <- @recent_sessions}
-          class="rounded-2xl border border-base-300 px-4 py-3 text-sm"
+          class="rounded-2xl border border-edge px-4 py-3 text-sm"
         >
           <div class="flex flex-wrap items-center gap-2">
             <span class={session_badge_class(session.status)}>
@@ -1324,7 +1324,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
         <div
           :if={@recent_sessions == []}
-          class="rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
+          class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-base-content/50"
         >
           No sessions yet.
         </div>
@@ -1344,7 +1344,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   def vault_panel(assigns) do
     ~H"""
-    <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+    <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <h2 class="text-lg font-semibold text-base-content">Vault visibility</h2>
       <p class="mt-1 text-sm text-base-content/60">
         Metadata only — secrets stay encrypted. Agent runtime still resolves values through Platform.Vault.get/2.
@@ -1362,7 +1362,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             />
             <div
               :if={@agent_credentials == []}
-              class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
+              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/50"
             >
               No agent-scoped credentials.
             </div>
@@ -1380,7 +1380,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             />
             <div
               :if={@platform_credentials == []}
-              class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
+              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/50"
             >
               No matching platform credentials for this model chain.
             </div>
@@ -1394,7 +1394,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               provider is outside this agent's model chain: an admin who has
               just added an `elevenlabs` key to an Anthropic agent's page needs
               to see that it landed, not wonder where it went. --%>
-        <div :if={@fabrikam_admin?} class="border-t border-base-300 pt-4" data-role="vault-manage">
+        <div :if={@fabrikam_admin?} class="border-t border-edge pt-4" data-role="vault-manage">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
               All platform credentials
@@ -1416,7 +1416,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             />
             <div
               :if={@all_platform_credentials == []}
-              class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
+              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/50"
             >
               No platform credentials yet.
             </div>
@@ -1426,7 +1426,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             :if={@show_credential_form}
             phx-submit="create_credential"
             data-role="credential-form"
-            class="mt-4 space-y-3 rounded-2xl border border-base-300 bg-base-200/40 p-4"
+            class="mt-4 space-y-3 rounded-2xl border border-edge bg-base-200/40 p-4"
           >
             <div class="grid gap-3 sm:grid-cols-2">
               <div>

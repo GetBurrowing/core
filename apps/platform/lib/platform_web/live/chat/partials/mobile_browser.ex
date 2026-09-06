@@ -159,7 +159,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           @mask_names?,
           @revealed_section_ids
         ) %>
-      <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
+      <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4 safe-area-top">
         <p class="text-sm font-semibold">Conversations</p>
         <div class="flex items-center gap-1">
           <%!-- Screen-share name masking on the DRAWER (task 01a00c66 stage 3).
@@ -432,7 +432,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
       <button
         phx-click={JS.push("new_channel_open") |> JS.push("close_mobile_browser")}
         aria-label="New channel"
-        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-300 px-4 pt-3 text-sm text-base-content/70 hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
+        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-4 pt-3 text-sm text-base-content/70 hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
       >
         <span class="hero-plus size-5"></span>
         <span>New channel</span>
@@ -462,7 +462,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
          text-base is load-bearing: anything under 16px makes iOS auto-zoom
          the viewport on focus. Stable id so LiveView patches preserve
          focus/cursor while the list under it re-renders. --%>
-    <div class="flex-shrink-0 px-4 py-2 border-b border-base-300" role="search">
+    <div class="flex-shrink-0 px-4 py-2 border-b border-edge" role="search">
       <%!-- phx-change (NOT phx-keyup): change fires for every way text can
            enter the field — typing, paste, iOS dictation, the native
            type=search clear — where keyup only sees physical keys.

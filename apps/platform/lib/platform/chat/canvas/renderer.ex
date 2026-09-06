@@ -49,7 +49,7 @@ defmodule Platform.Chat.Canvas.Renderer do
     assigns = assign(assigns, :kind_name, Map.get(node, "type", "?"))
 
     ~H"""
-    <div class="rounded border border-dashed border-base-300 bg-base-200 px-3 py-2 text-xs text-base-content/40">
+    <div class="rounded border border-dashed border-edge bg-base-200 px-3 py-2 text-xs text-base-content/40">
       [unknown node type: {@kind_name}]
     </div>
     """

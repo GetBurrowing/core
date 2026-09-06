@@ -26,10 +26,10 @@ defmodule Platform.Chat.Canvas.Kinds.Code do
 
     ~H"""
     <div class={[
-      "rounded-xl border border-base-300 bg-base-900 overflow-x-auto",
+      "rounded-xl border border-edge bg-base-900 overflow-x-auto",
       @props["class_overrides"]
     ]}>
-      <div class="flex items-center justify-between border-b border-base-300 bg-base-200 px-3 py-1">
+      <div class="flex items-center justify-between border-b border-edge bg-base-200 px-3 py-1">
         <span class="text-[11px] uppercase tracking-widest text-base-content/50">
           {@props["language"] || "code"}
         </span>

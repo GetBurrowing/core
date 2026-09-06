@@ -69,7 +69,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
         <%!-- Sheet / dialog --%>
         <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[90vh] overflow-y-auto">
           <%!-- Header --%>
-          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+          <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div>
               <h2 class="text-base font-semibold">Assign Agents</h2>
               <p class="mt-0.5 text-xs text-base-content/60">
@@ -88,7 +88,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
           </div>
 
           <%!-- Mode toggle (segmented) --%>
-          <div class="flex items-center justify-between px-4 py-3 border-b border-base-300 gap-3">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-edge gap-3">
             <p class="text-xs text-base-content/60 leading-snug">
               {if @assignee_modal_mode == :advanced,
                 do: "One agent per phase. Build the DAG.",
@@ -192,7 +192,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
             </div>
 
             <%!-- Actions --%>
-            <div class="mt-2 flex justify-end gap-2 border-t border-base-300 pt-3">
+            <div class="mt-2 flex justify-end gap-2 border-t border-edge pt-3">
               <button
                 type="button"
                 phx-click="close_assignee_modal"

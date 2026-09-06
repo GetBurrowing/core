@@ -98,7 +98,7 @@ defmodule PlatformWeb.Components.SupersessionRuling do
     ~H"""
     <div
       :if={@claim}
-      class="mt-4 border-t border-base-300 pt-3"
+      class="mt-4 border-t border-edge pt-3"
       data-role={"files-supersession-panel" <> @suffix}
       data-supersession-ruling={@claim.ruling}
     >

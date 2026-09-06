@@ -2123,7 +2123,7 @@ defmodule PlatformWeb.MeetingLive do
   defp archive_chip_class(:canvas), do: "border-secondary/40 bg-secondary/10 text-secondary"
   defp archive_chip_class(:summary), do: "border-primary/30 bg-primary/10 text-primary"
   defp archive_chip_class(:action_items), do: "border-warning/30 bg-warning/10 text-warning"
-  defp archive_chip_class(:transcript), do: "border-base-300 bg-base-200 text-base-content/60"
+  defp archive_chip_class(:transcript), do: "border-edge bg-base-200 text-base-content/60"
 
   # Mobile shortens the chips that CARRY a short form — `artifacts_for/2`
   # ships `:short_label` on the action-item chip precisely so the phone does

@@ -6,7 +6,7 @@
   <%!-- Header. Chrome uses semantic token slots only — `base-300` for the
        divider (border), `base-content/60` for the muted eyebrow, `primary`
        for the single CTA. No raw hex anywhere on this surface. --%>
-  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+  <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
       <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
         Admin · Orgs
@@ -32,7 +32,7 @@
            the create sheet, so it is still true for someone arriving after
            the org was made and wondering where it went. --%>
       <div
-        class="rounded-lg border border-base-300 bg-base-200 p-3 text-xs text-base-content/60"
+        class="rounded-lg border border-edge bg-base-200 p-3 text-xs text-base-content/60"
         data-role="scope-rail-notice"
       >
         Creating an org registers the tenant. It does not give the org a scope colour or
@@ -170,7 +170,7 @@
 
       <%!-- The surface must not pretend the form finishes the job. --%>
       <div
-        class="rounded-lg border border-base-300 bg-base-200 p-3 text-xs text-base-content/60"
+        class="rounded-lg border border-edge bg-base-200 p-3 text-xs text-base-content/60"
         data-role="create-org-followup-note"
       >
         Creating an org registers the tenant. Its scope colour and its chip on the Tasks

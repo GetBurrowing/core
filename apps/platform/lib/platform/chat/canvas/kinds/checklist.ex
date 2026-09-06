@@ -36,7 +36,7 @@ defmodule Platform.Chat.Canvas.Kinds.Checklist do
 
     ~H"""
     <div class={[
-      "card-checklist flex flex-col gap-1 rounded-xl border border-base-300 bg-base-200 p-3",
+      "card-checklist flex flex-col gap-1 rounded-xl border border-edge bg-base-200 p-3",
       @props["class_overrides"]
     ]}>
       <div class="flex items-center justify-between mb-1">

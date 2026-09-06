@@ -59,7 +59,7 @@ defmodule PlatformWeb.Components.TaskMergeControls do
          `bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]`
          already keeps it clear of the iOS bottom-tab nav, so no
          defensive bottom padding belongs here. --%>
-    <div class="shrink-0 border-t border-base-300 bg-base-100" data-role="task-merge-controls">
+    <div class="shrink-0 border-t border-edge bg-base-100" data-role="task-merge-controls">
       <%!-- Full-width state band, above the buttons so it is read before
            the hand reaches the control rather than sitting beside it
            where it degrades into decoration. --%>

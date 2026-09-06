@@ -92,7 +92,7 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
           alt={@props["alt"] || ""}
           class={[
             "max-w-full h-auto block",
-            @props["border"] && "border border-base-300"
+            @props["border"] && "border border-edge"
           ]}
         />
       </a>

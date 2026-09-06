@@ -68,7 +68,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
     ~H"""
     <div class="flex flex-1 flex-col overflow-hidden">
       <%!-- Toolbar --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-6 py-3">
+      <div class="flex items-center justify-between border-b border-edge px-6 py-3">
         <div class="flex items-center gap-3">
           <span class={[file_icon(@page.file_key), "size-5 text-primary"]}></span>
           <%!-- Version / updated-by / relative-time meta lives in the
@@ -90,7 +90,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
             </button>
             <%!-- Delete confirmation popover --%>
             <%= if @confirm_delete == @page.file_key do %>
-              <div class="absolute right-0 top-full mt-1 z-50 rounded-lg border border-base-300 bg-base-100 p-4 shadow-lg w-64">
+              <div class="absolute right-0 top-full mt-1 z-50 rounded-lg border border-edge bg-base-100 p-4 shadow-lg w-64">
                 <p class="text-sm font-medium mb-3">
                   Delete {@page.file_key}?
                 </p>
@@ -123,7 +123,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
       </div>
 
       <%!-- Content stats footer (version / dates live in the right pane) --%>
-      <div class="flex items-center gap-4 border-t border-base-300 px-6 py-2 text-xs text-base-content/40">
+      <div class="flex items-center gap-4 border-t border-edge px-6 py-2 text-xs text-base-content/40">
         <span class="flex items-center gap-1">
           <span class="hero-document size-3.5"></span>
           {byte_size(@page.content)} bytes
@@ -150,7 +150,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
     ~H"""
     <div class="flex flex-1 flex-col overflow-hidden">
       <%!-- Editor toolbar --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-6 py-3">
+      <div class="flex items-center justify-between border-b border-edge px-6 py-3">
         <div class="flex items-center gap-3">
           <span class={[file_icon(@page.file_key), "size-5 text-warning"]}></span>
           <div>
@@ -191,7 +191,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
         id="org-memory-frontmatter-form"
         phx-change="update_frontmatter"
         phx-submit="save_page"
-        class="border-b border-base-300 bg-base-200/40 px-6 py-3"
+        class="border-b border-edge bg-base-200/40 px-6 py-3"
       >
         <h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content/40">
           Frontmatter
@@ -208,7 +208,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
       </.form>
 
       <%!-- Complex frontmatter fallback: read-only, edit YAML in body --%>
-      <div :if={@fm_complex} class="border-b border-base-300 bg-base-200/40 px-6 py-3">
+      <div :if={@fm_complex} class="border-b border-edge bg-base-200/40 px-6 py-3">
         <h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content/40">
           Frontmatter
         </h2>
@@ -224,8 +224,8 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
       <%!-- Split editor + preview --%>
       <div class="flex flex-1 overflow-hidden">
         <%!-- Editor pane --%>
-        <div class="flex flex-1 flex-col border-r border-base-300">
-          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content/40 border-b border-base-300">
+        <div class="flex flex-1 flex-col border-r border-edge">
+          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content/40 border-b border-edge">
             Markdown
           </div>
           <textarea
@@ -239,7 +239,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
 
         <%!-- Preview pane --%>
         <div class="flex flex-1 flex-col">
-          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content/40 border-b border-base-300">
+          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content/40 border-b border-edge">
             Preview
           </div>
           <div class="flex-1 overflow-y-auto px-6 py-4">

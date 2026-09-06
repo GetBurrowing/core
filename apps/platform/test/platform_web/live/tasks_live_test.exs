@@ -8759,7 +8759,7 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "max-h-[90vh] w-full max-w-6xl",
              "expected mirrored review-canvas inner card sizing (max-h-[90vh] w-full max-w-6xl)"
 
-      assert html =~ "rounded-2xl border border-base-300 bg-base-100 shadow-2xl",
+      assert html =~ "rounded-2xl border border-edge bg-base-100 shadow-2xl",
              "expected mirrored review-canvas inner card chrome (rounded, border, shadow)"
     end
   end
@@ -8937,7 +8937,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # on unrelated flex rows.
       header_tag =
         case Regex.run(
-               ~r/<div class="flex items-center justify-between border-b border-base-300 px-4 py-3[^"]*">/,
+               ~r/<div class="flex items-center justify-between border-b border-edge px-4 py-3[^"]*">/,
                html
              ) do
           [tag] -> tag

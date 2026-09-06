@@ -1,6 +1,6 @@
 <div class="flex h-full min-h-0 flex-col">
   <%!-- Header --%>
-  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+  <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
       <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
         Skills
@@ -23,7 +23,7 @@
         :for={skill <- @skills}
         phx-click="select_skill"
         phx-value-slug={skill.slug}
-        class="card card-compact cursor-pointer border border-base-300 bg-base-100 shadow-sm transition-shadow hover:shadow-md"
+        class="card card-compact cursor-pointer border border-edge bg-base-100 shadow-sm transition-shadow hover:shadow-md"
       >
         <div class="card-body gap-2 p-4">
           <div class="flex items-start justify-between gap-2">
@@ -50,9 +50,9 @@
        clear both to land flush with the visible nav top. --%>
   <div
     :if={@show_detail && @selected_skill}
-    class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-2xl flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
+    class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-2xl flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
   >
-    <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+    <div class="flex items-center justify-between border-b border-edge px-4 py-3">
       <h2 class="text-sm font-semibold truncate">{@selected_skill.name}</h2>
       <div class="flex items-center gap-2">
         <span
@@ -110,7 +110,7 @@
             >{@edit_form[:content].value}</textarea>
 
             <%!-- Markdown preview --%>
-            <div class="rounded-box border border-base-300 bg-base-200/30 p-4 overflow-y-auto max-h-[500px] prose prose-sm">
+            <div class="rounded-box border border-edge bg-base-200/30 p-4 overflow-y-auto max-h-[500px] prose prose-sm">
               {Platform.Chat.ContentRenderer.render_message(@edit_form[:content].value || "")}
             </div>
           </div>
@@ -132,7 +132,7 @@
       </.form>
 
       <%!-- Attachments section --%>
-      <div :if={@skill_attachments_grouped} class="space-y-4 border-t border-base-300 pt-4">
+      <div :if={@skill_attachments_grouped} class="space-y-4 border-t border-edge pt-4">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
           Attached To
         </h3>
@@ -145,7 +145,7 @@
               :for={
                 {project_id, project_name} <- Map.get(@skill_attachments_grouped, "project", [])
               }
-              class="flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs border border-base-300"
+              class="flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs border border-edge"
             >
               <span>{project_name}</span>
               <button
@@ -185,7 +185,7 @@
           <div class="flex flex-wrap gap-2">
             <div
               :for={{epic_id, epic_name} <- Map.get(@skill_attachments_grouped, "epic", [])}
-              class="flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs border border-base-300"
+              class="flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs border border-edge"
             >
               <span>{epic_name}</span>
               <button
@@ -223,7 +223,7 @@
           <div class="flex flex-wrap gap-2">
             <span
               :for={{_task_id, task_title} <- Map.get(@skill_attachments_grouped, "task", [])}
-              class="rounded-full bg-base-200 px-2 py-0.5 text-xs border border-base-300 text-base-content/60"
+              class="rounded-full bg-base-200 px-2 py-0.5 text-xs border border-edge text-base-content/60"
             >
               {task_title}
             </span>
@@ -259,7 +259,7 @@
     <div class="absolute inset-0 bg-black/40" phx-click="close_skill_sheet" />
 
     <div class="relative w-full max-w-lg rounded-t-2xl bg-base-100 shadow-2xl transition-transform duration-300 pb-[env(safe-area-inset-bottom)]">
-      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+      <div class="flex items-center justify-between border-b border-edge px-4 py-3">
         <h2 class="text-sm font-semibold">New Skill</h2>
         <button class="btn btn-sm btn-ghost btn-square" phx-click="close_skill_sheet">
           <span class="hero-x-mark size-4"></span>

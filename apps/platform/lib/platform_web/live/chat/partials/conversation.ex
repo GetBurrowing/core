@@ -788,7 +788,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     ~H"""
     <div
       :if={present?(@search_query)}
-      class="border-b border-base-300 bg-base-200 px-5 py-3"
+      class="border-b border-edge bg-base-200 px-5 py-3"
     >
       <div class="flex items-center justify-between gap-3">
         <div>
@@ -813,7 +813,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           type="button"
           phx-click="search_open_result"
           phx-value-message-id={result.id}
-          class="block w-full rounded-xl border border-base-300 bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
+          class="block w-full rounded-xl border border-edge bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
         >
           <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
             <span>{PresenceHooks.sender_name(@participants_map, result.participant_id)}</span>
@@ -875,7 +875,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     ~H"""
     <div
       :if={@show_pins && @pins != []}
-      class="border-b border-base-300 bg-base-200 px-5 py-2"
+      class="border-b border-edge bg-base-200 px-5 py-2"
     >
       <p class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
         Pinned Messages
@@ -921,7 +921,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     ~H"""
     <div
       :if={@show_canvases}
-      class="border-b border-base-300 bg-base-200 px-5 py-3"
+      class="border-b border-edge bg-base-200 px-5 py-3"
     >
       <div class="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div class="space-y-2">
@@ -966,7 +966,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
               phx-value-canvas-id={canvas.id}
               class={[
                 "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors",
-                "border-base-300 bg-base-100 hover:border-primary/40 hover:bg-base-100/80",
+                "border-edge bg-base-100 hover:border-primary/40 hover:bg-base-100/80",
                 @active_canvas && @active_canvas.id == canvas.id && "border-primary bg-primary/5"
               ]}
             >
@@ -999,7 +999,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
             <div
               :if={@canvases == []}
-              class="rounded-xl border border-dashed border-base-300 bg-base-100 px-3 py-4 text-sm text-base-content/50"
+              class="rounded-xl border border-dashed border-edge bg-base-100 px-3 py-4 text-sm text-base-content/50"
             >
               No canvases yet. Create one to collaborate live in this channel.
             </div>
@@ -1011,7 +1011,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           id="new-canvas-form"
           phx-hook="ButtonLoading"
           phx-submit="canvas_create"
-          class="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4"
+          class="space-y-3 rounded-2xl border border-edge bg-base-100 p-4"
         >
           <div>
             <p class="text-sm font-semibold text-base-content">New canvas</p>

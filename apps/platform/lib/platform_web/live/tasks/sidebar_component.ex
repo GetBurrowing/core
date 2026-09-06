@@ -377,9 +377,9 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
       <%!-- Desktop sidebar --%>
       <aside
         :if={@sidebar_open}
-        class="hidden w-56 shrink-0 flex-col border-r border-base-300 bg-base-100 md:flex"
+        class="hidden w-56 shrink-0 flex-col border-r border-edge bg-base-100 md:flex"
       >
-        <div class="flex items-center justify-between border-b border-base-300 px-3 py-3">
+        <div class="flex items-center justify-between border-b border-edge px-3 py-3">
           <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
             Projects
           </span>
@@ -601,7 +601,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
           </details>
         </div>
 
-        <div class="border-t border-base-300 p-2">
+        <div class="border-t border-edge p-2">
           <button
             phx-click="filter_clear"
             phx-target="#tasks-filters"
@@ -617,7 +617,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
         :if={!@sidebar_open}
         phx-click="sidebar_toggle"
         phx-target={@myself}
-        class="hidden md:flex items-center justify-center w-6 shrink-0 border-r border-base-300 hover:bg-base-200"
+        class="hidden md:flex items-center justify-center w-6 shrink-0 border-r border-edge hover:bg-base-200"
         title="Expand sidebar"
       >
         <span class="hero-chevron-right size-4 text-base-content/50"></span>

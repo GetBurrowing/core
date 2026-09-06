@@ -33,10 +33,11 @@ defmodule Platform.Design.ChipSoftContrastTest do
 
   Two corrections carried by the comment and asserted here:
 
-    * The chip's edge is **not** adjacent to `--color-base-300`. That token is
-      the card's own border (`border border-base-300 bg-base-100`), and a chip
-      sits inside the card's padding, so an earlier figure taken against
-      base-300 named a pair that does not occur.
+    * The chip's edge is **not** adjacent to `--color-base-300`. That token was
+      the card's own border (`border border-edge bg-base-100` since task
+      01a0740b moved the border job to the `--edge` slot), and a chip sits
+      inside the card's padding, so an earlier figure taken against base-300
+      named a pair that does not occur.
     * `background-clip` is at its `border-box` default, so the 25%-alpha border
       composites over the chip's own fill rather than over the card surface.
 

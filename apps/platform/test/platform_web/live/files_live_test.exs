@@ -894,7 +894,7 @@ defmodule PlatformWeb.FilesLiveTest do
       refute classes =~ "error"
       # Positive control on the same attribute: the strip IS styled, so
       # the two refutes are not reading an empty class list.
-      assert classes =~ "border-base-300"
+      assert classes =~ "border-edge"
     end
 
     test "full-screen overlay opens, does NOT take the reserved z-50, and Escape-closes",

@@ -83,7 +83,7 @@ defmodule PlatformWeb.Components.InboxItem do
     ~H"""
     <li
       id={@id}
-      class="group relative flex items-stretch gap-1 rounded-2xl border border-base-300 bg-base-100 transition-colors hover:border-base-content/20"
+      class="group relative flex items-stretch gap-1 rounded-2xl border border-edge bg-base-100 transition-colors hover:border-base-content/20"
       data-role="inbox-item"
       data-item-id={@item.id}
       data-item-kind={@item.kind}

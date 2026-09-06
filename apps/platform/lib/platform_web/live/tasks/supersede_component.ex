@@ -79,7 +79,7 @@ defmodule PlatformWeb.Tasks.SupersedeComponent do
         <%!-- Sheet / dialog --%>
         <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[90vh] overflow-y-auto">
           <%!-- Header --%>
-          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+          <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div class="min-w-0">
               <h2 class="text-base font-semibold">Return to planning</h2>
               <p class="mt-0.5 text-xs text-base-content/60 truncate">

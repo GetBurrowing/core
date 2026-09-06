@@ -102,7 +102,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
       :if={@active_space && @active_space.archived_at}
       id="archived-banner"
       role="status"
-      class="flex-shrink-0 flex items-center gap-3 border-b border-base-300 bg-base-200/60 px-5 py-2.5"
+      class="flex-shrink-0 flex items-center gap-3 border-b border-edge bg-base-200/60 px-5 py-2.5"
     >
       <%= if @active_space.deletion_scheduled_at do %>
         <span class="hero-trash size-4 flex-shrink-0 text-error"></span>

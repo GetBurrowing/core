@@ -30,8 +30,8 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
 
   def right_pane(assigns) do
     ~H"""
-    <aside class="flex min-h-0 flex-col overflow-y-auto border-l border-base-300 bg-base-200/40">
-      <div class="border-b border-base-300 px-4 py-3">
+    <aside class="flex min-h-0 flex-col overflow-y-auto border-l border-edge bg-base-200/40">
+      <div class="border-b border-edge px-4 py-3">
         <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/50">
           Page Details
         </h2>
@@ -39,7 +39,7 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
 
       <%= if @page do %>
         <%!-- Backlinks (top) --%>
-        <div class="border-b border-base-300 px-4 py-3" data-role="backlinks">
+        <div class="border-b border-edge px-4 py-3" data-role="backlinks">
           <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content/40">
             Backlinks
           </h3>

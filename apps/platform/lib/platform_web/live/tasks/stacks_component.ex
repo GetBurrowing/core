@@ -138,7 +138,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
         id="stack-detail-panel"
         data-role="stack-detail-panel"
         data-stack-id={@selected_stack.id}
-        class="fixed top-0 left-0 md:left-auto right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] z-30 flex w-full max-w-full md:max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
+        class="fixed top-0 left-0 md:left-auto right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] z-30 flex w-full max-w-full md:max-w-lg flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
       >
         <%!-- Head/app bar. On mobile the chrome is a back arrow + Stack
            tag + overflow kebab (matching the mock's `.detail-appbar`).
@@ -156,7 +156,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
            arbitrarily long descriptions AND arbitrarily many members. The
            action bar stays outside as a pinned `shrink-0` footer. --%>
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" data-role="stack-detail-scroll">
-          <div class="shrink-0 flex items-start justify-between gap-3 border-b border-base-300 px-4 py-3">
+          <div class="shrink-0 flex items-start justify-between gap-3 border-b border-edge px-4 py-3">
             <%!-- Mobile back arrow: same handler as the desktop close X. --%>
             <button
               type="button"
@@ -253,7 +253,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
            Computed via `stack_meta/2` to keep the template clean. --%>
           <% meta = stack_meta(@selected_stack, @selected_stack_members) %>
           <div
-            class="shrink-0 grid grid-cols-2 md:grid-cols-4 gap-2 border-b border-base-300 px-4 py-3"
+            class="shrink-0 grid grid-cols-2 md:grid-cols-4 gap-2 border-b border-edge px-4 py-3"
             data-role="stack-detail-meta"
           >
             <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-status">
@@ -438,8 +438,22 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                   review_count = Map.get(@selected_stack_member_review_counts, member.id, 0)
                   action_reason = Tasks.needs_human_action_reason(member, review_count)
                   {action_label, action_reason_attr} = stack_member_action_label(action_reason) %>
+                  <%!-- Repointed to border-edge (task 01a0740b stage 2), and the
+                        new ring is intended. This row was `border-base-300` over
+                        `bg-base-300`: border and fill the same colour, so the
+                        declared border drew nothing.
+
+                        Repointing is right here because the border is declared
+                        deliberately. The meta-cells above (~line 259) are the same
+                        visual family (`rounded-md bg-base-300 p-2`) and carry no
+                        border at all. This component already omits the border
+                        where none is wanted, so its presence on this row is a
+                        choice, not boilerplate. The row is also the interactive
+                        one: `cursor-pointer` with a hover fill flip, and a
+                        clickable row earns a defined edge that a static meta-cell
+                        does not. --%>
                   <div
-                    class="mlist-item rounded-md bg-base-300 border border-base-300 p-2 cursor-pointer hover:bg-base-200 transition-colors"
+                    class="mlist-item rounded-md bg-base-300 border border-edge p-2 cursor-pointer hover:bg-base-200 transition-colors"
                     phx-click="select_task"
                     phx-value-id={member.id}
                     data-role="stack-detail-member-row"
@@ -545,7 +559,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
         <% has_backlog_member? =
           Enum.any?(@selected_stack_members, &(&1.status == "backlog")) %>
         <div
-          class="shrink-0 flex gap-2 border-t border-base-300 bg-base-100 px-4 py-3"
+          class="shrink-0 flex gap-2 border-t border-edge bg-base-100 px-4 py-3"
           data-role="stack-detail-actions"
         >
           <%!-- Start Planning (T8 stage 3): stack-level mirror of the per-task
@@ -663,14 +677,14 @@ defmodule PlatformWeb.Tasks.StacksComponent do
         <%!-- Overlay panel — full-screen takeover on mobile, pinned to the
            right edge on desktop matching the stack pane's column. --%>
         <div
-          class="absolute inset-0 md:inset-y-0 md:left-auto md:right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] flex w-full max-w-full md:max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-2xl safe-area-top"
+          class="absolute inset-0 md:inset-y-0 md:left-auto md:right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] flex w-full max-w-full md:max-w-lg flex-col border-l border-edge bg-base-100 shadow-2xl safe-area-top"
           data-role="stack-feedback-overlay-panel"
         >
           <%!-- Overlay header: title + count + close X. Mirrors the stack-
              detail panel chrome shape for visual continuity, but uses the
              "Needs feedback" label so the user understands this is the
              drill-down from the chrome pill. --%>
-          <div class="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
+          <div class="flex items-center justify-between gap-3 border-b border-edge px-4 py-3">
             <div class="flex min-w-0 items-center gap-2">
               <span class="hero-eye size-4 shrink-0 text-warning" aria-hidden="true"></span>
               <div class="min-w-0">
@@ -707,7 +721,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
           <div class="flex-1 overflow-y-auto px-4 py-3">
             <%= if @selected_stack_open_review_requests == [] do %>
               <div
-                class="rounded-lg border border-dashed border-base-300 bg-base-200/50 p-6 text-center text-sm text-base-content/60"
+                class="rounded-lg border border-dashed border-edge bg-base-200/50 p-6 text-center text-sm text-base-content/60"
                 data-role="stack-feedback-overlay-empty"
               >
                 No pending feedback on this stack.
@@ -716,13 +730,13 @@ defmodule PlatformWeb.Tasks.StacksComponent do
               <ul class="flex flex-col gap-4" data-role="stack-feedback-overlay-list">
                 <li
                   :for={rr <- @selected_stack_open_review_requests}
-                  class="rounded-xl border border-base-300 bg-base-100"
+                  class="rounded-xl border border-edge bg-base-100"
                   data-role="stack-feedback-overlay-item"
                   data-review-request-id={rr.id}
                   data-task-id={rr.task_id}
                 >
                   <%!-- Row header: member task title + drill-in link. --%>
-                  <div class="flex items-start justify-between gap-2 border-b border-base-300 px-3 py-2">
+                  <div class="flex items-start justify-between gap-2 border-b border-edge px-3 py-2">
                     <div class="min-w-0">
                       <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
                         Member task
@@ -748,7 +762,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                   <ul class="flex flex-col gap-3 p-3">
                     <li
                       :for={item <- rr.items || []}
-                      class="rounded-lg border border-base-300 bg-base-200/40 p-3"
+                      class="rounded-lg border border-edge bg-base-200/40 p-3"
                       data-role="stack-feedback-overlay-review-item"
                       data-review-item-id={item.id}
                     >
@@ -846,7 +860,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                       <%= cond do %>
                         <% canvas = is_binary(item.canvas_id) && Map.get(@selected_stack_open_review_canvases, item.canvas_id) -> %>
                           <div
-                            class="rounded-md border border-base-300 bg-base-100 p-2"
+                            class="rounded-md border border-edge bg-base-100 p-2"
                             data-role="stack-feedback-overlay-canvas"
                             data-canvas-id={canvas.id}
                           >
@@ -858,12 +872,12 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                           </div>
                         <% is_binary(item.content) and item.content != "" -> %>
                           <pre
-                            class="overflow-x-auto whitespace-pre-wrap rounded-md border border-base-300 bg-base-100 p-2 text-xs text-base-content/80"
+                            class="overflow-x-auto whitespace-pre-wrap rounded-md border border-edge bg-base-100 p-2 text-xs text-base-content/80"
                             data-role="stack-feedback-overlay-content"
                           >{item.content}</pre>
                         <% true -> %>
                           <div
-                            class="rounded-md border border-dashed border-base-300 bg-base-100 p-2 text-xs text-base-content/50"
+                            class="rounded-md border border-dashed border-edge bg-base-100 p-2 text-xs text-base-content/50"
                             data-role="stack-feedback-overlay-empty-item"
                           >
                             No reviewable content attached.
@@ -880,7 +894,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
              action bar so the dismiss target is reachable on tall mobile
              viewports without scrolling all the way back up. --%>
           <div
-            class="mt-auto sticky bottom-0 flex gap-2 border-t border-base-300 bg-base-100 px-4 py-3"
+            class="mt-auto sticky bottom-0 flex gap-2 border-t border-edge bg-base-100 px-4 py-3"
             data-role="stack-feedback-overlay-actions"
           >
             <button
@@ -917,8 +931,8 @@ defmodule PlatformWeb.Tasks.StacksComponent do
           data-role="stack-detail-dag-modal-backdrop"
           aria-hidden="true"
         />
-        <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-2xl max-sm:h-screen max-sm:max-h-none max-sm:w-screen max-sm:rounded-none max-sm:border-0">
-          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+        <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-edge bg-base-100 shadow-2xl max-sm:h-screen max-sm:max-h-none max-sm:w-screen max-sm:rounded-none max-sm:border-0">
+          <div class="flex items-center justify-between border-b border-edge px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
             <div class="min-w-0">
               <div class="truncate text-sm font-semibold">Stack dep graph</div>
               <div class="text-xs text-base-content/60">
@@ -1022,7 +1036,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
         <%!-- Sheet / dialog --%>
         <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[90vh] overflow-y-auto">
           <%!-- Header --%>
-          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+          <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div>
               <h2 class="text-base font-semibold">Assign Agents</h2>
               <p class="mt-0.5 text-xs text-base-content/60">
@@ -1041,7 +1055,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
           </div>
 
           <%!-- Mode toggle (segmented) --%>
-          <div class="flex items-center justify-between px-4 py-3 border-b border-base-300 gap-3">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-edge gap-3">
             <p class="text-xs text-base-content/60 leading-snug">
               {if @stack_assignee_modal_mode == :advanced,
                 do: "One agent per phase, applied to every member.",
@@ -1136,7 +1150,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
             </div>
 
             <%!-- Actions --%>
-            <div class="mt-2 flex justify-end gap-2 border-t border-base-300 pt-3">
+            <div class="mt-2 flex justify-end gap-2 border-t border-edge pt-3">
               <button
                 type="button"
                 phx-click="stack_close_assignee_modal"

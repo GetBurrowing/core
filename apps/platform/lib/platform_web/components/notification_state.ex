@@ -235,7 +235,7 @@ defmodule PlatformWeb.Components.NotificationState do
     ~H"""
     <div
       :if={@push_permission == "prompt"}
-      class="mb-6 flex items-start gap-3 rounded-box border border-base-300 bg-base-200 p-3"
+      class="mb-6 flex items-start gap-3 rounded-box border border-edge bg-base-200 p-3"
       role="status"
       data-role="notification-state"
       data-permission="prompt"
@@ -259,7 +259,7 @@ defmodule PlatformWeb.Components.NotificationState do
 
     <div
       :if={@push_permission == "denied"}
-      class="mb-6 flex items-start gap-3 rounded-box border border-base-300 border-l-[3px] border-l-warning bg-base-200 p-3"
+      class="mb-6 flex items-start gap-3 rounded-box border border-edge border-l-[3px] border-l-warning bg-base-200 p-3"
       role="status"
       data-role="notification-state"
       data-permission="denied"
@@ -286,7 +286,7 @@ defmodule PlatformWeb.Components.NotificationState do
       :if={
         @push_permission == "granted" and @registration_failed in [:no_participant, :subscribe_failed]
       }
-      class="mb-6 flex items-start gap-3 rounded-box border border-base-300 border-l-[3px] border-l-warning bg-base-200 p-3"
+      class="mb-6 flex items-start gap-3 rounded-box border border-edge border-l-[3px] border-l-warning bg-base-200 p-3"
       role="status"
       data-role="notification-state"
       data-permission="granted"

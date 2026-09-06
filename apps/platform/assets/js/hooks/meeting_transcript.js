@@ -331,7 +331,7 @@ const MeetingTranscript = {
     groups.forEach((group, index) => {
       // The hairline sits above each SPEAKER CHANGE, so the first group
       // has none: there is no change above it to mark.
-      const rule = index === 0 ? "" : " border-t border-base-300"
+      const rule = index === 0 ? "" : " border-t border-edge"
       const agent = group.identity && group.identity.startsWith(AGENT_IDENTITY_PREFIX)
       const chip = agent
         ? `<span class="badge badge-outline badge-xs text-[9px] font-bold uppercase tracking-wide text-base-content/60" data-role="transcript-agent-chip">agent</span>`

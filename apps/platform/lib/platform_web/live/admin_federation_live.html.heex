@@ -4,7 +4,7 @@
     %{label: "Federation", navigate: nil}
   ]} />
   <%!-- Header --%>
-  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+  <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
       <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
         Admin · Federation Health
@@ -28,7 +28,7 @@
       </h2>
 
       <%= if Enum.empty?(@runtimes) do %>
-        <div class="rounded-lg border border-base-300 p-8 text-center text-base-content/40 text-sm">
+        <div class="rounded-lg border border-edge p-8 text-center text-base-content/40 text-sm">
           No active runtimes registered.
         </div>
       <% else %>
@@ -48,7 +48,7 @@
           still reachable by scrolling — but the columns that lead are now the
           ones the canvas says have to be read together.
         --%>
-        <div class="rounded-lg border border-base-300 overflow-x-auto">
+        <div class="rounded-lg border border-edge overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
               <tr>
@@ -140,7 +140,7 @@
                     and in the screenshot someone pastes into the channel at
                     midnight, which is where this gets read.
 
-                    The `border-base-300` hairline below is the most
+                    The `border-edge` hairline below is the most
                     load-bearing pixel on the page: everything above it
                     HAPPENED, everything below it was ASSERTED by the process
                     whose competence is in question.
@@ -179,7 +179,7 @@
                         </div>
                       <% end %>
                     </div>
-                    <div data-proof-rule class="mt-2 border-t border-base-300 pt-2">
+                    <div data-proof-rule class="mt-2 border-t border-edge pt-2">
                       <%= if Enum.empty?(declared_chips(runtime)) do %>
                         <span data-declared class="text-info text-[12px]">declared: none</span>
                       <% else %>
@@ -261,7 +261,7 @@
       </div>
 
       <%!-- Cumulative loss counters. Monotonic, never pruned — see the caption. --%>
-      <div id="dead-letter-cumulative" class="rounded-lg border border-base-300 p-3 mb-3">
+      <div id="dead-letter-cumulative" class="rounded-lg border border-edge p-3 mb-3">
         <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
           <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
             Cumulative loss
@@ -403,12 +403,12 @@
       </div>
 
       <%= if Enum.empty?(@dead_letters) do %>
-        <div class="rounded-lg border border-base-300 p-6 text-center text-base-content/40 text-sm">
+        <div class="rounded-lg border border-edge p-6 text-center text-base-content/40 text-sm">
           The ledger is empty. That means nothing is queued and nothing settled recently —
           it does not mean nothing was ever lost; read the cumulative totals above.
         </div>
       <% else %>
-        <div class="rounded-lg border border-base-300 overflow-x-auto">
+        <div class="rounded-lg border border-edge overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
               <tr>

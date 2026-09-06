@@ -755,7 +755,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
              summary that reveals the full plan body when expanded. --%>
       <div
         :for={plan <- rejected_plans}
-        class="rounded-box border border-base-300/60 bg-base-200/20 overflow-hidden"
+        class="rounded-box border border-edge/60 bg-base-200/20 overflow-hidden"
       >
         <% expanded? = plan_expanded?(@expanded_plans, plan) %>
         <button
@@ -778,7 +778,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           :if={expanded?}
           data-role="plan-body"
           data-plan-id={plan.id}
-          class="border-t border-base-300/60 p-3 space-y-2 bg-base-200/30"
+          class="border-t border-edge/60 p-3 space-y-2 bg-base-200/30"
         >
           <%!-- Full rejection reason. Renders nothing for legacy rows
                  where `rejection_reason` is nil so the body doesn't grow
@@ -787,7 +787,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             :if={present?(plan.rejection_reason)}
             data-role="plan-rejection-reason"
             data-plan-id={plan.id}
-            class="rounded border border-base-300/60 bg-base-100/40 px-3 py-2"
+            class="rounded border border-edge/60 bg-base-100/40 px-3 py-2"
           >
             <p class="text-[10px] uppercase tracking-wider text-base-content/50 mb-1">
               Rejection reason
@@ -805,7 +805,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         :for={plan <- active_plans}
         data-role="plan-body"
         data-plan-id={plan.id}
-        class={"rounded-box border p-3 space-y-2 #{if plan.status == "pending_review", do: "border-warning bg-warning/5", else: "border-base-300 bg-base-200/30"}"}
+        class={"rounded-box border p-3 space-y-2 #{if plan.status == "pending_review", do: "border-warning bg-warning/5", else: "border-edge bg-base-200/30"}"}
       >
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium">v{plan.version}</span>
@@ -943,9 +943,9 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
              which left visible dead space below content. --%>
       <div
         :if={@show_detail && @selected_task}
-        class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
+        class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-lg flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
       >
-        <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <div class="flex items-center justify-between border-b border-edge px-4 py-3">
           <%= cond do %>
             <% @edit_mode and @editing_task_title_id == @selected_task.id -> %>
               <input
@@ -965,7 +965,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             <% @edit_mode -> %>
               <h2
                 id={"detail-title-#{@selected_task.id}"}
-                class="text-sm font-semibold truncate cursor-text rounded px-1 -mx-1 flex-1 border border-dashed border-base-300 hover:border-base-content/40 hover:bg-base-200"
+                class="text-sm font-semibold truncate cursor-text rounded px-1 -mx-1 flex-1 border border-dashed border-edge hover:border-base-content/40 hover:bg-base-200"
                 phx-click="detail_start_edit_title"
                 phx-target={@myself}
                 phx-value-task-id={@selected_task.id}
@@ -1291,7 +1291,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               <form
                 phx-change="detail_update_task_field"
                 phx-target={@myself}
-                class="flex flex-col gap-1 rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+                class="flex flex-col gap-1 rounded border border-dashed border-edge hover:border-base-content/40 p-1"
                 data-role="priority-form"
                 data-editable="true"
               >
@@ -1322,7 +1322,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               <form
                 phx-change="detail_update_task_field"
                 phx-target={@myself}
-                class="flex flex-col gap-1 rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+                class="flex flex-col gap-1 rounded border border-dashed border-edge hover:border-base-content/40 p-1"
                 data-role="deploy-target-form"
                 data-editable="true"
               >
@@ -1412,7 +1412,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               <form
                 phx-change="detail_update_task_field"
                 phx-target={@myself}
-                class="flex flex-col gap-1 rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+                class="flex flex-col gap-1 rounded border border-dashed border-edge hover:border-base-content/40 p-1"
                 data-role="sponsor-form"
                 data-editable="true"
               >
@@ -1609,7 +1609,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             class={[
               "space-y-1",
               @edit_mode &&
-                "rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+                "rounded border border-dashed border-edge hover:border-base-content/40 p-1"
             ]}
             data-role="description-block"
             data-editable={to_string(@edit_mode)}
@@ -1713,7 +1713,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                     "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs " <>
                       if source == "task",
                         do: "bg-primary/10 text-primary border border-primary/20",
-                        else: "bg-base-200 text-base-content/60 border border-base-300"
+                        else: "bg-base-200 text-base-content/60 border border-edge"
                   }
               >
                 <span class="font-medium">{skill.name}</span>
@@ -1790,7 +1790,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         <%!-- Sheet / dialog --%>
         <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[90vh] overflow-y-auto">
           <%!-- Header --%>
-          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+          <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div class="min-w-0">
               <h2 class="text-base font-semibold">Reopen with feedback</h2>
               <p class="mt-0.5 text-xs text-base-content/60 truncate">
@@ -2353,7 +2353,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
       <div
         :if={@e2e_validations != []}
         data-role="e2e-behavior-section"
-        class="mt-3 rounded-box border border-base-300 bg-base-200/30 p-3 space-y-2"
+        class="mt-3 rounded-box border border-edge bg-base-200/30 p-3 space-y-2"
       >
         <div class="flex items-center gap-2">
           <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
@@ -2368,7 +2368,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           :for={v <- @e2e_validations}
           data-role="e2e-behavior-validation"
           data-validation-id={v.id}
-          class="space-y-2 rounded border border-base-300 bg-base-100/40 p-2 text-xs"
+          class="space-y-2 rounded border border-edge bg-base-100/40 p-2 text-xs"
         >
           <div class="flex items-center gap-2">
             <span class={"size-3 #{stage_status_icon(v.status)}"}></span>

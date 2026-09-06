@@ -143,7 +143,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
     ~H"""
     <section
       :if={@open != [] or @closed != [] or @error}
-      class="border-base-300 bg-base-200/40 border-b px-3 py-3"
+      class="border-edge bg-base-200/40 border-b px-3 py-3"
       data-role="meeting-candidate-countdown-rail"
     >
       <%!-- `Cards ● appearing live` — the drawing's own words, and an

@@ -395,7 +395,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
           <%!-- Auto-merge config — visible only when PR Merge is selected --%>
           <div
             :if={@deploy_strategy_type == "pr_merge"}
-            class="space-y-2 pl-2 border-l-2 border-base-300"
+            class="space-y-2 pl-2 border-l-2 border-edge"
           >
             <label class="label cursor-pointer justify-start gap-2">
               <input
