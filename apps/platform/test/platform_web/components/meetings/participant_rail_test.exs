@@ -30,7 +30,19 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       participant_type: "user",
       display_name: name,
       avatar_url: nil,
-      attention_config: %{"mic_on" => true}
+      # An EXPLICIT LiveKit identity, so the slot tests name the key by
+      # hand instead of asking `gallery_identity/1` what it would have
+      # produced — a fixture that computes its own expected value with
+      # the code under test cannot fail when that code is wrong. Same
+      # string the fallback clause yields, so no existing assertion moves.
+      identity: "user:" <> id,
+      # No `attention_config` content. Nothing in production writes
+      # `"mic_on"` — `MeetingLive` builds every live presence row with
+      # `attention_config: %{}` — so a fixture that seeded it was testing a
+      # branch the app cannot reach. Task 01a0740c moved per-identity mic
+      # state onto `:muted_identities`, fed from LiveKit; `mic_on?/1` and
+      # its rail read are retired in stage 3.
+      attention_config: %{}
     }
   end
 
@@ -41,6 +53,11 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       participant_type: "agent",
       display_name: name,
       avatar_url: nil,
+      # `Meetings` mints an agent's LiveKit identity as `"agent:" <> slug`
+      # (`meetings.ex:5020`). The rail does not care what the string means
+      # — it is a map key — but a realistic one keeps the human and agent
+      # key spaces from silently overlapping in a fixture.
+      identity: "agent:" <> id,
       attention_config: %{}
     }
   end
@@ -76,6 +93,37 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       now: now
     )
   end
+
+  # A rail carrying the two per-identity MapSets (task 01a0740c stage 3).
+  # `:muted` / `:camera_off` are lists of LITERAL identity strings.
+  defp media_rail(participants, opts \\ []) do
+    render_component(&ParticipantRail.participant_rail/1,
+      participants: participants,
+      agents_by_id: %{},
+      meeting: %{id: "m-1", host_participant_id: "u-1"},
+      muted_identities: MapSet.new(Keyword.get(opts, :muted, [])),
+      camera_off_identities: MapSet.new(Keyword.get(opts, :camera_off, []))
+    )
+  end
+
+  defp row_for(html, identity) do
+    case Regex.run(
+           ~r/<li[^>]*data-participant-identity="#{Regex.escape(identity)}".*?<\/li>/s,
+           html
+         ) do
+      [row] -> row
+      nil -> flunk("no roster row for identity #{identity}")
+    end
+  end
+
+  defp slot(row, role) do
+    case row |> Floki.parse_fragment!() |> Floki.find(~s([data-role="#{role}"])) do
+      [node] -> node
+      other -> flunk("expected exactly one #{role} in the row, got #{length(other)}")
+    end
+  end
+
+  defp attr(node, name), do: node |> Floki.attribute(name) |> List.first()
 
   # One agent per state in ONE rail, which is also the shape the
   # manual-approval gate asks to see.
@@ -448,6 +496,206 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.find(parsed, ~s([data-role="agent-activity-primary"])) != []
       assert Floki.find(parsed, ~s([data-role="agent-activity-reason"])) != []
       assert agent_row(html, "a-1") =~ "still running a tool"
+    end
+  end
+
+  describe "mic and camera slots (task 01a0740c stage 3)" do
+    # THE DEFECT THIS REPLACES: the rail read `MeetingLive.mic_on?/1`,
+    # which read `attention_config["mic_on"]`, which `MeetingLive`
+    # hardcoded to `%{}` on every live presence row — so every row read
+    # "Microphone off" for everyone, always. A test that hands the
+    # component a muted identity and asserts a muted glyph would have
+    # PASSED against that code. Every assertion below therefore names two
+    # participants and asserts they differ.
+
+    test "only the identity in the muted set reads muted" do
+      html =
+        media_rail(
+          [human("Mariah", "u-1"), human("Harper", "u-2")],
+          muted: ["user:u-2"]
+        )
+
+      assert attr(slot(row_for(html, "user:u-2"), "mic-indicator"), "data-mic-state") == "off"
+      assert attr(slot(row_for(html, "user:u-1"), "mic-indicator"), "data-mic-state") == "on"
+    end
+
+    test "only the identity in the camera-off set reads camera off" do
+      html =
+        media_rail(
+          [human("Mariah", "u-1"), human("Harper", "u-2")],
+          camera_off: ["user:u-1"]
+        )
+
+      assert attr(slot(row_for(html, "user:u-1"), "camera-indicator"), "data-camera-state") ==
+               "off"
+
+      assert attr(slot(row_for(html, "user:u-2"), "camera-indicator"), "data-camera-state") ==
+               "on"
+    end
+
+    test "the two axes are independent: muted does not imply camera off" do
+      html = media_rail([human("Mariah", "u-1")], muted: ["user:u-1"])
+      row = row_for(html, "user:u-1")
+
+      assert attr(slot(row, "mic-indicator"), "data-mic-state") == "off"
+      assert attr(slot(row, "camera-indicator"), "data-camera-state") == "on"
+    end
+
+    test "both slots are present on every row in every state" do
+      html =
+        media_rail(
+          [human("Mariah", "u-1"), human("Harper", "u-2"), agent("Saru", "a-1")],
+          muted: ["user:u-2"],
+          camera_off: ["user:u-2"]
+        )
+
+      parsed = Floki.parse_fragment!(html)
+
+      # THREE rows, THREE mic slots, THREE camera slots. An indicator that
+      # vanishes in one of its states is indistinguishable from one that
+      # failed to render, which is the whole reason the slots are fixed.
+      assert length(Floki.find(parsed, "li[data-participant-identity]")) == 3
+      assert length(Floki.find(parsed, ~s([data-role="mic-indicator"]))) == 3
+      assert length(Floki.find(parsed, ~s([data-role="camera-indicator"]))) == 3
+    end
+
+    test "off is carried by the well and the accessible label, not by the glyph alone" do
+      # FE-19 (01a07486-7985-7001-87ce-277681791f52): `hero-microphone-slash`
+      # generates NO CSS — Heroicons ships no `microphone-slash.svg`, and
+      # `assets/vendor/heroicons.js` emits one class per file it finds. The
+      # class is in the markup and this assertion would pass on a blank
+      # circle, so the two channels that DO reach a viewer today are
+      # asserted alongside it: the red well and the words.
+      row = row_for(media_rail([human("Mariah", "u-1")], muted: ["user:u-1"]), "user:u-1")
+      mic = slot(row, "mic-indicator")
+
+      assert attr(mic, "class") =~ "bg-error/15"
+      assert attr(mic, "aria-label") == "Microphone muted"
+      assert row =~ "hero-microphone-slash"
+      assert row =~ "Mariah, muted, camera on"
+    end
+
+    test "the camera's slashed glyph is real, unlike the mic's" do
+      # `video-camera-slash.svg` DOES ship, in all four Heroicons sizes,
+      # so the camera-off state gets all three channels for real. Asserted
+      # separately from the mic so the two are not assumed to share a fate.
+      row = row_for(media_rail([human("Mariah", "u-1")], camera_off: ["user:u-1"]), "user:u-1")
+      cam = slot(row, "camera-indicator")
+
+      assert attr(cam, "class") =~ "bg-error/15"
+      assert attr(cam, "aria-label") == "Camera off"
+      assert row =~ "hero-video-camera-slash"
+      assert row =~ "Mariah, unmuted, camera off"
+    end
+
+    test "an agent's camera slot is UNAVAILABLE, not off" do
+      html = media_rail([human("Mariah", "u-1"), agent("Saru", "a-1")], camera_off: ["user:u-1"])
+
+      agent_cam = slot(row_for(html, "agent:a-1"), "camera-indicator")
+      human_cam = slot(row_for(html, "user:u-1"), "camera-indicator")
+
+      # DIFFERENT ACCESSIBLE TEXT. "Off" implies it could be on; a roster
+      # that said "camera off" on every agent row would read as every
+      # agent having disabled their video.
+      assert attr(agent_cam, "aria-label") == "No camera"
+      assert attr(human_cam, "aria-label") == "Camera off"
+
+      # DIFFERENT CLASS, on both the well and the glyph — greyed and
+      # neutral against red and tinted — so the two are not separable only
+      # by their labels.
+      assert attr(agent_cam, "data-camera-state") == "unavailable"
+      assert attr(agent_cam, "class") =~ "bg-base-300"
+      refute attr(agent_cam, "class") =~ "bg-error"
+      assert attr(human_cam, "class") =~ "bg-error/15"
+
+      # DIFFERENT GLYPH: `hero-minus` reads as not-applicable and is not a
+      # camera at all, so the distinction survives a viewer who cannot
+      # separate the two hues.
+      assert row_for(html, "agent:a-1") =~ "hero-minus"
+      refute row_for(html, "agent:a-1") =~ "hero-video-camera"
+    end
+
+    test "an agent's camera slot is non-interactive" do
+      cam = slot(row_for(media_rail([agent("Saru", "a-1")]), "agent:a-1"), "camera-indicator")
+
+      assert attr(cam, "class") =~ "pointer-events-none"
+      # No `title`: `pointer-events-none` means a tooltip could never
+      # appear, and an attribute whose behaviour is suppressed reads as a
+      # working one.
+      assert attr(cam, "title") == nil
+    end
+
+    test "an agent's MIC slot is live, keyed the same way a human's is" do
+      # Agents publish audio, and `meeting_client.js` reports an agent that
+      # has published no mic at all as muted ("no publication reads as
+      # off"), so this slot is a real signal rather than decoration.
+      html = media_rail([agent("Saru", "a-1"), agent("Orion", "a-2")], muted: ["agent:a-2"])
+
+      assert attr(slot(row_for(html, "agent:a-2"), "mic-indicator"), "data-mic-state") == "off"
+      assert attr(slot(row_for(html, "agent:a-1"), "mic-indicator"), "data-mic-state") == "on"
+    end
+
+    test "every row carries an sr-only line naming the participant and both states" do
+      html =
+        media_rail(
+          [human("Mariah", "u-1"), human("Harper", "u-2"), agent("Saru", "a-1")],
+          muted: ["user:u-2"],
+          camera_off: ["user:u-2"]
+        )
+
+      # The icons are the entire payload of this feature: a screen reader
+      # that only gets the name gets nothing.
+      assert row_for(html, "user:u-1") =~ "Mariah, unmuted, camera on"
+      assert row_for(html, "user:u-2") =~ "Harper, muted, camera off"
+      assert row_for(html, "agent:a-1") =~ "Saru, unmuted, no camera"
+
+      summaries =
+        html |> Floki.parse_fragment!() |> Floki.find(~s([data-role="participant-state-summary"]))
+
+      assert length(summaries) == 3
+
+      # `sr-only`, not visible text: a roster spelling out "unmuted, camera
+      # on" for five people is a wall of words saying nothing happened.
+      for node <- summaries, do: assert(attr([node], "class") =~ "sr-only")
+    end
+
+    test "the slots use the error/base tokens and neither warning nor success" do
+      html =
+        media_rail(
+          [human("Mariah", "u-1"), human("Harper", "u-2"), agent("Saru", "a-1")],
+          muted: ["user:u-2"],
+          camera_off: ["user:u-2"]
+        )
+
+      slots =
+        html
+        |> Floki.parse_fragment!()
+        |> Floki.find(~s([data-role="media-slots"]))
+        |> Floki.raw_html()
+
+      # `text-success` is reserved for SPEAKING and the mic-on state used
+      # to take it — that was the violation this stage removes.
+      refute slots =~ "success"
+
+      # `warning` on this screen means "a human is being asked for
+      # something". Being muted asks nothing of anyone.
+      refute slots =~ "warning"
+
+      assert slots =~ "text-error"
+      assert slots =~ "bg-base-300"
+    end
+
+    test "with no sets supplied nobody is muted, rather than everybody" do
+      # The nil-normalising default. `MeetingLive` used to make this
+      # component claim every participant was muted forever; the fallback
+      # for "the room has told us nothing yet" must be the quiet state.
+      html = media_rail([human("Mariah", "u-1")])
+      row = row_for(html, "user:u-1")
+
+      assert attr(slot(row, "mic-indicator"), "data-mic-state") == "on"
+      assert attr(slot(row, "camera-indicator"), "data-camera-state") == "on"
+      assert row =~ "hero-microphone"
+      refute row =~ "hero-microphone-slash"
     end
   end
 end

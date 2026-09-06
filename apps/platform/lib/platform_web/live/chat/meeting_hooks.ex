@@ -539,6 +539,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, apply_active_speakers(socket, params)}
   end
 
+  # Per-identity remote mic/camera state from the viewer's own LiveKit
+  # client (`MeetingClient._pushMediaStates`). Same plumbing story as
+  # `active_speakers` directly above: `MeetingClient` is mounted on BOTH
+  # `chat_live.html.heex` and `meeting_live.html.heex`, a hook's
+  # `pushEvent` ignores `phx-target`, and a surface with no clause for an
+  # event a mounted hook pushes is a `FunctionClauseError` per mute —
+  # i.e. a crash-remount loop, not a missing indicator.
+  defp handle_event("media_states", params, socket) do
+    {:halt, apply_media_states(socket, params)}
+  end
+
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
   # ── Guest-flavored event surface (task 019f498d stage 3) ────────────────
@@ -608,6 +619,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp handle_guest_event("active_speakers", params, socket) do
     {:halt, apply_active_speakers(socket, params)}
+  end
+
+  defp handle_guest_event("media_states", params, socket) do
+    {:halt, apply_media_states(socket, params)}
   end
 
   defp handle_guest_event(_event, _params, socket), do: {:cont, socket}
@@ -823,6 +838,56 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   def apply_active_speakers(socket, _params), do: socket
+
+  @doc """
+  Fold a `media_states` push from the `MeetingClient` JS hook into
+  `:muted_identities` and `:camera_off_identities`.
+
+  NOT `apply_media_state/2` (singular), which is a different thing living
+  a few hundred lines below: that one folds the `"meeting:state:<user_id>"`
+  broadcast for the viewer's OWN mic/camera and guards on
+  `uid == socket.assigns[:user_id]`. This one is per-identity state for
+  OTHER people, and there is deliberately no broadcast behind it.
+
+  VIEWER-LOCAL presentation state, exactly like `:speaking_identities`:
+  each connected client runs its own LiveKit room and reports what IT
+  observes, so this is never persisted and never broadcast. The payload
+  is `%{"muted" => ["user:…"], "camera_off" => ["agent:…"]}`; a missing
+  key, a non-list, or non-binary members are tolerated rather than
+  crashed on, because a malformed push must not take the LiveView down
+  (the hook dedupes, but a crash-remount loop loses every transient
+  assign the surface holds).
+
+  `:camera_off_identities` has no reader on the tile — the tile already
+  swaps to a full-frame avatar when the camera is off, so a corner badge
+  would restate something occupying the whole frame. The roster in stage
+  3 is what consumes it; it is folded here so that stage has the data.
+  """
+  @spec apply_media_states(Phoenix.LiveView.Socket.t(), term()) ::
+          Phoenix.LiveView.Socket.t()
+  def apply_media_states(socket, params) when is_map(params) do
+    socket
+    |> fold_identity_set(:muted_identities, Map.get(params, "muted"))
+    |> fold_identity_set(:camera_off_identities, Map.get(params, "camera_off"))
+  end
+
+  def apply_media_states(socket, _params), do: socket
+
+  # Same no-op short-circuit as `apply_active_speakers/2`: an unchanged set
+  # must not re-assign, or every LiveKit mute event repaints the gallery
+  # grid for everyone. Anything that is not a list leaves the assign alone.
+  defp fold_identity_set(socket, key, ids) when is_list(ids) do
+    next = ids |> Enum.filter(&is_binary/1) |> MapSet.new()
+    current = socket.assigns[key] || MapSet.new()
+
+    if MapSet.equal?(next, current) do
+      socket
+    else
+      assign(socket, key, next)
+    end
+  end
+
+  defp fold_identity_set(socket, _key, _ids), do: socket
 
   @doc """
   Fold an `{:agent_activity, …}` payload into `:agent_activity`.
@@ -1482,6 +1547,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign_new(:meeting_candidate_events, fn -> %{} end)
     |> assign_new(:candidate_error, fn -> nil end)
     |> assign_new(:speaking_identities, fn -> MapSet.new() end)
+    |> assign_new(:muted_identities, fn -> MapSet.new() end)
+    |> assign_new(:camera_off_identities, fn -> MapSet.new() end)
   end
 
   # Hydrate the rail for the meeting this socket just joined.
@@ -1630,6 +1697,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> release_roster_topic()
     |> assign(:in_meeting, false)
     |> assign(:speaking_identities, MapSet.new())
+    |> assign(:muted_identities, MapSet.new())
+    |> assign(:camera_off_identities, MapSet.new())
     |> assign(:mic_enabled, true)
     |> assign(:camera_enabled, true)
     |> assign(:screen_share_enabled, false)

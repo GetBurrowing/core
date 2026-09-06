@@ -384,6 +384,8 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:active_meeting_tab, "people")
       |> assign(:captions_visible, false)
       |> assign(:speaking_identities, MapSet.new())
+      |> assign(:muted_identities, MapSet.new())
+      |> assign(:camera_off_identities, MapSet.new())
       |> seed_intent_assigns()
       |> assign_calendar_time_zone()
       |> seed_calendar_now()
@@ -523,6 +525,14 @@ defmodule PlatformWeb.MeetingLive do
      # broadcast over PubSub. Each viewer's own client is the authority on
      # what it is hearing.
      |> assign(:speaking_identities, MapSet.new())
+     # Per-identity mic/camera state observed by THIS viewer's LiveKit
+     # client (`MeetingClient._pushMediaStates` -> `media_states`).
+     # VIEWER-LOCAL on the same terms as `:speaking_identities` above:
+     # never persisted, never broadcast. `:camera_off_identities` has no
+     # reader on the tile (the avatar fallback already IS the camera
+     # indicator); the stage-3 roster is what consumes it.
+     |> assign(:muted_identities, MapSet.new())
+     |> assign(:camera_off_identities, MapSet.new())
      # Intents-collapse bar defaults (task 019f70b8 stage 7). Seeded in
      # BOTH mount clauses so the `:index` action and the guest surface
      # render without a KeyError even though neither shows the bar.
@@ -2444,6 +2454,16 @@ defmodule PlatformWeb.MeetingLive do
   # the hook is ever detached. A malformed payload is tolerated there too.
   def handle_event("active_speakers", params, socket) do
     {:noreply, MeetingHooks.apply_active_speakers(socket, params)}
+  end
+
+  # Per-identity remote mic/camera state, pushed by `MeetingClient`
+  # (`_pushMediaStates`) on `RoomEvent.TrackMuted` / `TrackUnmuted`. Same
+  # ONE-implementation arrangement as `active_speakers` above:
+  # `MeetingHooks` is attached and halts this event first on the
+  # authenticated and guest surfaces, so this clause is the fallback for a
+  # detached hook. Malformed payloads are tolerated there too.
+  def handle_event("media_states", params, socket) do
+    {:noreply, MeetingHooks.apply_media_states(socket, params)}
   end
 
   # Stage-mode switching (ADR 0042). The segmented control in the top bar
@@ -4782,9 +4802,13 @@ defmodule PlatformWeb.MeetingLive do
       display_name: display_name,
       avatar_url: avatar_url,
       identity: identity,
-      # Live presence rows don't carry mic state yet; keep the key so the
-      # rail's `mic_on?/1` and the strip's `attention_config` reads stay
-      # total without special-casing nil.
+      # Live presence rows carry NO mic state, and nothing has ever
+      # written `"mic_on"` here. Per-identity mic and camera state now
+      # arrives from LiveKit on `:muted_identities` /
+      # `:camera_off_identities` (task 01a0740c), and `mic_on?/1` — the
+      # placeholder read that made the rail claim everyone was muted
+      # forever — is deleted. The key stays because `agent_role/1` still
+      # reads `attention_config["role"]` and wants the map total.
       attention_config: %{}
     }
   end
@@ -6509,14 +6533,6 @@ defmodule PlatformWeb.MeetingLive do
   def via_guest_link?(_participant), do: false
 
   @doc """
-  True when the participant's mic is on. Reads
-  `participant.attention_config["mic_on"]`; defaults to `false`.
-  """
-  @spec mic_on?(Platform.Chat.Participant.t()) :: boolean()
-  def mic_on?(%{attention_config: %{"mic_on" => true}}), do: true
-  def mic_on?(_participant), do: false
-
-  @doc """
   The `activity_state` for an agent participant's bottom-strip tile.
 
   Replaces the `activity_state={:idle}` LITERAL that was this
@@ -6637,6 +6653,35 @@ defmodule PlatformWeb.MeetingLive do
         end
     end
   end
+
+  @doc """
+  The set of identities the ROSTER should draw as off, given the
+  SFU-reported set plus the viewer's own local state.
+
+  `room.remoteParticipants` excludes the local participant by
+  construction, so `:muted_identities` and `:camera_off_identities` can
+  never contain the viewer — but the roster lists the viewer like anyone
+  else, and their own row is the one they look at most. Without this
+  fold, a viewer who mutes themselves watches every other row tell the
+  truth while their own says "unmuted". That is the same class of defect
+  task 01a0740c exists to remove, so the rail folds the local booleans
+  (`:mic_enabled` / `:camera_enabled`, driven by the viewer's own
+  buttons) into the set it renders.
+
+  `"user:unknown"` is `gallery_identity/1`'s fallback for a participant
+  it cannot key and `viewer_gallery_identity/1`'s fallback for a viewer
+  it cannot resolve, so folding on it could mark an unrelated row. It is
+  treated as "no viewer identity" instead.
+  """
+  @spec roster_off_set(MapSet.t(), String.t() | nil, boolean()) :: MapSet.t()
+  def roster_off_set(remote_set, viewer_identity, viewer_on?)
+
+  def roster_off_set(remote_set, identity, _on?)
+      when not is_binary(identity) or identity == "" or identity == "user:unknown",
+      do: remote_set
+
+  def roster_off_set(remote_set, identity, true), do: MapSet.delete(remote_set, identity)
+  def roster_off_set(remote_set, identity, _off), do: MapSet.put(remote_set, identity)
 
   @doc "Filter participants to the agent subset for the bottom strip."
   def strip_agents(participants) when is_list(participants) do

@@ -141,6 +141,16 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   attr(:meeting, :any, default: nil)
   attr(:agent_activity, :any, default: nil)
 
+  attr(:muted_identities, :any,
+    default: nil,
+    doc: "MapSet of LiveKit identities whose mic is off; passed through to the rail."
+  )
+
+  attr(:camera_off_identities, :any,
+    default: nil,
+    doc: "MapSet of LiveKit identities whose camera is off; passed through to the rail."
+  )
+
   attr(:now, :any,
     default: nil,
     doc: """
@@ -267,6 +277,8 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               agents_by_id={@agents_by_id}
               meeting={@meeting}
               agent_activity={@agent_activity}
+              muted_identities={@muted_identities}
+              camera_off_identities={@camera_off_identities}
               now={@now}
             />
             {render_slot(@people_extra)}

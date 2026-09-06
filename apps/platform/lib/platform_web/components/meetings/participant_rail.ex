@@ -9,10 +9,10 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
        carrying:
          * avatar (`human_avatar` component, sm)
          * display name
-         * mic indicator (`hero-microphone` /
-           `hero-microphone-slash`)
          * host badge (`hero-shield-check`) when
            `participant.id == meeting.host_participant_id`
+         * a fixed mic slot and a fixed camera slot (see
+           "Two slots on every row" below)
 
     2. **Agents** (bottom) — separated from section 1 by a
        `border-edge` divider with a small "Agents" label. One row
@@ -25,6 +25,54 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
          * status dot keyed off THIS MEETING's agent activity, with the
            global `agents.status` column only as an offline fallback
            (task 01a04a98)
+         * the same two media slots, with the camera slot drawn as
+           UNAVAILABLE rather than off
+
+  ## Two slots on every row (task 01a0740c stage 3)
+
+  Both slots render on every row of both sections, always, in the same
+  trailing position. An indicator that disappears in one of its states
+  is indistinguishable from an indicator that failed to render, and a
+  roster is read by scanning a column.
+
+  The mic slot used to read `MeetingLive.mic_on?/1`, which read
+  `attention_config["mic_on"]`, which `MeetingLive` hardcoded to `%{}`
+  on every live presence row — so the rail told every viewer that every
+  participant was muted, permanently, and had done since it shipped.
+  Both slots now read the per-identity MapSets that
+  `handle_event("media_states", ...)` folds from LiveKit
+  (`:muted_identities`, `:camera_off_identities`, task 01a0740c stages
+  1-2), keyed with the same `MeetingLive.gallery_identity/1` the video
+  tiles use. `mic_on?/1` is deleted; this was its only caller.
+
+  ### Off is drawn three ways
+
+  A slashed glyph, a red-tinted well, and an accessible label — never a
+  hue shift alone, because a mic that changes only its tint is how
+  somebody joins a call believing they are muted when they are not.
+
+  ONE OF THE THREE IS CURRENTLY BLANK, and this is deliberate rather
+  than unnoticed. `hero-microphone-slash` generates NO CSS:
+  `assets/vendor/heroicons.js` emits one class per file in
+  `deps/heroicons/optimized`, and the Heroicons set ships
+  `microphone.svg` with no `microphone-slash.svg` at any of the four
+  sizes. So the muted mic well currently paints its tint around an
+  empty centre. The class is kept, not swapped, so that FE-19
+  (`01a07486-7985-7001-87ce-277681791f52`) — which owns the icon
+  decision and is also the ticket for the identical hole in
+  `video_tile.ex`, `call_shell.ex` and `meeting_bar_live.ex` — fixes
+  every call site at once. The CAMERA does not share the mic's fate:
+  `video-camera-slash.svg` ships in all four sizes, so the camera-off
+  slot draws its slash for real.
+
+  ### Tokens
+
+  `--color-error` for OFF on both axes, `--color-base-content` at
+  reduced opacity for ON, `--color-base-300` for the well. NOT
+  `--color-warning`, which on this screen means "a human is being asked
+  for something", and NOT `--color-success`, which is reserved for
+  SPEAKING. The mic-on state used to be `text-success`; that was the
+  violation, and replacing it is part of this stage.
 
   The human rows used to carry a server-side speaking ring driven by a
   speaking-ids assign that NOTHING ever wrote — it was `MapSet.new()`
@@ -77,6 +125,28 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     doc: "%Platform.Meetings.AgentActivity{} (or a resolved map) for this meeting"
   )
 
+  attr(:muted_identities, :any,
+    default: nil,
+    doc: """
+    `MapSet` of LiveKit identities whose microphone is off, folded from
+    the client's `media_states` push (task 01a0740c stage 2). Keyed with
+    `MeetingLive.gallery_identity/1`, the same string the gallery tiles
+    match on. `nil` normalises to an empty set so a caller that renders
+    this component without the assign gets "nobody is muted" rather than
+    a match error — which is also what a caller SHOULD get before the
+    LiveKit room has reported anything.
+    """
+  )
+
+  attr(:camera_off_identities, :any,
+    default: nil,
+    doc: """
+    `MapSet` of LiveKit identities whose camera is off. Same source,
+    same keying, same nil handling as `:muted_identities`. Ignored for
+    agent rows, whose camera slot is UNAVAILABLE by construction.
+    """
+  )
+
   attr(:now, :any,
     default: nil,
     doc: """
@@ -114,6 +184,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       |> assign(:agents, agents)
       |> assign(:resolved_activity, resolved_activity)
       |> assign(:current_room, room)
+      |> assign(:muted, assigns[:muted_identities] || MapSet.new())
+      |> assign(:camera_off, assigns[:camera_off_identities] || MapSet.new())
 
     ~H"""
     <div data-component="participant-rail" class="flex flex-col">
@@ -138,6 +210,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           <li
             :for={p <- @humans}
             data-participant-id={p.id}
+            data-participant-identity={MeetingLive.gallery_identity(p)}
             data-participant-type="user"
             data-host={to_string(MeetingLive.host?(p, @meeting))}
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs min-h-11 transition-colors hover:bg-base-300/40"
@@ -182,21 +255,11 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             >
             </span>
 
-            <%!-- Mic indicator --%>
-            <span
-              class={[
-                "size-4 flex-shrink-0",
-                if(MeetingLive.mic_on?(p),
-                  do: "hero-microphone text-success",
-                  else: "hero-microphone-slash text-base-content/40"
-                )
-              ]}
-              aria-label={if MeetingLive.mic_on?(p), do: "Microphone on", else: "Microphone off"}
-              title={if MeetingLive.mic_on?(p), do: "Mic on", else: "Mic off"}
-              data-role="mic-indicator"
-              data-mic-on={to_string(MeetingLive.mic_on?(p))}
-            >
-            </span>
+            <.media_slots
+              name={p.display_name || "Unknown participant"}
+              mic_state={mic_state(@muted, p)}
+              camera_state={camera_state(@camera_off, p)}
+            />
           </li>
 
           <li
@@ -225,6 +288,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           <li
             :for={p <- @agents}
             data-participant-id={p.id}
+            data-participant-identity={MeetingLive.gallery_identity(p)}
             data-participant-type="agent"
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs min-h-11 hover:bg-base-300/40 transition-colors"
           >
@@ -299,12 +363,159 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               data-role="agent-status-dot"
             >
             </span>
+
+            <.media_slots
+              name={p.display_name || "Agent"}
+              mic_state={mic_state(@muted, p)}
+              camera_state={camera_state(@camera_off, p)}
+            />
           </li>
         </ul>
       </section>
     </div>
     """
   end
+
+  attr(:name, :string, required: true)
+  attr(:mic_state, :atom, required: true)
+  attr(:camera_state, :atom, required: true)
+
+  # The trailing status cluster: an `sr-only` sentence, then the mic well,
+  # then the camera well. Same order, same position, every row.
+  #
+  # The sentence is here because the icons ARE the payload of this
+  # feature: a screen reader that only gets the name gets nothing. It is
+  # `sr-only`, which is `position: absolute`, so it is not a flex item and
+  # contributes no gap to the row it sits in. The per-icon `aria-label`s
+  # are kept alongside it deliberately (the stage spec asks for both), so
+  # a row announces the sentence and then the two labels; the redundancy
+  # is the cost of the icons also being reachable one at a time.
+  #
+  # `title` is omitted on an UNAVAILABLE camera rather than set to the
+  # label: `pointer-events-none` means the tooltip could never appear, and
+  # an attribute whose behaviour is suppressed reads as a working one.
+  defp media_slots(assigns) do
+    ~H"""
+    <span class="sr-only" data-role="participant-state-summary">
+      {state_sentence(@name, @mic_state, @camera_state)}
+    </span>
+    <span class="flex flex-shrink-0 items-center gap-1" data-role="media-slots">
+      <span
+        class={["grid size-6 place-items-center rounded-full", well_class(@mic_state)]}
+        role="img"
+        aria-label={mic_label(@mic_state)}
+        title={mic_title(@mic_state)}
+        data-role="mic-indicator"
+        data-mic-state={to_string(@mic_state)}
+      >
+        <span
+          class={["size-3.5", mic_glyph(@mic_state), glyph_tone(@mic_state)]}
+          aria-hidden="true"
+        >
+        </span>
+      </span>
+
+      <span
+        class={[
+          "grid size-6 place-items-center rounded-full",
+          well_class(@camera_state),
+          @camera_state == :unavailable && "pointer-events-none"
+        ]}
+        role="img"
+        aria-label={camera_label(@camera_state)}
+        title={camera_title(@camera_state)}
+        data-role="camera-indicator"
+        data-camera-state={to_string(@camera_state)}
+      >
+        <span
+          class={["size-3.5", camera_glyph(@camera_state), glyph_tone(@camera_state)]}
+          aria-hidden="true"
+        >
+        </span>
+      </span>
+    </span>
+    """
+  end
+
+  # `:on` | `:off`. Agents are keyed the same way humans are: an agent
+  # that has published no audio track at all is reported muted by
+  # `meeting_client.js` (`_publicationMuted(null)` is `true`, "no
+  # publication reads as off"), so a silent agent reads muted rather than
+  # reading live.
+  defp mic_state(muted, participant) do
+    if MapSet.member?(muted, MeetingLive.gallery_identity(participant)),
+      do: :off,
+      else: :on
+  end
+
+  # `:on` | `:off` | `:unavailable`.
+  #
+  # AGENTS HAVE NO CAMERA, which is a different fact from a camera being
+  # off. "Off" implies it could be on, so a roster that drew agents as
+  # camera-off would read as every agent having disabled their video.
+  # Matched on `participant_type` rather than on which section is
+  # rendering, so the two sections cannot drift apart.
+  defp camera_state(_camera_off, %{participant_type: "agent"}), do: :unavailable
+
+  defp camera_state(camera_off, participant) do
+    if MapSet.member?(camera_off, MeetingLive.gallery_identity(participant)),
+      do: :off,
+      else: :on
+  end
+
+  # OFF tints the well with `--color-error`. ON and UNAVAILABLE share the
+  # neutral `--color-base-300` well the stage pins and are told apart by
+  # GLYPH and tone, never by hue alone.
+  defp well_class(:off), do: "bg-error/15"
+  defp well_class(_state), do: "bg-base-300"
+
+  # Not `text-success` for ON — success is reserved for SPEAKING — and not
+  # `text-warning` for OFF, which on this screen means "a human is being
+  # asked for something". Being muted asks nothing of anyone.
+  defp glyph_tone(:off), do: "text-error"
+  defp glyph_tone(:unavailable), do: "text-base-content/25"
+  defp glyph_tone(_state), do: "text-base-content/60"
+
+  # `hero-microphone-slash` COMPILES TO NOTHING: see the moduledoc. Kept
+  # so FE-19 fixes every call site with one vendored file.
+  defp mic_glyph(:off), do: "hero-microphone-slash"
+  defp mic_glyph(_state), do: "hero-microphone"
+
+  # `hero-video-camera-slash` DOES compile — the slashed camera ships in
+  # all four Heroicons sizes. UNAVAILABLE takes `hero-minus`, a shape
+  # nobody reads as a camera, so an agent row differs from a human
+  # camera-off row by glyph as well as by tone and by label.
+  defp camera_glyph(:off), do: "hero-video-camera-slash"
+  defp camera_glyph(:unavailable), do: "hero-minus"
+  defp camera_glyph(_state), do: "hero-video-camera"
+
+  defp mic_label(:off), do: "Microphone muted"
+  defp mic_label(_state), do: "Microphone on"
+
+  defp mic_title(:off), do: "Muted"
+  defp mic_title(_state), do: "Mic on"
+
+  defp camera_label(:off), do: "Camera off"
+  defp camera_label(:unavailable), do: "No camera"
+  defp camera_label(_state), do: "Camera on"
+
+  defp camera_title(:off), do: "Camera off"
+  defp camera_title(:unavailable), do: nil
+  defp camera_title(_state), do: "Camera on"
+
+  # The whole row state in plain words, for the `sr-only` line only. The
+  # visible row says this with icons: five rows reading "unmuted, camera
+  # on" is a wall of text announcing that nothing happened.
+  defp state_sentence(name, mic_state, camera_state) do
+    "#{name}, #{mic_word(mic_state)}, #{camera_word(camera_state)}"
+  end
+
+  defp mic_word(:off), do: "muted"
+  defp mic_word(_state), do: "unmuted"
+
+  defp camera_word(:off), do: "camera off"
+  defp camera_word(:unavailable), do: "no camera"
+  defp camera_word(_state), do: "camera on"
 
   # The agent id an activity signal is addressed to.
   #

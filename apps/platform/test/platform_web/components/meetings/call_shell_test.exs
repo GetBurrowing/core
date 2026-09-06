@@ -30,7 +30,13 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       participant_type: "user",
       display_name: name,
       avatar_url: nil,
-      attention_config: %{"mic_on" => true}
+      # No `attention_config` content. Nothing in production writes
+      # `"mic_on"` — `MeetingLive` builds every live presence row with
+      # `attention_config: %{}` — so a fixture that seeded it was testing a
+      # branch the app cannot reach. Task 01a0740c moved per-identity mic
+      # state onto `:muted_identities`, fed from LiveKit; `mic_on?/1` and
+      # its rail read are retired in stage 3.
+      attention_config: %{}
     }
   end
 

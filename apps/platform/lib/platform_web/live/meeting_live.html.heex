@@ -1339,7 +1339,7 @@
                               }
                             }
                             video_track={false}
-                            audio_muted?={false}
+                            audio_muted?={MapSet.member?(@muted_identities, gallery_identity(p))}
                             speaking?={MapSet.member?(@speaking_identities, gallery_identity(p))}
                             avatar_url={Map.get(p, :avatar_url)}
                             layout={:gallery}
@@ -1701,6 +1701,12 @@
                `:meet_member` session has `shell?: false` yet may invite, and
                a `@shell?` gate would take the control away from exactly the
                external members the invite tests cover. --%>
+          <%!-- `muted_identities` / `camera_off_identities` are the
+               SFU-reported sets FOLDED with the viewer's own local
+               booleans: LiveKit's `remoteParticipants` never contains the
+               viewer, so without the fold the one roster row the viewer
+               looks at most is the one that lies (task 01a0740c stage
+               3). --%>
           <CallShell.call_rail
             id="meeting-call-rail"
             class="min-h-0 flex-1"
@@ -1711,6 +1717,20 @@
             agents_by_id={assigns[:agents_by_id] || %{}}
             meeting={@meeting}
             agent_activity={assigns[:agent_activity]}
+            muted_identities={
+              roster_off_set(
+                @muted_identities,
+                viewer_gallery_identity(assigns),
+                @mic_enabled
+              )
+            }
+            camera_off_identities={
+              roster_off_set(
+                @camera_off_identities,
+                viewer_gallery_identity(assigns),
+                @camera_enabled
+              )
+            }
             now={assigns[:agent_activity_now]}
             invite_rows={assigns[:invite_rows] || []}
             invite_event={if is_binary(assigns[:user_id]), do: "meeting_invite_agent"}
@@ -2011,7 +2031,7 @@
                 }
               }
               video_track={false}
-              audio_muted?={!Map.get(participant.attention_config || %{}, "mic_on", false)}
+              audio_muted?={MapSet.member?(@muted_identities, gallery_identity(participant))}
               speaking?={MapSet.member?(@speaking_identities, gallery_identity(participant))}
               avatar_url={participant.avatar_url}
               data-local-dock={local? && "true"}

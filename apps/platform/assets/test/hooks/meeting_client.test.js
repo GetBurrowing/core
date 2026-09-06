@@ -172,6 +172,13 @@ function buildHook() {
   const hook = Object.create(MeetingClient)
   hook._localVideoEl = null
   hook._localVideoTrack = null
+  // Phoenix always gives a MOUNTED hook a `pushEvent`; the join paths now
+  // report remote media state through it (task 01a0740c stage 2), so a
+  // fixture without one asserts against a hook shape that cannot exist.
+  // Records rather than throwing — the pushes themselves are asserted in
+  // `meeting_client_media_states.test.js`.
+  hook.pushedEvents = []
+  hook.pushEvent = (event, payload) => hook.pushedEvents.push([event, payload])
   return hook
 }
 
@@ -1273,6 +1280,15 @@ function buildBoundHook(room, doc) {
   hook._tiles = new Map()
   hook._boundRoom = null
   hook._roomListeners = []
+  // `_bindRoomEvents` also wires the REMOTE media-state path (task
+  // 01a0740c stage 1), which pushes to the LiveView. Phoenix always gives
+  // a mounted hook a `pushEvent`; this fixture predates the push, so it
+  // records instead of throwing. The pushes are asserted in
+  // `meeting_client_media_states.test.js` — here they are noise, and what
+  // matters is that they never disturb the LOCAL self-view assertions
+  // below.
+  hook.pushedMediaStates = []
+  hook.pushEvent = (event, payload) => hook.pushedMediaStates.push([event, payload])
   hook._room = room
   hook._bindRoomEvents(room)
   return hook

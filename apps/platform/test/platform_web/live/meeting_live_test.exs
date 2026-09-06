@@ -11888,6 +11888,266 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  # ── media_states → the mute overlay (task 01a0740c stage 1) ─────────────
+  #
+  # `MeetingClient._pushMediaStates` pushes
+  # `%{"muted" => [...], "camera_off" => [...]}` on `RoomEvent.TrackMuted`
+  # / `TrackUnmuted`. A hook's `pushEvent` ignores `phx-target`, so
+  # `render_hook(view, ...)` (root-targeted) is the honest simulation.
+  #
+  # ANTI-VACUITY. Rendering `<.video_tile audio_muted?={true}>` and
+  # asserting the overlay appears proves the COMPONENT, which was never
+  # broken, and passes on `origin/main` today. What was broken is the two
+  # bindings that fed it, and both answered the same for EVERYBODY: the
+  # gallery hardcoded `false` (nobody ever muted) and the strip read
+  # `attention_config["mic_on"]`, a key no writer exists for, so every
+  # human carried the overlay permanently. So these tests drive the real
+  # push and assert PER IDENTITY plus an exact overlay count — a binding
+  # that answers uniformly cannot pass either.
+  defp mute_indicator?(html, scope, identity) do
+    count(html, ~s(#{scope} [data-participant="#{identity}"] [data-mute-indicator])) > 0
+  end
+
+  defp tile_rendered?(html, scope, identity) do
+    count(html, ~s(#{scope} [data-participant="#{identity}"])) > 0
+  end
+
+  # The ROSTER row for `identity`, as a `{mic_state, camera_state}` pair.
+  # The People pane is `@active_meeting_tab`'s default, so it is in the
+  # mount HTML with no tab click needed.
+  defp roster_states(html, identity) do
+    row =
+      case Regex.run(
+             ~r/<li[^>]*data-participant-identity="#{Regex.escape(identity)}".*?<\/li>/s,
+             html
+           ) do
+        [r] -> r
+        nil -> flunk("no roster row for identity #{identity}")
+      end
+
+    parsed = Floki.parse_fragment!(row)
+
+    {
+      parsed
+      |> Floki.attribute(~s([data-role="mic-indicator"]), "data-mic-state")
+      |> List.first(),
+      parsed
+      |> Floki.attribute(~s([data-role="camera-indicator"]), "data-camera-state")
+      |> List.first()
+    }
+  end
+
+  defp identity_for(view, display_name) do
+    case Enum.find(
+           :sys.get_state(view.pid).socket.assigns.participants,
+           &(&1.display_name == display_name)
+         ) do
+      nil -> flunk("no live participant named #{display_name}")
+      p -> PlatformWeb.MeetingLive.gallery_identity(p)
+    end
+  end
+
+  describe "media_states → per-identity mute overlay (stage 1)" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "media-states-#{System.unique_integer([:positive])}",
+          name: "Media States"
+        })
+
+      seed_meeting_presence(space, "user", "Ada Muted")
+      seed_meeting_presence(space, "user", "Bo Loud")
+
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "only the identity named in the push wears the overlay in the gallery",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert html =~ ~s(data-stage-mode="gallery")
+
+      ada = identity_for(view, "Ada Muted")
+      bo = identity_for(view, "Bo Loud")
+
+      assert tile_rendered?(html, "[data-gallery-grid]", ada)
+      assert tile_rendered?(html, "[data-gallery-grid]", bo)
+
+      # DIRECTION CONTROL: no overlay anywhere on mount, so the assertion
+      # below cannot pass on a tile that always carried one.
+      assert count(html, "[data-gallery-grid] [data-mute-indicator]") == 0
+
+      muted = render_hook(view, "media_states", %{"muted" => [ada], "camera_off" => []})
+
+      assert mute_indicator?(muted, "[data-gallery-grid]", ada)
+      refute mute_indicator?(muted, "[data-gallery-grid]", bo)
+
+      # EXACTLY one, which is the claim a per-identity read has to make and
+      # a uniform one cannot: it covers Bo, the local viewer's own tile,
+      # and anyone else presence adds while the test runs.
+      assert count(muted, "[data-gallery-grid] [data-mute-indicator]") == 1
+
+      cleared = render_hook(view, "media_states", %{"muted" => [], "camera_off" => []})
+      assert count(cleared, "[data-gallery-grid] [data-mute-indicator]") == 0
+    end
+
+    test "the bottom strip answers per identity too, not `true` for everyone",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      ada = identity_for(view, "Ada Muted")
+      bo = identity_for(view, "Bo Loud")
+
+      # The strip renders the humans only outside gallery mode.
+      strip = render_click(view, "set_stage_mode", %{"mode" => "canvas"})
+
+      assert tile_rendered?(strip, ~s([data-pane="bottom-strip"]), ada)
+      assert tile_rendered?(strip, ~s([data-pane="bottom-strip"]), bo)
+
+      # THE DEFECT, stated as a control: on `origin/main` this count equals
+      # the number of humans in the strip before any push arrives, because
+      # `!Map.get(attention_config, "mic_on", false)` is true for every row
+      # `MeetingLive` builds.
+      assert count(strip, ~s([data-pane="bottom-strip"] [data-mute-indicator])) == 0
+
+      # No `camera_off` key at all — a partial payload must fold what it has.
+      muted = render_hook(view, "media_states", %{"muted" => [ada]})
+
+      assert mute_indicator?(muted, ~s([data-pane="bottom-strip"]), ada)
+      refute mute_indicator?(muted, ~s([data-pane="bottom-strip"]), bo)
+      assert count(muted, ~s([data-pane="bottom-strip"] [data-mute-indicator])) == 1
+    end
+
+    test "camera_off folds into its own assign and adds no badge to the tile",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      ada = identity_for(view, "Ada Muted")
+
+      html = render_hook(view, "media_states", %{"muted" => [], "camera_off" => [ada]})
+
+      # The tile already swaps to a full-frame avatar when the camera is
+      # off, so it IS the camera indicator; a corner badge would restate
+      # something occupying the whole frame. The assign exists because the
+      # stage-3 roster consumes it.
+      assert :sys.get_state(view.pid).socket.assigns.camera_off_identities ==
+               MapSet.new([ada])
+
+      assert count(html, "[data-gallery-grid] [data-mute-indicator]") == 0
+    end
+
+    test "the ROSTER row for the pushed identity flips, and only that row",
+         %{conn: conn, meeting: meeting} do
+      # THE ANTI-VACUITY CLAIM (stage 3 spec): a component test handed a
+      # muted identity by hand proves the rendering, which was never the
+      # broken part. This pushes the event the browser pushes and reads
+      # the People roster the viewer actually looks at.
+      #
+      # Fails on `origin/main` twice over: there is no
+      # `data-participant-identity` on a roster row to find, and the mic
+      # slot there reads `mic_on?/1`, which answers `false` for every row
+      # whatever any event carries.
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      ada = identity_for(view, "Ada Muted")
+      bo = identity_for(view, "Bo Loud")
+
+      # DIRECTION CONTROL: nobody reads muted at mount, so the assertion
+      # below cannot pass on a row that was already drawn that way.
+      assert roster_states(html, ada) == {"on", "on"}
+      assert roster_states(html, bo) == {"on", "on"}
+
+      muted = render_hook(view, "media_states", %{"muted" => [ada], "camera_off" => []})
+
+      assert roster_states(muted, ada) == {"off", "on"}
+      assert roster_states(muted, bo) == {"on", "on"}
+
+      cleared = render_hook(view, "media_states", %{"muted" => [], "camera_off" => []})
+      assert roster_states(cleared, ada) == {"on", "on"}
+    end
+
+    test "camera_off reaches the roster's camera slot, which the tile has no badge for",
+         %{conn: conn, meeting: meeting} do
+      # Stage 1 asserted `camera_off` folds into its assign and adds NO
+      # badge to the tile, and left the reader to take on faith that
+      # something would consume it. The roster is that consumer.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      ada = identity_for(view, "Ada Muted")
+      bo = identity_for(view, "Bo Loud")
+
+      html = render_hook(view, "media_states", %{"muted" => [], "camera_off" => [ada]})
+
+      assert roster_states(html, ada) == {"on", "off"}
+      assert roster_states(html, bo) == {"on", "on"}
+    end
+
+    test "the viewer's own roster row follows their own mic and camera buttons",
+         %{conn: conn, meeting: meeting, space: space} do
+      # LiveKit's `remoteParticipants` EXCLUDES the local participant, so
+      # `:muted_identities` can never name the viewer — and the viewer's
+      # own row is the one they look at most. Without
+      # `MeetingLive.roster_off_set/3` folding `:mic_enabled` /
+      # `:camera_enabled` in, the roster would tell everyone else's truth
+      # and the viewer's lie.
+      # `viewer_gallery_identity/1` resolves off `:current_participant`,
+      # which mount only finds for a viewer who is a participant of the
+      # meeting's chat space. Seed that, then re-mount: an unjoined viewer
+      # publishes nothing and correctly gets no fold, so the fold has to
+      # be exercised on the joined path.
+      {:ok, probe, _} = live(conn, ~p"/meetings/#{meeting.slug}")
+      user_id = :sys.get_state(probe.pid).socket.assigns.user_id
+
+      # Tolerant of the row already existing: the probe mount's auto-join
+      # may have inserted it first, and either way the guard below is the
+      # one that matters.
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user_id,
+        display_name: "Meeting Test User",
+        joined_at: DateTime.utc_now()
+      })
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      me =
+        PlatformWeb.MeetingLive.viewer_gallery_identity(:sys.get_state(view.pid).socket.assigns)
+
+      refute me == "user:unknown", "the viewer has no resolvable identity in this fixture"
+
+      assert roster_states(html, me) == {"on", "on"}
+
+      muted = render_click(view, "meeting_toggle_mic")
+      assert roster_states(muted, me) == {"off", "on"}
+
+      # And nobody else moved: the fold is one identity wide.
+      assert roster_states(muted, identity_for(view, "Ada Muted")) == {"on", "on"}
+
+      dark = render_click(view, "meeting_toggle_camera")
+      assert roster_states(dark, me) == {"off", "off"}
+
+      back = render_click(view, "meeting_toggle_mic")
+      assert roster_states(back, me) == {"on", "off"}
+    end
+
+    test "a malformed payload is ignored rather than crashing the LV",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      ada = identity_for(view, "Ada Muted")
+
+      for bad <- [%{"nonsense" => true}, %{"muted" => "user:not-a-list"}, %{}] do
+        render_hook(view, "media_states", bad)
+        assert Process.alive?(view.pid), "crashed on #{inspect(bad)}"
+
+        assert MapSet.size(:sys.get_state(view.pid).socket.assigns.muted_identities) == 0,
+               "assigned from #{inspect(bad)}"
+      end
+
+      # Non-binary members are dropped; the binaries survive.
+      render_hook(view, "media_states", %{"muted" => [1, nil, ada, %{}]})
+      assert :sys.get_state(view.pid).socket.assigns.muted_identities == MapSet.new([ada])
+    end
+  end
+
   describe "top bar: live pill + roster count (task 01a05b14 stage 5)" do
     alias Platform.Meetings
     alias PlatformWeb.MeetingLive

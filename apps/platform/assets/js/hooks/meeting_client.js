@@ -33,6 +33,10 @@ const MeetingClient = {
     // case-3 unbounded growth lived here).
     this._boundRoom = null
     this._roomListeners = []
+    // Last `media_states` payload pushed, serialised. Dedupe key for
+    // `_pushMediaStates`; reset whenever we bind a new Room so an adopted
+    // room re-reports rather than being swallowed by a stale key.
+    this._lastMediaStatesKey = null
 
     // v2 (task 019e42f6): the single persistent local self-view <video>.
     // Born once in the [data-role="local-self-view"] parking slot, attached
@@ -129,6 +133,16 @@ const MeetingClient = {
     if (room && room.state === "connected") {
       this._emitState("connected", room)
       this._reconcileLocalMedia(room)
+      // The socket reconnect re-ran `mount/3`, which re-seeds
+      // `:muted_identities` / `:camera_off_identities` to an empty MapSet
+      // (`meeting_live.ex:387`, `:534`). This hook INSTANCE survives the
+      // reconnect, so its dedupe key still claims the server has been
+      // told, and every mic badge would stay gone until somebody
+      // physically toggled a mic. Clear the key, then re-report: the same
+      // loss task 01a0740c stage 2 exists to prevent, arriving over the
+      // socket instead of the SFU.
+      this._lastMediaStatesKey = null
+      this._pushMediaStates(room)
     }
   },
 
@@ -206,6 +220,13 @@ const MeetingClient = {
         if (pub.track) this._attachTrack(pub.track, participant)
       }
     }
+
+    // Report what the room ALREADY looks like (task 01a0740c stage 2).
+    // Everyone present when we adopt got here without firing a single
+    // `TrackMuted` at us, so without this the tiles of the people already
+    // in the call all read as unmuted. `_bindRoomEvents` above cleared
+    // `_lastMediaStatesKey`, so this first push is never deduped away.
+    this._pushMediaStates(room)
 
     // Reconcile camera/mic against committed intent (stage 3): the LV
     // socket may still be settling, so read intent from the DOM dataset
@@ -365,6 +386,103 @@ const MeetingClient = {
     return false
   },
 
+  // ── Remote media state (task 01a0740c stage 1) ─────────────────────────
+  //
+  // Publication-level mute, the same two flags `meeting_video_tile.js` and
+  // `meeting_push_to_talk.js` read. `pub.isMuted` is what LiveKit flips on
+  // a remote `setMicrophoneEnabled(false)`; `pub.track.isMuted` covers the
+  // subscribed-track shape. Anything else reads as unmuted.
+  _publicationMuted(pub) {
+    if (!pub) return true
+    if (pub.isMuted === true) return true
+    if (pub.track && pub.track.isMuted === true) return true
+    return false
+  },
+
+  // Which REMOTE identities have their mic muted and their camera off, as
+  // `{ muted, camera_off }` — two sorted arrays of LiveKit identities,
+  // mirroring the `active_speakers` payload shape.
+  //
+  // `room.remoteParticipants` excludes the local participant by
+  // construction: the viewer's own mute is already the `:mic_enabled`
+  // assign, driven by their own button, and does not need a round trip
+  // through the SFU to be known.
+  //
+  // NO PUBLICATION READS AS OFF. A participant who has published no mic
+  // has nothing for anyone to hear, and one who has published no camera is
+  // already showing the tile's avatar fallback; both are the states the
+  // indicators exist to name.
+  //
+  // Screen-share publications are skipped on both axes via
+  // `isScreenShareSource`. Without that, stopping a share unpublishes a
+  // video track and the tile would read it as the camera going off.
+  _remoteMediaStates(room) {
+    const muted = []
+    const cameraOff = []
+    const remotes = room && room.remoteParticipants
+
+    if (!remotes || typeof remotes.values !== "function") {
+      return { muted, camera_off: cameraOff }
+    }
+
+    for (const participant of remotes.values()) {
+      if (!participant || !participant.identity) continue
+
+      const pubs = participant.trackPublications || participant.tracks
+      let mic = null
+      let camera = null
+
+      if (pubs && typeof pubs.values === "function") {
+        for (const pub of pubs.values()) {
+          if (!pub) continue
+          const source = (pub.track && pub.track.source) || pub.source
+          if (isScreenShareSource(source)) continue
+          if (pub.kind === Track.Kind.Audio && !mic) mic = pub
+          else if (pub.kind === Track.Kind.Video && !camera) camera = pub
+        }
+      }
+
+      if (this._publicationMuted(mic)) muted.push(participant.identity)
+      if (this._publicationMuted(camera)) cameraOff.push(participant.identity)
+    }
+
+    muted.sort()
+    cameraOff.sort()
+    return { muted, camera_off: cameraOff }
+  },
+
+  // Push the remote media state to the LiveView, dropping a push that would
+  // repeat the last one. `RoomEvent.TrackMuted` fires once PER PUBLICATION,
+  // so somebody muting mic and camera together fires twice for one visible
+  // change; the equality guard mirrors guard 1 in `MeetingRoom`.
+  //
+  // The push is root-targeted (a hook's `pushEvent` ignores `phx-target`),
+  // and `MeetingClient` is mounted on BOTH surfaces — `chat_live.html.heex`
+  // and `meeting_live.html.heex` — so this one call site reaches every
+  // `handle_event("media_states", …)` family.
+  _pushMediaStates(room) {
+    const next = this._remoteMediaStates(room)
+    // Both arrays are sorted, so serialising the whole payload is a stable
+    // identity for it. `JSON.stringify` rather than a joined string because
+    // an identity may legally contain any separator character we could pick.
+    const key = JSON.stringify(next)
+    if (key === this._lastMediaStatesKey) return
+    // Commit the key BEFORE awaiting, so the synchronous burst this guard
+    // exists for (TrackMuted fires once per publication) still collapses
+    // to one push. Then roll it back if the push was refused:
+    // `View.pushHookEvent` REJECTS with "unable to push hook event.
+    // LiveView not connected", and task 01a0740c stage 2 pushes during
+    // the join burst and on every `TrackSubscribed` — exactly when the
+    // socket is most likely still settling. A key left committed for a
+    // push nobody received swallows the state permanently, which is the
+    // bug this stage exists to fix. The `=== key` check keeps a stale
+    // rejection from clobbering a newer push's key.
+    this._lastMediaStatesKey = key
+    Promise.resolve(this.pushEvent("media_states", next)).catch(() => {
+      if (this._lastMediaStatesKey === key) this._lastMediaStatesKey = null
+    })
+  },
+
   // Single decision point for "should the local self-view be painting?".
   // Live → attach (idempotent; re-uses the SAME element) and dock. Off →
   // suspend, which parks + detaches so the dock is empty and the server
@@ -434,17 +552,43 @@ const MeetingClient = {
     if (this._boundRoom) this._releaseRoomListeners()
     this._boundRoom = room
     this._roomListeners = []
+    this._lastMediaStatesKey = null
 
     const bind = (event, fn) => {
       room.on(event, fn)
       this._roomListeners.push([event, fn])
     }
 
-    bind(RoomEvent.ParticipantConnected, (p) => this._ensureTile(p))
+    // ── Media state at JOIN (task 01a0740c stage 2) ─────────────────────
+    //
+    // `RoomEvent.TrackMuted`/`TrackUnmuted` fire on a TRANSITION, so the
+    // stage-1 handler below hears nothing about somebody who muted BEFORE
+    // we subscribed and renders them unmuted indefinitely. Sweeping the
+    // room at the two points a participant or a publication can appear
+    // WITHOUT a transition closes that:
+    //
+    //   * `ParticipantConnected` — somebody who joins already muted.
+    //   * `TrackSubscribed` — a publication's `track` only exists once the
+    //     subscription lands, and `pub.track.isMuted` is the authoritative
+    //     read for a subscribed track. Everyone already in the room when
+    //     we arrive comes in on the join response and is subscribed here,
+    //     never announced as `ParticipantConnected`.
+    //
+    // Chained onto the existing handlers rather than bound as a second
+    // listener: `_ensureTile`/`_attachTrack` keep running first and
+    // unchanged, and the per-event listener counts the reconnect-survival
+    // tests assert stay at one. `_pushMediaStates` recomputes the whole
+    // set and drops a push identical to the last one, so re-sweeping on
+    // every one of these is cheap.
+    bind(RoomEvent.ParticipantConnected, (p) => {
+      this._ensureTile(p)
+      this._pushMediaStates(room)
+    })
     bind(RoomEvent.ParticipantDisconnected, (p) => this._removeTile(p.identity))
-    bind(RoomEvent.TrackSubscribed, (track, pub, participant) =>
-      this._attachTrack(track, participant),
-    )
+    bind(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+      this._attachTrack(track, participant)
+      this._pushMediaStates(room)
+    })
     bind(RoomEvent.TrackUnsubscribed, (track, pub, participant) =>
       this._detachTrack(track, participant),
     )
@@ -494,6 +638,25 @@ const MeetingClient = {
     }
     bind(RoomEvent.TrackMuted, onLocalMuteChanged)
     bind(RoomEvent.TrackUnmuted, onLocalMuteChanged)
+
+    // ── Remote per-identity media state (task 01a0740c stage 1) ──────────
+    //
+    // A SEPARATE handler on the same two events, deliberately NOT a widened
+    // `onLocalMuteChanged`. That handler's identity guard exists to protect
+    // `_reconcileLocalVideo(room)`, which swaps the LOCAL self-view between
+    // live video and the avatar fallback. Admitting remote identities there
+    // would re-run local self-view reconciliation every time somebody ELSE
+    // muted, and the failure mode is your own video flickering or vanishing
+    // for a reason that has nothing to do with you. This handler reads the
+    // room and pushes; it touches no local media state at all, so it needs
+    // no identity guard and must not grow one.
+    //
+    // Same contract as `active_speakers` (see `meeting_room.js`): VIEWER-
+    // LOCAL presentation state. Each client runs its own LiveKit room and
+    // reports what IT observes. Never persisted, never broadcast.
+    const onRemoteMediaChanged = () => this._pushMediaStates(room)
+    bind(RoomEvent.TrackMuted, onRemoteMediaChanged)
+    bind(RoomEvent.TrackUnmuted, onRemoteMediaChanged)
 
     bind(RoomEvent.ActiveSpeakersChanged, (speakers) => {
       const identities = speakers.map((p) => p.identity)
@@ -644,6 +807,15 @@ const MeetingClient = {
         if (pub.track) this._attachTrack(pub.track, participant)
       }
     }
+
+    // Report what the room ALREADY looks like (task 01a0740c stage 2).
+    // The people who were in the call before we connected arrive in the
+    // JOIN RESPONSE, never as `ParticipantConnected`, and nobody
+    // transitions on our account — so without this sweep a first-time
+    // joiner sees every already-muted tile as unmuted. `pub.isMuted` is
+    // populated from that join response, so this reads correctly whether
+    // or not the subscriptions have landed yet.
+    this._pushMediaStates(room)
 
     // v4 stage 2: drive the camera from committed server intent on the
     // INITIAL join too — not just on Reconnected/adopt. `_join` previously
