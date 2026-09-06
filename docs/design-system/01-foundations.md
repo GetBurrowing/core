@@ -73,7 +73,7 @@ The existing inline use of `var(--agent-accent, oklch(82% 0.12 207))` (chat_live
 
 | Token            | Default                  | When set        |
 |------------------|--------------------------|-----------------|
-| `--agent-accent` | `oklch(82% 0.12 207)` (cyan, matches `--color-primary` light) | Overridden per-agent at runtime; agents may set their own accent within a contrast-safe range. |
+| `--agent-accent` | `oklch(82% 0.12 207)` (cyan, renders `#4EDAEB`; no longer tracks `--color-primary`, which is `#06D5ED` in both themes as of task 01a07435) | Overridden per-agent at runtime; agents may set their own accent within a contrast-safe range. |
 
 Phase 4 should add a runtime contrast guard: if a user-supplied `--agent-accent` lightness is outside `[35%, 80%]`, clamp it (or warn). Out of scope for Phase 2 spec.
 

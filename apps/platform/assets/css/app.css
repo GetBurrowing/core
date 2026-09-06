@@ -88,12 +88,41 @@
      follows it; do not assume. */
   --edge: oklch(88% 0 0);
   --color-base-content: oklch(0% 0 0);        /* #000000 */
-  /* Fabrikam cyan primary */
-  --color-primary: oklch(82% 0.12 207);      /* #4EDAEB */
+  /* Fabrikam cyan primary. ONE value in both themes (task 01a07435).
+
+     The hex is authoritative over the oklch it replaces: oklch(82% 0.12 207)
+     renders #4EDAEB, a visibly paler cyan, and the dark block declared a
+     second cyan of its own. Two reasons the split is gone. The brand names
+     #06D5ED as its single action colour, and
+     docs/design-system/04-accessibility.md:21 already specifies the focus
+     ring as `var(--color-primary)` (cyan; same in light + dark themes), so
+     one value is what makes this file agree with the spec it contradicted.
+     No record was ever left of why the themes were split in the first place.
+
+     Written as a hex because a hex cannot drift from its own comment, which
+     is the defect being fixed here.
+
+     Measured: 9.63:1 on the dark panel #171b25, 11.75:1 against
+     --color-primary-content (black). The brand rule that cyan is NEVER text
+     on a light surface is untouched by this; --color-interactive is still
+     the AA-safe text cyan and this token is still fill-only.
+
+     The trailing `renders #XXXXXX` marker carried by each of the four
+     --color-primary / --color-accent declarations is asserted against the
+     value it sits on by test/platform/design/primary_contrast_sweep_test.exs
+     (task 01a07435 stage 2). A comment that disagrees with its own
+     declaration is the defect this task closed, and that marker is what reds
+     the build if it comes back. Do not drop it. */
+  --color-primary: #06D5ED;                   /* renders #06D5ED */
   --color-primary-content: oklch(0% 0 0);     /* black text on cyan */
   --color-secondary: oklch(30% 0.01 0);       /* #4A4A4A */
   --color-secondary-content: oklch(100% 0 0);
-  --color-accent: oklch(82% 0.12 207);       /* cyan */
+  /* Accent has always held the same value as primary in both themes, so it
+     follows primary here rather than being left behind as a second cyan.
+     Its five consumers are chat/canvas/theme.ex:85,
+     planning_step_extension.ex:197, :198, :454 and board_component.ex:1134;
+     none needs a distinct value, and no stylesheet reads var(--color-accent). */
+  --color-accent: #06D5ED;                    /* renders #06D5ED */
   --color-accent-content: oklch(0% 0 0);
   --color-neutral: oklch(45% 0.01 0);         /* ~#737373 — bumped from 55% to fix WCAG 1.4.3 AA contrast vs --color-neutral-content (3.54:1 → 4.7:1) per audit 1B-A11Y-5 */
   --color-neutral-content: oklch(100% 0 0);
@@ -132,7 +161,17 @@
   prefersdark: true;
   color-scheme: "dark";
   /* Fabrikam dark surfaces — merge the comp-aligned chat pane with the newer
-     deeper sidebar/input treatment already on main. */
+     deeper sidebar/input treatment already on main.
+
+     GROUND, decided 2026-09-06 by Harper Parker alongside the primary
+     unification (task 01a07435): the ground stays #000306, which is what
+     --color-base-200 below already renders. The mockup proposed #0C1016 and
+     it was rejected on panel-against-ground separation: the #171b25 panel is
+     1.2011:1 against #000306 and 1.1077:1 against #0C1016, so the lighter
+     ground gives away separation on the boundary it would have affected.
+     Recorded as a decision and NOT as an edit: #0C1016 is declared nowhere
+     in this repo and #000306 is already what ships, so the CSS half of this
+     ruling is a deliberate no-op. Do not add a ground token for it. */
   --color-base-100: #171b25;                  /* Chat Pane */
   --color-base-200: oklch(9% 0.018 240);      /* #000306 — sidebar */
   --color-base-300: oklch(20% 0.028 240);     /* #091821 — raised, input bar */
@@ -157,12 +196,16 @@
      test/platform/design/border_token_direction_test.exs. */
   --edge: #232A38;
   --color-base-content: oklch(95% 0 0);       /* near-white text */
-  /* Fabrikam cyan — matching comp #00bcd4 */
-  --color-primary: oklch(78% 0.14 200);       /* ~#00bcd4 bright cyan */
+  /* Fabrikam cyan, the SAME value as light. See the light block above for why
+     the two themes were unified. The declaration this replaces,
+     oklch(78% 0.14 200), rendered #00D1DA, so the comp it claimed to match
+     (#00bcd4) was drifted as well: three different cyans were named for one
+     colour across this file. */
+  --color-primary: #06D5ED;                   /* renders #06D5ED */
   --color-primary-content: oklch(0% 0 0);     /* black text on cyan */
   --color-secondary: oklch(70% 0.01 0);       /* #B0B0B0 */
   --color-secondary-content: oklch(0% 0 0);
-  --color-accent: oklch(82% 0.12 207);
+  --color-accent: #06D5ED;                    /* renders #06D5ED; follows primary */
   --color-accent-content: oklch(0% 0 0);
   --color-neutral: oklch(40% 0.01 0);         /* #6A6A6A */
   --color-neutral-content: oklch(90% 0 0);
@@ -862,9 +905,9 @@ body, .font-fabrikam {
      #06D5ED fails contrast as text on white (~1.6:1), so links/active labels
      use this AA-safe darkened cyan. Fill-cyan stays #06D5ED with black on it. */
   --color-interactive: #087f93;
-  --glow-btn: 0 0 0 1px color-mix(in srgb, #06d5ed 55%, transparent),
-    0 2px 8px color-mix(in srgb, #06d5ed 30%, transparent),
-    0 0 16px color-mix(in srgb, #06d5ed 18%, transparent);
+  --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 55%, transparent),
+    0 2px 8px color-mix(in srgb, var(--color-primary) 30%, transparent),
+    0 0 16px color-mix(in srgb, var(--color-primary) 18%, transparent);
 }
 
 /* Dark shadows: light-theme shadows vanish on #171b25 — darker and wider,
@@ -876,8 +919,8 @@ body, .font-fabrikam {
   --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
   --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
   --color-interactive: #4dd7e8;
-  --glow-btn: 0 0 0 1px color-mix(in srgb, #00bcd4 45%, transparent),
-    0 0 12px color-mix(in srgb, #00bcd4 16%, transparent);
+  --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
+    0 0 12px color-mix(in srgb, var(--color-primary) 16%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -887,8 +930,8 @@ body, .font-fabrikam {
     --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
     --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
     --color-interactive: #4dd7e8;
-    --glow-btn: 0 0 0 1px color-mix(in srgb, #00bcd4 45%, transparent),
-      0 0 12px color-mix(in srgb, #00bcd4 16%, transparent);
+    --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
+      0 0 12px color-mix(in srgb, var(--color-primary) 16%, transparent);
   }
 }
 
@@ -5005,9 +5048,13 @@ body, .font-fabrikam {
 
      `--color-primary` is paired with `--color-primary-content` (black) by the
      brand itself, so this borrows a blessed pairing rather than inventing a
-     colour: 12.55:1 light, 11.13:1 dark. Filling it also turns a text link
-     into an obvious control, which suits Undo being the way back from an
-     action that makes a row vanish.
+     colour: 11.75:1, the same in both themes since task 01a07435 made
+     `--color-primary` one value. The 12.55:1 / 11.13:1 pair recorded here
+     before that was two themes carrying two different cyans, and it was
+     sampled in Chrome rather than computed; 11.75:1 is arithmetic, #06D5ED
+     on black. Filling it also turns a text link into an obvious control,
+     which suits Undo being the way back from an action that makes a row
+     vanish.
 
      Size, padding, radius and the colour transition are unchanged. Only the
      hover moved: `hover:bg-primary/10` was a tint FOR a transparent button and
@@ -5258,8 +5305,10 @@ body, .font-fabrikam {
          2.21457697:1 (error 3.89478250, success 3.23613436, neutral 4.87868930,
          info 5.11825478). Dark clears on all six at that ceiling (neutral
          5.2957, info 6.9412, success 5.3194, warning 7.7732, error 4.4198,
-         primary 7.4956), but the change must be component-wide across both
-         themes and light cannot be satisfied.
+         primary 9.6304, which read 7.4956 while the dark `--chip-tint` was a
+         literal of its own and task 01a07435 pointed it at `--color-primary`),
+         but the change must be component-wide across both themes and light
+         cannot be satisfied.
        - MUST NOT deepen the tint. Fill-vs-outline is the only thing separating
          the needs-merge chip from the outlined priority badges beside it in the
          Tasks board Deploy column (task_display.ex); a deeper tint walks a soft
@@ -5293,7 +5342,7 @@ body, .font-fabrikam {
   .chip-success { --chip-tint: oklch(62% 0.17 162); --chip-label: oklch(51% 0.15 162); }
   .chip-warning { --chip-tint: oklch(76% 0.17 70); --chip-label: oklch(53% 0.14 70); }
   .chip-error   { --chip-tint: oklch(63% 0.22 25); --chip-label: oklch(52% 0.19 25); }
-  .chip-primary { --chip-tint: #06d5ed; --chip-label: var(--color-interactive); }
+  .chip-primary { --chip-tint: var(--color-primary); --chip-label: var(--color-interactive); }
 
   /* Agent-owned marker: the chat .msg-agent accent edge, reusable on any
      container (agent-assigned task cards adopt it in the Tasks pilot).
@@ -5337,7 +5386,7 @@ body, .font-fabrikam {
 [data-theme="dark"] .chip-success { --chip-label: oklch(70% 0.15 162); }
 [data-theme="dark"] .chip-warning { --chip-label: oklch(80% 0.15 75); }
 [data-theme="dark"] .chip-error   { --chip-label: oklch(72% 0.17 25); }
-[data-theme="dark"] .chip-primary { --chip-tint: #00bcd4; }
+[data-theme="dark"] .chip-primary { --chip-tint: var(--color-primary); }
 [data-theme="dark"] .dropdown-content { background: var(--color-base-300); }
 
 @media (prefers-color-scheme: dark) {
@@ -5350,7 +5399,7 @@ body, .font-fabrikam {
   :root:not([data-theme="light"]) .chip-success { --chip-label: oklch(70% 0.15 162); }
   :root:not([data-theme="light"]) .chip-warning { --chip-label: oklch(80% 0.15 75); }
   :root:not([data-theme="light"]) .chip-error   { --chip-label: oklch(72% 0.17 25); }
-  :root:not([data-theme="light"]) .chip-primary { --chip-tint: #00bcd4; }
+  :root:not([data-theme="light"]) .chip-primary { --chip-tint: var(--color-primary); }
   :root:not([data-theme="light"]) .dropdown-content { background: var(--color-base-300); }
 }
 
