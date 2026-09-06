@@ -273,6 +273,41 @@ defmodule PlatformWeb.RuntimeChannel do
     {:noreply, socket}
   end
 
+  # The receipt for a `meeting_transcript` frame (task 01a06dfb stage 2).
+  #
+  # This is the ONLY thing that can prove `meeting_transcript`. Core
+  # broadcasts the transcript frame outbound from
+  # `Meetings.deliver_transcript_segment/2` and, until this ack existed,
+  # never heard anything back — so a plugin older than `63229eb`, which
+  # drops the frame in silence while sending a byte-identical
+  # `client_info`, was indistinguishable from one that heard the room.
+  # Stamping the proof at the broadcast site would be core certifying its
+  # own outbound send; the comment there says so, and
+  # `transcript_delivery_test.exs` holds it.
+  #
+  # `prove/2` rather than `touch/1`, for the same reason as the say ack
+  # above: `prove/2` advances `last_seen_at` exactly as `touch/1` does and
+  # additionally stamps the capability, so it replaces the touch rather
+  # than accompanying it.
+  #
+  # Fire-and-forget in the shape of the acks around it. The payload also
+  # carries `room_name` and `build` (the plugin's package.json version);
+  # both are logged and neither is persisted here, and nothing is pushed
+  # back down the socket.
+  @impl true
+  def handle_in("meeting_transcript_ack", %{"segment_id" => segment_id} = payload, socket)
+      when is_binary(segment_id) do
+    RuntimePresence.prove(socket.assigns.runtime_id, "meeting_transcript")
+
+    Logger.info(
+      "[RuntimeChannel] meeting_transcript_ack: agent=#{inspect(socket.assigns[:agent_id])} " <>
+        "segment=#{segment_id} room=#{Map.get(payload, "room_name")} " <>
+        "build=#{Map.get(payload, "build", "unknown")}"
+    )
+
+    {:noreply, socket}
+  end
+
   # The delivery receipt for a meeting intent (task 019ff292 stage 2).
   #
   # Send this at the moment the intent is SURFACED TO THE AGENT'S LOOP,

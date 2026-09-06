@@ -2,10 +2,12 @@
 
 **Status:** STABLE from the merge of task `01a06672-b193-7001-a5a1-0eac1b8cf949`
 **Owner task:** `01a06672-b193-7001-a5a1-0eac1b8cf949` (Agents hear the room: transcript frame and reply budget)
-**Consumed by:** `claude-code-suite-channel` (separate repo, follow-up ticket (URL needed)), any runtime client on `PlatformWeb.RuntimeSocket`
+**Consumed by:** `claude-code-suite-channel` (separate repo; listener added in `63229eb`, ack added by task `01a06dfb-2a34-7001-99ec-2d3f3678afe0` stage 1), any runtime client on `PlatformWeb.RuntimeSocket`
 **Source-of-truth references:**
 - Delivery: `apps/platform/lib/platform/meetings.ex`, `Platform.Meetings.deliver_transcript_segment/2`
 - Persist seam: `apps/platform/lib/platform/meetings.ex`, `Platform.Meetings.append_segment/2`
+- Ack seam: `apps/platform/lib/platform_web/channels/runtime_channel.ex`, `handle_in("meeting_transcript_ack", ...)`
+- Capability proofs: `apps/platform/lib/platform/federation/runtime_presence.ex`, `prove/2`
 - Reply budget: `apps/platform/lib/platform/meetings.ex`, `Platform.Meetings.say/4` and `check_reply_budget/2`
 - Ledger: `apps/platform/lib/platform/meetings/say_registry.ex`
 - Tool envelopes: `apps/platform/lib/platform/federation/tool_surface.ex`, `meeting_say_error/2`
@@ -63,7 +65,7 @@ Example:
 - The speaking agent never receives its own segment. Exclusion is a string compare of `participant_identity` against `agent:<slug>`, the identity the voice worker publishes under.
 - Agent segments are not classified as intents. `Platform.Meetings.IntentClassifier` guard 1 skips any chunk whose speaker is an agent with `%{reason: :agent_speaker}` (`intent_classifier.ex`). Delivery is history, not classification: `deliver_transcript_segment/2` never touches the intent queue.
 - Ordering is per append. Within a burst of appends the frames leave in append order, but delivery across agents is best effort and a client should order by `spoken_at` if it cares.
-- No ack is expected from the runtime. Delivery never fails the append: an agent with no linked runtime is skipped and logged at `:info`, and an exception inside delivery is caught and logged.
+- The runtime is expected to ack each frame with `meeting_transcript_ack` (below), but the ack is advisory: it is fire-and-forget, core never waits for it, and its absence changes nothing about delivery. Delivery never fails the append: an agent with no linked runtime is skipped and logged at `:info`, and an exception inside delivery is caught and logged.
 - An agent with a voice row but no brain row is skipped (`:no_runtime`): there is no brain socket to deliver to.
 
 ## Reply budget
@@ -86,8 +88,30 @@ What to do on each:
 
 The constants are exposed as `Meetings.meeting_say_budget_per_minute/0` and `Meetings.meeting_say_max_agent_chain/0`.
 
-## Channel-side follow-up
+## Return frame: `meeting_transcript_ack`
 
-Dependency, not built in this task. `claude-code-suite-channel` (separate repo) must surface `meeting_transcript` as an inbound message tagged with `room_name` and `meeting_id`, the way `space` messages arrive today with `space_id`. Follow-up ticket: (URL needed).
+Shipped by task `01a06dfb-2a34-7001-99ec-2d3f3678afe0`. `claude-code-suite-channel` surfaces `meeting_transcript` as an inbound message tagged with `room_name` and `meeting_id` (the way `space` messages arrive with `space_id`) and sends this receipt back on the same socket.
 
-The frame above is stable from this task's merge. Keys will only be added, never renamed or removed; a client should read the keys it knows and ignore the rest.
+Runtime to core, on the brain's `runtime:<runtime_id>` channel, one per frame handled:
+
+```json
+{
+  "segment_id": "01a06700-1234-7001-b000-0eac1b8cf949",
+  "room_name": "space-01a066cb-60c7-7001-a8e9-5af52dcf4811",
+  "build": "0.4.0"
+}
+```
+
+| Key | Type | Value |
+|---|---|---|
+| `segment_id` | uuid | The `segment_id` of the frame being acked. Required; a frame without a binary `segment_id` does not match the clause |
+| `room_name` | string | The room the frame named. Logged only |
+| `build` | string | The plugin's package.json `version`. Logged only |
+
+Handled by `PlatformWeb.RuntimeChannel.handle_in("meeting_transcript_ack", ...)`. Fire-and-forget in the shape of `meeting_say_ack` and `meeting_join_ack`: the receipt is logged, nothing is pushed back down the socket, and no row is written.
+
+Its one effect is `RuntimePresence.prove(runtime_id, "meeting_transcript")`, which stamps the capability and advances `last_seen_at` (`prove/2` subsumes `touch/1`; it is not called alongside one). This ack is the **only** thing that can prove `meeting_transcript`. The proof is deliberately NOT stamped at `deliver_transcript_segment/2`'s broadcast site: that frame is one core sent, and recording a proof from it would be core certifying its own outbound send — every connected runtime would read as able to hear meetings. The discriminating case is `test/platform/meetings/transcript_delivery_test.exs`, "delivering a transcript records NO proof, even when the client declared the feature", which declares the feature in `client_info.features`, asserts the broadcast fired, and still asserts `proven == %{}`.
+
+Proofs do not survive a reconnect (`RuntimePresence.track/1` resets `proven`), so a runtime that reconnects reads `never` for the transcript path until it acks another frame.
+
+The frame above is stable from task `01a06672`'s merge. Keys will only be added, never renamed or removed; a client should read the keys it knows and ignore the rest.

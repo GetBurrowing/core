@@ -1195,6 +1195,71 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # last one demonstrated is not evidence about this one.
       assert Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven == %{}
     end
+
+    # Task 01a06dfb stage 2 — the inbound frame that finally makes the
+    # transcript path observable. Everything else core has about it is
+    # either a claim by the runtime (`client_info.features`) or a frame
+    # core itself sent (the broadcast). Only this ack is evidence.
+    test "a meeting_transcript_ack proves meeting_transcript", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      # Nothing yet: the join alone must not have stamped anything.
+      assert Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven == %{}
+
+      push(socket, "meeting_transcript_ack", %{
+        "segment_id" => Platform.Types.UUIDv7.generate(),
+        "room_name" => "space-test",
+        "build" => "0.4.0"
+      })
+
+      Process.sleep(50)
+
+      proven = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven
+
+      assert Map.has_key?(proven, "meeting_transcript")
+
+      # By key, not by "proven is non-empty": an assertion any non-empty map
+      # satisfies does not distinguish this capability from another one, and
+      # would pass on a handler that stamped the wrong string.
+      refute Map.has_key?(proven, "meeting_voice")
+      refute Map.has_key?(proven, "chat_reply")
+    end
+
+    # Named mutation "prove-on-join" (task 01a06dfb stage 2).
+    #
+    # The counterpart to the reconnect test above, checked at the FIRST
+    # join rather than a re-join: a runtime that has connected and done
+    # nothing else has proven nothing. Moving the new `prove/2` call into
+    # `join/3` — or into the 30s `:presence_retrack` self-heal, which the
+    # join schedules — turns the transcript cell green for every runtime
+    # that can complete a handshake, which is exactly the declaration-shaped
+    # signal `proven` exists to replace. This test is what goes red.
+    test "a fresh join proves NOTHING before any ack is pushed", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      # Let the join's own work settle, so the absence below is a real
+      # absence and not a read that merely won a race.
+      Process.sleep(50)
+
+      proven = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven
+
+      assert proven == %{}
+      refute Map.has_key?(proven, "meeting_transcript")
+    end
   end
 
   describe "reply message" do
