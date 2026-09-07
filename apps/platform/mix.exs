@@ -118,12 +118,14 @@ defmodule Platform.MixProject do
         "tailwind platform",
         "esbuild platform",
         "esbuild excalidraw",
+        "esbuild emoji",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs"
       ],
       "assets.deploy": [
         "tailwind platform --minify",
         "esbuild platform --minify",
         "esbuild excalidraw --minify",
+        "esbuild emoji --minify",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs",
         "phx.digest"
       ],

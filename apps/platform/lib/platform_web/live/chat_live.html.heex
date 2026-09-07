@@ -556,12 +556,12 @@
   }
 />
 
-<.reaction_picker
-  reaction_picker_for={@reaction_picker_for}
-  reaction_picker_emojis={@reaction_picker_emojis}
-/>
+<.reaction_picker reaction_picker_for={@reaction_picker_for} />
 
-<.longpress_pill longpress_menu_for={@longpress_menu_for} />
+<.longpress_pill
+  longpress_menu_for={@longpress_menu_for}
+  quick_emojis={@quick_emojis}
+/>
 
 <.image_lightbox url={@lightbox_url} />
 

@@ -24,8 +24,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
     * `:messages` (stream — items are `%Message{}` enriched with `:reactions`)
     * `:attachments_map` — msg_id → [attachments]
-    * `:reaction_picker_for` — msg_id | nil — when set, the picker popover is open for that message
-    * `:reaction_picker_emojis` — curated emoji list shown in the picker
+    * `:reaction_picker_for` — msg_id | nil — when set, the picker is open for that message
     * `:longpress_menu_for` — msg_id | nil — when set, the mobile quick-react popover (double-tap entry) is open for that message
     * `:compose_form`
     * `:thread_compose_form`
@@ -115,22 +114,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # the newest-end ids cheaply.
   @stream_size_limit 300
 
-  # Expanded emoji list offered in the "+" picker popover. Keep curated —
-  # full emoji-picker-element with search/skin tones is tracked for V2.
-  @reaction_picker_emojis ~w(
-    👍 👎 ❤️ 🔥 🎉 🚀 ✅ ❌
-    😀 😂 😅 😊 😍 🤔 😮 😢
-    🙏 👏 🙌 💪 👀 💡 ⭐ ✨
-    🥳 🤯 💯 🫶 🤝 ☕ 🍕 🐛
-  )
-
   @doc "Attach message/thread/reactions handlers. Call from `ChatLive.mount/3`."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def attach(socket) do
     socket
     |> assign(:attachments_map, %{})
     |> assign(:reaction_picker_for, nil)
-    |> assign(:reaction_picker_emojis, @reaction_picker_emojis)
     |> assign(:longpress_menu_for, nil)
     |> assign(:active_thread, nil)
     |> assign(:thread_messages, [])

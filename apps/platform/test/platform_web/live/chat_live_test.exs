@@ -10,6 +10,29 @@ defmodule PlatformWeb.ChatLiveTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
+  # The row this product offers, pinned as a LITERAL (task 019e0814 stage 2).
+  #
+  # Deliberately NOT `Platform.Chat.Emoji.quick_defaults()`. A test that reads
+  # back the same function the template reads passes for EVERY possible return
+  # value of that function: it proves the wiring and asserts nothing about the
+  # set, so mutating `quick_defaults/0` would leave all three surfaces below
+  # green. Pinned here, that mutation turns all three red — which was the point
+  # of collapsing them onto one source, and was verified by doing it.
+  #
+  # Written as escapes, not glyphs: `\u{2764}\u{FE0F}` and a bare `\u{2764}` are
+  # the same picture in an editor and different strings to
+  # `Chat.list_reactions_grouped/1`, which groups by exact match. A row that
+  # dropped the variation selector would detach every heart reaction already in
+  # the database into a second pill, and no migration repairs that.
+  @quick_react_row [
+    "\u{1F44D}",
+    "\u{1F389}",
+    "\u{2705}",
+    "\u{2764}\u{FE0F}",
+    "\u{1F602}",
+    "\u{1F64F}"
+  ]
+
   setup do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
 
@@ -87,6 +110,42 @@ defmodule PlatformWeb.ChatLiveTest do
       })
 
     participant
+  end
+
+  # ── Reaction-picker state assertions (task 019e0814 stage 3) ────────────────
+  #
+  # `#reaction-picker` is ALWAYS mounted now. The JS hook builds its ~1,850-tile
+  # grid once and that grid has to survive a close, so the container cannot be
+  # gated by `:if` on the server any more and open/closed became STATE on it.
+  #
+  # Four assertions in this file used to read `refute html =~
+  # ~s(id="reaction-picker")`. They were the guards that the picker does not
+  # appear unbidden, and that property still needs guarding — it is just
+  # expressed differently now. They were CONVERTED, not deleted, because the
+  # obvious replacement (`assert` the container exists) passes just as happily
+  # against a picker stuck permanently open.
+  #
+  # THAT FAILURE IS THE ONE THAT MATTERS. An always-open picker means a
+  # full-viewport `inset-0` scrim carrying `phx-click="close_reaction_picker"`
+  # sitting over the whole chat surface: every message silently stops responding
+  # to clicks and nothing looks wrong. Both halves below are therefore
+  # load-bearing — the positive on `data-open="false"` AND the refutation of
+  # `data-open="true"` — and `inert` is asserted alongside them because it is
+  # the layer that still holds if a CSS change breaks the display gate.
+  #
+  # Verified by mutation: forcing `data-open` to a constant `"true"` in
+  # `overlays.ex` turns every call to `assert_picker_closed/1` red.
+  defp assert_picker_closed(view) do
+    assert has_element?(view, ~s(#reaction-picker[data-open="false"]))
+    refute has_element?(view, ~s(#reaction-picker[data-open="true"]))
+    assert has_element?(view, "#reaction-picker[inert]")
+  end
+
+  defp assert_picker_open(view, msg_id) do
+    assert has_element?(view, ~s(#reaction-picker[data-open="true"]))
+    refute has_element?(view, ~s(#reaction-picker[data-open="false"]))
+    refute has_element?(view, "#reaction-picker[inert]")
+    assert has_element?(view, ~s(#reaction-picker[data-message-id="#{msg_id}"]))
   end
 
   defp count_occurrences(haystack, needle) do
@@ -1755,11 +1814,14 @@ defmodule PlatformWeb.ChatLiveTest do
       html = render(view)
       assert html =~ "react to me"
 
-      # Quick emoji buttons should be present (in the action bar)
-      assert html =~ "👍"
-      assert html =~ "❤️"
-      assert html =~ "😂"
-      assert html =~ "🎉"
+      # Quick emoji buttons should be present (in the action bar). Asserted
+      # against the pinned row rather than a hand-listed subset: this test
+      # listed four of the six and so stayed green through the entire period
+      # the hover row and the double-tap pill disagreed (task 019e0814
+      # stage 2). A subset check cannot see a missing emoji.
+      for emoji <- @quick_react_row do
+        assert html =~ emoji
+      end
     end
 
     test "renders the (+) add-reaction button on a message with zero reactions",
@@ -2215,8 +2277,11 @@ defmodule PlatformWeb.ChatLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, html} = live(conn, ~p"/chat/general")
 
-      # Picker is not rendered before anyone opens it.
-      refute html =~ ~s(id="reaction-picker")
+      # The picker is MOUNTED before anyone opens it — the JS hook builds its
+      # ~1,850-tile grid once and it has to survive a close — so "not open" is
+      # state, not absence. See assert_picker_closed/1.
+      assert html =~ ~s(id="reaction-picker")
+      assert_picker_closed(view)
 
       view
       |> form("#compose-form", compose: %{text: "picker target"})
@@ -2227,14 +2292,121 @@ defmodule PlatformWeb.ChatLiveTest do
 
       html = render_click(view, "open_reaction_picker", %{"message-id" => msg.id})
 
-      # Popover is now in the DOM, anchored to this message via the emoji buttons.
+      # The picker is now OPEN, and carries the target message id on the
+      # container. The tiles no longer carry `phx-value-message-id`: they are
+      # built by the hook, which reads `data-message-id` off this element at
+      # click time and pushes the hyphenated `"message-id"` key the server
+      # matches on.
       assert html =~ ~s(id="reaction-picker")
       assert html =~ ~s(aria-label="Add reaction")
-      # Every picker emoji button carries the target message-id.
-      assert html =~ ~s(phx-value-message-id="#{msg.id}")
+      assert_picker_open(view, msg.id)
+
+      # The grid is CLIENT-BUILT. A server-rendered tile here would mean the
+      # ~180-210KB-per-open regression this stage exists to remove has crept
+      # back in, and the hook's host would be fighting morphdom for the same
+      # children.
+      refute has_element?(view, ".reaction-picker-tile")
+
+      assert has_element?(
+               view,
+               ~s(#reaction-picker-body[phx-hook="ReactionPicker"][phx-update="ignore"])
+             )
     end
 
-    test "closing the reaction picker removes the popover", %{conn: conn} do
+    test "the picker container is mounted, closed and inert before it is opened",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      assert_picker_closed(view)
+
+      # THE HAZARD, stated as an assertion. A permanently-mounted picker puts a
+      # full-viewport inset-0 scrim carrying phx-click="close_reaction_picker"
+      # in the DOM for the life of the page. If the closed gate is wrong, that
+      # scrim eats every click on the chat surface and nothing looks broken.
+      # `inert` is the layer that survives a CSS mistake.
+      assert has_element?(view, "#reaction-picker[inert] .reaction-picker-scrim")
+
+      # The window Escape binding must NOT be live while closed, or every
+      # Escape anywhere in chat costs a round trip pushing a no-op close.
+      refute has_element?(view, ~s(#reaction-picker[phx-window-keydown]))
+
+      # The hook host ships EMPTY. Anything server-rendered inside a
+      # phx-update="ignore" host is frozen at first render and can never be
+      # updated again (task 01a0693d, the transcript pane's empty state).
+      assert [""] =
+               view
+               |> render()
+               |> Floki.parse_document!()
+               |> Floki.find("#reaction-picker-body")
+               |> Enum.map(&(&1 |> Floki.text() |> String.trim()))
+    end
+
+    test "the search field is client-built and costs no round trip per keystroke",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "search field"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      html = render_click(view, "open_reaction_picker", %{"message-id" => msg.id})
+
+      picker =
+        html
+        |> Floki.parse_document!()
+        |> Floki.find("#reaction-picker")
+
+      # NO SERVER-RENDERED INPUT. The field lives inside the
+      # `phx-update="ignore"` host and is built by the hook, because a
+      # LiveView-owned input would have its `value` re-synced by morphdom on
+      # every patch — so anyone posting a message in the space would wipe what
+      # the user had typed mid-search.
+      assert [] = Floki.find(picker, "input")
+
+      # AND NO `phx-change` ANYWHERE IN THE PICKER. The superseded ticket
+      # 019e0814-dba5-7e74-84cd-e48e6689f44d proposed exactly that, which puts
+      # a round trip on every keystroke over an inventory the client already
+      # holds. Matching is client-side in assets/js/lib/emoji_search.js.
+      assert [] = Floki.find(picker, "[phx-change]")
+
+      # The host is still empty, so the four assertions above cannot be
+      # satisfied by a field the server rendered somewhere else inside it.
+      assert [""] =
+               html
+               |> Floki.parse_document!()
+               |> Floki.find("#reaction-picker-body")
+               |> Enum.map(&(&1 |> Floki.text() |> String.trim()))
+    end
+
+    test "the Escape window binding exists only while the picker is open",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "escape binding"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      render_click(view, "open_reaction_picker", %{"message-id" => msg.id})
+
+      assert has_element?(
+               view,
+               ~s(#reaction-picker[phx-window-keydown="close_reaction_picker"][phx-key="Escape"])
+             )
+
+      render_click(view, "close_reaction_picker", %{})
+      refute has_element?(view, ~s(#reaction-picker[phx-window-keydown]))
+    end
+
+    test "closing the reaction picker returns it to the closed state", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -2247,9 +2419,14 @@ defmodule PlatformWeb.ChatLiveTest do
 
       html = render_click(view, "open_reaction_picker", %{"message-id" => msg.id})
       assert html =~ ~s(id="reaction-picker")
+      assert_picker_open(view, msg.id)
 
-      html = render_click(view, "close_reaction_picker", %{})
-      refute html =~ ~s(id="reaction-picker")
+      render_click(view, "close_reaction_picker", %{})
+
+      # The container STAYS — closing is a state change, not an unmount, and
+      # that is exactly why the closed state has to be asserted rather than the
+      # container's absence.
+      assert_picker_closed(view)
     end
 
     test "selecting an emoji from the picker reacts and closes the picker",
@@ -2274,8 +2451,9 @@ defmodule PlatformWeb.ChatLiveTest do
       # Reaction is persisted.
       assert [%{emoji: "🚀"}] = Chat.list_reactions(msg.id)
 
-      # Picker is closed after selection — one-click flow.
-      refute html =~ ~s(id="reaction-picker")
+      # Picker is closed after selection — one-click flow. Still mounted.
+      assert html =~ ~s(id="reaction-picker")
+      assert_picker_closed(view)
     end
   end
 
@@ -2431,9 +2609,12 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ ~s(aria-label="Quick reactions")
 
       # The strip is driven by @quick_emojis — the SAME assign the desktop
-      # hover action row renders — so the two surfaces cannot drift. If this
-      # list changes, change it in chat_live.ex, never in the template.
-      for emoji <- ["👍", "❤️", "😂", "🎉"] do
+      # hover action row and the double-tap pill render — so the surfaces
+      # cannot drift. That was aspirational until task 019e0814 stage 2: this
+      # loop asserted four emoji while the pill rendered six. If the set
+      # changes, change `Platform.Chat.Emoji.quick_defaults/0`, never a
+      # template and never this literal alone.
+      for emoji <- @quick_react_row do
         assert html =~ ~s(phx-value-emoji="#{emoji}")
         assert html =~ ~s(aria-label="React with #{emoji}")
       end
@@ -2467,24 +2648,25 @@ defmodule PlatformWeb.ChatLiveTest do
         |> Floki.parse_document!()
         |> Floki.find("#message-actions-quick-reactions button")
 
-      # Counted in two parts on purpose, rather than asserting `== 5`.
-      # The strip holds two DIFFERENT kinds of target: four emoji that come
-      # from @quick_emojis, and one "+" that opens the picker. A flat `== 5`
-      # would still pass if somebody added the "+" as a fifth emoji in the
+      # Counted in two parts on purpose, rather than asserting one total.
+      # The strip holds two DIFFERENT kinds of target: the emoji that come
+      # from @quick_emojis, and one "+" that opens the picker. A flat total
+      # would still pass if somebody added the "+" as an extra emoji in the
       # assign and deleted the real control — exactly the mistake the
       # ruling's wording ("the + is a control, not an emoji") invites. So
       # pin the two facts separately.
       emoji_buttons = Floki.filter_out(buttons, "#message-actions-more-reactions")
-      assert length(emoji_buttons) == 4
+      assert length(emoji_buttons) == length(@quick_react_row)
 
       assert [_] = Floki.find(buttons, "#message-actions-more-reactions")
       refute html =~ ~s(phx-value-emoji="+")
 
-      # ALL five, "+" included, are 44x44. size-11 is Tailwind's 2.75rem on
+      # ALL of them, "+" included, are 44x44. size-11 is Tailwind's 2.75rem on
       # both axes, matching the .longpress-pill-btn hit target this strip
       # borrows from. shrink-0 stops flex from squeezing one below 44px on a
-      # narrow phone — the "+" is last in the row and would be squeezed first.
-      assert length(buttons) == 5
+      # narrow phone — the "+" is last in the row and would be squeezed first,
+      # and the row got longer when the set went from four to six.
+      assert length(buttons) == length(@quick_react_row) + 1
 
       for button <- buttons do
         classes = button |> Floki.attribute("class") |> List.first() |> String.split()
@@ -2509,9 +2691,11 @@ defmodule PlatformWeb.ChatLiveTest do
 
       html = render(view)
 
-      # ONE TAP: the sheet is gone and the picker never opened.
+      # ONE TAP: the sheet is gone and the picker never OPENED. The picker
+      # container is always mounted now, so its absence is not the thing to
+      # check — its closed state is.
       refute html =~ ~s(id="message-actions-sheet")
-      refute html =~ ~s(id="reaction-picker")
+      assert_picker_closed(view)
     end
 
     test "the '+' at the end of the strip opens the picker and closes the sheet",
@@ -4138,6 +4322,199 @@ defmodule PlatformWeb.ChatLiveTest do
       active_space = :sys.get_state(view.pid).socket.assigns.active_space
       assert active_space.id == exec.id
       assert is_nil(active_space.org_id)
+    end
+  end
+
+  # ── Quick-react row: one set, three surfaces ─────────────────────────────────
+
+  # The emoji of one quick-react row, in DOM order, read off `phx-value-emoji`.
+  #
+  # The ATTRIBUTE and not the button's text, because the attribute is what a
+  # click actually posts to the `react` event: a row that displayed the right
+  # glyph and sent a different string would fail here and pass a text check.
+  # It also drops the picker "+" for free — that control carries no
+  # `phx-value-emoji`, which is the distinction Harper's ruling turns on.
+  defp quick_row_emoji(html, selector) do
+    html
+    |> Floki.parse_document!()
+    |> Floki.find(selector)
+    |> Enum.map(&(&1 |> Floki.attribute("phx-value-emoji") |> List.first()))
+  end
+
+  defp hover_row_selector(msg_id) do
+    ~s(.message-action-row button[phx-value-message-id="#{msg_id}"][phx-value-emoji])
+  end
+
+  @longpress_pill_selector ".longpress-pill button[phx-value-emoji]"
+  @actions_sheet_selector "#message-actions-quick-reactions button[phx-value-emoji]"
+
+  describe "quick-react row is one set across every surface" do
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "one row, three surfaces"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      %{view: view, msg: msg}
+    end
+
+    test "the desktop hover row renders the pinned set, in order", %{view: view, msg: msg} do
+      html = render(view)
+
+      assert quick_row_emoji(html, hover_row_selector(msg.id)) == @quick_react_row
+    end
+
+    test "the mobile double-tap pill renders the pinned set, in order",
+         %{view: view, msg: msg} do
+      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
+
+      assert quick_row_emoji(html, @longpress_pill_selector) == @quick_react_row
+    end
+
+    test "the mobile message-actions sheet renders the pinned set, in order",
+         %{view: view, msg: msg} do
+      html = render_click(view, "open_message_actions", %{"id" => msg.id})
+
+      assert quick_row_emoji(html, @actions_sheet_selector) == @quick_react_row
+    end
+
+    test "all three surfaces agree with each other on one render pass",
+         %{view: view, msg: msg} do
+      # The three assertions above each compare a surface to the pin. This
+      # compares the surfaces to EACH OTHER, which is the defect being closed:
+      # every one of them looked right in isolation while the pointer row
+      # offered four emoji and the touch pill offered six, on the same message,
+      # in the same account, differing only by the device it was opened on.
+      hover = quick_row_emoji(render(view), hover_row_selector(msg.id))
+
+      pill =
+        quick_row_emoji(
+          render_hook(view, "open_longpress_menu", %{"message_id" => msg.id}),
+          @longpress_pill_selector
+        )
+
+      sheet =
+        quick_row_emoji(
+          render_click(view, "open_message_actions", %{"id" => msg.id}),
+          @actions_sheet_selector
+        )
+
+      assert hover == pill
+      assert pill == sheet
+      assert length(hover) == 6
+    end
+
+    test "the picker control is still a control, not a seventh emoji",
+         %{view: view, msg: msg} do
+      # The counterpart to the equality assertions: they would all still pass
+      # if somebody added the "+" to the set and deleted the real control.
+      # Counted separately on each surface, the way the sheet's own strip test
+      # counts them, because "the + is a control, not an emoji" is a rule about
+      # kinds and not about a total.
+      pill_html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
+      pill_buttons = pill_html |> Floki.parse_document!() |> Floki.find(".longpress-pill button")
+
+      assert length(pill_buttons) == 7
+      assert [_] = Floki.find(pill_buttons, ".longpress-pill-more")
+
+      sheet_html = render_click(view, "open_message_actions", %{"id" => msg.id})
+
+      sheet_buttons =
+        sheet_html
+        |> Floki.parse_document!()
+        |> Floki.find("#message-actions-quick-reactions button")
+
+      assert length(sheet_buttons) == 7
+      assert [_] = Floki.find(sheet_buttons, "#message-actions-more-reactions")
+
+      refute pill_html =~ ~s(phx-value-emoji="+")
+      refute sheet_html =~ ~s(phx-value-emoji="+")
+    end
+  end
+
+  describe "quick-react row does not vary by who is looking" do
+    test "the row is byte-identical for the participant who reacted and for a peer" do
+      # THE REGRESSION THIS STAGE PROTECTS AGAINST. The static system-wide set
+      # was chosen over the personalisation options precisely so that two people
+      # looking at one message see the same emoji in the same order. A "recents"
+      # or "most used" implementation would pass a test that merely asserted the
+      # row is non-empty, and would fail this one the moment Alice reacted:
+      # her row would reorder and Bob's would not.
+      #
+      # Two REAL LiveViews under two different sessions, not one view re-rendered
+      # — a per-user set would be read from the session, and re-rendering one
+      # session cannot observe that.
+      alice =
+        insert_chat_user(%{email: "row-alice@example.com", oidc_sub: "row-alice", name: "Alice"})
+
+      bob = insert_chat_user(%{email: "row-bob@example.com", oidc_sub: "row-bob", name: "Bob"})
+
+      conn_a = init_test_session(Phoenix.ConnTest.build_conn(), current_user_id: alice.id)
+      conn_b = init_test_session(Phoenix.ConnTest.build_conn(), current_user_id: bob.id)
+
+      {:ok, view_a, _} = live(conn_a, ~p"/chat/general")
+      {:ok, view_b, _} = live(conn_b, ~p"/chat/general")
+
+      view_a
+      |> form("#compose-form", compose: %{text: "same row for everyone"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Alice reacts. On a personalised row this is the event that would move
+      # her set — a "recents" list puts the emoji she just used at the front.
+      render_click(view_a, "react", %{"message-id" => msg.id, "emoji" => "\u{1F64F}"})
+
+      # Sanity: the reaction really landed, so the render below is the
+      # after-state and not an unchanged page. Without this the equality
+      # assertions could pass because nothing happened at all.
+      assert [%{emoji: "\u{1F64F}"}] = Chat.list_reactions(msg.id)
+      assert render(view_b) =~ "same row for everyone"
+
+      selector = hover_row_selector(msg.id)
+      alice_row = quick_row_emoji(render(view_a), selector)
+      bob_row = quick_row_emoji(render(view_b), selector)
+
+      assert alice_row == bob_row
+      assert alice_row == @quick_react_row
+
+      # And on touch, where the reacting gesture and the row both live in the
+      # same overlay.
+      alice_pill =
+        quick_row_emoji(
+          render_hook(view_a, "open_longpress_menu", %{"message_id" => msg.id}),
+          @longpress_pill_selector
+        )
+
+      bob_pill =
+        quick_row_emoji(
+          render_hook(view_b, "open_longpress_menu", %{"message_id" => msg.id}),
+          @longpress_pill_selector
+        )
+
+      assert alice_pill == bob_pill
+      assert alice_pill == @quick_react_row
+
+      alice_sheet =
+        quick_row_emoji(
+          render_click(view_a, "open_message_actions", %{"id" => msg.id}),
+          @actions_sheet_selector
+        )
+
+      bob_sheet =
+        quick_row_emoji(
+          render_click(view_b, "open_message_actions", %{"id" => msg.id}),
+          @actions_sheet_selector
+        )
+
+      assert alice_sheet == bob_sheet
+      assert alice_sheet == @quick_react_row
     end
   end
 end

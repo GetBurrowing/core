@@ -228,11 +228,17 @@ defmodule PlatformWeb.Components.ChatMessage do
               </button>
 
               <%!-- Add-reaction, moved here from the reaction row below the
-                   message body (task 01a000c0 stage 3). It joins four
+                   message body (task 01a000c0 stage 3). It joins the
                    quick-react buttons that were already here, so this row was
                    always partly about reacting — the consolidation is putting
                    the general case next to the shortcuts rather than in a
                    second corner revealed by the same gesture.
+
+                   The count is deliberately not written down here. @quick_emojis
+                   is `Platform.Chat.Emoji.quick_defaults/0` (task 019e0814
+                   stage 2) and this row renders whatever it holds; a number in
+                   this comment is a fourth place for the set to drift, which is
+                   the defect that stage exists to close.
 
                    Treatment is copied verbatim from its siblings: no new
                    colour, no text label (it would be the only word in a glyph

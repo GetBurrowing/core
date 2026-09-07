@@ -47,13 +47,39 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   ## THE BESPOKE CSS CLASSES ARE LOAD-BEARING
 
   `reaction-picker`, `reaction-picker-scrim`, `reaction-picker-panel`,
-  `reaction-picker-grid`, `reaction-picker-tile`, `reaction-picker-close`,
-  `longpress-scrim`, `longpress-pill`, `longpress-pill-btn`,
-  `longpress-pill-divider` and `longpress-pill-more` are hand-written in
-  `assets/css/app.css`, not Tailwind utilities. Tailwind's content scan
-  covers `lib/**/*.ex` as well as `*.heex`, so the move does not change
-  what is generated — but the class strings are byte-identical here for
-  that reason, and must stay that way.
+  `reaction-picker-header`, `reaction-picker-body`, `reaction-picker-sr`,
+  `reaction-picker-search`, `reaction-picker-search-icon`,
+  `reaction-picker-search-input`, `reaction-picker-search-clear`,
+  `reaction-picker-modebar`, `reaction-picker-jumpbar`,
+  `reaction-picker-chip`, `reaction-picker-count`,
+  `reaction-picker-scroll`, `reaction-picker-inventory`,
+  `reaction-picker-results`, `reaction-picker-empty`,
+  `reaction-picker-section`, `reaction-picker-category`,
+  `reaction-picker-grid`, `reaction-picker-row`, `reaction-picker-tile`,
+  `reaction-picker-skeleton-tile`, `reaction-picker-error`,
+  `reaction-picker-error-text`, `reaction-picker-retry`,
+  `reaction-picker-close`, `longpress-scrim`, `longpress-pill`,
+  `longpress-pill-btn`, `longpress-pill-divider` and `longpress-pill-more`
+  are hand-written in `assets/css/app.css`, not Tailwind utilities.
+  Tailwind's content scan covers `lib/**/*.ex` as well as `*.heex`, so the
+  move does not change what is generated — but the class strings are
+  byte-identical here for that reason, and must stay that way.
+
+  Everything from `reaction-picker-sr` down is emitted by
+  `assets/js/hooks/reaction_picker.js` and
+  `assets/js/lib/emoji_picker_chrome.js`, not by this module — INCLUDING THE
+  SEARCH FIELD (task 019e0814 stage 4). The field is deliberately not
+  server-rendered: a LiveView-owned input would have its `value` re-synced by
+  morphdom on every patch, so anyone posting a message in the space would wipe
+  what the user had typed mid-search. It carries no `phx-change` either, for
+  the same reason the grid is client-built — matching runs over an inventory
+  the client already holds, and a round trip per keystroke is what the
+  superseded ticket 019e0814-dba5-7e74-84cd-e48e6689f44d proposed. The tile's
+  hover and focus treatment is folded INTO `.reaction-picker-tile` rather
+  than composed from `hover:bg-base-200 transition-colors` at the call
+  site: a class string built inside a JS template literal is one Tailwind
+  scan away from disappearing, and the tile is the element here that
+  cannot afford that (task 019e0814 stage 3).
   """
 
   use Phoenix.Component
@@ -63,12 +89,50 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   alias Phoenix.LiveView.JS
 
   attr(:reaction_picker_for, :any, required: true)
-  attr(:reaction_picker_emojis, :list, required: true)
 
   @doc """
-  The add-reaction picker. The `:if={@reaction_picker_for}` travelled into
-  the component with the markup, so the call site states no render
-  condition of its own.
+  The add-reaction picker.
+
+  ## IT IS ALWAYS MOUNTED NOW, AND THAT IS THE WHOLE HAZARD
+
+  `#reaction-picker` used to carry `:if={@reaction_picker_for}`, so the
+  whole overlay left the DOM when closed. It cannot any more: the grid is
+  built once by a JS hook and must survive a close (task 019e0814 stage
+  3), so the container is permanently in the document and open/closed is
+  STATE on it.
+
+  What that puts permanently in the DOM is a full-viewport `inset-0`
+  scrim carrying `phx-click="close_reaction_picker"`. Get the closed gate
+  wrong and you ship an invisible click-eater over the entire chat
+  surface: every message stops responding to clicks and NOTHING LOOKS
+  WRONG. Three things gate it, all derived from the same assign so they
+  cannot disagree:
+
+    * `data-open` — the CSS gate. `app.css` sets `.reaction-picker
+      { display: none }` and shows it only on `[data-open="true"]`. The
+      old rule was an unconditional `display: flex`, which is exactly the
+      shape that would have shipped the click-eater.
+    * `inert` when closed — a second, independent layer. Even if a future
+      CSS change made the container visible while closed, an inert
+      subtree takes no pointer events and no focus.
+    * `phx-window-keydown` only while open — a window binding that
+      survived the close would push `close_reaction_picker` on every
+      Escape anywhere in chat, one wasted round trip per press.
+
+  `assets/test/reaction_picker_closed_gate_test.mjs` pins the CSS half;
+  `chat_live_test.exs` pins the markup half. End-to-end case 3 exists to
+  catch the click-eater in a browser.
+
+  ## THE LAYERING
+
+  This element stays LIVEVIEW-OWNED: the server drives `data-open` and
+  `data-message-id`. `#reaction-picker-body` is the hook's
+  `phx-update="ignore"` host and ships EMPTY — nothing server-rendered
+  inside it would ever update again, which is the bug filed as task
+  01a0693d against the transcript pane. The hook keeps all of its own
+  state on that host and never writes an attribute back to this element,
+  because morphdom re-syncs attributes on every patch and chat patches
+  constantly.
   """
   def reaction_picker(assigns) do
     ~H"""
@@ -81,10 +145,12 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       users have parity with backdrop click.
     --%>
     <div
-      :if={@reaction_picker_for}
       id="reaction-picker"
       class="reaction-picker fixed inset-0 z-50"
-      phx-window-keydown="close_reaction_picker"
+      data-open={if @reaction_picker_for, do: "true", else: "false"}
+      data-message-id={@reaction_picker_for}
+      inert={is_nil(@reaction_picker_for)}
+      phx-window-keydown={if @reaction_picker_for, do: "close_reaction_picker"}
       phx-key="Escape"
     >
       <div
@@ -94,17 +160,25 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       >
       </div>
       <%!--
-        `role="dialog"` without `aria-modal="true"` is an intentional
-        downgrade: we don't yet have a focus trap or return-focus-on-close,
-        so claiming modality to assistive tech would be a false promise.
-        Full focus management lands in PR B (search + a11y feature pass).
+        `aria-modal="true"` is now honest: the hook traps Tab and
+        Shift+Tab inside this panel, gives the grid a roving tabindex so
+        the focusable set is about three elements rather than ~1,850, and
+        restores focus to the control that opened the picker on close.
+        The deferral this comment used to record ("full focus management
+        lands in PR B") was that PR. `tabindex="-1"` makes the panel the
+        initial focus target on open, which is what MOBILE keeps: the hook
+        moves initial focus to the search field only on a fine pointer at
+        640px and up, because raising a soft keyboard unbidden collapses
+        the grid to two rows before the user has asked to search.
       --%>
       <div
-        class="reaction-picker-panel rounded-lg border border-edge bg-base-100 p-3 shadow-xl"
+        class="reaction-picker-panel border border-edge bg-base-100 p-3 shadow-xl"
         role="dialog"
+        aria-modal="true"
         aria-label="Add reaction"
+        tabindex="-1"
       >
-        <div class="mb-2 flex items-center justify-between">
+        <div class="reaction-picker-header mb-2 flex items-center justify-between">
           <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
             Add reaction
           </span>
@@ -113,24 +187,25 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
             phx-click="close_reaction_picker"
             title="Close"
             aria-label="Close reaction picker"
-            class="reaction-picker-close rounded p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content"
+            class="reaction-picker-close rounded p-1 text-base-content/50 hover:bg-base-content/5 hover:text-base-content"
           >
             <span class="hero-x-mark size-5"></span>
           </button>
         </div>
-        <div class="reaction-picker-grid">
-          <button
-            :for={emoji <- @reaction_picker_emojis}
-            type="button"
-            phx-click="react"
-            phx-value-message-id={@reaction_picker_for}
-            phx-value-emoji={emoji}
-            title={"React with #{emoji}"}
-            aria-label={"React with #{emoji}"}
-            class="reaction-picker-tile rounded hover:bg-base-200 transition-colors"
-          >
-            {emoji}
-          </button>
+        <%!--
+          THE HOOK'S HOST. It ships empty and MUST stay empty: under
+          `phx-update="ignore"` anything server-rendered in here is frozen
+          at first render and can never be updated again. The hook builds
+          `.reaction-picker-scroll` and the categorised grid inside it on
+          first open, from the emoji island, and reuses them for the
+          lifetime of the page.
+        --%>
+        <div
+          id="reaction-picker-body"
+          class="reaction-picker-body"
+          phx-hook="ReactionPicker"
+          phx-update="ignore"
+        >
         </div>
       </div>
     </div>
@@ -138,11 +213,17 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   end
 
   attr(:longpress_menu_for, :any, required: true)
+  attr(:quick_emojis, :list, required: true)
 
   @doc """
-  The mobile double-tap quick-react pill. The emoji list is a literal
-  `~w()` in the markup rather than an assign — that is how it arrived and
-  the move does not change it.
+  The mobile double-tap quick-react pill.
+
+  The emoji come from `@quick_emojis` — the same assign the desktop hover
+  action row and the message-actions sheet render, sourced from
+  `Platform.Chat.Emoji.quick_defaults/0` (task 019e0814 stage 2). This markup
+  used to carry its own six-emoji `~w()` literal, which is how this surface
+  came to offer six while the other two offered four. Do not put a literal
+  back; if the set is wrong, change `quick_defaults/0`.
   """
   def longpress_pill(assigns) do
     ~H"""
@@ -180,7 +261,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
            → close_picker/1 closes both reaction_picker_for and longpress_menu_for). --%>
       <div class="longpress-pill" role="group" aria-label="Quick reactions">
         <button
-          :for={emoji <- ~w(👍 🎉 ✅ ❤️ 😂 🙏)}
+          :for={emoji <- @quick_emojis}
           type="button"
           class="longpress-pill-btn"
           title={"React with #{emoji}"}
@@ -306,18 +387,23 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
              to stay one tap.
 
              EMOJI SET: @quick_emojis, the same assign the desktop hover action
-             row renders (chat_message.ex ~line 159), so pointer and touch
-             cannot drift. Do not hardcode a literal list here; if the set is
-             wrong, change the assign in chat_live.ex.
+             row and the double-tap longpress pill render, so pointer and touch
+             cannot drift. That claim was FALSE when it was written: the
+             longpress pill 150 lines above carried its own six-emoji `~w()`
+             while this assign held four. Task 019e0814 stage 2 collapsed all
+             three onto `Platform.Chat.Emoji.quick_defaults/0`. Do not hardcode
+             a literal list here; if the set is wrong, change quick_defaults/0.
 
              THE "+" IS IN THIS ROW, NOT A ROW OF ITS OWN: Harper's ruling —
              "the reaction should be next to the other emojis as a + sign; when
-             you hit that you get the other options". Stage 3 moves the desktop
-             "+" into the hover action row, which already renders these same
-             four @quick_emojis, so touch and pointer end up the same shape and
-             the same gesture. A labelled "More reactions…" menu row on one
-             surface and a glyph on the other would be two ways to do one thing.
-             The "+" is an additional CONTROL, not a fifth entry in the assign.
+             you hit that you get the other options". The desktop hover action
+             row renders these same @quick_emojis beside its own "+", so touch
+             and pointer end up the same shape and the same gesture. A labelled
+             "More reactions…" menu row on one surface and a glyph on the other
+             would be two ways to do one thing. The "+" is an additional
+             CONTROL, never an entry in the assign — which is why the tests
+             count the emoji and the "+" separately rather than asserting a
+             single total.
 
              SIZING: 44x44 hit targets (size-11), the vertical hairline before
              the "+", and the "+"'s own base-200 fill / scale-on-press are
@@ -347,8 +433,8 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           </button>
           <%!-- Hairline before the "+", matching .longpress-pill-divider (1px x
                24px on --color-base-300). It says the "+" is a different KIND of
-               target from the four beside it — one opens the picker, the others
-               react — without pulling it out of the row. --%>
+               target from the emoji beside it — one opens the picker, the
+               others react — without pulling it out of the row. --%>
           <div class="h-6 w-px shrink-0 bg-base-300" aria-hidden="true"></div>
           <%!-- Escape hatch for anything outside @quick_emojis. Same event chain
                the deleted "More reactions…" row used: open the existing

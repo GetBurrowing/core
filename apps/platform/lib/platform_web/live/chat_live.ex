@@ -54,7 +54,28 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ShellLive
   alias PlatformWeb.SpaceTopics
 
-  @quick_emojis ["👍", "❤️", "😂", "🎉"]
+  # The quick-react row's contents, for every surface that renders one: the
+  # desktop hover action row, the mobile double-tap pill and the mobile
+  # message-actions sheet. All three take it from this assign, and this assign
+  # now has exactly one source (task 019e0814 stage 2).
+  #
+  # It used to be a FOUR-emoji literal on this line while the longpress pill
+  # carried a SIX-emoji `~w()` of its own, so the product disagreed with itself
+  # about what a quick reaction is — on the same message, in the same account,
+  # differing only by which device it was opened on. Six is the number the
+  # ticket asks for and the number already live on touch, so four was the odd
+  # one out.
+  #
+  # STATIC AND SYSTEM-WIDE, deliberately. Nothing per-user, per-space or
+  # per-session feeds this: no recents, no last-used, no override column. Two
+  # people looking at one message get the same emoji in the same order, on any
+  # device, on their first day and their thousandth — which is what makes the
+  # row teachable and its screenshots stable. `Platform.Chat.Emoji` records
+  # what changing that would cost.
+  #
+  # Resolved at compile time, so `Platform.Chat.Emoji` is a compile-time
+  # dependency of this module and editing the set recompiles this file.
+  @quick_emojis Platform.Chat.Emoji.quick_defaults()
   @max_upload_entries 5
   @max_upload_size 15_000_000
 

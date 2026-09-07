@@ -2701,24 +2701,134 @@ body, .font-fabrikam {
 
 /* Container is always an inset-0 fixed overlay; positioning of the
    inner panel differs between breakpoints (bottom-aligned vs. centered). */
-.reaction-picker { display: flex; }
+
+/* ── THE CLOSED GATE ──────────────────────────────────────────────────────
+   `#reaction-picker` is ALWAYS in the DOM as of task 019e0814 stage 3: the
+   ~1,850-tile grid is built once by a JS hook and has to survive a close, so
+   the container can no longer be gated by `:if` on the server.
+
+   That means a full-viewport `inset-0` scrim carrying
+   `phx-click="close_reaction_picker"` is permanently in the document. This
+   rule used to read `.reaction-picker { display: flex }` with no condition,
+   which — now that the element never leaves — would put an INVISIBLE
+   CLICK-EATER over the whole chat surface: every message stops responding to
+   clicks and nothing looks wrong. Closed is therefore `display: none`, and
+   `display: flex` is spelled only on the open state.
+
+   Do not reintroduce an unconditional `display` on `.reaction-picker`.
+   `assets/test/reaction_picker_closed_gate_test.mjs` fails if you do, and
+   end-to-end case 3 catches it in a browser. The markup carries `inert` while
+   closed as an independent second layer. */
+.reaction-picker {
+  /* Sticky category-header height. Shared with the tiles' scroll-margin so
+     arrow-key navigation cannot park a focused tile underneath the header. */
+  --reaction-picker-header-h: 1.75rem;
+
+  /* A SUBTLE STEP UP FROM THE PANEL, IN BOTH THEMES. `--color-base-200` cannot
+     do this job: the dark base ladder is NOT monotonic. Measured from the
+     theme blocks at the top of this file, dark base-100 is #171b25 (L 22.3%)
+     while base-200 is oklch(9% …), thirteen points DARKER than the panel it
+     would sit on, where light base-200 is four points lighter. The two swap
+     relative order between themes, so no opaque base token is one step up in
+     both. A translucent tint of the FOREGROUND composited over the panel is,
+     and it survives a change to the panel's own token.
+
+     Composited here rather than left translucent because its main consumer is
+     the sticky category header: a see-through header shows ~1,850 emoji
+     scrolling through it. `color-mix` against base-100 is the same colour a
+     translucent `bg-base-content/5` would produce, opaque. */
+  --reaction-picker-tint: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
+  --reaction-picker-tint-strong: color-mix(in oklab, var(--color-base-content) 10%, var(--color-base-100));
+
+  /* The 10px structural label colour: category chips, the result count, the
+     placeholder. MEASURED 2026-09-06 against the panel ground:
+
+       light  --color-neutral #5a5355 on #ffffff  7.48:1   passes
+       dark   --color-neutral #4d4647 on #171b25  1.86:1   FAILS
+
+     Ten-pixel text gets no large-text allowance, so it owes 4.5:1. Dark misses
+     it by a factor of two and the labels are effectively invisible. Corrected
+     inside this component only — no app-level token moves — by mixing the
+     foreground into neutral. See the dark block below for the resulting
+     numbers. */
+  --reaction-picker-label: var(--color-neutral);
+
+  display: none;
+}
+
+.reaction-picker[data-open="true"] { display: flex; }
+
+/* The dark correction. 50% base-content into neutral gives #9a9596, which is
+   5.85:1 on the panel and 5.30:1 on the tinted sticky header — both clear of
+   the 4.5:1 small-text floor with headroom, and still visibly quieter than
+   --color-base-content, which would be ~14:1 and would stop reading as
+   structural. Light is untouched: it already passes at 7.48:1, and mixing a
+   black foreground into it there would make the labels heavier than designed.
+
+   Three-state theming, matching the pattern this file already uses at the
+   `.msg-agent` and `.chip-soft` blocks: an explicit `data-theme="dark"` wins
+   outright, and the unset default follows `prefers-color-scheme`. */
+[data-theme="dark"] .reaction-picker {
+  --reaction-picker-label: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .reaction-picker {
+    --reaction-picker-label: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
+  }
+}
 
 /* Mobile: bottom-sheet. The panel slides up from the bottom of the
    viewport with iOS-style rounded top corners and honors the bottom
-   safe-area inset on notched devices. */
+   safe-area inset on notched devices.
+
+   THE PANEL NO LONGER SCROLLS — the grid's scroll area does. With ~1,850
+   tiles the sticky category headers have to stay pinned inside a scrolling
+   region, and stage 4 pins a search field to the bottom of this sheet; both
+   scroll away if the panel keeps `overflow-y`. The panel is a flex column,
+   `overflow: hidden` so the sticky headers stay inside its rounded corners. */
 .reaction-picker-panel {
   position: relative;
   z-index: 10;
+  display: flex;
+  flex-direction: column;
   width: calc(100vw - 16px);
   max-width: 100%;
-  max-height: 60vh;
-  margin: auto 8px 0;
+  /* KEYBOARD-AWARE. `vh` is the LAYOUT viewport, which iOS Safari does not
+     shrink when the soft keyboard opens, so a plain `60vh` sheet ends up
+     partly underneath it — with the search field, the thing the user is
+     looking at, hidden behind the keys. `--reaction-picker-kb` is written on
+     <html> by reaction_picker.js from `window.visualViewport` and is 0px
+     whenever no keyboard is up, so both declarations are byte-equivalent to
+     the previous `60vh` / `auto 8px 0` in every other case.
+
+     ANDROID CHROME WILL NOT SHOW YOU THIS BUG: root.html.heex sets
+     `interactive-widget=resizes-content`, which resizes the layout viewport
+     there. iOS Safari ignores that hint. */
+  /* HEIGHT, NOT max-height. Stage 4 gave the panel two more contents — a short
+     ranked result list and a one-line empty state — and a panel that sizes to
+     its content resizes on the FIRST KEYSTROKE. Measured 2026-09-06: at 1280px
+     the modal went 630px → 490px on typing "heart" and, being centred, moved
+     the search field 130px DOWN under the cursor mid-word. On the mobile sheet
+     the field stays put (the sheet is bottom-anchored) but the results still
+     jump. Fixing the height removes the whole class: the panel is the same size
+     in every state, including while the skeleton is up, so the inventory
+     landing does not resize it either. */
+  height: min(60vh, calc(100vh - var(--reaction-picker-kb, 0px) - 3rem));
+  max-height: min(60vh, calc(100vh - var(--reaction-picker-kb, 0px) - 3rem));
+  margin: auto 8px var(--reaction-picker-kb, 0px);
+  border-radius: var(--radius-box);
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
-  overflow-y: auto;
+  overflow: hidden;
   animation: reaction-picker-sheet-in 280ms cubic-bezier(0.33, 1, 0.68, 1) both;
 }
+
+/* The panel is the initial focus target on open (`tabindex="-1"`), so it must
+   not draw a ring — the roving-tabindex grid owns the only visible focus on
+   this surface. */
+.reaction-picker-panel:focus { outline: none; }
 
 @keyframes reaction-picker-sheet-in {
   from { transform: translateY(100%); }
@@ -2732,9 +2842,13 @@ body, .font-fabrikam {
   .reaction-picker-panel {
     width: 400px;
     max-width: calc(100vw - 32px);
-    max-height: 70vh;
-    margin: 0;
-    border-radius: 0.5rem;
+    height: min(70vh, calc(100vh - var(--reaction-picker-kb, 0px) - 4rem));
+    max-height: min(70vh, calc(100vh - var(--reaction-picker-kb, 0px) - 4rem));
+    /* A centred modal with a bottom margin is pushed up by half of it, so a
+       coarse-pointer tablet over 640px — which lands on this block rather than
+       the sheet — clears its own keyboard too. */
+    margin: 0 0 var(--reaction-picker-kb, 0px);
+    border-radius: var(--radius-box);
     padding-bottom: 0.75rem;
     animation: reaction-picker-modal-in 160ms ease-out both;
   }
@@ -2749,36 +2863,399 @@ body, .font-fabrikam {
   to   { opacity: 1; transform: scale(1); }
 }
 
+/* Panel header ("Add reaction" + close).
+
+   THE HAIRLINE IS `--edge`, NOT `--color-base-300`. Dark base-300 renders
+   #091821 against a #171b25 panel — 1.0478:1, a border nobody can see. That is
+   the exact defect task 01a0740b split `--edge` out to fix, and the panel
+   itself already carries `border-edge` at its call site in overlays.ex. This
+   line was still on base-300 and was therefore invisible in dark. */
+.reaction-picker-header {
+  flex: none;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--edge);
+}
+
+/* The hook's `phx-update="ignore"` host. Ships empty; everything below it is
+   built by assets/js/hooks/reaction_picker.js. */
+.reaction-picker-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* One gap rather than margins, because the hook builds the chrome in two
+     different DOM ORDERS — field/row/grid on desktop, row/grid/field on mobile
+     — so that tab order always matches visual order. A margin would have to
+     know which order it was in. The live region is `position: absolute` and is
+     out of flow, so it consumes no gap. */
+  gap: 0.5rem;
+}
+
+/* `hidden` has to beat the component's own `display`. The jump bar, the count
+   and the clear button all set a flex display, and the UA's `[hidden]` rule is
+   a bare type selector that loses to any class. Mode switching sets `.hidden`
+   as a property on exactly these elements. */
+.reaction-picker-body [hidden] { display: none !important; }
+
+/* The result-count announcement region. Created in the hook's `mounted()` and
+   never rebuilt: `aria-live` only announces CHANGES to a region that already
+   existed, so one created alongside its own first text announces nothing. */
+.reaction-picker-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* `overscroll-behavior: contain` stops the chat behind an open sheet from
+   scrolling on iOS once this area hits its end. The body scroll lock in the
+   hook covers the rest of the surface: message_lift.js's lock is already gone
+   by the time the picker opens, because the longpress menu closes first. */
+.reaction-picker-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.reaction-picker-section + .reaction-picker-section { margin-top: 0.5rem; }
+
+/* Sticky category label. Public Sans 600 / 10px / uppercase, small and quiet
+   and structural. Uppercase is `text-transform`, not the string, so the
+   accessible name stays "Common" rather than being spelled out letter by
+   letter.
+
+   GROUND AND COLOUR ARE BOTH CORRECTIONS TO STAGE 3, both for the same
+   reason: they were chosen by reading token NAMES rather than token VALUES,
+   and dark does not rank its tokens the way light does. `--color-base-200`
+   here rendered as a near-black band on the panel; `--color-neutral` here
+   rendered at 1.86:1. See the two component tokens on `.reaction-picker`. */
+.reaction-picker-category {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  height: var(--reaction-picker-header-h);
+  padding-inline: 0.25rem;
+  background-color: var(--reaction-picker-tint);
+  color: var(--reaction-picker-label);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 /* Emoji tile grid. Desktop is information-dense (8 columns, small tiles);
    touch devices get fewer columns and bigger tiles to hit Apple 44pt /
-   Google 48dp tap-target guidance. Uses auto-fit with a min-sized track
-   so the column count follows the panel width at each breakpoint. */
+   Google 48dp tap-target guidance. The BASE rule keeps auto-fit so a narrow
+   fine-pointer window still packs sensibly; the two blocks that matter are
+   the 8-column desktop rule below and the coarse-pointer rule at the end. */
 .reaction-picker-grid {
   display: grid;
   gap: 4px;
+  padding-top: 4px;
   grid-template-columns: repeat(auto-fit, minmax(36px, 1fr));
 }
+
+/* `role="grid"` REQUIRES `role="row"` children, and a flat container of
+   `role="gridcell"` tiles is reported as a malformed grid. The row wrappers
+   the hook emits are `display: contents` so the TILES stay the grid items and
+   the column rules above keep applying unchanged. The hook sizes each row to
+   the column count it measures off this element's used tracks, so the
+   announced geometry always matches the visible one. */
+.reaction-picker-row { display: contents; }
 
 /* `min-height: 44px` is an unconditional safety floor — auto-fit grid
    on a narrow panel could in principle pack columns such that
    aspect-ratio-derived heights drop below Apple 44pt. Touch bumps to
-   48px via the coarse-pointer media query below. */
+   48px via the coarse-pointer media query below.
+
+   The emoji font stack and `line-height: 1` are load-bearing: without them
+   emoji metrics vary enough between families to produce visibly uneven rows.
+   Hover and the radius are folded in here rather than composed from Tailwind
+   utilities at the call site, because the tiles are built inside a JS
+   template literal and a class string there is one content-scan change away
+   from vanishing. */
 .reaction-picker-tile {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   aspect-ratio: 1 / 1;
   min-height: 44px;
+  border-radius: var(--radius-selector);
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+    "Segoe UI Symbol", sans-serif;
   font-size: 1.25rem;
   line-height: 1;
+  scroll-margin-top: var(--reaction-picker-header-h);
   transition: transform 120ms ease, background-color 120ms ease;
 }
 
+/* Same tint as the sticky header, and for the same reason: base-200 is
+   thirteen lightness points BELOW the dark panel, so hover on a dark theme
+   darkened the tile instead of lifting it. */
+.reaction-picker-tile:hover { background-color: var(--reaction-picker-tint); }
 .reaction-picker-tile:active { transform: scale(0.92); }
+
+/* INSET ring, never an `outline`: an outline on a first- or last-column tile
+   is clipped by the scroll container's overflow, so the one element that has
+   to be unmistakable would be the one drawn half-missing. --color-primary is
+   spent here and nowhere else in this picker. */
+.reaction-picker-tile:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+/* First-open skeleton. Static, never shimmering, and at the REAL tile
+   geometry: a late height change would fight the mobile sheet sizing. It
+   paints only after a 150ms delay guard, so a warm cache never flashes one. */
+.reaction-picker-skeleton-tile {
+  background-color: var(--reaction-picker-tint);
+  border-radius: var(--radius-selector);
+}
+
+/* Fetch failure — usually offline rather than a server fault. No semantic
+   colour is available in this picker, so the copy carries the meaning. The
+   COMMON section renders beneath this as a working fallback. */
+.reaction-picker-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 0.5rem;
+}
+
+.reaction-picker-error-text {
+  margin: 0;
+  color: var(--reaction-picker-label);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.reaction-picker-retry {
+  min-height: 44px;
+  padding-inline: 1rem;
+  border-radius: var(--radius-field);
+  background-color: var(--reaction-picker-tint-strong);
+  color: var(--reaction-picker-label);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.reaction-picker-retry:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+/* ── Stage 4: search, and the row search shares with the categories ───────
+   Task 019e0814 stage 4. Everything below is emitted by
+   assets/js/hooks/reaction_picker.js and assets/js/lib/emoji_picker_chrome.js,
+   which is why the treatment is folded into bespoke classes here rather than
+   composed from Tailwind utilities at a JS call site: a class string inside a
+   template literal is one content-scan change away from vanishing. */
+
+/* The field's wrapper. Position in the panel is the HOOK's decision, not this
+   file's: it inserts the field above the row on desktop and below the grid on
+   mobile so that DOM order equals visual order in both, which a CSS `order`
+   could not do without breaking tab order. */
+.reaction-picker-search {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+.reaction-picker-search-icon {
+  position: absolute;
+  left: 0.625rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1rem;
+  height: 1rem;
+  color: var(--reaction-picker-label);
+  pointer-events: none;
+}
+
+/* FONT SIZE IS LOAD-BEARING. 15px here, exactly 16px under `@media (hover:
+   none)` at the end of this component — see that block for why.
+
+   `padding-inline`'s end value RESERVES THE CLEAR BUTTON'S WIDTH IN EVERY
+   STATE, whether the button is showing or not. Sized to the button only while
+   it exists, the text would shift sideways the moment the first character
+   landed, which is the one frame the user is looking straight at. */
+.reaction-picker-search-input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-field);
+  background-color: var(--reaction-picker-tint);
+  color: var(--color-base-content);
+  padding-inline: 2rem 2.5rem;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.reaction-picker-search-input::placeholder { color: var(--reaction-picker-label); }
+
+.reaction-picker-search-input:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
+/* Appears at one character and stays regardless of focus: a clear button that
+   disappears on blur is one the user has to re-focus the field to reach. */
+.reaction-picker-search-clear {
+  position: absolute;
+  right: 0.375rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-selector);
+  color: var(--reaction-picker-label);
+}
+
+.reaction-picker-search-clear .hero-x-mark { width: 16px; height: 16px; }
+.reaction-picker-search-clear:hover { background-color: var(--reaction-picker-tint-strong); }
+
+.reaction-picker-search-clear:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+/* THE ROW MUST NOT CHANGE HEIGHT. It holds the category jump bar while the
+   field is empty and the result count while it is not, and it swaps CONTENTS,
+   never size. Anything below it moving on the first keystroke is a defect: on
+   mobile that is the entire grid jumping while the user is mid-word. The fixed
+   height is what makes the swap free. */
+.reaction-picker-modebar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 2rem;
+  min-height: 2rem;
+}
+
+/* Ten chips at 10px letterspaced run past 600px, so at 375px the bar scrolls.
+   The scrollbar is hidden because it would be the tallest thing in a 32px row.
+   `scroll-padding-inline` matches the panel's own `p-3`, so a chip scrolled to
+   by the observer stops clear of the panel edge rather than flush against it. */
+.reaction-picker-jumpbar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scroll-padding-inline: 0.75rem;
+}
+
+.reaction-picker-jumpbar::-webkit-scrollbar { width: 0; height: 0; }
+
+.reaction-picker-chip {
+  flex: none;
+  height: 1.5rem;
+  padding-inline: 0.5rem;
+  border-radius: var(--radius-selector);
+  color: var(--reaction-picker-label);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.reaction-picker-chip[aria-current="true"] {
+  background-color: var(--color-primary);
+  color: var(--color-primary-content);
+}
+
+/* THE FOCUS RING ALWAYS OUTRANKS. `--color-primary` now serves two elements on
+   this surface — the focus ring and the active category — and they collide the
+   instant a keyboard user tabs into the grid while the bar is showing: two
+   identical glows, one of which is not where focus is. Whenever anything
+   inside the panel draws a visible ring, the active chip demotes to a quiet
+   fill with its ordinary label colour.
+
+   The demoted fill is the component's own tint rather than `--color-base-300`:
+   dark base-300 is #091821 against a #171b25 panel, 1.05:1, so a base-300
+   "active" chip would not be visible at all in dark. Same reasoning as the
+   sticky header ground. */
+.reaction-picker-panel:has(:focus-visible) .reaction-picker-chip[aria-current="true"] {
+  background-color: var(--reaction-picker-tint-strong);
+  color: var(--reaction-picker-label);
+}
+
+.reaction-picker-chip:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+/* The other half of the swapping row. `aria-hidden` in the markup: the number
+   reaches a screen reader through `.reaction-picker-sr`, which predates it. */
+.reaction-picker-count {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding-inline: 0.5rem;
+  color: var(--reaction-picker-label);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* One horizontally centred line, ~56px down from the top of the scroll area and
+   DELIBERATELY NOT VERTICALLY CENTRED: a vertically centred line jumps every
+   time the mobile keyboard resizes the sheet, which is exactly when the user is
+   reading it. No second line, no illustration, and no repeat of the count —
+   the row above already carries that. The term is truncated to 24 characters in
+   JS; `nowrap` plus an ellipsis is the backstop for a narrow sheet. */
+.reaction-picker-empty {
+  margin: 0;
+  padding-top: 56px;
+  color: var(--reaction-picker-label);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* THE 8-COLUMN DESKTOP RULE. `auto-fit` with `minmax(36px, 1fr)` packs NINE
+   columns into the 400px panel, not the eight the design specifies, and the
+   tile face was 20px against a specified ~22px. Both are fixed here rather
+   than by narrowing the base rule, so mobile is untouched. */
+@media (min-width: 640px) {
+  .reaction-picker-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+  .reaction-picker-tile {
+    font-size: 1.375rem;
+  }
+}
 
 /* Coarse-pointer devices: bump tile track min-size up and enlarge
    the close button + font to hit tap-target minimums without forcing
-   desktop to look bloated. */
+   desktop to look bloated.
+
+   THIS BLOCK MUST STAY LAST. Both it and the 640px block match on a tablet,
+   and touch has to win: it is what packs six 48px columns into the 375px
+   sheet. Mobile is already correct — do not "fix" it. */
 @media (hover: none) and (pointer: coarse) {
   .reaction-picker-grid {
     grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
@@ -2791,6 +3268,34 @@ body, .font-fabrikam {
   .reaction-picker-close {
     min-width: 44px;
     min-height: 44px;
+  }
+  /* 44x44 on a coarse pointer, and the input's reserved end padding grows with
+     it so the text still never shifts. */
+  .reaction-picker-search-clear {
+    width: 44px;
+    height: 44px;
+  }
+  .reaction-picker-search-input {
+    padding-inline-end: 3.5rem;
+  }
+  .reaction-picker-chip {
+    height: 1.75rem;
+    padding-inline: 0.625rem;
+  }
+}
+
+/* iOS Safari auto-zooms any input with font-size < 16px on focus, and
+   `root.html.heex:6-7` locks `maximum-scale=1`, so the user cannot pinch back
+   out — they are stranded zoomed with the sheet half off-screen. The only
+   correct mitigation is to remove the trigger, which is what the composer
+   already does at `.compose-pill-bar textarea` above. Same media query, same
+   value: `hover: none` and not `pointer: coarse`, because the zoom is a
+   property of the browser rather than of the tile geometry.
+
+   Do NOT copy the channel picker's `input-sm` sizing here. It is an offender. */
+@media (hover: none) {
+  .reaction-picker-search-input {
+    font-size: 16px;
   }
 }
 

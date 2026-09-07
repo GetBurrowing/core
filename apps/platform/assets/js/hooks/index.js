@@ -39,6 +39,7 @@ import MeetingWhiteboard from "./meeting_whiteboard"
 import MermaidDiagram from "./mermaid_diagram"
 import MessageEditor from "./message_editor"
 import PushSubscribe from "./push_subscribe"
+import ReactionPicker from "./reaction_picker"
 import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
 import RouteResume from "./route_resume"
@@ -95,6 +96,7 @@ export default {
   MessageEditor,
   MessageLift,
   PushSubscribe,
+  ReactionPicker,
   ReactorPopover,
   ResizableSidebar,
   RouteResume,
