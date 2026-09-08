@@ -203,6 +203,20 @@ defmodule PlatformWeb.MeetingLiveTest do
   # a substring that happens to appear anywhere in the opening tag. Raises
   # when the shell is absent — a nil class list would make every `refute`
   # below it vacuously true.
+  # The `[data-pane="bottom-strip"]` footer's class attribute, as one
+  # string. Used only to pin which `@shell?` branch the template selected;
+  # see the block comment on the safe-area describe below for why a class
+  # string proves nothing about geometry.
+  defp bottom_strip_class(html) do
+    [class] =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-pane="bottom-strip"]))
+      |> LazyHTML.attribute("class")
+
+    class
+  end
+
   defp caption_bar_shell_class(html) do
     [class] =
       html
@@ -2136,6 +2150,118 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       html = render(view)
       assert html =~ ~s(data-canvas-id="#{canvas.id}")
+    end
+  end
+
+  # ── Bottom-strip safe-area branch (task 01a0776a-4c11-7001-ae00-507fadebf462, stage 1)
+  #
+  # WHAT THESE TWO TESTS PROVE, AND WHAT THEY DO NOT PROVE.
+  #
+  # They pin WHICH BRANCH of the footer's `@shell?` conditional the
+  # template selects, and nothing beyond that. A class-string assertion
+  # passes on any build that emits the string: it cannot tell you that a
+  # 96px border-box minus the inset leaves a 45px content box, that the
+  # `aspect-video` tile then narrows to 80px, that the 120px container
+  # query fires and hides the participant names, or that a dead band opens
+  # between the strip and the mobile bottom nav. None of that is checked
+  # here and none of it can be. Server-side rendering has no viewport, and
+  # headless Chromium resolves `env(safe-area-inset-bottom)` to 0 anyway,
+  # so even a rendered check at this layer would measure the un-inset case
+  # and pass on the broken build.
+  #
+  # The arithmetic is measured in `e2e/tests/meeting_layout_geometry.spec.ts`
+  # against a real 34px inset injected over CDP
+  # (`Emulation.setSafeAreaInsetsOverride`). That is the gate. Do not cite
+  # the assertions below as evidence about layout.
+
+  describe "bottom-strip safe-area branch selection (task 01a0776a stage 1)" do
+    setup do
+      put_guest_livekit_env()
+      :ok
+    end
+
+    test "shell surface: no inset below lg, inset ADDED to the height at lg",
+         %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "strip-safe-area-shell"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Gallery is the default stage mode and the footer is gated
+      # `:if={@current_stage_mode != :gallery}`, so it is not in the DOM
+      # until canvas is selected. Without this click the class query below
+      # would raise on an empty match rather than silently pass, but the
+      # click is what makes the case meaningful at all.
+      html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
+      assert :sys.get_state(view.pid).socket.assigns.shell? == true
+
+      class = bottom_strip_class(html)
+      tokens = String.split(class)
+
+      # Below lg the shell's own `<.bottom_rail>` is the bottom-most
+      # element and `.bottom-nav` already carries the inset as padding
+      # (`app.css:3441`). Reserving it here as well would double it.
+      assert "pb-2" in tokens, "expected an un-inset pb-2 below lg; class was: #{class}"
+      assert "h-[96px]" in tokens, "expected a flat h-[96px] below lg; class was: #{class}"
+
+      refute "pb-[calc(0.5rem+env(safe-area-inset-bottom))]" in tokens,
+             "unprefixed inset padding on the shell is the defect being fixed; class was: #{class}"
+
+      refute "h-[calc(96px+env(safe-area-inset-bottom))]" in tokens,
+             "the shell footer must not grow below lg, where the rail owns the inset; class was: #{class}"
+
+      # At lg the rail is `display:none` (`app.css:3448-3452`), so the
+      # footer is bottom-most and the inset extends it.
+      assert "lg:pb-[calc(0.5rem+env(safe-area-inset-bottom))]" in tokens,
+             "expected the lg padding to carry the inset; class was: #{class}"
+
+      assert "lg:h-[calc(120px+env(safe-area-inset-bottom))]" in tokens,
+             "expected the lg height to ADD the inset rather than absorb it; class was: #{class}"
+
+      refute "lg:h-[120px]" in tokens,
+             "a flat lg height absorbs the inset out of the tiles; class was: #{class}"
+    end
+
+    test "guest surface: the inset is carried in the padding AND the height at both breakpoints",
+         %{conn: conn} do
+      {meeting, token} = create_guest_meeting()
+
+      {:ok, view, _html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assert :sys.get_state(view.pid).socket.assigns.shell? == false
+
+      html = render_click(view, "set_stage_mode", %{"mode" => "canvas"})
+
+      class = bottom_strip_class(html)
+      tokens = String.split(class)
+
+      # No shell chrome exists on `meet.`, so this footer is bottom-most at
+      # every width and the inset applies at both breakpoints.
+      assert "pb-[calc(0.5rem+env(safe-area-inset-bottom))]" in tokens,
+             "expected the guest padding to carry the inset; class was: #{class}"
+
+      assert "h-[calc(96px+env(safe-area-inset-bottom))]" in tokens,
+             "expected the guest base height to ADD the inset; class was: #{class}"
+
+      assert "lg:h-[calc(120px+env(safe-area-inset-bottom))]" in tokens,
+             "expected the guest lg height to ADD the inset; class was: #{class}"
+
+      refute "h-[96px]" in tokens, "flat base height absorbs the inset; class was: #{class}"
+      refute "lg:h-[120px]" in tokens, "flat lg height absorbs the inset; class was: #{class}"
+      refute "pb-2" in tokens, "guest must not take the shell branch; class was: #{class}"
+
+      # `--bottom-nav-height` is shell-only and the chrome-escape test in
+      # this file refutes the substring `bottom-nav` in a guest document.
+      # Keep the guest branch free of it.
+      refute class =~ "bottom-nav",
+             "guest branch must not reference shell chrome; class was: #{class}"
     end
   end
 

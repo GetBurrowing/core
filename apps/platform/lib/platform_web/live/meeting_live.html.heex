@@ -2052,9 +2052,10 @@
       <%!-- Bottom strip (task 019e2475-0037): horizontal flex row composing
          one `<.video_tile>` per human (left) and one `<.agent_tile>` per
          agent (right), with a thin vertical divider between sections.
-         Strip height: 96px on `<lg`, 120px on `lg`+. Bottom edge respects
-         `safe-area-inset-bottom` so the iOS home indicator never overlaps
-         the tiles.
+         Strip height: 96px on `<lg`, 120px on `lg`+, plus the
+         home-indicator inset wherever this footer is the bottom-most
+         element. See the safe-area paragraph below for which surface and
+         breakpoint that is.
 
          Gallery-default reframe (stage 3, task 019e2d1a): the strip WAS
          hidden entirely in gallery mode so the responsive grid owned the
@@ -2078,28 +2079,55 @@
          rendering unconditionally so the "who's here" humans strip is
          unaffected by whether any agent is present.
 
-         Dock chrome + height (stage 2 refinement): in gallery the footer is
-         a BORDERED CARD PANEL — `mx-2 mb-1 rounded-xl border` instead of a
-         full-bleed `border-t` — with the "Agents" label at its left edge,
-         vertically centred, and the tiles in a row beside it. Matches the
-         target mockup (canvas 01a05590-7076-7001-bee0-ccbb408627a4). It is
-         also TALLER (132px / 148px on lg, from 96px / 120px) for one
-         reason: the activity WORD. Stage 1 hid the word with a blanket
-         `.agent-tile-activity` CSS rule because it did not fit the 40px
-         strip tile, which defeated `AgentActivityBadge` — whose contract is
-         ring + glyph + word, never colour alone. The fix is room, not
-         suppression: the dock is tall enough, so `agent_tile/1` is passed
-         `dock?` and stops applying the suppressing class. The short
-         non-gallery strip keeps its 96px height AND the suppression.
+         Dock chrome + height (stage 2, task 01a059e4) is GONE. That
+         revision made the footer a bordered card panel in gallery at
+         132px / 148px so the agent activity WORD had room. It was
+         reverted: the `:if={@current_stage_mode != :gallery}` gate below
+         is back, no 132px or 148px height exists anywhere in this file,
+         and `agent_tile/1` still applies the `.agent-tile-activity`
+         suppression in the short strip. The mockup reference (canvas
+         01a05590-7076-7001-bee0-ccbb408627a4) is kept here only so it is
+         not lost. Today the strip renders in non-gallery modes only, at
+         96px, and 120px on lg.
 
-         Safe-area arithmetic, checked: the footer's own
-         `pb-[calc(0.5rem+env(safe-area-inset-bottom))]` is UNCHANGED, and
-         the captions shell's `bottom-[calc(1.75rem+env(safe-area-inset-bottom)
-         +var(--bottom-nav-height,0px))]` is `fixed`, i.e. viewport-relative
-         — it composes from those two terms and NOT from this footer's
-         height, so growing the dock cannot shift it. The bar already sat in
-         front of the 96px footer (28px < 96px), so the overlap relationship
-         is unchanged in kind, only in magnitude.
+         Safe-area arithmetic (task 01a0776a-4c11-7001-ae00-507fadebf462):
+         the inset EXTENDS this footer. It is never eaten out of it.
+         Tailwind sizes border-box, so a flat `h-[96px]` carrying the inset
+         inside its padding leaves a content box of 96 - 8 (pt-2) - 8 (pb)
+         - 1 (border-t) - inset. At a 34px iOS home-indicator inset that is
+         45px, and the `aspect-video h-full` tile from `video_tile.ex:429`
+         narrows from 140.44px to 80px, which trips the 120px container
+         query at `app.css:4229` and hides every participant name in the
+         strip.
+
+         Hence the `@shell?` branch below, mirroring the call rail at the
+         `bottom-[...]` branch further up this file:
+         * Shell, below lg: NO inset here. `<.bottom_rail>`
+           (`icon_rail.ex:368`) is the bottom-most element and its
+           `.bottom-nav` rule already carries
+           `padding-bottom: env(safe-area-inset-bottom)`
+           (`app.css:3441`). Reserving it twice opens a dead band about a
+           third of a tile tall.
+         * Shell, lg and up: that rail is `display:none`
+           (`app.css:3448-3452`), so this footer IS bottom-most and the
+           inset is ADDED to its height.
+         * Guest (`@shell? == false`): no shell chrome exists, so the inset
+           applies at both breakpoints, in the padding AND the height. Do
+           not reach for `var(--bottom-nav-height)` on this branch: the
+           chrome-escape test refutes the substring `bottom-nav` anywhere
+           in a guest document.
+
+         Server-side tests pin WHICH BRANCH renders. They cannot prove the
+         arithmetic, because a class-string assertion passes on any build
+         that emits the string and headless Chromium resolves
+         `env(safe-area-inset-bottom)` to 0. The measurement lives in
+         `e2e/tests/meeting_layout_geometry.spec.ts`.
+
+         The captions shell's
+         `bottom-[calc(1.75rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]`
+         is `fixed`, i.e. viewport-relative: it composes from those terms
+         and NOT from this footer's height, so changing the footer's height
+         cannot shift it.
 
          Identity strings are deliberately aligned with gallery
          (`"user:" <> pid` instead of `"strip:user:" <> pid`) so the
@@ -2111,8 +2139,13 @@
         class={[
           "flex flex-shrink-0 items-stretch gap-2 overflow-x-auto overscroll-contain",
           "bg-base-200/40 px-2 py-2",
-          "pb-[calc(0.5rem+env(safe-area-inset-bottom))]",
-          "border-t border-edge h-[96px] lg:h-[120px]"
+          "border-t border-edge",
+          if(@shell?,
+            do:
+              "pb-2 h-[96px] lg:pb-[calc(0.5rem+env(safe-area-inset-bottom))] lg:h-[calc(120px+env(safe-area-inset-bottom))]",
+            else:
+              "pb-[calc(0.5rem+env(safe-area-inset-bottom))] h-[calc(96px+env(safe-area-inset-bottom))] lg:h-[calc(120px+env(safe-area-inset-bottom))]"
+          )
         ]}
         data-pane="bottom-strip"
         data-tile-count-humans={length(strip_humans(assigns[:participants]))}

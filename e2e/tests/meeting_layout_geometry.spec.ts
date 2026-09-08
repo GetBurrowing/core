@@ -755,3 +755,496 @@ for (const surface of [MEETINGS, QUICKMEET]) {
   }
 }
 
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════
+ * THE SAFE-AREA GATE (task 01a0776a-4c11-7001-ae00-507fadebf462 stage 2)
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * WHY THESE CASES EXIST, AND WHY THEY ARE NOT VACUOUS.
+ *
+ * Headless Chromium resolves `env(safe-area-inset-bottom)` to 0. Every
+ * assertion taken at the default inset is taken WHERE THE BUG CANNOT
+ * APPEAR, which is precisely how this defect survived: three separate
+ * comments in this repo (`apps/platform/assets/css/app.css` at the
+ * `video-tile` container query, `video_tile_test.exs`,
+ * `meeting_live_test.exs`) record the surface as untestable in a browser
+ * rather than testing it.
+ *
+ * `Emulation.setSafeAreaInsetsOverride` changes the value `env()` resolves
+ * to. It does NOT change the expression, so the arithmetic under test stays
+ * the arithmetic the template ships. A stand-in custom property, a rewritten
+ * padding rule or a synthetic `--inset` variable would test the rewrite
+ * instead of the template, and is deliberately not used here.
+ *
+ * THE INSTRUMENT IS PROVED BEFORE EVERY MEASUREMENT. `readInsetProbe`
+ * puts an element styled `height: env(safe-area-inset-bottom)` on the page
+ * and measures it. If a future Chromium drops or renames the CDP command,
+ * the send resolves without effect, `env()` still reads 0, and every
+ * assertion below would then be taken on a page where the broken build
+ * passes. The probe is what converts that silent instrument failure into a
+ * red case. It is asserted in BOTH directions, 34 after the override and 0
+ * without it, because a probe that reads 34 unconditionally is no
+ * instrument either.
+ *
+ * THE TRAP THAT WOULD MAKE ALL FOUR PASS ON NOTHING. `@current_stage_mode`
+ * defaults to `:gallery` and the footer carries
+ * `:if={@current_stage_mode != :gallery}`, so on a freshly opened meeting
+ * THE FOOTER IS NOT IN THE DOM. `openCanvasStage` clicks
+ * `[data-stage-mode-button="canvas"]` and waits for the strip; a selector
+ * that resolves to zero elements throws through `visibleRect`/`rect`
+ * rather than skipping, and `markFirstStripTile` fails loudly on zero
+ * tiles the way the `rowIds.length` guards above do.
+ *
+ * THE EXPECTED NUMBERS, AND WHY 96 AND 120 ARE NOT A CONTRADICTION. The
+ * footer's shell branch reserves NO inset below `lg` (the shell's
+ * `.bottom-nav` rail is the bottom-most element there and already carries
+ * `padding-bottom: env(safe-area-inset-bottom)`; reserving it twice would
+ * open a dead band) and DOES add the inset to its height at `lg` and
+ * above, where that rail is `display:none` and the footer is bottom-most.
+ * So at 390x844 the footer's own height is expected to STAY 96 under an
+ * injected inset, and at 1280x800 it is expected to GROW by exactly the
+ * inset off a 120 baseline. Two breakpoints, two different correct
+ * answers. Each case names its breakpoint in its title for that reason.
+ *
+ * What must not move at either breakpoint is the TILE. The strip tile is
+ * `aspect-video h-full`, so its width is derived from the footer's content
+ * box; on the broken build the inset is eaten out of that content box and
+ * the tile collapses from 140.44x79 to 80x45 at 390x844.
+ */
+
+const BOTTOM_STRIP = '[data-pane="bottom-strip"]'
+const STAGE_MODE_CANVAS = '[data-stage-mode-button="canvas"]'
+const VIDEO_TILE = "[data-meeting-video-tile]"
+const TILE_NAME = '[data-role="tile-name"]'
+
+/** Marks the first laid-out strip tile. `rect()` requires a UNIQUE match by
+ *  design and the strip holds one tile per participant, so a per-tile probe
+ *  attribute is what makes the shipped helper usable here: the same device
+ *  the candidate-card case above uses, for the same reason. */
+const TILE_PROBE_ATTR = "data-safe-area-tile"
+const TILE_PROBE = `[${TILE_PROBE_ATTR}]`
+
+/** The iOS home-indicator inset. Suite mobile is an installed PWA, so this
+ *  is the ordinary case on a phone, not an edge one. */
+const INJECTED_INSET = 34
+
+/** Measured on the fixed build, one browser, both breakpoints. Border-box
+ *  sizing: the content box is the footer height less `pt-2`, `pb-2` and the
+ *  1px top border, and the `aspect-video` tile takes its width from that. */
+const MOBILE_FOOTER_H = 96
+const MOBILE_TILE_H = 79
+const MOBILE_TILE_W = 140.4
+const DESKTOP_FOOTER_H = 120
+const DESKTOP_TILE_H = 103
+
+/** The `@container video-tile (max-width: 120px)` threshold in `app.css`
+ *  that hides `[data-role="tile-name"]`. Read here, never written: this
+ *  spec measures against that constant and does not own it. */
+const NAME_HIDE_THRESHOLD = 120
+
+/** Every geometry assertion in this block is a two-sided window, in px. */
+const TOL = 1
+
+const INSET_PROBE_ID = "safe-area-inset-probe"
+
+/**
+ * Put the env() probe on the page and measure it.
+ *
+ * The element is appended to `document.body`, OUTSIDE the LiveView root
+ * container, so a morphdom patch cannot remove it mid-run. `height:
+ * env(safe-area-inset-bottom)` with no fallback is deliberate: if `env()`
+ * were unsupported the declaration would be invalid, the empty div would
+ * lay out at 0, and the injected-inset assertion would go red, which is
+ * the correct direction for an instrument that cannot see.
+ */
+async function readInsetProbe(page: Page): Promise<number> {
+  return (await page.evaluate((id) => {
+    let el = document.getElementById(id)
+    if (!el) {
+      el = document.createElement("div")
+      el.id = id
+      el.style.cssText =
+        "position:fixed;left:0;bottom:0;width:1px;opacity:0;pointer-events:none;" +
+        "height:env(safe-area-inset-bottom);"
+      document.body.appendChild(el)
+    }
+    return el.getBoundingClientRect().height
+  }, INSET_PROBE_ID)) as number
+}
+
+/** Apply the real safe-area inset. Chromium-only, and typed by the pinned
+ *  protocol definitions, so a rename in a future Playwright fails at
+ *  `tsc --noEmit` rather than at runtime. A rename on the BROWSER side
+ *  resolves silently, which is what the probe catches. */
+async function injectSafeAreaInset(page: Page, bottom: number): Promise<void> {
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send("Emulation.setSafeAreaInsetsOverride", {
+    insets: { bottom, bottomMax: bottom },
+  })
+  await settle(page)
+}
+
+/**
+ * Open the meeting and put it in a stage mode that HAS a bottom strip.
+ *
+ * Two failure modes this exists to avoid, both of which read exactly like
+ * "the gate is broken": the footer is gated out of the DOM in the default
+ * `:gallery` mode, and a click sent before LiveView connects lands in a
+ * static DOM and dies silently. Wait for the socket, click, and re-click
+ * once if the first one was lost. Same shape as `QUICKMEET.open`.
+ */
+async function openCanvasStage(page: Page): Promise<void> {
+  await page.goto(`/meetings/${MEETING_SLUG}`)
+  await page.waitForSelector(STAGE, { timeout: 30_000 })
+  await page.waitForFunction(
+    () => !!(window as any).liveSocket?.isConnected?.(),
+    null,
+    { timeout: 30_000 },
+  )
+
+  const canvasButton = page.locator(`${STAGE_MODE_CANVAS}:visible`).first()
+  await expect(
+    canvasButton,
+    `the canvas stage-mode control is missing. Without it the footer never enters ` +
+      `the DOM (it carries :if={@current_stage_mode != :gallery}) and every ` +
+      `measurement below would be taken on nothing.`,
+  ).toBeVisible({ timeout: 15_000 })
+
+  await canvasButton.click()
+  try {
+    await page.waitForSelector(BOTTOM_STRIP, { timeout: 15_000 })
+  } catch {
+    await canvasButton.click()
+    await page.waitForSelector(BOTTOM_STRIP, { timeout: 15_000 })
+  }
+  await settle(page)
+}
+
+/**
+ * Tag the first laid-out tile in the strip and report how many there were.
+ *
+ * ZERO TILES IS A RIG STATE, NOT A PASSING LAYOUT. A hidden or absent tile
+ * has an all-zero rect, and a zero rect satisfies every containment test
+ * there is, so the count is asserted by the caller before any number below
+ * is read.
+ */
+async function markFirstStripTile(page: Page): Promise<number> {
+  return (await page.evaluate(
+    ({ stripSel, tileSel, attr }) => {
+      for (const stale of Array.from(document.querySelectorAll(`[${attr}]`))) {
+        stale.removeAttribute(attr)
+      }
+      const tiles = Array.from(
+        document.querySelectorAll(`${stripSel} ${tileSel}`),
+      ).filter((t) => {
+        const r = t.getBoundingClientRect()
+        return r.width > 0 && r.height > 0
+      })
+      if (tiles.length > 0) tiles[0].setAttribute(attr, "1")
+      return tiles.length
+    },
+    { stripSel: BOTTOM_STRIP, tileSel: VIDEO_TILE, attr: TILE_PROBE_ATTR },
+  )) as number
+}
+
+/** Mark, guard the count, and hand back the first tile's rect. */
+async function firstStripTileRect(page: Page): Promise<Rect> {
+  const tileCount = await markFirstStripTile(page)
+  expect(
+    tileCount,
+    `no laid-out ${VIDEO_TILE} inside ${BOTTOM_STRIP}. Seed the meeting fixture ` +
+      `(the room must be status:"active" or get_active_room/1 returns nil and the ` +
+      `strip renders empty) before reading this run. Zero tiles is a rig state, ` +
+      `not a passing layout.`,
+  ).toBeGreaterThan(0)
+  return await rect(page, TILE_PROBE)
+}
+
+/** The computed `display` of the name bar inside the marked tile. Read
+ *  through `getComputedStyle`, never off a class list: the container query
+ *  that hides it lives in the stylesheet and no class changes when it
+ *  fires. */
+async function markedTileNameDisplay(page: Page): Promise<string> {
+  return (await page.evaluate(
+    ({ probeSel, nameSel }) => {
+      const tile = document.querySelector(probeSel)
+      if (!tile) return "NO-MARKED-TILE"
+      const name = tile.querySelector(nameSel)
+      if (!name) return "NO-NAME-ELEMENT"
+      return getComputedStyle(name).display
+    },
+    { probeSel: TILE_PROBE, nameSel: TILE_NAME },
+  )) as string
+}
+
+test.describe("meeting bottom strip: safe-area inset @ 390x844", () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  /**
+   * ─── CASE 1 · THE INJECTED INSET, MOBILE ──────────────────────────────
+   *
+   * The whole ticket in one measurement. On the broken build the fixed
+   * `h-[96px]` swallows the inset inside its own padding, the content box
+   * drops from 79px to 45px, and the `aspect-video` tile narrows from
+   * 140.44px to 80px. On the fixed build the tile is untouched.
+   *
+   * The footer's OWN height staying at 96 is intended, not a miss: below
+   * `lg` the shell's `.bottom-nav` is bottom-most and already reserves the
+   * inset once.
+   */
+  test("case 1: a 34px inset leaves the strip tile full size (footer stays 96)", async ({
+    page,
+  }) => {
+    await login(page)
+    await openCanvasStage(page)
+
+    await injectSafeAreaInset(page, INJECTED_INSET)
+
+    const probe = await readInsetProbe(page)
+    expect(
+      probe,
+      `the CDP safe-area override did not land: an element styled ` +
+        `height:env(safe-area-inset-bottom) measured ${probe}, not ${INJECTED_INSET}. ` +
+        `Emulation.setSafeAreaInsetsOverride resolved without effect, so every ` +
+        `measurement below would be taken at inset 0, where the broken build ` +
+        `passes. This is an INSTRUMENT failure, not a layout failure.`,
+    ).toBeCloseTo(INJECTED_INSET, 1)
+
+    const footR = await visibleRect(page, BOTTOM_STRIP)
+    const tileR = await firstStripTileRect(page)
+
+    console.log(
+      `[safe-area] 390x844 inset=${probe} footer=${fmt(footR)} tile=${fmt(tileR)}`,
+    )
+
+    expect(
+      Math.abs(tileR.height - MOBILE_TILE_H) <= TOL,
+      `the strip tile's height collapsed under the inset: ${tileR.height.toFixed(2)}, ` +
+        `expected ${MOBILE_TILE_H} +/- ${TOL}. This is the defect: the inset was eaten ` +
+        `out of the footer's content box instead of extending the footer. ` +
+        `tile=${fmt(tileR)} footer=${fmt(footR)}`,
+    ).toBe(true)
+
+    expect(
+      Math.abs(tileR.width - MOBILE_TILE_W) <= TOL,
+      `the strip tile's width collapsed under the inset: ${tileR.width.toFixed(2)}, ` +
+        `expected ${MOBILE_TILE_W} +/- ${TOL}. The tile is aspect-video h-full, so its ` +
+        `width follows the footer's content-box height. tile=${fmt(tileR)}`,
+    ).toBe(true)
+
+    expect(
+      Math.abs(footR.height - MOBILE_FOOTER_H) <= TOL,
+      `the footer's own height is ${footR.height.toFixed(2)}, expected ` +
+        `${MOBILE_FOOTER_H} +/- ${TOL}. Below lg the shell's .bottom-nav already ` +
+        `reserves the inset, so the footer must NOT reserve it a second time. ` +
+        `A footer at ${MOBILE_FOOTER_H + INJECTED_INSET} here is the dead-band ` +
+        `alternative this fix deliberately rejected. footer=${fmt(footR)}`,
+    ).toBe(true)
+  })
+
+  /**
+   * ─── CASE 2 · THE CONTROL, MOBILE ─────────────────────────────────────
+   *
+   * GREEN ON BOTH THE FIXED AND THE REVERTED BUILD, DELIBERATELY. This is
+   * the control half of the mutation contract: its job is to show that
+   * case 1 fails FOR THE INSET and not for some unrelated change to the
+   * page. If this ever goes red the rig or the fixture moved and no other
+   * case in this block can be trusted.
+   *
+   * It also asserts the probe reads 0 with no override, which is the other
+   * half of the instrument check: a probe that reported 34
+   * unconditionally would make case 1 pass on a browser that ignores the
+   * command.
+   */
+  test("case 2 (control): at inset 0 the footer is 96 and the tile is full size", async ({
+    page,
+  }) => {
+    await login(page)
+    await openCanvasStage(page)
+
+    const probe = await readInsetProbe(page)
+    expect(
+      probe,
+      `expected env(safe-area-inset-bottom) to resolve to 0 with no override applied, ` +
+        `got ${probe}. A non-zero reading here means an override leaked in from ` +
+        `another case and this control is measuring something else.`,
+    ).toBeCloseTo(0, 1)
+
+    const footR = await visibleRect(page, BOTTOM_STRIP)
+    const tileR = await firstStripTileRect(page)
+
+    console.log(
+      `[safe-area] 390x844 inset=${probe} (control) footer=${fmt(footR)} tile=${fmt(tileR)}`,
+    )
+
+    expect(
+      Math.abs(footR.height - MOBILE_FOOTER_H) <= TOL,
+      `control footer height ${footR.height.toFixed(2)}, expected ${MOBILE_FOOTER_H} ` +
+        `+/- ${TOL}. footer=${fmt(footR)}`,
+    ).toBe(true)
+    expect(
+      Math.abs(tileR.height - MOBILE_TILE_H) <= TOL,
+      `control tile height ${tileR.height.toFixed(2)}, expected ${MOBILE_TILE_H} ` +
+        `+/- ${TOL}. tile=${fmt(tileR)}`,
+    ).toBe(true)
+    expect(
+      Math.abs(tileR.width - MOBILE_TILE_W) <= TOL,
+      `control tile width ${tileR.width.toFixed(2)}, expected ${MOBILE_TILE_W} ` +
+        `+/- ${TOL}. tile=${fmt(tileR)}`,
+    ).toBe(true)
+  })
+
+  /**
+   * ─── CASE 4 · THE USER-VISIBLE LOSS ───────────────────────────────────
+   *
+   * Asserted separately from case 1's geometry because it is the
+   * consequence a person actually sees. `@container video-tile (max-width:
+   * 120px)` hides `[data-role="tile-name"]`, so on the broken build a real
+   * phone inset shrinks the tile to 80px, the query fires, and EVERY
+   * participant name in the strip disappears.
+   *
+   * The display is read through `getComputedStyle`. No class changes when
+   * a container query fires, so a class assertion could not see this at
+   * all.
+   */
+  test("case 4: under a 34px inset the tile stays above the name-hide threshold", async ({
+    page,
+  }) => {
+    await login(page)
+    await openCanvasStage(page)
+
+    await injectSafeAreaInset(page, INJECTED_INSET)
+
+    const probe = await readInsetProbe(page)
+    expect(
+      probe,
+      `the CDP safe-area override did not land (probe measured ${probe}, expected ` +
+        `${INJECTED_INSET}). Instrument failure, not a layout failure.`,
+    ).toBeCloseTo(INJECTED_INSET, 1)
+
+    const tileR = await firstStripTileRect(page)
+    const nameDisplay = await markedTileNameDisplay(page)
+
+    console.log(
+      `[safe-area] 390x844 inset=${probe} tile=${fmt(tileR)} tileName.display=${nameDisplay}`,
+    )
+
+    expect(
+      tileR.width,
+      `the strip tile is ${tileR.width.toFixed(2)}px wide under a ${INJECTED_INSET}px ` +
+        `inset, at or below the ${NAME_HIDE_THRESHOLD}px container-query threshold in ` +
+        `app.css. tile=${fmt(tileR)}`,
+    ).toBeGreaterThan(NAME_HIDE_THRESHOLD)
+
+    expect(
+      nameDisplay,
+      `[data-role="tile-name"] computed display is ${nameDisplay} under a ` +
+        `${INJECTED_INSET}px inset. The container query fired because the tile ` +
+        `collapsed to ${tileR.width.toFixed(2)}px, which is the user-visible loss ` +
+        `this ticket names: every participant name in the strip disappears on a ` +
+        `real phone.`,
+    ).not.toBe("none")
+    // Both sentinels are asserted away. `firstStripTileRect` above already
+    // throws on zero tiles and on a non-unique marker, but a morphdom patch
+    // between the two reads could drop the attribute, and a sentinel string
+    // satisfies `not.toBe("none")` perfectly. A measurement that cannot fail
+    // is not a measurement.
+    expect(
+      ["NO-MARKED-TILE", "NO-NAME-ELEMENT"],
+      `expected to measure a real name element inside the marked tile, got ` +
+        `"${nameDisplay}". A missing tile or a missing name element would make ` +
+        `the display assertion above unfalsifiable.`,
+    ).not.toContain(nameDisplay)
+  })
+})
+
+test.describe("meeting bottom strip: safe-area inset @ 1280x800", () => {
+  test.use({ viewport: { width: 1280, height: 800 } })
+
+  /**
+   * ─── CASE 3 · THE FOOTER GROWS, DESKTOP ───────────────────────────────
+   *
+   * At this width the shell's `.bottom-nav` is `display:none`, so the
+   * footer IS the bottom-most element and the inset is added to its
+   * height. The opposite expectation to case 1, at the other breakpoint,
+   * and both are correct.
+   *
+   * TWO CLAUSES, NOT ONE. Asserting only the tile size would let a fix
+   * that keeps the tile by shrinking something ELSE inside the footer pass,
+   * so the footer's own delta is asserted as its own clause. Both are
+   * measured on ONE page, before and after the override, which is what
+   * makes the delta a delta rather than a comparison across two runs that
+   * could differ for any reason.
+   */
+  test("case 3: a 34px inset grows the footer by exactly 34 and leaves the tiles alone", async ({
+    page,
+  }) => {
+    await login(page)
+    await openCanvasStage(page)
+
+    const probe0 = await readInsetProbe(page)
+    expect(
+      probe0,
+      `expected env(safe-area-inset-bottom) to be 0 before the override, got ${probe0}.`,
+    ).toBeCloseTo(0, 1)
+
+    const foot0 = await visibleRect(page, BOTTOM_STRIP)
+    const tile0 = await firstStripTileRect(page)
+
+    await injectSafeAreaInset(page, INJECTED_INSET)
+
+    const probe34 = await readInsetProbe(page)
+    expect(
+      probe34,
+      `the CDP safe-area override did not land: the probe measured ${probe34}, not ` +
+        `${INJECTED_INSET}. Both measurements would then be taken at inset 0, the ` +
+        `delta below would be 0 on the FIXED build too, and the case would be ` +
+        `asserting nothing. Instrument failure, not a layout failure.`,
+    ).toBeCloseTo(INJECTED_INSET, 1)
+
+    const foot34 = await visibleRect(page, BOTTOM_STRIP)
+    const tile34 = await firstStripTileRect(page)
+
+    const delta = foot34.height - foot0.height
+    console.log(
+      `[safe-area] 1280x800 h0=${foot0.height.toFixed(2)} h34=${foot34.height.toFixed(2)} ` +
+        `delta=${delta.toFixed(2)} tile0=${fmt(tile0)} tile34=${fmt(tile34)}`,
+    )
+
+    expect(
+      Math.abs(foot0.height - DESKTOP_FOOTER_H) <= TOL,
+      `baseline footer height ${foot0.height.toFixed(2)}, expected ${DESKTOP_FOOTER_H} ` +
+        `+/- ${TOL}. Every clause below is a delta off this number, so a wrong ` +
+        `baseline makes them meaningless. footer=${fmt(foot0)}`,
+    ).toBe(true)
+
+    expect(
+      Math.abs(delta - INJECTED_INSET) <= TOL,
+      `the footer grew by ${delta.toFixed(2)}px under a ${INJECTED_INSET}px inset, ` +
+        `expected ${INJECTED_INSET} +/- ${TOL}. A delta of 0 is the broken build: the ` +
+        `inset was consumed inside a fixed height instead of extending it. ` +
+        `h0=${foot0.height.toFixed(2)} h34=${foot34.height.toFixed(2)}`,
+    ).toBe(true)
+
+    expect(
+      Math.abs(tile0.height - DESKTOP_TILE_H) <= TOL,
+      `baseline tile height ${tile0.height.toFixed(2)}, expected ${DESKTOP_TILE_H} ` +
+        `+/- ${TOL} (${DESKTOP_FOOTER_H} - 8 pt - 8 pb - 1 border). tile=${fmt(tile0)}`,
+    ).toBe(true)
+
+    expect(
+      Math.abs(tile34.height - DESKTOP_TILE_H) <= TOL,
+      `the tile row is ${tile34.height.toFixed(2)}px tall under the inset, expected ` +
+        `${DESKTOP_TILE_H} +/- ${TOL}. The growth must land in the FOOTER, not come ` +
+        `out of the tiles. tile=${fmt(tile34)}`,
+    ).toBe(true)
+
+    expect(
+      Math.abs(tile34.width - tile0.width) <= TOL,
+      `the tile width moved from ${tile0.width.toFixed(2)} to ${tile34.width.toFixed(2)} ` +
+        `under the inset. The tile is aspect-video, so a width change means the ` +
+        `content box moved even though the height clause passed.`,
+    ).toBe(true)
+  })
+})
