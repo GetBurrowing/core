@@ -418,9 +418,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
       assert :sys.get_state(view.pid).socket.assigns.agent_activity.computing[agent.id] ==
                stale_at
 
-      # The tick is load-bearing here: without a fresh `now` to cap
-      # against, `resolve_at/2` never gets asked again and the row would
-      # still read whatever it read at the last incidental re-render.
+      # CORRECTED, task 01a077e7 stage 1. This comment used to claim the
+      # tick is load-bearing here. On the quickmeet it is NOT: the
+      # `assign/3` above already changed `:agent_activity`, which IS
+      # passed at the `<.meeting_panel>` call site, so the panel is
+      # re-diffed on that change alone, and `<.participant_rail>` falls
+      # back to `DateTime.utc_now/0` when `:now` is nil. This test passed
+      # on the build that never threaded `:agent_activity_now` through at
+      # all, so it is not a guard for that defect — the
+      # "an ETS-only :speaking becomes visible on a bare tick" test below
+      # is. Kept as written because what it DOES cover, the 120-second
+      # ceiling turning a stuck row into "Couldn't", is real.
       send(view.pid, :agent_activity_tick)
       capped_html = render(view)
 
@@ -431,6 +439,84 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
       assert rail_activity_word(capped_html, presence.id) =~ "Couldn't"
       assert rail_activity_word(capped_html, presence.id) =~ "agent went offline"
       assert rail_activity_state(capped_html, presence.id) == ["failed"]
+    end
+  end
+
+  # ── Task 01a077e7 stage 1 ────────────────────────────────────────────
+  #
+  # The clock existed; the WIRE did not. `MeetingHooks` has armed and
+  # re-armed `:agent_activity_tick` since task 01a06e07, and
+  # `Partials.meeting_panel/1` has always read `:agent_activity_now` for
+  # the rail's `now=` — but it read it as `assigns[:agent_activity_now]`,
+  # declared no such attr, and `chat_live.html.heex` passed no such value.
+  # A function component is re-invoked only when something passed AT ITS
+  # CALL SITE changes, so a tick changed nothing the diff could see and
+  # the whole `<.meeting_panel>` subtree was skipped. The rail therefore
+  # repainted only when some OTHER passed assign happened to change.
+  #
+  # The state that makes this visible is `:speaking`: `mark_speaking/4`
+  # writes ETS and `agent_activity.ex` broadcasts only `:computing` and
+  # `:failed`, so nothing about a `:speaking` touches an assign. On the
+  # broken build it could never reach this screen by itself.
+  describe "the quickmeet rail repaints on the tick alone (the meeting_panel wire)" do
+    test "an ETS-only :speaking becomes visible with the tick as the ONLY change",
+         %{conn: conn, space: space, meeting: meeting} do
+      {presence, agent} = seat_agent_in_call(space, "Speaker")
+      view = join(conn, space, meeting)
+
+      before = render(view)
+      assert count(before, rail_row(before, presence.id)) == 1
+      assert rail_activity_word(before, presence.id) == "Idle"
+      refute rail_activity_word(before, presence.id) =~ "Speaking"
+
+      # Straight into ETS. This touches NO assign and sends NO broadcast —
+      # `mark_speaking/4` is an `:ets.insert/2` and nothing else — so the
+      # only thing that can carry it to the client is a re-diff of the
+      # panel, and the only thing that can cause one is the tick.
+      assert {:ok, %{state: :speaking}} =
+               AgentActivity.mark_speaking(meeting.id, agent.id, Ecto.UUID.generate())
+
+      # And it is genuinely not on screen yet: `render/1` reads the test
+      # client's accumulated DOM, so with no diff pushed the row is still
+      # the "Idle" one rendered above. This is the defect, stated as an
+      # assertion.
+      assert rail_activity_word(render(view), presence.id) == "Idle"
+
+      # The tick, and NOTHING else. No broadcast, no `:sys.replace_state`,
+      # no click — every one of those changes an assign that IS passed at
+      # the call site, which is precisely what made the panel paint on the
+      # broken build, so a test using any of them would pass there and
+      # prove nothing.
+      send(view.pid, :agent_activity_tick)
+      html = render(view)
+
+      assert Process.alive?(view.pid)
+
+      assert rail_activity_word(html, presence.id) =~ "Speaking",
+             "the tick advanced :agent_activity_now but the rail did not repaint — " <>
+               "`<.meeting_panel>` is not being handed the clock, so LiveView " <>
+               "skips its whole subtree on a tick"
+
+      assert rail_activity_state(html, presence.id) == ["speaking"]
+    end
+
+    # A value passed to an attr the component does not declare is the
+    # SHAPE of this bug, and phoenix_live_view only warns about it (see
+    # `deps/phoenix_live_view/lib/phoenix_component/declarative.ex`) — a
+    # warning `mix precommit` turns into an error, but only while the call
+    # site is there. Pin the declaration itself so the pair cannot rot
+    # back apart.
+    test "meeting_panel/1 declares :agent_activity_now" do
+      attrs =
+        PlatformWeb.ChatLive.Partials.__components__()
+        |> Map.fetch!(:meeting_panel)
+        |> Map.fetch!(:attrs)
+        |> Enum.map(& &1.name)
+
+      assert :agent_activity_now in attrs
+      # Anti-vacuity: the attr list is the real one, so a mistyped fetch
+      # cannot make the assertion above pass against an empty list.
+      assert :agent_activity in attrs
     end
   end
 end

@@ -1374,6 +1374,32 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:meeting, :any, default: nil)
   attr(:agents_by_id, :map, default: %{})
   attr(:agent_activity, :any, default: nil)
+
+  attr(:agent_activity_now, :any,
+    default: nil,
+    doc: """
+    The 1-second clock `ChatLive.MeetingHooks` maintains (task 01a077e7).
+
+    `join_call_shell/2` arms `MeetingHooks.schedule_agent_activity_tick/0`
+    the moment a REAL quickmeet is joined, and the `:agent_activity_tick`
+    clause re-assigns `:agent_activity_now` every
+    `AgentActivity.tick_interval_ms/0` and re-arms. Threading it through
+    here is not decoration: **passing it is what makes LiveView re-diff
+    the rail on each tick.** The panel is a function component, so the
+    diff only re-invokes it when one of the values passed AT THE CALL SITE
+    changes. Until this attr existed, `chat_live.html.heex` passed no
+    ticking value at all, so a tick was invisible to the diff and the
+    whole `<.meeting_panel>` subtree was skipped — the rail repainted only
+    when some OTHER assign happened to change. That is why an ETS-only
+    `:speaking` (`AgentActivity.mark_speaking/4` writes ETS and broadcasts
+    nothing) never reached this screen on its own.
+
+    Read as `@agent_activity_now`, never `assigns[:agent_activity_now]`:
+    bracket access on `assigns` bypasses change tracking, so even a passed
+    value would not register as a dynamic.
+    """
+  )
+
   attr(:candidates, :list, default: [])
   attr(:candidates_closed, :list, default: [])
   attr(:candidate_events, :map, default: %{})
@@ -1751,7 +1777,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         agents_by_id={@agents_by_id}
         meeting={@meeting}
         agent_activity={@agent_activity}
-        now={assigns[:agent_activity_now]}
+        now={@agent_activity_now}
         invite_rows={@invite_rows}
         invite_event="quickmeet_invite_agent"
         candidates={@candidates}
