@@ -3771,6 +3771,36 @@ defmodule Platform.Meetings do
   # ── Recordings ───────────────────────────────────────────────────────────
 
   @doc """
+  Returns the room's LIVE recording: the most recently inserted
+  `meeting_recordings` row in `recording` status, or `nil` when it has none.
+
+  `"recording"` is the only status that means capture is happening right
+  now. `processing`, `ready` and `failed` all mean it has stopped, so all
+  three answer `nil`. The question this answers is "is this room being
+  captured", NOT "does this room have a recording": it backs a consent
+  indicator, where a row that outlives the capture would keep telling
+  people they are being recorded after they have stopped being recorded.
+  """
+  @spec live_recording_for_room(term()) :: Recording.t() | nil
+  def live_recording_for_room(room_id) do
+    # Guarded for the reason `get_transcript/1` is: `where: r.room_id ==
+    # ^room_id` raises the same `Ecto.Query.CastError` as `Repo.get/2` on a
+    # malformed binary. The room_id reaches this from a LiveView assign and
+    # from a `{:recording_updated, _}` broadcast payload, and a malformed
+    # one must read as "nothing is recording" rather than take the header
+    # render down.
+    if Platform.UUID.valid?(room_id) do
+      Recording
+      |> where([r], r.room_id == ^room_id and r.status == "recording")
+      |> order_by([r], desc: r.inserted_at)
+      |> limit(1)
+      |> Repo.one()
+    else
+      nil
+    end
+  end
+
+  @doc """
   Start a recording for a room. Creates a recording entry in `recording`
   status.
 
@@ -3799,7 +3829,7 @@ defmodule Platform.Meetings do
         |> Repo.update()
       end
 
-      result
+      broadcast_recording_updated(result)
     end
   end
 
@@ -3822,6 +3852,7 @@ defmodule Platform.Meetings do
           recording
           |> Recording.changeset(%{status: "processing"})
           |> Repo.update()
+          |> broadcast_recording_updated()
 
         _recording ->
           {:error, :invalid_status}
@@ -3849,12 +3880,28 @@ defmodule Platform.Meetings do
           recording
           |> Recording.changeset(Map.merge(attrs, %{status: "ready"}))
           |> Repo.update()
+          |> broadcast_recording_updated()
 
         _recording ->
           {:error, :invalid_status}
       end
     end
   end
+
+  # Every recording write announces itself on the room topic the call
+  # LiveView is ALREADY subscribed to (`MeetingsPubSub.subscribe_room/1`,
+  # via `MeetingLive.subscribe_room_once/2`), mirroring `activate_room/1`.
+  # Deliberately one topic, not a `meetings:recording:<room_id>` of its own:
+  # a second topic would need a second subscription in every consumer.
+  #
+  # It carries the whole `%Recording{}` rather than the status alone so a
+  # subscriber can tell WHICH recording changed without a re-read.
+  defp broadcast_recording_updated({:ok, %Recording{} = recording} = result) do
+    MeetingsPubSub.broadcast_room(recording.room_id, {:recording_updated, recording})
+    result
+  end
+
+  defp broadcast_recording_updated(result), do: result
 
   # ── Transcripts ────────────────────────────────────────────────────────────
 

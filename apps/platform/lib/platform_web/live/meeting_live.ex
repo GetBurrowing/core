@@ -600,6 +600,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
     |> assign(:participants, participants)
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
+    |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
     |> assign(:agents_by_id, %{})
     # Per-meeting agent activity (task 01a04a98). Hydrated on the GUEST
     # surface too: the guest holds `meeting:<id>` (see
@@ -973,6 +974,7 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:meeting, meeting)
           |> assign(:participants, participants)
           |> assign(:room_live?, room_live?(meeting.chat_space_id))
+          |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
           |> assign(:agents_by_id, agents_by_id)
           # The invite-an-agent control's options (task 01a04c2f). Seeded
           # here and re-derived by `refresh_participants/1`, so an agent that
@@ -4043,6 +4045,29 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_info({:roster_changed, _space_id}, socket), do: {:noreply, socket}
 
+  # Recording started or stopped in this room (task 01a0740d stage 2).
+  # Arrives on the ROOM topic, which this pid already holds via
+  # `subscribe_room_once/2` — stage 1 deliberately put the broadcast on the
+  # existing `MeetingsPubSub.room_topic/1` rather than a topic of its own, so
+  # there is no second subscription here and nothing to unsubscribe.
+  #
+  # The payload is ignored on purpose; see `room_recording?/1`. Re-reading is
+  # what makes the pill track the room's live capture rather than the last
+  # event that happened to reach this pid.
+  #
+  # Only `:room_recording?` moves. A recording write does not change the
+  # roster, so calling `refresh_participants/1` here would spend four reads
+  # to re-derive assigns nothing asked for.
+  def handle_info(
+        {:recording_updated, _recording},
+        %{assigns: %{meeting: %{chat_space_id: space_id}}} = socket
+      )
+      when is_binary(space_id) do
+    {:noreply, assign(socket, :room_recording?, room_recording?(space_id))}
+  end
+
+  def handle_info({:recording_updated, _recording}, socket), do: {:noreply, socket}
+
   # Catch-all: chat-space topic carries many event shapes (messages,
   # reactions, pins, …). The shell only cares about roster + canvas
   # events; ignore the rest so a broadcast can't crash the LV.
@@ -4484,6 +4509,7 @@ defmodule PlatformWeb.MeetingLive do
     socket
     |> assign(:participants, participants)
     |> assign(:room_live?, room_live?(space_id))
+    |> assign(:room_recording?, room_recording?(space_id))
     |> assign(:agents_by_id, load_agents_by_id(participants))
     |> assign_invite_rows(space_id, participants)
   end
@@ -4521,6 +4547,36 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp room_live?(_space_id), do: false
+
+  # Whether this meeting's space is being CAPTURED right now (task 01a0740d
+  # stage 2). Drives the top bar's red `recording` pill, and it is observed
+  # on exactly the terms `room_live?/1` above is: it answers from a row, and
+  # the row is `meeting_recordings` at `status == "recording"` — the only
+  # status that means capture is happening (`Meetings.live_recording_for_room/1`,
+  # stage 1, where `processing` / `ready` / `failed` all answer nil because a
+  # row that outlives the capture would keep telling people they are being
+  # recorded after they have stopped being recorded).
+  #
+  # Recomputed rather than carried from the `{:recording_updated, recording}`
+  # broadcast payload. The payload says which recording changed; it does not
+  # say whether the ROOM still has a live one, and those differ the moment a
+  # room holds more than one row. The broadcast is the wake-up, the read is
+  # the answer.
+  #
+  # KNOWN INTERACTION, reported in stage 1 and unchanged here: `start_recording/2`
+  # sets `meeting_rooms.status` to `"recording"`, and `get_active_room/1` matches
+  # `"active"` only. So on the real write path this read finds no active room and
+  # answers false — and the green live pill above disappears on the same tick,
+  # for the same reason. That is backend lifecycle, outside this ticket, and it
+  # is why nothing in production lights this pill today.
+  defp room_recording?(space_id) when is_binary(space_id) do
+    case Meetings.get_active_room(space_id) do
+      %Room{id: room_id} -> Meetings.live_recording_for_room(room_id) != nil
+      _ -> false
+    end
+  end
+
+  defp room_recording?(_space_id), do: false
 
   # ── Agent invitation (task 01a04c2f) ───────────────────────────────────
   #

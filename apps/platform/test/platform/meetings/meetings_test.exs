@@ -397,4 +397,188 @@ defmodule Platform.Meetings.PresenceTest do
       assert %DateTime{} = reloaded.notified_at
     end
   end
+
+  # ── Recordings (task 01a0740d-e5ce-7001-812e-aa79a5392aed stage 1) ──────────
+  #
+  # THE LANDMINE these tests are written around. `meeting_rooms.status` is
+  # `~w(idle active recording)` (`meetings/room.ex:15`), `get_active_room/1`
+  # matches `"active"` and nothing else (`meetings.ex:2866`), and
+  # `start_recording/2` sets the ROOM to `"recording"` (`meetings.ex:3796`).
+  # So starting a recording on a live room makes `get_active_room/1` answer
+  # `nil`. Every recording row below is therefore inserted with
+  # `Repo.insert!/1` rather than through `start_recording/2`, EXCEPT in the
+  # one test whose subject is `start_recording/2` itself.
+  #
+  # `live_recording_for_room/1` keys off `meeting_recordings` for the same
+  # reason: reading the room's own status would make the indicator disappear
+  # at the exact moment it is supposed to appear.
+
+  defp insert_recording!(room, status, attrs \\ %{}) do
+    Repo.insert!(
+      struct(
+        %Recording{room_id: room.id, space_id: room.space_id, status: status},
+        attrs
+      )
+    )
+  end
+
+  describe "live_recording_for_room/1" do
+    test "returns the row while a recording is in progress" do
+      room = create_room(create_space().id)
+      recording = insert_recording!(room, "recording")
+
+      assert %Recording{} = found = Meetings.live_recording_for_room(room.id)
+      assert found.id == recording.id
+      assert found.status == "recording"
+    end
+
+    test "returns nil once the recording is processing" do
+      room = create_room(create_space().id)
+      insert_recording!(room, "processing")
+
+      assert Meetings.live_recording_for_room(room.id) == nil
+    end
+
+    test "returns nil once the recording is ready" do
+      room = create_room(create_space().id)
+      insert_recording!(room, "ready")
+
+      assert Meetings.live_recording_for_room(room.id) == nil
+    end
+
+    test "returns nil when the recording failed" do
+      # A failed egress is not a live capture. Asserted separately from
+      # `processing` and `ready` rather than in a loop over the three, so a
+      # read that happened to special-case only one of them still fails here.
+      room = create_room(create_space().id)
+      insert_recording!(room, "failed")
+
+      assert Meetings.live_recording_for_room(room.id) == nil
+    end
+
+    test "returns nil for a room that has never been recorded" do
+      room = create_room(create_space().id)
+
+      assert Meetings.live_recording_for_room(room.id) == nil
+    end
+
+    test "returns the most recently inserted of two live rows" do
+      room = create_room(create_space().id)
+
+      older =
+        insert_recording!(room, "recording", %{
+          inserted_at: ~U[2026-09-01 10:00:00.000000Z],
+          updated_at: ~U[2026-09-01 10:00:00.000000Z]
+        })
+
+      newer =
+        insert_recording!(room, "recording", %{
+          inserted_at: ~U[2026-09-01 11:00:00.000000Z],
+          updated_at: ~U[2026-09-01 11:00:00.000000Z]
+        })
+
+      assert newer.id != older.id
+      assert Meetings.live_recording_for_room(room.id).id == newer.id
+    end
+
+    test "does not return another room's live recording" do
+      recorded = create_room(create_space().id)
+      quiet = create_room(create_space().id)
+      recording = insert_recording!(recorded, "recording")
+
+      assert Meetings.live_recording_for_room(recorded.id).id == recording.id
+      assert Meetings.live_recording_for_room(quiet.id) == nil
+    end
+
+    test "returns nil for a malformed room id rather than raising" do
+      # `where: r.room_id == ^room_id` raises the same Ecto.Query.CastError
+      # as `Repo.get/2` on a non-uuid, and this read backs a header render.
+      for id <- ["higgins", "higginshigginsxx", "", nil] do
+        assert Meetings.live_recording_for_room(id) == nil
+      end
+    end
+  end
+
+  describe "recording writes broadcast {:recording_updated, _} on the room topic" do
+    # `config/test.exs` pins no `:livekit` key, so `Meetings.enabled?/0`
+    # would otherwise fall through to reading LIVEKIT_URL / _API_KEY /
+    # _API_SECRET off the HOST — making these three functions return
+    # `{:error, :meetings_disabled}` on CI and succeed on a developer
+    # machine, or the reverse. Pinned here so the assertions mean the same
+    # thing everywhere. Safe because this module is `async: false`.
+    # Called AFTER the room exists, never in a `setup`: `ensure_room/1` asks
+    # LiveKit to CreateRoom when a url is configured, and a fixture that
+    # resolves DNS is a flake this suite does not need. None of the three
+    # functions under test makes an HTTP call of its own.
+    defp enable_livekit! do
+      prior = Application.fetch_env(:platform, :livekit)
+
+      Application.put_env(:platform, :livekit,
+        url: "wss://livekit.invalid",
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret"
+      )
+
+      on_exit(fn ->
+        case prior do
+          {:ok, value} -> Application.put_env(:platform, :livekit, value)
+          :error -> Application.delete_env(:platform, :livekit)
+        end
+      end)
+
+      :ok
+    end
+
+    test "start_recording/2 announces the new recording" do
+      room = create_room(create_space().id)
+      enable_livekit!()
+      MeetingsPubSub.subscribe_room(room.id)
+
+      {:ok, recording} = Meetings.start_recording(room.id)
+
+      assert_receive {:recording_updated, %Recording{} = broadcast}
+      assert broadcast.id == recording.id
+      assert broadcast.room_id == room.id
+      assert broadcast.status == "recording"
+    end
+
+    test "stop_recording/1 announces the move to processing" do
+      room = create_room(create_space().id)
+      recording = insert_recording!(room, "recording")
+      enable_livekit!()
+      MeetingsPubSub.subscribe_room(room.id)
+
+      {:ok, _stopped} = Meetings.stop_recording(recording.id)
+
+      assert_receive {:recording_updated, %Recording{} = broadcast}
+      assert broadcast.id == recording.id
+      assert broadcast.room_id == room.id
+      assert broadcast.status == "processing"
+    end
+
+    test "recording_completed/2 announces the move to ready" do
+      room = create_room(create_space().id)
+      recording = insert_recording!(room, "processing")
+      enable_livekit!()
+      MeetingsPubSub.subscribe_room(room.id)
+
+      {:ok, _ready} = Meetings.recording_completed(recording.id, %{duration_seconds: 12})
+
+      assert_receive {:recording_updated, %Recording{} = broadcast}
+      assert broadcast.id == recording.id
+      assert broadcast.room_id == room.id
+      assert broadcast.status == "ready"
+    end
+
+    test "a subscriber to a different room hears nothing" do
+      room = create_room(create_space().id)
+      other = create_room(create_space().id)
+      enable_livekit!()
+      MeetingsPubSub.subscribe_room(other.id)
+
+      {:ok, _recording} = Meetings.start_recording(room.id)
+
+      refute_receive {:recording_updated, _}, 200
+    end
+  end
 end

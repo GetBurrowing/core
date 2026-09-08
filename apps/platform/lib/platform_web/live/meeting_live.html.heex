@@ -327,8 +327,40 @@
            the difference into its scroll port — which is exactly the
            mechanism the bar's own comment above says should take the
            squeeze. Still a percentage of the line, per that comment. --%>
+        <%!-- SHRINK WEIGHT, and why it is conditional (task 01a0740d stage 2).
+
+           A SECOND state pill can now sit in this box, and the box's width is
+           basis-driven: its content growing does not make it any wider. So the
+           whole 51.7px the recording pill costs came straight out of the only
+           `min-w-0` item inside it. Measured at 390x844 before this line
+           existed, with a recording row seeded: the meeting name rendered at
+           2.14px. That is the width-ZERO title the 019fb955 rework fixed,
+           arrived at from the other direction.
+
+           Expressed as a shrink weight and NOT a px floor, per the bar's own
+           comment above: the deficit is split by `shrink x basis`, so at 0.2
+           this box keeps 188.36px of the 390px line and the segmented control's
+           scroll port absorbs the rest at 47.64px — the mechanism that
+           control's own comment says should take the squeeze, and the same
+           trade the previous stage made when it moved this basis to 60%.
+
+           Conditional, because an unconditional 0.2 would spend that 53px of
+           segmented control on EVERY meeting, including the overwhelming
+           majority that are not being recorded — a layout change this ticket
+           did not ask for. With no pill the class string is byte-identical to
+           what shipped, so the quiet path is provably unchanged. Measured both
+           ways at 390x844: recording -> title 188.36 / name 55.75 / control
+           47.64; quiet -> title 134.75 / name 53.84 / control 101.25. No
+           horizontal page scroll in either, and nothing at width 0.
+
+           `basis` is untouched, so a long meeting name still truncates rather
+           than overflowing the page: the h1 keeps `min-w-0 truncate` and this
+           box's hypothetical size does not follow its content. --%>
         <div
-          class="flex min-w-0 shrink grow basis-[60%] items-center gap-2 sm:basis-[50%]"
+          class={[
+            "flex min-w-0 grow basis-[60%] items-center gap-2 sm:basis-[50%]",
+            if(@room_recording?, do: "shrink-[0.2] sm:shrink", else: "shrink")
+          ]}
           data-role="meeting-title"
         >
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
@@ -357,6 +389,62 @@
           >
             <span class="size-1.5 rounded-full bg-success" aria-hidden="true"></span>
             <span><span class="sr-only sm:not-sr-only">meeting </span>live</span>
+          </span>
+
+          <%!-- `● recording` (task 01a0740d stage 2, FE-7). Same 10px fully
+             rounded pill as the live one above it, on the DESTRUCTIVE slot.
+
+             THE SLOT IS THE POINT OF THE TICKET. A red dot is the recording
+             convention and nothing else on this screen claims red. `warning`
+             (amber) is not available to it at any shade: on this surface amber
+             means a human is being asked for something — it is the invite
+             honesty banner's slot and the last-five-seconds colour of the FE-9
+             commit countdown, which renders inches from here. An amber dot
+             would not read as a new colour, it would read as a demand for a
+             response that does not exist.
+
+             `@room_recording?` is OBSERVED, on the same terms `@room_live?` is:
+             it answers from a `meeting_recordings` row at `status ==
+             "recording"` (`room_recording?/1` in meeting_live.ex), never from
+             the meeting existing. `:if` and not a hidden node — an
+             always-present-but-hidden consent indicator is a lie waiting for a
+             CSS regression, and it is the failure mode the neighbouring
+             components ban by name.
+
+             COLOUR IS NOT THE ONLY SIGNAL, and the word does not yield: below
+             `sm` only the "ording" tail goes `sr-only`, so `rec` is painted at
+             every width and the full word stays in the accessibility tree. This
+             is STATE, so `hidden sm:flex` is banned on it — that treatment
+             belongs to the roster count below, which is informational.
+
+             CONTRAST, measured against this pill's OWN rendered fill with
+             Platform.Design.WcagContrast, compositing every alpha over the real
+             ground (header `bg-base-200/60` over the shell's `bg-base-100`):
+
+               * The word is `text-base-content`, NOT `text-error`, because
+                 `text-error` on this fill measures 2.9702:1 light / 4.4376:1
+                 dark and 10px text needs 4.5:1. `text-base-content` measures
+                 17.1452:1 light / 15.7191:1 dark. The green pill's own
+                 `text-success` treatment measures 2.0437:1 light and was NOT
+                 copied; it is reported, not patched here.
+               * The fill is `/10` and not the green pill's `/15` for one
+                 measurable reason: an error-tinted ground drags the error dot
+                 toward its own hue, and at `/15` the dot falls to 2.9702:1,
+                 under the 3:1 non-text floor. At `/10` it clears both themes
+                 at 3.1799:1 light / 4.6703:1 dark.
+               * `border-error/40` measures 1.7377:1 light / 1.6521:1 dark, so
+                 it is shape only. Nothing here depends on it to be seen — the
+                 filled dot and the word carry the indicator, which is the rule
+                 this theme's invisible `border-base-300` (1.0478:1) taught. --%>
+          <span
+            :if={@room_recording?}
+            class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-error/40 bg-error/10 px-2 py-0.5 text-[10px] font-medium leading-4 text-base-content"
+            data-role="meeting-recording-pill"
+            role="status"
+            aria-label="This meeting is being recorded"
+          >
+            <span class="size-1.5 rounded-full bg-error" aria-hidden="true"></span>
+            <span>rec<span class="sr-only sm:not-sr-only">ording</span></span>
           </span>
         </div>
 

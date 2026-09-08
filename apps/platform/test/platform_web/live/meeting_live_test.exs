@@ -12520,4 +12520,236 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert people_count(render(view)) == ["1"]
     end
   end
+
+  # ── Recording indicator (task 01a0740d stage 2, FE-7) ────────────────────
+  #
+  # The rows are seeded by hand with `Repo.insert!`, deliberately NOT through
+  # `Meetings.start_recording/2`. That function sets `meeting_rooms.status` to
+  # `"recording"`, and `Meetings.get_active_room/1` matches `"active"` only, so
+  # calling it would take the room out from under BOTH pills and every
+  # assertion below would go green or red for a reason that has nothing to do
+  # with the indicator. See `room_recording?/1` in meeting_live.ex.
+  describe "top bar: recording pill (task 01a0740d stage 2)" do
+    alias Platform.Meetings
+
+    @recording_pill ~s([data-role="meeting-recording-pill"])
+    @live_pill ~s([data-role="meeting-live-pill"])
+
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "rec-pill-#{System.unique_integer([:positive])}",
+          name: "Rec Pill"
+        })
+
+      {conn, user} = authenticated_conn(conn)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    # THE NEGATIVE. A live room that is NOT being captured renders no
+    # indicator at all — not a hidden one, not a grey one. A consent surface
+    # that is present while nothing is recording is the failure this `:if`
+    # exists to prevent.
+    #
+    # The word is refuted through the header's TEXT and not through the raw
+    # HTML, because the markup splits it (`rec` + a `sr-only` `ording`), so
+    # `html =~ "recording"` would be false even with the pill rendered — an
+    # assertion that passes without the system doing anything. The aria-label
+    # is refuted separately, on the raw HTML, since it is the one place the
+    # claim is spelled out contiguously.
+    test "a live room with no recording row renders no pill and no word", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert count(html, @live_pill) == 1
+      assert count(html, @recording_pill) == 0
+      refute header_text(html) =~ "recording"
+      refute html =~ "being recorded"
+    end
+
+    test "a recording row renders one pill on the error slot, with the word", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      room = Meetings.get_active_room(space.id)
+      seed_recording(room, "recording")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert count(html, ~s(header #{@recording_pill})) == 1
+
+      [pill_class] = attrs(html, @recording_pill, "class")
+
+      assert pill_class =~ "bg-error/10"
+      assert pill_class =~ "border-error/40"
+      assert pill_class =~ "rounded-full"
+      assert pill_class =~ "text-[10px]"
+
+      # The word is `text-base-content` and NOT `text-error`, and that is a
+      # measured decision, not a preference: `text-error` on this pill's own
+      # rendered fill is 2.9702:1 light / 4.4376:1 dark, under the 4.5:1 that
+      # 10px text needs. `text-base-content` is 17.1452:1 / 15.7191:1.
+      # Re-measure with Platform.Design.WcagContrast before changing this.
+      assert pill_class =~ "text-base-content"
+      refute pill_class =~ "text-error"
+
+      # STATE does not yield at narrow widths. The roster count next to it is
+      # informational and carries `hidden sm:flex`; this must not.
+      refute pill_class =~ "hidden"
+
+      # The dot carries the hue, and it is what has to clear the 3:1 non-text
+      # floor (3.1799:1 light / 4.6703:1 dark on this fill).
+      assert Enum.any?(attrs(html, ~s(#{@recording_pill} span), "class"), &(&1 =~ "bg-error"))
+
+      assert pill_text(html) == "recording"
+    end
+
+    # THE ONE THAT SEPARATES A LIVE ROW FROM A STATIC FLAG. One mount, no
+    # `live/2` in the middle, no remount: the pill has to appear and then
+    # disappear inside the SAME view process, driven only by the row plus the
+    # broadcast. An implementation that reads the recording once at mount
+    # cannot pass this.
+    test "the pill follows the row through a broadcast, in one mounted view", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      room = Meetings.get_active_room(space.id)
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      assert count(html, @recording_pill) == 0
+
+      recording = seed_recording(room, "recording")
+      MeetingsPubSub.broadcast_room(room.id, {:recording_updated, recording})
+
+      assert count(render(view), @recording_pill) == 1
+
+      stopped =
+        recording
+        |> Ecto.Changeset.change(status: "processing")
+        |> Repo.update!()
+
+      MeetingsPubSub.broadcast_room(room.id, {:recording_updated, stopped})
+
+      assert count(render(view), @recording_pill) == 0
+    end
+
+    # A failed egress is not a dead meeting. `failed` means capture stopped,
+    # so the recording pill goes; the room is still live, so the green one
+    # stays. The two pills are independent reads and this is where that shows.
+    test "a failed recording renders no pill and leaves the live pill alone", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      room = Meetings.get_active_room(space.id)
+      seed_recording(room, "failed")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert count(html, @recording_pill) == 0
+      assert count(html, @live_pill) == 1
+    end
+
+    # THE WIDTH BUDGET. The title box is basis-driven, so it does NOT get wider
+    # when a second pill moves in — the pill's 51.7px comes straight out of the
+    # only `min-w-0` item in the box, and measured at 390x844 that put the
+    # meeting name at 2.14px. The fix is a lighter shrink weight, and it is
+    # conditional so a meeting that is NOT being recorded keeps the exact line
+    # it shipped with. Both halves are asserted, because only pinning the
+    # recording half would let the quiet regression back in.
+    test "the title box takes a lighter shrink only while recording", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      room = Meetings.get_active_room(space.id)
+
+      {:ok, view, quiet} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      [quiet_class] = attrs(quiet, ~s([data-role="meeting-title"]), "class")
+
+      assert quiet_class =~ "shrink"
+      refute quiet_class =~ "shrink-["
+
+      recording = seed_recording(room, "recording")
+      MeetingsPubSub.broadcast_room(room.id, {:recording_updated, recording})
+
+      [loud_class] = attrs(render(view), ~s([data-role="meeting-title"]), "class")
+
+      assert loud_class =~ "shrink-[0.2]"
+      assert loud_class =~ "sm:shrink"
+
+      # The basis is what keeps a long name truncating instead of overflowing
+      # the page. It is deliberately NOT part of the trade.
+      assert quiet_class =~ "basis-[60%]"
+      assert loud_class =~ "basis-[60%]"
+    end
+
+    # THE TOKEN FENCE. On this surface `warning` (amber) means a human is
+    # being asked for something: it is the invite honesty banner's slot and
+    # the last-five-seconds colour of the FE-9 commit countdown, which renders
+    # inches away. An amber recording dot would read as a demand for a
+    # response that does not exist. This is the only part of that constraint a
+    # machine can catch, so it is asserted rather than only written down.
+    test "the pill carries no amber utility and no raw colour literal", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      room = Meetings.get_active_room(space.id)
+      seed_recording(room, "recording")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      classes =
+        attrs(html, @recording_pill, "class") ++
+          attrs(html, ~s(#{@recording_pill} span), "class")
+
+      assert classes != []
+
+      for class <- classes do
+        refute class =~ ~r/warning|amber|yellow|orange/i, "amber utility in #{inspect(class)}"
+        refute class =~ ~r/#[0-9a-f]{3,8}\b|oklch\(/i, "raw colour literal in #{inspect(class)}"
+      end
+    end
+  end
+
+  # Insert a `meeting_recordings` row directly. NOT `Meetings.start_recording/2`
+  # — see the describe-block note above for why that would move the room out
+  # from under the test.
+  defp seed_recording(room, status) do
+    Repo.insert!(%Platform.Meetings.Recording{
+      room_id: room.id,
+      space_id: room.space_id,
+      status: status
+    })
+  end
+
+  defp header_text(html), do: node_text(html, "header")
+
+  defp pill_text(html), do: node_text(html, ~s([data-role="meeting-recording-pill"]))
+
+  defp node_text(html, selector) do
+    html
+    |> frag()
+    |> LazyHTML.query(selector)
+    |> LazyHTML.text()
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp attrs(html, selector, attribute) do
+    html |> frag() |> LazyHTML.query(selector) |> LazyHTML.attribute(attribute)
+  end
 end
