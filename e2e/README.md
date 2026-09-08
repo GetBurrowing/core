@@ -128,3 +128,41 @@ no-ops because `project_id` is NOT NULL.
 - The rig fingerprint (`app.js` sha) narrows but does not prove which of the
   shared 400x dev servers was measured — two servers on the same branch
   fingerprint identically.
+
+## The canvas search snippet gate (task 01a077e6)
+
+`tests/canvas_search_snippet_geometry.spec.ts`. At 375px the canvases drawer's
+search snippet used to clip the matched term off the right edge entirely — the
+box ended at x=286 and the `<mark>` sat at x=317-377, so a phone reader got
+context without the word they searched for. Nine passing LiveView tests missed
+it, because `Phoenix.LiveViewTest` does no layout. This spec measures rects.
+
+Seed first, then run against the SAME database:
+
+```bash
+cd apps/platform && mix run priv/scripts/seed_canvas_search_snippet_fixture.exs
+scripts/run-e2e.sh tests/canvas_search_snippet_geometry.spec.ts
+```
+
+The seed prints `SPACE_SLUG` and `PHRASE`; override with `FIXTURE_SPACE_SLUG` /
+`FIXTURE_PHRASE`. It is idempotent — an earlier fixture canvas is soft-deleted,
+which is what keeps the search returning exactly one hit and the `<mark>`
+selector unambiguous.
+
+Every case prints its rects on PASS as well as on FAIL. A run that does not show
+the two rects is not evidence that anything was measured.
+
+Two things about this file worth knowing before you change it:
+
+- **The mark is resolved as `[data-role="canvas-result-snippet"] mark`, not by
+  the sub-role the fix introduced.** The same selector has to resolve on the
+  PRE-FIX single-span markup or the mutation probe fails on a missing element
+  instead of on geometry, and a mutant that dies of a `SelectorAmbiguityError`
+  has demonstrated nothing about where the mark lands.
+- **Case 2 is read against the leading run's WIDTH, not its text length.** The
+  plan asked for text "strictly longer at 1440px"; measured in the real app the
+  DOM text is identical at both widths, because the server emits one fragment
+  and CSS does the yielding. The clause that separates this fix from a global
+  `ts_headline` MaxWords reduction is the PAIR: the leading run must be genuinely
+  clipped at 375px (`scrollWidth > clientWidth`) and must widen with the
+  viewport. A MaxWords reduction fails both — the fragment would fit at 375px.

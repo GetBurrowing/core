@@ -74,6 +74,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       search_headline: 1,
       sidebar_display_name: 2,
       space_header_name: 4,
+      split_marked_snippet: 1,
       unread_label: 1
     ]
 
@@ -1128,13 +1129,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                        for. `bg-base-content/5` for the lifted ground, NOT
                        `base-200`: the dark ladder is not monotonic and
                        `base-200` renders as a near-black band there. --%>
-                  <p
+                  <.canvas_result_snippet
                     :if={present?(hit.snippet)}
-                    data-role="canvas-result-snippet"
-                    class="mt-0.5 min-w-0 truncate rounded bg-base-content/5 px-1.5 py-0.5 text-xs font-normal text-base-content/70"
-                  >
-                    {marked_text(hit.snippet)}
-                  </p>
+                    snippet={hit.snippet}
+                  />
 
                   <%!-- The design canvas gives a `--color-neutral` slot to the
                        space name. This drawer is single-space, so a space name
@@ -1202,6 +1200,77 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
         </.form>
       </div>
     </div>
+    """
+  end
+
+  # THE SNIPPET IS THREE PARTS IN A ROW, NOT ONE TRUNCATING STRING.
+  #
+  # The brand rule: the last thing allowed to truncate is the most meaningful.
+  # On this row that is the MATCH, and the surrounding context is the
+  # expendable part — the title above already failed to disambiguate, which is
+  # the whole reason the snippet line exists. So the match is held at
+  # `shrink-0 whitespace-nowrap` and the two context runs are `min-w-0
+  # truncate` and yield around it. It holds at every width by construction:
+  # there is no breakpoint to tune, no second server-side fragment
+  # configuration, and no viewport for the server to guess at.
+  #
+  # Measured before this split, at 375px: the snippet box's right edge sat at
+  # x=286 and the `<mark>` at x=317-377, entirely past it. A phone reader got
+  # "… until their manager r…" — context without the word they searched for.
+  # At 1440px the mark ended at 825 inside a box ending at 943, which is why
+  # nobody reviewing on a laptop saw it.
+  #
+  # `data-role="canvas-result-snippet"` stays on the CONTAINER: the drawer
+  # tests and the `mark` CSS rule both key off it. The three children carry
+  # their own roles so the browser-geometry spec has stable handles.
+  #
+  # LEFT-SIDE CLIPPING on the leading run, because `truncate` clips from the
+  # right and would keep the words FURTHEST from the match — the wrong half.
+  # `direction: rtl` moves the clip and the ellipsis to the left edge (the CSS
+  # rule is in `app.css`, scoped to the leading role), and the `<bdi>` inside
+  # keeps the text itself in logical order: without it the neutral characters
+  # at the run's edges, including the literal "… " the server prepends in
+  # `Chat.ellipsised_headline/2`, get reordered to the wrong end at widths
+  # where the run does not overflow.
+  #
+  # `max-w-full truncate` on the match is a guard, not a feature: a match
+  # wider than the whole row cannot shrink (that is the point), so without a
+  # cap it would overflow the row. Capped, it degrades to a clipped match with
+  # both context runs at zero width, which is the least-wrong reading of a
+  # case the design left open.
+  defp canvas_result_snippet(assigns) do
+    {leading, match, trailing} = split_marked_snippet(assigns.snippet)
+
+    assigns = assign(assigns, leading: leading, match: match, trailing: trailing)
+
+    ~H"""
+    <%!-- `phx-no-format` is load-bearing, not tidiness. Left to itself the HEEx
+         formatter puts each interpolation on its own line, which lands a
+         newline and an indent INSIDE the run — so the leading run's last text
+         node becomes whitespace instead of the character next to the match.
+         Every markup assertion still passes on that, and the browser
+         measurement in stage 2 reads the last character's rect, so it would be
+         measuring a space. Same reflow hazard the moduledoc records for the two
+         mask calls, one element further in. --%>
+    <p
+      phx-no-format
+      data-role="canvas-result-snippet"
+      class="mt-0.5 flex min-w-0 items-baseline gap-1 overflow-hidden rounded bg-base-content/5 px-1.5 py-0.5 text-xs font-normal text-base-content/65"
+    ><%= if @match do %><span
+        :if={@leading}
+        data-role="canvas-result-snippet-leading"
+        class="min-w-0 truncate"
+      ><bdi>{@leading}</bdi></span><mark
+        data-role="canvas-result-snippet-match"
+        class="max-w-full shrink-0 truncate whitespace-nowrap"
+      >{@match}</mark><span
+        :if={@trailing}
+        data-role="canvas-result-snippet-trailing"
+        class="min-w-0 truncate"
+      >{@trailing}</span><% else %><%!-- No mark in the fragment: nothing to
+        protect, so this is the single truncating span it always was. --%><span
+        class="min-w-0 truncate"
+      >{marked_text(@snippet)}</span><% end %></p>
     """
   end
 

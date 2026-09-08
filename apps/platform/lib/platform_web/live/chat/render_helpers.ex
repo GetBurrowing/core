@@ -355,6 +355,73 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
     |> Phoenix.HTML.raw()
   end
 
+  @doc """
+  Split a `ts_headline` fragment at its FIRST `<mark>` pair.
+
+  Returns `{leading, match, trailing}`. `match` is `nil` when the fragment
+  carries no usable mark at all, and that is the caller's signal to fall back
+  to the single `marked_text/1` span. Either context run is `nil` when it would
+  render nothing, so a match at the very start or the very end does not leave
+  an empty padded box in the row.
+
+  ## Why the string is split at all
+
+  The canvases drawer row cannot afford to truncate its snippet from the right.
+  The brand rule is that the last thing allowed to truncate is the most
+  meaningful, and on this row the meaningful fragment is the matched phrase:
+  the corpus is ~409 canvases whose titles do not disambiguate, so a row
+  showing context with the searched word clipped off the right edge is the
+  original problem in a nicer font. Measured at 375px before this split: the
+  snippet box ended at x=286 and the `<mark>` sat at x=317-377, entirely
+  outside it.
+
+  Splitting lets the template hold the match at `shrink-0 whitespace-nowrap`
+  and let the two context runs yield around it, so the match survives at every
+  width by construction — no breakpoint to tune and no viewport for the server
+  to guess at. The server does not change: `ts_headline` already emits the
+  `<mark>` sentinels and `Platform.Chat.ellipsised_headline/2` already recovers
+  the source text by stripping them, so the match is ALREADY separable on the
+  string that reaches the template.
+
+  ## Only the FIRST mark is protected
+
+  `MaxFragments=1` bounds fragments, not marks. `websearch_to_tsquery/2` marks
+  every lexeme of a multi-word query and every occurrence of a repeated term,
+  so one fragment can carry several `<mark>` pairs. Everything after the first
+  `</mark>` stays in the trailing run, marks and all: those marks keep their
+  styling and ride inside the run that truncates. Protecting all of them would
+  make the row's unshrinkable width the sum of every match, which overflows the
+  row and puts the bug back.
+
+  ## Escaping
+
+  Each run goes back through `marked_text/1`, so the escape-then-re-enable path
+  is the same one and only one this module has. Never `raw/1` on any of it: the
+  body is user-written. A user who types a literal `<mark>` into a canvas body
+  can therefore steer where this split lands — exactly as they can already
+  steer `marked_text/1`'s output, which is the same pre-existing property and
+  not a new hole, since both ends escape everything else first.
+  """
+  @spec split_marked_snippet(String.t()) ::
+          {Phoenix.HTML.safe() | nil, Phoenix.HTML.safe() | nil, Phoenix.HTML.safe() | nil}
+  def split_marked_snippet(text) when is_binary(text) do
+    with [leading, rest] <- String.split(text, "<mark>", parts: 2),
+         [match, trailing] <- String.split(rest, "</mark>", parts: 2) do
+      {snippet_run(leading), snippet_run(match), snippet_run(trailing)}
+    else
+      # No mark, or an opening tag with no closing one. Both fall back to the
+      # single-span render rather than inventing a partition.
+      _ -> {nil, nil, nil}
+    end
+  end
+
+  # A run that would render nothing is `nil`, not an empty safe string: the
+  # template keys the three spans off these, and a whitespace-only run would
+  # otherwise contribute a flex gap on each side of nothing.
+  defp snippet_run(text) do
+    if String.trim(text) == "", do: nil, else: marked_text(text)
+  end
+
   # Composer empty-state check for the send button's disabled attribute.
   # The form value can be nil (initial render), a binary, or a Phoenix.HTML.Form.normalize_value-shaped
   # value. Treat whitespace-only as empty so a stray space doesn't enable Send.

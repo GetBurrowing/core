@@ -53,6 +53,9 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
   alias Platform.Repo
 
   @snippet_selector ~s([data-role="canvas-result-snippet"])
+  @leading_selector ~s([data-role="canvas-result-snippet-leading"])
+  @match_selector ~s([data-role="canvas-result-snippet-match"])
+  @trailing_selector ~s([data-role="canvas-result-snippet-trailing"])
   @indexing_selector ~s([data-role="canvas-search-indexing-state"])
   @search_form ~s(form[phx-change="canvas_search"])
 
@@ -173,6 +176,23 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
     |> Enum.to_list()
   end
 
+  # The text of the ONE element matching `selector`, and a failure naming the
+  # count when there is not exactly one. A `.first()` here would silently
+  # measure whichever copy the parser happened to yield, which is the same
+  # ambiguity the browser-geometry helpers raise on.
+  defp one!(html, selector) do
+    case query_all(html, selector) do
+      [element] -> element
+      other -> flunk("expected exactly one #{selector}, got #{length(other)}")
+    end
+  end
+
+  defp text_of(html, selector), do: html |> one!(selector) |> LazyHTML.text()
+
+  defp class_of(html, selector) do
+    html |> one!(selector) |> LazyHTML.attribute("class") |> List.first() || ""
+  end
+
   # ── the search input exists and is wired ──────────────────────────────────
 
   describe "the search input" do
@@ -221,17 +241,118 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
 
       snippet_html = LazyHTML.to_html(snippet)
 
-      assert snippet_html =~ "<mark>zorbling</mark>",
-             "expected the matched term wrapped in <mark>, got: #{snippet_html}"
+      assert snippet_html =~ "<mark data-role=\"canvas-result-snippet-match\"",
+             "expected the matched term in the protected match role, got: #{snippet_html}"
+
+      assert text_of(html, @match_selector) == "zorbling"
 
       # The <mark> is real markup, not escaped text shown to the reader.
       refute snippet_html =~ "&lt;mark&gt;"
+    end
 
-      # One line, truncated — the design's whole argument against a snippet
-      # that grows the row.
-      classes = LazyHTML.attribute(snippet, "class") |> List.first()
-      assert classes =~ "truncate"
-      assert classes =~ "min-w-0"
+    test "partitions the fragment into leading context, the match, and trailing context",
+         %{conn: conn, user: user, space: space, author: author} do
+      # THE RULE THIS REPLACED, and why. Until task 01a077e6 the snippet was
+      # ONE `min-w-0 truncate` element and this test asserted those two classes
+      # on it. That rule is overturned: a single right-truncating string clips
+      # the match off the right edge at 375px (measured: box right edge x=286,
+      # the <mark> at x=317-377, entirely outside), which leaves a phone reader
+      # context without the word they searched for — and the row exists
+      # precisely because the title above it cannot disambiguate.
+      #
+      # The replacement is the brand rule that the last thing allowed to
+      # truncate is the most meaningful: the match is protected at `shrink-0
+      # whitespace-nowrap` and the two context runs yield around it at `min-w-0
+      # truncate`. The one-line guarantee this test carried is still owed and
+      # is still asserted, now across four elements instead of one.
+      #
+      # WHAT THIS CANNOT PROVE, stated because a green run here reads like
+      # proof and is not: `Phoenix.LiveViewTest` does no layout. Every
+      # assertion below would also pass on a build whose CSS never loaded. It
+      # pins which characters land in which span. Whether the match is actually
+      # on screen at 375px is a browser measurement and belongs to stage 2.
+      canvas(
+        space,
+        author,
+        "Quarterly Notes",
+        "the rollout requires zorbling before any customer sees it"
+      )
+
+      view = open_drawer(conn, user, space)
+      html = search(view, "zorbling")
+
+      # The three parts are all present, and each appears exactly once.
+      assert [_] = query_all(html, @leading_selector)
+      assert [_] = query_all(html, @match_selector)
+      assert [_] = query_all(html, @trailing_selector)
+
+      # THE TEXT IS SPLIT AT THE MARK, not duplicated across the runs and not
+      # dropped between them. `ts_headline` picks the window, so the runs are
+      # matched on their ends rather than on a whole string this test would be
+      # re-deriving from the query planner.
+      leading = text_of(html, @leading_selector)
+      trailing = text_of(html, @trailing_selector)
+
+      assert String.ends_with?(leading, "rollout requires ")
+      assert String.starts_with?(trailing, " before any customer sees")
+      refute leading =~ "zorbling"
+      refute trailing =~ "zorbling"
+
+      # The literal "… " that `Chat.ellipsised_headline/2` prepends belongs to
+      # the LEADING run, so under left-side clipping it is the first thing to
+      # scroll away and the CSS ellipsis takes its place. Landing it in the
+      # match instead would make the protected fragment wider than the match.
+      assert String.starts_with?(leading, "… ")
+
+      # STILL ONE LINE, which is what the overturned assertion was protecting.
+      # The container clips, both context runs may shrink and truncate, and the
+      # match may not shrink at all.
+      container = class_of(html, @snippet_selector)
+      assert container =~ "flex"
+      assert container =~ "min-w-0"
+      assert container =~ "overflow-hidden"
+
+      for role <- [@leading_selector, @trailing_selector] do
+        classes = class_of(html, role)
+        assert classes =~ "min-w-0", "#{role} must be allowed to shrink"
+        assert classes =~ "truncate", "#{role} must truncate, not wrap"
+      end
+
+      match_classes = class_of(html, @match_selector)
+      assert match_classes =~ "shrink-0", "the match must not shrink"
+      assert match_classes =~ "whitespace-nowrap", "the match must not wrap"
+      refute match_classes =~ "min-w-0"
+    end
+
+    test "protects only the FIRST mark and leaves later ones in the trailing run",
+         %{conn: conn, user: user, space: space, author: author} do
+      # `MaxFragments=1` bounds fragments, not marks: one fragment can carry
+      # several <mark> pairs. Protecting all of them would make the row's
+      # unshrinkable width the sum of every match and put the overflow back.
+      # This is the case that separates "protect the first" from "protect
+      # every one", and both pass the single-match test above.
+      canvas(
+        space,
+        author,
+        "Repeat Notes",
+        "zorbling early and then zorbling again inside one short line"
+      )
+
+      view = open_drawer(conn, user, space)
+      html = search(view, "zorbling")
+
+      # Exactly one element holds the protected role, whatever the mark count.
+      assert [_] = query_all(html, @match_selector)
+
+      marks = query_all(html, "#{@snippet_selector} mark")
+
+      assert length(marks) >= 2,
+             "fixture no longer produces a multi-mark fragment, so this case " <>
+               "is not exercising the rule it names — got #{length(marks)} mark(s)"
+
+      # The second mark is inside the run that truncates, not a second
+      # protected sibling of the container.
+      assert [_] = query_all(html, "#{@trailing_selector} mark")
     end
   end
 
@@ -266,8 +387,8 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
       assert has_element?(view, ~s([phx-value-canvas-id="#{titled.id}"]))
       assert has_element?(view, ~s([phx-value-canvas-id="#{bodied.id}"]))
 
-      assert [snippet] = query_all(html, @snippet_selector)
-      assert LazyHTML.to_html(snippet) =~ "<mark>wumberton</mark>"
+      assert [_snippet] = query_all(html, @snippet_selector)
+      assert text_of(html, @match_selector) == "wumberton"
     end
   end
 

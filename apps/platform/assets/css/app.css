@@ -7019,33 +7019,83 @@ body, .font-fabrikam {
   display: none;
 }
 
-/* Canvas search snippet — the matched term (task 01a07402 stage 5).
+/* Canvas search snippet — the matched term (task 01a07402 stage 5, restyled
+   and re-derived for both themes by task 01a077e6 stage 1).
 
    `Chat.search_canvases/3` returns a `ts_headline` fragment wrapping the match
    in <mark>. Without a rule here the browser's UA stylesheet renders that as
    black-on-yellow, which is both off-brand and a semantic colour in a row the
    design canvas says carries none.
 
-   The design is a TRANSLUCENT --color-primary WASH behind UNCHANGED
-   body-coloured text, never coloured text: the brand rule is that cyan is
-   never used for text on white. So `background-color` gets the primary tint
-   and `color` is pinned back to `--color-base-content`, which is what <mark>'s
-   UA `color` would otherwise override.
+   THE FILL IS NEUTRAL, NOT CYAN. This replaces the translucent
+   --color-primary 25% wash that shipped in 01a07402. Cyan is the ACTION slot
+   and a match that is merely present is not an action; amber (--color-warning)
+   means a human is being asked for something on these surfaces, so it is out
+   for the same reason. Emphasis is carried by WEIGHT plus a neutral ground
+   instead, which is what the design canvas for 01a077e6 specified.
+
+   WHY --color-base-content AT 20% AND NOT --color-base-300, WHICH THE CANVAS
+   NAMED. base-300 was reasoned in the light theme only. In dark it renders
+   #091821, DARKER than this row's own ground, so it lands at 1.187:1 — a
+   highlight nobody can see, and the same hazard recorded at the --edge
+   declaration above. --color-base-content is one step along the very ladder
+   the snippet box's own `bg-base-content/5` ground already sits on, so the
+   fill moves TOWARD the text colour in both themes: a darker chip in light,
+   a lighter chip in dark. Measured separation against that ground is 1.5980:1
+   light and 1.8189:1 dark, against the outgoing cyan wash's 1.1631:1 and
+   1.7385:1 — better in both, and both clear the separation --edge itself
+   achieves against --color-base-100 (1.4355:1 light, 1.1966:1 dark), which is
+   this file's own shipped answer to "a boundary that reads". Pinned by
+   test/platform/design/canvas_search_snippet_contrast_test.exs.
 
    BOTH THEMES COME FREE, and that is the reason it is written with the tokens
-   rather than with literal oklch values: `--color-primary` and
-   `--color-base-content` are both redefined by the [data-theme=dark] block
-   above, so this single rule resolves to cyan-on-near-white in light and to
-   the dark theme's brighter cyan on near-white text in dark, with no second
-   selector to keep in step. Verified by screenshotting the drawer in both
-   themes, not by assuming.
+   rather than with literal oklch values: `--color-base-content` is redefined
+   by the [data-theme=dark] block above, so this single rule resolves in both
+   with no second selector to keep in step.
+
+   `color` is pinned back to `--color-base-content` because that is what
+   <mark>'s UA rule would otherwise override, and `font-weight` is here rather
+   than on a class because the SECOND and later marks in a fragment are emitted
+   inside the trailing context run by `marked_text/1` and cannot take one. All
+   marks look alike; only the first is protected from truncation, and that is a
+   layout property, not a visual one.
 
    Scoped to the snippet, so the message-search headline (which also emits
    <mark>, via the same `marked_text/1`) is left exactly as it renders today.
    Widening this to a bare `mark` would be a silent restyle of that surface. */
 [data-role="canvas-result-snippet"] mark {
-  background-color: color-mix(in oklch, var(--color-primary) 25%, transparent);
+  background-color: color-mix(in oklch, var(--color-base-content) 20%, transparent);
   color: var(--color-base-content);
+  font-weight: 600;
   border-radius: 0.1875rem;
   padding-inline: 0.125em;
+}
+
+/* The leading context run clips from the LEFT (task 01a077e6 stage 1).
+
+   `truncate` clips from the right, which on this run would keep the words
+   FURTHEST from the match and drop the ones next to it — the wrong half of the
+   only text on the row that is doing any work. `direction: rtl` moves both the
+   clip and the ellipsis to the left edge, so the words immediately before the
+   match are the ones that survive and the row shows an ellipsis on BOTH sides.
+   That two-sided ellipsis is the visible signal that the row is anchored on
+   the match rather than on the fragment's start; every other result list in
+   the product truncates from the right because it is showing a title.
+
+   `text-align: left` only matters if the box is ever wider than its content,
+   which flex sizing does not currently allow; it is here so a later `flex-1`
+   on this run cannot silently push the text to the far edge.
+
+   The bidi hazard this pairs with is handled in the markup, not here: the run
+   is wrapped in a `<bdi>` so its own neutral characters — notably the literal
+   "… " that `Chat.ellipsised_headline/2` prepends — resolve inside an LTR
+   isolate instead of being reordered to the run's right end at widths where it
+   does not overflow. Geometry, not this property, is what the browser spec
+   asserts, so a different technique that anchors the run at its end is fine.
+   Known limitation: for genuinely right-to-left body text the clip direction
+   is inverted, which is out of scope here and no worse than the right-clip it
+   replaces. */
+[data-role="canvas-result-snippet-leading"] {
+  direction: rtl;
+  text-align: left;
 }
