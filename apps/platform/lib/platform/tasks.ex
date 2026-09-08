@@ -167,9 +167,9 @@ defmodule Platform.Tasks do
   Creates a project.
 
   Per ADR 0042, every project must belong to an org. When `attrs` does not
-  carry `:org_id` / `"org_id"`, the project is attached to the root Fabrikam org
-  so legacy callers (and tests pre-dating the topology change) continue to
-  work without an explicit assignment.
+  carry `:org_id` / `"org_id"`, the project is attached to the org named by
+  `Platform.Tenancy.root_org_slug/0` so legacy callers (and tests pre-dating
+  the topology change) continue to work without an explicit assignment.
 
   On successful insert broadcasts `{:project_created, project}` on
   `projects_lifecycle_topic/0` so long-lived subscribers can attach to the
@@ -200,7 +200,7 @@ defmodule Platform.Tasks do
         attrs
 
       is_map(attrs) and not is_struct(attrs) ->
-        case Platform.Tenancy.get_org_by_slug("fabrikam") do
+        case Platform.Tenancy.get_org_by_slug(Platform.Tenancy.root_org_slug()) do
           %Platform.Tenancy.Org{id: id} -> Map.put(attrs, :org_id, id)
           nil -> attrs
         end

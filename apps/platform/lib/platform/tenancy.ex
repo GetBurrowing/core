@@ -43,13 +43,25 @@ defmodule Platform.Tenancy do
   UPDATE so new Fabrikam hires auto-inherit `:admin` without re-running the
   migration.
 
-  > WARNING: the rule is locked to the literal `@example.com` suffix.
-  > Future Fabrikam alias domains (e.g. `example.com`, `kobo-ai.co`) need explicit
-  > additions to `derive_role_from_email/1` AND the matching SQL in
+  The domain is configuration, not a literal (task 01a081c2 stage 2).
+  `config :platform, :admin_email_domain` plus `derive_role_from_email/1`
+  are together the SINGLE SOURCE OF TRUTH for the rule; read the key via
+  `admin_email_domain/0` and never re-hardcode a domain here. Setting
+  `ADMIN_EMAIL_DOMAIN=""` on an install disables auto-admin outright.
+
+  > NOTHING IS LEFT IN LOCKSTEP WITH THE MIGRATION. The SQL in
   > `priv/repo/migrations/20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`
-  > — keep the two in sync. Contractors temporarily on `@example.com`
-  > should be denylisted via the `roles_locked_at` column (Stage 3 of
-  > this task).
+  > is frozen Fabrikam-specific history: a one-time backfill that has already
+  > run everywhere, recorded in `schema_migrations` by version number only,
+  > never by content. Do NOT "fix" it to match this function. Editing its
+  > body changes what a future fresh `mix ecto.migrate` runs while leaving
+  > the recorded history untouched, and on a fresh database it matches zero
+  > rows anyway because it runs before any user exists. Reading application
+  > config from a migration would bake one install's configuration into
+  > another install's schema history.
+
+  Contractors temporarily on an admin-domain address should be denylisted
+  via the `roles_locked_at` column (Stage 3 of this task).
 
   ## Manual-override overlay (Stage 3)
 
@@ -137,6 +149,25 @@ defmodule Platform.Tenancy do
         |> Map.new(&{&1.id, &1})
     end
   end
+
+  @doc """
+  The slug of this install's root org — the org a write lands in when the
+  caller named none.
+
+  Defaults to `"fabrikam"`. `config/runtime.exs` overrides it from `ROOT_ORG_SLUG`
+  for an install whose root org carries a different slug (a renamed org made
+  every `get_org_by_slug("fabrikam")` return nil there, so org_id-less wiki pages
+  and projects landed unowned and a first-time OIDC login could not create a
+  user at all).
+
+  Read at RUNTIME via `Application.get_env/3`, never `compile_env/3`: the
+  released image auto-updates from `:latest` and would otherwise ship whatever
+  config.exs held at build time, and tests could not override the key per case.
+  The read is an ETS lookup, which is why calling it from a changeset or a
+  render path costs nothing measurable.
+  """
+  @spec root_org_slug() :: String.t()
+  def root_org_slug, do: Application.get_env(:platform, :root_org_slug, "fabrikam")
 
   @doc "Fetch an org by slug. Returns `nil` if not found."
   @spec get_org_by_slug(String.t()) :: Org.t() | nil
@@ -1240,35 +1271,71 @@ defmodule Platform.Tenancy do
 
   # ── Email-domain admin rule (Stage 2 self-healing hook) ──────────────
 
-  # Anchored at the end of string so a literal `@example.com` suffix is
-  # required. Matches the migration's SQL `LIKE '%@example.com'` semantic:
-  # `example.com@example.com` → :member (suffix is `@gmail.com`)
-  # `alice@us.example.com` → :member (subdomain in middle, not suffix)
-  # `Alice@example.com` → :admin (downcase normalizes the host)
-  @fabrikam_email_suffix_regex ~r/@example\.com$/
+  @doc """
+  The email domain whose addresses are auto-promoted to admin on the root
+  org, or `nil` when auto-admin is switched off.
+
+  Defaults to `"example.com"` from `config/config.exs`. `config/runtime.exs`
+  overrides it from `ADMIN_EMAIL_DOMAIN` per install, and a BLANK value there
+  is honoured rather than skipped: `ADMIN_EMAIL_DOMAIN=""` means nobody is
+  auto-admined. This function collapses unset and blank to the same `nil` so
+  callers have one case to handle.
+
+  Until task 01a081c2 the domain was a literal compiled into this module, so
+  a Fabrikam email address was automatically an admin on any other install of
+  Suite. Renaming an install's org did not touch that.
+
+  Read at RUNTIME via `Application.get_env/3`, never `compile_env/3`: the
+  released image auto-updates from `:latest` and would otherwise ship whatever
+  config.exs held at build time, and tests could not override the key per case.
+  """
+  @spec admin_email_domain() :: String.t() | nil
+  def admin_email_domain do
+    case Application.get_env(:platform, :admin_email_domain) do
+      domain when is_binary(domain) ->
+        case String.trim(domain) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
 
   @doc """
   Single source of truth for the email-domain admin rule.
 
-  Returns `:admin` when `String.downcase(email)` ends in `@example.com`,
+  Returns `:admin` when `email`'s host equals `admin_email_domain/0`,
+  compared case-insensitively on the whole `"@" <> domain` suffix.
   `:member` otherwise. Nil, empty, and non-binary input return `:member`.
 
-  Mirrors the SQL anchor `LIKE '%@example.com'` used by the Stage 1
-  backfill migration (`20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`).
-  Keep this function and the migration's WHERE clause in lockstep —
-  see the WARNING in the module `@moduledoc`.
+  **When no domain is configured, EVERY input returns `:member`.** Unset or
+  blank means nobody is auto-admined, never everybody and never a Fabrikam
+  fallback. The failure this guards is a config-less install silently
+  promoting every user who logs in.
+
+  `String.ends_with?/2` on `"@" <> domain`, not a runtime-built regex: a
+  regex would recompile on every call, and a metacharacter in a config value
+  would change the match semantics. The string comparison is exactly the old
+  anchored regex on the cases that matter: the suffix must start at an `@`,
+  so a subdomain in the middle and a domain in the local part both miss.
 
   ## Examples
 
+      # With :admin_email_domain set to "example.com"
       iex> Platform.Tenancy.derive_role_from_email("alice@example.com")
       :admin
 
+      # Host comparison is case-insensitive
       iex> Platform.Tenancy.derive_role_from_email("ALICE@example.com")
       :admin
 
+      # A subdomain is not the configured domain
       iex> Platform.Tenancy.derive_role_from_email("alice@us.example.com")
       :member
 
+      # The domain in the local part is not the host
       iex> Platform.Tenancy.derive_role_from_email("example.com@example.com")
       :member
 
@@ -1277,9 +1344,15 @@ defmodule Platform.Tenancy do
   """
   @spec derive_role_from_email(any()) :: :admin | :member
   def derive_role_from_email(email) when is_binary(email) and email != "" do
-    if Regex.match?(@fabrikam_email_suffix_regex, String.downcase(email)),
-      do: :admin,
-      else: :member
+    case admin_email_domain() do
+      nil ->
+        :member
+
+      domain ->
+        if String.ends_with?(String.downcase(email), "@" <> String.downcase(domain)),
+          do: :admin,
+          else: :member
+    end
   end
 
   def derive_role_from_email(_), do: :member
@@ -1353,7 +1426,7 @@ defmodule Platform.Tenancy do
   @doc """
   Lock-aware caller used by `Platform.Accounts.find_or_create_from_oidc/1`.
 
-  If a membership row exists for `{user, :fabrikam}` AND its `roles_locked_at`
+  If a membership row exists for `{user, root_org_slug()}` AND its `roles_locked_at`
   is non-nil, this is a no-op and returns `{:ok, existing}` — the manual
   grant wins. Otherwise the email-domain rule is evaluated and the row is
   upserted via `set_membership_role/3`.
@@ -1367,7 +1440,7 @@ defmodule Platform.Tenancy do
           | {:error, :org_not_found}
           | {:error, Ecto.Changeset.t()}
   def apply_derived_role(%{id: user_id, email: email} = user) when is_binary(user_id) do
-    slug_str = normalize_slug(:fabrikam)
+    slug_str = normalize_slug(root_org_slug())
 
     case get_org_by_slug(slug_str) do
       nil ->
@@ -1381,7 +1454,7 @@ defmodule Platform.Tenancy do
 
           _ ->
             role = derive_role_from_email(email)
-            set_membership_role(user, :fabrikam, role)
+            set_membership_role(user, slug_str, role)
         end
     end
   end
@@ -1403,7 +1476,7 @@ defmodule Platform.Tenancy do
 
   ## Options
 
-    * `:org_slug` — defaults to `"fabrikam"`.
+    * `:org_slug` — defaults to `Platform.Tenancy.root_org_slug/0`.
     * `:actor_id` — UUID of the user/agent making the change. Defaults to
       `nil` and `actor_type` defaults to `"system"`.
     * `:actor_type` — one of `Platform.Audit.Event.actor_types/0`. Defaults
@@ -1462,7 +1535,7 @@ defmodule Platform.Tenancy do
   # another field of the struct. Dropped rather than underscore-prefixed.
   defp set_managed_role(%{id: user_id}, target_role, opts)
        when is_binary(user_id) and target_role in [:admin, :member] do
-    slug_str = opts |> Keyword.get(:org_slug, "fabrikam") |> normalize_slug()
+    slug_str = opts |> Keyword.get(:org_slug, root_org_slug()) |> normalize_slug()
     role_str = Atom.to_string(target_role)
     now = DateTime.utc_now()
 

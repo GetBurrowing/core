@@ -354,7 +354,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
   defp default_project_form_attrs(_), do: fabrikam_default_attrs()
 
   defp fabrikam_default_attrs do
-    case Tenancy.get_org_by_slug("fabrikam") do
+    case Tenancy.get_org_by_slug(Tenancy.root_org_slug()) do
       %Tenancy.Org{id: id} -> %{"org_id" => id}
       _ -> %{}
     end
@@ -502,7 +502,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                 # other than here. Kebab and reveal each claim a slot; the row
                 # reserves exactly as many as it renders.
                 summary_pad(
-                  @fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"],
+                  @fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"],
                   @mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)
                 )
               ]
@@ -527,7 +527,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               type="button"
               class={[
                 "channel-section-reveal-button absolute top-1.5",
-                if(@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"],
+                if(@fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"],
                   do: "right-8",
                   else: "right-1"
                 )
@@ -549,7 +549,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                  NO phx-target, so their events reach the parent LiveView, which
                  still owns them and the directory maps they refresh. --%>
             <.lifecycle_menu
-              :if={@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"]}
+              :if={@fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"]}
               key={"org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
               open={@lifecycle_menu_key == "org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
               type="org"
@@ -679,7 +679,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
             <summary class={[
               "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 cursor-pointer select-none",
               summary_pad(
-                @fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"],
+                @fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"],
                 @mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)
               )
             ]}>
@@ -698,7 +698,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               type="button"
               class={[
                 "channel-section-reveal-button absolute top-1.5",
-                if(@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"],
+                if(@fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"],
                   do: "right-8",
                   else: "right-1"
                 )
@@ -717,7 +717,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                  Positioned sibling of <summary> so a tap opens the menu without
                  toggling the native <details>. Root org (Fabrikam) is never offered. --%>
             <.lifecycle_menu
-              :if={@fabrikam_admin and org_slug not in ["fabrikam", "_unassigned"]}
+              :if={@fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"]}
               key={"mobile-org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
               open={
                 @lifecycle_menu_key ==

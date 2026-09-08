@@ -55,11 +55,12 @@ defmodule Platform.Org.Seeds do
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     # ADR 0042: org_id is required on org_wiki_pages. Default seeds attach
-    # to the root Fabrikam org. If the seed migration hasn't run yet (e.g. a
-    # very early boot), skip silently rather than crash — `seed_defaults`
-    # is idempotent and will run again later.
+    # to the install's root org (`Platform.Tenancy.root_org_slug/0`). If the
+    # seed migration hasn't run yet (e.g. a very early boot), skip silently
+    # rather than crash — `seed_defaults` is idempotent and will run again
+    # later.
     org_id =
-      case Platform.Tenancy.get_org_by_slug("fabrikam") do
+      case Platform.Tenancy.get_org_by_slug(Platform.Tenancy.root_org_slug()) do
         %Platform.Tenancy.Org{id: id} -> id
         nil -> nil
       end

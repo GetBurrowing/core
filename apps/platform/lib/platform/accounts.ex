@@ -192,8 +192,10 @@ defmodule Platform.Accounts do
 
     * **INSERT**: every new user gets an `org_memberships` row in Fabrikam
       with role derived from `Platform.Tenancy.derive_role_from_email/1`
-      (`:admin` for `@example.com`, `:member` otherwise). No lock exists
-      yet for a fresh user, so the rule always applies on first INSERT.
+      (`:admin` for the configured `:admin_email_domain`, `:member`
+      otherwise, and `:member` for everyone when no domain is set).
+      No lock exists yet for a fresh user, so the rule always applies
+      on first INSERT.
     * **UPDATE with email change**: if the email changes AND the new
       email derives `:admin`, promote the user in Fabrikam — UNLESS the
       Fabrikam membership row has `roles_locked_at` set, in which case the

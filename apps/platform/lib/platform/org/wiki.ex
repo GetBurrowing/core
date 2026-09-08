@@ -301,18 +301,19 @@ defmodule Platform.Org.Wiki do
   Until this change, `upsert_page/3` read only `:content` and
   `:updated_by` out of `attrs`. Every other column — including the
   ADR-0042 tenancy pair — was unreachable through this function, so a
-  page written at `project/<uuid>/page/…` landed as a **root-Fabrikam row
+  page written at `project/<uuid>/page/…` landed as a **root-org row
   with a nil `project_id`**: `WikiPage.changeset/2`'s
-  `maybe_default_org_id/1` fills a nil `org_id` with the `"fabrikam"` org
-  by design, as a legacy-caller accommodation. The path said one
-  tenant, the row said another, and because `update_changeset/2` cast
-  neither column, no later write through this path could repair it.
+  `maybe_default_org_id/1` fills a nil `org_id` with the org named by
+  `Platform.Tenancy.root_org_slug/0` by design, as a legacy-caller
+  accommodation. The path said one tenant, the row said another, and
+  because `update_changeset/2` cast neither column, no later write
+  through this path could repair it.
 
   Both keys are now read from `attrs` and forwarded to the changeset —
   on insert AND on update, so an existing mis-tenanted row is
   repairable by rewriting it with the right pair. Only keys the caller
   actually supplies are forwarded: omit them and behaviour is
-  byte-identical to before, Fabrikam default included. Nothing here
+  byte-identical to before, root-org default included. Nothing here
   *requires* them, because most callers legitimately write org-level
   pages; the requirement belongs to whoever owns a tenant-scoped path.
   `Platform.Files.Cataloger` is the reference caller.

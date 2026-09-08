@@ -146,19 +146,31 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   #   * `pages_updated_since_query/2` — private extraction of the shared
   #     body of the two accessors, so the clock/ordering/workspace
   #     scoping cannot differ between the two halves of the partition.
-  @wiki_ex_sha256_2026_08_15 "c7dab7d6cb02a072b133cba17212d523e0af880a91b49fcbe3efe1823aab34b4"
+  #
+  # Re-pinned 2026-09-08 (task 01a081c2 stage 1): DOC COMMENT ONLY. The
+  # module's `@moduledoc` described `maybe_default_org_id/1` as filling a
+  # nil `org_id` with the `"fabrikam"` org; that slug is now
+  # `Platform.Tenancy.root_org_slug/0`, so the sentence named a literal the
+  # code no longer contains. Two phrases changed ("root-Fabrikam row" → "root-org
+  # row", "Fabrikam default included" → "root-org default included") plus the
+  # accessor's name. No function, arity, clause, query or return value in
+  # this file moved — `git diff` on the file is the moduledoc and nothing
+  # else. The pin is re-taken rather than the sentence left stale because a
+  # comment that names a deleted literal is the drift this guard exists to
+  # stop, one level up.
+  @wiki_ex_sha256_2026_09_08 "d1029e4a09c77539b1cedbf6c8d354130032389477616c98d510b5d335118f65"
 
-  test "wiki.ex matches the 2026-08-15 authorized domain surface (sha256 pin)" do
+  test "wiki.ex matches the 2026-09-08 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"
     contents = File.read!(Path.join(app_root(), rel_path))
     hash = :crypto.hash(:sha256, contents) |> Base.encode16(case: :lower)
 
-    assert hash == @wiki_ex_sha256_2026_08_15,
+    assert hash == @wiki_ex_sha256_2026_09_08,
            """
-           Scope-creep detected: #{rel_path} drifted from the 2026-08-15
-           authorized content (task 01a0008c stage 4 — the pages/files
-           corpus partition).
-           Expected sha256: #{@wiki_ex_sha256_2026_08_15}
+           Scope-creep detected: #{rel_path} drifted from the 2026-09-08
+           authorized content (task 01a081c2 stage 1 — the root-org slug
+           accessor; the 2026-08-15 pin covered the pages/files partition).
+           Expected sha256: #{@wiki_ex_sha256_2026_09_08}
            Got sha256:      #{hash}
            Domain changes to Platform.Org.Wiki require explicit authorization
            — re-pin this constant in the same commit as the authorized change.

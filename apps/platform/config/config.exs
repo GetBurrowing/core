@@ -394,6 +394,31 @@ config :platform, :oidc,
 # 1-3 has to be touched, which is why enforcement is a flag at all.
 config :platform, :host_surface_enforcement, :on
 
+# Root org slug (task 01a081c2 stage 1). Every code path that needs "the
+# org a write lands in when the caller named none" resolves this slug through
+# `Platform.Tenancy.root_org_slug/0`. Fabrikam's own install keeps "fabrikam", so this
+# default preserves current behaviour everywhere.
+#
+# A separate install (suite.example.com) runs its own database whose
+# single org was renamed to "milhouse" on 2026-09-03. There every
+# `get_org_by_slug("fabrikam")` returned nil, so org_id-less wiki pages and
+# projects landed unowned and a first-time OIDC login could not create a user
+# at all. runtime.exs threads the per-install value via ROOT_ORG_SLUG.
+config :platform, :root_org_slug, "fabrikam"
+
+# Auto-admin email domain (task 01a081c2 stage 2). `derive_role_from_email/1`
+# reads this through `Platform.Tenancy.admin_email_domain/0` on every user
+# INSERT and every email-change UPDATE. An address whose host equals this
+# domain is auto-promoted to admin on the root org. Fabrikam's own install keeps
+# "example.com", so this default preserves current behaviour.
+#
+# Until now the domain was the literal regex `~r/@example\.com$/` compiled into
+# tenancy.ex, which made a Fabrikam email address an automatic admin on somebody
+# else's Suite. runtime.exs threads the per-install value via ADMIN_EMAIL_DOMAIN,
+# and a BLANK value there disables auto-admin entirely. See the accessor's
+# @doc for why blank must not fall back to this default.
+config :platform, :admin_email_domain, "example.com"
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

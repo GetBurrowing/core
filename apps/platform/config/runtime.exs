@@ -37,6 +37,43 @@ case System.get_env("SESSION_COOKIE_DOMAIN") do
     :ok
 end
 
+# ── Root org slug (per-install root/default org) ──────────────────────────────
+# `Platform.Tenancy.root_org_slug/0` reads this key at runtime. config.exs
+# defaults it to "fabrikam"; an install whose root org carries a different slug
+# sets ROOT_ORG_SLUG so org_id-less writes, the derived-role hook, and the
+# admin promote/revoke helpers all resolve the org that actually exists there.
+#
+# Written only when the var is present and non-blank, so dev, test and CI keep
+# the config.exs default and per-test `Application.put_env/3` overrides are the
+# only thing that moves it.
+case System.get_env("ROOT_ORG_SLUG") do
+  slug when is_binary(slug) and slug != "" ->
+    config :platform, :root_org_slug, slug
+
+  _ ->
+    :ok
+end
+
+# ── Auto-admin email domain (per-install) ────────────────────────────────────
+# `Platform.Tenancy.admin_email_domain/0` reads this key at runtime and
+# `derive_role_from_email/1` uses it on every user INSERT and every
+# email-change UPDATE. config.exs defaults it to "example.com".
+#
+# The branch shape here deliberately differs from SESSION_COOKIE_DOMAIN and
+# ROOT_ORG_SLUG above, which both skip a blank value. Here a blank value is
+# MEANINGFUL: ADMIN_EMAIL_DOMAIN="" disables auto-admin entirely, and must NOT
+# fall back to the config.exs default. An install that does not want Fabrikam
+# addresses auto-promoted on its database has to be able to say so by setting
+# the var empty, without inventing a sentinel string.
+#
+# Unset (nil) still means "keep the config.exs default", so dev, test and CI
+# are unchanged and per-test `Application.put_env/3` overrides remain the only
+# thing that moves the key there.
+case System.get_env("ADMIN_EMAIL_DOMAIN") do
+  nil -> :ok
+  domain -> config :platform, :admin_email_domain, String.trim(domain)
+end
+
 # ── ADR corpus location (release images have no `docs/decisions/`) ────────────
 # ContextProviders.adr_dir/0 resolves by walking ancestors for a literal
 # `docs/decisions` directory. A release image has no such ancestor, so the
