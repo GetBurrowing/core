@@ -582,15 +582,85 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       refute html =~ "meeting_toggle_screen_share"
     end
 
+    # THE VISIBLE LABEL IS READ OUT OF THE SPAN, NEVER OFF THE PAGE.
+    #
+    # `assert off =~ "Unmute"` is a substring over the whole render and
+    # `aria-label="Unmute microphone"` satisfies it, so the assertion
+    # that shipped could not tell the visible word from the accessible
+    # name and would have gone green on a change that deleted the
+    # thing it exists to protect. Since task 01a0773e it cannot tell
+    # them from the HIDDEN word either: both words are now in the
+    # markup at all times, the inactive one held there by
+    # `visibility: hidden` so the control reserves its widest label
+    # and stops changing width when pressed.
+    #
+    # `[data-shown="true"]` is the only reading that distinguishes all
+    # three. It resolves to nothing, and fails, if the label span goes
+    # away.
+    defp shown_label(html, role),
+      do: label_word(html, role, "true")
+
+    # The reserved word: present, laid out, not shown. Asserted
+    # explicitly because it is the whole fix — a render carrying only
+    # the current word looks correct in a snapshot and moves the row.
+    defp reserved_label(html, role),
+      do: label_word(html, role, "false")
+
+    defp label_word(html, role, shown) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-role="#{role}"] .call-control-label [data-shown="#{shown}"]))
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
     test "the mic button says what the click will DO, not what is true now" do
       on = controls(mic_on: true)
       off = controls(mic_on: false)
 
-      assert on =~ "Mute"
+      assert shown_label(on, "call-control-mic") == "Mute"
+      assert shown_label(off, "call-control-mic") == "Unmute"
+
       assert on =~ ~s(size-4 hero-microphone")
       refute on =~ "hero-microphone-slash"
-      assert off =~ "Unmute"
       assert off =~ "hero-microphone-slash"
+    end
+
+    # Each control reserves its OWN widest word, so the row does not
+    # reflow when one is pressed. Both pairs are asserted because they
+    # have DIFFERENT wider words — "Unmute" for mic, "Stop sharing" for
+    # share — which is exactly why a single tuned `min-width` cannot
+    # fix this row and why a mic-only test would go green on a fix
+    # that leaves share broken.
+    test "a toggling control carries both of its words in every state" do
+      for {role, on_key, when_on, when_off} <- [
+            {"call-control-mic", :mic_on, "Mute", "Unmute"},
+            {"call-control-share", :sharing, "Stop sharing", "Share"}
+          ] do
+        on = controls([{on_key, true}])
+        off = controls([{on_key, false}])
+
+        assert shown_label(on, role) == when_on
+        assert reserved_label(on, role) == when_off
+        assert shown_label(off, role) == when_off
+        assert reserved_label(off, role) == when_on
+      end
+    end
+
+    # The class the narrow-bar container query keys on stays ONE PER
+    # CONTROL. The words are nested inside it, not siblings of it: a
+    # second span carrying `.call-control-label` per control would take
+    # the quickmeet bar's count from four to six and break
+    # `partials_meeting_panel_test.exs`, which asserts that number
+    # because a drifting class silently stops the CSS applying and
+    # re-clips Leave.
+    test "four labels on the row, whatever state the toggles are in" do
+      for opts <- [
+            [mic_on: true, sharing: false],
+            [mic_on: false, sharing: true]
+          ] do
+        assert count(controls(opts), ".call-control-label") == 4
+      end
     end
 
     test "Leave carries the error slot, and nothing else does" do
@@ -601,13 +671,17 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       refute html =~ "hero-x-mark"
     end
 
+    # Same correction as the mic test above: `assert live =~ "Stop
+    # sharing"` was satisfied by `aria-label="Stop sharing your
+    # screen"` in EVERY state, including the idle one, so it was
+    # asserting nothing about what the button says.
     test "share reflects whether a share is already running" do
       idle = controls(sharing: false)
       live = controls(sharing: true)
 
-      assert idle =~ "Share"
+      assert shown_label(idle, "call-control-share") == "Share"
+      assert shown_label(live, "call-control-share") == "Stop sharing"
       assert idle =~ ~s(data-on="false")
-      assert live =~ "Stop sharing"
     end
   end
 

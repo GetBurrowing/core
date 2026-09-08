@@ -563,6 +563,18 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   is untouched, so the accessible name and every `data-role` selector
   survive the degradation.
 
+  A CONTROL'S WIDTH DOES NOT DEPEND ON ITS OWN STATE (task 01a0773e /
+  FE-20). Mic and share change their label word when pressed, and this
+  row is `justify-center` inside a box that does not resize, so a
+  widening label used to push every sibling outward by HALF the
+  widening: +15.7969px on "Mute" -> "Unmute" moved the other three
+  controls 7.8906px, and +38.9531px on "Share" -> "Stop sharing" moved
+  them 19.4844px. Both toggling labels now reserve their widest word
+  via `toggling_label/1` below, so every rect on this row is fixed
+  across every state. If you add a fifth control whose label changes,
+  give it `toggling_label/1` too; a plain `.call-control-label` with an
+  `if` in it reintroduces the defect.
+
   Every event name is a REQUIRED attr. The two surfaces genuinely
   disagree on the vocabulary (see the moduledoc), and a component that
   picked one of them would be a component only one surface could use.
@@ -660,7 +672,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
           aria-hidden="true"
         >
         </span>
-        <span class="call-control-label">{if @mic_on, do: "Mute", else: "Unmute"}</span>
+        <.toggling_label on={@mic_on} when_on="Mute" when_off="Unmute" />
       </button>
 
       <button
@@ -694,7 +706,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
       >
         <span class="hero-arrow-up-tray size-4" aria-hidden="true"></span>
-        <span class="call-control-label">{if @sharing, do: "Stop sharing", else: "Share"}</span>
+        <.toggling_label on={@sharing} when_on="Stop sharing" when_off="Share" />
       </button>
 
       {render_slot(@before_leave)}
@@ -711,6 +723,49 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         <span class="call-control-label">Leave</span>
       </button>
     </div>
+    """
+  end
+
+  attr(:on, :boolean, required: true)
+  attr(:when_on, :string, required: true)
+  attr(:when_off, :string, required: true)
+
+  @doc false
+  # A label whose WORD changes with state, rendered so its WIDTH does
+  # not (task 01a0773e / FE-20).
+  #
+  # Both words are always in the box, stacked in one grid cell, with
+  # the inactive one held by `visibility: hidden` — hidden boxes still
+  # take part in layout, so the label sizes to the wider of the two in
+  # BOTH states. See `app.css`, which owns the stacking.
+  #
+  # WHY THIS AND NOT A `min-width`. `.call-control-label` is shared by
+  # all four controls and each toggling pair has a different wider
+  # word: "Unmute" for mic, "Stop sharing" for share, measured at
+  # 44.4219px and 71.5313px. One constant cannot be right for both,
+  # and picking either is wrong SILENTLY — the row stops moving on
+  # mute and keeps moving on share. There is no number in this
+  # mechanism, so it stays correct when a label is reworded.
+  #
+  # WHY NOT A ROW-LAYOUT FIX (fixed grid tracks, or dropping
+  # `justify-center`). That stops the SIBLINGS moving, which is the
+  # 7.8906px in the bug report, but the pressed control still changes
+  # width inside its own track, so its glyph still slides out from
+  # under the finger that pressed it. Mute is the button people press
+  # twice in a row. It would also break the two quickmeet assertions
+  # that this bar keeps `justify-center`.
+  #
+  # ONE `.call-control-label` PER CONTROL, words nested inside it.
+  # `partials_meeting_panel_test.exs` asserts the quickmeet bar
+  # contains exactly four of them, because that class is what the
+  # narrow-bar container query keys on; a second span carrying it per
+  # control would read as six controls' worth of labels.
+  defp toggling_label(assigns) do
+    ~H"""
+    <span class="call-control-label">
+      <span class="call-control-label-word" data-shown={to_string(@on)}>{@when_on}</span>
+      <span class="call-control-label-word" data-shown={to_string(!@on)}>{@when_off}</span>
+    </span>
     """
   end
 

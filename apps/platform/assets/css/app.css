@@ -2400,6 +2400,54 @@ body, .font-fabrikam {
   container-type: inline-size;
 }
 
+/* Task 01a0773e (FE-20). A CONTROL'S WIDTH MUST NOT DEPEND ON ITS OWN
+   STATE.
+
+   Mic and share change their label word when pressed. This row is
+   `justify-center` inside a box that does not resize, so a label that
+   grows pushes every sibling outward by HALF the growth. Measured on
+   `main` at 1440x900, identical in dark and light: "Mute" 28.6250px ->
+   "Unmute" 44.4219px is +15.7969px and moved the other three controls
+   7.8906px; "Share" 32.5781px -> "Stop sharing" 71.5313px is
+   +38.9531px and moved them 19.4844px. The pressed control also
+   widens under its own cursor, which is the part a row-layout fix
+   would leave in place -- and mute is the button people press twice
+   in quick succession.
+
+   THE MECHANISM: a toggling label renders BOTH of its words, stacked
+   in the same grid cell, with the inactive one `visibility: hidden`.
+   A hidden box still takes part in layout, so the label sizes to the
+   WIDER word in both states and the swing goes to zero.
+
+   NOT a `min-width`. `.call-control-label` is shared by all four
+   controls and each pair has a different wider word, so one constant
+   cannot be right for both -- and the wrong one fails SILENTLY, with
+   the row settling on mute and still moving on share. Nothing here is
+   a tuned number, so it survives a reworded label.
+
+   NOT `opacity: 0` or a transparent colour: those reserve the box but
+   leave the text in the accessibility tree, and every control would
+   then expose both of its words.
+
+   The container-query collapse BELOW still governs on narrow bars: it
+   pins the whole label to a 1px box with `overflow: hidden`, which
+   clips the stacked words along with it. That rule sets no `display`,
+   so nothing here contends with it. */
+[data-component="call-controls"] .call-control-label {
+  display: inline-grid;
+  align-items: center;
+  justify-items: center;
+}
+
+[data-component="call-controls"] .call-control-label-word {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+
+[data-component="call-controls"] .call-control-label-word[data-shown="false"] {
+  visibility: hidden;
+}
+
 @container (max-width: 389px) {
   [data-component="call-controls"] .call-control-label {
     position: absolute;
