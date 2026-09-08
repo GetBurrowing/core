@@ -57,19 +57,36 @@ defmodule Platform.Orchestration.ExecutionSpace do
         {:ok, space}
 
       nil ->
-        # Take 12 hex chars of the task UUID (dashes stripped) so the slug is
-        # unique enough to survive two backlog tasks pinned into the same
-        # project inside one second. Pre-fix rows used `slice(task_id, 0, 8)`
-        # (32 timestamp bits ≈ 1s precision) which was safe when every exec
-        # space carried `org_id = NULL` (no `chat_spaces_unique_org_slug` to
-        # trip). Post-fix rows carry the project's `org_id`, so same-org same
-        # slug collides. 12 hex chars gets us the full 48-bit ms timestamp
-        # so collisions require sub-ms creation in the same project — well
-        # outside anything the sponsor UI can produce. Existing rows keep
-        # their 8-char slugs; lookups go through `metadata->>'task_id'`, so
-        # no data migration needed.
-        short_id = task_id |> String.replace("-", "") |> String.slice(0, 12)
-        name = "task-exec-#{short_id}"
+        # The slug is a BIJECTION of the task id: the whole UUID, dashes
+        # stripped, all 32 hex characters. Two distinct tasks cannot produce
+        # one slug, because the task primary key already guarantees they
+        # cannot produce one id.
+        #
+        # That property is load-bearing. This row is written against
+        # `chat_spaces_unique_org_slug` (`(org_id, slug)`), and there
+        # is deliberately NO retry here: no rescue of `Ecto.ConstraintError`,
+        # no second slug minted from an `{:error, changeset}`, no
+        # `on_conflict:`. A retry would let the derivation stay deterministic
+        # in a quantity that is not unique, and every later caller would
+        # inherit both. So the derivation has to be collision-free on its own.
+        #
+        # Prior widths were NOT. Rows were minted at 8 hex, then 12; both are
+        # a prefix of a UUIDv7 (`Platform.Tasks.Task` `@primary_key`), whose
+        # leading 48 bits (exactly 12 hex) are the creation millisecond and
+        # nothing else. Any front slice is therefore pure timestamp carrying
+        # zero entropy from the random half, and two tasks created in one org
+        # in the same millisecond collided; widening the slice only takes more
+        # timestamp, so it collides identically.
+        #
+        # Materialisation is lazy (`ChatPins.pin/3`, `TaskRouter`,
+        # `ContextAssembler`, the MCP tool surface), so such a pair stayed
+        # primed until the second one was first opened, possibly days later.
+        #
+        # Existing 8- and 12-character rows keep their slugs and are never
+        # re-minted: `find_or_create/1` resolves through `metadata->>'task_id'`
+        # (see `find_by_task_id/1`), which is also how every other resolver in
+        # the codebase finds an execution space. No backfill is needed.
+        name = "task-exec-#{String.replace(task_id, "-", "")}"
         org_id = resolve_task_org_id(task_id)
 
         if is_nil(org_id) do

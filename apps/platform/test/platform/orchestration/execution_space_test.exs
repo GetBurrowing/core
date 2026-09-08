@@ -9,6 +9,7 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
+  alias Platform.Tasks.Task
 
   @task_id "01234567-89ab-cdef-0123-456789abcdef"
 
@@ -27,13 +28,68 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
     test "creates an execution space for a task" do
       assert {:ok, space} = ExecutionSpace.find_or_create(@task_id)
       assert space.kind == "execution"
-      # 12 hex chars of the UUID (dashes stripped) — see
-      # `execution_space.ex` for the slug-width bump rationale (task
-      # 019f62a1 v4 stage 2). `@task_id` here is
-      # "01234567-89ab-cdef-0123-456789abcdef" so the first 12 hex
-      # chars are "0123456789ab".
-      assert space.name == "task-exec-0123456789ab"
+      # The WHOLE UUID, dashes stripped: all 32 hex characters, so the
+      # slug is a bijection of the task id. See `execution_space.ex` for
+      # why no front slice can be (task 01a07783 stage 1): the leading
+      # 12 hex of a UUIDv7 are the creation millisecond, so a prefix
+      # carries none of the random half. `@task_id` here is
+      # "01234567-89ab-cdef-0123-456789abcdef".
+      assert space.name == "task-exec-0123456789abcdef0123456789abcdef"
+      assert space.slug == space.name
       assert space.metadata["task_id"] == @task_id
+    end
+
+    # The defect the whole-UUID derivation exists to prevent.
+    #
+    # Task ids are UUIDv7 and their leading 48 bits (exactly 12 hex
+    # characters) are the creation millisecond. The old derivation sliced
+    # precisely those 12, so two tasks created in ONE org in the same
+    # millisecond produced the SAME slug and the second was rejected by
+    # `chat_spaces_unique_org_slug`.
+    #
+    # The two ids below are CONSTRUCTED to share that 12-hex prefix. Creating
+    # two tasks back to back would not test this: on the broken build that
+    # passes whenever the scheduler puts a millisecond between the inserts,
+    # which is exactly the flake being fixed.
+    #
+    # A collision comes back as `{:error, %Ecto.Changeset{}}`:
+    # `Chat.Space.changeset/2` declares
+    # `unique_constraint(:slug, name: :chat_spaces_unique_org_slug)`, so the
+    # insert never raises.
+    test "two tasks sharing the UUIDv7 millisecond get distinct slugs in one org" do
+      org_id = fabrikam_org_id()
+
+      {:ok, project} =
+        Tasks.create_project(%{name: "Exec Slug Collision Project", org_id: org_id})
+
+      # Identical leading 12 hex ("0a0a0a0a1b1b"), different remaining 20.
+      id_a = "0a0a0a0a-1b1b-7000-8000-00000000000a"
+      id_b = "0a0a0a0a-1b1b-7000-8000-00000000000b"
+      hex_a = String.replace(id_a, "-", "")
+      hex_b = String.replace(id_b, "-", "")
+
+      # Guard the fixture itself: if these ever stop sharing the millisecond
+      # prefix, the test below stops discriminating and would go green on the
+      # broken derivation.
+      assert String.slice(hex_a, 0, 12) == String.slice(hex_b, 0, 12)
+      refute hex_a == hex_b
+
+      task_a = Repo.insert!(%Task{id: id_a, project_id: project.id, title: "Same ms A"})
+      task_b = Repo.insert!(%Task{id: id_b, project_id: project.id, title: "Same ms B"})
+
+      assert {:ok, space_a} = ExecutionSpace.find_or_create(task_a.id)
+      assert {:ok, space_b} = ExecutionSpace.find_or_create(task_b.id)
+
+      assert space_a.slug == "task-exec-" <> hex_a
+      assert space_b.slug == "task-exec-" <> hex_b
+      assert space_a.slug != space_b.slug
+      assert space_a.id != space_b.id
+
+      # `org_id` is what brings `chat_spaces_unique_org_slug` into play at
+      # all. With `nil` on both rows the index cannot fire and the pair
+      # would prove nothing.
+      assert space_a.org_id == org_id
+      assert space_b.org_id == org_id
     end
 
     test "is idempotent — returns existing space" do
