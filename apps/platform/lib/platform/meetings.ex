@@ -4738,7 +4738,27 @@ defmodule Platform.Meetings do
             do: attrs,
             else: Map.put(attrs, :failure_reason, format_failure_reason(reason))
 
-        case transcript |> Transcript.changeset(attrs) |> Repo.update() do
+        # Release the router claim in the SAME statement that marks the row
+        # failed (task 01a0826f). `claim_router_dispatch/1` is a once-only
+        # claim under `router_dispatched_at IS NULL`, and nothing else ever
+        # cleared it — so a transcript whose dispatch failed stayed claimed
+        # forever and every retry answered `{:error, :already_dispatched}`.
+        # The stall sweep cannot rescue it either: it is hard-filtered to
+        # `status = "processing"` (and its partial index matches), so a
+        # `failed` row is unreachable to it. A sweep is a timeout anyway,
+        # and the failure is already KNOWN at this instant.
+        #
+        # One `Repo.update/1`, not two: there must be no window in which the
+        # row is terminally failed and still holding the claim.
+        #
+        # `put_change/3` rather than an `attrs` key, because `cast/3` on a
+        # nil value is exactly the sort of thing that silently no-ops.
+        changeset =
+          transcript
+          |> Transcript.changeset(attrs)
+          |> Ecto.Changeset.put_change(:router_dispatched_at, nil)
+
+        case Repo.update(changeset) do
           {:ok, failed} ->
             Logger.error(
               "[Meetings] Transcript #{failed.id} marked failed " <>

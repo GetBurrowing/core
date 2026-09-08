@@ -991,8 +991,8 @@ defmodule Platform.Meetings.SummarizerTest do
       # Both halves of the refusal are visible: the handler declined
       # before the round-trip, and the bridge chose NOT to fall back.
       assert log =~ "[meetings.summarize] dispatch for transcript #{transcript.id} was already"
-      assert log =~ "already claimed by the router's meeting:finished path"
-      assert log =~ "NOT falling back to the legacy body"
+      assert log =~ "already holds a router dispatch claim"
+      assert log =~ "NOT running the legacy body"
 
       # The legacy seam is wired and reachable in this test — it simply
       # was not used. Same shape as the ADR-0046 positive control.
@@ -1002,6 +1002,50 @@ defmodule Platform.Meetings.SummarizerTest do
 
       # Not marked failed: this is a healthy dedupe, not an error.
       refute Meetings.get_transcript(transcript.id).status == "failed"
+    end
+
+    test "the skip log states the row's OBSERVED status and claim time, not a live producer" do
+      # Task 01a0826f stage 3. The old message asserted "the other path
+      # is producing the summary" — a claim about a live producer that
+      # this clause never checked (on prod 2026-09-08 the claimed work
+      # had been dead six days and the line still said that). The log
+      # must now report only what it read off the row.
+      _name = start_registry!()
+      _agent = wire_external_scribe!()
+
+      test_pid = self()
+      stub_legacy_llm!(test_pid)
+      stub_external_summary!(test_pid)
+      attach_fired_telemetry!(test_pid)
+
+      transcript = create_transcript!(%{segments: sample_segments()})
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+
+      # Move the row to a status the message could only know by reading
+      # it. `processing` is not the row's default (`recording`), so a
+      # hardcoded or defaulted status cannot satisfy this.
+      row =
+        Meetings.get_transcript(transcript.id)
+        |> Ecto.Changeset.change(%{status: "processing"})
+        |> Repo.update!()
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = Summarizer.run_summary(transcript)
+        end)
+
+      # Not merely "contains status=" — the VALUE must match the row we
+      # set up, and the claim timestamp must be the one actually stored.
+      assert log =~ "status=processing"
+      assert log =~ "claimed_at=#{inspect(row.router_dispatched_at)}"
+
+      # The unchecked assertion is gone in every phrasing it had.
+      refute log =~ "is producing the summary"
+      refute log =~ "producing the summary"
+
+      # Control: behaviour is unchanged — still :ok, still no fallback.
+      refute_receive :legacy_llm_called, 200
+      assert collect(:external_dispatch) == []
     end
 
     test "CONTRAST — an unfilled responsibility STILL runs the legacy body" do

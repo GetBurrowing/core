@@ -2427,4 +2427,113 @@ defmodule Platform.MeetingsTest do
       assert Meetings.meeting_live?("not-a-uuid")
     end
   end
+
+  describe "claim lifecycle across failure (task 01a0826f)" do
+    defp create_claimable_transcript do
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: "space-#{Ecto.UUID.generate()}",
+          status: "processing"
+        })
+
+      transcript
+    end
+
+    test "a transcript that fails releases its claim so a retry can claim again" do
+      transcript = create_claimable_transcript()
+
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+
+      assert {:ok, _failed} =
+               Meetings.fail_transcript(
+                 transcript.id,
+                 nil,
+                 {:llm_failed, %RuntimeError{message: "timeout"}}
+               )
+
+      reloaded = Meetings.get_transcript(transcript.id)
+      assert is_nil(reloaded.router_dispatched_at)
+      assert reloaded.status == "failed"
+      assert reloaded.failure_reason =~ "timeout"
+
+      # The assertion that matters: the retry actually runs.
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+
+      # Releasing the claim did not erase why it failed.
+      retried = Meetings.get_transcript(retried_id = transcript.id)
+      assert retried.id == retried_id
+      assert retried.status == "failed"
+      assert retried.failure_reason =~ "timeout"
+    end
+
+    test "a released claim is still exclusive — only one of two concurrent retries wins" do
+      transcript = create_claimable_transcript()
+
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+
+      assert {:ok, _failed} =
+               Meetings.fail_transcript(
+                 transcript.id,
+                 nil,
+                 {:llm_failed, %RuntimeError{message: "timeout"}}
+               )
+
+      # Releasing the claim re-opens the door ONCE, not for everybody. A
+      # claim predicate that also admitted `status = "failed"` rows would
+      # let both retries through and reinstate the duplicate dispatch the
+      # claim exists to prevent — so the ORDER of these two results is the
+      # assertion, not just their set.
+      results = [
+        Meetings.claim_router_dispatch(transcript.id),
+        Meetings.claim_router_dispatch(transcript.id)
+      ]
+
+      assert results == [{:ok, :claimed}, {:error, :already_dispatched}]
+    end
+
+    test "a failure followed by a successful retry produces exactly one completed summary" do
+      transcript = create_claimable_transcript()
+
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+
+      assert {:ok, _failed} =
+               Meetings.fail_transcript(
+                 transcript.id,
+                 nil,
+                 {:llm_failed, %RuntimeError{message: "timeout"}}
+               )
+
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+
+      assert {:ok, %{status: "complete", summary: "retry summary"}} =
+               Meetings.complete_transcript(transcript.id, "retry summary")
+
+      completed = Meetings.get_transcript(transcript.id)
+      assert completed.status == "complete"
+      assert completed.summary == "retry summary"
+      assert completed.completed_at
+
+      # The retry holds its OWN claim through completion. Only `failed`
+      # releases — a completed row that let go of the claim would invite a
+      # second `complete_transcript/2` write over the summary that already
+      # landed, which is the exact race the claim was introduced to stop.
+      refute is_nil(completed.router_dispatched_at)
+      assert Meetings.claim_router_dispatch(transcript.id) == {:error, :already_dispatched}
+    end
+
+    test "completing a transcript never releases the claim" do
+      transcript = create_claimable_transcript()
+
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(transcript.id)
+      claimed_at = Meetings.get_transcript(transcript.id).router_dispatched_at
+      refute is_nil(claimed_at)
+
+      assert {:ok, _completed} = Meetings.complete_transcript(transcript.id, "a summary")
+
+      # Guards the stage-1 edit against being copy-pasted from
+      # `fail_transcript/3` into `complete_transcript/2`: the claim must be
+      # byte-identical across a completion, not merely still present.
+      assert Meetings.get_transcript(transcript.id).router_dispatched_at == claimed_at
+    end
+  end
 end

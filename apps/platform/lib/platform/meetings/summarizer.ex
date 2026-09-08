@@ -123,10 +123,14 @@ defmodule Platform.Meetings.Summarizer do
   `meeting_transcripts.router_dispatched_at` to the OTHER dispatch path
   for this same meeting end — the `meeting:finished` broadcast, which
   the Router has actually delivered since stage 1 repaired its
-  event_topic adapter. Somebody IS producing the summary, so this
-  clause returns `:ok` and stops. Running the legacy body here would
-  produce the duplicate summary and the duplicate
-  `complete_transcript/2` write that the claim exists to prevent.
+  event_topic adapter. The claim is HELD — that, and only that, is what
+  this clause has observed; it reads no process and does not check that
+  the holder is still alive. So it returns `:ok` and stops. Running the
+  legacy body here would produce the duplicate summary and the duplicate
+  `complete_transcript/2` write that the claim exists to prevent. Since
+  task 01a0826f stage 1 the claim is RELEASED when the row reaches
+  `failed` (`Meetings.fail_transcript/3`), so a holder that dies loudly
+  frees the row rather than latching it forever.
   """
   def run_summary(%{id: id, space_id: space_id, segments: segments} = _transcript) do
     if router_meetings_summarize_filled?() do
@@ -174,22 +178,43 @@ defmodule Platform.Meetings.Summarizer do
         # model round-trip. This shape means the OTHER dispatch path for
         # this same meeting end — the `meeting:finished` broadcast the
         # Router has delivered since stage 1 repaired its event_topic
-        # adapter — got there first and is producing the summary right
-        # now.
+        # adapter — got there first and the claim is HELD.
+        #
+        # "Held" is the whole of what this clause knows. It reads no
+        # process and no liveness; a held claim is not evidence that a
+        # summary is being produced right now. Task 01a0826f stage 1
+        # made `Meetings.fail_transcript/3` clear `router_dispatched_at`,
+        # so a holder that fails loudly releases the row; a holder that
+        # dies silently leaves the claim standing until the sweeper
+        # notices. The log below therefore states the row's observed
+        # status and claim timestamp and nothing else.
         #
         # THIS IS THE OPPOSITE OF THE TWO CLAUSES BELOW. `{:ok, :unfilled}`
-        # and `{:ok, :unknown_responsibility}` mean *nobody* is producing
-        # a summary, so the legacy body is the only thing standing
-        # between us and a silently lost meeting summary (ADR-0046
-        # member 1). A lost claim means *somebody already is*, so running
-        # the legacy body here would produce the second summary and the
+        # and `{:ok, :unknown_responsibility}` mean *nobody* holds the
+        # work, so the legacy body is the only thing standing between us
+        # and a silently lost meeting summary (ADR-0046 member 1). A lost
+        # claim means somebody else already holds it, so running the
+        # legacy body here would produce the second summary and the
         # second `complete_transcript/2` write that the claim exists to
         # prevent. Return `:ok`; do not fall through.
         {:error, {:context_gather_refused, :already_dispatched}} ->
+          # `get_transcript/1` UUID-guards and returns nil rather than
+          # raising (meetings.ex:3922) — same discipline as
+          # `claim_router_dispatch/1` (meetings.ex:4318): this sits on a
+          # dispatch path that must never raise, so a vanished row is
+          # reported as `status=missing`, not thrown.
+          {claim_status, claimed_at} =
+            case Meetings.get_transcript(id) do
+              nil -> {"missing", "unknown"}
+              row -> {row.status, inspect(row.router_dispatched_at)}
+            end
+
           Logger.info(
-            "[Summarizer] transcript #{id} was already claimed by the router's " <>
-              "meeting:finished path — skipping this duplicate dispatch (NOT falling " <>
-              "back to the legacy body: the other path is producing the summary)"
+            "[Summarizer] transcript #{id} already holds a router dispatch claim " <>
+              "(status=#{claim_status} claimed_at=#{claimed_at}) — skipping this " <>
+              "duplicate dispatch and NOT running the legacy body. Liveness of the " <>
+              "claim holder is not checked here; a claim is released when the row " <>
+              "reaches failed (Meetings.fail_transcript/3)."
           )
 
           :ok
