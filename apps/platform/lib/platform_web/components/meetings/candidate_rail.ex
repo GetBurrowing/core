@@ -277,23 +277,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
         </summary>
 
         <div class="mt-2 flex flex-col gap-2">
-          <article
-            :for={candidate <- @closed}
-            class="candidate-card candidate-card--closed"
-            data-role="meeting-candidate-closed-card"
-            data-candidate-id={candidate.id}
-            data-closed-reason={CandidateDisplay.closed_reason_slug(candidate.closed_reason)}
-          >
-            <p
-              class="candidate-card__title candidate-card__title--dead"
-              data-role="meeting-candidate-title"
-            >
-              {candidate.evidence_quote}
-            </p>
-            <p class="candidate-card__reason" data-role="meeting-candidate-closed-reason">
-              {CandidateDisplay.closed_reason_line(candidate.closed_reason, candidate.closed_note)}
-            </p>
-          </article>
+          <.closed_card :for={candidate <- @closed} candidate={candidate} />
         </div>
       </details>
 
@@ -415,6 +399,142 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
       <.review_row :if={review?(@candidate)} candidate={@candidate} />
 
       <.countdown_foot :if={armed?(@candidate)} candidate={@candidate} now={@now} />
+    </article>
+    """
+  end
+
+  # ONE CLOSED ROW, and the only row on this rail that leads anywhere
+  # (task 01a078d0 stage 2).
+  #
+  # ## Why the title is the link and there is no `View` button
+  #
+  # Saru's canvas "Closed candidate row: design direction"
+  # (01a07a60-8cbd) is the design authority, and its ruling is one tap
+  # target per row: the deliverable's name IS the link. A trailing
+  # button would add a second thing to scan per row in a list read at a
+  # glance during a meeting.
+  #
+  # The name is `evidence_quote`, and that is not an approximation of
+  # the real title — `Candidates.deliverable_title/2` derives the minted
+  # title from `truncate(candidate.evidence_quote)`, so on this path the
+  # quote IS the title. Reading the tasks or canvases table per row to
+  # find out would be an N+1 inside a render for a string we already
+  # hold.
+  #
+  # ## Why `Done` is gone from an accepted row
+  #
+  # The outcome treatment REPLACES `closed_reason_line/2` here rather
+  # than appending to it. `Done` spends the most scannable position in
+  # the row on the one fact the reader already has: the row is in the
+  # Closed list, so it is done. Everything else keeps its reason line —
+  # "Already on the backlog — 01a03f57" is the whole value of the Closed
+  # section, and a `:vetoed` or `:dismissed` row is UNCHANGED by this
+  # component.
+  #
+  # ## The three shapes, and why they key on `disposition`
+  #
+  #   * ACCEPTED, deliverable reached — linked title, kind label, bar.
+  #   * ACCEPTED, nothing reached — `Nothing was created`, and
+  #     deliberately no link, no kind label and no bar. This row is
+  #     real: `record_only_close/1` (candidates.ex) writes `:accepted`
+  #     with `queue_status: "completed"` and mints nothing, which is the
+  #     ack arm for an `:artifact` candidate or one that was never
+  #     armed. Absence is the honest rendering, and Saru is explicit
+  #     that it gets no error colour and no retry: a red row in a
+  #     collapsed list nobody opened is an alarm nobody hears.
+  #   * NOT ACCEPTED — the reason line, exactly as before.
+  #
+  # The link and the kind label are drawn from `outcome_path/1` and
+  # `outcome_kind_label/1`, which key on the STORED IDS and never on
+  # `state` or `outcome_kind` — see their docs in `CandidateDisplay`.
+  # A row that reached nothing therefore cannot render an href, which is
+  # the failure mode that matters: a link built from a nil id is worse
+  # than the gap it was meant to fill.
+  #
+  # `evidence_quote` is user-controlled text. It is interpolated, never
+  # `raw/1`.
+  attr(:candidate, :map, required: true)
+
+  defp closed_card(assigns) do
+    candidate = assigns.candidate
+    accepted? = Map.get(candidate, :disposition) == :accepted
+
+    assigns =
+      assigns
+      |> assign(:outcome_path, accepted? && CandidateDisplay.outcome_path(candidate))
+      |> assign(:kind_label, accepted? && CandidateDisplay.outcome_kind_label(candidate))
+      |> assign(:outcome_line, accepted? && CandidateDisplay.closed_outcome_line(candidate))
+      |> assign(
+        :reason_line,
+        not accepted? &&
+          CandidateDisplay.closed_reason_line(candidate.closed_reason, candidate.closed_note)
+      )
+
+    ~H"""
+    <article
+      class={[
+        "candidate-card candidate-card--closed",
+        (@outcome_path || @outcome_line) && "candidate-card--outcome"
+      ]}
+      data-role="meeting-candidate-closed-card"
+      data-candidate-id={@candidate.id}
+      data-closed-reason={CandidateDisplay.closed_reason_slug(@candidate.closed_reason)}
+    >
+      <%!-- The title truncates and the kind label is `shrink-0`, so a
+           long quote never squeezes the class marker out of the row —
+           the brand's truncation rule, and the reason the label sits in
+           its own flex item rather than inline in the title. --%>
+      <div class="candidate-closed__line">
+        <a
+          :if={@outcome_path}
+          href={@outcome_path}
+          class="candidate-card__title candidate-closed__link"
+          data-role="meeting-candidate-title"
+        >
+          {@candidate.evidence_quote}
+        </a>
+        <p
+          :if={!@outcome_path}
+          class="candidate-card__title candidate-card__title--dead"
+          data-role="meeting-candidate-title"
+        >
+          {@candidate.evidence_quote}
+        </p>
+        <span
+          :if={@kind_label}
+          class="candidate-closed__kind"
+          data-role="meeting-candidate-outcome-kind"
+        >
+          {@kind_label}
+        </span>
+      </div>
+
+      <p :if={@reason_line} class="candidate-card__reason" data-role="meeting-candidate-closed-reason">
+        {@reason_line}
+      </p>
+
+      <p
+        :if={@outcome_line}
+        class="candidate-closed__empty"
+        data-role="meeting-candidate-closed-outcome"
+      >
+        {@outcome_line}
+      </p>
+
+      <%!-- The live card's drain geometry, held still. It answers the
+           question you actually open the disclosure to ask — "is this
+           the card I just watched?" — by reusing a shape that is
+           already on screen, and it costs nothing to build. Only a row
+           that reached something gets one. `aria-hidden` because it
+           carries no information a screen reader is missing: the link
+           above it says what the row is. --%>
+      <span
+        :if={@outcome_path}
+        class="candidate-drain candidate-drain--spent"
+        data-role="meeting-candidate-closed-bar"
+        aria-hidden="true"
+      >
+      </span>
     </article>
     """
   end

@@ -429,6 +429,90 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
     state |> stage_label() |> String.split(" · ") |> List.last()
   end
 
+  @doc """
+  WHERE the deliverable this card produced actually lives, as a route,
+  or `nil` while it has produced nothing.
+
+  The companion to `outcome_label/1`: that function says a deliverable
+  exists, this one says how to go and look at it. Both are drawn from
+  the SAME place and for the same reason — a stored id, never `state`.
+  `Platform.Meetings.Candidates.graduate/2` can fail against an archived
+  project and leave a closed row with no deliverable at all, so a path
+  keyed on the state would be a link to a task that was never created.
+
+  Present id, present route. No id, no route — and the caller renders
+  plain text rather than a link that 404s.
+
+  ## Why `task_id` is checked first
+
+  Not incidental, and not a tidy-looking accident of clause order.
+  `MeetingCandidate`'s own changeset says an `:artifact` candidate must
+  NOT carry a `task_id`, while a `:task` candidate MAY legitimately
+  carry a `canvas_id` (`validate_artifact_has_no_task/1`, deliberately
+  one-directional). So a row holding both ids is a TASK candidate that
+  also drew a canvas, and the task is its deliverable. This is the same
+  precedence `outcome_label/1` uses, which is what makes the closed row
+  and the live card name the same thing.
+
+  `outcome_kind` is deliberately not consulted, for the reason
+  `outcome_label/1` gives: it records what the card was AIMING at, and
+  the ids record what it REACHED.
+
+  Both routes are real — `live("/tasks/:task_id", TasksLive, :show)`
+  and `live("/canvases/:id", CanvasLive, :show)` in `router.ex`.
+  """
+  @spec outcome_path(map()) :: String.t() | nil
+  def outcome_path(%{task_id: task_id}) when is_binary(task_id), do: "/tasks/" <> task_id
+
+  def outcome_path(%{canvas_id: canvas_id}) when is_binary(canvas_id),
+    do: "/canvases/" <> canvas_id
+
+  def outcome_path(_candidate), do: nil
+
+  @doc """
+  WHAT KIND of thing the card reached — `"TASK"`, `"CANVAS"`, or `nil`
+  when it reached nothing.
+
+  The short kind tag that sits beside the deliverable's name, so a
+  reader can tell a task from a canvas without following the link.
+  Keyed on the stored ids with the same task-id-first precedence as
+  `outcome_path/1` and `outcome_label/1`; see `outcome_path/1` for why
+  that ordering is load-bearing rather than cosmetic.
+
+  The two answers are deliberately DIFFERENT words. A kind tag that
+  said the same thing for both kinds would render the same markup for
+  two different deliverables and quietly stop being a distinction at
+  all.
+  """
+  @spec outcome_kind_label(map()) :: String.t() | nil
+  def outcome_kind_label(%{task_id: task_id}) when is_binary(task_id), do: "TASK"
+  def outcome_kind_label(%{canvas_id: canvas_id}) when is_binary(canvas_id), do: "CANVAS"
+  def outcome_kind_label(_candidate), do: nil
+
+  @doc """
+  The line a closed row shows when a human ACCEPTED it and nothing was
+  ever created.
+
+  This is the honest reading of a specific and real failure:
+  `graduate/2` can fail against an archived project, leaving a row that
+  a participant said yes to with no `task_id` and no `canvas_id` on it.
+  Without this line that row renders as a silent gap — indistinguishable
+  from a row nobody has got to yet — and the accepted decision looks
+  like it was simply never acted on.
+
+  Keyed on `disposition`, not on `state` or `closed_reason`, because the
+  claim is precisely "a human accepted this". A `:rejected` or
+  `:timed_out` row with no deliverable is not a failure at all — nothing
+  was SUPPOSED to be created — so it answers `nil` and the row stays
+  quiet. Saying "Nothing was created" under a vetoed card would read as
+  a bug report about a system working correctly.
+  """
+  @spec closed_outcome_line(map()) :: String.t() | nil
+  def closed_outcome_line(%{disposition: :accepted, task_id: nil, canvas_id: nil}),
+    do: "Nothing was created"
+
+  def closed_outcome_line(_candidate), do: nil
+
   defp normalize(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil

@@ -6128,6 +6128,33 @@ body, .font-fabrikam {
   --cc-btn-border: #d5d9e2;
   --cc-btn-fg: #3d4453;
   --cc-go-bg: #2f57a0;
+
+  /* ── The closed row that leads somewhere (task 01a078d0 stage 2) ──
+     Saru's canvas names `--color-interactive` for the link and
+     `--color-neutral` for the kind label. Both were tuned against other
+     grounds — a WHITE card, and `--color-neutral-content` — and neither
+     of those is the ground here. MEASURED on the real rendered row in a
+     browser (painted pixels, not palette arithmetic) against
+     `--cc-bg-closed` (#F4F5F7):
+
+       --color-interactive  #087F93   4.31:1   FAILS AA at 4.5
+       --color-neutral      #5A5355   6.87:1   passes
+       --cc-title-dead      #767D8D   3.78:1   FAILS AA at 4.5
+
+     So exactly ONE of the three is corrected, scoped to this row and
+     derived from the token rather than replacing it. `--color-neutral`
+     is used raw: it was 6.87:1 all along, and darkening it further
+     (7.82:1 measured) bought nothing and cost the label its muting.
+     The tokens themselves are NOT retuned — they do double duty as
+     fills elsewhere, and moving one to fix text here breaks the other
+     pairing. */
+  --cc-outcome-link: color-mix(in srgb, var(--color-interactive) 88%, black);
+  --cc-outcome-muted: var(--color-neutral);
+  /* The hairline is meant to be quiet — Saru's word — and base-300 on
+     this ground measures 1.32:1, which is the intended weight for a
+     decorative 2px rule that carries no information and is
+     `aria-hidden`. */
+  --cc-outcome-bar: var(--color-base-300);
   --cc-go-border: #3a68bd;
   --cc-go-fg: #ffffff;
   /* ── The commit window (task 01a0740e stage 3) ──
@@ -6211,6 +6238,30 @@ body, .font-fabrikam {
   --cc-btn-border: #2c3448;
   --cc-btn-fg: #aeb6c6;
   --cc-go-bg: #2f57a0;
+
+  /* See the light block; the same measurement on this theme's ground
+     (`--cc-bg-closed`, #12151C) puts the corrections in DIFFERENT
+     places, which is why they are two token sets and not one:
+
+       --color-interactive  #4DD7E8   10.61:1  passes, used untouched
+       --color-neutral      #4D4647    1.99:1  FAILS, and badly
+       --color-base-300     #091821    1.01:1  invisible, not quiet
+
+     `--color-neutral` resolves DARKER here than in light (oklch 40%
+     against 45%) while the ground is darker still, so the raw token is
+     very nearly the ground itself — the failure the canvas warned
+     about, measured. It is lightened toward white by the same 60% the
+     spent row's `--cc-spent-fg` arrived at from the same starting
+     token; they stay two tokens because they are two claims, and a
+     re-tune of one must not silently move the other.
+
+     The BAR cannot be `--color-base-300`: dark base-300 is DARKER than
+     the closed ground and measures 1.01:1, which is not a quiet
+     hairline, it is an invisible one. `--cc-border` is the row's own
+     edge colour and lands at 1.27:1, the weight the light row gets. */
+  --cc-outcome-link: var(--color-interactive);
+  --cc-outcome-muted: color-mix(in oklch, var(--color-neutral) 60%, white);
+  --cc-outcome-bar: var(--cc-border);
   --cc-go-border: #3a68bd;
   --cc-go-fg: #ffffff;
   /* Same measurement, opposite failure. Dark --color-neutral is
@@ -6278,6 +6329,30 @@ body, .font-fabrikam {
     --cc-btn-border: #2c3448;
     --cc-btn-fg: #aeb6c6;
     --cc-go-bg: #2f57a0;
+
+    /* See the light block; the same measurement on this theme's ground
+       (`--cc-bg-closed`, #12151C) puts the corrections in DIFFERENT
+       places, which is why they are two token sets and not one:
+
+         --color-interactive  #4DD7E8   10.61:1  passes, used untouched
+         --color-neutral      #4D4647    1.99:1  FAILS, and badly
+         --color-base-300     #091821    1.01:1  invisible, not quiet
+
+       `--color-neutral` resolves DARKER here than in light (oklch 40%
+       against 45%) while the ground is darker still, so the raw token is
+       very nearly the ground itself — the failure the canvas warned
+       about, measured. It is lightened toward white by the same 60% the
+       spent row's `--cc-spent-fg` arrived at from the same starting
+       token; they stay two tokens because they are two claims, and a
+       re-tune of one must not silently move the other.
+
+       The BAR cannot be `--color-base-300`: dark base-300 is DARKER than
+       the closed ground and measures 1.01:1, which is not a quiet
+       hairline, it is an invisible one. `--cc-border` is the row's own
+       edge colour and lands at 1.27:1, the weight the light row gets. */
+    --cc-outcome-link: var(--color-interactive);
+    --cc-outcome-muted: color-mix(in oklch, var(--color-neutral) 60%, white);
+    --cc-outcome-bar: var(--cc-border);
     --cc-go-border: #3a68bd;
     --cc-go-fg: #ffffff;
     --cc-countdown-rest: color-mix(in oklch, var(--color-neutral) 60%, white);
@@ -6800,6 +6875,110 @@ body, .font-fabrikam {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--cc-stage);
+}
+
+/* ── The closed row that leads somewhere (task 01a078d0 stage 2) ──
+   Only an ACCEPTED row gets this treatment; a vetoed or duplicate row
+   is untouched and keeps its reason line.
+
+   `opacity` is the first thing that has to go, and it is the reason
+   this modifier exists at all rather than the colours being set on the
+   children. `.candidate-card--closed` carries `opacity: 0.72`, which
+   composites EVERY colour on the row toward the ground behind it: at
+   0.72 the link measures 2.78:1 no matter which token it is given,
+   because the dimming happens after the colour is chosen. This is the
+   same trap `.candidate-card--spent` documents above and solves the
+   same way — one measured colour per element instead of a blanket
+   fade. The row still recedes: `--cc-bg-closed` against the live
+   cards' white IS the recession, and it is what Saru's palette
+   specifies. */
+.candidate-card--outcome {
+  opacity: 1;
+}
+
+/* The failed row's title. It is the one title on an outcome row that is
+   NOT a link, so it does not get `--cc-outcome-link` — but it cannot
+   keep `--cc-title-dead` either, which measures 3.78:1 light and 4.43:1
+   dark on this ground and fails AA in both. `--cc-title-half` is the
+   rail's existing "present but not current" title colour and measures
+   4.91:1 light / 6.23:1 dark here, so the row keeps a real hierarchy —
+   the quote reads as the stronger line and `Nothing was created` sits
+   under it in the muted colour — without inventing a value. */
+.candidate-card--outcome .candidate-card__title--dead {
+  color: var(--cc-title-half);
+}
+
+/* Title and class marker on one line. `min-width: 0` on the flex parent
+   is what actually lets the title truncate — without it the flex item's
+   automatic minimum size is its content and the row grows instead. */
+.candidate-closed__line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* THE TITLE IS THE LINK. One tap target per row, no `View` button.
+   Truncates on one line so the row height is constant down the list and
+   the kind label always lands in the same place; the full quote is on
+   the page it links to. */
+.candidate-closed__link {
+  color: var(--cc-outcome-link);
+  font-weight: 500;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+
+.candidate-closed__link:hover,
+.candidate-closed__link:focus-visible {
+  text-decoration: underline;
+}
+
+/* `TASK` / `CANVAS`. `shrink-0` so it never wins width from the
+   truncating title.
+
+   9.5px, not the canvas's 11px, and that is a deliberate transposition
+   rather than a drift. The canvas draws the pair at 14px title / 11px
+   label on a 900px artboard — the label at 0.79x the title. This rail
+   is 312px wide and its titles are 11.5px, so 11px here would make the
+   class marker the same size as the name it must not compete with.
+   0.79 x 11.5 is 9.1, and 9.5px is the rail's existing small-label size
+   (`.candidate-card__byline`), so the ratio survives at this scale
+   using a size the rail already speaks. */
+.candidate-closed__kind {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cc-outcome-muted);
+}
+
+/* `Nothing was created`. No error colour and no retry: a red row in a
+   collapsed list nobody opened is an alarm nobody hears, and if failed
+   mints need handling that is its own decision about where failures
+   surface. */
+.candidate-closed__empty {
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 3px;
+  color: var(--cc-outcome-muted);
+}
+
+/* The live card's drain, held still: same 2px, same full-bleed bottom
+   edge, same clipping by the card's `overflow: hidden`. It answers
+   "is this the card I just watched?" by reusing a shape already on
+   screen. Static, so the width transition it inherits is turned off —
+   a bar that eases into place on first paint would read as a countdown
+   that is still running. */
+.candidate-drain--spent {
+  width: 100%;
+  background: var(--cc-outcome-bar);
+  transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

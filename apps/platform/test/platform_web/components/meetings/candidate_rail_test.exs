@@ -1038,4 +1038,159 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
       end
     end
   end
+
+  # ── A closed row that produced something (task 01a078d0 stage 2) ──────
+
+  describe "the closed row names its deliverable and can reach it" do
+    test "a task row and a canvas row carry DIFFERENT hrefs and DIFFERENT kind labels" do
+      # ONE fixture proves nothing about a branch. Two rows differing only
+      # in WHICH id they carry must produce two different routes and two
+      # different class markers, or the row is not distinguishing the
+      # kinds at all — it is printing the same markup twice.
+      task_row =
+        closed_accepted(%{
+          evidence_quote: "rotate the staging secrets",
+          task_id: "01a078d0-bedd-7001-a3d5-ee9c6c85aa59"
+        })
+
+      canvas_row =
+        closed_accepted(%{
+          evidence_quote: "write up what we agreed",
+          canvas_id: "01a07a60-8cbd-7001-8000-dab13283b524",
+          outcome_kind: :artifact,
+          closed_at: DateTime.add(@now, -60, :second)
+        })
+
+      html = rail_closed([task_row, canvas_row])
+
+      task_link = link_in(closed_row(html, task_row))
+      canvas_link = link_in(closed_row(html, canvas_row))
+
+      # ORDER IS LOAD-BEARING. The title assertion is keyed on the
+      # `data-role` and NOT on the `a` tag, so it holds whether the row
+      # renders a link or falls back to a `<p>` — and it is asserted
+      # FIRST so that the mutation below (`task_id: nil` on this
+      # fixture) reddens the href assertion while this one is still
+      # reached and still green. Two assertions that go red together are
+      # one assertion wearing two names.
+      assert title_of(html, task_row) == "rotate the staging secrets"
+
+      # THE VALUE, not the presence of a label. "Added to Tasks" with no
+      # href is the defect this row exists to fix, wearing better copy.
+      assert attr(task_link, "href") == "/tasks/01a078d0-bedd-7001-a3d5-ee9c6c85aa59"
+      assert attr(canvas_link, "href") == "/canvases/01a07a60-8cbd-7001-8000-dab13283b524"
+      refute attr(task_link, "href") == attr(canvas_link, "href")
+
+      assert kind_of(html, task_row) == "TASK"
+      assert kind_of(html, canvas_row) == "CANVAS"
+      refute kind_of(html, task_row) == kind_of(html, canvas_row)
+
+      # The link IS the title — one tap target, and the words are the
+      # quote, which is also what `deliverable_title/2` mints from.
+      assert LazyHTML.text(task_link) |> String.trim() == "rotate the staging secrets"
+
+      # `Done` is REPLACED, not appended to. It spends the most scannable
+      # position on the one fact the reader already has.
+      refute present?(closed_row(html, task_row), "[data-role='meeting-candidate-closed-reason']")
+      refute LazyHTML.to_html(closed_row(html, task_row)) =~ "Done"
+
+      # The spent bar, only on a row that reached something.
+      assert present?(closed_row(html, task_row), "[data-role='meeting-candidate-closed-bar']")
+      assert present?(closed_row(html, canvas_row), "[data-role='meeting-candidate-closed-bar']")
+    end
+
+    test "an accepted row that reached NOTHING renders no anchor, no kind label and no bar" do
+      # Reachable in production: `Candidates.record_only_close/1` writes
+      # `:accepted` with `queue_status: "completed"` and mints nothing —
+      # the ack arm for an `:artifact` candidate or one that was never
+      # armed. A link built from a nil id would be worse than the gap.
+      empty =
+        closed_accepted(%{evidence_quote: "someone should look at the invoice", task_id: nil})
+
+      html = rail_closed([empty])
+      row = closed_row(html, empty)
+
+      assert Enum.any?(row)
+      refute present?(row, "a[data-role='meeting-candidate-title']")
+      refute present?(row, "[data-role='meeting-candidate-outcome-kind']")
+      refute present?(row, "[data-role='meeting-candidate-closed-bar']")
+      refute LazyHTML.to_html(row) =~ "href="
+
+      # What it DOES say, and no error colour or retry anywhere near it.
+      assert text_of(row, "[data-role='meeting-candidate-closed-outcome']") ==
+               "Nothing was created"
+
+      assert title_of(html, empty) == "someone should look at the invoice"
+    end
+
+    test "a NON-accepted closed row is untouched: its reason line, and no link" do
+      # The whole value of the Closed section, and an existing board test
+      # asserts this string on the real route. A disposition-blind
+      # renderer would strip it.
+      vetoed =
+        closed_accepted(%{
+          evidence_quote: "let us buy the expensive one",
+          disposition: :rejected,
+          closed_reason: :duplicate,
+          closed_note: "01a03f57",
+          task_id: "01a078d0-bedd-7001-a3d5-ee9c6c85aa59"
+        })
+
+      html = rail_closed([vetoed])
+      row = closed_row(html, vetoed)
+
+      assert text_of(row, "[data-role='meeting-candidate-closed-reason']") ==
+               "Already on the backlog — 01a03f57"
+
+      # It carries a `task_id`, and it still gets no link: the treatment
+      # is keyed on the DISPOSITION, so a rejected duplicate that happens
+      # to point at the row it duplicates does not become a link.
+      refute present?(row, "a[data-role='meeting-candidate-title']")
+      refute present?(row, "[data-role='meeting-candidate-outcome-kind']")
+      refute present?(row, "[data-role='meeting-candidate-closed-bar']")
+    end
+  end
+
+  # A closed, accepted row. `closed_at` is required rather than defaulted
+  # to nil because the rail sorts the closed list on it.
+  defp closed_accepted(attrs) do
+    %{
+      state: :closed,
+      closed_reason: :done,
+      closed_at: @now,
+      disposition: :accepted,
+      disposition_at: @now,
+      outcome_kind: :task,
+      classified_intent: "action_item"
+    }
+    |> Map.merge(Map.new(attrs))
+    |> candidate()
+  end
+
+  defp rail_closed(closed) do
+    render_component(&CandidateRail.candidate_rail/1,
+      candidates: [],
+      closed: closed,
+      events: %{},
+      now: @now
+    )
+  end
+
+  defp closed_row(html, %MeetingCandidate{id: id}) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("[data-role='meeting-candidate-closed-card'][data-candidate-id='#{id}']")
+  end
+
+  # `query/2` descends; `filter/2` would match only the fragment's ROOT
+  # nodes and answer `[]` for anything inside the `<details>`.
+  defp link_in(row), do: LazyHTML.query(row, "a[data-role='meeting-candidate-title']")
+
+  defp title_of(html, candidate),
+    do: text_of(closed_row(html, candidate), "[data-role='meeting-candidate-title']")
+
+  defp kind_of(html, candidate),
+    do: text_of(closed_row(html, candidate), "[data-role='meeting-candidate-outcome-kind']")
+
+  defp attr(nodes, name), do: nodes |> LazyHTML.attribute(name) |> List.first()
 end
