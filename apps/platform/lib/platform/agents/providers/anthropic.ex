@@ -347,7 +347,14 @@ defmodule Platform.Agents.Providers.Anthropic do
   @spec receive_timeout_ms() :: pos_integer()
   def receive_timeout_ms, do: @receive_timeout_ms
 
-  defp req_client do
+  @doc """
+  The `Req` client used for chat completions.
+
+  Public so tests can assert on the options the adapter actually ships with;
+  `:anthropic_req_client` overrides it wholesale for injection.
+  """
+  @spec req_client() :: Req.Request.t()
+  def req_client do
     Application.get_env(
       :platform,
       :anthropic_req_client,

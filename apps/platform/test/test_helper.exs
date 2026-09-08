@@ -9,8 +9,16 @@
 # and mislabelling it `:intermittent` to borrow excludability is exactly the
 # confusion `TestQuarantine`'s moduledoc exists to end. Both lists are DERIVED;
 # neither may become a literal, which `Platform.TestQuarantineTest` asserts.
+# The third list is `Platform.SlowTests` (task 01a0826f stage 5): green,
+# trustworthy tests whose only cost is real wall-clock sleep. Its own registry
+# for the same reason `PendingFix` has one — "slow" is not "untrustworthy" and
+# not "known-red", and borrowing either label to gain excludability is the lie
+# both moduledocs forbid. CI runs `mix test --include slow`, so excluding here
+# shortens the LOCAL default only; nothing stops running where it is enforced.
 ExUnit.start(
-  exclude: Platform.TestQuarantine.excluded_tags() ++ Platform.PendingFix.excluded_tags()
+  exclude:
+    Platform.TestQuarantine.excluded_tags() ++
+      Platform.PendingFix.excluded_tags() ++ Platform.SlowTests.excluded_tags()
 )
 
 # ONE lifecycle step registry for the whole run, under the default name,

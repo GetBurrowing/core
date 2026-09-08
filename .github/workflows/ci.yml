@@ -223,7 +223,13 @@ jobs:
 
       - name: Run tests
         run: |
-          mix test || (echo "::warning::initial mix test failed; retrying failed tests serially" && mix test --failed --max-cases 1)
+          # `--include slow` is load-bearing, not decoration: `Platform.SlowTests`
+          # excludes the `:slow` tag from the DEFAULT run, and this flag is the
+          # named thing that still runs those tests — including the 16s
+          # reproductions of the provider timeout bug from task 01a0826f.
+          # Removing it silently shrinks the suite. `Platform.SlowTestsTest`
+          # asserts this flag is still spelled here.
+          mix test --include slow || (echo "::warning::initial mix test failed; retrying failed tests serially" && mix test --failed --max-cases 1 --include slow)
 
       # Task 019f9d80. `Platform.Audit.HistorianLatencyTest` used to detach the
       # VM-global `Platform.Audit.TelemetryHandler` and never put it back, which

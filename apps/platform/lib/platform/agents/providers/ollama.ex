@@ -157,7 +157,40 @@ defmodule Platform.Agents.Providers.Ollama do
     _ -> :ok
   end
 
-  defp req_client do
-    Application.get_env(:platform, :ollama_req_client, Req.new())
+  # How long a single model call is allowed to take, in milliseconds. An
+  # order of magnitude above the measured worst case: production summaries
+  # run 10.3s for 64 output tokens and 26.7s for ~970 output tokens on a
+  # 21k-token prompt, so a full 2048-token completion extrapolates to ~45s
+  # on an unloaded box. The sibling adapters hardcode 60s, which would leave
+  # under 15s of headroom on a self-hosted model whose throughput varies with
+  # concurrent load. Config-driven so an operator can lower it without a
+  # deploy.
+  @default_receive_timeout_ms 300_000
+
+  @doc """
+  The default receive timeout in milliseconds, honouring
+  `:ollama_receive_timeout`. Read this rather than restating the number.
+  """
+  @spec receive_timeout_ms() :: pos_integer()
+  def receive_timeout_ms do
+    Application.get_env(:platform, :ollama_receive_timeout, @default_receive_timeout_ms)
+  end
+
+  @doc """
+  The `Req` client used for chat completions.
+
+  Public so tests can assert on the options the adapter actually ships with;
+  `:ollama_req_client` overrides it wholesale for injection.
+  """
+  @spec req_client() :: Req.Request.t()
+  def req_client do
+    Application.get_env(
+      :platform,
+      :ollama_req_client,
+      Req.new(
+        headers: [{"accept", "application/json"}],
+        receive_timeout: receive_timeout_ms()
+      )
+    )
   end
 end

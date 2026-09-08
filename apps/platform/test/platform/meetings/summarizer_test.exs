@@ -1,3 +1,45 @@
+defmodule Platform.Meetings.SummarizerTest.SlowOllamaPlug do
+  @moduledoc """
+  A real HTTP endpoint speaking the Ollama OpenAI-compatible chat shape that
+  stalls before answering.
+
+  Mirrors `Platform.Agents.Providers.OllamaTest.SlowPlug` (task 01a0826f
+  stage 1) rather than a `Req.Test` stub on purpose: a plug stub runs
+  in-process and never reaches the Finch socket, so it cannot observe a
+  `receive_timeout` at all.
+  """
+
+  @behaviour Plug
+
+  @impl true
+  def init(opts), do: opts
+
+  @impl true
+  def call(conn, opts) do
+    Process.sleep(Keyword.fetch!(opts, :sleep_ms))
+
+    body =
+      Jason.encode!(%{
+        "model" => "concierge",
+        "choices" => [
+          %{
+            "index" => 0,
+            "finish_reason" => "stop",
+            "message" => %{
+              "role" => "assistant",
+              "content" => "## Summary\n\nThe team discussed the Q3 roadmap."
+            }
+          }
+        ],
+        "usage" => %{"prompt_tokens" => 40, "completion_tokens" => 12, "total_tokens" => 52}
+      })
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, body)
+  end
+end
+
 defmodule Platform.Meetings.SummarizerTest do
   @moduledoc false
   # M8 stage 4 added bridge tests that toggle global resources (Role
@@ -1299,5 +1341,95 @@ defmodule Platform.Meetings.SummarizerTest do
       assert reloaded.status == "complete"
       assert reloaded.summary == "This meeting had no transcribed content."
     end
+  end
+
+  # ── task 01a0826f stage 4 — the summariser call path against a SLOW provider ──
+  #
+  # The production failure (2026-09-02 SXI workshop) was not in the adapter in
+  # isolation: `Summarizer.run_summary/1` -> `call_llm/3` (summarizer.ex:321)
+  # -> `provider_adapter(:ollama)` (summarizer.ex:590) -> `adapter.chat/3`
+  # (summarizer.ex:569) returned `{:error, %Req.TransportError{reason:
+  # :timeout}}` after Req's 15s default, and the `{:error, reason}` branch at
+  # summarizer.ex:343-346 wrote the row `failed` with `{:llm_failed, _}`.
+  #
+  # So the fixture has to be SLOW. A short transcript answered instantly
+  # passes on unmodified `main` and proves nothing — that is precisely how the
+  # bug reached production.
+  describe "end-to-end summarisation against a provider slower than Req's default" do
+    @tag :slow
+    @tag timeout: 180_000
+    test "a completion returned after 16s still lands the transcript complete with a summary" do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      base_url = start_slow_ollama!(16_000)
+
+      previous_summary_cfg = Application.get_env(:platform, :meetings_summary)
+
+      Application.put_env(:platform, :meetings_summary, %{
+        provider: :ollama,
+        model: "concierge",
+        max_tokens: 2048,
+        base_url: base_url
+      })
+
+      on_exit(fn ->
+        if previous_summary_cfg do
+          Application.put_env(:platform, :meetings_summary, previous_summary_cfg)
+        else
+          Application.delete_env(:platform, :meetings_summary)
+        end
+      end)
+
+      # Config.summary/0 honours the injected map (config.ex:50-60); assert it
+      # rather than trusting it, so a config regression fails HERE and not as a
+      # mystery `:no_summary_provider_configured` twenty seconds later.
+      cfg = Platform.Meetings.Config.summary()
+      assert cfg.provider == :ollama
+      assert cfg.base_url == base_url
+
+      {:ok, space} = Platform.Chat.create_space(%{kind: "execution"})
+
+      transcript =
+        create_transcript!(%{space_id: space.id, segments: sample_segments()})
+
+      capture_log(fn ->
+        assert :ok = Summarizer.run_summary(transcript),
+               "the summariser gave up on a provider that answers in 16s"
+      end)
+
+      reloaded = Meetings.get_transcript(transcript.id)
+
+      assert reloaded.status == "complete",
+             "expected status=complete, got #{inspect(reloaded.status)} " <>
+               "failure_reason=#{inspect(reloaded.failure_reason)} — a " <>
+               "%Req.TransportError{reason: :timeout} here is the 2026-09-02 regression"
+
+      refute is_nil(reloaded.summary)
+      assert reloaded.summary =~ "Q3 roadmap"
+    end
+  end
+
+  # Starts a real Bandit server on a free loopback port that sleeps `sleep_ms`
+  # before answering with a valid Ollama completion, and returns its base URL.
+  defp start_slow_ollama!(sleep_ms) do
+    port = free_port()
+
+    start_supervised!(
+      {Bandit,
+       plug: {Platform.Meetings.SummarizerTest.SlowOllamaPlug, sleep_ms: sleep_ms},
+       scheme: :http,
+       ip: {127, 0, 0, 1},
+       port: port,
+       startup_log: false}
+    )
+
+    "http://127.0.0.1:#{port}"
+  end
+
+  defp free_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    port
   end
 end
