@@ -21,6 +21,7 @@ defmodule Platform.Federation.MemoryToolsTest do
 
   alias Platform.Agents.Agent
   alias Platform.Federation.ToolSurface
+  alias Platform.Memory.MemoryProposal
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
   alias Platform.Org.{WikiJournalEntry, WikiPage}
@@ -31,6 +32,7 @@ defmodule Platform.Federation.MemoryToolsTest do
   setup do
     Repo.delete_all(WikiPage)
     Repo.delete_all(WikiJournalEntry)
+    Repo.delete_all(MemoryProposal)
 
     historian = create_agent("historian", assign_historian?: true)
     plain = create_agent("plain")
@@ -259,6 +261,54 @@ defmodule Platform.Federation.MemoryToolsTest do
       entries = Journal.get_for_date(~D[2026-05-20])
       assert length(entries) == 1
       assert hd(entries).content == "Field note."
+    end
+
+    test "a synthesis-proposal block in the body reaches /memory/proposals",
+         %{historian: h} do
+      # Regression guard. A dreaming run is only authorised to write to
+      # today's journal, and it emits `<synthesis-proposal>` blocks there
+      # via this tool. Before the JournalSweep call in
+      # `do_memory_create/5`, those blocks were persisted as journal prose
+      # and never ingested — the proposals page stayed empty while the
+      # agent reported having filed them.
+      body = """
+      Dreaming pass.
+
+      <synthesis-proposal category="emerging-risk" confidence="high" evidence="org/journal/2026-05-20.md">
+      Blocks written through memory_create must be ingested.
+      </synthesis-proposal>
+      """
+
+      assert {:ok, _result} =
+               ToolSurface.execute(
+                 "memory_create",
+                 %{"path" => "org/journal/2026-05-20.md", "file_text" => body},
+                 context(h)
+               )
+
+      assert [proposal] = Repo.all(MemoryProposal)
+      assert proposal.category == "emerging-risk"
+      assert proposal.confidence == "high"
+      assert proposal.body == "Blocks written through memory_create must be ingested."
+      assert proposal.journal_path == "org/journal/2026-05-20.md"
+      assert proposal.status == "pending"
+    end
+
+    test "a page write is not swept for proposals", %{historian: h} do
+      body = """
+      <synthesis-proposal category="emerging-risk" confidence="high" evidence="e">
+      Pages are not a proposal surface.
+      </synthesis-proposal>
+      """
+
+      assert {:ok, _result} =
+               ToolSurface.execute(
+                 "memory_create",
+                 %{"path" => "org/page/identity.md", "file_text" => body},
+                 context(h)
+               )
+
+      assert [] = Repo.all(MemoryProposal)
     end
 
     test "namespace is preserved from the path", %{historian: h} do

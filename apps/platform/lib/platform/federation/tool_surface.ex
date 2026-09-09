@@ -46,6 +46,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Design.PreplanStep
   alias Platform.Meetings
   alias Platform.Meetings.AgentActivity
+  alias Platform.Memory.JournalSweep
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
   alias Platform.Orchestration.Diagnostics
@@ -11623,6 +11624,12 @@ defmodule Platform.Federation.ToolSurface do
 
     case Journal.append(attrs, namespace: class.namespace) do
       {:ok, entry} ->
+        # Journal.append/2 is Memory-agnostic by design, so the proposal
+        # sweep is explicit here — without it, `<synthesis-proposal>`
+        # blocks an agent writes during a dreaming run never reach
+        # `/memory/proposals`.
+        JournalSweep.sweep(entry, class.namespace)
+
         {:ok,
          %{
            path: path,

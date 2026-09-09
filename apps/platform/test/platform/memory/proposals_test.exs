@@ -11,6 +11,8 @@ defmodule Platform.Memory.ProposalsTest do
   alias Platform.Memory.Proposals
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Org.Wiki
+  alias Platform.Memory.JournalSweep
+  alias Platform.Org.Wiki.Journal
   alias Platform.Org.WikiPage
   alias Platform.Repo
 
@@ -411,6 +413,98 @@ defmodule Platform.Memory.ProposalsTest do
                  updated_by: nil
                })
 
+      assert [] = Repo.all(MemoryProposal)
+    end
+  end
+
+  describe "JournalSweep.sweep/2 after Journal.append/2" do
+    test "journal append with a synthesis-proposal block ingests a row" do
+      content = ~s"""
+      Dreaming pass.
+
+      <synthesis-proposal category="emerging-risk" confidence="high" evidence="org/journal/2026-07-17.md">
+      Ingested via the journal append hook.
+      </synthesis-proposal>
+      """
+
+      assert {:ok, _entry} =
+               append_and_sweep(%{content: content, date: ~D[2026-07-17]}, "org")
+
+      assert [%{body: "Ingested via the journal append hook.", category: "emerging-risk"}] =
+               Repo.all(MemoryProposal)
+    end
+
+    test "namespaced append keys the proposal to the namespaced journal path" do
+      workspace_id = Ecto.UUID.generate()
+
+      content = ~s"""
+      <synthesis-proposal category="unresolved-question" confidence="medium" evidence="e">
+      Scoped to a project journal.
+      </synthesis-proposal>
+      """
+
+      assert {:ok, _entry} =
+               append_and_sweep(
+                 %{content: content, date: ~D[2026-07-18], workspace_id: workspace_id},
+                 "project/#{workspace_id}"
+               )
+
+      assert [%{journal_path: path, workspace_id: ^workspace_id}] = Repo.all(MemoryProposal)
+      assert path == "project/#{workspace_id}/journal/2026-07-18.md"
+    end
+
+    test "append with no blocks does not create rows" do
+      assert {:ok, _entry} =
+               append_and_sweep(%{content: "just prose today", date: ~D[2026-07-17]}, "org")
+
+      assert [] = Repo.all(MemoryProposal)
+    end
+
+    test "re-appending the same block does not duplicate the proposal" do
+      content = ~s"""
+      <synthesis-proposal category="recurring-theme" confidence="low" evidence="e">
+      Written twice, ingested once.
+      </synthesis-proposal>
+      """
+
+      assert {:ok, _} =
+               append_and_sweep(%{content: content, date: ~D[2026-07-17]}, "org")
+
+      assert {:ok, _} =
+               append_and_sweep(%{content: content, date: ~D[2026-07-17]}, "org")
+
+      assert [%{body: "Written twice, ingested once."}] = Repo.all(MemoryProposal)
+    end
+
+    # Mirrors what a journal writer must do: append, then sweep. The two
+    # production writers (the `memory_create` tool surface and the
+    # /org_memory journal pane) call exactly this pair.
+    defp append_and_sweep(attrs, namespace) do
+      case Journal.append(attrs, namespace: namespace) do
+        {:ok, entry} ->
+          :ok = JournalSweep.sweep(entry, namespace)
+          {:ok, entry}
+
+        other ->
+          other
+      end
+    end
+
+    test "raw Journal.append/2 without the sweep ingests nothing" do
+      content = ~s"""
+      <synthesis-proposal category="recurring-theme" confidence="high" evidence="e">
+      Written under the low-level API.
+      </synthesis-proposal>
+      """
+
+      assert {:ok, _} =
+               Journal.append(%{content: content, date: ~D[2026-07-17]}, namespace: "org")
+
+      # Deliberate: the T2 layering guard in wiki_t2_e2e_test.exs forbids a
+      # Platform.Memory call site inside Journal, so the sweep is a
+      # separate module callers invoke. This test pins that contract —
+      # if Journal ever starts sweeping on its own, this fails and the
+      # guard test above it should be revisited too.
       assert [] = Repo.all(MemoryProposal)
     end
   end

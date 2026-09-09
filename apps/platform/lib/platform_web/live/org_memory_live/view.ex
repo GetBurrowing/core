@@ -60,6 +60,7 @@ defmodule PlatformWeb.OrgMemoryLive do
   alias Platform.Accounts
   alias Platform.Agents.Agent
   alias Platform.Memory.Proposals
+  alias Platform.Memory.JournalSweep
   alias Platform.Org.Context
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
@@ -252,8 +253,12 @@ defmodule PlatformWeb.OrgMemoryLive do
         authored_by: socket.assigns.current_user_id
       }
 
-      case Journal.append(attrs, namespace: journal_namespace(socket.assigns.selected_page)) do
-        {:ok, _entry} ->
+      namespace = journal_namespace(socket.assigns.selected_page)
+
+      case Journal.append(attrs, namespace: namespace) do
+        {:ok, entry} ->
+          JournalSweep.sweep(entry, namespace)
+
           {:noreply,
            socket
            |> assign(:journal_draft, "")
