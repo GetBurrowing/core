@@ -62,6 +62,11 @@ never by bare number:
   reference. The architect's own prompt header already says so
   (`lib/platform/responsibilities/handlers/architecture_review_plan.ex`,
   `format_adr_index_header/1`); source comments follow the same rule.
+  **Half of this bullet is now machine-checked.** A bare number followed by a
+  section sign — `ADR 0041 §"Branch model"` — is REJECTED by the audit: it
+  claims a section of a document it never names, so nothing can resolve it. A
+  bare number carrying NO section sign (`ADR-0042`, `ADR-0046 decision 7`) is
+  still unenforced, for the reasons below.
 - **Keep the citation on one source line.** Wrap the prose around it, not
   through it — a citation split across two comment lines is invisible to the
   audit and only looks resolvable.
@@ -72,16 +77,45 @@ never by bare number:
 
 `test/platform/regression/adr_citation_audit_test.exs` enforces all of the
 above — it bans the line-pinned form outright, resolves every `§` citation
-against the named ADR, rejects a citation split across two lines, and keeps
-citations out of `test` / `describe` names. If it fails, update the citation
-or restore the heading; adding an exclusion is not a third option.
+against the named ADR, **rejects a bare ADR number followed by a section
+sign**, rejects a citation split across two lines, and keeps citations out of
+`test` / `describe` names. If it fails, update the citation or restore the
+heading; adding an exclusion is not a third option.
 
-Deliberately **not** enforced: bare `ADR-NNNN` references and decision
-ordinals (`ADR-0046 decision 7`, `Decision 4`). The audit's moduledoc argues
-the exclusion at length — the short version is that most of the ~120 such
-sites name no document at all, and that a decision ordinal cannot be checked
-non-circularly until the citation form carries the decision's lead phrase.
-Prefer the `§` form for anything you are writing new.
+### The bare-anchor pin is a ratchet, not an exemption
+
+58 bare-anchor sites across 29 files existed when the rule landed (measured
+against `origin/main` at `e844c1c2`), so they are registered in
+`@dangling_anchor_pins` rather than fixed in one sweep. The three tests over
+that list assert set **equality** against the live scan: a new site goes red
+because nothing exempts it, and fixing a registered site ALSO goes red until
+its row is deleted. The list can only shrink.
+
+**Adding a row to quiet a failure is not an option.** The correct move is to
+name the ADR file, and there are two cases — the audit's failure message tells
+you which one you are in:
+
+- **The section exists in a different ADR.** Repoint the citation at that
+  file. `ADR 0041 §"Branch model"` is the measured example: `Branch model` is a
+  real heading in `0045-task-stacks-v2.md`, so the fix is
+  `0045-task-stacks-v2.md § Branch model` and nothing needs writing.
+- **The section exists nowhere.** Eight of the ADR-0041 anchors are in this
+  case — Status divergence handling, Rollup-branch merge, Stack-level deploy,
+  DAG validation, Status mapping, Unblock threshold, Status cascade,
+  Validation routing. Write the section in the ADR it belongs to, then anchor
+  to it.
+
+This file is `.md`, and the audit walks only `.ex` / `.exs` / `.heex`, so it is
+the one place in the repo that may spell the banned form verbatim as an
+example. The audit's own moduledoc describes the form in prose instead,
+because that file is inside the corpus it scans.
+
+Deliberately **not** enforced: bare `ADR-NNNN` references *carrying no section
+sign*, and decision ordinals (`ADR-0046 decision 7`, `Decision 4`). The audit's
+moduledoc argues the exclusion at length — the short version is that most of
+the ~120 such sites name no document at all, and that a decision ordinal
+cannot be checked non-circularly until the citation form carries the decision's
+lead phrase. Prefer the `§` form for anything you are writing new.
 
 
 <!-- usage-rules-start -->

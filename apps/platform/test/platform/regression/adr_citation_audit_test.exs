@@ -36,6 +36,17 @@ defmodule Platform.Regression.AdrCitationAuditTest do
        heading has been wrapped onto the following line is rejected by name.
     4. **No citation inside a `test` / `describe` name.** The full filename
        makes a 150-character test name; put it in a comment above instead.
+    5. **No bare ADR number carrying a section sign.** An ADR number written
+       as a bare number and immediately followed by a section sign claims a
+       section of a document it never names, so rule 2 has no file to resolve
+       the heading against and cannot see it at all. Added last, and numbered
+       5 rather than folded into rule 2 on purpose: the failure heredocs and
+       `AGENTS.md` § Citing ADRs address rules 2 and 3 **by position**, and
+       renumbering rots pointers, which is the defect this whole file exists
+       to stop. `system_event_envelope_record_audit_test.exs` hit the identical
+       fork and numbered its new assertion `6b` for the identical reason.
+       The 58 sites that predate the rule are registered in
+       `@dangling_anchor_pins`; see the ratchet comment below.
 
   ## Why rule 3 rejects rather than rejoins
 
@@ -56,10 +67,16 @@ defmodule Platform.Regression.AdrCitationAuditTest do
 
   ## What is deliberately NOT covered
 
-  **Bare ADR numbers (`ADR-0042`), and decision ordinals (`ADR-0046 decision
-  7`, `Decision 4`).** ~120 sites across the umbrella. Three reasons, and the
-  gap is documented here rather than left implicit because an undocumented gap
-  in an audit reads as coverage:
+  **THE SECTION SIGN IS THE BOUNDARY.** Rule 5 moved it: a bare ADR number
+  that is immediately followed by a section sign is now in scope, because it
+  makes a claim about a named section that no file can be found for. A bare
+  number carrying **no** section sign stays out of scope, and that is where
+  the line falls today.
+
+  **Bare ADR numbers with no section sign (`ADR-0042`), and decision ordinals
+  (`ADR-0046 decision 7`, `Decision 4`).** ~120 sites across the umbrella.
+  Three reasons, and the gap is documented here rather than left implicit
+  because an undocumented gap in an audit reads as coverage:
 
     * The large majority name **no document at all** — `Decision 1 from the
       stack`, `decision 6`, `Decision 3`. They are not ADR citations; a rule
@@ -87,6 +104,45 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   `docs/decisions/` itself is out of scope: ADRs cross-reference each other in
   prose, and stage 1 left the documents untouched by design.
 
+  ### Two measured escapes from rule 5, named and NOT widened
+
+  Recorded the way the precedent recorded its `#L485` gap: measured, scoped,
+  left alone rather than chased.
+
+    * **The parenthetical dodge.** `lib/platform/tasks/stacks.ex` (currently
+      line 5132, stated for orientation only — locate it by content) reads
+      `Mirrors the convention documented in ADR 0041 (Branch model) so
+      callers`. Same unresolvable claim as a bare anchor, in parentheses
+      instead of after a section sign, so rule 5 does not fire. Widening to
+      ban parentheses after an ADR number would fire on ordinary prose
+      constantly — `(ADR 0041)`, `(see ADR 0044)` and `(ADR 0041 stack-level
+      agent assignment)` are all in this same file — so the parenthetical form
+      carries no reliable signal that a *section* is being claimed. Named,
+      measured, left alone.
+    * **The number-free anchor.** A section sign with a name but no ADR number
+      in front of it — `process-patterns.md § Cite ADR Headings, Not Line
+      Numbers`, cited in `system_event_envelope_record_audit_test.exs` — is
+      out of BOTH selectors by design. Rule 5's selector requires an ADR
+      number; `@citation_head_regex` requires the `NNNN-name.md` ADR filename
+      shape, which `process-patterns.md` does not have. It names a non-ADR
+      corpus, which is the same reason the `(?<!notes\\/)` lookbehind exists:
+      `notes/2026-07-26-boot-telemetry-detach.md` *does* have the ADR filename
+      shape and had to be excluded explicitly. Resolving either against
+      `docs/decisions/` would report a missing ADR that was never claimed.
+
+  ### What green means, and what it does not
+
+  Green here means two things: every citation that names a section also names
+  a file whose headings resolve, AND every dangling citation that has not been
+  fixed is registered in the pin list. It does **not** mean the registered
+  citations are correct — they are known-broken by construction. They are
+  pinned so the set cannot grow, not blessed. Two shapes of fix apply and the
+  failure message distinguishes them: some anchors exist as a heading in a
+  *different* ADR (`Branch model` is a real heading in
+  `0045-task-stacks-v2.md`, so those sites repoint and nothing needs writing),
+  and most exist nowhere under `docs/decisions/` (write the section, then
+  anchor to it).
+
   ## Anti-vacuity
 
   Every ADR citation lives in a comment, a `@moduledoc`, or a string literal,
@@ -112,6 +168,76 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   # a position pin; `ADR 0042 Decision 8` deliberately does not match (see the
   # moduledoc's out-of-scope note).
   @line_pinned_regex ~r/\bADR[\s-]?\d{4}\s*:\s*\d/
+
+  # An ADR number written as a bare number, immediately followed by a section
+  # sign: the citation CLAIMS to name a section of a document it never names.
+  # There is no filename to resolve the heading against, so rule 2 cannot see
+  # it at all — 15 sites of this shape sat in the corpus unauditable by
+  # construction while the audit reported clean.
+  #
+  # THE SECTION SIGN IS THE LINE, and it is deliberate. A bare number with NO
+  # sign (`ADR-0046 decision 7`, `ADR-0042`, `Decision 4` — ~120 sites) stays
+  # out of scope exactly as the moduledoc's out-of-scope note argues: it makes
+  # no resolvable claim, so there is nothing to check that is not circular. A
+  # bare number WITH a sign makes a claim that cannot be checked, which is a
+  # different thing and the one this bans.
+  #
+  # BANNED RATHER THAN RESOLVED-BY-NUMBER, and that was measured. Mapping the
+  # number to a file is wrong three ways:
+  #
+  #   1. Ambiguous. Four numbers name two ADR files each (0017, 0036, 0042,
+  #      0044 — see the moduledoc above). 8 of the 49 measured sites cite 0042.
+  #   2. It SWALLOWS the anchored check. Resolve-by-number reports a bare
+  #      citation as `:unresolved_heading` — the same kind an anchored-but-wrong
+  #      citation produces. "Names no file" and "names a file whose heading is
+  #      gone" collapse into one red, and neither can fail alone any more. That
+  #      is the quiet hazard, and it is why this is its own kind.
+  #   3. It buys nothing. Measured against `9d925d18`: NONE of the anchors the
+  #      bare sites name (Status divergence handling, Rollup-branch merge,
+  #      Stack-level deploy, DAG validation, Status mapping, Branch model,
+  #      Unblock threshold, Status cascade, Validation routing, sponsor-bypass,
+  #      architect-finding-1) exists as a heading anywhere under
+  #      `docs/decisions/`. Resolve-by-number produces the identical red with
+  #      more machinery and less discriminative power.
+  #
+  # Its own source is safe from the self-scan for the same reason
+  # `@line_pinned_regex`'s is: the `ADR` here is followed by `[`, not a digit.
+  #
+  # MEASURED AGAINST THE REAL TREE, not assumed. Both this selector and the
+  # anchored one pass on an unmutated tree — exactly the condition under which
+  # a new check is most likely to be decorative — so stage 3 ran four mutations
+  # in `lib/platform/tasks/stack.ex`, above `@statuses`, and reverted each.
+  # Every citation below is DESCRIBED rather than spelled, because this file is
+  # inside the corpus the audit walks and a contiguous instance would be a real
+  # offence (see the fixture comments below).
+  #
+  #   1. BARE ONLY — `ADR`, the invented number 0099, a section sign, then a
+  #      quoted invented heading. 14 tests, ONE failure: `no bare-anchor
+  #      citation is unpinned` alone, quoting `stack.ex:35`. The three anchored
+  #      assertions stayed GREEN.
+  #   2. ANCHORED-BUT-WRONG ONLY — the 0046 planning ADR's real filename, a
+  #      section sign, and a heading that is not in it. 14 tests, ONE failure:
+  #      `every anchored citation names a heading that exists in that ADR`
+  #      alone, quoting `stack.ex:35`. The bare-anchor assertions stayed GREEN.
+  #   3. BOTH AT ONCE — 14 tests, exactly TWO failures, one per kind, each
+  #      reporting ONLY its own site (`stack.ex:35` for the anchored one,
+  #      `stack.ex:36` for the bare one). This is the swallow control against
+  #      the real tree: the two selectors do not overlap, and neither is
+  #      passing on the other's behalf.
+  #   4. RATCHET DIRECTION — the pinned bare citation in that same file was
+  #      FIXED (rewritten into a resolvable anchored form) with the pin left
+  #      alone. 14 tests, ONE failure: `no pin names a citation that no longer
+  #      exists`, saying "A pinned citation was FIXED — shrink the pin" and
+  #      naming `{"lib/platform/tasks/stack.ex", "0041", _}`. Direction-correct
+  #      — NOT a new-citation message, which is the whole point of stage 2's
+  #      three-way decomposition.
+  #
+  # All four reverted; the file returns 14 tests, 0 failures. The independence
+  # observed in mutation 3 is kept permanently by `a bare anchor and a broken
+  # anchored citation are reported under different kinds` below, in the same
+  # way assertion 6b is kept separate from assertion 6 in
+  # `system_event_envelope_record_audit_test.exs`.
+  @bare_anchor_regex ~r/\bADR[\s-]?(\d{4})\s*§/
 
   # The anchored form's head: an ADR filename immediately followed by `§`. The
   # heading is NOT captured here — it is resolved against the target file's
@@ -147,6 +273,70 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   @orphan_section_regex ~r/^\s*(?:#+|\*|\/\/|<%!--)?\s*§/
 
   @test_name_regex ~r/^\s*(?:test|describe)\s+"/
+
+  # ── The dangling-citation ratchet ─────────────────────────────────
+  #
+  # Every bare-anchor site that existed when this gate landed, keyed
+  # `{path_relative_to_@app_root, adr_number, count}`. It is a REGISTRATION
+  # ratchet, not an exemption list: the three tests below assert set EQUALITY
+  # against the live scan, so a new site goes red (nothing exempts it), and
+  # fixing a registered one ALSO goes red until the row is removed. The list
+  # can therefore only shrink.
+  #
+  # Three deliberate omissions:
+  #
+  #   * No line number. A position-pinned entry is the exact defect this file
+  #     bans; it would rot on the first insertion above it.
+  #   * No verbatim citation text. Storing it would put a contiguous instance
+  #     of the banned form inside the corpus this audit walks (see the fixture
+  #     comments below), and it would force this list to decide where an anchor
+  #     ENDS — the terminator problem the moduledoc declines to solve. The
+  #     number and the count carry everything the ratchet needs; the failure
+  #     message quotes the offending line from source at report time, which is
+  #     where the text belongs.
+  #   * No aggregate total. A single number would let one new site hide behind
+  #     one fixed site.
+  #
+  # Measured against `origin/main` at `e844c1c2` + this branch: 58 sites across
+  # 29 files. The plan was written against a 49/26 measurement and did not list
+  # ADR 0044 at all; ten 0044 sites landed in between with the auto-approve
+  # fan-out work (tasks 01a05877 / 01a0589b).
+  @dangling_anchor_pins [
+    {"lib/platform/audit/event.ex", "0040", 1},
+    {"lib/platform/federation/invocation_visibility_grant.ex", "0040", 2},
+    {"lib/platform/federation/owner_handle.ex", "0040", 1},
+    {"lib/platform/federation/task_attrs.ex", "0044", 2},
+    {"lib/platform/federation/tool_surface.ex", "0041", 1},
+    {"lib/platform/federation/tool_surface.ex", "0042", 1},
+    {"lib/platform/federation/tool_surface.ex", "0044", 4},
+    {"lib/platform/orchestration/context_assembler.ex", "0042", 1},
+    {"lib/platform/orchestration/execution_lease.ex", "0040", 1},
+    {"lib/platform/orchestration/runtime_event.ex", "0040", 1},
+    {"lib/platform/orchestration/runtime_supervision.ex", "0040", 1},
+    {"lib/platform/org/preamble_builder.ex", "0042", 1},
+    {"lib/platform/security.ex", "0043", 1},
+    {"lib/platform/security/sweeper.ex", "0043", 1},
+    {"lib/platform/tasks.ex", "0018", 2},
+    {"lib/platform/tasks.ex", "0041", 3},
+    {"lib/platform/tasks/rollup_webhook_processor.ex", "0041", 1},
+    {"lib/platform/tasks/stack.ex", "0041", 1},
+    {"lib/platform/tasks/stacks.ex", "0041", 8},
+    {"lib/platform_web/controllers/github_webhook_controller.ex", "0041", 1},
+    {"lib/platform_web/live/tasks/board_component.ex", "0042", 1},
+    {"lib/platform_web/live/tasks/task_detail_component.ex", "0042", 1},
+    {"priv/repo/migrations/20260501202512_add_owner_identity_to_runtime_tables.exs", "0040", 1},
+    {"priv/repo/migrations/20260512000000_add_metadata_to_task_stacks.exs", "0041", 1},
+    {"test/platform/federation/task_attrs_test.exs", "0044", 3},
+    {"test/platform/federation/tool_surface_stacks_test.exs", "0041", 1},
+    {"test/platform/federation/tool_surface_test.exs", "0044", 1},
+    {"test/platform/org/preamble_builder_test.exs", "0042", 2},
+    {"test/platform/responsibilities/event_topic_delivery_test.exs", "0043", 1},
+    {"test/platform/tasks/plan_engine_stack_member_merge_test.exs", "0041", 1},
+    {"test/platform_web/controllers/github_webhook_controller_test.exs", "0041", 2},
+    {"test/platform_web/live/tasks_live_test.exs", "0018", 3},
+    {"test/platform_web/live/tasks_live_test.exs", "0041", 4},
+    {"test/platform_web/live/tasks_live_test.exs", "0042", 1}
+  ]
 
   setup_all do
     headings_by_adr = adr_headings_by_file()
@@ -269,6 +459,74 @@ defmodule Platform.Regression.AdrCitationAuditTest do
     end
   end
 
+  describe "the dangling-citation ratchet" do
+    # Set equality against @dangling_anchor_pins, decomposed into three
+    # DIRECTIONAL assertions. Not `MapSet.subset?` — subset is an exemption
+    # list wearing a ratchet's clothes, and a new site would slot into the
+    # exempted class and never fire. Not one `assert scanned == pinned` either:
+    # a bare equality failure says something moved without saying WHICH WAY,
+    # and the two directions need opposite actions. Mirrors the decomposition
+    # in `repo_lookup_boundary_test.exs`, whose `@inventory` solves this
+    # identically.
+    test "no bare-anchor citation is unpinned", ctx do
+      scanned = bare_anchor_counts(ctx)
+      unpinned = Enum.reject(Map.keys(scanned), &(&1 in pin_keys()))
+
+      assert unpinned == [],
+             """
+             A NEW dangling citation appeared — it names a section of a
+             document it never names, so nothing can resolve it and rule 2
+             cannot see it at all.
+
+             Fix the citation by naming the ADR file it means, in the anchored
+             form. Do NOT add a row to `@dangling_anchor_pins` to quiet this;
+             the pin registers what already existed, and it only ever shrinks.
+
+             #{sites_for(ctx, unpinned)}
+             """
+    end
+
+    test "no pin names a citation that no longer exists", ctx do
+      scanned = bare_anchor_counts(ctx)
+      stale = Enum.reject(pin_keys(), &Map.has_key?(scanned, &1))
+
+      assert stale == [],
+             """
+             A pinned citation was FIXED — shrink the pin.
+
+             These `@dangling_anchor_pins` rows no longer match anything in the
+             tree. Delete them:
+
+             #{Enum.map_join(stale, "\n", fn {path, number} -> "  {\"#{path}\", \"#{number}\", _}" end)}
+
+             This assertion is what makes the list monotonically decreasing: a
+             repair that left its row behind would silently re-open the slot
+             for the next bare citation in that file.
+             """
+    end
+
+    test "no pin carries a stale count", ctx do
+      scanned = bare_anchor_counts(ctx)
+
+      drifted =
+        for {path, number, pinned} <- @dangling_anchor_pins,
+            actual = Map.get(scanned, {path, number}),
+            actual != nil,
+            actual != pinned,
+            do: {{path, number}, pinned, actual}
+
+      assert drifted == [],
+             """
+             A pinned count no longer matches the tree. Each line below states
+             the direction, and the two directions need opposite actions.
+
+             #{Enum.map_join(drifted, "\n\n", &count_drift_line/1)}
+
+             #{sites_for(ctx, Enum.map(drifted, fn {key, _, _} -> key end))}
+             """
+    end
+  end
+
   describe "the audit itself" do
     test "the scan is not vacuous", ctx do
       # Without this control a typo in @citation_head_regex, or a file walk
@@ -294,6 +552,30 @@ defmodule Platform.Regression.AdrCitationAuditTest do
       # headings; an empty heading list would fail citations for the wrong
       # reason.
       assert Enum.all?(ctx.headings_by_adr, fn {_file, headings} -> headings != [] end)
+
+      # The ratchet's own controls. A widened bare-anchor selector that matched
+      # nothing would leave every ratchet assertion below comparing two empty
+      # sets and shipping green over a tree known to carry dozens of sites.
+      bare_anchors = of_kind(ctx, :bare_anchor)
+
+      assert length(bare_anchors) >= 40,
+             "the scan found only #{length(bare_anchors)} bare-anchor sites. There " <>
+               "were 58 across 29 files when this gate landed; the floor sits well " <>
+               "below that so ordinary repairs do not trip it, and far above zero " <>
+               "so a broken @bare_anchor_regex does."
+
+      assert length(@dangling_anchor_pins) > 0,
+             "@dangling_anchor_pins is empty. Either every registered citation was " <>
+               "repaired — in which case delete the pin and the three ratchet tests, " <>
+               "and the bare-anchor ban stands alone with no registration at all — " <>
+               "or the scan broke and the ratchet is comparing two empty sets."
+
+      pin_keys = Enum.map(@dangling_anchor_pins, fn {path, number, _count} -> {path, number} end)
+
+      assert Enum.uniq(pin_keys) == pin_keys,
+             "duplicate keys in @dangling_anchor_pins: " <>
+               inspect(pin_keys -- Enum.uniq(pin_keys)) <>
+               ". One row per {path, ADR number}; the count column carries multiplicity."
     end
 
     test "the detector flags a broken citation and clears a correct one" do
@@ -383,6 +665,190 @@ defmodule Platform.Regression.AdrCitationAuditTest do
       named = "  test \"the gate (" <> adr <> " " <> "§ Per-step outcome" <> ")\" do"
       assert [{:test_name, _, 1, _}] = offences_in("fixture.ex", named, headings)
     end
+
+    test "a bare anchor and a broken anchored citation are reported under different kinds" do
+      # Mutation 3 of the measurement above, made permanent. Two sites, one of
+      # each shape, scanned in ONE call: the returned list must be exactly one
+      # `:bare_anchor` and one `:unresolved_heading`, each on its own line. If
+      # either selector ever widens to subsume the other, this collapses to a
+      # single kind or reports one site twice, and it fails here rather than in
+      # a mutation run nobody re-runs.
+      headings = adr_headings_by_file()
+      sign = "§"
+      adr = "0046-design-and-architecture-phases-in-planning" <> ".md"
+
+      source =
+        "  # see ADR " <>
+          "0099" <>
+          " " <>
+          sign <>
+          "\"Phantom halt semantics\"\n" <>
+          "  # " <> adr <> " " <> sign <> " Phantom halt semantics" <> " governs this."
+
+      assert [
+               {:bare_anchor, "fixture.ex", 1, bare_detail},
+               {:unresolved_heading, "fixture.ex", 2, heading_detail}
+             ] = offences_in("fixture.ex", source, headings)
+
+      assert bare_detail =~ "0099"
+      assert heading_detail =~ adr
+      refute bare_detail =~ adr
+      refute heading_detail =~ "0099"
+    end
+
+    test "the advisory anchor read handles the three shapes in the corpus, and decides nothing" do
+      # Fixtures piecewise, as everywhere in this file: a contiguous literal of
+      # the banned form here would be a real offence against the rule.
+      sign = "§"
+
+      # The three shapes actually present in the corpus.
+      quoted = " " <> "\"Rollup-branch merge\"" <> ", which never landed."
+      quoted_with_space = "  " <> "\"Status divergence handling\"" <> " — see below."
+      bare_word = " Rationale, and the rest of the sentence."
+
+      assert extract_anchor_text(quoted) == "Rollup-branch merge"
+      assert extract_anchor_text(quoted_with_space) == "Status divergence handling"
+      assert extract_anchor_text(bare_word) == "Rationale"
+
+      # Bare-word variants that are not words.
+      assert extract_anchor_text("D3") == "D3"
+      assert extract_anchor_text("3") == "3"
+
+      # Nothing to read is reported as nothing, not as a guess.
+      assert extract_anchor_text("") == ""
+      assert extract_anchor_text("   ") == ""
+
+      # Bounded: a runaway read cannot paste a paragraph into the advice.
+      long = " " <> String.duplicate("a", 200)
+      assert String.length(extract_anchor_text(long)) <= 60
+
+      # THE LOAD-BEARING ASSERTION. The offence tuple — which is what every
+      # ratchet assertion is computed from — must be identical whatever this
+      # heuristic would read off the line. Two lines whose anchor TEXT differs
+      # wildly produce the same kind, and the detail stays the trimmed source
+      # line rather than anything the heuristic produced.
+      headings = adr_headings_by_file()
+      readable = "  # see ADR " <> "0041" <> " " <> sign <> "\"Rollup-branch merge\""
+      unreadable = "  # see ADR " <> "0041" <> " " <> sign
+
+      assert [{:bare_anchor, _, 1, readable_detail}] =
+               offences_in("fixture.ex", readable, headings)
+
+      assert [{:bare_anchor, _, 1, unreadable_detail}] =
+               offences_in("fixture.ex", unreadable, headings)
+
+      assert readable_detail == String.trim(readable)
+      assert unreadable_detail == String.trim(unreadable)
+    end
+
+    test "the advice names every file carrying an ambiguous number, and says when a section exists nowhere" do
+      headings = adr_headings_by_file()
+      sign = "§"
+
+      # FACT 1, ambiguous case. Two files under docs/decisions/ carry 0042; the
+      # advice must name BOTH, because naming one would be the coin flip the
+      # bare form is banned for.
+      ambiguous = "  # see ADR " <> "0042" <> " " <> sign <> "\"Context inheritance\""
+      advice = anchor_advice(ambiguous, headings)
+
+      carriers_0042 =
+        headings |> Map.keys() |> Enum.filter(&String.starts_with?(&1, "0042" <> "-"))
+
+      assert length(carriers_0042) == 2,
+             "expected two ADR files numbered 0042; found #{inspect(carriers_0042)}"
+
+      assert advice =~ "AMBIGUOUS"
+
+      for file <- carriers_0042 do
+        assert advice =~ file, "the ambiguity advice omitted #{file}"
+      end
+
+      # FACT 1, unambiguous case. One file carries 0041, and it is the
+      # org-memory ADR — NOT the stacks ADR that the 0041 citations in this
+      # tree are reaching for. The advice names the file it really is.
+      single = "  # see ADR " <> "0041" <> " " <> sign <> "\"Rollup-branch merge\""
+      single_advice = anchor_advice(single, headings)
+
+      carriers_0041 =
+        headings |> Map.keys() |> Enum.filter(&String.starts_with?(&1, "0041" <> "-"))
+
+      assert [only_0041] = carriers_0041
+      assert single_advice =~ only_0041
+
+      # FACT 2, the ticket's finding made self-evident at failure time. The
+      # section this citation names is in NO ADR, so the message must say the
+      # section was never written rather than imply a repointing fix.
+      assert files_carrying_heading("Rollup-branch merge", headings) == []
+      assert single_advice =~ "NO file"
+      assert single_advice =~ "never"
+      assert single_advice =~ "Do not delete the citation."
+
+      # FACT 2, the other branch. A heading that DOES exist somewhere gets the
+      # "anchor to that file" advice instead — otherwise the no-carrier
+      # message above would be unfalsifiable boilerplate that fires for
+      # everything.
+      {carrier, [heading | _]} =
+        Enum.find(headings, fn {_file, hs} -> hs != [] end)
+
+      existing = "  # see ADR " <> "0041" <> " " <> sign <> "\"" <> heading <> "\""
+      existing_advice = anchor_advice(existing, headings)
+
+      assert existing_advice =~ "Anchor the citation to that file."
+      assert existing_advice =~ carrier
+      refute existing_advice =~ "NO file"
+    end
+
+    test "the detector flags the bare-anchor form and clears the anchored and ordinal forms" do
+      headings = adr_headings_by_file()
+
+      # Every fixture is built piecewise for the same reason the fixtures above
+      # are: this file is inside the corpus the audit walks, so a contiguous
+      # literal of the banned form written here would be a real offence against
+      # the rule this test is adding.
+      sign = "§"
+      bare = fn number, tail -> "  # see ADR " <> number <> " " <> sign <> tail end
+
+      # FIRES. The shape the ticket found, plus the punctuation variants in the
+      # corpus, plus the SPACED variant (a space between the sign and the quoted
+      # heading) which `tasks_live_test.exs` uses and which must not escape.
+      for line <- [
+            bare.("0041", "\"Rollup-branch merge\""),
+            "  # ADR-" <> "0043" <> " " <> sign <> " Rationale",
+            "  # ADR " <> "0040" <> " " <> sign <> "D3",
+            "  # ADR" <> "0042" <> sign <> "3",
+            bare.("0041", " \"Status divergence handling\"")
+          ] do
+        assert [{:bare_anchor, _, 1, detail}] = offences_in("fixture.ex", line, headings),
+               "expected a bare-anchor offence for: " <> line
+
+        assert detail == String.trim(line)
+      end
+
+      # SWALLOW CONTROL — the load-bearing assertion. The anchored form must
+      # keep failing (or passing) on its OWN mechanism. Assert the FULL list,
+      # not `Enum.any?`, so a second kind appearing beside the first fails.
+      adr = "0046-design-and-architecture-phases-in-planning" <> ".md"
+
+      good = "  # " <> adr <> " " <> sign <> " Architect prompt contract" <> " — the rule."
+      assert offences_in("fixture.ex", good, headings) == []
+
+      wrong = "  # " <> adr <> " " <> sign <> " Architect prompt contracts" <> " — the rule."
+      assert [{:unresolved_heading, _, 1, _}] = offences_in("fixture.ex", wrong, headings)
+
+      # DISCRIMINATION CONTROL. None of these are the banned form, and each is
+      # a shape a greedier selector would swallow.
+      for line <- [
+            "  # ADR-0046 decision 7 falls open",
+            "  # see ADR-0042 for the topology",
+            "  # line 95 of ADR-0046 was a fence",
+            "  # never use the ADR-NNNN:LINE form",
+            "  # " <> sign <> " Branch model, with no ADR number before it",
+            "  # ADR 0041 (Branch model)"
+          ] do
+        assert offences_in("fixture.ex", line, headings) == [],
+               "expected no offence for: " <> line
+      end
+    end
   end
 
   # ── Scanning ──────────────────────────────────────────────────────
@@ -391,8 +857,14 @@ defmodule Platform.Regression.AdrCitationAuditTest do
     @umbrella_apps
     |> Path.join("**/*.{ex,exs,heex}")
     |> Path.wildcard()
+    # `/_build` rather than `/_build/`: OTP-version-suffixed build paths
+    # (`_build_otp28/`, used to run this suite under the CI image on a host
+    # whose Erlang is too old) hold verbatim COPIES of `priv/` sources, so the
+    # narrower match reported every migration twice — once as the real file and
+    # once as its build artefact. Any directory whose name starts `_build` is
+    # output, never authored source.
     |> Enum.reject(
-      &(String.contains?(&1, "/_build/") or String.contains?(&1, "/deps/") or
+      &(String.contains?(&1, "/_build") or String.contains?(&1, "/deps/") or
           String.contains?(&1, "/node_modules/"))
     )
     |> Enum.sort()
@@ -431,6 +903,7 @@ defmodule Platform.Regression.AdrCitationAuditTest do
     split_offences(path, line, index, next_line) ++
       resolution_offences(path, line, index, headings_by_adr) ++
       pin_offences(path, line, index) ++
+      bare_anchor_offences(path, line, index) ++
       test_name_offences(path, line, index)
   end
 
@@ -472,6 +945,18 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   defp pin_offences(path, line, index) do
     if Regex.match?(@line_pinned_regex, line) do
       [{:line_pinned, path, index, String.trim(line)}]
+    else
+      []
+    end
+  end
+
+  # Deliberately NOT folded into `test_name_offences/3`'s `cited?` disjunction.
+  # A bare anchor inside a test name is already caught here, wherever on the
+  # line it appears; adding it there would report one site under two kinds,
+  # which is the collapse problem of rationale 2 above running in reverse.
+  defp bare_anchor_offences(path, line, index) do
+    if Regex.match?(@bare_anchor_regex, line) do
+      [{:bare_anchor, path, index, String.trim(line)}]
     else
       []
     end
@@ -541,6 +1026,193 @@ defmodule Platform.Regression.AdrCitationAuditTest do
     ~r/^#+\s+(.+?)\s*$/m
     |> Regex.scan(body, capture: :all_but_first)
     |> List.flatten()
+  end
+
+  # ── The ratchet ───────────────────────────────────────────────────
+
+  # `%{{path, adr_number} => count}` over the live scan. Counted per ANCHOR,
+  # not per line: `bare_anchor_offences/3` emits one offence per offending
+  # line, and a line can carry two anchors, so the numbers are recovered by
+  # re-scanning the offence's own detail with the same regex that flagged it.
+  defp bare_anchor_counts(ctx) do
+    ctx
+    |> of_kind(:bare_anchor)
+    |> Enum.flat_map(fn {_kind, path, _index, detail} ->
+      @bare_anchor_regex
+      |> Regex.scan(detail)
+      |> Enum.map(fn [_match, number] -> {path, number} end)
+    end)
+    |> Enum.frequencies()
+  end
+
+  defp pin_keys do
+    Enum.map(@dangling_anchor_pins, fn {path, number, _count} -> {path, number} end)
+  end
+
+  defp count_drift_line({{path, number}, pinned, actual}) when actual > pinned do
+    "  #{path} (ADR #{number}): count went UP, #{pinned} -> #{actual}. A NEW " <>
+      "dangling citation landed in a file that already had some. Fix the new " <>
+      "one by naming the ADR file; do not raise the pinned count."
+  end
+
+  defp count_drift_line({{path, number}, pinned, actual}) do
+    "  #{path} (ADR #{number}): count went DOWN, #{pinned} -> #{actual}. A " <>
+      "citation was fixed. Decrement the row to #{actual} so the ratchet " <>
+      "holds the new floor."
+  end
+
+  # The offending lines themselves, quoted from source at report time. This is
+  # where the citation text lives — deliberately not in the pin.
+  #
+  # Each site carries two COMPUTED facts under it (see `anchor_advice/2`).
+  # Nothing here is hardcoded: both are derived from `docs/decisions/` at
+  # report time, so they cannot go stale against the tree the way a written
+  # list of "known-bad anchors" would.
+  defp sites_for(ctx, keys) do
+    key_set = MapSet.new(keys)
+    headings_by_adr = Map.get(ctx, :headings_by_adr, %{})
+
+    sites =
+      ctx
+      |> of_kind(:bare_anchor)
+      |> Enum.filter(fn {_kind, path, _index, detail} ->
+        @bare_anchor_regex
+        |> Regex.scan(detail)
+        |> Enum.any?(fn [_match, number] -> MapSet.member?(key_set, {path, number}) end)
+      end)
+      |> Enum.map_join("\n\n", fn {_kind, path, index, detail} ->
+        "  #{path}:#{index} — #{detail}\n" <> anchor_advice(detail, headings_by_adr)
+      end)
+
+    """
+    Offending sites. Under each one: which file(s) actually carry that ADR
+    number, and whether the cited section exists anywhere under
+    docs/decisions/ at all.
+
+    A citation whose section exists NOWHERE is not a misnumbered pointer — it
+    is a reference to a section nobody wrote. The repair is to write that
+    section into the ADR that should own it and then anchor the citation to
+    it. That is the worked example already pinned by this audit: rather than
+    delete a citation whose target was missing, the section was added to the
+    ADR and the citation anchored to the new heading. Deleting the citation to
+    make this test green is not one of the options — it destroys the only
+    record that the decision was ever claimed to exist.
+
+    #{sites}
+    """
+  end
+
+  # ── Bare-anchor advice ────────────────────────────────────────────
+  #
+  # Two computed facts per offending anchor, both read out of
+  # `docs/decisions/` at report time:
+  #
+  #   1. Which file(s) carry the cited ADR number. For a number owned by two
+  #      files this says so explicitly — that ambiguity is the whole reason the
+  #      bare form is banned (moduledoc, and `apps/platform/AGENTS.md`).
+  #   2. Whether the cited section exists anywhere under `docs/decisions/`. If
+  #      it does, the fix is "anchor to that file". If it does not, the section
+  #      was never written and the fix is to write it.
+  #
+  # Fact 2 needs the anchor TEXT, and reading it back off the line is exactly
+  # the terminator problem the moduledoc refuses to solve for the anchored form
+  # (rule 3 rationale). `extract_anchor_text/1` is therefore an openly
+  # BEST-EFFORT read, and it is confined to advice: the pass/fail decision
+  # stays purely "is there a filename before the section sign", made by
+  # `bare_anchor_offences/3` without consulting any of this. A heuristic that
+  # decides nothing cannot be wrong in a way that matters — the worst it can do
+  # is offer a reader a lookup on a truncated string, which the reader can see
+  # because the message quotes what it read.
+  defp anchor_advice(detail, headings_by_adr) do
+    @bare_anchor_regex
+    |> Regex.scan(detail, return: :index)
+    |> Enum.map_join("\n", fn [{match_start, match_length}, {number_start, number_length}] ->
+      number = binary_part(detail, number_start, number_length)
+      tail_start = match_start + match_length
+      tail = binary_part(detail, tail_start, byte_size(detail) - tail_start)
+      text = extract_anchor_text(tail)
+
+      "      " <>
+        number_advice(number, headings_by_adr) <>
+        "\n      " <> heading_advice(text, headings_by_adr)
+    end)
+  end
+
+  defp number_advice(number, headings_by_adr) do
+    case adr_files_for(number, headings_by_adr) do
+      [] ->
+        "No file under docs/decisions/ carries the number #{number} at all — " <>
+          "the citation names a document that does not exist."
+
+      [only] ->
+        "ADR #{number} is `#{only}` — name it: `#{only} § <heading>`."
+
+      several ->
+        "AMBIGUOUS: #{length(several)} files carry the number #{number} — " <>
+          Enum.join(several, ", ") <>
+          ". A bare `#{number}` is a coin flip between them, which is why " <>
+          "this form is banned; only the filename disambiguates."
+    end
+  end
+
+  defp heading_advice("", _headings_by_adr) do
+    "No section text follows the sign on this line, so there is nothing to " <>
+      "look up — name the file and the heading you mean."
+  end
+
+  defp heading_advice(text, headings_by_adr) do
+    case files_carrying_heading(text, headings_by_adr) do
+      [] ->
+        "Cited section (best-effort read of this line): `#{text}`. NO file " <>
+          "under docs/decisions/ has that heading. The section was never " <>
+          "written — write it into the ADR that should own it, then anchor " <>
+          "the citation to it. Do not delete the citation."
+
+      files ->
+        "Cited section (best-effort read of this line): `#{text}` — that " <>
+          "heading exists in " <>
+          Enum.join(files, ", ") <>
+          ". Anchor the citation to that file."
+    end
+  end
+
+  defp adr_files_for(number, headings_by_adr) do
+    headings_by_adr
+    |> Map.keys()
+    |> Enum.filter(&String.starts_with?(&1, number <> "-"))
+    |> Enum.sort()
+  end
+
+  defp files_carrying_heading(text, headings_by_adr) do
+    for({file, headings} <- headings_by_adr, text in headings, do: file) |> Enum.sort()
+  end
+
+  # BEST-EFFORT, advisory only. Strip a leading quote and cut at the closing
+  # one; failing that, cut at the first terminator the corpus actually uses.
+  # Capped so a runaway read cannot paste a whole line of prose into the
+  # advice. It is never consulted by any assertion.
+  @anchor_text_cap 60
+  @anchor_terminators [".", ",", ")", "—", "`", "\""]
+
+  defp extract_anchor_text(tail) do
+    tail = String.trim_leading(tail)
+
+    text =
+      case tail do
+        "\"" <> rest -> rest |> String.split("\"", parts: 2) |> hd()
+        _ -> cut_at_terminator(tail)
+      end
+
+    text
+    |> String.slice(0, @anchor_text_cap)
+    |> String.trim()
+  end
+
+  defp cut_at_terminator(text) do
+    @anchor_terminators
+    |> Enum.reduce(text, fn terminator, acc ->
+      acc |> String.split(terminator, parts: 2) |> hd()
+    end)
   end
 
   # ── Reporting ─────────────────────────────────────────────────────
