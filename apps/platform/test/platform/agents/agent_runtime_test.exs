@@ -11,6 +11,7 @@ defmodule Platform.Agents.AgentRuntimeTest do
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation
+  alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
@@ -23,6 +24,32 @@ defmodule Platform.Agents.AgentRuntimeTest do
       defaults = AgentRuntime.default_allowed_bundles()
       valid = AgentRuntime.valid_bundles()
       assert Enum.all?(defaults, &(&1 in valid))
+    end
+  end
+
+  describe "meetings bundle reachability (task 01a066af stage 4)" do
+    # `meeting_say` is the only way an invited agent can speak in a room. It
+    # was registered inside `task_tools/0` and therefore stamped `"task"`, a
+    # bundle that is NOT a default — so a voice-capable runtime sitting on the
+    # defaults was refused by `ToolAuthorization.authorize/2` before the
+    # room-membership guard ever ran, and could not speak at all.
+    #
+    # The runtime here is built from the accessor, not a literal list: the
+    # point is that WHATEVER the defaults are, they reach `meeting_say`.
+    # `owner_user_id` is nil, so `external_principal?/1` is false without a
+    # query and no external-chat intersection applies.
+    test "a runtime on default bundles may call meeting_say" do
+      runtime = %AgentRuntime{allowed_bundles: AgentRuntime.default_allowed_bundles()}
+
+      assert :ok = ToolAuthorization.authorize("meeting_say", runtime)
+      assert :ok = ToolAuthorization.authorize("meeting_create", runtime)
+      assert "meeting_say" in ToolAuthorization.tool_names(runtime)
+    end
+
+    test "\"meetings\" is a default, not merely grantable" do
+      assert "meetings" in AgentRuntime.default_allowed_bundles()
+      assert "meetings" in AgentRuntime.valid_bundles()
+      assert "meetings" in ToolSurface.all_bundles()
     end
   end
 

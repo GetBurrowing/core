@@ -12,9 +12,25 @@ defmodule Platform.Meetings.SayRegistry do
   whatever the runtime sent BACK — any connected runtime could echo an ack
   with arbitrary content and have it posted under the agent's name. So the
   ack carries only the id, and the text that gets posted is the text core
-  itself dispatched, looked up here. A forged ack for an id that was never
-  dispatched finds nothing and posts nothing; an ack from a different agent
-  than the one that spoke is refused by the `agent_id` stored alongside.
+  itself dispatched, looked up here.
+
+  ## What "refused" means, precisely
+
+  A forged ack for an id that was never dispatched by this node (or one
+  swept past `ttl_ms/0`) finds nothing here, so it posts nothing — but it IS
+  still relayed to whoever is waiting in `Platform.Meetings.say/4`. There is
+  no owner to check it against, and that carve-out is the same path a late
+  `"spoken"` ack takes when it arrives inside the ttl after the caller has
+  already been told `no_ack`.
+
+  An ack for an id that IS registered, sent by an agent other than the one
+  it was dispatched for, is refused outright by the `agent_id` stored
+  alongside: `Platform.Meetings.record_agent_say_ack/2` neither posts it nor
+  relays it, so the speaking agent waits out its ack window and is told
+  `no_ack` rather than a `"spoken"` that nothing earned. Before task
+  01a066af stage 2 the word "refused" here covered only the post, and the
+  relay went out regardless — agent B could make agent A's `say/4` return
+  `status: "spoken"` while nothing was spoken and nothing written.
 
   ## Storage
 

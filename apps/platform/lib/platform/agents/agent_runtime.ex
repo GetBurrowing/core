@@ -21,9 +21,15 @@ defmodule Platform.Agents.AgentRuntime do
   #
   # Being GRANTABLE is not being GRANTED: adding a bundle here does not add it
   # to `@default_allowed_bundles` below, and must not.
-  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files)
+  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings)
 
-  @default_allowed_bundles ~w(federation space context_read messaging attachment skill)
+  # `meetings` is a DEFAULT, not merely grantable (task 01a066af stage 4).
+  # `meeting_say` is the only way an invited agent can speak in a room, and it
+  # is guarded independently by `Platform.Meetings`' own room check — an agent no
+  # human invited still gets `:not_in_room`, so the bundle grant on its own
+  # buys nothing. Withholding it by default, though, meant every voice-capable
+  # runtime on the defaults was refused before that guard ever ran.
+  @default_allowed_bundles ~w(federation space context_read messaging attachment skill meetings)
 
   schema "agent_runtimes" do
     field(:runtime_id, :string)

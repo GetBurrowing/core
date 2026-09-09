@@ -127,10 +127,14 @@ defmodule Platform.Federation.ToolSurfaceMeetingSayTest do
   # ── Exposure ─────────────────────────────────────────────────────────────
 
   describe "the tool definition" do
-    test "sits in the task bundle beside meeting_create, with both parameters required" do
-      names = ToolSurface.list_tools(["task"]) |> Enum.map(& &1.name)
+    # Task 01a066af stage 4 moved both tools out of `task` and into the new
+    # `meetings` bundle, which IS a default — `task` is not, so this tool was
+    # unreachable for a runtime that had never been hand-granted `task`.
+    test "sits in the meetings bundle beside meeting_create, with both parameters required" do
+      names = ToolSurface.list_tools(["meetings"]) |> Enum.map(& &1.name)
       assert "meeting_say" in names
       assert "meeting_create" in names
+      refute "meeting_say" in (ToolSurface.list_tools(["task"]) |> Enum.map(& &1.name))
 
       tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "meeting_say"))
       assert tool.parameters.room_name.required
@@ -191,6 +195,86 @@ defmodule Platform.Federation.ToolSurfaceMeetingSayTest do
 
       assert {:ok, %{status: "spoken", utterance_id: ^id, duration_s: 0.8}} = Task.await(task)
       assert [%Message{content: "on it"}] = say_messages(space.id)
+    end
+  end
+
+  # ── The worker's error string (task 01a066af stage 1) ───────────────────
+  #
+  # `record_agent_say_ack/2` has always built `error` into the ack map and
+  # `say/4` has always passed it through, but the tool clause rebuilt the
+  # envelope key by key and did not list `error` — so the one string that
+  # tells a `failed` apart from any other `failed` died one frame short of
+  # the agent, while the tool description told the agent to "see `error`".
+  # The first test is the one that must go red if that key is removed again.
+  describe "the failure detail" do
+    test "the worker's error string round-trips to the agent" do
+      %{space: space, room: room} = room!()
+      %{agent: agent} = agent_with_runtime!()
+      seat!(room, agent)
+      room_name = room.livekit_room_name
+
+      # Hand-driven ack, so the wait has to outlive the round trip.
+      Application.put_env(:platform, :meeting_say_ack_timeout_ms, 2_000)
+
+      task =
+        Task.async(fn -> dispatch(%{"room_name" => room_name, "text" => "say this"}, agent) end)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "meeting_say",
+                       payload: %{utterance_id: id}
+                     },
+                     1_000
+
+      Meetings.record_agent_say_ack(agent.id, %{
+        "utterance_id" => id,
+        "room_name" => room_name,
+        "status" => "failed",
+        "error" => "HTTP 500"
+      })
+
+      assert {:ok, envelope} = Task.await(task)
+
+      # Exactly the worker's string, not a summary of it and not a code.
+      assert envelope.error == "HTTP 500"
+      assert envelope.status == "failed"
+      assert envelope.utterance_id == id
+      assert envelope.room_name == room_name
+
+      # `failed` posts nothing, so the string in the envelope is the only
+      # account of this utterance the agent will ever get.
+      assert say_messages(space.id) == []
+    end
+
+    test "a spoken ack with no error yields a nil error" do
+      %{room: room} = room!()
+      %{agent: agent} = agent_with_runtime!()
+      seat!(room, agent)
+      room_name = room.livekit_room_name
+
+      Application.put_env(:platform, :meeting_say_ack_timeout_ms, 2_000)
+
+      task =
+        Task.async(fn -> dispatch(%{"room_name" => room_name, "text" => "all good"}, agent) end)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "meeting_say",
+                       payload: %{utterance_id: id}
+                     },
+                     1_000
+
+      # No "error" key at all — the shape a well-behaved worker sends on
+      # success. The envelope must carry nil, not raise on a missing key.
+      Meetings.record_agent_say_ack(agent.id, %{
+        "utterance_id" => id,
+        "room_name" => room_name,
+        "status" => "spoken",
+        "duration_s" => 1.2
+      })
+
+      assert {:ok, envelope} = Task.await(task)
+      assert envelope.status == "spoken"
+      assert is_nil(envelope.error)
+      assert Map.has_key?(envelope, :error)
     end
   end
 

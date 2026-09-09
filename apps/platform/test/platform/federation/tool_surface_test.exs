@@ -142,6 +142,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # declaring `thinking` / `composing` about itself in a meeting, with a
       # server-side ttl that expires the declaration whether or not the
       # runtime survives to withdraw it. No new bundle.
+      # Still 104 after task 01a066af stage 4, which added the `meetings`
+      # bundle and MOVED `meeting_create` and `meeting_say` into it out of
+      # `task`. A move registers no new tool, so the total is unchanged — a
+      # change here would mean a tool was copied rather than moved.
       assert length(tools) == 104
 
       tool_names = Enum.map(tools, & &1.name)
@@ -283,6 +287,24 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute "canvas_create" in names
       refute "plan_create" in names
       assert Enum.all?(tools, &(&1.bundle == "task"))
+    end
+
+    # Task 01a066af stage 4 — `meeting_create` and `meeting_say` used to be
+    # registered inside `task_tools/0`, so they were stamped `"task"`, a bundle
+    # absent from `AgentRuntime.default_allowed_bundles/0`. A voice-capable
+    # runtime on the defaults was refused by `ToolAuthorization.authorize/2`
+    # and could not speak at all. Both directions are asserted: presence in
+    # `meetings` alone would still pass if the tools had merely been COPIED.
+    test "meeting_say is in the meetings bundle and not in task" do
+      meetings = ToolSurface.list_tools(["meetings"]) |> Enum.map(& &1.name)
+      task = ToolSurface.list_tools(["task"]) |> Enum.map(& &1.name)
+
+      assert "meeting_say" in meetings
+      assert "meeting_create" in meetings
+      refute "meeting_say" in task
+      refute "meeting_create" in task
+
+      assert Enum.all?(ToolSurface.list_tools(["meetings"]), &(&1.bundle == "meetings"))
     end
 
     test "returns the union when multiple bundles are requested" do

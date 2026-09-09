@@ -76,7 +76,7 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -169,6 +169,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
   defp tools_for_bundle("files"), do: tag(files_tools(), "files")
+  defp tools_for_bundle("meetings"), do: tag(meetings_tools(), "meetings")
   defp tools_for_bundle(_), do: []
 
   defp tag(tools, bundle), do: Enum.map(tools, &Map.put(&1, :bundle, bundle))
@@ -2579,6 +2580,49 @@ defmodule Platform.Federation.ToolSurface do
           "When you want to assign agents once at the stack level instead of drilling into each member task individually."
       },
       %{
+        name: "meeting_activity_push",
+        description:
+          "Declare what YOU are doing in a meeting right now, so the meeting's agent rail shows it instead of showing you idle. Only two states can be declared — `thinking` (you are working on something) and `composing` (you are drafting a reply you have not started sending) — because those are the only two the meeting cannot already observe for itself; it already sees when you are typing, when an intent is in flight for you, when one failed, and when a transcript segment reached you. The declaration EXPIRES on its own after a ttl the server sets (returned as `ttl_ms`), so call this again on roughly half that interval for as long as the state holds. There is nothing to call to clear it: stop pushing and it lapses. That is deliberate — it means a state you declared still lapses correctly if your runtime crashes, is killed, or loses its socket mid-turn.",
+        parameters: %{
+          meeting_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The meeting to declare the state in. NOT a room name and not a chat space id."
+          },
+          state: %{
+            type: "string",
+            required: true,
+            description:
+              "Exactly `thinking` or `composing`. Any other value — including `idle`, `typing`, `computing`, `failed` or `heard` — is refused, not coerced."
+          },
+          reason: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional short note shown beside the state, e.g. \"reading the last ten minutes of transcript\". Truncated past 200 characters; blank is treated as absent."
+          }
+        },
+        returns:
+          "%{meeting_id, agent_id, state, reason, pushed_at, ttl_ms, expires_at}. `pushed_at` and `expires_at` are ISO8601 UTC; `expires_at` is when the declaration lapses if you do not push again.",
+        limitations:
+          "You must be an active participant of the meeting's live room — seated by a human and not yet departed. Being in the meeting's chat space is not enough, and neither is having been in the room earlier. The state applies to YOU: there is no parameter for declaring another agent's state. It cannot overwrite what the meeting observed directly — a failed intent still reads as failed, and output you are actually emitting still reads as typing — but it does take precedence over a merely in-flight intent, and it holds off the 120-second stall cap for as long as you keep refreshing. It does not make you speak, does not post to chat, and is not persisted: it is in-memory per node and gone after a restart.",
+        when_to_use:
+          "When you are about to spend more than a few seconds on something in a meeting that the meeting has no other way to see — a long tool chain, a document read, drafting a summary — and the humans in the room would otherwise be watching you sit there looking idle or, past two minutes, looking failed."
+      }
+    ]
+  end
+
+  # Task 01a066af stage 4 — the `meetings` bundle. `meeting_create` and
+  # `meeting_say` were registered in `task_tools/0`, so `tag/2` stamped them
+  # `"task"`, a bundle that is NOT in `AgentRuntime.default_allowed_bundles/0`.
+  # A voice-capable runtime sitting on the defaults was therefore refused by
+  # `ToolAuthorization.authorize/2` and could not speak at all. Both tool maps
+  # moved here VERBATIM — their descriptions carry the `no_ack` contract
+  # rewritten in stages 1 and 3 and must not be regenerated.
+  defp meetings_tools do
+    [
+      %{
         name: "meeting_create",
         description:
           "Create a durable meeting in a project (ADR 0042). A meeting is a persistent record with its own backing chat space (the future intent panel) and a LiveKit room name — distinct from an ephemeral LiveKit call. Status starts at `scheduled`.",
@@ -2624,7 +2668,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "meeting_say",
         description:
-          "Speak text aloud into a meeting you have been invited into, in your own configured voice. The text is sent to your voice worker, which synthesises and plays it into the LiveKit room, then reports back. On `spoken` the text is also posted into the meeting's chat space under your name so the transcript shows what you said. Returns `status`: `spoken` (the worker played it; `duration_s` is how long it took), `failed` (the worker could not play it; see `error`), or `no_ack` (nothing answered within 15 seconds — your voice worker may not be connected, or may still be speaking; core cannot tell which, and nothing was posted to chat).",
+          "Speak text aloud into a meeting you have been invited into, in your own configured voice. The text is sent to your voice worker, which synthesises and plays it into the LiveKit room, then reports back. On `spoken` the text is also posted into the meeting's chat space under your name so the transcript shows what you said. Returns `status`: `spoken` (the worker played it; `duration_s` is how long it took), `failed` (the worker could not play it; see `error`), or `no_ack` (nothing answered in time — your voice worker may not be connected, or may still be speaking; core cannot tell which). The wait is not a fixed 15 seconds: it scales with how long your text takes to say, so a long utterance is given time to finish playing before core gives up. `no_ack` describes what CORE KNOWS, not what the room heard. Your words may already have been spoken aloud. Nothing has been posted to chat YET, which is not the same as nothing ever being posted: a late `spoken` ack arriving within the say registry's 5-minute ttl still posts the text under your name, back-dated to when it was dispatched. So do not conclude from `no_ack` that your words were lost, and do not say them again out loud on that basis.",
         parameters: %{
           room_name: %{
             type: "string",
@@ -2639,42 +2683,11 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{utterance_id, status: \"spoken\" | \"failed\" | \"no_ack\", duration_s, room_name}. `duration_s` is nil unless the worker reported it.",
+          "%{utterance_id, status: \"spoken\" | \"failed\" | \"no_ack\", duration_s, error, room_name}. `duration_s` is nil unless the worker reported it. `error` is the worker's own failure string on `failed`, and nil otherwise.",
         limitations:
           "You must be a current participant of the room — invited by a human from the meeting page and not yet dismissed. Being a member of the meeting's chat space is not enough. Text over 2000 characters is refused, not truncated. A reply budget applies: at most 6 says per minute per room (`reply_budget_exhausted`), and no say at all while the last 3 utterances in the room were agents — a human must speak before you may reply again (`agent_chain_too_deep`). `no_ack` is not a failure and not a success: the dispatch went out and nothing came back, and it still spends budget. Do not retry in a loop on `no_ack`; if it repeats, say so in chat instead.",
         when_to_use:
           "When you are in a meeting and want to say something specific out loud — an answer, a summary, a question — rather than waiting for the intent pipeline to prompt you."
-      },
-      %{
-        name: "meeting_activity_push",
-        description:
-          "Declare what YOU are doing in a meeting right now, so the meeting's agent rail shows it instead of showing you idle. Only two states can be declared — `thinking` (you are working on something) and `composing` (you are drafting a reply you have not started sending) — because those are the only two the meeting cannot already observe for itself; it already sees when you are typing, when an intent is in flight for you, when one failed, and when a transcript segment reached you. The declaration EXPIRES on its own after a ttl the server sets (returned as `ttl_ms`), so call this again on roughly half that interval for as long as the state holds. There is nothing to call to clear it: stop pushing and it lapses. That is deliberate — it means a state you declared still lapses correctly if your runtime crashes, is killed, or loses its socket mid-turn.",
-        parameters: %{
-          meeting_id: %{
-            type: "string",
-            required: true,
-            description:
-              "The meeting to declare the state in. NOT a room name and not a chat space id."
-          },
-          state: %{
-            type: "string",
-            required: true,
-            description:
-              "Exactly `thinking` or `composing`. Any other value — including `idle`, `typing`, `computing`, `failed` or `heard` — is refused, not coerced."
-          },
-          reason: %{
-            type: "string",
-            required: false,
-            description:
-              "Optional short note shown beside the state, e.g. \"reading the last ten minutes of transcript\". Truncated past 200 characters; blank is treated as absent."
-          }
-        },
-        returns:
-          "%{meeting_id, agent_id, state, reason, pushed_at, ttl_ms, expires_at}. `pushed_at` and `expires_at` are ISO8601 UTC; `expires_at` is when the declaration lapses if you do not push again.",
-        limitations:
-          "You must be an active participant of the meeting's live room — seated by a human and not yet departed. Being in the meeting's chat space is not enough, and neither is having been in the room earlier. The state applies to YOU: there is no parameter for declaring another agent's state. It cannot overwrite what the meeting observed directly — a failed intent still reads as failed, and output you are actually emitting still reads as typing — but it does take precedence over a merely in-flight intent, and it holds off the 120-second stall cap for as long as you keep refreshing. It does not make you speak, does not post to chat, and is not persisted: it is in-memory per node and gone after a restart.",
-        when_to_use:
-          "When you are about to spend more than a few seconds on something in a meeting that the meeting has no other way to see — a long tool chain, a document read, drafting a summary — and the humans in the room would otherwise be watching you sit there looking idle or, past two minutes, looking failed."
       }
     ]
   end
@@ -4332,6 +4345,11 @@ defmodule Platform.Federation.ToolSurface do
                utterance_id: ack.utterance_id,
                status: ack.status,
                duration_s: Map.get(ack, :duration_s),
+               # The worker's own failure string, relayed verbatim. It is
+               # the only thing that distinguishes one `failed` from
+               # another, and dropping it here left the tool description
+               # promising an `error` the agent could never see.
+               error: Map.get(ack, :error),
                room_name: Map.get(ack, :room_name) || room_name
              }}
 

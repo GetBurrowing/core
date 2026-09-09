@@ -5391,7 +5391,94 @@ defmodule Platform.Meetings do
   @spec meeting_say_max_chars() :: pos_integer()
   def meeting_say_max_chars, do: @meeting_say_max_chars
 
+  # ── The ack window (task 01a066af stage 3) ───────────────────────────
+  #
+  # The worker acks a `meeting_say` only AFTER playback finishes, so ack
+  # latency tracks the duration of the audio. A FIXED window is therefore a
+  # ceiling on how long an agent may speak before the tool lies to it: at
+  # 15 s it sat at roughly 190 characters. Live, 2026-09-08: five short
+  # utterances all returned `spoken` (5.1-8.4 s), and two ~700-character
+  # utterances — about 45 s of speech each — both returned `no_ack` while
+  # playing perfectly. So the window is derived from the text instead.
+  #
+  #   window = min(@say_ack_max_timeout_ms,
+  #                max(floor, chars * ms_per_char))
+  #
+  # The floor is kept at the old constant so every utterance short enough
+  # to have worked before waits exactly as long as it did before — this is
+  # a `max`, not a sum, precisely so short-say behaviour is bit-for-bit
+  # unchanged rather than merely similar.
   @say_ack_timeout_ms 15_000
+
+  # Per character of text. Speech runs about 15.5 characters a second by
+  # two independent measures that agree: `@meeting_say_max_chars`' own
+  # note that 2,000 characters is "roughly two minutes of speech"
+  # (16.7 chars/s), and the live 2026-09-08 data above (~700 chars in ~45 s,
+  # 15.6 chars/s). That is ~65 ms of audio per character; 80 ms carries it
+  # plus ~23% headroom for TTS synthesis and the round trip, because the
+  # ack cannot start until playback ENDS.
+  @say_ack_ms_per_char 80
+
+  # A hard ceiling, so a misconfigured seam cannot park a caller forever.
+  # 2.5 minutes comfortably covers a full 2,000-character utterance
+  # (~130 s of speech) with room for synthesis on top; the ceiling has not
+  # merely moved, it now sits above the longest utterance `say/4` accepts.
+  @say_ack_max_timeout_ms 150_000
+
+  @doc """
+  How long `say/4` will wait for the runtime's receipt for `text`.
+
+  Pure and public so the arithmetic can be asserted directly, without a
+  test ever waiting on a real window.
+
+      max(floor, String.length(text) * ms_per_char), capped at
+      #{@say_ack_max_timeout_ms} ms
+
+  Floor #{@say_ack_timeout_ms} ms, rate #{@say_ack_ms_per_char} ms per
+  character. Because it is a `max` and not a sum, anything short enough to
+  have acked under the old fixed window gets exactly the old fixed window:
+  the floor covers the first #{div(@say_ack_timeout_ms, @say_ack_ms_per_char)}
+  characters. Past that the window tracks how long the audio will take,
+  which is what the ack actually waits on — the worker acks after playback
+  ENDS, not when it starts.
+
+  ## The two app-env seams
+
+    * `:meeting_say_ack_timeout_ms` — the floor. **Setting this alone
+      pins the window to that value for every length**, which is exactly
+      how it behaved before this function existed, and is what the tests
+      that use it to avoid a real 15-second `no_ack` wait rely on. A test
+      that shortened the wait must not start waiting again because the
+      text got longer.
+    * `:meeting_say_ack_ms_per_char` — the rate. Setting it beside the
+      floor turns scaling back on at that rate, so an integration test can
+      prove the wiring in milliseconds instead of minutes.
+
+  Both are unset in every config file; production always gets the module
+  defaults, and therefore always scales.
+
+  An explicit `:ack_timeout_ms` option to `say/4` bypasses this function
+  entirely and is never scaled.
+  """
+  @spec say_ack_timeout_for(String.t()) :: pos_integer()
+  def say_ack_timeout_for(text) when is_binary(text) do
+    chars = String.length(text)
+
+    case {Application.fetch_env(:platform, :meeting_say_ack_timeout_ms),
+          Application.fetch_env(:platform, :meeting_say_ack_ms_per_char)} do
+      {{:ok, fixed}, :error} ->
+        fixed
+
+      {floor_env, rate_env} ->
+        floor_ms = unwrap_env(floor_env, @say_ack_timeout_ms)
+        ms_per_char = unwrap_env(rate_env, @say_ack_ms_per_char)
+
+        min(@say_ack_max_timeout_ms, max(floor_ms, chars * ms_per_char))
+    end
+  end
+
+  defp unwrap_env({:ok, value}, _default), do: value
+  defp unwrap_env(:error, default), do: default
 
   # The reply budget (task 01a06672 stage 2). Deterministic, no LLM call,
   # and checked inside `say/4` so every caller — the tool surface, the
@@ -5460,7 +5547,31 @@ defmodule Platform.Meetings do
   the return is `{:ok, %{status: "no_ack"}}` — the dispatch itself did
   succeed, and the honest thing to say about what happened next is that
   core does not know. The tool description tells the agent what to do with
-  that. Nothing is posted to chat on `no_ack`; see `record_agent_say_ack/2`.
+  that.
+
+  `no_ack` is a statement about what the CALLER knows, not about what the
+  room received. The words may already have been spoken aloud. Nothing has
+  been posted to chat YET, and that is not the same as nothing ever being
+  posted: `await_say_ack/4` deliberately leaves the `SayRegistry` entry in
+  place on timeout, so a late `"spoken"` ack landing any time inside the
+  registry's 5-minute ttl still runs `post_spoken_utterance/2` and writes
+  the chat row, back-dated to the dispatch time. Callers must not conclude
+  from `no_ack` that the utterance was lost, and must not repeat it out
+  loud on that basis. See `record_agent_say_ack/2`.
+
+  ## How long the wait is
+
+  Not a constant. The worker acks only after playback FINISHES, so ack
+  latency tracks the duration of the audio, and a fixed window is a ceiling
+  on how long an agent may speak before this function reports `no_ack` for
+  something the room heard perfectly. `say_ack_timeout_for/1` derives the
+  window from the text, keeping the old #{@say_ack_timeout_ms} ms as a
+  floor so short utterances behave exactly as they always have.
+
+  That makes `no_ack` rarer; it does not change what `no_ack` MEANS. A
+  worker that is disconnected, wedged, or slower than the derived window
+  still produces one, and everything the section above says about it still
+  holds.
 
   ## Why the text is parked in `SayRegistry` and not sent back in the ack
 
@@ -5492,9 +5603,13 @@ defmodule Platform.Meetings do
 
   ## Options
 
-    * `:ack_timeout_ms` — how long to wait for the runtime's receipt
-      (default #{@say_ack_timeout_ms}, overridable for tests through the
-      `:meeting_say_ack_timeout_ms` app env key).
+    * `:ack_timeout_ms` — how long to wait for the runtime's receipt.
+      Passed explicitly it wins outright and is NEVER scaled. Omitted, the
+      window comes from `say_ack_timeout_for/1`, which derives it from the
+      text: a #{@say_ack_timeout_ms} ms floor, #{@say_ack_ms_per_char} ms
+      per character past what the floor covers, capped at
+      #{@say_ack_max_timeout_ms} ms. See the "How long the wait is"
+      section.
 
   ## Returns
 
@@ -5521,7 +5636,14 @@ defmodule Platform.Meetings do
          {:ok, topic} <- meeting_join_topic(agent) do
       utterance_id = Platform.Types.UUIDv7.generate()
       ack_topic = say_ack_topic(utterance_id)
-      timeout = Keyword.get(opts, :ack_timeout_ms, default_say_ack_timeout_ms())
+      # An explicitly passed window wins outright and is never scaled; every
+      # existing test that shortens the wait depends on that. Otherwise the
+      # window is derived from the text. See `say_ack_timeout_for/1`.
+      timeout =
+        case Keyword.fetch(opts, :ack_timeout_ms) do
+          {:ok, ms} -> ms
+          :error -> say_ack_timeout_for(text)
+        end
 
       # Registered before the broadcast, for the same reason the subscribe
       # is: an ack that beats the registration would find no text to post.
@@ -5759,14 +5881,6 @@ defmodule Platform.Meetings do
 
   defp say_ack_topic(utterance_id), do: "meetings:say:#{utterance_id}"
 
-  # The tool surface calls `say/4` without options, so the only way a test
-  # of the TOOL can avoid a real 15-second wait on `no_ack` is this app-env
-  # seam. Unset in every config file; production always gets the module
-  # default.
-  defp default_say_ack_timeout_ms do
-    Application.get_env(:platform, :meeting_say_ack_timeout_ms, @say_ack_timeout_ms)
-  end
-
   # The rendezvous. Whichever branch fires, the subscription is dropped so a
   # late ack does not land in the caller's mailbox as an unexpected message
   # (the tool surface runs inside a channel process that would otherwise
@@ -5796,32 +5910,58 @@ defmodule Platform.Meetings do
   Called from `PlatformWeb.RuntimeChannel.handle_in("meeting_say_ack", ...)`
   with the raw string-keyed payload. `status` is `"spoken"` or `"failed"`
   from a well-behaved worker; an absent or unrecognised status is relayed
-  verbatim (absent as `"unknown"`) and is treated as not-spoken. Three
-  things happen, in this order:
+  verbatim (absent as `"unknown"`) and is treated as not-spoken.
 
-  1. The ack is relayed to whoever is waiting in `say/4`, on
-     `"meetings:say:<utterance_id>"`. This is unconditional — a `"failed"`
-     receipt is exactly what the waiting caller needs to hear.
-  2. `[:platform, :meetings, :agent_say_ack]` telemetry, mirroring the join
-     ack's event.
-  3. On `"spoken"` ONLY, the text core dispatched is posted into the room's
-     chat space as the agent, so the transcript shows what was said. That
-     row's `metadata["spoken_at"]` is the utterance's DISPATCH time, not its
-     insert time, so a late ack does not reorder the meeting (task 01a07401
-     stage 1); `metadata["spoken_at_source"]` records that it is dispatch
-     time and not a worker-reported playback start.
+  ## The ownership gate runs first
+
+  Both audit emits — `[:platform, :meetings, :agent_say_ack]` and
+  `Platform.Meetings.SayTelemetry.ack/5`'s `[:platform, :meetings, :say,
+  :ack]` — fire for EVERY ack, including a refused one, and are emitted
+  before anything is decided: they are the audit trail for exactly the
+  forgery described below, and an event that only fired on the accepted path
+  could not evidence one.
+
+  Then the `SayRegistry` entry is resolved, and that resolution gates
+  everything after it:
+
+    * **The acking agent owns the utterance, or the id is a registry MISS.**
+      The ack is relayed to whoever is waiting in `say/4`, on
+      `"meetings:say:<utterance_id>"` — a `"failed"` receipt is exactly what
+      the waiting caller needs to hear, and a miss (an id this node never
+      dispatched, or one past the registry ttl) has no owner to check
+      against, so it keeps relaying. That carve-out is load-bearing: it is
+      the path the `no_ack` and late-ack cases run through. On `"spoken"`
+      ONLY, the text core dispatched is posted into the room's chat space as
+      the agent, so the transcript shows what was said. That row's
+      `metadata["spoken_at"]` is the utterance's DISPATCH time, not its
+      insert time, so a late ack does not reorder the meeting (task 01a07401
+      stage 1); `metadata["spoken_at_source"]` records that it is dispatch
+      time and not a worker-reported playback start.
+
+    * **The entry EXISTS and was dispatched for a DIFFERENT agent.** Nothing
+      is relayed and nothing is posted; the refusal is logged at `info`
+      naming both agent ids and the utterance id, and `:ok` comes back. This
+      is the honesty half of the guard (task 01a066af stage 2). The check on
+      the posting path below already refused to WRITE such an ack, but the
+      relay above it used to be unconditional, so a runtime authenticated as
+      agent B holding agent A's `utterance_id` could make A's in-flight
+      `say/4` return `status: "spoken"` while nothing was spoken and nothing
+      posted, with no way for A to tell. A waiter must never be told a thing
+      the registry is about to refuse.
 
   ## What does NOT post
 
   `"failed"` — nothing was said. A registry miss — the id was never
   dispatched by this node, or has expired; a forged or replayed ack finds no
-  text and writes nothing. An `agent_id` mismatch — the acking runtime is
-  not the agent that spoke; another runtime cannot cause a post under a
-  different agent's name. And an agent that is in the call but is not a
-  chat participant of the space (`authorize_writer/2` refuses) — the voice
-  went out, but there is no participant row to post as, so the miss is
-  logged rather than forged. Each of those is logged at `info` with the id,
-  and none of them raises: an ack is a receipt, not a command.
+  text and writes nothing (it is still relayed, see above). An `agent_id`
+  mismatch — the acking runtime is not the agent that spoke; another runtime
+  cannot cause a post under a different agent's name, and as of this stage
+  cannot satisfy that agent's waiter either. And an agent that is in the
+  call but is not a chat participant of the space (`authorize_writer/2`
+  refuses) — the voice went out, but there is no participant row to post as,
+  so the miss is logged rather than forged. Each of those is logged at
+  `info` with the id, and none of them raises: an ack is a receipt, not a
+  command.
 
   Returns `:ok` always.
   """
@@ -5844,34 +5984,56 @@ defmodule Platform.Meetings do
       room_name: room_name
     }
 
-    Phoenix.PubSub.broadcast(
-      Platform.PubSub,
-      say_ack_topic(utterance_id),
-      {:meeting_say_ack, utterance_id, ack}
-    )
-
+    # BOTH audit emits are unconditional and deliberately sit above the
+    # ownership gate: a refused ack is the one an audit most wants to see,
+    # and an event that only fired on the accepted path could not evidence
+    # a forgery. `status` is handed to `SayTelemetry` verbatim (task
+    # 01a07400 stage 1) — the row records what the runtime said, not what
+    # this function concluded about it.
     :telemetry.execute(
       [:platform, :meetings, :agent_say_ack],
       %{system_time: System.system_time()},
       %{agent_id: agent_id, room_name: room_name, status: status}
     )
 
-    # Task 01a07400 stage 1. `status` is handed over verbatim — the audit
-    # row records what the runtime said, not what this branch concluded.
     SayTelemetry.ack(utterance_id, agent_id, room_name, status, ack.duration_s)
 
-    SpeakingWindow.acked(agent_id, utterance_id)
+    # Resolved BEFORE the relay, not after it. See the "ownership gate"
+    # note above: a nil entry is a MISS and still relays.
+    case SayRegistry.get(utterance_id) do
+      %{agent_id: owner} when owner != agent_id ->
+        Logger.info(
+          "[Meetings] meeting_say_ack status=#{status} utterance=#{utterance_id} " <>
+            "acked by agent=#{inspect(agent_id)} but dispatched for agent=#{owner} " <>
+            "— refused, not relayed to the caller and not posted"
+        )
 
-    if status == "spoken" do
-      post_spoken_utterance(agent_id, utterance_id)
-    else
-      Logger.info(
-        "[Meetings] meeting_say_ack status=#{status} utterance=#{utterance_id} " <>
-          "agent=#{inspect(agent_id)} error=#{inspect(ack.error)} — not posted"
-      )
+        :ok
+
+      _owned_or_unknown ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          say_ack_topic(utterance_id),
+          {:meeting_say_ack, utterance_id, ack}
+        )
+
+        SpeakingWindow.acked(agent_id, utterance_id)
+
+        if status == "spoken" do
+          # The ownership check inside is now unreachable for a registered
+          # id — the gate above caught it. It stays as the guard on the
+          # WRITE, so a future caller of this function cannot post under
+          # another agent's name by skipping the gate.
+          post_spoken_utterance(agent_id, utterance_id)
+        else
+          Logger.info(
+            "[Meetings] meeting_say_ack status=#{status} utterance=#{utterance_id} " <>
+              "agent=#{inspect(agent_id)} error=#{inspect(ack.error)} — not posted"
+          )
+        end
+
+        :ok
     end
-
-    :ok
   end
 
   def record_agent_say_ack(_agent_id, _payload), do: :ok
