@@ -145,4 +145,93 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplayOutcomeTest do
              ) == nil
     end
   end
+
+  # An ARMED row — still counting down, nothing produced. Both ids are
+  # nil because that is the only shape an armed row has: `acts_at` is
+  # nilled in the same write that moves the row to `:acting`, and
+  # `graduate/2` writes an id strictly after that. A fixture with an id
+  # on it would not be an armed card, and a test built on one would pass
+  # against an implementation that renders nothing during the countdown.
+  defp armed(attrs) do
+    struct!(
+      %MeetingCandidate{
+        id: Ecto.UUID.generate(),
+        evidence_quote: "we should rotate the staging secrets",
+        state: :shaping,
+        acts_at: ~U[2026-09-08 22:00:00Z],
+        task_id: nil,
+        canvas_id: nil,
+        disposition: nil
+      },
+      attrs
+    )
+  end
+
+  describe "armed_outcome_label/1" do
+    test "a :task row names a task" do
+      label = CandidateDisplay.armed_outcome_label(armed(outcome_kind: :task))
+
+      assert is_binary(label)
+      assert label != ""
+    end
+
+    test "an :artifact row names a canvas" do
+      label = CandidateDisplay.armed_outcome_label(armed(outcome_kind: :artifact))
+
+      assert is_binary(label)
+      assert label != ""
+    end
+
+    test "names the two armed kinds differently" do
+      # The only assertion in this describe that catches the real bug.
+      # Each of the two tests above passes against a function that
+      # returns one constant for everything; this one does not.
+      task_label = CandidateDisplay.armed_outcome_label(armed(outcome_kind: :task))
+      artifact_label = CandidateDisplay.armed_outcome_label(armed(outcome_kind: :artifact))
+
+      refute task_label == artifact_label
+    end
+
+    test "an armed row with NEITHER id still names what it is aiming at" do
+      # The real shape of an armed card. Anything keyed on `task_id` /
+      # `canvas_id` answers nil here, which is a blank line on screen for
+      # the whole countdown.
+      row = armed(outcome_kind: :artifact)
+
+      assert row.task_id == nil
+      assert row.canvas_id == nil
+      assert CandidateDisplay.armed_outcome_label(row) != nil
+
+      # The nil-safe clause, on the same family of id-less rows: a row
+      # whose kind was never recorded renders nothing rather than raising
+      # and taking the rail down with it.
+      assert CandidateDisplay.armed_outcome_label(armed(outcome_kind: nil)) == nil
+    end
+
+    test "the stored :artifact token never reaches the DOM as the word artifact" do
+      label = CandidateDisplay.armed_outcome_label(armed(outcome_kind: :artifact))
+
+      refute String.downcase(label) =~ "artifact"
+    end
+
+    test "every outcome_kind gets its own word" do
+      # Walks the enum rather than naming the two members, so a third
+      # `outcome_kind` fails HERE — loudly, at the point somebody adds
+      # it — instead of rendering a blank noun during a live meeting.
+      labels =
+        Map.new(MeetingCandidate.outcome_kinds(), fn kind ->
+          label = CandidateDisplay.armed_outcome_label(armed(outcome_kind: kind))
+
+          assert is_binary(label) and label != "",
+                 "no armed word for outcome_kind #{inspect(kind)}"
+
+          {kind, label}
+        end)
+
+      distinct = labels |> Map.values() |> Enum.uniq()
+
+      assert length(distinct) == map_size(labels),
+             "two outcome_kinds share one armed word: #{inspect(labels)}"
+    end
+  end
 end

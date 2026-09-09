@@ -513,6 +513,60 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
 
   def closed_outcome_line(_candidate), do: nil
 
+  @doc """
+  The noun for a card that is still COUNTING DOWN — what it is about to
+  make, while it has not made anything yet.
+
+  ## Why this cannot be `outcome_label/1`
+
+  Not a near-duplicate, and the difference is structural rather than a
+  matter of wording. `outcome_label/1` keys on `task_id` / `canvas_id`,
+  and a card is armed exactly while `acts_at` is non-nil.
+  `Platform.Meetings.Candidates` nils `acts_at` in the SAME
+  `Repo.update_all` that moves the row to `:acting`
+  (`set: [acts_at: nil, state: :acting, updated_at: now]`), and
+  `graduate/2` — the only writer of either id — runs strictly after
+  that. So on every armed card BOTH ids are nil and `outcome_label/1`
+  answers nil. An armed label built on the ids renders nothing at all,
+  on every card, for the entire window it exists to describe.
+
+  This one therefore keys on `outcome_kind`, which is the field that
+  records what the card is AIMING at. That is the same distinction
+  `outcome_label/1` and `outcome_path/1` draw in their own docs; they
+  are about what a card REACHED, and reaching is what has not happened
+  yet here.
+
+  ## The words
+
+  `"task"` and `"canvas"`, to agree with what already ships. The closed
+  row says `"TASK"` / `"CANVAS"` (`outcome_kind_label/1`) and the byline
+  says `"task created"` / `"canvas created"` (`byline_state/1`), so a
+  third wording would make one card call the same deliverable two names
+  as it moved from armed to closed.
+
+  The stored member is `:artifact` while the word is **canvas**, and
+  that mismatch is deliberate and already established in both functions
+  above. Per the moduledoc there is no catch-all to `to_string/1`: the
+  token `artifact` must never reach the DOM as the word "artifact". A
+  row with no `outcome_kind` answers nil so the caller omits the noun,
+  rather than raising and taking the whole rail down with it.
+
+  ## Examples
+
+      iex> alias PlatformWeb.Components.Meetings.CandidateDisplay
+      iex> CandidateDisplay.armed_outcome_label(%{outcome_kind: :task})
+      "task"
+      iex> CandidateDisplay.armed_outcome_label(%{outcome_kind: :artifact})
+      "canvas"
+      iex> CandidateDisplay.armed_outcome_label(%{outcome_kind: nil})
+      nil
+
+  """
+  @spec armed_outcome_label(map()) :: String.t() | nil
+  def armed_outcome_label(%{outcome_kind: :task}), do: "task"
+  def armed_outcome_label(%{outcome_kind: :artifact}), do: "canvas"
+  def armed_outcome_label(_candidate), do: nil
+
   defp normalize(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil

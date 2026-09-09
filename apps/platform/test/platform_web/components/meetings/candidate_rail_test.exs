@@ -815,6 +815,164 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
     end
   end
 
+  # ── The armed card names its outcome (task 01a0740e stage 2) ─────────
+  #
+  # A NEW describe on purpose. Nothing in "the commit window" above is
+  # edited or relaxed by this stage, and in particular its two
+  # refutations still stand exactly as written:
+  #
+  #   * `refute count =~ "s"` / `refute count =~ ":"` — the count is
+  #     still bare seconds. Every word of the new sentence lives in a
+  #     SIBLING element, so nothing this stage adds can reach that node.
+  #   * `refute present?(..., "meeting-candidate-remaining-word")` and
+  #     `refute html =~ "Starting in"` — the prose FE-9 deleted stays
+  #     deleted. It was banned for restating the NUMBER a third time.
+  #     The sentence here carries the outcome KIND, which appears
+  #     nowhere else on an armed card, so it is a different claim under
+  #     a different `data-role` and not a revert of that decision.
+  @sentence "[data-role='meeting-candidate-armed-outcome']"
+
+  # An armed card AIMED at a kind. `outcome_kind` is the only field that
+  # can answer here: `Candidates` nils `acts_at` in the same update that
+  # moves the row to `:acting`, and `graduate/2` — the only writer of
+  # `task_id` / `canvas_id` — runs strictly after that, so an armed card
+  # has nil ids by construction. The fixtures below assert that rather
+  # than assuming it.
+  defp armed_kind(secs, kind) do
+    candidate(%{acts_at: DateTime.add(@now, secs, :second), outcome_kind: kind})
+  end
+
+  # HEEx indents the sentence across lines; the reader sees one line.
+  defp sentence(html, candidate) do
+    html
+    |> node(candidate)
+    |> LazyHTML.query(@sentence)
+    |> LazyHTML.text()
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  describe "the armed card names what it is about to make" do
+    test "a card aimed at a TASK says so, while both of its ids are still nil" do
+      card = armed_kind(24, :task)
+
+      # The premise, asserted rather than assumed: this is what makes
+      # `outcome_label/1` — which keys on the ids — unable to answer for
+      # an armed card, and `outcome_kind` the only field that can.
+      assert card.task_id == nil
+      assert card.canvas_id == nil
+
+      html = rail([card])
+
+      # Positive control first: the foot has to be on the page at all.
+      assert Enum.any?(foot(html, card))
+      assert present?(node(html, card), @sentence)
+
+      assert sentence(html, card) == "Creating a task in"
+    end
+
+    test "a card aimed at an ARTIFACT says canvas, never the stored word" do
+      card = armed_kind(24, :artifact)
+
+      assert card.task_id == nil
+      assert card.canvas_id == nil
+
+      html = rail([card])
+
+      assert Enum.any?(foot(html, card))
+      assert present?(node(html, card), @sentence)
+
+      assert sentence(html, card) == "Creating a canvas in"
+
+      # `:artifact` is the STORED member and `canvas` is the word. A
+      # catch-all through `to_string/1` would put the schema's vocabulary
+      # in front of a human mid-meeting.
+      refute sentence(html, card) =~ "artifact"
+    end
+
+    # THE ANTI-VACUITY ASSERTION, and it is why both kinds are rendered
+    # into ONE rail. A test that exercises only `:task` passes with the
+    # bug fully intact: a sentence hard-coded to "task" satisfies every
+    # assertion above and still tells a canvas card's reader the wrong
+    # thing. Only the inequality catches that.
+    test "TWO KINDS IN ONE RAIL do not say the same thing" do
+      tasked = armed_kind(24, :task)
+      canvassed = armed_kind(24, :artifact)
+
+      html = rail([tasked, canvassed])
+
+      assert Enum.any?(foot(html, tasked))
+      assert Enum.any?(foot(html, canvassed))
+      assert present?(node(html, tasked), @sentence)
+      assert present?(node(html, canvassed), @sentence)
+
+      assert sentence(html, tasked) != sentence(html, canvassed)
+    end
+
+    # The hook constraint, asserted in the DOM. `CandidateClock` walks
+    # every `[data-role='meeting-candidate-remaining']` once a second and
+    # assigns `el.textContent`, so prose INSIDE that node is erased on
+    # the first tick — invisible to every server-render test and visible
+    # to anyone who watches a real card for one second.
+    test "the sentence is a SEPARATE node, and the count is still digits only" do
+      card = armed_kind(24, :artifact)
+      html = rail([card])
+      card_node = node(html, card)
+
+      count_node = LazyHTML.query(card_node, "[data-role='meeting-candidate-remaining']")
+
+      # Positive controls for both refutations below.
+      assert present?(card_node, @sentence)
+      assert Enum.any?(count_node)
+
+      # The words are not in the node the ticker overwrites...
+      refute present?(count_node, @sentence)
+      assert text_of(card_node, "[data-role='meeting-candidate-remaining']") == "24"
+      assert text_of(card_node, "[data-role='meeting-candidate-remaining']") =~ ~r/\A\d+\z/
+
+      # ...and the number is not restated in the words.
+      refute sentence(html, card) =~ ~r/\d/
+    end
+
+    test "a DISARMED card carries no sentence at all" do
+      armed_card = armed_kind(24, :task)
+      disarmed = candidate(%{acts_at: nil, outcome_kind: :task})
+
+      html = rail([armed_card, disarmed])
+
+      # The control: this page does render the sentence. `countdown_foot/1`
+      # is gated on `armed?/1`, so the spent row, the closed row and the
+      # skeleton are all untouched by this stage.
+      assert present?(node(html, armed_card), @sentence)
+
+      refute present?(node(html, disarmed), @sentence)
+    end
+
+    # REGRESSION on the half that was ALREADY CORRECT, asserted without
+    # modifying it. `outcome_label/1` is rendered at
+    # `[data-role='meeting-candidate-outcome']` and distinguishes the two
+    # kinds after graduation; the ticket's claim that it is dead code is
+    # wrong, and this stage must not make it true.
+    test "the graduated half still names its deliverable, and still distinguishes them" do
+      tasked = candidate(%{state: :acting, task_id: Ecto.UUID.generate()})
+      canvassed = candidate(%{state: :acting, canvas_id: Ecto.UUID.generate()})
+
+      html = rail([tasked, canvassed])
+
+      outcome = "[data-role='meeting-candidate-outcome']"
+
+      assert present?(node(html, tasked), outcome)
+      assert present?(node(html, canvassed), outcome)
+
+      tasked_text = text_of(node(html, tasked), outcome)
+      canvassed_text = text_of(node(html, canvassed), outcome)
+
+      assert tasked_text =~ "Added to Tasks"
+      assert canvassed_text =~ "Added to Canvas"
+      assert tasked_text != canvassed_text
+    end
+  end
+
   # ── 8. The rail is ordered by deadline (task 01a0740e stage 4) ────────
 
   describe "rail order" do

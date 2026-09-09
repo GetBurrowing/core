@@ -825,6 +825,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
       |> assign(:remaining, remaining)
       |> assign(:warning?, warning?(remaining))
       |> assign(:drain_width, drain_width(remaining))
+      |> assign(:outcome_noun, CandidateDisplay.armed_outcome_label(assigns.candidate))
 
     ~H"""
     <div
@@ -836,6 +837,54 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
       data-total-seconds={Countdown.countdown_seconds()}
       data-warning-seconds={Countdown.warning_seconds()}
     >
+      <%!-- WHAT IS ABOUT TO EXIST, said while it still does not.
+           `Creating a task in 24` / `Creating a canvas in 24`. Saru's
+           canvas 01a08321 is the authority and its ruling is that the
+           outcome kind is a NOUN, not a state, an alarm or an action —
+           so it gets TYPE and not colour, and it rides on the line that
+           is already counting down at the reader rather than competing
+           for attention with a chip of its own. A coloured `Task` /
+           `Canvas` pill was considered there and rejected: this surface
+           already spends error on the recording pill, success on the
+           live pill and amber on the last five seconds of THIS
+           countdown, so a fourth coloured marker beside a timer that
+           turns amber would argue with it about urgency — and on a
+           312px rail a chip has to hide at the tightest width, which
+           recreates the exact defect FE-11 was filed about.
+
+           ## This is NOT the `Starting in {N}s` prose FE-9 deleted
+
+           That line was removed for restating the NUMBER a third time,
+           under a card that already showed it twice. This one restates
+           nothing: `outcome_kind` appears nowhere else on an armed
+           card, so the sentence is the only place the reader can learn
+           whether thirty seconds of silence mints a task or a canvas.
+           Different claim, different `data-role`, and the phrase
+           `Starting in` stays gone. The commit-window refutations that
+           police that are deliberately left standing.
+
+           SEPARATE NODE from the count, and that is load-bearing rather
+           than tidy: `CandidateClock` re-queries every
+           `[data-role="meeting-candidate-remaining"]` once a second and
+           assigns `el.textContent`, so prose put INSIDE that node is
+           erased on the first tick — a failure that passes every
+           server-render test in the suite and is visible only to
+           someone watching a real card for one second. The words live
+           out here; the `<time>` below stays a bare integer.
+
+           Omitted entirely when `armed_outcome_label/1` answers nil
+           (a row with no `outcome_kind`). The justification for adding
+           prose to this line is that it carries the KIND; with no kind
+           to carry, `Creating in` would be prose for its own sake,
+           which is what FE-9 removed. --%>
+      <span
+        :if={@outcome_noun}
+        class="candidate-outcome-line"
+        data-role="meeting-candidate-armed-outcome"
+      >
+        Creating a <span class="candidate-outcome-line__noun">{@outcome_noun}</span> in
+      </span>
+
       <%!-- BARE SECONDS. `12`, never `0:12` and never `12s`: a unit
            beside a number that changes every second is a glyph that
            never changes, and the card's whole foot is already about

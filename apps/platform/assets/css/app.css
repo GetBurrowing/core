@@ -6857,6 +6857,49 @@ body, .font-fabrikam {
   color: var(--cc-countdown-rest);
 }
 
+/* THE OUTCOME SENTENCE (task 01a0740e stage 2). `Creating a task in 24`.
+   The kind of thing the countdown is about to mint, set in TYPE rather
+   than in colour, because it is a noun and not a state: Saru's canvas
+   01a08321 rejected a coloured Task/Canvas pill here, since this screen
+   already spends error on recording, success on live and amber on the
+   last five seconds of this very countdown.
+
+   TWO SLOTS, and the contrast between them is what makes the noun
+   readable at a glance without a hue of its own. The lead-in words take
+   `--cc-countdown-rest`, the same muted slot the count already rests in,
+   so the sentence reads as one line rather than as two elements. The
+   noun takes `--cc-title` — this file's on-surface foreground for the
+   card, and the file's expression of the `--color-base-content` slot the
+   canvas names. `--cc-title` rather than the raw app token because every
+   colour on this card is measured against the card's OWN grounds
+   (`--cc-bg` plus the shaping and acting gradients), which is not the
+   base-100 surface `--color-base-content` is tuned for. Never
+   `--cc-countdown-warn`: amber on this card means "the last five
+   seconds", and a second amber meaning would read as urgency about the
+   wrong thing.
+
+   `flex: 0 1 auto` with `min-width: 0` — the SENTENCE is what gives way
+   when the rail narrows. The count is `flex: 0 0 auto` and Stop is
+   `ml-auto`, so neither of those moves first. It gives way by WRAPPING,
+   not by disappearing: there is deliberately no `display: none` for this
+   element at any width and no `@media` block that hides it. Hiding the
+   outcome on a narrow rail is the defect FE-11 exists to fix, so a rule
+   that hides this is a regression and not a responsive refinement.
+
+   11px is `.candidate-card__reason`'s size — the card's body prose. No
+   display size: a card that shouts competes with the four beside it. */
+.candidate-outcome-line {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--cc-countdown-rest);
+}
+
+.candidate-outcome-line__noun {
+  color: var(--cc-title);
+}
+
 /* THE STEP. No transition on `color` anywhere in this pair, and that is
    the design: a fade spends thirty seconds slowly becoming alarming and
    leaves the threshold unfindable, whereas a step at T−5 is an EVENT,
