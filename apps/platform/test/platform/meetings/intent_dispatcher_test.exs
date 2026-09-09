@@ -668,14 +668,24 @@ defmodule Platform.Meetings.IntentDispatcherTest do
       # actually keys on: the PRESENCE of a row in `IntentRouting`, not
       # a hardcoded one-intent allowlist.
       #
-      # `off_topic` is the canonical unrouted intent — deliberately
-      # absent from the table (see `IntentRouting`'s moduledoc: a
-      # routing row for it would wake an agent for every joke). The
-      # premise is asserted rather than assumed, because if someone ever
-      # DOES route it, this test would otherwise quietly start proving
+      # This control needs an intent that is unrouted AND routable.
+      # "Has no responsibility row" and "reaches nobody at all" are
+      # different properties, and only the first is what this case is
+      # about.
+      #
+      # `off_topic` stood here until task 01a06637 and no longer can:
+      # `dispatch_row/3` now fails it ahead of BOTH forks, so it takes
+      # neither path and cannot demonstrate the runtime one.
+      # `book_followup` is this file's default intent, has no routing
+      # row, and is routable. Both halves of the premise are asserted
+      # rather than assumed — if someone routes it, or declares it
+      # unroutable, this test would otherwise quietly start proving
       # nothing.
-      assert IntentRouting.entry("off_topic") == nil,
-             "off_topic gained a routing row; pick another unrouted intent for this control"
+      assert IntentRouting.entry("book_followup") == nil,
+             "book_followup gained a routing row; pick another unrouted intent for this control"
+
+      refute IntentRouting.unroutable_intent?("book_followup"),
+             "book_followup became unroutable; it can no longer stand for the runtime path"
 
       {agent, runtime} = seed_target!("designer")
       subscribe_all_intent_topics!()
@@ -685,7 +695,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
       row =
         enqueue!(meeting_id, %{
-          classified_intent: "off_topic",
+          classified_intent: "book_followup",
           target_role: "designer"
         })
 
@@ -1693,6 +1703,159 @@ defmodule Platform.Meetings.IntentDispatcherTest do
         end)
 
       assert bogus_log =~ "unknown target_role"
+    end
+
+    # ── An intent that reaches nobody, whatever role it named ──────────────
+    #
+    # Task 01a06637. `IntentRouting` has known since `b768c2ef` that
+    # `off_topic` reaches nobody — `@unroutable_intents`, asked first in
+    # `routable?/2` — but `dispatch_row/3` never asked it. The response
+    # schema demands a `target_role` STRING on every answer while the
+    # prompt makes `off_topic` the stated default, so a small model
+    # filling in `meeting_scribe` while declining is an ordinary output,
+    # not a contrived shape.
+    #
+    # THE SEEDING IS THE TEST. The original production repro only
+    # stopped because the probe's scribe had no runtime, so the row
+    # failed fast on `:no_runtime` and released the cursor anyway. A
+    # version of these cases without a runtime-backed `meeting_scribe`
+    # goes green against the UNFIXED dispatcher and proves nothing.
+    test "off_topic naming a REAL role does not hold the cursor from the ask behind it" do
+      # Runtime-backed on purpose: without the fix this row genuinely
+      # resolves an agent, genuinely reaches `:dispatched`, and
+      # genuinely holds the cursor.
+      {_scribe, _scribe_runtime} = seed_target!("meeting_scribe")
+      {designer, _designer_runtime} = seed_target!("designer")
+
+      # 60s, deliberately far longer than `await_status/4`'s 2s budget.
+      # A held cursor must not be rescued by the ack window expiring
+      # inside the test — with a short timeout here the buggy code
+      # passes.
+      meeting_id = new_meeting!(ack_timeout_ms: 60_000)
+      start_dispatcher!()
+
+      first =
+        enqueue!(meeting_id, %{
+          classified_intent: "off_topic",
+          target_role: "meeting_scribe",
+          chunk_excerpt: "ha, did you catch the game last night?"
+        })
+
+      second =
+        enqueue!(meeting_id, %{
+          classified_intent: "book_followup",
+          target_role: "designer",
+          chunk_excerpt: "designer, book us a follow-up on the onboarding funnel"
+        })
+
+      # THE CLAIM. Not "the small talk did not dispatch" — that is the
+      # easy half and nearly worthless. The user-visible bug is that the
+      # meeting FEELS STUCK, so what has to be proved is that the real
+      # ask spoken behind the small talk went out WITHOUT WAITING.
+      dispatched = await_status(meeting_id, second.id, :dispatched)
+      assert dispatched.target_agent_id == designer.id
+      assert IntentQueue.cursor(meeting_id) == second.id
+
+      # A direct read, not a wait: `second` could only be claimed after
+      # `first` released the cursor, so `first` is already terminal here
+      # by the queue's own ordering.
+      assert status_of(meeting_id, first.id) == :dispatch_failed
+
+      {:ok, failed} = IntentQueue.get(meeting_id, first.id)
+      assert failed.dispatch_failure_reason == :no_target_role
+    end
+
+    test "nothing reaches the named scribe, and the row is retained and visible" do
+      # `seed_target!/1` subscribes this process to `runtime:<id>` for
+      # the role it seeds, so the refute below is evidence rather than a
+      # missing fixture: the role path is fully wired and WOULD have
+      # delivered.
+      {_scribe, _runtime} = seed_target!("meeting_scribe")
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      row =
+        enqueue!(meeting_id, %{
+          classified_intent: "off_topic",
+          target_role: "meeting_scribe",
+          chunk_excerpt: "anyway, my flight got delayed three hours"
+        })
+
+      failed = await_status(meeting_id, row.id, :dispatch_failed)
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+
+      assert failed.dispatch_failure_reason == :no_target_role
+
+      # Never resolved an agent — the branch fires ahead of resolution.
+      assert failed.target_agent_id == nil
+
+      # Retained, X-able and visible: the contract every other failure
+      # branch in this module keeps. And the cursor is free.
+      assert [^failed] = IntentQueue.list(meeting_id)
+      assert IntentQueue.cursor(meeting_id) == nil
+    end
+
+    # `:no_target_role` and `:unknown_role` are load-bearing for triage
+    # and were separated deliberately in `88291626`. Widening
+    # `:no_target_role` to cover unroutable intents is an easy way to
+    # collapse them back together, so all three rows live in ONE test —
+    # a collapse cannot hide in a case that is skipped or read alone.
+    test "the two dispatch-failure reasons still mean different things" do
+      # Runtime-backed again: with the unroutable branch removed, row
+      # (b) below would DISPATCH rather than fail for some unrelated
+      # reason, so this test fails loudly instead of drifting green.
+      {_scribe, _runtime} = seed_target!("meeting_scribe")
+
+      meeting_id = new_meeting!()
+      start_dispatcher!()
+
+      quiet_log =
+        capture_log(fn ->
+          # (a) the shape the classifier writes when it declines
+          # cleanly. This is the pre-existing case; it must not break.
+          sentinel =
+            enqueue!(meeting_id, %{
+              classified_intent: "off_topic",
+              target_role: IntentClassifier.no_target_role()
+            })
+
+          assert await_status(meeting_id, sentinel.id, :dispatch_failed).dispatch_failure_reason ==
+                   :no_target_role
+
+          # (b) the shape task 01a06637 fixed: the same decline, still
+          # naming a real role, because the schema demands one.
+          named =
+            enqueue!(meeting_id, %{
+              classified_intent: "off_topic",
+              target_role: "meeting_scribe"
+            })
+
+          assert await_status(meeting_id, named.id, :dispatch_failed).dispatch_failure_reason ==
+                   :no_target_role
+        end)
+
+      # Neither off_topic row spends the once-per-key unknown-role line
+      # on the single most common value in the queue.
+      refute quiet_log =~ "unknown target_role"
+
+      # (c) The distinction that must SURVIVE: a routable intent naming
+      # a role outside `Role.valid_keys/0` is a different event, keeps
+      # its own reason, and still logs.
+      noisy_log =
+        capture_log(fn ->
+          bogus =
+            enqueue!(meeting_id, %{
+              classified_intent: "book_followup",
+              target_role: "not-a-real-role"
+            })
+
+          assert await_status(meeting_id, bogus.id, :dispatch_failed).dispatch_failure_reason ==
+                   :unknown_role
+        end)
+
+      assert noisy_log =~ "unknown target_role"
     end
 
     test "unknown role fails as :unknown_role and logs once per key" do

@@ -78,11 +78,22 @@ defmodule Platform.Meetings.IntentDispatcher do
 
   | reason              | meaning                                        |
   |---------------------|------------------------------------------------|
-  | `:no_target_role`   | the classifier produced no role                |
+  | `:no_target_role`   | no role, or an intent that reaches nobody      |
   | `:unknown_role`     | role isn't in `Role.valid_keys/0`              |
   | `:no_assignee`      | role is valid but unassigned                   |
   | `:agent_not_found`  | assignment points at a deleted agent           |
   | `:no_runtime`       | agent exists but has no linked AgentRuntime    |
+
+  `:no_target_role` covers BOTH shapes small talk arrives in. The
+  classifier's own "nobody" is the STRING `"null"`, but the response
+  schema demands a `target_role` on every answer, so an `off_topic`
+  row routinely names a real role instead — usually `meeting_scribe`.
+  `IntentRouting.unroutable_intent?/1` is therefore asked FIRST in
+  `dispatch_row/3`: without it such a row resolves an agent, reaches
+  `:dispatched`, and HOLDS the meeting's serial cursor for the whole
+  ack window while a real ask behind it sits `:queued`. Both shapes
+  land the one reason, so the red strip reads the same way for what
+  is the same event (task 01a06637).
 
   Unknown role keys still log once each (MapSet in state) so a
   misbehaving classifier can't spam the log.
@@ -405,6 +416,19 @@ defmodule Platform.Meetings.IntentDispatcher do
     responsibility_key = responsibility_key_for(row.classified_intent)
 
     cond do
+      # Asked FIRST, mirroring the order `IntentRouting.routable?/2`
+      # already uses. An unroutable intent reaches nobody WHATEVER role
+      # it names, and the classifier's response schema demands it name
+      # one — so `off_topic` carrying a real `meeting_scribe` is an
+      # ordinary output, not a contrived shape. Without this branch that
+      # row resolves an agent, lands `:dispatched`, and holds the
+      # meeting's serial cursor for the full ack window while the next
+      # real ask sits `:queued` and nobody sees an error.
+      # `:dispatch_failed` is an ADVANCING status, so failing here
+      # releases the cursor immediately (task 01a06637).
+      IntentRouting.unroutable_intent?(row.classified_intent) ->
+        fail_dispatch(meeting_id, row, :no_target_role, state)
+
       # Checked BEFORE the target_role arms, deliberately: these rows
       # carry whatever role the cheap classifier guessed (usually
       # `meeting_scribe`), and resolving it would send a runtime
