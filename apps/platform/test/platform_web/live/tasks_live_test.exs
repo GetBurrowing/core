@@ -1,6 +1,8 @@
 defmodule PlatformWeb.TasksLiveTest do
   use PlatformWeb.ConnCase, async: false
 
+  import Platform.SubmittablePlanFixtures
+
   import Ecto.Query
   import Phoenix.LiveViewTest
 
@@ -3118,7 +3120,7 @@ defmodule PlatformWeb.TasksLiveTest do
     task = create_task(project, %{title: "Rejectable Task", status: "planning"})
 
     {:ok, plan} =
-      Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+      create_submittable_plan(%{task_id: task.id, version: 1, status: "draft"})
 
     {:ok, plan} = Tasks.submit_plan_for_review(plan)
 
@@ -4532,7 +4534,7 @@ defmodule PlatformWeb.TasksLiveTest do
     task = create_task(project, %{title: "Badge Task", status: "planning"})
 
     {:ok, plan} =
-      Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+      create_submittable_plan(%{task_id: task.id, version: 1, status: "draft"})
 
     {:ok, _plan} = Tasks.submit_plan_for_review(plan)
 

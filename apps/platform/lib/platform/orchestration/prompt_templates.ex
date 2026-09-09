@@ -1828,7 +1828,17 @@ defmodule Platform.Orchestration.PromptTemplates do
         - `summary` — required on both. One paragraph: what you checked, what you found,
           and anything from the three demoted checks above.
         - `findings` — required and non-empty on a `reject`, omitted on a `pass`. **One
-          finding per objection**, each carrying `stage_id`, `constraint` and `detail`.
+          finding per objection**, each carrying `constraint`, `detail`, and — when the
+          objection is about one particular stage — that stage's `stage_id`.
+
+        **`stage_id` is optional.** Omit it (or send `null`) when the defect lives at the
+        plan level rather than in any one stage: a decomposition that is wrong even
+        though each stage is individually sound, or a sequencing problem spread across
+        several stages with no single one at fault. Such a finding reaches the planner
+        labelled `(plan-wide)`. Do NOT downgrade a plan-level architectural objection to
+        a `pass` with a note in `summary` — `summary` is not a rejection, the plan
+        proceeds, and the defect ships. If it is one of the four constraints, reject with
+        a stage-less finding.
 
         A `detail` states WHAT TO CHANGE, not what is wrong. Good:
 
@@ -1840,14 +1850,25 @@ defmodule Platform.Orchestration.PromptTemplates do
         }
         ```
 
-        Bad — `{"constraint": "module_boundary", "detail": "This is unsound"}`. It has no
-        `stage_id`, and "This is unsound" is unactionable: the planner cannot tell what
+        Plan-level, also good:
+
+        ```json
+        {
+          "constraint": "module_boundary",
+          "detail": "Stages 2, 3 and 4 each add one call site of the same boundary crossing; no single stage is wrong, but the decomposition has no stage in which the shared seam gets built. Add a stage that introduces the seam before the three that consume it."
+        }
+        ```
+
+        Bad — `{"constraint": "module_boundary", "detail": "This is unsound"}`. "This is
+        unsound" is unactionable: the planner cannot tell what
         to write differently, so the next version comes back differently worded rather
         than better. If you cannot say what to change, you are not rejecting — you are
         commenting, and comments go in `summary` with a `pass`.
 
         A `reject` whose `constraint` is not one of the four listed above is REFUSED at
-        the tool boundary, as is a finding whose `stage_id` does not belong to this plan.
+        the tool boundary, as is a finding whose `stage_id` is PRESENT but does not
+        belong to this plan. An omitted `stage_id` is accepted — it is how you say
+        "plan-wide" — so never invent or guess an id to satisfy the shape.
         A refused call does not resolve the gate; the plan stays held and the deadline
         keeps running.
 

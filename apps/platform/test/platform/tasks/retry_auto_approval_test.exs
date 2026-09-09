@@ -544,15 +544,42 @@ defmodule Platform.Tasks.RetryAutoApprovalTest do
 
       # POSITIVE CONTROL that the same handler CAN hear that event, so the
       # `refute_receive` above is not passing because nothing is attached.
-      # A SECOND armed task with an equally empty plan, submitted through the
-      # ordinary ungated path — `maybe_auto_approve/1` reaches the identical
-      # `{:skip, :empty_plan}` and says so. That is the noise this refusal
-      # keeps off the five-minute tick.
-      {_control_task, control_plan} =
-        task_fixture(project, auto_approve_plan: true, empty_plan: true)
+      # A SECOND armed task submitted through the ordinary ungated path —
+      # `maybe_auto_approve/1` reaches a `{:skip, _}` and says so.
+      #
+      # The control used to be an EMPTY plan skipping with `:empty_plan`,
+      # the exact mirror of the assertion above. Task 01a0588e stage 2 made
+      # that shape unreachable: `submit_plan_for_review/1` now refuses a
+      # plan with no planner-authored stage with `{:error,
+      # :no_authored_stages}` BEFORE any status write, so an empty plan can
+      # no longer be submitted at all and `auto_approve_precondition/2`'s
+      # `:empty_plan` branch is reachable only through the retry path this
+      # test's main assertion already exercises. The control therefore uses
+      # a skip reason that is still reachable through a submit —
+      # `:no_review_assignee`, on a plan that DOES carry a stage — which
+      # keeps it doing its one job: proving the handler is live.
+      {control_task, control_plan} = task_fixture(project, auto_approve_plan: true)
+
+      {:ok, _} =
+        control_task
+        |> Ecto.Changeset.change(%{
+          # Both halves are needed: `assignee_for_phase/2` falls back to the
+          # TOP-LEVEL assignee when a phase is missing, so dropping the
+          # "review" phase alone would still resolve an assignee and the
+          # plan would auto-approve instead of skipping.
+          assignee_id: nil,
+          assignee_type: nil,
+          phase_assignees: %{
+            "execution" => %{
+              "assignee_id" => Ecto.UUID.generate(),
+              "assignee_type" => "agent"
+            }
+          }
+        })
+        |> Repo.update()
 
       {:ok, _} = Tasks.submit_plan_for_review(control_plan)
-      assert_receive {:skipped, %{reason: :empty_plan}}
+      assert_receive {:skipped, %{reason: :no_review_assignee}}
     end
   end
 

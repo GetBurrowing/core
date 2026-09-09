@@ -14,6 +14,8 @@ defmodule Platform.Tasks.StacksTest do
   # without assuming the answer. See the site comment at the non-stack case.
   use Platform.DataCase, async: false
 
+  import Platform.SubmittablePlanFixtures
+
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{PlanEngine, ReviewRequests, Stack, Stacks, Task}
@@ -6868,7 +6870,7 @@ defmodule Platform.Tasks.StacksTest do
       # A + B already approved; C is the last-pending plan.
       {:ok, _} = Tasks.create_plan(%{task_id: root_a.id, status: "approved"})
       {:ok, _} = Tasks.create_plan(%{task_id: root_b.id, status: "approved"})
-      {:ok, c_draft} = Tasks.create_plan(%{task_id: child.id})
+      {:ok, c_draft} = create_submittable_plan(%{task_id: child.id})
       {:ok, c_pending} = Tasks.submit_plan_for_review(c_draft)
 
       :ok = Tasks.subscribe_board()
@@ -6899,7 +6901,7 @@ defmodule Platform.Tasks.StacksTest do
       # A already approved. B is what we're approving. C is still pending
       # (has no plan at all), so plans_ready? stays false after this call.
       {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
-      {:ok, b_draft} = Tasks.create_plan(%{task_id: b.id})
+      {:ok, b_draft} = create_submittable_plan(%{task_id: b.id})
       {:ok, b_pending} = Tasks.submit_plan_for_review(b_draft)
 
       :ok = Tasks.subscribe_board()
@@ -6917,7 +6919,7 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, standalone} =
         Tasks.create_task(%{project_id: project.id, title: "Standalone", status: "planning"})
 
-      {:ok, draft} = Tasks.create_plan(%{task_id: standalone.id})
+      {:ok, draft} = create_submittable_plan(%{task_id: standalone.id})
       {:ok, pending} = Tasks.submit_plan_for_review(draft)
 
       # BOARD-SCOPE-EXEMPT (durable — survives any future `async: true` move):
@@ -6962,7 +6964,7 @@ defmodule Platform.Tasks.StacksTest do
       # Root already approved; the child's approval is the LAST plan, which
       # flips the commencement gate closed → open on a still-`forming` stack.
       {:ok, _} = Tasks.create_plan(%{task_id: root.id, status: "approved"})
-      {:ok, c_draft} = Tasks.create_plan(%{task_id: child.id})
+      {:ok, c_draft} = create_submittable_plan(%{task_id: child.id})
       {:ok, c_pending} = Tasks.submit_plan_for_review(c_draft)
 
       :ok = Tasks.subscribe_board()
@@ -9060,7 +9062,7 @@ defmodule Platform.Tasks.StacksTest do
       assert ShipState.shipped?(stack)
       assert late.status == "planning"
 
-      {:ok, draft} = Tasks.create_plan(%{task_id: late.id})
+      {:ok, draft} = create_submittable_plan(%{task_id: late.id})
       {:ok, pending} = Tasks.submit_plan_for_review(draft)
 
       assert {:error, {:stack_already_shipped, %{stack_id: stack_id, message: message}}} =

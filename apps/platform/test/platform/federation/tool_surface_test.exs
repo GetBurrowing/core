@@ -1,6 +1,8 @@
 defmodule Platform.Federation.ToolSurfaceTest do
   use Platform.DataCase, async: false
 
+  import Platform.SubmittablePlanFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Chat
 
@@ -2282,7 +2284,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # approval from a human one on the wire.
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Manual-approve plan"})
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, _plan} = Tasks.approve_plan(plan, "00000000-0000-0000-0000-000000000001")
 
@@ -3037,7 +3039,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           assignee_id: "00000000-0000-0000-0000-000000000001"
         })
 
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
 
       {:ok, _stage} =
         Tasks.create_stage(%{
@@ -3237,6 +3239,111 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute Enum.any?(Enum.take(plan.stages, 2), fn s ->
                Enum.any?(s.validations, &(&1.kind == "e2e_behavior"))
              end)
+    end
+
+    # Task 01a0588e. The stage the engine synthesized above is marked
+    # STRUCTURALLY, not by its name or its description — both are template
+    # copy, and a classifier keyed to either fails open on a reword.
+    test "plan_create marks only the synthesized stage with origin=synthesized" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Origin task"})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Add the guard",
+                "description" => "Add it",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}, e2e_case("guard fires")]
+              },
+              %{
+                "name" => "Wire the envelope",
+                "description" => "Wire it",
+                "position" => 2,
+                "validations" => [%{"kind" => "lint_pass"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      # Read the persisted rows: `origin` is a server-side marker and is not
+      # part of the serialized plan the tool hands back.
+      assert Enum.map(Tasks.list_stages(plan.id), & &1.origin) ==
+               ~w(authored authored synthesized)
+
+      assert Tasks.authored_stage_count(plan.id) == 2
+    end
+
+    # A planner handing us `"origin": "synthesized"` must not be able to
+    # disguise its own stage as the engine's — `origin` is stripped from raw
+    # planner input before the engine's rewrite runs.
+    test "plan_create does not honour a planner-supplied origin" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Forged origin"})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Add the guard",
+                "description" => "Add it",
+                "position" => 1,
+                "origin" => "synthesized",
+                "validations" => [%{"kind" => "test_pass"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert Enum.map(Tasks.list_stages(plan.id), & &1.origin) == ~w(authored)
+      assert Tasks.authored_stage_count(plan.id) == 1
+    end
+
+    test "plan_update does not honour a planner-supplied origin" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Forged origin update"})
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{"name" => "First", "description" => "d", "position" => 1}
+            ]
+          },
+          %{}
+        )
+
+      {:ok, updated} =
+        ToolSurface.execute(
+          "plan_update",
+          %{
+            "plan_id" => plan.id,
+            "stages" => [
+              %{
+                "name" => "First",
+                "description" => "d",
+                "position" => 1,
+                "origin" => "synthesized"
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert updated.id == plan.id
+      assert Enum.map(Tasks.list_stages(plan.id), & &1.origin) == ~w(authored)
+      assert Tasks.authored_stage_count(plan.id) == 1
     end
 
     test "plan_create accepts a trigger-named stage that explicitly opts in as e2e_host" do
@@ -3576,7 +3683,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     test "plan_get returns current approved plan" do
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plan task"})
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, _plan} = Tasks.approve_plan(plan, "00000000-0000-0000-0000-000000000001")
 
@@ -3601,7 +3708,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     test "plan_submit transitions draft to pending_review" do
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Submit task"})
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
 
       {:ok, result} =
         ToolSurface.execute("plan_submit", %{"plan_id" => plan.id}, %{})
@@ -3612,7 +3719,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     test "plan_submit on non-draft plan returns error" do
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Submit task"})
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
 
       {:error, error} =
@@ -3710,7 +3817,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     defp draft_plan_task(title) do
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: title})
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       %{task: task, plan: plan}
     end
 

@@ -431,7 +431,7 @@ defmodule Platform.Tasks.ArchitectureRejection do
   # not quote the old wording verbatim.
   defp instruction(%Plan{} = plan) do
     """
-    Every finding names a stage and one of the #{length(Plan.architecture_constraints())} architecture constraints. Produce #{next_version_phrase(plan)}
+    Every finding names one of the #{length(Plan.architecture_constraints())} architecture constraints, and names the stage it applies to unless it objects to the plan AS A WHOLE — those read `(plan-wide)` and mean the decomposition itself, not any one stage. Produce #{next_version_phrase(plan)}
     plan that resolves all of them. A finding is resolved by changing the plan's structure,
     not by rewording the stage description.
     """

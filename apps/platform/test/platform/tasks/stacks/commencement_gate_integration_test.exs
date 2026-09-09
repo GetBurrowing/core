@@ -17,6 +17,8 @@ defmodule Platform.Tasks.Stacks.CommencementGateIntegrationTest do
   """
   use Platform.DataCase, async: false
 
+  import Platform.SubmittablePlanFixtures
+
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, Stacks, Task}
@@ -585,7 +587,9 @@ defmodule Platform.Tasks.Stacks.CommencementGateIntegrationTest do
   # real user flow through the LiveView plan dialog.
   defp approve_new_plan(%Task{} = task) do
     task = Repo.reload!(task)
-    {:ok, draft} = Tasks.create_plan(%{task_id: task.id})
+    # Task 01a0588e stage 2: the real user flow authors a stage before
+    # submitting, and submit_plan_for_review/1 now enforces that.
+    {:ok, draft} = create_submittable_plan(%{task_id: task.id})
     {:ok, pending} = Tasks.submit_plan_for_review(draft)
     {:ok, approved} = Tasks.approve_plan(pending, "system")
     approved

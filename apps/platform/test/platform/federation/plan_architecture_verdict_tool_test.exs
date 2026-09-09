@@ -30,7 +30,7 @@ defmodule Platform.Federation.PlanArchitectureVerdictToolTest do
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, Task}
+  alias Platform.Tasks.{ArchitectureRejection, Plan, Task}
 
   defp u, do: System.unique_integer([:positive])
 
@@ -84,6 +84,14 @@ defmodule Platform.Federation.PlanArchitectureVerdictToolTest do
   defp stored_verdict(%Plan{id: id}), do: Repo.get!(Plan, id).architecture_verdict
 
   defp call(args), do: ToolSurface.execute("plan_architecture_verdict", args, %{})
+
+  # `ArchitectureRejection` renders `(plan-wide)` both for a finding with no
+  # `stage_id` AND for a plan whose `:stages` assoc is not loaded — the two
+  # are indistinguishable in the output. The production path preloads
+  # (`architecture_rejection.ex:299`), so the test must too; reading back a
+  # bare `Repo.get!` would make the plan-wide assertion below pass for the
+  # wrong reason.
+  defp feedback_plan(%Plan{id: id}), do: Plan |> Repo.get!(id) |> Repo.preload(:stages)
 
   defp reject_args(plan, stage, overrides \\ %{}) do
     Map.merge(
@@ -328,6 +336,192 @@ defmodule Platform.Federation.PlanArchitectureVerdictToolTest do
   end
 
   # ── GUARD: gate-state refusals name the ACTUAL state ──────────────────
+
+  # ── stage 3: a defect that lives at the PLAN level ───────────────────
+  #
+  # `plan_architecture_verdict` could previously express an objection only
+  # by attaching it to a stage. A decomposition that is wrong although each
+  # stage is individually sound, or a sequencing defect spread across three
+  # stages with no single one at fault, had NO representable shape — and
+  # the tool's own `missing_findings` suggestion told the architect to pass
+  # and write it in `summary` instead. A gate whose only expressible
+  # verdict shape is per-stage is not a lenient gate; it is an absent one.
+  #
+  # The downstream already supported it: `Plan.validate_verdict_finding/2`
+  # never required `stage_id`, and `ArchitectureRejection.stage_label/2`
+  # has always rendered a nil stage as `(plan-wide)`. Only the boundary
+  # refused. Each acceptance below is paired with the refusals that must
+  # SURVIVE the relaxation, in the same describe — a validator that simply
+  # stopped checking `stage_id` fails this block.
+  describe "GUARD: a plan-level finding needs no stage_id" do
+    test "a finding OMITTING stage_id is accepted and persists stage_id: nil", %{
+      project: project
+    } do
+      {_task, gated, stage} = gated_fixture(project)
+
+      assert {:ok, result} =
+               call(
+                 reject_args(gated, stage, %{
+                   "findings" => [
+                     %{
+                       "constraint" => "module_boundary",
+                       "detail" =>
+                         "No stage builds the shared seam the other three consume. Add one before them."
+                     }
+                   ]
+                 })
+               )
+
+      assert result.state == "rejected"
+      assert result.findings_count == 1
+      assert verdict_state(gated) == "rejected"
+
+      assert [persisted] = Map.get(stored_verdict(gated), "findings")
+      assert Map.fetch!(persisted, "stage_id") == nil
+      assert persisted["constraint"] == "module_boundary"
+    end
+
+    test "an explicit \"stage_id\": null is the same thing", %{project: project} do
+      {_task, gated, stage} = gated_fixture(project)
+
+      assert {:ok, result} =
+               call(
+                 reject_args(gated, stage, %{
+                   "findings" => [
+                     %{
+                       "stage_id" => nil,
+                       "constraint" => "data_model",
+                       "detail" =>
+                         "The key shape is decided across stages 2 and 4; decide it once."
+                     }
+                   ]
+                 })
+               )
+
+      assert result.findings_count == 1
+      assert [%{"stage_id" => nil}] = Map.get(stored_verdict(gated), "findings")
+    end
+
+    # The tool return is not the deliverable — the PLANNER's message is.
+    # Asserting only `{:ok, _}` would pass even if the renderer dropped a
+    # stage-less finding on the floor, which is the whole failure this
+    # change exists to prevent.
+    test "the planner's feedback renders it as (plan-wide) WITH the detail", %{project: project} do
+      {_task, gated, stage} = gated_fixture(project)
+      detail = "Split stage 2 into a seam stage and a consumer stage."
+
+      assert {:ok, _} =
+               call(
+                 reject_args(gated, stage, %{
+                   "findings" => [
+                     %{"constraint" => "module_boundary", "detail" => detail}
+                   ]
+                 })
+               )
+
+      feedback = ArchitectureRejection.compose_feedback(feedback_plan(gated))
+
+      assert feedback =~ "Stage: (plan-wide)"
+      assert feedback =~ detail
+      # PAIRED CONTROL: a stage-attached finding still names its stage, so
+      # the label is not simply hardcoded to "(plan-wide)".
+      refute feedback =~ stage.id
+    end
+
+    test "a named stage still renders its name, not (plan-wide)", %{project: project} do
+      {_task, gated, stage} = gated_fixture(project)
+
+      assert {:ok, _} = call(reject_args(gated, stage))
+
+      feedback = ArchitectureRejection.compose_feedback(feedback_plan(gated))
+
+      assert feedback =~ stage.id
+      refute feedback =~ "Stage: (plan-wide)"
+    end
+
+    # ── REGRESSION: what must still be refused ───────────────────────────
+
+    test "a well-formed stage_id from ANOTHER plan is still :foreign_stage_id", %{
+      project: project
+    } do
+      {_task, gated, _stage} = gated_fixture(project)
+      {_other_task, _other_plan, foreign_stage} = gate_fixture(project)
+
+      assert {:error, refusal} =
+               call(
+                 reject_args(gated, foreign_stage, %{
+                   "findings" => [
+                     %{
+                       "stage_id" => foreign_stage.id,
+                       "constraint" => "data_model",
+                       "detail" => "Widen the column."
+                     }
+                   ]
+                 })
+               )
+
+      assert refusal.code == :foreign_stage_id
+      assert verdict_state(gated) == "pending"
+    end
+
+    test "a NON-STRING stage_id is :foreign_stage_id, not a silent plan-level finding", %{
+      project: project
+    } do
+      {_task, gated, stage} = gated_fixture(project)
+
+      for bogus <- [42, %{"id" => "x"}, ["a"], ""] do
+        assert {:error, refusal} =
+                 call(
+                   reject_args(gated, stage, %{
+                     "findings" => [
+                       %{
+                         "stage_id" => bogus,
+                         "constraint" => "data_model",
+                         "detail" => "Widen the column."
+                       }
+                     ]
+                   })
+                 ),
+               "stage_id #{inspect(bogus)} was accepted"
+
+        assert refusal.code == :foreign_stage_id, "stage_id #{inspect(bogus)}"
+        assert verdict_state(gated) == "pending"
+      end
+    end
+
+    test "findings: [] is still :missing_findings — stagelessness is not emptiness", %{
+      project: project
+    } do
+      {_task, gated, stage} = gated_fixture(project)
+
+      assert {:error, refusal} = call(reject_args(gated, stage, %{"findings" => []}))
+      assert refusal.code == :missing_findings
+      assert refusal.suggestion =~ "still unactionable and still refused"
+      assert verdict_state(gated) == "pending"
+    end
+
+    test "a stage-less finding still needs a valid constraint and a non-empty detail", %{
+      project: project
+    } do
+      {_task, gated, stage} = gated_fixture(project)
+
+      assert {:error, %{code: :invalid_constraint}} =
+               call(
+                 reject_args(gated, stage, %{
+                   "findings" => [%{"constraint" => "naming", "detail" => "Rename it."}]
+                 })
+               )
+
+      assert {:error, %{code: :malformed_finding}} =
+               call(
+                 reject_args(gated, stage, %{
+                   "findings" => [%{"constraint" => "data_model", "detail" => "   "}]
+                 })
+               )
+
+      assert verdict_state(gated) == "pending"
+    end
+  end
 
   describe "GUARD: gate state" do
     test "a plan whose gate never opened is refused with gate_not_open", %{project: project} do

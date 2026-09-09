@@ -25,6 +25,8 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
   # bound id (`^submitted_id` / `^task_id`), so the global topic costs nothing.
   use Platform.DataCase, async: false
 
+  import Platform.SubmittablePlanFixtures
+
   import ExUnit.CaptureLog
 
   alias Platform.Agents.Agent
@@ -74,7 +76,12 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
         status: "planning"
       })
 
-    {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+    # Task 01a0588e stage 2: submit_plan_for_review/1 now requires at least
+    # one planner-authored stage, so this fixture carries one. It is a
+    # fixture CORRECTION, not a concession — a stageless plan was never a
+    # reachable production shape (plan_create requires stages) and none of
+    # the hook behaviour under test depends on the plan being empty.
+    {:ok, plan} = create_submittable_plan(%{task_id: task.id})
 
     %{project: project, task: task, plan: plan}
   end
@@ -450,7 +457,7 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
         status: "planning"
       })
 
-    {:ok, plan_b} = Tasks.create_plan(%{task_id: task_b.id})
+    {:ok, plan_b} = create_submittable_plan(%{task_id: task_b.id})
 
     override_native_dispatcher(NoopDispatcher, :maybe_dispatch)
     _agent = wire_architect_assignee()
@@ -527,7 +534,7 @@ defmodule Platform.Tasks.SubmitPlanForReviewArchitectHookTest do
           status: "planning"
         })
 
-      {:ok, plan_b} = Tasks.create_plan(%{task_id: task_b.id})
+      {:ok, plan_b} = create_submittable_plan(%{task_id: task_b.id})
 
       Application.put_env(
         :platform,

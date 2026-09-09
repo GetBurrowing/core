@@ -1,6 +1,8 @@
 defmodule Platform.Tasks.PlanTest do
   use Platform.DataCase, async: true
 
+  import Platform.SubmittablePlanFixtures
+
   import Ecto.Changeset, only: [get_change: 2]
 
   alias Platform.Tasks
@@ -17,7 +19,7 @@ defmodule Platform.Tasks.PlanTest do
     test "creates with auto-incremented version after the previous plan is rejected", %{
       task: task
     } do
-      assert {:ok, %Plan{} = plan1} = Tasks.create_plan(%{task_id: task.id})
+      assert {:ok, %Plan{} = plan1} = create_submittable_plan(%{task_id: task.id})
       assert plan1.version == 1
       assert plan1.status == "draft"
 
@@ -27,30 +29,30 @@ defmodule Platform.Tasks.PlanTest do
 
       # After rejection, the next plan is allowed and gets the next version.
       {:ok, _} = Tasks.reject_plan(plan1, Ecto.UUID.generate())
-      assert {:ok, plan2} = Tasks.create_plan(%{task_id: task.id})
+      assert {:ok, plan2} = create_submittable_plan(%{task_id: task.id})
       assert plan2.version == 2
     end
 
     test "rejects a duplicate plan while one is in draft", %{task: task} do
-      assert {:ok, _} = Tasks.create_plan(%{task_id: task.id})
+      assert {:ok, _} = create_submittable_plan(%{task_id: task.id})
       assert {:error, :plan_pending_review} = Tasks.create_plan(%{task_id: task.id})
     end
 
     test "rejects a duplicate plan while one is pending_review", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, _} = Tasks.submit_plan_for_review(plan)
       assert {:error, :plan_pending_review} = Tasks.create_plan(%{task_id: task.id})
     end
 
     test "respects explicit version", %{task: task} do
-      assert {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 42})
+      assert {:ok, plan} = create_submittable_plan(%{task_id: task.id, version: 42})
       assert plan.version == 42
     end
   end
 
   describe "approval flow" do
     test "draft → pending_review → approved", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       assert plan.status == "draft"
 
       assert {:ok, plan} = Tasks.submit_plan_for_review(plan)
@@ -65,7 +67,7 @@ defmodule Platform.Tasks.PlanTest do
 
     test "approval stores string actor id and moves planning task to in_progress", %{task: task} do
       {:ok, task} = Tasks.update_task(task, %{status: "planning"})
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
 
       assert {:ok, plan} = Tasks.approve_plan(plan, "system")
@@ -77,7 +79,7 @@ defmodule Platform.Tasks.PlanTest do
     end
 
     test "draft → pending_review → rejected", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
 
       assert {:ok, plan} = Tasks.reject_plan(plan, Ecto.UUID.generate())
@@ -85,12 +87,12 @@ defmodule Platform.Tasks.PlanTest do
     end
 
     test "cannot approve a draft plan", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       assert {:error, :invalid_transition} = Tasks.approve_plan(plan, Ecto.UUID.generate())
     end
 
     test "cannot submit a non-draft plan for review", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       assert {:error, :invalid_transition} = Tasks.submit_plan_for_review(plan)
     end
@@ -98,11 +100,11 @@ defmodule Platform.Tasks.PlanTest do
 
   describe "current_plan/1" do
     test "returns latest approved plan", %{task: task} do
-      {:ok, plan1} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan1} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan1} = Tasks.submit_plan_for_review(plan1)
       {:ok, _plan1} = Tasks.approve_plan(plan1, Ecto.UUID.generate())
 
-      {:ok, plan2} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan2} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan2} = Tasks.submit_plan_for_review(plan2)
       {:ok, _plan2} = Tasks.approve_plan(plan2, Ecto.UUID.generate())
 
@@ -111,7 +113,7 @@ defmodule Platform.Tasks.PlanTest do
     end
 
     test "returns nil when no approved plans", %{task: task} do
-      {:ok, _} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _} = create_submittable_plan(%{task_id: task.id})
       assert Tasks.current_plan(task.id) == nil
     end
   end
@@ -188,11 +190,11 @@ defmodule Platform.Tasks.PlanTest do
 
     test "round-trips through the database with a real predecessor → successor link",
          %{task: task} do
-      {:ok, plan_v1} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan_v1} = create_submittable_plan(%{task_id: task.id})
       # Need plan_v1 in a non-blocking status before creating v2.
       {:ok, plan_v1} = Tasks.submit_plan_for_review(plan_v1)
       {:ok, _} = Tasks.reject_plan(plan_v1, Ecto.UUID.generate())
-      {:ok, plan_v2} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan_v2} = create_submittable_plan(%{task_id: task.id})
 
       {:ok, plan_v1_updated} =
         plan_v1
@@ -254,10 +256,10 @@ defmodule Platform.Tasks.PlanTest do
   describe "list_plans/1" do
     test "returns plans ordered by version", %{task: task} do
       # Two legitimate revisions: first is rejected, then a new one is drafted.
-      {:ok, plan1} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan1} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan1} = Tasks.submit_plan_for_review(plan1)
       {:ok, _} = Tasks.reject_plan(plan1, Ecto.UUID.generate())
-      {:ok, _} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _} = create_submittable_plan(%{task_id: task.id})
 
       plans = Tasks.list_plans(task.id)
       assert length(plans) == 2
@@ -267,7 +269,7 @@ defmodule Platform.Tasks.PlanTest do
 
   describe "reject_plan/3" do
     test "persists rejection_reason when provided on a pending_review plan", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
 
       assert {:ok, rejected} =
@@ -278,7 +280,7 @@ defmodule Platform.Tasks.PlanTest do
     end
 
     test "leaves rejection_reason nil when no reason given (back-compat)", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
 
       # 2-arity form delegates to 3-arity with reason: nil.
@@ -289,7 +291,7 @@ defmodule Platform.Tasks.PlanTest do
 
     test "accepts approved and completed plans (reopen-with-feedback path)", %{task: task} do
       # Approved
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, plan} = Tasks.approve_plan(plan, "system")
       assert plan.status == "approved"
@@ -299,7 +301,7 @@ defmodule Platform.Tasks.PlanTest do
       assert rejected.rejection_reason == "post-done feedback"
 
       # Completed (force the status directly via changeset to model a completed plan)
-      {:ok, plan2} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan2} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan2} = Plan.changeset(plan2, %{status: "completed"}) |> Platform.Repo.update()
 
       assert {:ok, rejected2} = Tasks.reject_plan(plan2, "reviewer", "completed-but-bad")
@@ -310,7 +312,7 @@ defmodule Platform.Tasks.PlanTest do
     # Task 01a05b32 stage 1 — draft is rejectable now (planner self-service),
     # so the only status left outside the guard is "rejected" itself.
     test "refuses plans in non-rejectable statuses", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.reject_plan(plan, "actor", "first rejection")
       assert plan.status == "rejected"
 
@@ -320,7 +322,7 @@ defmodule Platform.Tasks.PlanTest do
     # ── Task 01a05b32 stage 1 — the planner self-service draft path ───────
 
     test "rejects a draft directly with the reason persisted on the row", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       assert plan.status == "draft"
 
       assert {:ok, rejected} =
@@ -342,13 +344,13 @@ defmodule Platform.Tasks.PlanTest do
       task: task
     } do
       {:ok, task} = Tasks.update_task(task, %{status: "planning"})
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
 
       assert {:ok, _rejected} = Tasks.reject_plan(plan, "planner-agent", "obsolete draft")
 
       assert Tasks.get_task_record(task.id).status == "planning"
 
-      assert {:ok, plan2} = Tasks.create_plan(%{task_id: task.id})
+      assert {:ok, plan2} = create_submittable_plan(%{task_id: task.id})
       assert plan2.version == 2
       assert plan2.status == "draft"
     end
@@ -365,6 +367,8 @@ defmodule Platform.Tasks.PlanTest do
     end
 
     defp seed_old_tree(task) do
+      # Already submittable on its own: the "Old" stage below is a real
+      # planner-authored stage, so no fixture helper is needed here.
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
       {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Old", position: 1})
       {:ok, validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "lint_pass"})
@@ -407,7 +411,7 @@ defmodule Platform.Tasks.PlanTest do
     end
 
     test "accepts atom-keyed stage maps like the create paths do", %{task: task} do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
 
       assert {:ok, updated} =
                Tasks.replace_plan_stages(plan, [
@@ -498,14 +502,14 @@ defmodule Platform.Tasks.PlanTest do
   describe "approve_plan/2 auto-supersession" do
     # Helper: drive a task to having an approved v1 in place.
     defp approve_v1(task) do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, plan} = Tasks.approve_plan(plan, "system")
       plan
     end
 
     defp draft_and_review(task) do
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       plan
     end
@@ -542,7 +546,7 @@ defmodule Platform.Tasks.PlanTest do
 
     test "approving v2 leaves a manually-rejected v1 untouched", %{task: task} do
       # v1: pending_review → manually rejected with custom reason.
-      {:ok, v1} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, v1} = create_submittable_plan(%{task_id: task.id})
       {:ok, v1} = Tasks.submit_plan_for_review(v1)
 
       {:ok, v1_rejected} =
@@ -653,7 +657,7 @@ defmodule Platform.Tasks.PlanTest do
       {:ok, task} =
         Tasks.update_task(task, %{status: "planning", deploy_target: "production"})
 
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, plan} = Tasks.approve_plan(plan, "system")
       # task is now "in_progress" via approve_plan's dispatch gate
@@ -750,7 +754,7 @@ defmodule Platform.Tasks.PlanTest do
           status: "planning"
         })
 
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, plan} = Tasks.approve_plan(plan, "system")
 
@@ -858,7 +862,7 @@ defmodule Platform.Tasks.PlanTest do
           status: "planning"
         })
 
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, _rejected} = Tasks.reject_plan(plan, "system")
 
@@ -1010,7 +1014,7 @@ defmodule Platform.Tasks.PlanTest do
       # row still IS v1 — so the next plan is v2, no collision with the
       # in-place row.
       assert {:ok, _} = Tasks.reject_plan(rewritten, Ecto.UUID.generate())
-      assert {:ok, v2} = Tasks.create_plan(%{task_id: task.id})
+      assert {:ok, v2} = create_submittable_plan(%{task_id: task.id})
       assert v2.version == 2
     end
   end

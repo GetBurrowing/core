@@ -2,6 +2,8 @@ defmodule Platform.Tasks.TasksContextTest do
   @moduledoc "Integration tests for the Tasks context module."
   use Platform.DataCase, async: true
 
+  import Platform.SubmittablePlanFixtures
+
   import Ecto.Query, only: [from: 2]
 
   alias Platform.{Repo, Tasks}
@@ -97,7 +99,7 @@ defmodule Platform.Tasks.TasksContextTest do
       {:ok, task} =
         Tasks.create_task(%{project_id: project.id, title: "Approvable", status: "planning"})
 
-      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, _plan} = Tasks.approve_plan(plan, Ecto.UUID.generate())
 
@@ -1165,7 +1167,7 @@ defmodule Platform.Tasks.TasksContextTest do
       # Move task into `planning` and submit a plan for review without
       # approving it. Mirrors the "Plan Ready" UX case.
       {:ok, planning_task} = Tasks.transition_task_status(task, "planning")
-      {:ok, plan} = Tasks.create_plan(%{task_id: planning_task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: planning_task.id})
       {:ok, _plan} = Tasks.submit_plan_for_review(plan)
 
       reloaded =
@@ -1212,7 +1214,7 @@ defmodule Platform.Tasks.TasksContextTest do
       # plan_pending_review first, so the M2 demo task could not change
       # badge while the plan was still pending_review.
       {:ok, planning_task} = Tasks.transition_task_status(task, "planning")
-      {:ok, plan} = Tasks.create_plan(%{task_id: planning_task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: planning_task.id})
       {:ok, _plan} = Tasks.submit_plan_for_review(plan)
 
       reloaded =
@@ -1268,7 +1270,7 @@ defmodule Platform.Tasks.TasksContextTest do
       # plan-pending-review case. With zero pending review_requests, the
       # predicate continues to surface :plan_pending_review.
       {:ok, planning_task} = Tasks.transition_task_status(task, "planning")
-      {:ok, plan} = Tasks.create_plan(%{task_id: planning_task.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: planning_task.id})
       {:ok, _plan} = Tasks.submit_plan_for_review(plan)
 
       reloaded =
@@ -1735,7 +1737,24 @@ defmodule Platform.Tasks.TasksContextTest do
       assert log =~ "no_review_assignee"
     end
 
-    test "flag on but empty plan (no stages) → skip with :empty_plan",
+    # Task 01a0588e stage 2 REPLACED this test's subject rather than
+    # softening it. It used to assert that an armed task with an EMPTY plan
+    # submits to pending_review and merely logs an `:empty_plan`
+    # auto-approve skip. That path no longer exists:
+    # `submit_plan_for_review/1` refuses a plan with no planner-authored
+    # stage BEFORE the status write, so the empty plan never becomes
+    # pending_review and `maybe_auto_approve/1` is never reached to skip.
+    #
+    # The stronger statement is now assertable, so it is asserted: the arm
+    # does not weaken the refusal. An `auto_approve_plan: true` task is
+    # exactly the shape most at risk from a stageless plan — it would
+    # approve itself — and it is refused like any other.
+    #
+    # `auto_approve_precondition/2`'s `:empty_plan` branch is still live and
+    # still covered, via `retry_auto_approval/1`
+    # (`Platform.Tasks.RetryAutoApprovalTest`, "refuses a plan with no
+    # stages, terminally and without the skip telemetry").
+    test "flag on but empty plan (no stages) → the submit is refused outright, never auto-approved",
          %{project: project} do
       exec_id = Ecto.UUID.generate()
       review_id = Ecto.UUID.generate()
@@ -1754,14 +1773,15 @@ defmodule Platform.Tasks.TasksContextTest do
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
 
-      log =
-        capture_log(fn ->
-          {:ok, submitted} = Tasks.submit_plan_for_review(plan)
-          assert submitted.status == "pending_review"
-          assert submitted.auto_approved_at == nil
-        end)
+      capture_log(fn ->
+        assert {:error, :no_authored_stages} = Tasks.submit_plan_for_review(plan)
+      end)
 
-      assert log =~ "empty_plan"
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "draft"
+      assert reloaded.auto_approved_at == nil
+      assert Tasks.architecture_gate(reloaded) == :none
+      assert Tasks.get_task_record(task.id).status == "planning"
     end
 
     test "backfill safety: create_task without auto_approve_plan → flag reads false, no auto-approve",
@@ -2197,7 +2217,7 @@ defmodule Platform.Tasks.TasksContextTest do
       # should be parked in `stack_pending` rather than jumping to
       # `in_progress` (or worse, rolling back the plan approval).
       {:ok, m1} = Tasks.transition_task_status(m1, "planning")
-      {:ok, plan} = Tasks.create_plan(%{task_id: m1.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: m1.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
 
       {:ok, _approved} = Tasks.approve_plan(plan, "system")
@@ -2238,7 +2258,7 @@ defmodule Platform.Tasks.TasksContextTest do
         |> Repo.update()
 
       {:ok, m1} = Tasks.transition_task_status(m1, "planning")
-      {:ok, plan} = Tasks.create_plan(%{task_id: m1.id})
+      {:ok, plan} = create_submittable_plan(%{task_id: m1.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
 
       {:ok, _approved} = Tasks.approve_plan(plan, "system")
@@ -2361,7 +2381,7 @@ defmodule Platform.Tasks.TasksContextTest do
   end
 
   defp approve_latest_plan(task) do
-    {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+    {:ok, plan} = create_submittable_plan(%{task_id: task.id})
     {:ok, plan} = Tasks.submit_plan_for_review(plan)
     {:ok, _plan} = Tasks.approve_plan(plan, "system")
     Tasks.get_task_record(task.id)

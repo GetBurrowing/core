@@ -311,7 +311,9 @@ defmodule Platform.Tasks.PlanEngine do
         position: gate.position,
         name: @remediation_stage_name,
         description: remediation_description(gate, failed, feedback),
-        status: "pending"
+        status: "pending",
+        # Task 01a0588e. Engine-emitted, so structurally marked as such.
+        origin: "synthesized"
       })
       |> Repo.insert!()
 
@@ -1087,6 +1089,47 @@ defmodule Platform.Tasks.PlanEngine do
     end
   end
 
+  @doc """
+  Whether a stage was written by a PLANNER rather than by the engine.
+
+  Takes a `%Stage{}` or a raw stage map (string- or atom-keyed) and reads
+  its `origin` and nothing else. Absence reads as authored: rows written
+  before the marker existed, and every writer that does not opt in, are
+  planner-authored by construction.
+
+  This and `Tasks.authored_stage_count/1` are the ONLY sanctioned
+  authored/synthesized predicates. Do not re-derive the distinction from a
+  stage's name or description — see `Platform.Tasks.Stage`'s `@origins`
+  note for why a prose-keyed classifier fails open.
+  """
+  @spec authored_stage?(Stage.t() | map()) :: boolean()
+  def authored_stage?(%Stage{origin: origin}), do: origin != "synthesized"
+
+  def authored_stage?(stage) when is_map(stage),
+    do: stage_field(stage, "origin") != "synthesized"
+
+  @doc """
+  Strip any caller-supplied `origin` from raw planner stage input.
+
+  `origin` is the engine's marker. A planner that hands us
+  `"origin": "synthesized"` in an MCP payload would otherwise be able to
+  disguise its own stage as the engine's and slip past any authored-stage
+  requirement, so the key is removed from planner input BEFORE the engine
+  gets a chance to add its own. Run this ahead of
+  `route_e2e_behavior_validations/1`, never after: afterwards it would
+  erase the engine's own marker.
+  """
+  @spec strip_planner_origin([map()]) :: [map()]
+  def strip_planner_origin(stages_input) when is_list(stages_input),
+    do: Enum.map(stages_input, &strip_planner_origin_from_stage/1)
+
+  def strip_planner_origin(other), do: other
+
+  defp strip_planner_origin_from_stage(stage) when is_map(stage),
+    do: stage |> Map.delete("origin") |> Map.delete(:origin)
+
+  defp strip_planner_origin_from_stage(other), do: other
+
   defp synthesize_task_level_review_stage(existing_stages, e2e_validations) do
     next_position =
       existing_stages
@@ -1101,7 +1144,13 @@ defmodule Platform.Tasks.PlanEngine do
           "as a single per-task review gate. The review agent executes the behavioral script " <>
           "in a dev environment and dispositions the validation.",
       "position" => next_position,
-      "validations" => e2e_validations
+      "validations" => e2e_validations,
+      # Task 01a0588e. The STRUCTURAL marker that this stage is the engine's,
+      # not a planner's. Anything downstream that needs to know "did the
+      # planner author an implementation stage?" reads this key — never the
+      # name above ("Task-level review") or the description above, both of
+      # which are template copy a reword would silently invalidate.
+      "origin" => "synthesized"
     }
   end
 

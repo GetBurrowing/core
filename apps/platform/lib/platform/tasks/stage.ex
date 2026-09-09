@@ -115,6 +115,18 @@ defmodule Platform.Tasks.Stage do
   # deliberately — one vocabulary, one distinction.
   @architecture_audit_sources ~w(mcp handle_output)
 
+  # Task 01a0588e. WHO wrote this stage: the planner ("authored") or the
+  # plan engine ("synthesized").
+  #
+  # `origin` is an INPUT MARKER, written at insert time by the code that
+  # creates the row, and NEVER inferred from `name` or `description`. Both
+  # of those are template copy — the synthesized stage is called
+  # "Task-level review" and its description opens "Synthesized by the plan
+  # engine…" — and a classifier keyed to either fails OPEN the first time
+  # someone rewords the template, admitting exactly the plans the marker
+  # exists to refuse. Read `origin`; do not read prose.
+  @origins ~w(authored synthesized)
+
   # Written on EVERY write, explicitly nil where there is no value yet.
   # See the moduledoc: absence and nil must not be two ways of saying the
   # same thing.
@@ -128,6 +140,11 @@ defmodule Platform.Tasks.Stage do
     field(:description, :string)
     field(:status, :string, default: "pending")
     field(:expected_artifacts, {:array, :map}, default: [])
+
+    # See @origins: an insert-time marker, never inferred from name or
+    # description.
+    field(:origin, :string, default: "authored")
+
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
 
@@ -146,6 +163,15 @@ defmodule Platform.Tasks.Stage do
   end
 
   def statuses, do: @statuses
+
+  @doc """
+  The closed set of `origin` values.
+
+  "authored" means a planner wrote the stage; "synthesized" means the plan
+  engine emitted it. The value is written at insert time and is never
+  derived from the stage's name or description.
+  """
+  def origins, do: @origins
 
   @doc "The closed set of persistable `architecture_audit[\"state\"]` values."
   def architecture_audit_states, do: @architecture_audit_states
@@ -199,11 +225,13 @@ defmodule Platform.Tasks.Stage do
       :description,
       :status,
       :expected_artifacts,
+      :origin,
       :started_at,
       :completed_at
     ])
     |> validate_required([:plan_id, :position, :name])
     |> validate_inclusion(:status, @statuses)
+    |> validate_inclusion(:origin, @origins)
     |> foreign_key_constraint(:plan_id)
   end
 

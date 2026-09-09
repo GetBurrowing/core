@@ -2860,7 +2860,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: false,
             description:
-              "Required and non-empty when verdict is \"reject\"; omit on a pass. One object per objection: {stage_id, constraint, detail}. `stage_id` must be a stage of THIS plan. `constraint` must be one of #{Enum.join(Plan.architecture_constraints(), " | ")}. `detail` must say WHAT TO CHANGE, not what is wrong — a detail the planner cannot act on produces a differently-worded plan, not a better one."
+              "Required and non-empty when verdict is \"reject\"; omit on a pass. One object per objection: {stage_id, constraint, detail}. `stage_id` is OPTIONAL: supply a stage of THIS plan to object to that stage, or omit it (or send null) when the objection is about the plan AS A WHOLE — a decomposition that is wrong even though each stage is individually sound, or a sequencing defect with no single stage at fault. A plan-level finding reaches the planner labelled `(plan-wide)`. A `stage_id` that is present but is not a stage of this plan is refused as `foreign_stage_id`. `constraint` must be one of #{Enum.join(Plan.architecture_constraints(), " | ")}. `detail` must say WHAT TO CHANGE, not what is wrong — a detail the planner cannot act on produces a differently-worded plan, not a better one."
           }
         },
         returns:
@@ -2880,7 +2880,8 @@ defmodule Platform.Federation.ToolSurface do
             "`malformed_finding` (a finding is not an object, or its `detail` is blank), " <>
             "`invalid_constraint` (a finding's `constraint` is outside the four allowed values — " <>
             "this is where a style objection is refused), " <>
-            "`foreign_stage_id` (a finding names a stage that does not belong to this plan), " <>
+            "`foreign_stage_id` (a finding's `stage_id` is present but is not a stage of this plan — " <>
+            "note an ABSENT or null `stage_id` is not an error, it is a plan-level finding), " <>
             "`gate_not_open` (the gate never opened for this plan version), " <>
             "`gate_already_resolved` (somebody — an earlier call, the deadline, or a human " <>
             "override — already closed it; a duplicate call lands here and changes nothing), " <>
@@ -6142,6 +6143,30 @@ defmodule Platform.Federation.ToolSurface do
           {:ok, updated} ->
             {:ok, serialize_plan(Repo.preload(updated, :stages))}
 
+          # Task 01a0588e stage 2. The refusal NAMES THE OMISSION, because
+          # the caller's mistake is invisible from a stage count: a plan
+          # carrying only the engine's synthesized task-level review stage
+          # has one stage and no work in it. Recoverable — nothing was
+          # written, the plan is still a draft, and plan_update fixes it in
+          # place. No error `code` is added: plan_submit does not carry a
+          # code taxonomy and inventing one here would be the only member of
+          # it. Tone mirrors require_plan_update_stages/1, which refuses the
+          # same omission one call earlier.
+          {:error, :no_authored_stages} ->
+            {:error,
+             %{
+               error:
+                 "plan_submit: this plan has no planner-authored implementation stage, so there " <>
+                   "is nothing for the architecture review to review or for an executor to run. " <>
+                   "A plan carrying only the engine's synthesized task-level review stage counts " <>
+                   "as none — that stage is a review host the engine adds, not work you authored.",
+               recoverable: true,
+               suggestion:
+                 "Add at least one implementation stage with plan_update (same shape and " <>
+                   "contract as plan_create's `stages`), then submit again — or discard the " <>
+                   "draft with plan_reject. The plan is untouched and still in draft."
+             }}
+
           {:error, :invalid_transition} ->
             {:error,
              %{
@@ -7148,6 +7173,12 @@ defmodule Platform.Federation.ToolSurface do
 
     stages_input =
       raw_stages_input
+      # Task 01a0588e. FIRST, and before the engine's own rewrite: `origin`
+      # is the engine's marker, so a planner-supplied
+      # `"origin": "synthesized"` is dropped here rather than honoured.
+      # Stripping after `route_e2e_behavior_validations/1` would erase the
+      # engine's marker instead of the planner's forgery.
+      |> Platform.Tasks.PlanEngine.strip_planner_origin()
       |> Platform.Tasks.PlanEngine.route_e2e_behavior_validations()
       |> Platform.Tasks.PlanEngine.check_manual_approval_heuristic()
       |> Platform.Tasks.PlanEngine.check_zero_validation_stages()
@@ -9698,6 +9729,12 @@ defmodule Platform.Federation.ToolSurface do
     # 3. Log advisory warnings about stages with zero validations (also advisory).
     stages_input =
       raw_stages_input
+      # Task 01a0588e. FIRST, and before the engine's own rewrite: `origin`
+      # is the engine's marker, so a planner-supplied
+      # `"origin": "synthesized"` is dropped here rather than honoured.
+      # Stripping after `route_e2e_behavior_validations/1` would erase the
+      # engine's marker instead of the planner's forgery.
+      |> Platform.Tasks.PlanEngine.strip_planner_origin()
       |> Platform.Tasks.PlanEngine.route_e2e_behavior_validations()
       |> Platform.Tasks.PlanEngine.check_manual_approval_heuristic()
       |> Platform.Tasks.PlanEngine.check_zero_validation_stages()
@@ -9712,7 +9749,11 @@ defmodule Platform.Federation.ToolSurface do
                 name: Map.get(stage_input, "name"),
                 description: Map.get(stage_input, "description"),
                 position: Map.get(stage_input, "position"),
-                expected_artifacts: Map.get(stage_input, "expected_artifacts", [])
+                expected_artifacts: Map.get(stage_input, "expected_artifacts", []),
+                # Task 01a0588e. Built key-by-key, so an unnamed key is
+                # dropped: carried explicitly, defaulting to "authored".
+                # Planner-supplied values were already stripped above.
+                origin: Map.get(stage_input, "origin", "authored")
               }
 
               case Tasks.create_stage(stage_attrs) do
@@ -11932,7 +11973,16 @@ defmodule Platform.Federation.ToolSurface do
       not (is_binary(constraint) and constraint in Plan.architecture_constraints()) ->
         verdict_error(:invalid_constraint, constraint)
 
-      not (is_binary(stage_id) and MapSet.member?(stage_ids, stage_id)) ->
+      # A finding may OMIT `stage_id` (or send it as null) to object to the
+      # plan as a whole: a decomposition that is wrong even though no single
+      # stage is, or a sequencing defect spread across stages with no one
+      # stage at fault. A gate whose only expressible verdict shape is
+      # per-stage cannot state those, and an architect with nowhere to put
+      # them passes instead. Anything else present in `stage_id` — a foreign
+      # UUID, a number, a map — is still refused: relaxing THAT is what would
+      # let an architect invent an id.
+      not is_nil(stage_id) and
+          not (is_binary(stage_id) and MapSet.member?(stage_ids, stage_id)) ->
         verdict_error(:foreign_stage_id, stage_id)
 
       not (is_binary(detail) and String.trim(detail) != "") ->
@@ -12060,14 +12110,14 @@ defmodule Platform.Federation.ToolSurface do
       :missing_findings,
       "verdict \"reject\" requires a non-empty `findings` array.",
       true,
-      "Send one finding per objection: [{\"stage_id\": \"<a stage of this plan>\", \"constraint\": \"#{hd(Plan.architecture_constraints())}\", \"detail\": \"<what to change>\"}]. A rejection with no findings is unactionable — the planner cannot tell what to write differently. If you cannot name a stage and a change, pass and say it in `summary`."
+      "Send one finding per objection: [{\"stage_id\": \"<a stage of this plan>\", \"constraint\": \"#{hd(Plan.architecture_constraints())}\", \"detail\": \"<what to change>\"}]. A finding about the plan AS A WHOLE rather than one stage — a wrong decomposition, a sequencing defect with no single stage at fault — may OMIT `stage_id` (or send it as null); it renders to the planner as a plan-wide objection. A rejection with no findings at all is still unactionable and still refused — the planner cannot tell what to write differently."
     )
   end
 
   defp verdict_error(:malformed_finding, finding) do
     verdict_refusal(
       :malformed_finding,
-      "each finding must be an object with `stage_id`, `constraint` and a non-empty `detail` (got #{inspect(finding)}).",
+      "each finding must be an object with `constraint`, a non-empty `detail` and an optional `stage_id` (got #{inspect(finding)}).",
       true,
       "`detail` must state WHAT TO CHANGE, not what is wrong — \"This is unsound\" tells the planner nothing it can act on."
     )
@@ -12087,7 +12137,7 @@ defmodule Platform.Federation.ToolSurface do
       :foreign_stage_id,
       "finding stage_id #{inspect(stage_id)} does not belong to this plan.",
       true,
-      "Use a `stage_id` from the plan summary in your review prompt (or stage_list on this plan_id). A finding naming another plan's stage means the review ran against stale context."
+      "Use a `stage_id` from the plan summary in your review prompt (or stage_list on this plan_id). A finding naming another plan's stage means the review ran against stale context. If the objection is not about one stage but about the plan as a whole, OMIT `stage_id` entirely rather than guessing one — a plan-level finding is accepted and renders as (plan-wide)."
     )
   end
 

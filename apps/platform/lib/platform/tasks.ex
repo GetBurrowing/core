@@ -2286,7 +2286,17 @@ defmodule Platform.Tasks do
             description: plan_input_get(stage_input, "description", :description),
             position: plan_input_get(stage_input, "position", :position),
             expected_artifacts:
-              plan_input_get(stage_input, "expected_artifacts", :expected_artifacts, [])
+              plan_input_get(stage_input, "expected_artifacts", :expected_artifacts, []),
+            # Task 01a0588e. `stage_attrs` is built key-by-key, so an origin
+            # not named here is silently dropped and every stage would read
+            # "authored". Carried explicitly, defaulting to "authored".
+            #
+            # This does NOT trust a planner: `do_plan_update/4` strips
+            # `origin` from the raw MCP payload via
+            # `PlanEngine.strip_planner_origin/1` before the engine's own
+            # rewrite runs, so the only "synthesized" value that can reach
+            # here is one the engine put there.
+            origin: plan_input_get(stage_input, "origin", :origin, "authored")
           }
 
           case create_stage(stage_attrs) do
@@ -2429,7 +2439,47 @@ defmodule Platform.Tasks do
   # gate crediting nobody.
   @architecture_responsibility_key "architecture.review_plan"
 
+  @doc """
+  Move a draft plan to `pending_review`, opening the architecture gate.
+
+  ## The authored-stage precondition (task 01a0588e)
+
+  A draft with NO planner-authored stage is refused with
+  `{:error, :no_authored_stages}` BEFORE anything is written: the status
+  stays `draft`, no `architecture.review_plan` dispatch fires, no gate
+  opens, and the author can still fix the draft with `plan_update`.
+
+  This exists because four stageless plans reached the architecture gate
+  and were all recorded `passed` — not because the architect agreed with
+  them, but because `plan_architecture_verdict` cannot express a
+  well-formed REJECT for a stageless plan: every finding it accepts must
+  carry a `stage_id` belonging to the plan, and such a plan has no stage
+  to point at. The gate could only say yes. So the plan must never reach
+  it.
+
+  The condition is `authored_stage_count/1 == 0`, NOT `stages == []`. A
+  plan whose only stage is the engine's synthesized task-level review host
+  has a non-zero stage count and is still unexecutable — there is no work
+  stage in it. And the count is read by `origin`, via
+  `PlanEngine.authored_stage?/1`; it is never inferred from a stage's name
+  or description, because a prose-keyed classifier fails OPEN on the first
+  reword of the template and admits exactly the plans this refuses.
+
+  The count is taken by plan ID rather than from `plan.stages`, so a
+  caller holding a struct preloaded before its stages were replaced cannot
+  pass the precondition on a stale association.
+  """
   def submit_plan_for_review(%Plan{status: "draft"} = plan) do
+    if authored_stage_count(plan.id) == 0 do
+      {:error, :no_authored_stages}
+    else
+      do_submit_plan_for_review(plan)
+    end
+  end
+
+  def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
+
+  defp do_submit_plan_for_review(%Plan{} = plan) do
     case plan |> Plan.changeset(%{status: "pending_review"}) |> Repo.update() do
       {:ok, updated} ->
         # ADR-0044 stage 2: architect plan-time review hook.
@@ -2518,8 +2568,6 @@ defmodule Platform.Tasks do
         error
     end
   end
-
-  def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
 
   # THE EDGE IS RUN IN A SPAWNED PROCESS, and the choice is forced.
   # `Platform.Lifecycle.Executor.run_edge/3` awaits an awaited step in a
@@ -5295,6 +5343,27 @@ defmodule Platform.Tasks do
     %Stage{}
     |> Stage.changeset(attrs)
     |> Repo.insert()
+  end
+
+  @doc """
+  How many of a plan's stages a PLANNER authored, as opposed to the engine.
+
+  Takes a `%Plan{}` (loaded stages are used as-is; otherwise queried) or a
+  plan id. Counts on `origin` alone — see `PlanEngine.authored_stage?/1`.
+  Together those two are the only sanctioned authored/synthesized
+  predicates; nothing may re-derive the distinction from stage prose.
+  """
+  @spec authored_stage_count(Plan.t() | Ecto.UUID.t()) :: non_neg_integer()
+  def authored_stage_count(%Plan{stages: stages}) when is_list(stages),
+    do: Enum.count(stages, &PlanEngine.authored_stage?/1)
+
+  def authored_stage_count(%Plan{id: id}), do: authored_stage_count(id)
+
+  def authored_stage_count(plan_id) when is_binary(plan_id) do
+    Stage
+    |> where([s], s.plan_id == ^plan_id)
+    |> where([s], is_nil(s.origin) or s.origin != "synthesized")
+    |> Repo.aggregate(:count, :id)
   end
 
   def list_stages(plan_id) do
