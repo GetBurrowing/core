@@ -1415,7 +1415,7 @@ defmodule Platform.Tasks.PlanEngine do
   defp ordered_stages(plan_id) do
     Stage
     |> where([s], s.plan_id == ^plan_id)
-    |> order_by([s], asc: s.position)
+    |> order_by([s], asc: s.position, asc: s.id)
     |> Repo.all()
   end
 

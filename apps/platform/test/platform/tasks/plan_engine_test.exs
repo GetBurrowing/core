@@ -2069,6 +2069,100 @@ defmodule Platform.Tasks.PlanEngineTest do
     end
   end
 
+  # ── current_stage/1's selection is a WRITE-side decision (ticket 01a089e6,
+  # site 1) ───────────────────────────────────────────────────────────────
+
+  describe "advance/2 stage selection under a position tie" do
+    # #967 and #969 fixed six READ paths: which order a preload or a query
+    # hands a caller. `current_stage/1` is different — it decides which
+    # stage `advance/2` actually DISPATCHES and ADVANCES. With two `pending`
+    # or `running` stages sharing a position, `Enum.find/2` over an
+    # untiebroken `ordered_stages/1` list returns whichever row the scan
+    # handed it first, and THAT row is the one the engine acts on.
+    #
+    # THE FIXTURE, same two conditions as every other site on this ticket:
+    #
+    #   1. Two "running" stages share a `position` — with distinct
+    #      positions the tiebreak is never consulted.
+    #   2. Their PHYSICAL (heap) order must disagree with their `id` order
+    #      — `Tasks.create_stage/1` cannot build this, since it mints each
+    #      id as it inserts and heap order and id order always agree there.
+    #      The rows go in directly, with pre-chosen ids, HIGHEST ID FIRST,
+    #      so heap order is the exact reverse of id order.
+    #
+    # HOW THE CHOICE IS MADE OBSERVABLE WITHOUT SPENDING THE TIE ON A
+    # TRANSITION. Both stages are "running", so a real `running -> failed`
+    # transition is legal for either one — but the test never lets the
+    # correctly-picked stage (the lower id) transition at all. It calls
+    # `advance/2` with `stage_id: high` — the id it expects NOT to be
+    # current. `advance/2`'s own contract is "no-op unless the asserted
+    # stage IS the current stage" (see its `@doc`), so:
+    #
+    #   * `current_stage/1` correctly resolves to `low` → `low != high` →
+    #     the mismatch guard fires → no-op, and `high`'s (poisoned) validation
+    #     is never even read.
+    #   * `current_stage/1` wrongly resolves to `high` (the bug this ticket
+    #     fixes) → `high == high` → the mismatch guard does NOT fire →
+    #     `high`'s verdict is computed for real. `high` carries a `failed`
+    #     validation, so that is a genuine, legal `running -> failed`
+    #     transition — a visible mutation a correct engine never makes.
+    #
+    # So a correct engine leaves both stages exactly as inserted, every
+    # single call; calling it three times in a row is "a repeated call
+    # selects the same row" — nothing about the fixture changes between
+    # calls, so an unstable choice would eventually flip `high` to
+    # `"failed"` on some later iteration if it were ever going to.
+    test "current_stage/1 never treats the higher-id row as current, across repeated calls",
+         %{plan: plan} do
+      [low, high] =
+        Enum.sort([Platform.Types.UUIDv7.generate(), Platform.Types.UUIDv7.generate()])
+
+      insert_running = fn id, name ->
+        %Platform.Tasks.Stage{}
+        |> Platform.Tasks.Stage.changeset(%{
+          plan_id: plan.id,
+          position: 1,
+          name: name,
+          status: "running"
+        })
+        |> Ecto.Changeset.put_change(:id, id)
+        |> Platform.Repo.insert!()
+      end
+
+      # HIGHEST ID FIRST: heap order becomes the exact reverse of id order.
+      insert_running.(high, "Later")
+      insert_running.(low, "Earlier")
+
+      # The poison: only read if `high` is (wrongly) treated as current.
+      {:ok, _poison} =
+        Tasks.create_validation(%{stage_id: high, kind: "test_pass", status: "failed"})
+
+      # The tie is asserted, not assumed.
+      assert 2 ==
+               Platform.Repo.aggregate(
+                 from(s in Platform.Tasks.Stage,
+                   where: s.plan_id == ^plan.id and s.position == 1
+                 ),
+                 :count
+               )
+
+      for _ <- 1..3 do
+        assert {:ok, result} = PlanEngine.advance(plan.id, stage_id: high)
+
+        high_stage = Enum.find(result.stages, &(&1.id == high))
+        low_stage = Enum.find(result.stages, &(&1.id == low))
+
+        # `high` was never treated as current, so its poisoned validation
+        # was never read and it never transitioned.
+        assert high_stage.status == "running"
+        # `low` was current every time and was never the asserted id, so
+        # it was never touched either — this is the plan-scoped no-op
+        # branch, not the verdict branch.
+        assert low_stage.status == "running"
+      end
+    end
+  end
+
   # ── Test helpers ────────────────────────────────────────────────────────
 
   # Two sentences that appear ONLY in the single-repo rendering, and four

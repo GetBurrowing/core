@@ -89,6 +89,62 @@ defmodule Platform.Tasks.StageTest do
       stages = Tasks.list_stages(plan.id)
       assert Enum.map(stages, & &1.name) == ["Build", "Test"]
     end
+
+    # Ticket 01a089e6, site 2. `list_stages/1` is the public read behind the
+    # `stage_list` MCP tool, so its order is visible to every agent on the
+    # board. `asc: :position` alone is only a total order if positions are
+    # distinct, and nothing enforces that — see the `preload_order` comment
+    # on `Platform.Tasks.Plan` and the `plan_test.exs` fixture this one
+    # copies for the full argument: no unique index on `(plan_id, position)`,
+    # no uniqueness validation in `Stage.changeset/2`, and "Stages must have
+    # unique positions" living only in a tool description.
+    #
+    # THE FIXTURE, same two conditions as every other site on this ticket:
+    #
+    #   1. Two stages must SHARE a `position` — with distinct positions the
+    #      tiebreak is never consulted.
+    #   2. Their PHYSICAL (heap) order must disagree with their `id` order —
+    #      otherwise a bare `ORDER BY position` returns id order by
+    #      accident. `Tasks.create_stage/1` cannot produce (2): it mints
+    #      each id as it inserts, so id order and heap order always agree.
+    #      The rows go in directly, with pre-chosen ids, HIGHEST FIRST, so
+    #      heap order is the exact reverse of id order.
+    #
+    # Read three times and assert the ID ORDER each time, rather than that
+    # the reads agree with each other — a single lucky scan satisfies
+    # agreement, and the claim here is stronger than that: the order is
+    # TOTAL and STABLE across independent reads, not merely self-consistent.
+    test "a position tie is broken by id, identically on every read", %{plan: plan} do
+      [low, high] =
+        Enum.sort([Platform.Types.UUIDv7.generate(), Platform.Types.UUIDv7.generate()])
+
+      insert_tied = fn id, name ->
+        %Platform.Tasks.Stage{}
+        |> Platform.Tasks.Stage.changeset(%{plan_id: plan.id, position: 1, name: name})
+        |> Ecto.Changeset.put_change(:id, id)
+        |> Platform.Repo.insert!()
+      end
+
+      # HIGHEST ID FIRST: heap order becomes the exact reverse of id order.
+      insert_tied.(high, "Later")
+      insert_tied.(low, "Earlier")
+
+      # The tie is asserted, not assumed — and doubles as the standing proof
+      # that the schema accepts two stages at one position.
+      assert 2 ==
+               Platform.Repo.aggregate(
+                 from(s in Platform.Tasks.Stage,
+                   where: s.plan_id == ^plan.id and s.position == 1
+                 ),
+                 :count
+               )
+
+      for _ <- 1..3 do
+        stages = Tasks.list_stages(plan.id)
+        assert Enum.map(stages, & &1.id) == [low, high]
+        assert Enum.map(stages, & &1.name) == ["Earlier", "Later"]
+      end
+    end
   end
 
   describe "transition_stage/2" do
