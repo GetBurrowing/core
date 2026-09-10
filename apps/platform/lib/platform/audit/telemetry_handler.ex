@@ -303,7 +303,20 @@ defmodule Platform.Audit.TelemetryHandler do
     # ONLY on the exact bug signature `open=false AND blocked_by_count=0`
     # ("stack not in_progress but no plan gap" — the state that stranded the
     # Inbox stack in `forming`); benign checks are dropped without a write.
-    [:platform, :stacks, :commencement, :gate_check]
+    [:platform, :stacks, :commencement, :gate_check],
+    # Task 01a089b3-7f84 stage 1 — transcript failure history. Emitted by
+    # `Platform.Meetings.fail_transcript/3` (it always did); it was simply
+    # never registered here, so every emit was dropped SILENTLY and
+    # `audit_events` held ZERO transcript-failure rows. This registration is
+    # LOAD-BEARING for the clear-on-success change in the later stages of
+    # this task: once `failure_reason` is cleared on a successful retry, the
+    # audit row is the ONLY durable record that the transcript ever failed.
+    # Metadata carries resource_type "meeting_transcript", resource_id,
+    # action "failed", failure_reason, transcript_id and room_id. Sync
+    # (default handle_event clause) so tests can assert the row immediately
+    # after `fail_transcript/3` returns; `scope_check/2` falls through to
+    # `:ok` for this namespace.
+    [:platform, :meetings, :transcription_failed]
 
     # NOTE: `[:platform, :memory, :proposal_promoted]` is NOT registered
     # here. `Platform.Memory.Proposals.queue_promotion/1` (task 019f70e9
@@ -403,6 +416,51 @@ defmodule Platform.Audit.TelemetryHandler do
     else
       :ok
     end
+  end
+
+  # Task 01a089b3-7f84 stage 1 — `[:platform, :meetings, :transcription_failed]`
+  # needs the SYNC persist path (tests read the row straight after
+  # `fail_transcript/3` returns), but its emitter is uniquely exposed: it is
+  # reached from `Summarizer.summarize_async/1`'s `Task.Supervisor` child,
+  # which in an `async: true` `PlatformWeb.ConnCase` test borrows the TEST
+  # process's sandbox connection and outlives it. When the test process
+  # exits, DBConnection tears the connection down and the in-flight
+  # `INSERT INTO audit_events` arrives as a process EXIT — and `:telemetry`
+  # responds to an exiting handler by DETACHING it for the whole VM. Measured
+  # on this branch: one such orphan reddened 7 unrelated audit tests later in
+  # the run (TaskAccessTest, CanvasAttachmentsTest, ExternalAdmissionTest,
+  # CanvasLiveTest) with zero rows, which reads identically to a missing
+  # registration.
+  #
+  # This clause is deliberately NARROW — one event name, not the general
+  # path. `persist_or_skip/4`'s closing comment refuses a blanket
+  # `catch :exit` because it would silence a destroyed write on the
+  # high-volume historian path; that refusal stands. Here the exit is caught
+  # for ONE event and logged at `:error` naming the lost row, so nothing goes
+  # quiet — what is prevented is one doomed orphan disarming audit for every
+  # test that follows it.
+  #
+  # The race is TIMING-DEPENDENT: this clause did NOT fire in the run that
+  # shipped it. A clean suite is therefore not evidence that this clause is
+  # unnecessary — the evidence it is needed is the earlier run in which one
+  # orphan detached audit for 7 unrelated tests. Do not delete this as dead
+  # code on the strength of a green suite.
+  def handle_event(
+        [:platform, :meetings, :transcription_failed] = event_name,
+        measurements,
+        metadata,
+        config
+      ) do
+    persist_or_skip(event_name, measurements, metadata, config)
+  catch
+    :exit, reason ->
+      Logger.error(
+        "Audit persist EXITED for platform.meetings.transcription_failed " <>
+          "(transcript=#{inspect(Map.get(metadata, :transcript_id))}) — the row is LOST. " <>
+          "Reason: #{inspect(reason)}"
+      )
+
+      :ok
   end
 
   def handle_event(event_name, measurements, metadata, config) do

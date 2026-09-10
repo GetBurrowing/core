@@ -4103,6 +4103,82 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Failed transcripts a human still needs to look at — `status == "failed"`
+  AND `failure_reason` is set, ordered by `completed_at` descending.
+
+  Exists because task 01a089b3's incident query — hand-writing
+  `failure_reason like '%TransportError%timeout%'` with no `status` clause —
+  counted 6 transcripts when the true answer was 5. `failure_reason` is a
+  one-slot latch (see `Transcript.failure_reason`'s moduledoc): stage 2 made
+  `complete_transcript/2` clear it on success, and stage 3 added a CHECK
+  constraint making a non-nil value on a `complete` row unrepresentable. But
+  **before** those two stages shipped, a row that failed and later recovered
+  still carried a stale reason — the sixth row in the miscount. `not
+  is_nil(failure_reason)` ALONE is NOT the currently-broken-transcript filter,
+  even now: it is silent about status, so a future regression in the
+  clear-on-success path (or a row inserted directly, bypassing
+  `complete_transcript/2`) would again mix a recovered transcript into the
+  count. **The `status == "failed"` conjunction is the load-bearing clause
+  here** — it is what makes "currently failed" the actual predicate instead
+  of "has ever failed since this column existed."
+
+  Concretely, this is not only hypothetical: `reopen_transcript/1` (the
+  rejoin path) sets a failed row's status back to `"recording"` but does
+  NOT clear `failure_reason` — only `complete_transcript/2` does. A
+  transcript that failed, was rejoined, and is now recording again still
+  carries the old reason, and `not is_nil(failure_reason)` alone still
+  misreports it as an unrecovered failure today. `complete_transcript/2`'s
+  path is closed (stage 2's clear + stage 3's CHECK constraint), but the
+  `reopen_transcript/1` path is not, which is exactly why this function
+  filters on status rather than relying on the column alone.
+
+  ## Options
+
+    * `:reason_matching` — a binary; matched with `ilike` as `%pattern%`
+      against `failure_reason`. Default: no reason filter (all failed rows
+      with a reason are returned).
+  """
+  @spec unrecovered_failures(keyword()) :: [Transcript.t()]
+  def unrecovered_failures(opts \\ []) do
+    query =
+      from(t in Transcript,
+        where: t.status == "failed" and not is_nil(t.failure_reason),
+        order_by: [desc: t.completed_at]
+      )
+
+    query
+    |> apply_reason_matching(Keyword.get(opts, :reason_matching))
+    |> Repo.all()
+  end
+
+  defp apply_reason_matching(query, nil), do: query
+
+  defp apply_reason_matching(query, pattern) when is_binary(pattern) do
+    where(query, [t], ilike(t.failure_reason, ^"%#{pattern}%"))
+  end
+
+  @doc """
+  Count of rows where the incident's naive filter (`failure_reason IS NOT
+  NULL`) and the correct one (`unrecovered_failures/1`'s `status == "failed"`
+  conjunction) disagree in the dangerous direction: `status = "complete"` AND
+  `failure_reason` is still set.
+
+  Post stage-3 this is permanently `0` — the CHECK constraint
+  `meeting_transcripts_no_reason_when_complete` makes the state it counts
+  unrepresentable. It stays as the monitor a human can run without
+  reconstructing the incident's SQL by hand: a nonzero result means the
+  constraint (or its migration) regressed, not that a new stale row is
+  merely possible.
+  """
+  @spec stale_failure_reason_count() :: non_neg_integer()
+  def stale_failure_reason_count do
+    Repo.aggregate(
+      from(t in Transcript, where: t.status == "complete" and not is_nil(t.failure_reason)),
+      :count
+    )
+  end
+
+  @doc """
   Returns completed transcripts whose `completed_at` falls within the window.
 
   Used by the Historian's activity digest. Only status="complete" transcripts
@@ -4568,6 +4644,19 @@ defmodule Platform.Meetings do
   via telemetry (`[:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]`),
   so this function's `{:ok, transcript} | {:error, term()}` contract to the
   Summarizer stays unchanged.
+
+  ## The success path CLEARS `failure_reason`
+
+  `failure_reason` is a one-slot latch describing why the row is CURRENTLY
+  failed, not a history: every `fail_transcript/3` call overwrites it, so a
+  transcript that failed three times only ever retained the third reason.
+  Leaving it populated on a row that has since succeeded makes
+  `where: not is_nil(t.failure_reason)` report healthy transcripts as broken.
+  The column's own migration already defines it as "why a FAILED row failed";
+  not clearing it was the code failing to uphold a contract the schema states.
+  Failure HISTORY is durable elsewhere — `audit_events` with
+  `event_type = "platform.meetings.transcription_failed"` (task 01a089b3
+  stage 1) records every failure, multi-valued, so nothing is lost here.
   """
   @spec complete_transcript(String.t(), String.t()) ::
           {:ok, Transcript.t()} | {:error, term()}
@@ -4584,6 +4673,11 @@ defmodule Platform.Meetings do
             summary: summary,
             completed_at: DateTime.utc_now()
           })
+          # `put_change/3` rather than a `failure_reason: nil` key in the attrs
+          # map above: the clearing is the point of this call, and a nil value
+          # threaded through `cast/3` is exactly the sort of thing that silently
+          # no-ops. Stated here, it also survives a later refactor of the attrs.
+          |> Ecto.Changeset.put_change(:failure_reason, nil)
           |> Repo.update()
 
         case result do
@@ -4768,7 +4862,21 @@ defmodule Platform.Meetings do
             :telemetry.execute(
               [:platform, :meetings, :transcription_failed],
               %{presence_seconds: transcriber_presence_seconds(failed)},
-              %{transcript_id: failed.id, room_id: failed.room_id}
+              # Task 01a089b3-7f84 stage 1 — enriched so the audit row this
+              # now produces is self-describing. `Audit.TelemetryHandler`'s
+              # `build_attrs/3` reads resource_type/resource_id/action off
+              # the metadata and DEFAULTS `action` to "execute", so an
+              # unenriched map lands a useless `action: "execute"` row.
+              # `failure_reason` rides into the JSONB metadata column and is
+              # the durable record once later stages clear the column.
+              %{
+                transcript_id: failed.id,
+                room_id: failed.room_id,
+                resource_type: "meeting_transcript",
+                resource_id: failed.id,
+                action: "failed",
+                failure_reason: failed.failure_reason
+              }
             )
 
             {:ok, failed}

@@ -2340,6 +2340,43 @@ defmodule Platform.MeetingsTest do
       assert is_integer(measurements.presence_seconds)
     end
 
+    # Task 01a089b3-7f84 stage 1 — the telemetry→audit bridge for transcript
+    # failure. This is LOAD-BEARING for the later stages of this task, which
+    # CLEAR `failure_reason` on a successful retry: once that lands, the
+    # audit row is the only durable record that a transcript ever failed.
+    #
+    # DEMONSTRATED RED: removing `[:platform, :meetings, :transcription_failed]`
+    # from `Platform.Audit.TelemetryHandler`'s @events makes the test below
+    # ("fail_transcript bridges into a durable audit row") fail with
+    # `[] != one row` — the emit still succeeds and nothing raises, the row
+    # simply never appears. The registration IS the mechanism.
+    test "fail_transcript bridges into a durable audit row" do
+      # `attach/0` is idempotent; call it so a handler detached by an earlier
+      # raise in this VM cannot masquerade as a missing registration.
+      Platform.Audit.TelemetryHandler.attach()
+      transcript = failing_transcript!()
+
+      {:ok, _} = Meetings.fail_transcript(transcript.id, nil, {:llm_failed, :boom})
+
+      # NB: the column is `event_type`, not `event_name`.
+      rows =
+        Platform.Audit.Event
+        |> Ecto.Query.where(event_type: "platform.meetings.transcription_failed")
+        |> Platform.Repo.all()
+
+      assert [row] = rows
+      assert row.resource_id == transcript.id
+      assert row.resource_type == "meeting_transcript"
+      # "execute" here would mean the metadata enrichment was lost —
+      # `build_attrs/3` defaults `action` when metadata omits it.
+      assert row.action == "failed"
+      assert row.metadata["failure_reason"] =~ "llm_failed"
+    end
+
+    test "transcription_failed is registered on the audit telemetry handler" do
+      assert [:platform, :meetings, :transcription_failed] in Platform.Audit.TelemetryHandler.events()
+    end
+
     test "post_transcription_failure_to_space/2 posts a system notice naming no host" do
       {:ok, space} = Chat.create_space(%{kind: "execution"})
       transcript_id = Ecto.UUID.generate()
@@ -2534,6 +2571,320 @@ defmodule Platform.MeetingsTest do
       # `fail_transcript/3` into `complete_transcript/2`: the claim must be
       # byte-identical across a completion, not merely still present.
       assert Meetings.get_transcript(transcript.id).router_dispatched_at == claimed_at
+    end
+  end
+
+  describe "complete_transcript/2 clears failure_reason (task 01a089b3 stage 2)" do
+    defp armed_transcript do
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: "space-#{Ecto.UUID.generate()}",
+          status: "processing"
+        })
+
+      {:ok, _} =
+        Meetings.append_segment(transcript.id, %{
+          "participant_identity" => "user-1",
+          "text" => "we agreed to ship on friday",
+          "start_time" => 0,
+          "end_time" => 1000
+        })
+
+      transcript
+    end
+
+    test "a transcript that failed and then succeeded carries no failure_reason" do
+      transcript = armed_transcript()
+
+      assert {:ok, failed} =
+               Meetings.fail_transcript(transcript.id, nil, {:llm_failed, %{reason: :timeout}})
+
+      # Assert the trap is ARMED before asserting it springs. Without this the
+      # test passes for the wrong reason: a `failure_reason` that was never
+      # written is trivially nil after completion, which is exactly the
+      # vacuous ordering (succeed-then-assert) this test exists to avoid.
+      refute is_nil(failed.failure_reason)
+      assert failed.failure_reason =~ "timeout"
+
+      assert {:ok, _completed} = Meetings.complete_transcript(transcript.id, "a real summary")
+
+      reloaded = Meetings.get_transcript(transcript.id)
+      assert reloaded.status == "complete"
+      assert reloaded.summary == "a real summary"
+
+      # The fix. `failure_reason` is a one-slot latch for why the row is
+      # CURRENTLY failed; a completed row holding one makes healthy
+      # transcripts answer `where not is_nil(failure_reason)`.
+      assert is_nil(reloaded.failure_reason)
+    end
+
+    test "fail_transcript/3 still SETS the reason it is asked to record" do
+      transcript = armed_transcript()
+
+      assert {:ok, failed} =
+               Meetings.fail_transcript(transcript.id, nil, {:llm_failed, %{reason: :timeout}})
+
+      # Positive control: the fix must be "clear on success", not "never
+      # write this column". A blanket removal of the write turns this red.
+      reloaded = Meetings.get_transcript(transcript.id)
+      assert reloaded.status == "failed"
+      refute is_nil(reloaded.failure_reason)
+      assert reloaded.failure_reason == failed.failure_reason
+      assert reloaded.failure_reason =~ "llm_failed"
+      assert reloaded.failure_reason =~ "timeout"
+    end
+
+    test "no completed row anywhere answers a not-null failure_reason audit query" do
+      transcript = armed_transcript()
+
+      {:ok, _} = Meetings.fail_transcript(transcript.id, nil, {:llm_failed, %{reason: :timeout}})
+      {:ok, _} = Meetings.complete_transcript(transcript.id, "a real summary")
+
+      # The shape an operator actually runs to find broken transcripts. This
+      # is the query the unfixed code made lie.
+      count =
+        Platform.Repo.one(
+          from(t in "meeting_transcripts",
+            where: t.status == "complete" and not is_nil(t.failure_reason),
+            select: count()
+          )
+        )
+
+      assert count == 0
+    end
+  end
+
+  describe "meeting_transcripts_no_reason_when_complete constraint (task 01a089b3 stage 3)" do
+    # These insert through `Repo` DIRECTLY, bypassing `Transcript.changeset/2`.
+    # That is the point: a test that only drove `complete_transcript/2` would
+    # pass with no constraint in the database at all, because stage 2's writer
+    # fix already clears the column. Only a raw insert proves the DDL exists.
+    defp raw_insert(status, failure_reason) do
+      now = DateTime.utc_now()
+
+      Repo.insert_all(
+        "meeting_transcripts",
+        [
+          %{
+            id: Ecto.UUID.bingenerate(),
+            room_id: "space-#{Ecto.UUID.generate()}",
+            segments: [],
+            status: status,
+            failure_reason: failure_reason,
+            inserted_at: now,
+            updated_at: now
+          }
+        ]
+      )
+    end
+
+    test "a complete row with a failure_reason cannot be inserted at all" do
+      assert_raise Postgrex.Error, ~r/meeting_transcripts_no_reason_when_complete/, fn ->
+        raw_insert("complete", "{:llm_failed, :timeout}")
+      end
+    end
+
+    test "the constraint does not over-reach: a failed row keeps its reason" do
+      assert {1, _} = raw_insert("failed", "{:llm_failed, :timeout}")
+
+      assert Repo.exists?(
+               from(t in Transcript,
+                 where: t.status == "failed" and not is_nil(t.failure_reason)
+               )
+             )
+    end
+
+    test "a complete row with a NULL failure_reason inserts fine" do
+      assert {1, _} = raw_insert("complete", nil)
+    end
+
+    test "stages 2 and 3 compose: completing a failed transcript returns {:ok, _}" do
+      transcript = armed_transcript()
+
+      assert {:ok, failed} =
+               Meetings.fail_transcript(transcript.id, nil, {:llm_failed, %{reason: :timeout}})
+
+      refute is_nil(failed.failure_reason)
+
+      # Stage 2 clears the column, so stage 3's constraint is satisfied and the
+      # caller sees the ordinary success return — not `{:error, changeset}` and
+      # not a raised `Postgrex.Error` mid-success-path.
+      assert {:ok, completed} = Meetings.complete_transcript(transcript.id, "we shipped")
+      assert completed.status == "complete"
+      assert is_nil(completed.failure_reason)
+    end
+
+    test "a changeset that would violate the constraint returns {:error, changeset}" do
+      assert {1, _} = raw_insert("failed", "{:llm_failed, :timeout}")
+
+      transcript =
+        Repo.one!(from(t in Transcript, where: t.status == "failed", limit: 1))
+
+      assert {:error, changeset} =
+               transcript
+               |> Transcript.changeset(%{status: "complete"})
+               |> Repo.update()
+
+      assert {"cannot be set on a complete transcript", _} = changeset.errors[:failure_reason]
+    end
+  end
+
+  describe "unrecovered_failures/1 and stale_failure_reason_count/0 (task 01a089b3 stage 4)" do
+    # Reproduces the incident shape: 5 rows still failed with a timeout-shaped
+    # reason, PLUS ONE that failed with the SAME reason and then recovered via
+    # complete_transcript/2. A fixture that seeds only never-failed rows would
+    # be vacuous here — the recovered row is the entire discriminator between
+    # "counts 5" (correct) and "counts 6" (the incident).
+    defp fresh_transcript do
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: "space-#{Ecto.UUID.generate()}",
+          status: "processing"
+        })
+
+      transcript
+    end
+
+    setup do
+      still_failed_ids =
+        for _ <- 1..5 do
+          transcript = fresh_transcript()
+
+          {:ok, failed} =
+            Meetings.fail_transcript(
+              transcript.id,
+              nil,
+              {:llm_failed, %Req.TransportError{reason: :timeout}}
+            )
+
+          failed.id
+        end
+
+      recovered =
+        fresh_transcript()
+        |> then(fn transcript ->
+          {:ok, failed} =
+            Meetings.fail_transcript(
+              transcript.id,
+              nil,
+              {:llm_failed, %Req.TransportError{reason: :timeout}}
+            )
+
+          failed
+        end)
+
+      {:ok, recovered} = Meetings.complete_transcript(recovered.id, "recovered on retry")
+
+      # SECOND recovery path, via `reopen_transcript/1` (a rejoin) rather than
+      # `complete_transcript/2`. This one is the actual live discriminator:
+      # post stage-2/3, `complete_transcript/2` clears `failure_reason` AND
+      # the CHECK constraint forbids a `complete` row from carrying one, so a
+      # recovered-by-completion row can no longer produce the incident's 6th
+      # row at all (see the next test — that path is now permanently closed).
+      # `reopen_transcript/1` does NOT clear `failure_reason` (it only clears
+      # `completed_at`), so a transcript that failed, was rejoined, and is now
+      # back in `"recording"` status STILL carries the stale timeout reason.
+      # That row is not `"failed"` — it is actively recording again — so a
+      # `failure_reason`-only filter still misclassifies it as an unrecovered
+      # failure today. This is the case `status == "failed"` guards.
+      reopened_id =
+        fresh_transcript()
+        |> then(fn transcript ->
+          {:ok, failed} =
+            Meetings.fail_transcript(
+              transcript.id,
+              nil,
+              {:llm_failed, %Req.TransportError{reason: :timeout}}
+            )
+
+          {:ok, reopened} = Meetings.reopen_transcript(failed)
+          reopened
+        end)
+        |> Map.fetch!(:id)
+
+      # Non-matching failed row: guards against `:reason_matching` being
+      # applied unconditionally even when the caller passes no opts.
+      other = fresh_transcript()
+
+      {:ok, other_failed} =
+        Meetings.fail_transcript(other.id, nil, {:llm_failed, :bad_audio_format})
+
+      %{
+        still_failed_ids: still_failed_ids,
+        recovered_id: recovered.id,
+        reopened_id: reopened_id,
+        other_failed_id: other_failed.id
+      }
+    end
+
+    test "unrecovered_failures(reason_matching: \"timeout\") returns exactly the 5 still-failed rows",
+         %{
+           still_failed_ids: still_failed_ids,
+           recovered_id: recovered_id,
+           reopened_id: reopened_id
+         } do
+      results = Meetings.unrecovered_failures(reason_matching: "timeout")
+      result_ids = Enum.map(results, & &1.id)
+
+      assert length(results) == 5
+      assert Enum.sort(result_ids) == Enum.sort(still_failed_ids)
+      refute recovered_id in result_ids
+      refute reopened_id in result_ids
+    end
+
+    # A completed-via-`complete_transcript/2` recovery no longer produces a
+    # miscount at all: stage 2 clears `failure_reason` on success and stage
+    # 3's CHECK constraint forbids a `complete` row from carrying one, so
+    # `failure_reason IS NOT NULL` alone already excludes it. Asserted here
+    # so a regression in either of those (the column write, or the
+    # constraint) is caught as a naive-query mismatch, not silently absorbed.
+    test "a failure_reason-only filter already excludes the complete_transcript/2 recovery", %{
+      recovered_id: recovered_id
+    } do
+      naive_ids =
+        Repo.all(
+          from(t in Transcript,
+            where: not is_nil(t.failure_reason) and ilike(t.failure_reason, "%timeout%"),
+            select: t.id
+          )
+        )
+
+      refute recovered_id in naive_ids
+    end
+
+    # The mutation probe: dropping the `status == "failed"` clause from the
+    # query (i.e. filtering on `failure_reason` alone) makes this fixture
+    # return 6 instead of 5 and the `correct_count == 5` assertion below go
+    # red. The reopened (rejoined) row is what still supplies the 6th row
+    # today — the complete_transcript/2 recovery no longer can (previous
+    # test). This is the evidence the fixture discriminates rather than
+    # passing vacuously.
+    test "the status conjunction is load-bearing: without it the count would be 6, not 5" do
+      naive_count =
+        Repo.aggregate(
+          from(t in Transcript,
+            where: not is_nil(t.failure_reason) and ilike(t.failure_reason, "%timeout%")
+          ),
+          :count
+        )
+
+      assert naive_count == 6
+
+      correct_count = length(Meetings.unrecovered_failures(reason_matching: "timeout"))
+      assert correct_count == 5
+      assert correct_count != naive_count
+    end
+
+    test "unrecovered_failures/0 with no opts includes a non-matching failed row", %{
+      other_failed_id: other_failed_id
+    } do
+      result_ids = Meetings.unrecovered_failures() |> Enum.map(& &1.id)
+
+      assert other_failed_id in result_ids
+    end
+
+    test "stale_failure_reason_count/0 is 0 for this fixture" do
+      assert Meetings.stale_failure_reason_count() == 0
     end
   end
 end

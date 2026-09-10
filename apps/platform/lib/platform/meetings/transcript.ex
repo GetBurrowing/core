@@ -26,8 +26,15 @@ defmodule Platform.Meetings.Transcript do
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
     field(:router_dispatched_at, :utc_datetime_usec)
-    # Why a `failed` row failed — task 019ff6f3 stage 3. Nullable because
-    # every row written before the column existed has no reason to record.
+    # Why this row is CURRENTLY failed — task 019ff6f3 stage 3. Single-valued
+    # and overwritten by every `fail_transcript/3` call, so it is a latch, not
+    # a history. `Meetings.complete_transcript/2` CLEARS it on success: a
+    # non-nil value on a row that is not `failed` is a bug, enforced by the
+    # `meeting_transcripts_no_reason_when_complete` CHECK constraint.
+    # Failure HISTORY lives in `audit_events`
+    # (`event_type = "platform.meetings.transcription_failed"`), not here.
+    # Nullable because every row written before the column existed has no
+    # reason to record.
     field(:failure_reason, :string)
     # Weighted full-text vector over `summary` (weight `C`) concatenated with
     # the text of `segments` (weight `D`) — task 019fb954-c848. Generated
@@ -49,6 +56,12 @@ defmodule Platform.Meetings.Transcript do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, @statuses)
+    # Surfaces the DB-level invariant as `{:error, changeset}` instead of a
+    # raised `Postgrex.Error` mid-success-path — task 01a089b3-7f84 stage 3.
+    |> check_constraint(:failure_reason,
+      name: :meeting_transcripts_no_reason_when_complete,
+      message: "cannot be set on a complete transcript"
+    )
   end
 
   @doc "Returns the list of valid status values."
