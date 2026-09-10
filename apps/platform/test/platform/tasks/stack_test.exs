@@ -39,26 +39,25 @@ defmodule Platform.Tasks.StackTest do
     "conflict" => %{"member_task_id" => "t1", "files" => ["lib/a.ex"], "at" => "2026-08-02"}
   }
 
-  defp attach_telemetry(test_pid) do
-    handler = "stack-test-#{inspect(test_pid)}-#{System.unique_integer([:positive])}"
+  @regression_event [:platform, :stacks, :status_regression_blocked]
 
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:platform, :stacks, :status_regression_blocked],
-        fn _event, measurements, meta, _ ->
-          send(test_pid, {:regression_blocked, measurements, meta})
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
+  # Forward this stack's regression events only. The forwarder is VM-global,
+  # so without the `stack_id` discriminator a sibling module's block lands in
+  # this mailbox and trips the `refute_receive`s below (CI run 34476791446;
+  # task 01a08b5f stage 2).
+  defp attach_telemetry(%Stack{id: stack_id}) do
+    Platform.TelemetryHelpers.attach_scoped(
+      @regression_event,
+      {:stack_id, stack_id},
+      self(),
+      tag: :regression_blocked
+    )
   end
 
   describe "arm A — a shipped done stack is terminal" do
     test "drops done -> in_progress on a shipped stack, with telemetry naming the reason" do
-      attach_telemetry(self())
       s = stack("done", @shipped_meta)
+      attach_telemetry(s)
       assert s.status == "done"
       assert ShipState.shipped?(s)
 
@@ -68,7 +67,7 @@ defmodule Platform.Tasks.StackTest do
       refute Map.has_key?(cs.changes, :status)
       assert get_field(cs, :status) == "done"
 
-      assert_receive {:regression_blocked, %{count: 1},
+      assert_receive {:regression_blocked, @regression_event, %{count: 1},
                       %{stack_id: @stack_id, from: "done", to: "in_progress", reason: :shipped}}
     end
 
@@ -83,8 +82,8 @@ defmodule Platform.Tasks.StackTest do
     end
 
     test "LOSES: a done stack whose PR was never opened still moves (manual-ship lane)" do
-      attach_telemetry(self())
       s = stack("done", %{})
+      attach_telemetry(s)
       assert s.status == "done"
       refute ShipState.shipped?(s)
 
@@ -93,7 +92,7 @@ defmodule Platform.Tasks.StackTest do
       assert cs.valid?
       assert get_change(cs, :status) == "in_progress"
       assert get_field(cs, :status) == "in_progress"
-      refute_receive {:regression_blocked, _, _}, 50
+      refute_receive {:regression_blocked, _, _, _}, 50
     end
 
     test "LOSES: a done stack whose rollup PR is open but unmerged still moves" do
@@ -105,23 +104,24 @@ defmodule Platform.Tasks.StackTest do
     end
 
     test "LOSES: a shipped done stack still accepts abandoned (the terminal escape)" do
-      attach_telemetry(self())
       s = stack("done", @shipped_meta)
+      attach_telemetry(s)
       assert ShipState.shipped?(s)
 
       cs = Stack.changeset(s, %{status: "abandoned"})
 
       assert cs.valid?
       assert get_field(cs, :status) == "abandoned"
-      refute_receive {:regression_blocked, _, _}, 50
+      refute_receive {:regression_blocked, _, _, _}, 50
     end
 
     test "LOSES: a shipped done stack re-asserting done is a no-op, not a block" do
-      attach_telemetry(self())
-      cs = Stack.changeset(stack("done", @shipped_meta), %{status: "done"})
+      s = stack("done", @shipped_meta)
+      attach_telemetry(s)
+      cs = Stack.changeset(s, %{status: "done"})
 
       assert get_field(cs, :status) == "done"
-      refute_receive {:regression_blocked, _, _}, 50
+      refute_receive {:regression_blocked, _, _, _}, 50
     end
 
     test "LOSES: a shipped done stack can still change non-status fields" do
@@ -132,21 +132,21 @@ defmodule Platform.Tasks.StackTest do
     end
 
     test "LOSES: an in_progress stack still moves to in_review" do
-      attach_telemetry(self())
       s = stack("in_progress", @shipped_meta)
+      attach_telemetry(s)
       assert s.status == "in_progress"
 
       cs = Stack.changeset(s, %{status: "in_review"})
 
       assert get_field(cs, :status) == "in_review"
-      refute_receive {:regression_blocked, _, _}, 50
+      refute_receive {:regression_blocked, _, _, _}, 50
     end
   end
 
   describe "arm B — a conflict-held blocked stack is sticky" do
     test "drops blocked -> in_review while metadata.conflict lingers" do
-      attach_telemetry(self())
       s = stack("blocked", @conflict_meta)
+      attach_telemetry(s)
       assert s.status == "blocked"
       assert ShipState.conflict_held?(s)
 
@@ -156,7 +156,7 @@ defmodule Platform.Tasks.StackTest do
       refute Map.has_key?(cs.changes, :status)
       assert get_field(cs, :status) == "blocked"
 
-      assert_receive {:regression_blocked, %{count: 1},
+      assert_receive {:regression_blocked, @regression_event, %{count: 1},
                       %{
                         stack_id: @stack_id,
                         from: "blocked",
@@ -177,8 +177,8 @@ defmodule Platform.Tasks.StackTest do
     end
 
     test "EXIT: a changeset clearing metadata.conflict AND moving the status goes through" do
-      attach_telemetry(self())
       s = stack("blocked", @conflict_meta)
+      attach_telemetry(s)
       assert s.status == "blocked"
       assert ShipState.conflict_held?(s)
 
@@ -189,7 +189,7 @@ defmodule Platform.Tasks.StackTest do
       assert get_change(cs, :status) == "in_review"
       assert get_field(cs, :status) == "in_review"
       refute ShipState.conflict_held?(get_field(cs, :metadata))
-      refute_receive {:regression_blocked, _, _}, 50
+      refute_receive {:regression_blocked, _, _, _}, 50
     end
 
     test "EXIT: a nil conflict key counts as cleared" do
@@ -200,15 +200,15 @@ defmodule Platform.Tasks.StackTest do
     end
 
     test "LOSES: a blocked stack with NO conflict record still moves" do
-      attach_telemetry(self())
       s = stack("blocked", %{"rollup_pr" => %{"number" => 123}})
+      attach_telemetry(s)
       assert s.status == "blocked"
       refute ShipState.conflict_held?(s)
 
       cs = Stack.changeset(s, %{status: "in_review"})
 
       assert get_field(cs, :status) == "in_review"
-      refute_receive {:regression_blocked, _, _}, 50
+      refute_receive {:regression_blocked, _, _, _}, 50
     end
 
     test "LOSES: a conflict-held stack can still be abandoned only via the exit, not bare" do
@@ -225,17 +225,35 @@ defmodule Platform.Tasks.StackTest do
 
   describe "existing forming arm is unchanged" do
     test "drops in_progress -> forming with the original telemetry shape" do
-      attach_telemetry(self())
-      cs = Stack.changeset(stack("in_progress", %{}), %{status: "forming"})
+      s = stack("in_progress", %{})
+      attach_telemetry(s)
+      cs = Stack.changeset(s, %{status: "forming"})
 
       assert get_field(cs, :status) == "in_progress"
-      assert_receive {:regression_blocked, %{count: 1}, meta}
+      assert_receive {:regression_blocked, @regression_event, %{count: 1}, meta}
       assert meta == %{stack_id: @stack_id, from: "in_progress", to: "forming"}
     end
 
     test "LOSES: a forming stack still moves to in_progress" do
       cs = Stack.changeset(stack("forming", %{}), %{status: "in_progress"})
       assert get_field(cs, :status) == "in_progress"
+    end
+  end
+
+  describe "forwarder scoping (task 01a08b5f stage 2)" do
+    # The forwarder is VM-global: every `status_regression_blocked` emitted by
+    # any concurrently running module lands in whichever mailbox is attached.
+    # A foreign `stack_id` emitted here stands in for that sibling.
+    test "a sibling's status_regression_blocked for a foreign stack_id does not reach this test's mailbox" do
+      attach_telemetry(stack("done", @shipped_meta))
+
+      :telemetry.execute(
+        @regression_event,
+        %{count: 1},
+        %{stack_id: Ecto.UUID.generate(), from: "done", to: "in_progress", reason: :shipped}
+      )
+
+      refute_receive {:regression_blocked, _, _, _}, 50
     end
   end
 end

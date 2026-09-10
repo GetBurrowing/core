@@ -1580,22 +1580,14 @@ defmodule Platform.MeetingsTest do
     end
 
     # Run `fun` and return `{result, sources}` where `sources` is the list of
-    # table names Ecto queried FROM THIS PROCESS. The handler runs in the
-    # emitting process, so the `self() == test_pid` filter discards every
-    # query the rest of the concurrently-running suite is issuing — which is
-    # what makes this safe under `async: true`.
+    # table names Ecto queried FROM THIS PROCESS (or a `Task` it spawned,
+    # which carries it in `$callers`). The handler runs in the emitting
+    # process, so the `:caller` discriminator discards every query the rest
+    # of the concurrently-running suite is issuing — which is what makes this
+    # safe under `async: true`.
     defp capture_repo_sources(fun) do
-      test_pid = self()
-      handler_id = "invite-row-gate-#{System.unique_integer([:positive])}"
-
-      :telemetry.attach(
-        handler_id,
-        @query_event,
-        fn _event, _measurements, metadata, _config ->
-          if self() == test_pid, do: send(test_pid, {:repo_source, metadata[:source]})
-        end,
-        nil
-      )
+      handler_id =
+        Platform.TelemetryHelpers.attach_scoped(@query_event, :caller, self(), tag: :repo_query)
 
       result =
         try do
@@ -1609,7 +1601,8 @@ defmodule Platform.MeetingsTest do
 
     defp drain_repo_sources(acc) do
       receive do
-        {:repo_source, source} -> drain_repo_sources([source | acc])
+        {:repo_query, _event, _measurements, metadata} ->
+          drain_repo_sources([metadata[:source] | acc])
       after
         0 -> acc
       end
@@ -1798,20 +1791,31 @@ defmodule Platform.MeetingsTest do
       transcript
     end
 
+    # Run `fun` in a bare-spawned process (no `$callers`, so nothing about it
+    # says "this test"), with sandbox access so a boot-attached handler that
+    # persists the event does not crash there, and wait for it to finish.
+    defp foreign_emission!(fun) do
+      test_pid = self()
+
+      {pid, ref} =
+        spawn_monitor(fn ->
+          receive do
+            :go -> fun.()
+          end
+        end)
+
+      Ecto.Adapters.SQL.Sandbox.allow(Repo, test_pid, pid)
+      send(pid, :go)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    end
+
+    # The fallback's metadata carries no per-test id (agent/reason/actor/
+    # resource only) and the refute tests unassign the role, so the only thing
+    # that separates this test's emission from a sibling's is the emitting
+    # process: `complete_transcript/2` dispatches synchronously in its caller
+    # (task 01a08b5f stage 2).
     defp attach_scribe_telemetry! do
-      handler_id = "meetings-test-scribe-#{System.unique_integer([:positive])}"
-      parent = self()
-
-      :telemetry.attach(
-        handler_id,
-        @scribe_event,
-        fn event, measurements, metadata, _ ->
-          send(parent, {:telemetry, event, measurements, metadata})
-        end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
+      Platform.TelemetryHelpers.attach_scoped(@scribe_event, :caller, self())
       :ok
     end
 
@@ -1825,17 +1829,12 @@ defmodule Platform.MeetingsTest do
       # Before this, a scribe dispatched on transcript completion could not post
       # a message or create its action-items canvas in the space it was told
       # about: the dispatch was dead on arrival and nothing errored.
-      invite_handler = "meetings-test-invite-#{System.unique_integer([:positive])}"
-      parent = self()
-
-      :telemetry.attach(
-        invite_handler,
+      Platform.TelemetryHelpers.attach_scoped(
         [:platform, :chat, :dispatch_auto_invite],
-        fn _e, m, meta, _ -> send(parent, {:auto_invite, m, meta}) end,
-        nil
+        :caller,
+        self(),
+        tag: :auto_invite
       )
-
-      on_exit(fn -> :telemetry.detach(invite_handler) end)
 
       user = create_user!()
       agent = create_agent!()
@@ -1875,7 +1874,9 @@ defmodule Platform.MeetingsTest do
 
       # Positional: invite first, signal second.
       assert_receive first, 500
-      assert {:auto_invite, %{count: 1}, %{outcome: :invited, source: :meeting_scribe}} = first
+
+      assert {:auto_invite, _event, %{count: 1}, %{outcome: :invited, source: :meeting_scribe}} =
+               first
 
       assert_receive second, 500
       assert %Phoenix.Socket.Broadcast{event: "attention"} = second
@@ -1941,6 +1942,28 @@ defmodule Platform.MeetingsTest do
       refute_receive {:telemetry, @scribe_event, _, _}, 100
     end
 
+    # Task 01a08b5f stage 2. The forwarder is VM-global and this event carries
+    # no per-test id (its metadata is agent/reason/actor/resource only), so a
+    # sibling module's fallback lands in this mailbox and trips the refute
+    # above. A bare `spawn` carries no `$callers`, so it stands in for that
+    # sibling; it is allowed into the sandbox only so the boot-attached audit
+    # bridge, which persists this event, does not crash in a foreign process.
+    test "a sibling's scribe_dispatch fallback from outside this test's caller chain does not reach its mailbox" do
+      attach_scribe_telemetry!()
+
+      foreign_emission!(fn ->
+        :telemetry.execute(@scribe_event, %{count: 1}, %{
+          agent_id: Ecto.UUID.generate(),
+          reason: :runtime_unresolvable,
+          actor_type: "system",
+          resource_type: "agent",
+          resource_id: Ecto.UUID.generate()
+        })
+      end)
+
+      refute_receive {:telemetry, @scribe_event, _, _}, 50
+    end
+
     test "runtime-offline fallback: role assigned but no linked runtime → :runtime_unresolvable telemetry" do
       attach_scribe_telemetry!()
 
@@ -1977,20 +2000,10 @@ defmodule Platform.MeetingsTest do
   describe "on_scribe_canvas_created/2 → triage attention dispatch (task 019f5e2a)" do
     @triage_event [:platform, :meetings, :triage_dispatch, :assignee_unresolvable]
 
+    # Same shape as `attach_scribe_telemetry!/0`: no per-test id in the
+    # metadata, `on_scribe_canvas_created/2` dispatches in its caller.
     defp attach_triage_telemetry! do
-      handler_id = "meetings-test-triage-#{System.unique_integer([:positive])}"
-      parent = self()
-
-      :telemetry.attach(
-        handler_id,
-        @triage_event,
-        fn event, measurements, metadata, _ ->
-          send(parent, {:telemetry, event, measurements, metadata})
-        end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
+      Platform.TelemetryHelpers.attach_scoped(@triage_event, :caller, self())
       :ok
     end
 
@@ -2314,21 +2327,14 @@ defmodule Platform.MeetingsTest do
 
     test "emits transcription_failed telemetry carrying the transcript id" do
       transcript = failing_transcript!()
-      handler_id = "transcription-failed-#{System.unique_integer([:positive])}"
-      test_pid = self()
 
-      :telemetry.attach(
-        handler_id,
+      # Scoped to this transcript and detached on exit by the helper: a global
+      # detach here would silently disarm telemetry for unrelated tests.
+      Platform.TelemetryHelpers.attach_scoped(
         [:platform, :meetings, :transcription_failed],
-        fn event, measurements, metadata, _ ->
-          send(test_pid, {:telemetry, event, measurements, metadata})
-        end,
-        nil
+        {:transcript_id, transcript.id},
+        self()
       )
-
-      # Scoped handler id + targeted detach: a global detach here would
-      # silently disarm telemetry for unrelated tests in the same run.
-      on_exit(fn -> :telemetry.detach(handler_id) end)
 
       {:ok, _} = Meetings.fail_transcript(transcript.id, "no transcript arrived")
 

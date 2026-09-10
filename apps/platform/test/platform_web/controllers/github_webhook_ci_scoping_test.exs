@@ -170,20 +170,11 @@ defmodule PlatformWeb.GithubWebhookCiScopingTest do
   defp reload(%Validation{id: id}), do: Repo.get!(Validation, id)
   defp reload(%Stage{id: id}), do: Repo.get!(Stage, id)
 
-  defp attach(event) do
-    handler_id = "ci-scoping-#{System.unique_integer([:positive])}"
-    test_pid = self()
-
-    :telemetry.attach(
-      handler_id,
-      event,
-      fn _event, measurements, metadata, _ ->
-        send(test_pid, {:telemetry, measurements, metadata})
-      end,
-      nil
-    )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+  # Forward `event` for `task` only. The forwarder is VM-global, so without
+  # the `task_id` discriminator a sibling module's emission lands in this
+  # mailbox and trips the forward guard below (task 01a08b5f stage 2).
+  defp attach(event, %{id: task_id}) when is_binary(task_id) do
+    Platform.TelemetryHelpers.attach_scoped(event, {:task_id, task_id}, self())
   end
 
   # ── Which ci_passed gate does a CI run satisfy? ──────────────────────────
@@ -334,11 +325,11 @@ defmodule PlatformWeb.GithubWebhookCiScopingTest do
     test "emits :unmatched_repo telemetry naming the delivering and expected repos",
          %{conn: conn} do
       %{task: task} = two_repo_task!()
-      attach([:platform, :tasks, :ci_passed, :unmatched_repo])
+      attach([:platform, :tasks, :ci_passed, :unmatched_repo], task)
 
       signed_github_post(conn, @github_webhook_path, check_suite_payload(task, @undeclared))
 
-      assert_receive {:telemetry, %{count: 1}, metadata}
+      assert_receive {:telemetry, _event, %{count: 1}, metadata}
       assert metadata.task_id == task.id
       assert metadata.delivering_repo == @undeclared
       assert metadata.expected_repos == [@core, @bridge]
@@ -403,11 +394,11 @@ defmodule PlatformWeb.GithubWebhookCiScopingTest do
 
     test "emits :no_ci_to_gate telemetry naming the repository", %{conn: conn} do
       %{task: task} = two_repo_task!()
-      attach([:platform, :tasks, :auto_merge, :no_ci_to_gate])
+      attach([:platform, :tasks, :auto_merge, :no_ci_to_gate], task)
 
       signed_github_post(conn, @github_webhook_path, check_suite_payload(task, @bridge))
 
-      assert_receive {:telemetry, %{count: 1}, metadata}
+      assert_receive {:telemetry, _event, %{count: 1}, metadata}
       assert metadata.task_id == task.id
       assert metadata.repo == @bridge
     end
@@ -428,11 +419,11 @@ defmodule PlatformWeb.GithubWebhookCiScopingTest do
           %{"repo_url" => @undeclared, "ci" => "required"}
         ])
 
-      attach([:platform, :tasks, :auto_merge, :not_authorized_for_siblings])
+      attach([:platform, :tasks, :auto_merge, :not_authorized_for_siblings], task)
 
       signed_github_post(conn, @github_webhook_path, check_suite_payload(task, @core))
 
-      assert_receive {:telemetry, %{count: 2}, metadata}
+      assert_receive {:telemetry, _event, %{count: 2}, metadata}
       assert metadata.delivering_repo == @core
 
       assert metadata.awaiting_own_ci == [@undeclared],
@@ -455,11 +446,32 @@ defmodule PlatformWeb.GithubWebhookCiScopingTest do
       %{task: task} =
         two_repo_task!([%{"repo_url" => "https://github.com/#{@core}", "ci" => "required"}])
 
-      attach([:platform, :tasks, :auto_merge, :not_authorized_for_siblings])
+      attach([:platform, :tasks, :auto_merge, :not_authorized_for_siblings], task)
 
       signed_github_post(conn, @github_webhook_path, check_suite_payload(task, @core))
 
-      refute_receive {:telemetry, _, _}, 100
+      refute_receive {:telemetry, _, _, _}, 100
+    end
+
+    # Task 01a08b5f stage 2. The forwarder is VM-global, so a sibling module's
+    # emission — a `task_id` this test never created — lands in this mailbox
+    # and trips the forward guard above for a task that is not its own.
+    test "a sibling's not_authorized_for_siblings for a foreign task_id does not reach this test's mailbox" do
+      %{task: task} = two_repo_task!()
+      attach([:platform, :tasks, :auto_merge, :not_authorized_for_siblings], task)
+
+      :telemetry.execute(
+        [:platform, :tasks, :auto_merge, :not_authorized_for_siblings],
+        %{count: 1},
+        %{
+          task_id: Ecto.UUID.generate(),
+          delivering_repo: @core,
+          awaiting_own_ci: [],
+          awaiting_manual_merge: []
+        }
+      )
+
+      refute_receive {:telemetry, _, _, _}, 50
     end
 
     # FORWARD GUARD, NOT A DEFECT PIN — same caveat as above. The stage-3

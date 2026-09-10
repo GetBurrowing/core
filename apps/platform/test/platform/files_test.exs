@@ -324,11 +324,14 @@ defmodule Platform.FilesTest do
 
     test "round trip: an extractable file reaches the ingester, an unextractable one does not",
          %{project: project, root: root} do
-      attach_telemetry([
-        [:platform, :files, :ingested, :start],
-        [:platform, :files, :ingested, :stop],
-        [:platform, :files, :ingested, :exception]
-      ])
+      attach_telemetry(
+        [
+          [:platform, :files, :ingested, :start],
+          [:platform, :files, :ingested, :stop],
+          [:platform, :files, :ingested, :exception]
+        ],
+        project
+      )
 
       pdf = create_stored_file(project, root, "application/pdf", "doc.pdf", "%PDF-1.4 body")
       video = create_stored_file(project, root, "video/mp4", "clip.mp4", "not really mp4")
@@ -464,20 +467,11 @@ defmodule Platform.FilesTest do
       })
     end
 
-    defp attach_telemetry(events) do
-      handler_id = "files-default-intent-#{System.unique_integer([:positive])}"
-      test_pid = self()
-
-      :telemetry.attach_many(
-        handler_id,
-        events,
-        fn name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, name, measurements, metadata})
-        end,
-        %{}
-      )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
+    # Forward this project's ingest events only: the forwarder is VM-global
+    # and every async sibling that ingests a file would otherwise land here
+    # (task 01a08b5f stage 2).
+    defp attach_telemetry(events, %{id: project_id}) do
+      Platform.TelemetryHelpers.attach_scoped(events, {:project_id, project_id}, self())
       :ok
     end
   end
@@ -728,18 +722,8 @@ defmodule Platform.FilesTest do
       # recorded, so it isolates the retry's flip from the attempt it
       # triggers. `mode: :sync` runs the ingest in this process, so the
       # observation is ordered, not raced.
-      handler = "ingest-failure-count-#{file.id}"
-
-      :telemetry.attach(
-        handler,
-        [:platform, :files, :ingested, :start],
-        fn _event, _measurements, meta, pid ->
-          send(pid, {:at_ingest_start, Files.get_file(meta.file_id)})
-        end,
-        self()
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
+      file_id = file.id
+      attach_ingest_start_snapshot!(&(&1.file_id == file_id))
 
       capture_log(fn ->
         # The row's bytes were never written to storage, so extraction fails
@@ -1194,18 +1178,8 @@ defmodule Platform.FilesTest do
       # It doubles as the enqueue detector: this event fires only from
       # `Ingester.run/1`, so its ABSENCE for a file id is proof that file
       # was never handed to the pipeline.
-      handler = "retry-failed-ingests-#{System.unique_integer([:positive])}"
-
-      :telemetry.attach(
-        handler,
-        [:platform, :files, :ingested, :start],
-        fn _event, _measurements, meta, pid ->
-          send(pid, {:at_ingest_start, Files.get_file(meta.file_id)})
-        end,
-        self()
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
+      project_id = project.id
+      attach_ingest_start_snapshot!(&(&1.project_id == project_id))
 
       %{project: project}
     end
@@ -1338,6 +1312,48 @@ defmodule Platform.FilesTest do
 
       refute_received {:at_ingest_start, _}
     end
+
+    # Task 01a08b5f stage 2. The forwarder is VM-global, so a sibling module's
+    # ingest — a `file_id` this project never held — lands in this mailbox and
+    # trips the "never handed to the pipeline" refutes above.
+    test "a sibling's ingested:start for a foreign file_id does not reach this test's mailbox",
+         _ctx do
+      :telemetry.execute(
+        [:platform, :files, :ingested, :start],
+        %{system_time: System.system_time()},
+        %{file_id: Ecto.UUID.generate(), project_id: Ecto.UUID.generate(), byte_size: 1}
+      )
+
+      refute_received {:at_ingest_start, _}
+    end
+  end
+
+  # Forward `{:at_ingest_start, row}` — the PERSISTED row read at the instant
+  # `[:platform, :files, :ingested, :start]` fires — for the emissions `mine?/1`
+  # claims. The read has to happen at emit time (by the time a `mode: :sync`
+  # call returns, the pipeline has written the next outcome over the row), so
+  # it lives inside the discriminator, which runs in the emitting process:
+  # under `mode: :sync` that is this test process, inside its sandbox. The
+  # read runs only AFTER the match, so a sibling module's ingest never
+  # triggers a Repo read from this handler in a foreign process. The
+  # helper's own `{:ingest_start, ...}` forward is not asserted on; the
+  # snapshot message is (task 01a08b5f stage 2).
+  defp attach_ingest_start_snapshot!(mine?) when is_function(mine?, 1) do
+    test_pid = self()
+
+    Platform.TelemetryHelpers.attach_scoped(
+      [:platform, :files, :ingested, :start],
+      fn meta ->
+        if mine?.(meta) do
+          send(test_pid, {:at_ingest_start, Files.get_file(meta.file_id)})
+          true
+        else
+          false
+        end
+      end,
+      test_pid,
+      tag: :ingest_start
+    )
   end
 
   # A file that has genuinely broken `times` times: seeded `pending` and then

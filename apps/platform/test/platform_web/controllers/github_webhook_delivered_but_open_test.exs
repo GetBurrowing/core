@@ -43,20 +43,13 @@ defmodule PlatformWeb.GithubWebhookDeliveredButOpenTest do
         repo_url: "https://github.com/test/dbo-repo"
       })
 
-    handler_id = "dbo-test-#{System.unique_integer([:positive])}"
-    test_pid = self()
-
-    :ok =
-      :telemetry.attach(
-        handler_id,
-        @telemetry_event,
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:delivered_but_open_telemetry, measurements, metadata})
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+    # No task exists yet, so scope by emitting process: the controller stamps
+    # (and emits) synchronously inside the conn's request, i.e. in this test
+    # process. Unfiltered, a sibling module's stamp trips the refutes below
+    # (CI runs 34507040013 and 34507488848; task 01a08b5f stage 2).
+    Platform.TelemetryHelpers.attach_scoped(@telemetry_event, :caller, self(),
+      tag: :delivered_but_open_telemetry
+    )
 
     %{project: project}
   end
@@ -87,7 +80,9 @@ defmodule PlatformWeb.GithubWebhookDeliveredButOpenTest do
       # resolver ranks it first, and the telemetry fired once for this task.
       assert Tasks.needs_human_action_reason(reloaded, 0) == :delivered_but_open
       task_id = task.id
-      assert_received {:delivered_but_open_telemetry, %{count: 1}, %{task_id: ^task_id}}
+
+      assert_received {:delivered_but_open_telemetry, @telemetry_event, %{count: 1},
+                       %{task_id: ^task_id}}
     end
 
     test "(2) blocked task: stamped, still blocked", %{conn: conn, project: project} do
@@ -111,7 +106,25 @@ defmodule PlatformWeb.GithubWebhookDeliveredButOpenTest do
       assert reloaded.status == "done"
       refute Map.has_key?(reloaded.metadata || %{}, "delivered_but_open")
       refute Map.has_key?(reloaded.metadata || %{}, "delivered_but_open_at")
-      refute_received {:delivered_but_open_telemetry, _, _}
+      refute_received {:delivered_but_open_telemetry, _, _, _}
+    end
+
+    # Task 01a08b5f stage 2. The forwarder is VM-global, so a sibling
+    # module's stamp — a `task_id` this test never created — lands in this
+    # mailbox and trips the refutes above. A bare `spawn` carries no
+    # `$callers`, so it stands in for that sibling rather than for this test.
+    test "a sibling's delivered_but_open for a foreign task_id does not reach this test's mailbox" do
+      {pid, ref} =
+        spawn_monitor(fn ->
+          :telemetry.execute(@telemetry_event, %{count: 1}, %{
+            task_id: Ecto.UUID.generate(),
+            status: "planning",
+            pr_url: "https://github.com/test/dbo-repo/pull/0"
+          })
+        end)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+      refute_received {:delivered_but_open_telemetry, _, _, _}
     end
   end
 
@@ -173,7 +186,7 @@ defmodule PlatformWeb.GithubWebhookDeliveredButOpenTest do
                "current-plan gate passed, PlanCompletion advanced the task"
 
       refute Map.has_key?(reloaded.metadata || %{}, "delivered_but_open")
-      refute_received {:delivered_but_open_telemetry, _, _}
+      refute_received {:delivered_but_open_telemetry, _, _, _}
     end
   end
 
