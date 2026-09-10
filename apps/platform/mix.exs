@@ -1,3 +1,62 @@
+defmodule Platform.MixSupport do
+  @moduledoc """
+  Helpers invoked from `mix.exs` aliases.
+
+  Lives here rather than under `lib/` on purpose: the `test` alias runs before
+  the application is guaranteed to be compiled (`ecto.create` is what triggers
+  `app.config`/compile), so a module under `lib/` may not be loaded when the
+  alias needs it. `mix.exs` is evaluated at boot in every mix VM, so this module
+  is always in memory.
+  """
+
+  @doc """
+  Creates and migrates the test database, reporting and re-raising on failure.
+
+  Each step is wrapped independently so the failing step is named. The only
+  absorbed failure is a `Mix.Error` saying the database already exists, which is
+  the benign concurrent-run race. Everything else is reported on stderr and
+  propagated, so a run that could not prepare its database aborts instead of
+  producing hundreds of misleading setup failures.
+  """
+  def prepare_test_database(runner \\ &Mix.Task.run/2) do
+    run_step(runner, "ecto.create")
+    run_step(runner, "ecto.migrate")
+    :ok
+  end
+
+  defp run_step(runner, task) do
+    runner.(task, ["--quiet"])
+    :ok
+  rescue
+    error in [Mix.Error] ->
+      message = Exception.message(error)
+
+      if message =~ ~r/already exists/i do
+        :ok
+      else
+        report(task, message)
+        reraise(error, __STACKTRACE__)
+      end
+
+    error ->
+      report(task, Exception.message(error))
+      reraise(error, __STACKTRACE__)
+  catch
+    :exit, reason ->
+      report(task, inspect(reason))
+      exit(reason)
+  end
+
+  defp report(task, message) do
+    database = System.get_env("PLATFORM_TEST_DATABASE", "platform_test")
+
+    Mix.shell().error(
+      "mix #{task} failed for database #{database}: #{message} " <>
+        "- aborting the test run (the suite was NOT run)"
+    )
+  end
+end
+
 defmodule Platform.MixProject do
   use Mix.Project
 
@@ -130,16 +189,7 @@ defmodule Platform.MixProject do
         "phx.digest"
       ],
       test: [
-        fn _args ->
-          try do
-            Mix.Task.run("ecto.create", ["--quiet"])
-            Mix.Task.run("ecto.migrate", ["--quiet"])
-          rescue
-            _ -> :noop
-          catch
-            :exit, _ -> :noop
-          end
-        end,
+        fn _args -> Platform.MixSupport.prepare_test_database() end,
         "test"
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
