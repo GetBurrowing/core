@@ -211,11 +211,20 @@ proof_mode =
 config :platform,
   agent_workspace_path: System.get_env("AGENT_WORKSPACE_PATH", "/data/agents/zip"),
   anthropic_api_key: System.get_env("ANTHROPIC_API_KEY"),
-  chat_attachments_root: System.get_env("CHAT_ATTACHMENTS_ROOT", "/data/platform/chat_uploads"),
   inline_upload_max_bytes:
     String.to_integer(System.get_env("INLINE_UPLOAD_MAX_BYTES", "26214400")),
   upload_max_bytes: String.to_integer(System.get_env("UPLOAD_MAX_BYTES", "524288000")),
   pending_ttl_seconds: String.to_integer(System.get_env("PENDING_TTL_SECONDS", "900"))
+
+# The attachment storage root. This file loads AFTER config/test.exs, so an
+# unguarded write here would replace the per-run tmp root test.exs sets with
+# the deploy-host path, and every file test on a box without a writable
+# /data/platform would fail with {:error, :erofs} / :eacces. Tests own their
+# root; dev and prod keep reading this key exactly as before.
+if config_env() != :test do
+  config :platform,
+    chat_attachments_root: System.get_env("CHAT_ATTACHMENTS_ROOT", "/data/platform/chat_uploads")
+end
 
 # :attachment_signing_key is set by dev.exs/test.exs for local envs; prod
 # must read it from an env var and fail fast if unset.

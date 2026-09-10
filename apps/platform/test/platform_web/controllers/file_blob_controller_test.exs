@@ -29,10 +29,9 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
   # ── Setup ──────────────────────────────────────────────────────────────
 
-  # Point the attachment store at a writable per-test scratch dir. The
-  # default config in `test.exs` is `/data/platform/chat_uploads` which
-  # only exists in the dev container, not in CI / local sandboxes. We
-  # restore the prior value on exit so we don't poison other suites.
+  # Point the attachment store at a per-test scratch dir so this module's
+  # blobs are isolated from the shared per-run root `test.exs` configures.
+  # We restore the prior value on exit so we don't poison other suites.
   setup do
     prev = Application.get_env(:platform, :chat_attachments_root)
     scratch = Platform.TestTemp.mkdir!("file_blob_test")

@@ -19,10 +19,8 @@ defmodule Platform.Agents.AvatarStorageTest do
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.AttachmentStorage.Root, as: AttachmentRoot
 
-  # Point the attachment store at a writable per-test scratch dir. The value
-  # in scope during a test run comes from `config/runtime.exs`, which is
-  # unguarded by env and loads last: `/data/platform/chat_uploads`, a
-  # deployment path that does not exist locally and whose parent is read-only.
+  # Point the attachment store at a per-test scratch dir, isolated from the
+  # shared per-run root `test.exs` configures.
   #
   # This claims the root for THIS test process rather than writing the
   # VM-global `:chat_attachments_root`. This module is `async: true` alongside

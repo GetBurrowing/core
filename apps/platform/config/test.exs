@@ -24,8 +24,13 @@ config :platform, :oidc,
   strategy: Platform.TestOIDCStrategy,
   http_adapter: {Assent.HTTPAdapter.Mint, []}
 
+# Per-OS-process so two `mix test` runs on one host never share (and never
+# delete) each other's blobs. config/runtime.exs leaves this key alone in
+# the test env, so this value is the one every LocalDisk read resolves to
+# unless a test claims its own root via Platform.Chat.AttachmentStorage.Root.
 config :platform,
-  chat_attachments_root: Path.join(System.tmp_dir!(), "platform_test_chat_uploads"),
+  chat_attachments_root:
+    Path.join(System.tmp_dir!(), "platform_test_chat_uploads-#{System.pid()}"),
   skip_attachment_storage_check: true,
   attachment_signing_key: "test-attachment-signing-key-0123456789abcdef",
   meeting_guest_signing_key: "test-meeting-guest-signing-key-0123456789abcdef",

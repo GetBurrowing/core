@@ -15,13 +15,16 @@ defmodule Platform.Chat.AttachmentStorage.Root do
   already had a unique directory (`Platform.TestTemp`) and still failed. The
   missing property is ownership of the *read*: a root no sibling can repoint.
 
-  Restoring made it worse rather than better. `config/runtime.exs` sets the
-  same key unguarded by env and loads after `config/test.exs`, so the value in
-  scope during the whole test run is the deployment path
+  Restoring made it worse rather than better. `config/runtime.exs` used to set
+  the same key unguarded by env and load after `config/test.exs`, so the value
+  in scope during the whole test run was the deployment path
   (`/data/platform/chat_uploads` by default), which does not exist locally and
   whose parent is read-only. A sibling's restore therefore aimed the global
   root at an unwritable path, which is where the `{:error, :erofs}` failures
   came from — a shared-tmp-directory account cannot explain those at all.
+  (`runtime.exs` now skips the key in the test env, so the global fallback is
+  the per-run tmp root from `config/test.exs`; this module still removes the
+  cross-process race.)
 
   ## Mechanism
 

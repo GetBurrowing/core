@@ -40,10 +40,9 @@ defmodule PlatformWeb.ControlCenter.AgentAvatarUploadTest do
 
   @form "#agent-config-form"
 
-  # Point the attachment store at a writable per-test scratch dir, for the
-  # same reason `avatar_storage_test.exs` does: the `test.exs` default
-  # (`/data/platform/chat_uploads`) exists in the dev container and nowhere
-  # else. Global env, hence `async: false`.
+  # Point the attachment store at a per-test scratch dir, isolated from the
+  # shared per-run root `test.exs` configures. Global env, hence
+  # `async: false`.
   setup do
     prev = Application.get_env(:platform, :chat_attachments_root)
 

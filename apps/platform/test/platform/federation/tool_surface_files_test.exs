@@ -1287,8 +1287,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   # ── file_add ──────────────────────────────────────────────────────────
 
   # Redirects `Platform.Files.Storage` writes to a per-test tmp dir so the
-  # inline branch can actually persist bytes without needing the prod
-  # `/data/platform/chat_uploads` mount.
+  # inline branch's bytes are isolated from the shared per-run root.
   defp with_tmp_storage_root(_context) do
     root =
       Platform.TestTemp.path("platform-file-add-test")

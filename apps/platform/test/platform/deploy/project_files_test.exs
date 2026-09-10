@@ -22,9 +22,8 @@ defmodule Platform.Deploy.ProjectFilesTest do
   alias Platform.Tasks
   alias Platform.Tasks.{PlanEngine, Stage, Validation}
 
-  # runtime.exs sets `chat_attachments_root` unconditionally to
-  # `/data/platform/chat_uploads`, which is not writable in test. Override
-  # to a per-run tmp dir so the LocalDisk adapter can actually persist.
+  # Override `chat_attachments_root` to a per-module tmp dir so this file's
+  # blobs are isolated from the shared per-run root `test.exs` configures.
   setup do
     root =
       Platform.TestTemp.path("platform-deploy-project-files-test")

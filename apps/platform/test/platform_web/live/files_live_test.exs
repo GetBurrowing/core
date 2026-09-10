@@ -517,10 +517,8 @@ defmodule PlatformWeb.FilesLiveTest do
     # and pattern-matches the inner tuple shape.
 
     setup do
-      # Point the local-disk storage adapter at a writable temp root
-      # for the duration of the describe. The default runtime.exs
-      # value is `/data/platform/chat_uploads` (prod path) which is
-      # not writable in CI.
+      # Point the local-disk storage adapter at an isolated temp root
+      # for the duration of the describe.
       root =
         Platform.TestTemp.path("files-live-upload-test")
 

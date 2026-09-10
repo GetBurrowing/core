@@ -73,6 +73,26 @@ defmodule Platform.Chat.AttachmentStorage.RootTest do
     end
   end
 
+  describe "the test-env root never resolves to the deploy-host path" do
+    # config/runtime.exs loads after config/test.exs. If it sets
+    # :chat_attachments_root unguarded, every test that persists a blob
+    # without claiming its own root writes under /data/platform, which is
+    # only writable where the container runs as root — so CI stays green
+    # and every dev box fails with {:error, :erofs} / :eacces (measured on
+    # 784e3f34: ~18 failures across seven files). This assertion fails in
+    # BOTH environments, so the regression is caught where CI can see it.
+    test "the global fallback is under the system tmp dir, not /data" do
+      root = Application.fetch_env!(:platform, :chat_attachments_root)
+
+      refute String.starts_with?(root, "/data/"),
+             "test env resolved :chat_attachments_root to the deploy path #{inspect(root)}; " <>
+               "config/runtime.exs must not set the key when config_env() == :test"
+
+      assert String.starts_with?(root, System.tmp_dir!())
+      assert File.mkdir_p(root) == :ok
+    end
+  end
+
   describe "class invariant: no async module may mutate the VM-global key" do
     # The measured fix covers three files. This converts that measurement
     # into an invariant, so flipping one of the other mutating modules to
