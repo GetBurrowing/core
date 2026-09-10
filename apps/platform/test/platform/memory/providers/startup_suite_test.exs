@@ -137,6 +137,46 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
              }
     end
 
+    # The corpus tag is optional on the wire. Req.Test stub only — never
+    # asserts on the live memory-service.
+    test "passes a non-empty memory_type through on each hit" do
+      install_stub(fn conn ->
+        Req.Test.json(conn, %{
+          "results" => [
+            %{"entry_id" => "01foo", "score" => 0.87, "memory_type" => "journal"}
+          ]
+        })
+      end)
+
+      assert {:ok, hits} = StartupSuite.search("q", [], config())
+      assert hits == [%{entry_id: "01foo", score: 0.87, memory_type: "journal"}]
+    end
+
+    test "a legacy response without memory_type yields hits with no :memory_type key" do
+      install_stub(fn conn ->
+        Req.Test.json(conn, %{"results" => [%{"entry_id" => "01foo", "score" => 0.5}]})
+      end)
+
+      assert {:ok, [hit]} = StartupSuite.search("q", [], config())
+      refute Map.has_key?(hit, :memory_type)
+      assert hit == %{entry_id: "01foo", score: 0.5}
+    end
+
+    test "an empty-string or null memory_type omits the key rather than passing nil" do
+      install_stub(fn conn ->
+        Req.Test.json(conn, %{
+          "results" => [
+            %{"entry_id" => "01empty", "score" => 0.5, "memory_type" => ""},
+            %{"entry_id" => "01null", "score" => 0.4, "memory_type" => nil}
+          ]
+        })
+      end)
+
+      assert {:ok, hits} = StartupSuite.search("q", [], config())
+      assert hits == [%{entry_id: "01empty", score: 0.5}, %{entry_id: "01null", score: 0.4}]
+      refute Enum.any?(hits, &Map.has_key?(&1, :memory_type))
+    end
+
     test "omits nil/empty filters from the request body" do
       install_stub(fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)

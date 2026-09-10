@@ -415,6 +415,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "same sweep provenance as the journal-entry lookup above"},
     {"platform/org/wiki/routing.ex", :platform_uuid_guard, "-", 5, :safe_internal,
      "all five namespace/owner casts are Platform.UUID.cast/1, so a 16-character project/space path segment no longer validates as a namespace uuid nor gets compared as an owner id. Fabricated-value family: nothing raised before, which is why an assert_raise test would not have caught it"},
+    {"platform/org/wiki/search.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a08a6e stage 1: `classify_untagged_ids/2` filters semantic-provider `entry_id`s through Platform.UUID.valid?/1 before `where([r], r.id in ^ids)` on three UUID-typed PKs. The ids come from memory-service's /search response, not from a loaded row, and a non-UUID value previously raised Ecto.Query.CastError in bulk_load_pages/2. Covered by `untagged hits with an unknown UUID or a non-UUID id are dropped without crashing` in search_test.exs"},
     # ── Push ───────────────────────────────────────────────────────────
     {"platform/push.ex", :get, "Participant", 3, :safe_internal,
      "`participant_id` comes off the recipient list `Chat.list_participants/2` returned for the space being notified. The third call (task 019ffd19) is `subscriptions_for_recipient/1` reading `participant_type` to decide between user-scoped and per-membership device resolution; same provenance as the other two, and the router passes the already-loaded `%Participant{}` so its own path never reaches this clause"},

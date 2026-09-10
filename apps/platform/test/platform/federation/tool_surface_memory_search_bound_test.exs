@@ -206,6 +206,47 @@ defmodule Platform.Federation.ToolSurfaceMemorySearchBoundTest do
            "memory_view returned #{String.length(body)} chars — the full body should be reachable even though search snippets it"
   end
 
+  # A crashing semantic provider: the search must survive it and the
+  # MCP envelope must carry the dead channel in a JSON-encodable shape.
+  # No network — the stub exits on purpose.
+  defmodule CrashingProvider do
+    @behaviour Platform.Memory.Provider
+
+    @impl true
+    def ingest(_entries, _config), do: {:ok, 0}
+
+    @impl true
+    def search(_query, _opts, _config), do: exit(:boom)
+
+    @impl true
+    def delete(_ids, _config), do: {:ok, 0}
+
+    @impl true
+    def health(_c), do: :ok
+  end
+
+  test "dead_channels and dropped ride through alongside truncated, JSON-safe" do
+    seed_pages(@marker)
+    agent = create_agent()
+
+    envelope = search(@marker, agent)
+
+    assert envelope.dead_channels == []
+    assert envelope.dropped == %{page: 0, journal: 0, message: 0, task: 0}
+    assert envelope.truncated == false
+
+    Application.put_env(:platform, :memory_service, provider: CrashingProvider)
+
+    dead = search(@marker, agent)
+
+    # Tuples cannot be JSON-encoded; the head renders the label as a pair.
+    assert dead.dead_channels == [[:semantic, :all]]
+    assert dead.truncated == true
+    assert dead.results != []
+
+    assert Jason.decode!(Jason.encode!(dead))["dead_channels"] == [["semantic", "all"]]
+  end
+
   test "a query matching nothing returns an empty LIST, not an empty string" do
     seed_pages(@marker)
     agent = create_agent()

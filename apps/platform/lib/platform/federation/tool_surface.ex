@@ -761,9 +761,9 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean, payload_truncated: boolean}. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
+          "%{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean, dead_channels: [[channel, corpus]], dropped: %{page, journal, message, task}, payload_truncated: boolean}. `dead_channels` lists every search channel that timed out or crashed as a `[channel, corpus]` pair (e.g. `[\"semantic\", \"all\"]` or `[\"lexical\", \"task\"]`) — empty when every channel answered; `dropped` counts, per corpus, the fused hits that hydration refused (row deleted or not readable by the caller) and always carries all four keys. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
         limitations:
-          "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are silently dropped. `truncated: true` indicates a channel hit its `2*limit` cap and a higher `limit` may surface more hits. `payload_truncated: true` is a different thing: the whole response is capped at 20_000 bytes, and lowest-ranked hits were dropped from the tail to fit.",
+          "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are dropped and counted in `dropped`. `truncated: true` means the result set is incomplete for ANY reason: a channel hit its `2*limit` cap (a higher `limit` may surface more hits) OR a channel died (see `dead_channels` — a non-empty list always forces `truncated: true`; retry later rather than raising `limit`). `payload_truncated: true` is a different thing: the whole response is capped at 20_000 bytes, and lowest-ranked hits were dropped from the tail to fit.",
         when_to_use:
           "When you need to recall information beyond the org preamble — past decisions, journal entries, relevant chat threads, prior tasks (shipped or in-flight), or any cross-corpus lookup."
       },
@@ -10192,7 +10192,15 @@ defmodule Platform.Federation.ToolSurface do
     # Measure with the `payload_truncated` key already present (and with
     # its longer `false` rendering) so the flag we add can never push a
     # payload back over the budget we just measured it against.
-    base = envelope |> Map.put(:results, snipped) |> Map.put(:payload_truncated, false)
+    # `truncated`, `dead_channels` and `dropped` ride through from
+    # `Search.search/2` untouched — except that a dead-channel label is
+    # a tuple (`{:semantic, :all}`), which JSON cannot carry, so it is
+    # rendered as a `["semantic", "all"]` pair here.
+    base =
+      envelope
+      |> Map.put(:results, snipped)
+      |> Map.update(:dead_channels, [], &Enum.map(&1, fn {ch, corpus} -> [ch, corpus] end))
+      |> Map.put(:payload_truncated, false)
 
     {kept, dropped?} = fit_memory_search_payload(base, snipped)
 

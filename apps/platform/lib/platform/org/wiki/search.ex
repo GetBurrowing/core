@@ -17,6 +17,24 @@ defmodule Platform.Org.Wiki.Search do
   - the global semantic channel (corpus-tagged via `memory_type`),
   - the per-corpus lexical channel (`page`, `journal`, `message`, `task`).
 
+  ## Semantic hit classification
+
+  Every core ingest path stamps `memory_type` on the indexed payload and
+  memory-service stores it `NOT NULL`. The tag arrives on a hit when the
+  service includes it in its `/search` response (the StartupSuite
+  provider passes a non-empty `memory_type` through and omits the key
+  otherwise); older service builds return only `entry_id` + `score`, so
+  those hits reach this module UNTAGGED. A tag, when present, is
+  authoritative and never triggers a lookup: `"page"` -> `:page`,
+  `"task"` -> `:task`, and both `"journal"` (stamped by the Indexer) and
+  `"daily"` (the `normalize/1` default on the direct
+  `Context.append_memory_entry/2` path) -> `:journal`. An absent tag is
+  resolved by a bulk id lookup across `org_wiki_pages`,
+  `org_wiki_journal_entries` and `tasks` (one query per table, same
+  tenancy filters as hydration). Ids that match no table are dropped
+  before fusion. The lookup can be retired once the provider returns
+  the tag for every hit (`classify_untagged_ids/2` then never runs).
+
   Tie-break: `score desc → lexical_rank asc → date_or_inserted_at desc`.
 
   ## Task hits (stage 3, 019f3dbb)
@@ -45,14 +63,31 @@ defmodule Platform.Org.Wiki.Search do
   (private rows are dropped if the caller isn't the owner).
 
   Orphan ids (deleted between embed and query) and `deleted_at`-set
-  rows are dropped silently.
+  rows are dropped — untagged ones at classification, tagged ones at
+  hydration, where each drop is counted in `dropped` (see below).
 
   ## Robustness
 
   Each channel runs in its own `Task.async_stream/3` with a 2s timeout.
-  A failed channel logs a warning, contributes zero hits, and the
-  fusion proceeds with the surviving channels — a memory-service
-  outage degrades to lexical-only rather than failing the call.
+  A channel that times out or crashes is DEAD: it is logged by name,
+  contributes zero hits, and the fusion proceeds with the surviving
+  channels — a memory-service outage degrades to lexical-only rather
+  than failing the call. A dead channel is never silent in the
+  response: its label is listed under `dead_channels` and `truncated`
+  is forced to `true`, so a caller can tell "the semantic half died"
+  from "the semantic half found nothing".
+
+  `truncated` therefore means "incomplete for ANY reason": a live
+  channel hit its `2*limit` cap, or a channel died.
+
+  ## Hydration drops
+
+  Every fused hit that hydration cannot turn into a result — the row is
+  gone (orphan / tombstone) or the caller is refused by ACL — is counted
+  per corpus in `dropped: %{page, journal, message, task}`. All four
+  keys are always present (zero when nothing was dropped). Orphans and
+  ACL refusals are counted together on purpose: distinguishing them
+  would leak the existence of rows the caller may not read.
   """
 
   require Logger
@@ -74,6 +109,7 @@ defmodule Platform.Org.Wiki.Search do
   @default_limit 20
   @max_limit 100
   @channel_timeout_ms 2_000
+  @zero_dropped %{page: 0, journal: 0, message: 0, task: 0}
   @lexical_fallback_meta_key :lexical_fallback
 
   # Queries at or under this many distinct tokens keep the implicit conjunction
@@ -87,6 +123,10 @@ defmodule Platform.Org.Wiki.Search do
 
   @type corpus :: :page | :journal | :message | :task | :excluded | :unknown
 
+  # Only `semantic_corpus/1` produces `:untagged`, and only
+  # `classify_untagged_ids/2` consumes it; it never reaches fusion.
+  @type raw_corpus :: corpus() | :untagged
+
   @type hit :: %{
           source: String.t(),
           id: String.t(),
@@ -98,6 +138,27 @@ defmodule Platform.Org.Wiki.Search do
           lexical_rank: pos_integer() | nil,
           authored_by: String.t() | nil,
           date_or_inserted_at: String.t()
+        }
+
+  # Label of one fused channel: the single semantic channel, or one
+  # lexical channel per enabled corpus.
+  @type channel_label :: {:semantic, :all} | {:lexical, :page | :journal | :message | :task}
+
+  # Per-corpus count of fused hits that hydration refused (orphan,
+  # tombstone, or ACL) — always all four keys.
+  @type dropped :: %{
+          page: non_neg_integer(),
+          journal: non_neg_integer(),
+          message: non_neg_integer(),
+          task: non_neg_integer()
+        }
+
+  @type response :: %{
+          results: [hit()],
+          fusion_constant_k: 60,
+          truncated: boolean(),
+          dead_channels: [channel_label()],
+          dropped: dropped()
         }
 
   @type search_opts :: [
@@ -130,8 +191,12 @@ defmodule Platform.Org.Wiki.Search do
   ## ─────────────────────────────────────────────────────────────────────
 
   @doc """
-  Hybrid (semantic + lexical) search across pages, journal entries, and
-  chat messages. Returns `{:ok, %{results, fusion_constant_k, truncated}}`.
+  Hybrid (semantic + lexical) search across pages, journal entries,
+  chat messages and tasks. Returns
+  `{:ok, %{results, fusion_constant_k, truncated, dead_channels, dropped}}`
+  (see `t:response/0`): `dead_channels` names every channel that timed
+  out or crashed (and forces `truncated: true`), `dropped` counts the
+  fused hits hydration refused per corpus.
 
   ## Options
 
@@ -153,13 +218,19 @@ defmodule Platform.Org.Wiki.Search do
       (e.g. `"document"`, `"page"`, `"journal"`, `"daily"`). Ignored
       by the lexical channels (they already partition by corpus).
   """
-  @spec search(String.t(), search_opts()) ::
-          {:ok, %{results: [hit()], fusion_constant_k: 60, truncated: boolean()}}
+  @spec search(String.t(), search_opts()) :: {:ok, response()}
   def search(query, opts \\ []) when is_binary(query) and is_list(opts) do
     trimmed = String.trim(query)
 
     if trimmed == "" do
-      {:ok, %{results: [], fusion_constant_k: @fusion_constant_k, truncated: false}}
+      {:ok,
+       %{
+         results: [],
+         fusion_constant_k: @fusion_constant_k,
+         truncated: false,
+         dead_channels: [],
+         dropped: @zero_dropped
+       }}
     else
       do_search(trimmed, normalize_opts(opts))
     end
@@ -173,68 +244,112 @@ defmodule Platform.Org.Wiki.Search do
     corpora = enabled_corpora(opts.source)
     channel_cap = 2 * opts.limit
 
-    # All channels run concurrently with a 2s budget each. The
-    # `:on_timeout :kill_task` + `nil`-result handling means a slow
-    # channel never blocks the fusion — it just contributes no hits.
+    # All channels run concurrently with a 2s budget each. A slow
+    # channel never blocks the fusion (`:on_timeout :kill_task`), and a
+    # crashing one never takes the caller down (the `catch` inside the
+    # task — a linked task's abnormal exit would otherwise propagate
+    # to this process). Either way the channel is reported DEAD under
+    # its own label, not silently folded into "no hits".
+    #
+    # The stream yields a bare `{:exit, :timeout}` with no channel
+    # label, so the labels are carried alongside: `ordered: true` keeps
+    # results in input order and `Enum.zip/2` re-attaches the label.
+    labels = [{:semantic, :all} | Enum.map(corpora, &{:lexical, &1})]
+
     channel_results =
-      [:semantic | Enum.map(corpora, &{:lexical, &1})]
+      labels
       |> Task.async_stream(
-        fn channel -> run_channel(channel, query, opts, channel_cap, corpora) end,
+        fn label -> run_channel_guarded(label, query, opts, channel_cap, corpora) end,
         max_concurrency: max(length(corpora) + 1, 2),
         timeout: @channel_timeout_ms + 500,
         on_timeout: :kill_task,
-        ordered: false
+        ordered: true
       )
+      |> Enum.zip(labels)
       |> Enum.map(fn
-        {:ok, {channel, hits}} -> {channel, hits}
-        {:exit, reason} -> handle_channel_exit(reason)
+        {{:ok, {:ok, hits}}, label} -> {label, hits}
+        {{:ok, {:crashed, reason}}, label} -> handle_channel_exit(label, reason)
+        {{:exit, reason}, label} -> handle_channel_exit(label, reason)
       end)
 
-    hits = Enum.flat_map(channel_results, fn {_channel, hits} -> hits end)
+    dead_channels = for {label, :dead} <- channel_results, do: label
+    live_results = for {label, hits} when is_list(hits) <- channel_results, do: {label, hits}
 
-    truncated? =
-      Enum.any?(channel_results, fn {_channel, hits} -> length(hits) >= channel_cap end)
+    hits = Enum.flat_map(live_results, fn {_channel, hits} -> hits end)
+
+    # `truncated` means "incomplete for any reason": a live channel at
+    # its cap, or a channel that died (its share of the corpus is
+    # unknown, so the result set is known-incomplete). A dead channel
+    # contributes no hits and so could never trip the cap test — it
+    # must be OR-ed in explicitly.
+    capped? = Enum.any?(live_results, fn {_channel, hits} -> length(hits) >= channel_cap end)
+    truncated? = capped? or dead_channels != []
 
     fused = fuse(hits, opts.limit)
 
-    hydrated =
-      fused
-      |> hydrate(opts)
-      |> Enum.take(opts.limit)
+    {hydrated, dropped} = hydrate(fused, opts)
 
     {:ok,
      %{
-       results: hydrated,
+       results: Enum.take(hydrated, opts.limit),
        fusion_constant_k: @fusion_constant_k,
-       truncated: truncated?
+       truncated: truncated?,
+       dead_channels: dead_channels,
+       dropped: dropped
      }}
   end
 
-  defp handle_channel_exit(:timeout) do
-    Logger.warning("Platform.Org.Wiki.Search: channel timed out")
-    {:exited, []}
+  # Runs one channel inside its task and converts a crash (raise /
+  # throw / exit) into a value, so the stream never sees an abnormal
+  # exit. Timeouts cannot be caught here — the task is killed from the
+  # outside — and surface as `{:exit, :timeout}` from the stream.
+  defp run_channel_guarded(label, query, opts, channel_cap, corpora) do
+    channel =
+      case label do
+        {:semantic, :all} -> :semantic
+        {:lexical, corpus} -> {:lexical, corpus}
+      end
+
+    {^label, hits} = run_channel(channel, query, opts, channel_cap, corpora)
+    {:ok, hits}
+  catch
+    kind, reason -> {:crashed, {kind, reason}}
   end
 
-  defp handle_channel_exit(reason) do
-    Logger.warning("Platform.Org.Wiki.Search: channel crashed: #{inspect(reason)}")
-    {:exited, []}
+  @spec handle_channel_exit(channel_label(), term()) :: {channel_label(), :dead}
+  defp handle_channel_exit(label, :timeout) do
+    Logger.warning("Platform.Org.Wiki.Search: channel #{inspect(label)} timed out")
+    {label, :dead}
+  end
+
+  defp handle_channel_exit(label, reason) do
+    Logger.warning(
+      "Platform.Org.Wiki.Search: channel #{inspect(label)} crashed: #{inspect(reason)}"
+    )
+
+    {label, :dead}
   end
 
   ## ─────────────────────────────────────────────────────────────────────
   ## Channels — each returns {channel_label, [channel_hit]}
   ## ─────────────────────────────────────────────────────────────────────
 
-  # Semantic — single call covering every enabled corpus. The provider
-  # tags each hit via `memory_type` on the indexed payload, and every tag
-  # is classified by a named clause of `semantic_corpus/1`:
+  # Semantic — single call covering every enabled corpus. Every ingest
+  # path stamps `memory_type` on the indexed payload, but memory-service's
+  # `/search` response drops it (only `entry_id` + `score` come back), so
+  # in practice every hit arrives untagged. Hits are partitioned:
   #
-  #   * nil / "" — legacy entries indexed before the tag existed; these
-  #     are wiki pages and map to `:page`. The only unnamed value that does.
-  #   * "document" — refused. File text is ingested for the Files surface,
-  #     not for wiki memory search.
-  #   * anything else — unknown, and refused rather than reinterpreted.
-  #     A refusal is a no-result we can see; a silent remap to `:page` is
-  #     a wrong result we cannot.
+  #   * tagged — the tag is authoritative and classified by a named clause
+  #     of `semantic_corpus/1`. No DB lookup runs for a tagged hit.
+  #       - "document" — refused. File text is ingested for the Files
+  #         surface, not for wiki memory search.
+  #       - anything unrecognised — refused rather than reinterpreted. A
+  #         refusal is a no-result we can see; a silent remap to `:page`
+  #         is a wrong result we cannot.
+  #   * untagged (nil / "") — the tag was dropped at the read boundary,
+  #     not missing at ingest. The corpus is recovered by
+  #     `classify_untagged_ids/2` (bulk id lookup under the hydration
+  #     tenancy filters). Ids matching no table are dropped.
   #
   # Hits whose corpus doesn't match an enabled corpus are dropped before
   # fusion.
@@ -252,10 +367,29 @@ defmodule Platform.Org.Wiki.Search do
 
       case Memory.search(query, semantic_opts) do
         {:ok, results} ->
+          # Partition on the tag once; only the untagged side reaches the
+          # DB. A fully tagged result set costs zero extra queries.
+          classified =
+            Enum.map(results, fn hit -> {hit, hit |> raw_memory_type() |> semantic_corpus()} end)
+
+          resolved =
+            classified
+            |> Enum.filter(fn {_hit, corpus} -> corpus == :untagged end)
+            |> Enum.map(fn {hit, _} -> semantic_hit_id(hit) end)
+            |> classify_untagged_ids(opts)
+
           hits =
-            results
+            classified
             |> Enum.with_index(1)
-            |> Enum.flat_map(fn {hit, rank} -> semantic_hit_to_channel(hit, rank, corpora) end)
+            |> Enum.flat_map(fn {{hit, corpus}, rank} ->
+              corpus =
+                case corpus do
+                  :untagged -> Map.get(resolved, semantic_hit_id(hit), :unknown)
+                  other -> other
+                end
+
+              semantic_hit_to_channel(hit, rank, corpus, corpora)
+            end)
 
           warn_unknown_tags(results)
 
@@ -293,8 +427,8 @@ defmodule Platform.Org.Wiki.Search do
   # One warning per search call, listing the distinct unrecognised tags.
   # A provider returning many unknown-tagged hits would otherwise emit a
   # line per hit. Logs the TAG VALUE ONLY — never an entry id, content,
-  # org id or project id. `:excluded` and the legacy nil/"" cases are
-  # expected refusals, not surprises, so they are not logged.
+  # org id or project id. `:excluded` and the untagged nil/"" cases are
+  # expected (refusal / lookup), not surprises, so they are not logged.
   defp warn_unknown_tags(results) do
     unknown_tags =
       results
@@ -319,11 +453,81 @@ defmodule Platform.Org.Wiki.Search do
       get_in(Map.get(hit, "metadata", %{}), ["memory_type"])
   end
 
-  defp semantic_hit_to_channel(hit, rank, corpora) do
-    id = Map.get(hit, :entry_id) || Map.get(hit, "entry_id")
-    score = Map.get(hit, :score) || Map.get(hit, "score")
+  defp semantic_hit_id(hit) do
+    case Map.get(hit, :entry_id) || Map.get(hit, "entry_id") do
+      nil -> nil
+      id -> to_string(id)
+    end
+  end
 
-    corpus = hit |> raw_memory_type() |> semantic_corpus()
+  # Resolve untagged ids to a corpus by asking each table which of them
+  # it holds. Three bulk queries, never one per hit. Tenancy filters are
+  # the ones the hydration bulk loaders apply, so classification cannot
+  # admit a row hydration would then refuse. Non-UUID ids are dropped
+  # before the query (`Platform.UUID.valid?/1`, which also enforces the
+  # canonical length) so a garbage `entry_id` cannot raise a CastError.
+  # Ids in no table are absent from the map and are dropped by the
+  # caller (the orphan drop, now before fusion instead of at hydration).
+  #
+  # Precedence: a page id also present as a task id (impossible for
+  # UUIDv7 rows, but cheap to pin) resolves in `:page` order, matching
+  # the merge order below.
+  @spec classify_untagged_ids([String.t() | nil], map()) ::
+          %{String.t() => :page | :journal | :task}
+  defp classify_untagged_ids(ids, opts) do
+    ids =
+      ids
+      |> Enum.reject(&is_nil/1)
+      |> Enum.filter(&Platform.UUID.valid?/1)
+      |> Enum.uniq()
+
+    if ids == [] do
+      %{}
+    else
+      page_ids =
+        WikiPage
+        |> filter_workspace(opts.workspace_id)
+        |> scope_org(opts.org_id)
+        |> filter_project(opts.project_id)
+        |> where([r], r.id in ^ids)
+        |> select([r], r.id)
+        |> Repo.all()
+
+      journal_ids =
+        WikiJournalEntry
+        |> filter_workspace(opts.workspace_id)
+        |> scope_org(opts.org_id)
+        |> filter_project(opts.project_id)
+        |> where([r], r.id in ^ids)
+        |> select([r], r.id)
+        |> Repo.all()
+
+      task_ids =
+        TaskRecord
+        |> filter_task_deleted()
+        |> filter_task_project(opts.project_id)
+        |> scope_task_org(opts.org_id)
+        |> where([r], r.id in ^ids)
+        |> select([r], r.id)
+        |> Repo.all()
+
+      %{}
+      |> put_corpus(task_ids, :task)
+      |> put_corpus(journal_ids, :journal)
+      |> put_corpus(page_ids, :page)
+    end
+  end
+
+  defp put_corpus(acc, ids, corpus) do
+    Enum.reduce(ids, acc, fn id, acc -> Map.put(acc, id, corpus) end)
+  end
+
+  # `corpus` is already resolved: tag-derived for tagged hits,
+  # lookup-derived for untagged ones (`:unknown` when the lookup found
+  # nothing, so the id falls into the explicit refusal below).
+  defp semantic_hit_to_channel(hit, rank, corpus, corpora) do
+    id = semantic_hit_id(hit)
+    score = Map.get(hit, :score) || Map.get(hit, "score")
 
     cond do
       is_nil(id) ->
@@ -368,10 +572,12 @@ defmodule Platform.Org.Wiki.Search do
   # it later by accident at the wiki-page hydration lookup.
   defp semantic_corpus("document"), do: :excluded
   defp semantic_corpus(:document), do: :excluded
-  # Legacy entries indexed before the corpus tag existed carry no type.
-  # They are wiki pages; this is the only unnamed value that may map to :page.
-  defp semantic_corpus(nil), do: :page
-  defp semantic_corpus(""), do: :page
+  # No tag on the hit. This is NOT a legacy-row signal: every ingest path
+  # stamps the tag and memory-service stores it NOT NULL; it is dropped
+  # at the `/search` read boundary. The corpus is recovered by id lookup
+  # in `classify_untagged_ids/2`; nothing else may consume `:untagged`.
+  defp semantic_corpus(nil), do: :untagged
+  defp semantic_corpus(""), do: :untagged
   # Any other tag is a value this module has never been taught. Refuse it
   # rather than silently reinterpreting it as a page.
   defp semantic_corpus(_other), do: :unknown
@@ -769,13 +975,26 @@ defmodule Platform.Org.Wiki.Search do
       opts: opts
     }
 
-    fused
-    |> Enum.flat_map(fn fused_hit -> hydrate_one(fused_hit, ctx) end)
+    # Every `hydrate_one/2` miss (orphan, tombstone, ACL refusal) is
+    # counted under the fused hit's corpus. The kinds are deliberately
+    # not distinguished: a separate ACL count would tell the caller a
+    # row exists that they may not read.
+    {hits, dropped} =
+      Enum.reduce(fused, {[], @zero_dropped}, fn fused_hit, {acc, dropped} ->
+        case hydrate_one(fused_hit, ctx) do
+          [] -> {acc, Map.update!(dropped, fused_hit.corpus, &(&1 + 1))}
+          [hit] -> {[hit | acc], dropped}
+        end
+      end)
+
     # Stable post-hydration sort: score desc → lexical_rank asc →
     # date_or_inserted_at desc.
-    |> Enum.sort_by(fn hit ->
-      {-hit.score, hit.lexical_rank || 999_999, neg_iso(hit.date_or_inserted_at)}
-    end)
+    sorted =
+      Enum.sort_by(hits, fn hit ->
+        {-hit.score, hit.lexical_rank || 999_999, neg_iso(hit.date_or_inserted_at)}
+      end)
+
+    {sorted, dropped}
   end
 
   defp hydrate_one(%{corpus: :page} = h, %{pages: pages, opts: opts}) do

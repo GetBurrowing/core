@@ -33,7 +33,14 @@ defmodule Platform.Memory.Provider do
           optional(:metadata) => map()
         }
 
-  @type search_result :: %{entry_id: String.t(), score: float()}
+  # Providers MAY return the corpus tag (`memory_type`) on each hit. When
+  # they do it must be a non-empty binary; when they cannot (older
+  # services) the key is omitted rather than set to nil.
+  @type search_result :: %{
+          required(:entry_id) => String.t(),
+          required(:score) => float(),
+          optional(:memory_type) => String.t()
+        }
   @type search_opts :: [
           # @deprecated — see entry doc above.
           workspace_id: String.t() | nil,

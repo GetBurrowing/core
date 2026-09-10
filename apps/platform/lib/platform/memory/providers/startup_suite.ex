@@ -7,6 +7,8 @@ defmodule Platform.Memory.Providers.StartupSuite do
 
   - `POST /ingest`   — embed and store a batch of entries
   - `POST /search`   — vector similarity search, returns `{entry_id, score}`
+    plus `memory_type` once the service supplies it (passed through as-is;
+    omitted from the hit when the service does not send a non-empty tag)
   - `DELETE /entries` — remove entries from the index
   - `GET /health`    — readiness probe
 
@@ -47,6 +49,7 @@ defmodule Platform.Memory.Providers.StartupSuite do
         hits =
           Enum.map(results, fn r ->
             %{entry_id: r["entry_id"], score: r["score"]}
+            |> maybe_put_memory_type(r["memory_type"])
           end)
 
         emit(:searched, %{count: length(hits)}, %{
@@ -138,6 +141,15 @@ defmodule Platform.Memory.Providers.StartupSuite do
     |> maybe_put_opt(:date_to, normalize_date(Keyword.get(opts, :date_to)))
     |> maybe_put_opt(:limit, Keyword.get(opts, :limit))
   end
+
+  # The corpus tag is optional on the wire: older memory-service builds omit
+  # it. Only a non-empty binary is forwarded; anything else leaves the key
+  # out entirely (never `memory_type: nil`) so `Platform.Org.Wiki.Search`
+  # takes its untagged id-lookup path.
+  defp maybe_put_memory_type(hit, tag) when is_binary(tag) and tag != "",
+    do: Map.put(hit, :memory_type, tag)
+
+  defp maybe_put_memory_type(hit, _), do: hit
 
   defp maybe_put(kw, _key, nil), do: kw
   defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)

@@ -54,6 +54,8 @@ defmodule Platform.Memory do
   Vector-search memory entries by natural-language query.
 
   Returns `{:ok, [%{entry_id, score}]}` ordered by descending similarity.
+  Each hit may also carry an optional `memory_type` (the corpus tag stamped
+  at ingest) when the provider returns it; the key is absent otherwise.
   """
   @spec search(String.t(), Platform.Memory.Provider.search_opts(), keyword()) ::
           {:ok, [search_result()]} | {:error, term()}

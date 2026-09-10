@@ -15,6 +15,7 @@ defmodule Platform.Org.Wiki.SearchTest do
   use Platform.DataCase, async: false
 
   import ExUnit.CaptureLog
+  import Platform.TenancyFixtures
 
   alias Ecto.Adapters.SQL
   alias Platform.Agents.Agent
@@ -35,16 +36,29 @@ defmodule Platform.Org.Wiki.SearchTest do
     @impl true
     def ingest(_entries, _config), do: {:ok, 0}
 
+    # `:search_behaviour` models a DEAD semantic channel without any
+    # network: `:sleep` never returns (the stream kills the task on its
+    # timeout), `:crash` exits the task abnormally. Anything else answers
+    # with `:search_results`. The live service is never asserted on.
     @impl true
     def search(query, _opts, config) do
-      results =
-        case Keyword.get(config, :search_results) do
-          fun when is_function(fun, 1) -> fun.(query)
-          list when is_list(list) -> list
-          _ -> []
-        end
+      case Keyword.get(config, :search_behaviour) do
+        :sleep ->
+          Process.sleep(:infinity)
 
-      {:ok, results}
+        :crash ->
+          exit(:boom)
+
+        _ ->
+          results =
+            case Keyword.get(config, :search_results) do
+              fun when is_function(fun, 1) -> fun.(query)
+              list when is_list(list) -> list
+              _ -> []
+            end
+
+          {:ok, results}
+      end
     end
 
     @impl true
@@ -72,6 +86,19 @@ defmodule Platform.Org.Wiki.SearchTest do
     |> String.split("unrecognised memory_type tag(s)")
     |> length()
     |> Kernel.-(1)
+  end
+
+  defp install_dead_provider(behaviour) when behaviour in [:sleep, :crash] do
+    prev = Application.get_env(:platform, :memory_service, [])
+
+    Application.put_env(:platform, :memory_service,
+      provider: StubProvider,
+      search_behaviour: behaviour
+    )
+
+    on_exit(fn -> Application.put_env(:platform, :memory_service, prev) end)
+
+    :ok
   end
 
   defp noop_provider do
@@ -157,7 +184,14 @@ defmodule Platform.Org.Wiki.SearchTest do
 
   describe "search/2 — smoke" do
     test "empty query returns empty results with k=60" do
-      assert {:ok, %{results: [], fusion_constant_k: 60, truncated: false}} =
+      assert {:ok,
+              %{
+                results: [],
+                fusion_constant_k: 60,
+                truncated: false,
+                dead_channels: [],
+                dropped: %{page: 0, journal: 0, message: 0, task: 0}
+              }} =
                Search.search("", [])
     end
 
@@ -342,11 +376,12 @@ defmodule Platform.Org.Wiki.SearchTest do
   end
 
   ## ─────────────────────────────────────────────────────────────────────
-  ## 7. Orphan hydration drop — id from semantic channel with no row
+  ## 7. Orphan hydration drop — id from semantic channel with no row.
+  ##    The drop is no longer silent: it is counted in `dropped`.
   ## ─────────────────────────────────────────────────────────────────────
 
-  describe "hydration drops orphans silently" do
-    test "page id returned by semantic but absent from DB is dropped" do
+  describe "hydration drops orphans and counts them" do
+    test "page id returned by semantic but absent from DB is dropped and counted" do
       page = seed_page("org/page/yam.md", "yams roasted recipe")
 
       ghost_id = Ecto.UUID.generate()
@@ -356,14 +391,16 @@ defmodule Platform.Org.Wiki.SearchTest do
         %{entry_id: page.id, score: 0.50, memory_type: "page"}
       ])
 
-      {:ok, %{results: results}} = Search.search("yams", source: "page", limit: 10)
+      {:ok, %{results: results, dropped: dropped, dead_channels: []}} =
+        Search.search("yams", source: "page", limit: 10)
 
       ids = Enum.map(results, & &1.id)
       refute ghost_id in ids
       assert page.id in ids
+      assert dropped == %{page: 1, journal: 0, message: 0, task: 0}
     end
 
-    test "deleted (raw-SQL nuked) page id is dropped silently" do
+    test "deleted (raw-SQL nuked) page id is dropped and counted" do
       page = seed_page("org/page/papaya.md", "papaya is delicious in shakes")
 
       install_provider([
@@ -374,9 +411,122 @@ defmodule Platform.Org.Wiki.SearchTest do
       # the semantic provider keeps returning the ghost id.
       SQL.query!(Repo, "DELETE FROM org_wiki_pages WHERE id = $1", [Ecto.UUID.dump!(page.id)])
 
-      {:ok, %{results: results}} = Search.search("papaya", source: "page", limit: 10)
+      {:ok, %{results: results, dropped: dropped}} =
+        Search.search("papaya", source: "page", limit: 10)
 
       assert Enum.all?(results, &(&1.id != page.id))
+      assert dropped.page == 1
+    end
+
+    test "an ACL-refused private page is counted, indistinguishably from an orphan" do
+      noop_provider()
+
+      owner = create_agent("owner")
+      caller = create_agent("caller")
+      space = seed_space("private-#{System.unique_integer([:positive])}")
+      # Ownership of a private path also requires space participation.
+      _owner_part = seed_agent_participant(space, owner)
+
+      # The lexical page channel does not filter private paths; the
+      # refusal happens at hydration via `Routing.gate_read/2`.
+      seed_page("space/#{space.id}/private/#{owner.id}/notes.md", "tamarillo glaze secret ratio")
+      seed_page("org/page/tamarillo.md", "tamarillo glaze public ratio")
+
+      {:ok, %{results: results, dropped: dropped}} =
+        Search.search("tamarillo glaze", agent: caller, source: "page", limit: 10)
+
+      assert Enum.map(results, & &1.path) == ["org/page/tamarillo.md"]
+
+      # Counted so the caller can see a hit went missing, but not
+      # distinguished from an orphan: the payload must not reveal that a
+      # row exists which someone else may read.
+      assert dropped == %{page: 1, journal: 0, message: 0, task: 0}
+      assert Map.keys(dropped) |> Enum.sort() == [:journal, :message, :page, :task]
+
+      # The owner sees it, and nothing is dropped.
+      {:ok, %{results: owner_results, dropped: owner_dropped}} =
+        Search.search("tamarillo glaze", agent: owner, source: "page", limit: 10)
+
+      assert length(owner_results) == 2
+      assert owner_dropped == %{page: 0, journal: 0, message: 0, task: 0}
+    end
+
+    test "ghost ids across corpora are counted under their own corpus (StubProvider)" do
+      page = seed_page("org/page/durian.md", "durian custard experiment")
+
+      install_provider([
+        %{entry_id: Ecto.UUID.generate(), score: 0.99, memory_type: "page"},
+        %{entry_id: Ecto.UUID.generate(), score: 0.98, memory_type: "journal"},
+        %{entry_id: Ecto.UUID.generate(), score: 0.97, memory_type: "task"},
+        %{entry_id: page.id, score: 0.50, memory_type: "page"}
+      ])
+
+      {:ok, %{results: results, dropped: dropped}} = Search.search("durian custard", limit: 10)
+
+      assert Enum.map(results, & &1.id) == [page.id]
+      assert dropped == %{page: 1, journal: 1, message: 0, task: 1}
+    end
+  end
+
+  ## ─────────────────────────────────────────────────────────────────────
+  ## 7a. Dead channels — a channel that times out or crashes is NAMED in
+  ##     the response and forces `truncated: true`. StubProvider models
+  ##     the death (sleep / exit); no network is involved.
+  ## ─────────────────────────────────────────────────────────────────────
+
+  describe "dead channels (StubProvider sleep / crash, never the network)" do
+    # The stream budget is @channel_timeout_ms (2_000) + 500; the test
+    # must finish inside that plus slack, or the kill is not working.
+    @channel_timeout_ms 2_000
+
+    @tag timeout: 10_000
+    test "a semantic provider that never returns is killed, named, and forces truncated" do
+      install_dead_provider(:sleep)
+
+      seed_page("org/page/loquat.md", "loquat jam batch notes")
+
+      started = System.monotonic_time(:millisecond)
+
+      {{:ok, response}, log} =
+        with_log(fn -> Search.search("loquat jam", source: "page", limit: 10) end)
+
+      elapsed = System.monotonic_time(:millisecond) - started
+
+      assert elapsed <= @channel_timeout_ms + 500 + 1_500,
+             "search took #{elapsed}ms — the sleeping channel was not killed on its budget"
+
+      assert response.dead_channels == [{:semantic, :all}]
+      assert response.truncated == true
+      assert [%{source: "page", content: "loquat jam batch notes"}] = response.results
+      assert log =~ "channel {:semantic, :all} timed out"
+    end
+
+    test "a semantic provider that crashes is named, logged as crashed, and forces truncated" do
+      install_dead_provider(:crash)
+
+      seed_page("org/page/medlar.md", "medlar bletting schedule")
+
+      {{:ok, response}, log} =
+        with_log(fn -> Search.search("medlar bletting", source: "page", limit: 10) end)
+
+      assert response.dead_channels == [{:semantic, :all}]
+      assert response.truncated == true
+      assert [%{source: "page", content: "medlar bletting schedule"}] = response.results
+      assert log =~ "channel {:semantic, :all} crashed"
+      assert log =~ ":boom"
+    end
+
+    test "a dead channel does not push truncated toward false when a live channel is capped" do
+      install_dead_provider(:crash)
+
+      for n <- 1..50 do
+        seed_page("org/page/dead-cap-#{n}.md", "quandong harvest quandong yield")
+      end
+
+      {:ok, %{truncated: true, dead_channels: [{:semantic, :all}], results: results}} =
+        Search.search("quandong", source: "page", limit: 20)
+
+      assert length(results) == 20
     end
   end
 
@@ -428,7 +578,7 @@ defmodule Platform.Org.Wiki.SearchTest do
       assert Enum.all?(results, &(&1.id != page.id))
     end
 
-    test "a legacy untagged hit still resolves as a page" do
+    test "an untagged hit whose id is a page resolves as a page via lookup" do
       page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
 
       install_provider([
@@ -437,7 +587,10 @@ defmodule Platform.Org.Wiki.SearchTest do
 
       {:ok, %{results: results}} = Search.search("zzyzx", source: "page", limit: 10)
 
-      assert page.id in Enum.map(results, & &1.id)
+      hit = Enum.find(results, &(&1.id == page.id))
+      refute is_nil(hit)
+      assert hit.source == "page"
+      assert hit.semantic_rank == 1
     end
 
     # `Platform.Memory.normalize/1` defaults untyped entries to "daily", and
@@ -454,6 +607,157 @@ defmodule Platform.Org.Wiki.SearchTest do
 
       assert entry.id in Enum.map(results, & &1.id)
       assert Enum.find(results, &(&1.id == entry.id)).source == "journal"
+    end
+
+    # Stage 2 of 01a08a6e: once the provider forwards the service's tag,
+    # both spellings of the journal corpus arrive on the same response.
+    # StubProvider models that; the live service is never asserted on.
+    test "daily- and journal-tagged hits in one response both resolve as journal (StubProvider)" do
+      daily = seed_journal(~D[2026-05-21], "medlar bletting log")
+      journal = seed_journal(~D[2026-05-22], "sorb apple pressing")
+
+      install_provider([
+        %{entry_id: daily.id, score: 0.95, memory_type: "daily"},
+        %{entry_id: journal.id, score: 0.90, memory_type: "journal"}
+      ])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "journal", limit: 10)
+
+      ids = Enum.map(results, & &1.id)
+      assert daily.id in ids
+      assert journal.id in ids
+
+      for hit <- results, hit.id in [daily.id, journal.id] do
+        assert hit.source == "journal"
+        assert is_integer(hit.semantic_rank)
+      end
+    end
+  end
+
+  ## ─────────────────────────────────────────────────────────────────────
+  ## 7c. Untagged semantic hits — classified by id lookup
+  ##
+  ## memory-service `/search` returns only `entry_id` + `score`, so on prod
+  ## every semantic hit reaches classification with a nil tag. The stub
+  ## omits `memory_type` (or sets it nil) to model that. Queries are
+  ## nonsense so the lexical channels contribute nothing.
+  ## ─────────────────────────────────────────────────────────────────────
+
+  describe "untagged semantic hits are classified by id lookup (StubProvider)" do
+    test "task-scoped search returns an untagged task hit with semantic_rank only" do
+      {:ok, project} = Platform.Tasks.create_project(%{name: "UntaggedCo"})
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Ossifrage lantern calibration",
+          description: "untagged semantic target"
+        })
+
+      install_provider([%{entry_id: task.id, score: 0.9}])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "task", limit: 10)
+
+      hit = Enum.find(results, &(&1.id == task.id))
+      refute is_nil(hit)
+      assert hit.source == "task"
+      assert hit.lexical_rank == nil
+      assert hit.semantic_rank == 1
+    end
+
+    test "unscoped search returns an untagged page AND an untagged journal entry, each with its own source" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+      entry = seed_journal(~D[2026-05-20], "quince harvest notes")
+
+      install_provider([
+        %{entry_id: page.id, score: 0.9},
+        %{entry_id: entry.id, score: 0.8, memory_type: nil}
+      ])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", limit: 10)
+
+      by_id = Map.new(results, &{&1.id, &1})
+      assert Map.fetch!(by_id, page.id).source == "page"
+      assert Map.fetch!(by_id, entry.id).source == "journal"
+      assert Map.fetch!(by_id, page.id).semantic_rank == 1
+      assert Map.fetch!(by_id, entry.id).semantic_rank == 2
+    end
+
+    test "journal-scoped search returns an untagged journal entry with semantic_rank set" do
+      entry = seed_journal(~D[2026-05-20], "quince harvest notes")
+
+      install_provider([%{entry_id: entry.id, score: 0.9}])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "journal", limit: 10)
+
+      hit = Enum.find(results, &(&1.id == entry.id))
+      refute is_nil(hit)
+      assert hit.source == "journal"
+      assert hit.semantic_rank == 1
+    end
+
+    test "page-scoped search does NOT return an untagged journal entry as a page" do
+      entry = seed_journal(~D[2026-05-20], "quince harvest notes")
+
+      install_provider([%{entry_id: entry.id, score: 0.9}])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", source: "page", limit: 10)
+
+      assert Enum.all?(results, &(&1.id != entry.id))
+    end
+
+    test "a present tag wins over the lookup: a page id tagged task is not returned as a page" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+
+      install_provider([%{entry_id: page.id, score: 0.9, memory_type: "task"}])
+
+      # Unscoped: had the lookup run, the id would resolve as a page. The
+      # tag routes it to :task, where hydration finds no row.
+      {:ok, %{results: results}} = Search.search("zzyzx", limit: 10)
+
+      assert Enum.all?(results, &(&1.id != page.id))
+    end
+
+    test "untagged hits with an unknown UUID or a non-UUID id are dropped without crashing" do
+      page = seed_page("org/page/quince.md", "quince paste pairs with cheese")
+
+      install_provider([
+        %{entry_id: Ecto.UUID.generate(), score: 0.99},
+        %{entry_id: "not-a-uuid", score: 0.98},
+        %{entry_id: page.id, score: 0.5}
+      ])
+
+      {:ok, %{results: results}} = Search.search("zzyzx", limit: 10)
+
+      assert Enum.map(results, & &1.id) == [page.id]
+    end
+
+    test "an untagged page in another org is not returned under org_id / project_id scoping" do
+      other_org = tenant_org_id("soylent")
+      mine = tenant_org_id("sxi")
+
+      foreign =
+        %WikiPage{}
+        |> WikiPage.changeset(%{
+          file_key: "org/page/foreign.md",
+          content: "quince paste pairs with cheese",
+          org_id: other_org
+        })
+        |> Repo.insert!()
+
+      install_provider([%{entry_id: foreign.id, score: 0.99}])
+
+      # Anti-vacuity: unscoped, the lookup resolves it.
+      {:ok, %{results: unscoped}} = Search.search("zzyzx", limit: 10)
+      assert foreign.id in Enum.map(unscoped, & &1.id)
+
+      {:ok, %{results: by_org}} = Search.search("zzyzx", org_id: mine, limit: 10)
+      refute foreign.id in Enum.map(by_org, & &1.id)
+
+      {:ok, %{results: by_project}} =
+        Search.search("zzyzx", project_id: Ecto.UUID.generate(), limit: 10)
+
+      refute foreign.id in Enum.map(by_project, & &1.id)
     end
   end
 
@@ -552,12 +856,21 @@ defmodule Platform.Org.Wiki.SearchTest do
       # *lexical* message channel still respects ACL (the
       # primary contract). The semantic-message path is exercised via
       # the bulk_load_messages drop in the next assertion.
-      {:ok, %{results: results}} =
+      {:ok, %{results: results, dropped: dropped}} =
         Search.search("kiwi nectar", agent: caller, source: "message", limit: 10)
 
       ids = Enum.map(results, & &1.id)
       refute denied_msg.id in ids
       assert allowed_msg.id in ids
+
+      # Neither refusal happens at hydration: the "message"-tagged
+      # semantic hits are refused at classification (no message corpus in
+      # `semantic_corpus/1`) and the lexical message channel only ever
+      # queries the caller's own spaces. So nothing reaches `hydrate_one/2`
+      # to be counted — `dropped` stays zero. The hydration-time ACL count
+      # is pinned by the private-page test in "hydration drops orphans and
+      # counts them".
+      assert dropped == %{page: 0, journal: 0, message: 0, task: 0}
     end
 
     test "anonymous caller (no agent) gets zero message hits" do
@@ -587,12 +900,14 @@ defmodule Platform.Org.Wiki.SearchTest do
         seed_page("org/page/cap-#{n}.md", "passionfruit harvest passionfruit yield")
       end
 
-      {:ok, %{truncated: truncated, results: results}} =
+      {:ok, %{truncated: truncated, results: results, dead_channels: dead}} =
         Search.search("passionfruit", source: "page", limit: 20)
 
       # cap is 2 * limit = 40; we seeded 50 → cap hit → truncated true
       assert truncated == true
       assert length(results) == 20
+      # ...and the flag comes from the cap, not from a dead channel.
+      assert dead == []
     end
 
     test "truncated: false when channels return well under cap" do
@@ -600,7 +915,7 @@ defmodule Platform.Org.Wiki.SearchTest do
 
       seed_page("org/page/lone.md", "rambutan smoothie recipe")
 
-      {:ok, %{truncated: false, results: results}} =
+      {:ok, %{truncated: false, results: results, dead_channels: []}} =
         Search.search("rambutan", source: "page", limit: 20)
 
       assert length(results) == 1
@@ -622,6 +937,20 @@ defmodule Platform.Org.Wiki.SearchTest do
                 results: [%{source: "page", content: "blueberry muffin recipe deluxe"}],
                 fusion_constant_k: 60
               }} = Search.search("blueberry muffin", limit: 5)
+    end
+
+    test "Noop semantic channel is empty, NOT dead: no dead_channels, zero drops, not truncated" do
+      noop_provider()
+
+      seed_page("org/page/n2.md", "cloudberry compote recipe")
+
+      assert {:ok,
+              %{
+                truncated: false,
+                dead_channels: [],
+                dropped: %{page: 0, journal: 0, message: 0, task: 0},
+                results: [%{source: "page"}]
+              }} = Search.search("cloudberry compote", limit: 5)
     end
   end
 
