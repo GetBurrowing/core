@@ -2601,12 +2601,46 @@ defmodule Platform.Tasks do
       %Task{} = task ->
         edge = Platform.Lifecycle.Edges.architect_edge()
 
-        spawn(fn ->
+        # Task.Supervisor, NOT a bare `spawn/1` (ticket 01a06638). Two
+        # properties come with it, and both are the reason:
+        #
+        #   * `Task.Supervisor.start_child/2` propagates `$callers`, which is
+        #     how `Ecto.Adapters.SQL.Sandbox` finds an owner for a process the
+        #     test did not start. A bare `spawn/1` sets no `$callers`, so under
+        #     an `async: true` (ownership-mode) case every Repo call in here
+        #     raised `DBConnection.OwnershipError`.
+        #   * the child becomes VISIBLE to `Platform.SandboxHelpers`' drain,
+        #     which `Platform.DataCase` already runs before releasing the
+        #     sandbox connection. A bare spawn is invisible to it, so in
+        #     shared mode the owner exited mid-query and the run died with
+        #     `owner #PID<…> exited` inside `Runs.run_count/2` — reproduced on
+        #     a full-suite run, and the exact shape ticket 01a06638 opened on.
+        #
+        # In PRODUCTION the change is supervision: an orphan `spawn` is
+        # invisible to the supervision tree and to shutdown. Nothing else about
+        # the shape moves — it is still unlinked and still best-effort, so it
+        # still cannot fail the committed plan submission.
+        #
+        # `Elixir.Task.Supervisor`, spelled out: this module aliases
+        # `Platform.Tasks.Task` as `Task`, so a bare `Task.Supervisor` here
+        # resolves to `Platform.Tasks.Task.Supervisor` — a module that does not
+        # exist. That is a compile-time WARNING, not an error, so the
+        # unqualified form would have shipped a `run_architect_edge/1` that
+        # raised `UndefinedFunctionError` on every plan submission.
+        Elixir.Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
           try do
             Platform.Lifecycle.Executor.run_edge(task, edge,
               steps: Platform.Lifecycle.Edges.default_steps(edge)
             )
           rescue
+            DBConnection.OwnershipError ->
+              # TEST-ENV ONLY, and ahead of the catch-all below because the
+              # generic clause makes this indistinguishable from a real edge
+              # fault in the log. Spelled bare and immediately after `rescue`
+              # for the audit — see the fuller note in
+              # `Platform.Tasks.ProofOfLife`.
+              Logger.warning("[plan.review_requested] edge had no sandbox owner (test env)")
+
             e ->
               Logger.warning("[plan.review_requested] edge raised: #{Exception.message(e)}")
           catch

@@ -18,6 +18,8 @@ defmodule Platform.Tasks.ProofOfLife do
       orchestrated by the platform.
   """
 
+  require Logger
+
   alias Platform.{Context, Execution}
   alias Platform.Execution.{CredentialLease, DockerRunner, LocalRunner, LocalWorkspace}
 
@@ -138,7 +140,31 @@ defmodule Platform.Tasks.ProofOfLife do
              context_version
            ),
          {:ok, run} <- Execution.transition(run.id, :running) do
-      spawn(fn -> finalize_run(task_id, run, worktree_path, branch, config, mode, lease) end)
+      # Supervised, not a bare `spawn/1` — see the note on
+      # `Platform.Tasks.run_architect_edge/1` (ticket 01a06638).
+      # `finalize_run/7` persists the run's outcome, so it is precisely the
+      # kind of fire-and-forget WRITER `Platform.SandboxHelpers` exists to
+      # keep inside the sandbox connection's lifetime.
+      Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+        try do
+          finalize_run(task_id, run, worktree_path, branch, config, mode, lease)
+        rescue
+          DBConnection.OwnershipError ->
+            # TEST-ENV ONLY, and the clause head is spelled exactly this way
+            # on purpose: `supervised_task_repo_audit_test.exs` matches the
+            # literal `rescue DBConnection.OwnershipError ->`, so a bound
+            # form (`e in ...`) or a comment between `rescue` and the clause
+            # head reads to that audit as NO rescue at all.
+            #
+            # This is the `async: true` shape — the child's `$callers` chain
+            # names no sandbox owner, so the first `Repo` call raises. The
+            # `async: false` shape (owner exits mid-write) arrives as an EXIT
+            # that no rescue can see and is handled upstream by
+            # `Platform.SandboxHelpers`' drain.
+            Logger.warning("[proof_of_life] finalizer had no sandbox owner (test env)")
+        end
+      end)
+
       {:ok, run}
     end
   end

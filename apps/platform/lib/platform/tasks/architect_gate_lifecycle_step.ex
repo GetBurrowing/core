@@ -141,9 +141,26 @@ defmodule Platform.Tasks.ArchitectGateLifecycleStep do
     reply_to = Map.get(context, :reply_to, self())
     budget_ms = Map.get(context, :step_timeout_ms, Lifecycle.step_timeout_ms())
 
-    spawn(fn ->
-      Tasks.subscribe_board()
-      poll(plan_id, ref, reply_to, now_ms() + budget_ms)
+    # Supervised, not a bare `spawn/1` — see the note on
+    # `Platform.Tasks.run_architect_edge/1` (ticket 01a06638). `poll/4` reads
+    # the gate row through `Repo` on every tick; without `$callers` that read
+    # raised `DBConnection.OwnershipError` under an `async: true` case, and
+    # `settled_outcome/1`'s own rescue turned the raise into a settlement of
+    # `{:failed, :watch_read_raised}` — a watcher reporting a verdict it never
+    # actually read.
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+      try do
+        Tasks.subscribe_board()
+        poll(plan_id, ref, reply_to, now_ms() + budget_ms)
+      rescue
+        DBConnection.OwnershipError ->
+          # TEST-ENV ONLY, spelled bare for the audit — see the fuller note in
+          # `Platform.Tasks.ProofOfLife`. `settled_outcome/1`'s own rescue
+          # sits INSIDE this one and normally converts an ownership raise into
+          # a `{:failed, :watch_read_raised}` settlement first; this clause is
+          # the backstop for a raise anywhere else in the body.
+          Logger.warning("[plan.review_requested] gate watcher had no sandbox owner (test env)")
+      end
     end)
 
     {:running, ref}

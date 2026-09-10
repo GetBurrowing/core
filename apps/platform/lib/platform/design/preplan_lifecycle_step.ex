@@ -119,7 +119,22 @@ defmodule Platform.Design.PreplanLifecycleStep do
     reply_to = Map.get(context, :reply_to, self())
     budget_ms = Map.get(context, :step_timeout_ms, Lifecycle.step_timeout_ms())
 
-    spawn(fn -> watch_loop(task.id, ref, reply_to, deadline(budget_ms)) end)
+    # Supervised, not a bare `spawn/1` — see the note on
+    # `Platform.Tasks.run_architect_edge/1` (ticket 01a06638). `watch_loop/4`
+    # re-reads the board through `Repo`, so it needs `$callers` to resolve a
+    # sandbox owner and it needs to be drainable before that owner exits.
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+      try do
+        watch_loop(task.id, ref, reply_to, deadline(budget_ms))
+      rescue
+        DBConnection.OwnershipError ->
+          # TEST-ENV ONLY. Clause head spelled bare and immediately after
+          # `rescue` because that is the literal form
+          # `supervised_task_repo_audit_test.exs` scans for — see the fuller
+          # note in `Platform.Tasks.ProofOfLife`.
+          Logger.warning("[design.preplan] watcher had no sandbox owner (test env)")
+      end
+    end)
 
     {:running, ref}
   end
