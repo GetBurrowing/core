@@ -7871,6 +7871,22 @@ defmodule PlatformWeb.MeetingLiveTest do
   # (`#meeting-captions` + `MeetingCaptions` hook) is `:if`-gated on
   # `:captions_visible`, which defaults to false — so it's absent at
   # mount and appears only after the toggle.
+  # The CC toggle's rendered class tokens. `LazyHTML.query/2` (never
+  # `filter/2` — `filter/2` matches only the fragment's ROOT nodes, so
+  # this nested button would come back `[]` and read as "not there")
+  # then `attribute/2`, so the assertion is made against the extracted
+  # string and not against the always-truthy `%LazyHTML{}` struct.
+  defp captions_toggle_classes(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-role="meeting-captions-toggle"]))
+    |> LazyHTML.attribute("class")
+    |> case do
+      [class] -> String.split(class)
+      other -> flunk("expected exactly one CC toggle, got: #{inspect(other)}")
+    end
+  end
+
   describe "closed captions (stage 1)" do
     setup %{conn: conn} do
       # The CC toggle button is `<%= if @in_meeting do %>` gated
@@ -7975,6 +7991,60 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Server-push mirrored to localStorage by the hook: assert the
       # meeting_captions_persist event landed.
       assert_push_event(view, "meeting_captions_persist", %{visible: true})
+    end
+
+    # Task 01a0740e stage 1 — the CC toggle's OFF and ON colour states.
+    #
+    # SURFACE: this mounts `~p"/meetings/#{slug}"` on the DEFAULT host,
+    # i.e. `@shell? == true`. The control is NOT `@shell?`-gated (only
+    # the breadcrumb and guest-link controls are) so it renders on the
+    # `meet.` guest surface too; the default host is chosen so the
+    # assertion cannot pass by accident on a surface that would have
+    # rendered the button either way.
+    #
+    # Asserted on the EXTRACTED attribute, never on the query result:
+    # `LazyHTML.query/2` returns a truthy `%LazyHTML{}` even with zero
+    # matched nodes (and `length/1` raises on it), so a `refute` against
+    # the struct would pass on an element that is not there at all.
+    test "CC toggle: off is base-content/70, on is a base-300 pressed ground", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      # Split into whole class tokens rather than substring-matching:
+      # `"text-base-content" =~` is satisfied by `text-base-content/70`,
+      # so a substring assertion on the ON state would pass unchanged if
+      # someone reverted the OFF token onto it.
+      off = captions_toggle_classes(render(view))
+
+      # Positive: off is /70, the "available and off" treatment.
+      assert "text-base-content/70" in off
+
+      # Negative, and the point of the change: `/40` is the treatment a
+      # DISABLED control gets. While the off state wore it, "captions
+      # work here and are off" and "captions cannot work here" looked
+      # identical. `/40` is reclaimed for genuinely-unavailable, and this
+      # control has no unavailable state, so it must not reappear here.
+      refute "text-base-content/40" in off
+
+      on =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+        |> captions_toggle_classes()
+
+      # ON is a PRESSED treatment — a filled `base-300` ground with a
+      # `base-content` foreground — so the button reads as depressed.
+      assert "bg-base-300" in on
+      assert "text-base-content" in on
+
+      # Negative: NOT the brand colour. Every other control in this row
+      # is already cyan, so `text-primary` read as one more action
+      # rather than as state. Semantic slots only, and no raw hex.
+      refute "text-primary" in on
+      refute Enum.any?(on, &String.contains?(&1, "#"))
     end
 
     test "clicking the CC toggle twice returns to hidden state", %{

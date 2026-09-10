@@ -11,8 +11,30 @@ import ClientState from "../client_state"
  * - Each line shows **speaker name** (bold) + text
  * - Interim (non-final) segments update the current line in place
  * - Final segments scroll up and become permanent
- * - Auto-hides after 5 seconds of silence
+ * - Auto-hides after 5 seconds of silence, DROPPING the buffer as it goes
  * - CSS classes handle positioning (bottom overlay, semi-transparent bg)
+ *
+ * THREE STATES, not two (task 01a0740e stage 2):
+ *
+ *   1. FLOWING  — captions arriving; the bar draws them and nothing else.
+ *   2. IDLE     — nobody speaking; the bar says NOTHING. No placeholder,
+ *                 no spinner, and above all no "Listening". Saru's FE-8
+ *                 canvas cut a "Listening…" placeholder from its own first
+ *                 pass: a placeholder that appears whether or not a
+ *                 transcriber is attached asserts something nobody checked,
+ *                 which is the always-on lie `transcript_pane.ex` refuses by
+ *                 name in its own moduledoc. An empty visible bar feeling
+ *                 unfinished is the reflex; state 2 is silence on purpose.
+ *   3. STALLED  — speech is demonstrably happening and no transcript is
+ *                 arriving. The bar HOLDS POSITION and says so. See
+ *                 `_renderStall`.
+ *
+ * The bar previously had only 1 and 2, so it could not tell "nobody is
+ * speaking" from "the transcriber died" — and neither could the viewer,
+ * because both render as an empty screen. The host carries
+ * `aria-live="polite"`, so the stall notice is announced; the people most
+ * affected by a dead transcriber are the ones least able to notice it any
+ * other way.
  *
  * This bar is the ONE caption surface in every stage mode, gallery
  * included (task 019ff712). There is no per-tile fan-out: a single
@@ -30,6 +52,102 @@ import ClientState from "../client_state"
 const MAX_LINES = 2
 const HIDE_AFTER_MS = 5000
 
+// ── Stall window (task 01a0740e stage 2) ─────────────────────────────
+//
+// How long speech may continue with NO caption arriving before the bar
+// admits it is not receiving.
+//
+// CHOSEN, NOT MEASURED. Nobody has instrumented this deployment's real
+// transcriber finalisation lag, so this number is a judgement call and
+// this comment is the honest record of that — the same thing
+// `Platform.Meetings.PressWindow`'s moduledoc does for its own grace
+// value. If it proves twitchy in a real room, this is the dial.
+//
+// FLOOR, and it is load-bearing: it MUST stay greater than
+// HIDE_AFTER_MS. Below that an ordinary conversational pause — the
+// bar's own fade window — would trip the notice. Telling every user in
+// a normal pause that their captions are broken is the worst thing this
+// feature can do, worse than shipping nothing at all.
+//
+// NAMED RISK, written down rather than designed away: a hot mic or
+// sustained background noise can hold LiveKit's active-speaker slot
+// with nobody actually speaking, and that produces a FALSE stall. The
+// only mitigation applied is the one `_armStallTimer` implements — the
+// speaking window must be SUSTAINED for the whole STALL_AFTER_MS, so a
+// momentary level spike cannot trip it. No heuristic is layered on top
+// of that; a cleverer detector here would be guessing.
+const STALL_AFTER_MS = 6000
+
+// ── Caption palette — THEME-INVARIANT BY INTENT (task 01a0740e stage 1) ──
+//
+// These slots deliberately do NOT follow the daisyUI theme. That is the
+// design decision, not an oversight: Saru's FE-8 canvas keeps it in its
+// own self-critique, and this comment exists so the next tidy-up does
+// not undo it.
+//
+// WHY: this bar sits over arbitrary VIDEO in both themes, not over a
+// theme surface. Over video you want a dark scrim and light text
+// whatever the shell is doing. Routing these through `base-content` is
+// the tidy instinct and it is the wrong one here.
+//
+// It has already gone wrong exactly that way once. The host div in
+// `meeting_live.html.heex` carries `text-white`, but `_render` used to
+// write `text-base-content` / `text-base-content/90` on the CHILD
+// spans, and a colour declared on a child always beats one inherited
+// from a parent — so the host's `text-white` was dead. In the light
+// theme (`default: true` in app.css) `--color-base-content` is
+// `oklch(0% 0 0)`, i.e. #000000. Net result: black caption text on a
+// `bg-black/75` scrim. Not a contrast complaint — invisible.
+//
+//   SLOT                  VALUE                   WHERE
+//   caption scrim         oklch(0% 0 0 / 0.75)    `bg-black/75`, on the
+//                                                 `#meeting-captions` host in
+//                                                 meeting_live.html.heex — the
+//                                                 bar's ground, not written here
+//   caption text          oklch(100% 0 0)         CAPTION_TEXT
+//   caption attribution   the SAME white, semibold  CAPTION_ATTRIBUTION —
+//                                                 separated from the text by
+//                                                 WEIGHT, never by colour: on
+//                                                 this surface colour is spent
+//                                                 on state
+//   caption interim       white at 70%            CAPTION_TEXT composed with
+//                                                 CAPTION_INTERIM on the line
+//                                                 wrapper (+ italic)
+//
+// Tailwind built-ins only. `text-white` and `bg-black/75` are literal
+// sRGB and theme-invariant by construction, which is the exact property
+// being asked for. No raw hex, and nothing here reads a theme token.
+const CAPTION_TEXT = "text-white"
+const CAPTION_ATTRIBUTION = "font-semibold text-white"
+const CAPTION_INTERIM = "opacity-70"
+
+// ── The stalled notice — state 3 ─────────────────────────────────────
+//
+// Copy is VERBATIM from Saru's FE-8 canvas, which calls this the
+// signature element of the whole ticket: everything else on FE-8 is
+// restraint and the boldness is spent here. Do not reword it.
+//
+// `warning`, never `error` and never `info`: the meeting is fine, the
+// transcript is not. This is the ONE slot on this surface that reads a
+// theme token, and that is deliberate rather than a leak of the
+// tidy-instinct the block above warns about — `--color-warning` is
+// declared with the SAME value in both the light and dark theme blocks
+// in app.css, so `text-warning` / `bg-warning` are already
+// theme-invariant and need no special handling. No raw hex.
+//
+// Utility type at `text-[12.5px]`, matching the rail's transcript pane,
+// so the two caption surfaces speak in one voice. Semibold, preceded by
+// a small round dot.
+//
+// `data-role="caption-stall"` so tests and e2e query the state rather
+// than matching on the copy.
+const STALL_COPY = "Captions stopped. Nothing is being transcribed."
+const STALL_MARKUP =
+  '<div data-role="caption-stall" class="flex items-center gap-2 py-0.5 text-[12.5px] font-semibold text-warning">' +
+  '<span class="h-[7px] w-[7px] shrink-0 rounded-full bg-warning"></span>' +
+  STALL_COPY +
+  "</div>"
+
 const MeetingCaptions = {
   mounted() {
     /** @type {{ id: string, speaker: string, text: string, final: boolean }[]} */
@@ -37,8 +155,16 @@ const MeetingCaptions = {
     this._hideTimer = null
     this._interimLine = null // Track the current interim segment by ID
 
+    // Stall detection state. `_speaking` is the last thing the SFU told
+    // us about audio levels, NOT anything the transcriber said.
+    this._stallTimer = null
+    this._speaking = false
+
     this._boundOnCaption = this._onCaption.bind(this)
     document.addEventListener("meeting:caption", this._boundOnCaption)
+
+    this._boundOnSpeaking = this._onSpeaking.bind(this)
+    document.addEventListener("meeting:speaking", this._boundOnSpeaking)
 
     // Start hidden
     this.el.classList.add("opacity-0", "pointer-events-none")
@@ -54,7 +180,9 @@ const MeetingCaptions = {
 
   destroyed() {
     document.removeEventListener("meeting:caption", this._boundOnCaption)
+    document.removeEventListener("meeting:speaking", this._boundOnSpeaking)
     this._clearHideTimer()
+    this._clearStallTimer()
   },
 
   // ── Private ──────────────────────────────────────────────────────────
@@ -62,6 +190,13 @@ const MeetingCaptions = {
   _onCaption(event) {
     const { id, speaker, identity, text, final } = event.detail
     if (!text || !text.trim()) return
+
+    // A caption arriving is the ONLY thing that clears a stall, and it
+    // clears it immediately: `_render` below overwrites the notice, and
+    // the buffer was emptied when the notice was drawn, so no pre-stall
+    // line can come back beside this one. Restarting the countdown here
+    // is also half the stall rule — see `_armStallTimer`.
+    this._armStallTimer()
 
     // Show the container
     this.el.classList.remove("opacity-0", "pointer-events-none")
@@ -137,20 +272,137 @@ const MeetingCaptions = {
 
     this.el.innerHTML = visible
       .map((line) => {
-        const opacity = line.final ? "opacity-100" : "opacity-70"
+        // Interim treatment is unchanged: `opacity-70` + `italic` on the
+        // LINE WRAPPER. Once the base colour is white that composes to
+        // the canvas's "caption interim = white at 70%" on its own — it
+        // does not need (and must not get) a second colour slot.
+        const opacity = line.final ? "opacity-100" : CAPTION_INTERIM
         const italic = line.final ? "" : "italic"
         return `<div class="caption-line ${opacity} ${italic} py-0.5 transition-opacity duration-200">
-          <span class="font-semibold text-base-content">${this._escapeHtml(line.speaker)}</span>
-          <span class="text-base-content/90">${this._escapeHtml(line.text)}</span>
+          <span class="${CAPTION_ATTRIBUTION}">${this._escapeHtml(line.speaker)}</span>
+          <span class="${CAPTION_TEXT}">${this._escapeHtml(line.text)}</span>
         </div>`
       })
       .join("")
+  },
+
+  /**
+   * `meeting:speaking` — the SECOND, INDEPENDENT liveness signal.
+   *
+   * Dispatched by `MeetingRoom._onActiveSpeaker` off LiveKit's
+   * `activeSpeakersChanged`, which is derived from the SFU's audio levels
+   * and NOT from the transcriber. That is the entire reason the stall
+   * detector can be honest: absence of captions on its own cannot
+   * distinguish a silent room from a dead transcriber, because absence
+   * looks identical in both. Only a signal that keeps reporting after the
+   * transcriber dies separates them.
+   *
+   * The EMPTY set is a real transition, and it is how this hook learns
+   * everyone stopped talking. It disarms the detector, which is what keeps
+   * the stall claim tied to positive evidence of speech.
+   */
+  _onSpeaking(event) {
+    const identities = (event && event.detail && event.detail.identities) || []
+    const speaking = identities.length > 0
+
+    // Only TRANSITIONS matter. Re-arming on every membership change inside
+    // an ongoing conversation would push the deadline out each time
+    // somebody new took the floor, and the stall would never fire in a
+    // busy room — which is exactly the room where it matters.
+    if (speaking === this._speaking) return
+    this._speaking = speaking
+
+    if (speaking) {
+      this._armStallTimer()
+    } else {
+      this._clearStallTimer()
+    }
+  },
+
+  /**
+   * Arm the sustained-speech countdown.
+   *
+   * Restarted by exactly two things: speech STARTING (false -> true), and
+   * a caption ARRIVING. So when it fires, both halves of the rule hold at
+   * once — speech has been continuous for the full window (there has been
+   * no false -> true transition inside it) and no caption landed in that
+   * window. The stall claim is therefore only ever made on positive
+   * evidence that speech is occurring while no transcript arrives, and
+   * never in a silent room. That asymmetry is the point of the feature.
+   *
+   * The "sustained for the full window" requirement is also the whole
+   * hot-mic mitigation described at STALL_AFTER_MS.
+   */
+  _armStallTimer() {
+    this._clearStallTimer()
+    if (!this._speaking) return
+    this._stallTimer = setTimeout(() => {
+      this._stallTimer = null
+      if (!this._speaking) return
+      this._renderStall()
+    }, STALL_AFTER_MS)
+  },
+
+  _clearStallTimer() {
+    if (this._stallTimer) {
+      clearTimeout(this._stallTimer)
+      this._stallTimer = null
+    }
+  },
+
+  /**
+   * State 3. The bar HOLDS POSITION instead of fading: the hide timer is
+   * cancelled and `opacity-0` / `pointer-events-none` come off. Geometry
+   * is untouched — `max-w-2xl`, the centring, `rounded-xl`, the offset and
+   * the safe-area / bottom-nav terms all live on the shell in
+   * `meeting_live.html.heex` and are not this hook's business.
+   *
+   * The transcript is DROPPED first. An old utterance sitting beside
+   * "nothing is being transcribed" reads as something just said, which is
+   * the precise defect this ticket exists to remove.
+   *
+   * It holds until a caption arrives. It is deliberately NOT dismissed
+   * when the room falls quiet: the claim it makes is still true then, and
+   * fading it out would restore the silent disappearance.
+   */
+  _renderStall() {
+    this._lines = []
+    this._interimLine = null
+    this._clearHideTimer()
+    this.el.classList.remove("opacity-0", "pointer-events-none")
+    this.el.innerHTML = STALL_MARKUP
   },
 
   _resetHideTimer() {
     this._clearHideTimer()
     this._hideTimer = setTimeout(() => {
       this.el.classList.add("opacity-0", "pointer-events-none")
+
+      // Drop the buffer WITH the fade (task 01a0740e stage 2).
+      //
+      // `_onCaption` removes `opacity-0` BEFORE calling `_render`, and
+      // `_render` emits `[...this._lines]`. Leaving the buffer intact here
+      // meant the first caption after ANY gap re-showed the bar with the
+      // pre-gap line rendered beside the new one, identically, with no age
+      // marker — a line from twenty minutes ago reading as something just
+      // said. Not solved with timestamps on purpose: `_onCaption` drops the
+      // `timestamp` field `meeting_room.js` dispatches, and age-marking a
+      // two-line overlay is a bigger design change than this carries.
+      //
+      // A faded-out bar has no scrollback obligation. Scrollback is owned
+      // by the rail's transcript pane, which keeps 200 lines and is a
+      // separate surface.
+      // `_lines` and `innerHTML` are each independently load-bearing and
+      // each has a case pinning it (mutating either one alone goes red).
+      // `_interimLine` is state hygiene rather than a fixed defect: every
+      // path back into `_render` goes through `_commitLine` (which nulls
+      // the interim outright) or `_updateInterim` (which replaces it), so
+      // a surviving stale interim is not reachable on screen. It is
+      // cleared anyway so the buffer state is not half-reset, and that is
+      // said here rather than pretended about in a test.
+      this._lines = []
+      this._interimLine = null
+      this.el.innerHTML = ""
     }, HIDE_AFTER_MS)
   },
 
@@ -224,4 +476,7 @@ const MeetingCaptionsPersist = {
 }
 
 export default MeetingCaptions
-export { MeetingCaptionsPersist }
+// The two timing constants are exported so the vitest suite can pin the
+// FLOOR invariant (STALL_AFTER_MS > HIDE_AFTER_MS) directly instead of
+// duplicating the numbers and drifting from them.
+export { MeetingCaptionsPersist, HIDE_AFTER_MS, STALL_AFTER_MS }

@@ -5,7 +5,14 @@
  * 1. `TranscriptionReceived` — emits `meeting:caption` custom DOM events
  *    that the MeetingCaptions hook consumes.
  * 2. `activeSpeakersChanged` — pushes active speaker identities to the
- *    LiveView for speaking indicator rendering.
+ *    LiveView for speaking indicator rendering, AND re-dispatches the same
+ *    resolved identity list as a `meeting:speaking` custom DOM event.
+ *
+ * Both LiveKit events therefore have exactly one shape on the way out: a
+ * `pushEvent` where the SERVER needs the fact, and a custom DOM event where
+ * a client-side renderer needs it. `meeting:speaking` mirrors the
+ * `meeting:caption` contract so MeetingCaptions stays a pure DOM-event
+ * consumer, drivable in tests without LiveKit and without a socket.
  *
  * The LiveKit Room object is expected at `window.__livekit_room` (or the
  * legacy `window.__livekitRoom`). The hook gracefully no-ops when no room
@@ -160,6 +167,23 @@ const MeetingRoom = {
       if (pendingKey === this._lastSpeakerKey) return
       this._lastSpeakerKey = pendingKey
       this.pushEvent("active_speakers", { identities: pending })
+
+      // SECOND CONSUMER (task 01a0740e stage 2): MeetingCaptions' stall
+      // detector. It needs an independent signal that speech is HAPPENING,
+      // because absence of captions alone cannot tell a silent room from a
+      // dead transcriber — absence looks identical in both. This one comes
+      // from the SFU's audio levels, not from the transcriber, so it keeps
+      // reporting when the transcriber dies. That independence is the only
+      // reason the detector can be honest.
+      //
+      // Dispatched from INSIDE the debounce timer and AFTER the equality
+      // guard, deliberately: the two signals must not be able to drift, and
+      // an undebounced version of this is the same render storm the guards
+      // above exist to prevent. The EMPTY set is dispatched too — that is
+      // how the caption hook learns everyone stopped.
+      document.dispatchEvent(
+        new CustomEvent("meeting:speaking", { detail: { identities: pending } })
+      )
     }, ACTIVE_SPEAKER_DEBOUNCE_MS)
   },
 }

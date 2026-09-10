@@ -1,5 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import MeetingCaptions from "../../js/hooks/meeting_captions.js"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import MeetingCaptions, {
+  HIDE_AFTER_MS,
+  STALL_AFTER_MS,
+} from "../../js/hooks/meeting_captions.js"
 
 /**
  * Stage-2 home for the quick-meet caption duplication regression
@@ -121,6 +124,13 @@ function newHook() {
   hook._lines = []
   hook._interimLine = null
   hook._hideTimer = null
+  // Stall-detector state, same field set `mounted()` installs.
+  hook._stallTimer = null
+  hook._speaking = false
+  // The bar starts hidden, exactly as `mounted()` leaves it. Without this
+  // the opacity assertions in the stall cases would pass vacuously against
+  // a host that was never hidden in the first place.
+  hook.el.classList.add("opacity-0", "pointer-events-none")
   return hook
 }
 
@@ -149,6 +159,7 @@ describe("MeetingCaptions rolling buffer — one utterance, one line", () => {
 
   afterEach(() => {
     hook._clearHideTimer()
+    hook._clearStallTimer()
     delete globalThis.document
   })
 
@@ -210,5 +221,264 @@ describe("MeetingCaptions rolling buffer — one utterance, one line", () => {
 
     expect(captionLineCount(hook)).toBe(2)
     expect(hook._lines.map((l) => l.id)).toEqual(["c", "d"])
+  })
+})
+
+describe("MeetingCaptions palette — theme-invariant by intent (task 01a0740e)", () => {
+  let hook
+
+  beforeEach(() => {
+    installDocumentStub()
+    hook = newHook()
+  })
+
+  afterEach(() => {
+    hook._clearHideTimer()
+    hook._clearStallTimer()
+    delete globalThis.document
+  })
+
+  // The defect this pins: the host div carries `text-white`, but
+  // `_render` wrote `text-base-content` / `text-base-content/90` on the
+  // CHILD spans, and a colour on a child beats one inherited from a
+  // parent — so the host's white was dead. `light` is `default: true` in
+  // app.css and sets `--color-base-content: oklch(0% 0 0)`, so a
+  // light-theme viewer got BLACK caption text on the `bg-black/75`
+  // scrim. Not low contrast: invisible, and invisible to `mix test`.
+  it("emits the white slots for the speaker and the text", () => {
+    caption(hook, { id: "a", text: "hello there", final: true })
+
+    const html = hook.el.innerHTML
+
+    // Attribution: white, separated from the text by WEIGHT only.
+    expect(html).toContain('<span class="font-semibold text-white">Ada</span>')
+    // The spoken line: the same white, at full strength (the old
+    // `/90` is gone — the canvas's slot is `oklch(100% 0 0)`).
+    expect(html).toContain('<span class="text-white">hello there</span>')
+  })
+
+  // Asserting the ABSENCE is the load-bearing half. This is a
+  // regression that reintroduces itself the moment someone "tidies"
+  // the hook back toward the theme tokens, which is the tidy-looking
+  // and wrong move here: the bar sits over arbitrary VIDEO, not over a
+  // theme surface, so it is theme-invariant BY INTENT.
+  it("emits no theme-following colour token anywhere in a caption line", () => {
+    caption(hook, { id: "a", text: "first", final: true })
+    caption(hook, { id: "i", text: "and then", final: false })
+
+    // Reachability guard: the refutes below would pass just as happily
+    // against an empty host, so pin that lines were actually drawn.
+    expect(captionLineCount(hook)).toBe(2)
+
+    expect(hook.el.innerHTML).not.toContain("text-base-content")
+    expect(hook.el.innerHTML).not.toContain("base-content")
+    // Semantic slots and Tailwind built-ins only — no raw hex.
+    expect(hook.el.innerHTML).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+  })
+
+  it("interim keeps its 70% + italic treatment on the line wrapper", () => {
+    caption(hook, { id: "i", text: "half a sent", final: false })
+
+    // White base colour composed with `opacity-70` IS the canvas's
+    // "caption interim = white at 70%". It must not acquire a second
+    // colour slot of its own.
+    expect(hook.el.innerHTML).toContain("opacity-70")
+    expect(hook.el.innerHTML).toContain("italic")
+    expect(hook.el.innerHTML).toContain('<span class="text-white">half a sent</span>')
+
+    // …and a final line does NOT get the interim treatment.
+    caption(hook, { id: "f", text: "half a sentence", final: true })
+    expect(hook.el.innerHTML).toContain("opacity-100")
+    expect(hook.el.innerHTML).not.toContain("italic")
+  })
+})
+
+describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", () => {
+  let hook
+
+  // `meeting:speaking` is driven SYNTHETICALLY here, at the same entry point
+  // `MeetingRoom._onActiveSpeaker` dispatches into. BE CLEAR ABOUT WHAT THAT
+  // PROVES: this file exercises the caption hook's RULE, not LiveKit's real
+  // `activeSpeakersChanged` wiring. The dispatch side belongs to
+  // `meeting_room.js` and is asserted in
+  // `meeting_room_active_speakers.test.js`. Neither file is end-to-end
+  // coverage of the SFU, and no case here should be read as such.
+  function speaking(h, identities) {
+    h._onSpeaking({ detail: { identities } })
+  }
+
+  const stalled = (h) => h.el.innerHTML.includes('data-role="caption-stall"')
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    installDocumentStub()
+    hook = newHook()
+  })
+
+  afterEach(() => {
+    hook._clearHideTimer()
+    hook._clearStallTimer()
+    vi.useRealTimers()
+    delete globalThis.document
+  })
+
+  // The FLOOR, pinned directly rather than implied by the cases below.
+  // If STALL_AFTER_MS ever slips under HIDE_AFTER_MS, an ordinary
+  // conversational pause — the bar's own fade window — trips the notice and
+  // every user in a normal pause is told their captions are broken. That is
+  // the single worst outcome available to this feature.
+  it("keeps the stall window strictly longer than the hide window", () => {
+    expect(STALL_AFTER_MS).toBeGreaterThan(HIDE_AFTER_MS)
+  })
+
+  // ── CASE 1 — flowing -> stalled ─────────────────────────────────────
+  it("says so when speech continues and captions stop arriving", () => {
+    caption(hook, { id: "a", text: "the rail collapses to forty four", final: true })
+    expect(captionLineCount(hook)).toBe(1) // reachability: a line was drawn
+
+    speaking(hook, ["user:harper"])
+    vi.advanceTimersByTime(STALL_AFTER_MS + 1)
+
+    // THE ASSERTION THAT MATTERS: the last caption is not still on screen
+    // looking current next to a notice saying nothing is being transcribed.
+    expect(hook.el.innerHTML).not.toContain("the rail collapses to forty four")
+    expect(hook._lines).toEqual([])
+
+    expect(stalled(hook)).toBe(true)
+    expect(hook.el.innerHTML).toContain(
+      "Captions stopped. Nothing is being transcribed."
+    )
+
+    // It HOLDS POSITION. A notice nobody is looking at when it appears is
+    // the same as no notice.
+    expect(hook.el.classList.has("opacity-0")).toBe(false)
+    expect(hook.el.classList.has("pointer-events-none")).toBe(false)
+
+    // Warning, not error, and no raw hex.
+    expect(hook.el.innerHTML).toContain("text-warning")
+    expect(hook.el.innerHTML).not.toContain("text-error")
+    expect(hook.el.innerHTML).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+  })
+
+  // ── CASE 2 — a silent room NEVER stalls ─────────────────────────────
+  //
+  // The asymmetry is the whole feature: the claim is made only on positive
+  // evidence of speech, never on caption silence alone.
+  it("never stalls when nobody is speaking, however long the silence runs", () => {
+    caption(hook, { id: "a", text: "hello there", final: true })
+    speaking(hook, []) // explicit empty set — everyone stopped
+
+    vi.advanceTimersByTime(STALL_AFTER_MS * 10)
+
+    expect(stalled(hook)).toBe(false)
+    expect(hook.el.innerHTML).not.toContain("Captions stopped")
+  })
+
+  it("never stalls when no speaking signal has arrived at all", () => {
+    caption(hook, { id: "a", text: "hello there", final: true })
+
+    vi.advanceTimersByTime(STALL_AFTER_MS * 10)
+
+    expect(stalled(hook)).toBe(false)
+  })
+
+  // The hot-mic mitigation, and the only one applied: the speaking window
+  // must be SUSTAINED for the full stall window. Bursts do not accumulate.
+  it("does not let short speech bursts accumulate into a stall", () => {
+    for (let i = 0; i < 5; i++) {
+      speaking(hook, ["user:harper"])
+      vi.advanceTimersByTime(STALL_AFTER_MS - 2000)
+      speaking(hook, [])
+      vi.advanceTimersByTime(1000)
+    }
+
+    expect(stalled(hook)).toBe(false)
+  })
+
+  // Direction control for case 1: with captions still flowing under the
+  // same continuous speech, the notice must never appear.
+  it("stays quiet while captions keep arriving under continuous speech", () => {
+    speaking(hook, ["user:harper"])
+
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(STALL_AFTER_MS - 2000)
+      caption(hook, { id: `c${i}`, text: `line ${i}`, final: true })
+      expect(stalled(hook)).toBe(false)
+    }
+
+    vi.advanceTimersByTime(STALL_AFTER_MS - 2000)
+    expect(stalled(hook)).toBe(false)
+  })
+
+  // ── CASE 3 — recovery ───────────────────────────────────────────────
+  it("clears the stall the moment a caption arrives, without the pre-stall line", () => {
+    caption(hook, { id: "a", text: "pre-stall utterance", final: true })
+    speaking(hook, ["user:harper"])
+    vi.advanceTimersByTime(STALL_AFTER_MS + 1)
+    expect(stalled(hook)).toBe(true) // reachability
+
+    caption(hook, { id: "b", text: "fresh utterance", final: true })
+
+    expect(stalled(hook)).toBe(false)
+    expect(hook.el.innerHTML).toContain("fresh utterance")
+    expect(hook.el.innerHTML).not.toContain("pre-stall utterance")
+    expect(captionLineCount(hook)).toBe(1)
+    expect(hook.el.classList.has("opacity-0")).toBe(false)
+  })
+
+  // ── CASE 4 — idle-gap staleness ─────────────────────────────────────
+  //
+  // Second defect, found during planning and not in the ticket. The gap
+  // here has NO speaking signal, so no stall fires and the stall fix
+  // cannot be what saves this: the buffer clear on the hide path is.
+  it("does not bring a pre-gap line back beside the first caption after a gap", () => {
+    caption(hook, { id: "a", text: "twenty minutes ago", final: true })
+    expect(captionLineCount(hook)).toBe(1)
+
+    vi.advanceTimersByTime(HIDE_AFTER_MS + 1)
+    expect(hook.el.classList.has("opacity-0")).toBe(true)
+    expect(stalled(hook)).toBe(false) // no speech, so no stall, by design
+
+    caption(hook, { id: "b", text: "just said", final: true })
+
+    expect(captionLineCount(hook)).toBe(1)
+    expect(hook.el.innerHTML).not.toContain("twenty minutes ago")
+    expect(hook.el.innerHTML).toContain("just said")
+  })
+
+  it("empties the host on fade, leaving aria-live nothing stale to announce", () => {
+    caption(hook, { id: "i", text: "half a sent", final: false })
+    expect(captionLineCount(hook)).toBe(1)
+
+    vi.advanceTimersByTime(HIDE_AFTER_MS + 1)
+
+    // `opacity-0` is a VISUAL hide only. The host carries
+    // `aria-live="polite"`, so anything left in the DOM is still in the
+    // accessibility tree: a faded bar that still holds the line has hidden
+    // it from sighted users and from nobody else.
+    //
+    // (An earlier draft of this case asserted `hook._interimLine === null`
+    // after a fresh caption. That was VACUOUS: `_commitLine` nulls the
+    // interim unconditionally, so it passed just as happily with the whole
+    // hide-path clear deleted. The host content is the observable.)
+    expect(hook.el.innerHTML).toBe("")
+  })
+
+  // State 2 is silence ON PURPOSE. This refutes the reflex fix the canvas
+  // warns about — a placeholder that appears whether or not a transcriber
+  // is attached asserts something nobody checked.
+  it("renders no idle placeholder: no spinner, and never the word Listening", () => {
+    caption(hook, { id: "a", text: "hello there", final: true })
+    expect(captionLineCount(hook)).toBe(1) // reachability: it CAN draw
+
+    // Fall idle: the fade window passes with nobody speaking.
+    vi.advanceTimersByTime(HIDE_AFTER_MS + 1)
+    expect(hook.el.innerHTML).toBe("")
+
+    // …and it stays nothing, well past the stall window, because no speech
+    // is occurring and the bar has nothing honest to say.
+    vi.advanceTimersByTime(STALL_AFTER_MS * 5)
+    expect(hook.el.innerHTML).toBe("")
+    expect(hook.el.innerHTML).not.toMatch(/listening/i)
   })
 })

@@ -651,7 +651,35 @@
              `toggle_captions` handler (deleted by task 019f43da). The
              MeetingCaptions JS hook + `meeting_live_test.exs` still
              reference this name, so renaming would compound the blast
-             radius without changing behaviour. --%>
+             radius without changing behaviour.
+
+             STATE TREATMENT (task 01a0740e stage 1). Behaviour, event
+             name, `data-role`, `data-active` and ARIA are unchanged;
+             only the two colour states moved.
+
+             OFF was `text-base-content/40`. `/40` is what a DISABLED
+             control gets, so "captions work here and are off" and
+             "captions cannot work here" looked identical. Off is now
+             `/70`, and `/40` is reclaimed for genuinely-unavailable.
+             This ticket adds no unavailable state to this control, so
+             `/40` simply stops being used here — intended, not an
+             omission.
+
+             ON was `text-primary`. Every other control in this row is
+             already cyan, so brand colour read as one more action
+             rather than as state. It is now a PRESSED treatment:
+             `bg-base-300` as a filled ground (base-300 is the raised
+             surface over this header's `bg-base-200/60`) with
+             `base-content` as the foreground, so the button looks
+             depressed rather than tinted. Semantic slots only.
+
+             NOT DONE, deliberately: a visible text label. The canvas
+             notes the glyph is unlabelled, but this bar already
+             overflows at 375px (scrollWidth 391 vs clientWidth 375,
+             measured — which is why a sibling control is
+             `hidden sm:inline-flex`). Adding width here breaks a real
+             thing to improve a lesser one. The discoverability fix
+             shipped is the state treatment only. --%>
           <%= if @in_meeting do %>
             <button
               type="button"
@@ -664,8 +692,8 @@
               class={[
                 "btn btn-sm btn-ghost btn-square min-h-11",
                 if(@captions_visible,
-                  do: "text-primary",
-                  else: "text-base-content/40"
+                  do: "bg-base-300 text-base-content shadow-inner",
+                  else: "text-base-content/70"
                 )
               ]}
             >
