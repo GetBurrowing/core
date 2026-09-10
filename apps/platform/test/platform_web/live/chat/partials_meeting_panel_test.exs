@@ -12,6 +12,7 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
   import Phoenix.LiveViewTest, only: [rendered_to_string: 1]
 
   alias PlatformWeb.ChatLive.Partials
+  alias PlatformWeb.Components.Meetings.CallShell
 
   defp render_panel(assigns) do
     assigns =
@@ -965,6 +966,71 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
 
       assert caption_hosts(html) == 0
       refute html =~ ~s(data-role="meeting-captions")
+    end
+  end
+
+  # Task 01a089fe stage 2. The third of the three surfaces the stage covers,
+  # and the ONLY ONE OF THE THREE THAT CAN CURRENTLY FAIL on the
+  # served-versus-unfiltered axis. The other two live in
+  # `test/platform_web/live/meeting_live_rail_collapse_test.exs` under "(h)".
+  describe "the quickmeet's ONE tab presentation (task 01a089fe stage 2)" do
+    test "no collapsed strip exists here, so the rail is this surface's only tab list" do
+      html = render_panel(%{})
+      doc = LazyHTML.from_fragment(html)
+
+      rail_ids =
+        doc
+        |> LazyHTML.query(~s([data-component="call-rail"] [data-role="call-rail-tab"]))
+        |> LazyHTML.attribute("data-tab")
+
+      # WHY THIS FIXTURE IS THE DISCRIMINATING ONE. This caller passes NO
+      # `<:chat>` slot — it is embedded in the chat surface and the real
+      # discussion is already on screen beside it — so `served_tabs/1`
+      # returns three where the vocabulary holds four. The derived list and
+      # `CallShell.tabs/0` are DIFFERENT here, which is what makes an
+      # assertion over this surface capable of both outcomes. `/meetings`,
+      # shell and guest alike, serves all four today and therefore cannot
+      # tell the two lists apart at all; its cases are controls.
+      assert rail_ids == ["people", "canvas", "transcript"]
+
+      assert rail_ids != Enum.map(CallShell.tabs(), &elem(&1, 0)),
+             "this fixture only discriminates while the derived list differs " <>
+               "from the unfiltered vocabulary — if these two are ever equal, " <>
+               "this surface has quietly stopped being able to fail and the " <>
+               "assertion above became a control"
+
+      # AND THERE IS NO SECOND PRESENTATION HERE TO DISAGREE WITH IT.
+      # Defect 1 was a 44px collapsed icon strip looping the vocabulary
+      # while the rail beside it derived; that strip is markup private to
+      # `meeting_live.html.heex`, and this surface's `quickmeet_toggle_rail`
+      # shows and hides the whole rail as a bottom sheet rather than drawing
+      # an icon strip. So defect 1 is NOT EXPRESSIBLE on the quickmeet, and
+      # this `== 0` says so out loud instead of leaving the next reader to
+      # wonder why the strip/tablist agreement case for this caller is
+      # missing from the rail-collapse file.
+      #
+      # BOTH strip roles queried, not just `call-rail-strip-icon`: the
+      # looped Chat entry carries `call-rail-strip-chat` (task 01a0740d), so
+      # a one-role selector would reach `== 0` for the wrong reason and
+      # would keep reaching it if a strip were ever added here with Chat as
+      # its only entry.
+      assert count(
+               html,
+               ~s([data-role="call-rail-strip-icon"], [data-role="call-rail-strip-chat"])
+             ) == 0
+
+      assert count(html, ~s([data-role="call-rail-collapsed"])) == 0
+
+      # Anti-vacuity for the two refutations above. They are `== 0` over
+      # selectors that match NOTHING on this surface by design, so nothing
+      # in this file can prove the selectors are still spelled correctly —
+      # the positive control is necessarily in another module, where the
+      # same two roles and the same container are asserted PRESENT:
+      # `meeting_live_rail_collapse_test.exs`, describes "(a)" and "(h)".
+      # This assert is the local half: the rail those refutations are about
+      # really is on screen, so they are refuting the strip's absence rather
+      # than the panel's.
+      assert count(html, ~s([data-component="call-rail"])) == 1
     end
   end
 end

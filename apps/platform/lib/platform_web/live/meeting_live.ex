@@ -2480,6 +2480,26 @@ defmodule PlatformWeb.MeetingLive do
   # from the top bar. Normalised before comparing, because `tab` is assigned
   # from a URL param behind nothing stronger than `is_binary/1` and a junk
   # value renders People.
+  #
+  # THIS CLAUSE IS DEAD ON `/meetings`, AND THAT IS WHY IT STILL READS THE
+  # VOCABULARY (task 01a089fe stage 3, which gated the `<:chat>` slot and was
+  # handed this call site as a follow-on). `MeetingHooks.attach/2` — called
+  # from the `:show` `handle_params/3` — installs a `"meeting_tab_select"`
+  # hook that `{:halt, …}`s, so on the shell and `:meet_member` mounts the
+  # clause that actually services this event, and actually clears the dot, is
+  # `PlatformWeb.ChatLive.MeetingHooks.handle_event/3`. 01a084bf stage 4
+  # measured that by mutation: deleting the clear from here reds nothing,
+  # deleting it from there reds three tests. Changing THIS line therefore
+  # changes nothing anybody can observe on either of those surfaces; the live
+  # twin calls `normalize_tab/1` too, and correcting THAT reds an existing
+  # `:meet_member` test — see the note on `chat_on_screen?/1` for the
+  # measurement and for why it is reported rather than fixed here.
+  #
+  # It is live on exactly one surface: the GUEST mount, whose `handle_params/3`
+  # no-ops on `:state` and so never attaches the hook. And on that surface
+  # both effects are unobservable — a guest holds no `chat:space:<id>`
+  # subscription, so `:call_rail_unread` can never be true for this to clear,
+  # and no `"chat"` entry exists in either tab loop to render it if it were.
   def handle_event("meeting_tab_select", %{"tab" => tab}, socket) when is_binary(tab) do
     socket = assign(socket, :active_meeting_tab, tab)
 
@@ -4273,9 +4293,82 @@ defmodule PlatformWeb.MeetingLive do
   # Subscript access and `!` rather than `not`: both assigns are seeded at
   # both mount sites, but `not nil` would RAISE on any path that ever missed
   # one, and a crashed LiveView is a worse answer than a wrong dot.
+  #
+  # `normalize_tab/1` — THE VOCABULARY, NOT `served_meeting_tabs/1`, AND THAT
+  # IS A DECISION (task 01a089fe stage 3, which gated the `<:chat>` slot on
+  # `@shell?` and was handed this call site as a follow-on).
+  #
+  # The concern is real in shape: this reads the four-tab vocabulary while
+  # `call_rail/1` coerces against the list the caller actually serves, so on
+  # an `@shell?`-false surface this answers "chat is on screen" for a viewer
+  # whose rail is drawing People. It is defect 1's shape one layer out, and
+  # `normalize_tab/2`'s `\\ @tabs` default is what makes it silent.
+  #
+  # IT WAS CHANGED AND THE CHANGE WAS MEASURED AND WITHDRAWN. Passing the
+  # served list here reds `meeting_live_rail_collapse_test.exs:497`, "a
+  # message arriving while the drawer is OPEN does not raise the flag" — a
+  # test on the `:meet_member` surface (`open_meeting/3`: signed-in account on
+  # the `meet.` host, `chrome_mode: "none"`, so `@shell?` FALSE), which unlike
+  # the guest DOES hold `chat:space:<id>` (`handle_params/3` reaches
+  # `SpaceTopics.hold/3` because that mount leaves `:state` nil). So this is
+  # not dead state on every `@shell?`-false surface, and "correcting" it
+  # rewrites the unread-flag contract on a third surface that has its own
+  # describe and its own reasoning. That is a separate piece of work from "a
+  # guest's chat slot is absent", so it is reported rather than smuggled in.
+  #
+  # WHAT IT IS NOT: it is not the guest defect stage 1 predicted. On the GUEST
+  # surface this predicate cannot be observed at either answer —
+  # `enter_guest_topics/2` subscribes to presence, agents and the meeting
+  # topic and takes NO `SpaceTopics.hold/3`, so `{:new_message, _}` never
+  # arrives and the flag cannot rise; and the flag's only two renderers sit
+  # inside tab loops (`id == "chat" and @call_rail_unread` in the strip,
+  # `data-role="call-rail-tab-unread-dot"` in `call_rail/1`) which hold no
+  # `"chat"` entry for a guest now. Neither producer nor renderer exists
+  # there, which is also why no test in this repo can cover the guest half.
+  #
+  # AND THE LIVE TWIN IS SOMEWHERE ELSE ENTIRELY: the `"meeting_tab_select"`
+  # clause in THIS module is dead on `/meetings` (see it below), and the
+  # normalisation that actually runs is
+  # `PlatformWeb.ChatLive.MeetingHooks.handle_event("meeting_tab_select", …)`,
+  # which also calls `normalize_tab/1`.
   defp chat_on_screen?(assigns) do
     CallShell.normalize_tab(assigns[:active_meeting_tab]) == "chat" and
       !assigns[:chat_panel_collapsed]
+  end
+
+  # The call rail tabs THIS surface serves, for a viewer with this `@shell?`
+  # (task 01a089fe stages 1 and 3).
+  #
+  # ONE READER TODAY: the COLLAPSED 44px icon strip in
+  # `meeting_live.html.heex`. The expanded rail is `CallShell.call_rail/1`,
+  # which computes `served_tabs/1` off the slots it was handed and coerces
+  # `active_tab` against THAT list. The strip is markup in this module's
+  # template, holds no slots, and cannot be filtered by reading them; it used
+  # to loop `CallShell.tabs/0`, the unfiltered vocabulary, which is defect 1
+  # of this task (stage 1).
+  #
+  # TWO OTHER CALL SITES LOOK LIKE THEY BELONG HERE AND DELIBERATELY DO NOT —
+  # `chat_on_screen?/1` and the `"meeting_tab_select"` clause, both of which
+  # call `CallShell.normalize_tab/1` and so read the vocabulary. Pointing them
+  # at this function was tried, measured and withdrawn in stage 3: one reds an
+  # existing `:meet_member` test and the other is dead code on `/meetings`.
+  # The measurement and the reasoning are on each of those two functions, and
+  # this note exists so the next reader finds them BEFORE concluding the
+  # inconsistency is an oversight.
+  #
+  # `chat: shell?` IS THIS SURFACE'S CAPABILITY, NOT A SPELLING OF
+  # `CallShell.tabs/0`, and it is the same `@shell?` the `<:chat>` slot's own
+  # `:if` reads — one condition, stated once, reached by both presentations
+  # and both coercions. NOT a `tabs` attr on `call_rail/1` and NOT a literal
+  # list here: either would be the second tab list `served_tabs/1`'s own docs
+  # exist to refuse.
+  #
+  # `shell? == true` rather than `!!shell?`: both mount sites seed the assign,
+  # but a nil arriving from some future path must read as "no chat" instead of
+  # raising in a render.
+  @spec served_meeting_tabs(term()) :: [{String.t(), String.t()}]
+  defp served_meeting_tabs(shell?) do
+    CallShell.served_tabs(%{chat: shell? == true})
   end
 
   # A struct that carries NO space id is not attributed to another room, so

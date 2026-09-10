@@ -115,9 +115,59 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   strip is derived from the slots the CALLER actually supplied — see
   `served_tabs/1` — because a tab whose pane the caller cannot fill is a
   button that leads nowhere. `/meetings` serves all four; the in-chat
-  quickmeet serves three. Only a caller that genuinely serves every tab
-  (the meeting surface's collapsed icon strip mirrors the expanded rail on
-  the same socket) should read this list directly.
+  quickmeet serves three.
+
+  **NOTHING THAT RENDERS TABS SHOULD READ THIS LIST** (task 01a089fe
+  stage 1), and as of stage 4 nothing does — see the census below. 01a084bf stage 4 carved out one exception here — the
+  `/meetings` collapsed icon strip, on the grounds that it mirrors the
+  expanded rail on the same socket and that socket serves all four. That
+  was true when it was written and it is the wrong thing to depend on:
+  the strip agreed with the rail only because `/meetings` supplies
+  `<:chat>` unconditionally, so the moment that slot is gated the strip
+  would keep drawing a button the rail refuses to select. The exception is
+  withdrawn and the strip now derives like everything else; validating an
+  incoming `?tab=` param against the tab VOCABULARY is what is left.
+
+  ## Census: who reads the unfiltered list (task 01a089fe stage 4)
+
+  Defect 1 mattered because it was LATENT, not because of Chat: any future
+  slot-backed tab gets its `tab_served?/2` clause for free in the expanded
+  rail and would be silently wrong in every presentation reading this
+  list. Stage 1 fixed the one reader we knew about; stage 4 established
+  there are no others. Re-run it as
+  `git grep -n 'CallShell.tabs()' -- lib test`, and read it with the two
+  caveats below or it will mislead you.
+
+  IN `lib/`, ZERO CALLS. Every match is comment prose. Exactly two things
+  render a tab list, and both derive: `call_rail/1`'s `@rail_tabs` (from
+  `served_tabs/1`) and the `/meetings` collapsed strip (from
+  `MeetingLive.served_meeting_tabs/1`). The in-chat quickmeet has no
+  second presentation to disagree with its rail at all — the 44px strip is
+  markup private to `meeting_live.html.heex` and `quickmeet_toggle_rail`
+  shows and hides the whole rail as a bottom sheet — so its correctness
+  here is STRUCTURAL rather than a judgement someone has to keep making.
+
+  CAVEAT ONE, AND IT IS WHY THAT GREP IS NOT THE WHOLE ANSWER:
+  `normalize_tab/2`'s second argument DEFAULTS to `@tabs`, so an arity-1
+  call reads the unfiltered list WITHOUT NAMING IT and matches no search
+  for `tabs`. Three such calls exist —
+  `ChatLive.MeetingHooks.handle_event("meeting_tab_select", …)`,
+  `MeetingLive`'s own clause for that event, and
+  `MeetingLive.chat_on_screen?/1`. NONE OF THEM RENDERS ANYTHING: each
+  compares an active-tab id to decide a boolean unread flag. They are a
+  stale-flag question, not a presentation, which is why they are outside
+  defect 1 and why stage 3 measured a correction to them and withdrew it
+  (it reds an existing `:meet_member` test; see those functions).
+
+  CAVEAT TWO: `normalize_tab/1` and `@tabs` are both spelled the same way
+  in unrelated modules — `ControlCenterLive` has a private
+  `normalize_tab/1` about ROLES, and `OrgMemoryLive.MobileShell` has its
+  own `@tabs`. Neither has anything to do with this rail. A census that
+  greps the bare names picks them up and reads as five defects.
+
+  NO LINT RULE OR GREP-BASED META-TEST GUARDS THIS, deliberately: a caller
+  that genuinely serves every tab is entitled to this list, so such a
+  check would fire on correct code. The call-site comments are the record.
   """
   def tabs, do: @tabs
 
@@ -147,14 +197,66 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   People, Canvas and Transcript are unconditional: each renders something
   honest with no slot at all (a roster, `call-rail-canvas-empty`, and the
   JS-owned transcript pane with its own empty state).
+
+  ## Callers with no slots to hand over (task 01a089fe stage 1)
+
+  `/meetings` draws the rail TWICE — the expanded `call_rail/1` and, when
+  the viewer collapses it, a 44px icon strip that is markup in
+  `meeting_live.html.heex`'s own scope. That strip is not a call to this
+  component, so it holds no slots and cannot be filtered by reading them;
+  it used to loop `tabs/0` and therefore rendered the UNFILTERED list
+  while the rail beside it derived. Two presentations of one rail
+  disagreeing about which tabs exist is the defect stage 1 removes.
+
+  So `:chat` is accepted as a BOOLEAN capability as well as a slot list.
+  Same predicate, same order, one derivation — a caller states what it
+  serves in whichever form it has, and neither form is a second tab list
+  to keep in sync.
   """
   @spec served_tabs(map()) :: [{String.t(), String.t()}]
   def served_tabs(assigns) do
     Enum.filter(@tabs, fn {id, _label} -> tab_served?(assigns, id) end)
   end
 
-  defp tab_served?(assigns, "chat"), do: Map.get(assigns, :chat, []) != []
+  # WHAT THIS PREDICATE CAN SEE: whether a slot was PASSED, never whether that
+  # slot RENDERS ANYTHING (task 01a089fe stage 3).
+  #
+  # `Map.get(assigns, :chat, [])` is the slot LIST. It is empty exactly when
+  # the caller wrote no `<:chat>` — or wrote one whose own `:if` was false,
+  # which is the same thing to the compiler — and non-empty the moment one was
+  # written, whatever its body then decides to do. A slot body is an
+  # `:inner_block` function that has not been called when this runs, and its
+  # output is never handed here, so AN `:if` INSIDE A SLOT BODY IS INVISIBLE TO
+  # THIS FUNCTION. A caller who writes `<:chat><div :if={@thing}>…</div></:chat>`
+  # is served a Chat tab for every viewer, and the viewers for whom `@thing` is
+  # false get that tab over a pane with nothing in it: the `case @active` has no
+  # markup on its `"chat"` branch by design, so all that renders is an empty
+  # `call-rail-chat-wrap`. That was defect 2 of task 01a089fe, on the
+  # `/meetings` guest surface, and it was fixed in `meeting_live.html.heex` by
+  # moving the condition ONTO the slot — not by teaching this function to look
+  # inside one, which it cannot do.
+  #
+  # THIS IS THE BOUNDARY OF SLOT INTROSPECTION, NOT A FLAW IN CHOOSING IT.
+  # Keying on the slot is what makes capability declarative and keeps it from
+  # becoming a second tab list every caller has to remember to update (see
+  # `served_tabs/1`). Nothing reachable from here could distinguish a slot that
+  # renders a live chat from one that renders an empty div; that answer lives in
+  # the caller's own condition, which is precisely why the condition has to sit
+  # on the slot.
+  #
+  # SO `served_tabs/1` DOES NOT PROMISE A NON-EMPTY PANE. It reports what the
+  # caller DECLARED. A caller that conditions its pane's CONTENT must condition
+  # the SLOT by the same expression, and no test in this module can catch one
+  # that does not — the mismatch is only visible in a render of the caller
+  # (`meeting_live_rail_collapse_test.exs`, describe "(i)").
+  defp tab_served?(assigns, "chat"), do: chat_served?(Map.get(assigns, :chat, []))
   defp tab_served?(_assigns, _id), do: true
+
+  # A `<:chat>` SLOT from `call_rail/1` — a list, empty exactly when the
+  # caller supplied no slot — or an explicit boolean from a caller that has
+  # no slots (see the moduledoc-level note on `served_tabs/1` above).
+  defp chat_served?(chat) when is_boolean(chat), do: chat
+  defp chat_served?(chat), do: chat != []
 
   # The tab's ACCESSIBLE name. The unread dot is `aria-hidden`, so without
   # this the state it announces would exist only in pixels and a
@@ -213,9 +315,20 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   ## `call_rail/1` (task 01a084bf stage 4)
 
   `@tabs` is what the rail knows; `served_tabs/1` is what a given caller
-  can fill. Coercing to `@tabs` is right for the meeting surface's
-  collapsed strip — that socket serves all four — and WRONG inside
-  `call_rail/1`, which must land on a tab the caller can actually serve.
+  can fill. Both questions are legitimate — the bug is only ever a
+  PRESENTATION asking the first when it needed the second. Coercing to
+  `@tabs` is WRONG inside `call_rail/1`, which must land on a tab the
+  caller can actually serve.
+
+  THE SENTENCE THAT WAS HERE SAID COERCING TO `@tabs` WAS "right for the
+  meeting surface's collapsed strip — that socket serves all four". Both
+  halves are now false, and it is corrected rather than deleted because a
+  doc that blesses reading the unfiltered list is how the defect comes
+  back (01a084bf stage 4 left the same carve-out on `tabs/0`, and stage 1
+  of 01a089fe had to withdraw it). The strip stopped coercing to `@tabs`
+  in 01a089fe stage 1 — it passes its derived list explicitly — and that
+  socket stopped serving all four in stage 3, which gated `<:chat>` on
+  `@shell?`. A guest's `/meetings` socket serves three.
   A quickmeet arriving with `active_tab: "chat"` (a stale `?tab=` param, a
   bookmark, or its own `"meeting_tab_select"` handler, which assigns any
   binary) would otherwise select a pane whose button is not in the strip:

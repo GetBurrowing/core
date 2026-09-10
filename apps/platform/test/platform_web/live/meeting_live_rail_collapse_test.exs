@@ -55,6 +55,7 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
   alias Platform.Accounts.User
   alias Platform.Chat
   alias Platform.Meetings
+  alias Platform.Meetings.GuestInvite
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tenancy
@@ -197,6 +198,29 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
     # of the state under test and would make several assertions below pass
     # for entirely the wrong reason.
     assert html =~ meeting.name
+
+    settle(view)
+  end
+
+  # A GUEST mount: `chrome_mode: "none"`, which the router's
+  # `:guest_meeting` live_session injects on the `meet.` host scope, so
+  # `@shell?` is false and there is a real viewer in the room. This is the
+  # only mount that gives the strip/tablist comparison a non-shell caller —
+  # `open_meeting/3` above is a signed-in MEMBER on the `meet.` host, which
+  # is a different surface again.
+  defp open_meeting_guest(conn, meeting) do
+    expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+    token = GuestInvite.sign(meeting.slug, expires_at, "Agreement Guest")
+
+    {:ok, view, html} = conn |> on_meet_host() |> live("/#{meeting.slug}/#{token}")
+
+    # ANTI-VACUITY: this is the ROOM, not one of the four guest denial
+    # states. `:expired` and `:invalid` render a card with no rail at all,
+    # and every strip assertion downstream would then be comparing two
+    # empty sets — which is precisely the failure mode that reads as a pass.
+    assert html =~ meeting.name
+    assert :sys.get_state(view.pid).socket.assigns.state == :in_meeting
+    assert :sys.get_state(view.pid).socket.assigns.shell? == false
 
     settle(view)
   end
@@ -666,6 +690,23 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
     strip!(view) |> LazyHTML.attribute("class") |> List.first() || ""
   end
 
+  # Every tab id in the collapsed strip, in render order.
+  #
+  # BOTH ROLES, DELIBERATELY. The Chat entry carries
+  # `data-role="call-rail-strip-chat"` (inherited from task 01a0740d, when
+  # Chat was a hand-written button beside the loop) while the other three
+  # carry `call-rail-strip-icon`. A selector matching only the latter drops
+  # Chat and quietly compares a 3-element list to a 4-element one.
+  #
+  # `LazyHTML.query/2`, never `filter/2`: these buttons are nested inside the
+  # strip, and `filter/2` matches only the fragment's ROOT nodes, so it would
+  # return `[]` and read as "the strip has no buttons".
+  defp strip_tab_ids(strip) do
+    strip
+    |> LazyHTML.query(~s([data-role="call-rail-strip-icon"], [data-role="call-rail-strip-chat"]))
+    |> LazyHTML.attribute("data-tab")
+  end
+
   # The class list of the ONE rail node. The width and its transition live
   # here, not on the strip: after task 01a084bf stage 2 the rail is a single
   # element present in both states, and the animated quantity has to be a
@@ -776,21 +817,84 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       %{meeting: meeting, view: view}
     end
 
-    test "one button per tab, in `CallShell.tabs/0` order", %{view: view} do
+    test "one button per tab THIS SURFACE SERVES, in `served_tabs/1` order",
+         %{view: view} do
       strip = strip!(view)
 
-      # The strip renders one button per entry in `CallShell.tabs/0`, in that
-      # order, and every button's `data-tab` is read here regardless of which
-      # `data-role` it carries — see the next case for why Chat's differs.
-      tabs =
-        strip
-        |> LazyHTML.query(
-          ~s([data-role="call-rail-strip-icon"], [data-role="call-rail-strip-chat"])
-        )
+      # Every button's `data-tab` is read here regardless of which `data-role`
+      # it carries — see the next case for why Chat's differs. A selector
+      # matching only `call-rail-strip-icon` would silently omit Chat and
+      # compare the wrong set.
+      tabs = strip_tab_ids(strip)
+
+      # RE-POINTED (task 01a089fe stage 1). This compared the strip against
+      # `CallShell.tabs/0` — the UNFILTERED vocabulary — which is what the
+      # strip used to loop and is the defect stage 1 removes. The strip now
+      # derives, so the list it must equal is the DERIVED one.
+      #
+      # READ THIS BEFORE TRUSTING A GREEN RUN OF THIS FILE. The fixture is
+      # `open_meeting_shell`, `@shell?` is true there, and that surface serves
+      # all four tabs — so `served_tabs/1` and the unfiltered vocabulary are
+      # EQUAL here and this assertion cannot tell a deriving strip from a
+      # `CallShell.tabs/0` one. It passed both before and after stage 1. It is
+      # re-pointed so it MEANS what its name says, not because it proves
+      # anything about stage 1 on its own.
+      #
+      # STAGE 1 PREDICTED THIS CASE WOULD START DISCRIMINATING "the moment the
+      # `<:chat>` slot is gated". IT DID NOT, AND CANNOT. Stage 3 gated that
+      # slot on `@shell?`, and this fixture is the surface where `@shell?` is
+      # TRUE — a shell mount still serves four, so the two lists are still
+      # equal here and this line is still a control. What the gate made
+      # discriminating is the GUEST fixture: describe "(h)"'s guest agreement
+      # case, and describe "(i)", which is where the four-vs-three difference
+      # is actually observable.
+      assert tabs ==
+               Enum.map(
+                 PlatformWeb.Components.Meetings.CallShell.served_tabs(%{chat: true}),
+                 &elem(&1, 0)
+               )
+
+      assert tabs == ["people", "chat", "canvas", "transcript"]
+    end
+
+    test "the collapsed strip and the expanded tablist render ONE derivation",
+         %{view: view} do
+      # THE ACTUAL STAGE 1 INVARIANT: two presentations of one rail, one tab
+      # list. The strip is markup in `meeting_live.html.heex` and the tablist
+      # is `CallShell.call_rail/1`'s own `@rail_tabs`; before stage 1 they
+      # reached their lists by different routes (`tabs/0` vs `served_tabs/1`)
+      # and agreed only because this surface happens to serve all four.
+      #
+      # This is what goes red if the strip is ever pointed back at the
+      # unfiltered list while the rail's slots say otherwise, which is the
+      # regression stage 3 would otherwise ship.
+      #
+      # READ IN TWO STATES, NOT ONE RENDER. The strip is `:if`-gated on the
+      # collapsed branch and the tablist on the expanded one, so they never
+      # co-exist in the DOM (see "(a) it is absent while the rail is
+      # expanded"). Same view, same socket, same capability — the collapse
+      # latch is the only thing that changes between the two reads.
+      force_collapsed(view, false)
+
+      expanded_ids =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="call-rail-tab"]))
         |> LazyHTML.attribute("data-tab")
 
-      assert tabs == Enum.map(PlatformWeb.Components.Meetings.CallShell.tabs(), &elem(&1, 0))
-      assert tabs == ["people", "chat", "canvas", "transcript"]
+      force_collapsed(view, true)
+      strip_ids = view |> strip!() |> strip_tab_ids()
+
+      # ANTI-VACUITY: neither side may be empty. `LazyHTML.query/2` returning
+      # `[]` for a bad selector would otherwise make `[] == []` pass and read
+      # as agreement between two things that were never found.
+      assert strip_ids != [], "found no collapsed strip buttons to compare"
+      assert expanded_ids != [], "found no expanded tablist tabs to compare"
+
+      assert strip_ids == expanded_ids,
+             "the collapsed strip and the expanded tablist must render the same " <>
+               "derived tab list, in the same order"
     end
 
     test "Chat IS in the shared tab list now, and keeps the strip-chat role", %{view: view} do
@@ -1328,6 +1432,448 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
 
       assert rail_class(view) =~ @width_transition,
              "the refute above must be capable of failing"
+    end
+  end
+
+  # ── (h) the two presentations of one rail AGREE, per caller ────────────────
+  #
+  # Task 01a089fe stage 2. Defect 1 is a DISAGREEMENT between two
+  # presentations of one rail, not either presentation being wrong on its
+  # own. What has to be asserted is therefore EQUALITY of the two sets on
+  # the SAME assigns — same ids, same order — and not a count, because
+  # different callers legitimately serve different tabs and a count cannot
+  # tell "three because this caller serves three" from "three because a
+  # button went missing".
+  #
+  # BOTH SETS COME OUT OF ONE RENDER, and that is a property of the markup
+  # rather than a convenience. The collapsed strip is
+  # `:if={@chat_panel_collapsed}`, but the expanded branch is NEVER
+  # `:if`-gated — it hides with `lg:hidden` precisely so its nested
+  # `live_render`, stream and scroll position survive a collapse. While
+  # collapsed, both are in the DOM at once, so the two sets can be read
+  # without changing a single assign between the reads. Stage 1's own case
+  # toggled the collapse latch between its two reads, on the stated belief
+  # that the two presentations "never co-exist"; that belief is wrong, and
+  # reading both out of one document removes the toggle as a possible
+  # explanation for any agreement or disagreement observed.
+  #
+  # WHICH OF THESE IS A CONTROL AND WHICH IS A GUARD. Read this before
+  # trusting a green run of this describe:
+  #
+  #   * SHELL (`open_meeting_shell`, `@shell?` true) — a CONTROL, and it
+  #     cannot be made into anything else. This surface serves every tab,
+  #     so the derived list and the unfiltered vocabulary are EQUAL here
+  #     and no assertion over this fixture can distinguish them. Its job is
+  #     to prove the comparison is reading two real, non-empty, four-long
+  #     sets, and to stay GREEN when the strip is reverted to
+  #     `CallShell.tabs/0` — a mutation that reds here would mean the
+  #     comparison is measuring something other than what it claims.
+  #
+  #   * GUEST (`open_meeting_guest`, `@shell?` false) — A REAL GUARD, AND IT
+  #     NOW DISCRIMINATES IN BOTH DIRECTIONS. Stage 2 wrote this case with
+  #     the label "not yet discriminating", correctly: `/meetings` then
+  #     supplied `<:chat>` UNCONDITIONALLY, with the `:if={@shell?}` on a div
+  #     INSIDE the slot body rather than on the slot, so `served_tabs/1` saw
+  #     chat as served for a guest exactly as for the host and this
+  #     assertion could not fail on the served-vs-unfiltered axis. That gap
+  #     was defect 2, and stage 3 closed it by moving the `:if` onto the
+  #     slot. The label is updated rather than left standing, because a case
+  #     named "not yet discriminating" is one the next reader will discount.
+  #
+  #     Stage 3 measured it, one mutation per direction, both on THIS case:
+  #     reverting only the strip to `CallShell.tabs()` while the slot stays
+  #     gated gives strip 4 vs tablist 3 and reds it; reverting only the slot
+  #     gate while the strip keeps deriving gives strip 3 vs tablist 4 and
+  #     reds it. It is the guard that catches the half-applied change from
+  #     either side, which is the ordering constraint between stages 1 and 3
+  #     expressed as an invariant rather than as a sequence.
+  #
+  # THE THIRD SURFACE OF THIS STAGE, the in-chat quickmeet, is deliberately
+  # NOT here: it has no collapsed strip to compare against, because the
+  # 44px icon strip is markup private to `meeting_live.html.heex` and the
+  # quickmeet's `quickmeet_toggle_rail` shows and hides the whole rail as a
+  # bottom sheet instead. Its case lives in
+  # `test/platform_web/live/chat/partials_meeting_panel_test.exs`, under
+  # "the quickmeet's ONE tab presentation", where the absence of a strip is
+  # asserted and where the per-caller discrimination that IS available
+  # today (three served tabs against a four-entry vocabulary) is carried.
+  describe "(h) the collapsed strip and the expanded tablist agree, per caller" do
+    # Every tab id in the EXPANDED presentation, in render order.
+    #
+    # Scoped INSIDE `data-role="call-rail-expanded"` so the set is
+    # unambiguously that branch's own even while it is `lg:hidden` behind
+    # the collapsed strip, and so this can never accidentally read the
+    # strip's buttons back as though they were the tablist's — which would
+    # make the equality assertion compare a list to itself and pass forever.
+    #
+    # `LazyHTML.query/2`, never `filter/2`: these live several levels below
+    # the fragment root, and `filter/2` matches ROOT nodes only, so it would
+    # hand back an empty result that reads as "the tablist is not there".
+    defp tablist_tab_ids(doc) do
+      doc
+      |> LazyHTML.query(
+        ~s([data-role="call-rail-expanded"] [data-role="call-rail-tabs"] [data-role="call-rail-tab"])
+      )
+      |> LazyHTML.attribute("data-tab")
+    end
+
+    # ONE render, both presentations. See the note above on why they
+    # co-exist while collapsed.
+    defp both_presentations(view) do
+      doc = view |> render() |> LazyHTML.from_fragment()
+
+      strip = LazyHTML.query(doc, ~s([data-pane="call-rail"] [data-role="call-rail-collapsed"]))
+
+      # `LazyHTML.query/2` returns a `%LazyHTML{}` struct even when nothing
+      # matched, so a truthiness check here would read as "found it".
+      refute Enum.empty?(strip),
+             "expected the collapsed 44px strip in the DOM — the rail must be " <>
+               "collapsed for this comparison to have two sides"
+
+      {strip_tab_ids(strip), tablist_tab_ids(doc)}
+    end
+
+    defp assert_presentations_agree(view, label) do
+      {strip_ids, expanded_ids} = both_presentations(view)
+
+      # ANTI-VACUITY, and the reason it is two separate asserts rather than
+      # one: `LazyHTML.query/2` on a selector that has stopped matching
+      # returns an empty result, and `[] == []` would read as perfect
+      # agreement between two sets neither of which was ever found. Each
+      # side is checked on its own so the failure names which selector died.
+      assert strip_ids != [], "#{label}: found no collapsed strip buttons to compare"
+      assert expanded_ids != [], "#{label}: found no expanded tablist tabs to compare"
+
+      assert strip_ids == expanded_ids,
+             "#{label}: the collapsed strip and the expanded tablist are two " <>
+               "presentations of ONE rail and must render the same derived tab " <>
+               "list in the same order — got strip #{inspect(strip_ids)} vs " <>
+               "tablist #{inspect(expanded_ids)}"
+
+      strip_ids
+    end
+
+    test "SHELL (@shell? true): the two sets are equal — CONTROL, this surface serves every tab",
+         %{conn: conn, org: org, viewer: viewer} do
+      meeting = meeting!(org, "agree-shell")
+      view = open_meeting_shell(conn, viewer, meeting)
+
+      force_collapsed(view, true)
+
+      ids = assert_presentations_agree(view, "shell")
+
+      # The four-up named explicitly, so a change that drops the same tab
+      # from BOTH presentations at once cannot keep this green on a
+      # symmetrically shortened pair. This is the control's other job.
+      assert ids == ["people", "chat", "canvas", "transcript"]
+    end
+
+    test "GUEST (@shell? false): the two sets are equal — DISCRIMINATING, both directions",
+         %{conn: conn, org: org, viewer: viewer} do
+      _ = viewer
+      meeting = meeting!(org, "agree-guest")
+      view = open_meeting_guest(conn, meeting)
+
+      # The whole point of this case is the surface where `@shell?` is
+      # false. On a shell mount it would silently duplicate the control
+      # above.
+      assert assigns(view).shell? == false
+
+      # Collapsed the way a GUEST actually gets there. The collapse chevron
+      # is `@shell?`-gated, so a guest never has one to click; what
+      # collapses their rail is the host starting a screen share, which
+      # reasserts the `:screen` mode's rail default. Driving that real
+      # event rather than clicking a control this surface does not render —
+      # otherwise the fixture would be asserting over a state no guest can
+      # reach.
+      render_hook(view, "meeting_screen_share_state", %{"enabled" => true})
+
+      assert assigns(view).chat_panel_collapsed == true,
+             "the guest's rail must actually be collapsed, or there is only " <>
+               "one presentation here and nothing to compare"
+
+      ids = assert_presentations_agree(view, "guest")
+
+      # NO LITERAL LIST HERE, DELIBERATELY. The invariant this case guards
+      # is agreement, not a particular membership: pinning the current
+      # four-up would make the stage that gates the `<:chat>` slot red for
+      # doing exactly the right thing, and pinning three would assert a
+      # future that has not happened. What is checked instead is that the
+      # agreed list is a sublist of the vocabulary IN VOCABULARY ORDER,
+      # which is what `served_tabs/1` guarantees by construction and which
+      # catches a reordering that equality alone would miss if both
+      # presentations reordered together.
+      vocabulary = Enum.map(PlatformWeb.Components.Meetings.CallShell.tabs(), &elem(&1, 0))
+
+      assert ids == Enum.filter(vocabulary, &(&1 in ids)),
+             "the derived list must keep the vocabulary's order — got #{inspect(ids)} " <>
+               "against #{inspect(vocabulary)}"
+    end
+
+    # STAGE 2'S THIRD CASE WAS DELETED HERE, ON ITS OWN INSTRUCTIONS (task
+    # 01a089fe stage 3). It was named "DEFECT 2, RECORDED NOT FIXED: the
+    # guest is served a Chat tab whose pane never renders" and it asserted
+    # `"chat" in tablist_tab_ids(doc)` on a guest mount — the measured
+    # current state, written down so the defect was visible in the suite
+    # while the stage that owned it had not run yet, and so that the
+    # ordering constraint (stage 1's derived strip must land first) was
+    # enforced by a failing test rather than by a comment.
+    #
+    # It did exactly that. Gating the `<:chat>` slot on `@shell?` reds it
+    # — measured: `Assertion with in failed / left: "chat" / right:
+    # ["people", "canvas", "transcript"]` — which is the gate taking
+    # effect, and its own body says the stage that gates the slot must
+    # delete it. The coverage did not go anywhere: describe "(i)" below is
+    # the same guest surface asserted the other way round, plus the shell
+    # positive control that a refutation alone cannot give.
+    #
+    # The GUEST AGREEMENT CASE above is NOT that case and stays. It pins no
+    # literal tab list, so gating the slot leaves it green — and it is
+    # the guard that reds if the strip is ever pointed back at the
+    # vocabulary while the slot is gated (measured in stage 3: strip
+    # reverted to `CallShell.tabs()` gives strip 4 vs tablist 3 on the guest
+    # mount, which is the disagreement it exists to catch).
+  end
+
+  # ── (i) DEFECT 2: a slot that is SUPPLIED but renders nothing ──────────────
+  #
+  # Task 01a089fe stage 3. `meeting_live.html.heex` used to pass `<:chat>`
+  # unconditionally and put `:if={@shell?}` on a div INSIDE the slot body.
+  # `CallShell.served_tabs/1` keys on whether a slot was PASSED, never on
+  # whether it renders anything — an `:if` in a slot body is invisible to it
+  # (see the note on `tab_served?/2`) — so every `@shell?`-false viewer was
+  # served a Chat tab whose pane rendered literally nothing: the pane `case`
+  # has no markup on its `"chat"` branch by design, and the
+  # `call-rail-chat-wrap` below it was present but empty. The `:if` moved onto
+  # the slot, so the slot is genuinely ABSENT for those viewers.
+  #
+  # WHY THE FIXTURE HAS TO BE A GUEST MOUNT, and why that is the whole
+  # load-bearing part of this describe. On the SHELL surface `@shell?` is true,
+  # so the slot renders its chat whether or not this change exists and
+  # `served_tabs/1` returns all four either way — a case mounted as host
+  # CANNOT DISTINGUISH FIXED FROM BROKEN, however correct its assertion looks.
+  # `open_meeting_guest/2` (added by stage 2) is the mount where the two
+  # states differ. Measured, both directions, on this fixture:
+  #
+  #   * pre-fix (`:if={@shell?}` on the inner div): the guest's expanded
+  #     tablist is `["people", "chat", "canvas", "transcript"]` — stage 2's
+  #     own defect-2 case asserted exactly that and passed.
+  #   * post-fix (`:if={@shell?}` on the slot): `["people", "canvas",
+  #     "transcript"]`, and that same stage 2 case reds with
+  #     `left: "chat" / right: ["people", "canvas", "transcript"]`.
+  #
+  # BOTH HALVES ARE ASSERTED, because a guard that only refutes can be
+  # satisfied by breaking chat for everybody: (a) no Chat tab in either
+  # presentation for a guest, (b) no blank pane — whatever pane the guest's
+  # active tab resolves to has content in it. The SHELL positive control that
+  # follows is the other half of that: Chat still served, pane still mounting
+  # the embedded chat LiveView.
+  #
+  # SELECTORS ARE SCOPED PER PRESENTATION. The collapsed strip is
+  # `:if={@chat_panel_collapsed}` but the expanded branch is NEVER `:if`-gated
+  # (it hides with `lg:hidden` so its nested `live_render` survives a
+  # collapse), so while collapsed BOTH are in the DOM. An unscoped
+  # `[data-role="call-rail-pane"]` or `[data-role="call-rail-tab"]` can read
+  # the wrong branch and hand back a pass or a fail that is about the other
+  # presentation. Everything below goes through
+  # `[data-role="call-rail-expanded"] …` or the strip container, and every
+  # query is `LazyHTML.query/2` — `filter/2` matches the fragment's ROOT nodes
+  # only, so on nodes this deep it returns `[]` and reads as "not there".
+  describe "(i) the guest's chat slot is ABSENT, so no Chat tab is served" do
+    # The pane the expanded rail is currently rendering, scoped to the
+    # expanded branch for the reason in the note above.
+    defp expanded_pane(doc) do
+      LazyHTML.query(
+        doc,
+        ~s([data-role="call-rail-expanded"] [data-role="call-rail-pane"])
+      )
+    end
+
+    test "GUEST (@shell? false): NEITHER presentation offers a Chat tab",
+         %{conn: conn, org: org} do
+      meeting = meeting!(org, "guest-no-chat-tab")
+      view = open_meeting_guest(conn, meeting)
+
+      # Collapsed the way a guest actually gets there: the chevron is
+      # `@shell?`-gated, so what collapses their rail is the host starting a
+      # screen share, which reasserts the `:screen` mode's rail default.
+      # Both presentations are in the DOM at once while collapsed, which is
+      # what lets one render answer for both.
+      render_hook(view, "meeting_screen_share_state", %{"enabled" => true})
+
+      assert assigns(view).chat_panel_collapsed == true,
+             "the guest's rail must be collapsed or there is only one " <>
+               "presentation here and half the assertion is missing"
+
+      doc = view |> render() |> LazyHTML.from_fragment()
+      strip_ids = view |> strip!() |> strip_tab_ids()
+      tablist_ids = tablist_tab_ids(doc)
+
+      # ANTI-VACUITY FIRST, and as an equality rather than a `!= []`: a
+      # `refute "chat" in …` over a selector that has stopped matching passes
+      # for the worst possible reason, and pinning the exact three-up also
+      # catches a change that drops MORE than Chat.
+      assert strip_ids == ["people", "canvas", "transcript"],
+             "the guest's collapsed strip should serve exactly the three " <>
+               "unconditional tabs — got #{inspect(strip_ids)}"
+
+      assert tablist_ids == ["people", "canvas", "transcript"],
+             "the guest's expanded tablist should serve exactly the three " <>
+               "unconditional tabs — got #{inspect(tablist_ids)}"
+
+      # HALF (a), stated as the refutation it is, in BOTH presentations. The
+      # strip is the half that only became possible once stage 1 made it
+      # derive; before that this line would have failed on a correct fix.
+      refute "chat" in strip_ids
+      refute "chat" in tablist_ids
+
+      # …and no active marker for a tab that is not there, in either
+      # presentation. This is the defect-1 symptom that gating the slot would
+      # have created on a strip still looping the vocabulary.
+      assert doc
+             |> LazyHTML.query(~s([data-role="call-rail-strip-active-marker"]))
+             |> Enum.count() == 1,
+             "exactly one strip button may be marked active"
+
+      assert view
+             |> strip!()
+             |> LazyHTML.query(~s([data-tab="chat"]))
+             |> Enum.empty?(),
+             "no Chat button may survive in the guest's collapsed strip"
+
+      # THE SLOT REALLY IS ABSENT, not merely tab-less. `call_rail/1` gates
+      # the persistent chat wrapper on `@chat != []`, so its absence is the
+      # component's own view of the same fact the tab list reports — and the
+      # shell's chat panel div, which is what used to render empty here, is
+      # gone with it.
+      assert doc |> LazyHTML.query(~s([data-role="call-rail-chat-wrap"])) |> Enum.empty?(),
+             "a guest whose slot is absent must get no chat wrapper at all"
+
+      assert doc |> LazyHTML.query(~s([data-pane="meeting-chat-panel"])) |> Enum.empty?()
+    end
+
+    test "GUEST (@shell? false): no blank pane — the active pane has content",
+         %{conn: conn, org: org} do
+      meeting = meeting!(org, "guest-no-blank-pane")
+      view = open_meeting_guest(conn, meeting)
+
+      # The rail opens expanded for a guest, so this is the pane they land on.
+      pane = view |> render() |> LazyHTML.from_fragment() |> expanded_pane()
+
+      refute Enum.empty?(pane), "found no expanded rail pane to measure"
+      assert LazyHTML.attribute(pane, "data-pane-tab") == ["people"]
+
+      # HALF (b). "Blank" is measured as the DOM measures it: no element
+      # children and no text. Pre-fix, a guest sitting on Chat rendered
+      # exactly that — the pane `case` draws nothing on its `"chat"` branch
+      # and the chat wrap below it was an empty div — so this is the
+      # assertion that would have failed on the old code, not a restatement
+      # of half (a).
+      refute pane |> LazyHTML.query("*") |> Enum.empty?(),
+             "the guest's active pane has no element children — a tab over a " <>
+               "blank pane is the defect this stage removes"
+
+      refute pane |> LazyHTML.text() |> String.trim() == "",
+             "the guest's active pane renders no text at all"
+
+      # AND A TAB ID THE SURFACE NO LONGER SERVES STILL LANDS ON A REAL PANE.
+      # `"chat"` is reachable as an event value even with no button to press
+      # it — `?tab=chat` on a member mount, a stale client, the strip's own
+      # chained push before this change — and the rail must coerce it to
+      # People rather than render the empty branch. `call_rail/1` normalises
+      # against `served_tabs/1`, which is the same list the tab loop uses, so
+      # this is that coercion observed end to end rather than unit-tested.
+      render_click(view, "meeting_tab_select", %{"tab" => "chat"})
+
+      assert assigns(view).active_meeting_tab == "chat",
+             "the assign is stored verbatim; the rail coerces on render"
+
+      after_pane = view |> render() |> LazyHTML.from_fragment() |> expanded_pane()
+
+      assert LazyHTML.attribute(after_pane, "data-pane-tab") == ["people"],
+             "a tab this surface does not serve must render People, not an " <>
+               "empty pane"
+
+      refute after_pane |> LazyHTML.query("*") |> Enum.empty?()
+      refute after_pane |> LazyHTML.text() |> String.trim() == ""
+    end
+
+    test "MEMBER on the meet host is @shell? false too, and loses the tab with the guest",
+         %{conn: conn, org: org, viewer: viewer} do
+      # NOT A DUPLICATE OF THE GUEST CASE. The `:meet_member` live_session
+      # injects `chrome_mode: "none"` for a SIGNED-IN account, so `@shell?` is
+      # false with a real `@user_id` — a different mount clause, a different
+      # subscription set, and the surface where the follow-on `normalize_tab/1`
+      # call sites are actually live (see `chat_on_screen?/1`). The slot gate
+      # is `@shell?`, so the claim "every `@shell?`-false viewer" needs this
+      # second surface or it is a claim about one mount.
+      meeting = meeting!(org, "member-no-chat-tab")
+      view = open_meeting(conn, viewer, meeting)
+
+      assert assigns(view).shell? == false,
+             "if this surface is `@shell?` true it is the shell control, not " <>
+               "a second gated surface, and this case proves nothing"
+
+      doc = view |> render() |> LazyHTML.from_fragment()
+      ids = tablist_tab_ids(doc)
+
+      assert ids == ["people", "canvas", "transcript"], "got #{inspect(ids)}"
+      refute "chat" in ids
+      assert doc |> LazyHTML.query(~s([data-pane="meeting-chat-panel"])) |> Enum.empty?()
+    end
+
+    test "SHELL (@shell? true) POSITIVE CONTROL: Chat is still served and its pane still renders",
+         %{conn: conn, org: org, viewer: viewer} do
+      # THE HALF A REFUTATION CANNOT GIVE. Everything above is "no Chat tab
+      # here"; deleting the `<:chat>` slot outright, or gating it on
+      # something always-false, would satisfy all of it while breaking chat
+      # for every host on the product. This case is what makes the pair a
+      # specification instead of a demolition order.
+      meeting = meeting!(org, "shell-chat-kept")
+      view = open_meeting_shell(conn, viewer, meeting)
+
+      assert assigns(view).shell? == true
+
+      doc = view |> render() |> LazyHTML.from_fragment()
+      ids = tablist_tab_ids(doc)
+
+      assert ids == ["people", "chat", "canvas", "transcript"], "got #{inspect(ids)}"
+      assert "chat" in ids
+
+      # The slot is supplied here, so the persistent wrapper exists…
+      assert doc |> LazyHTML.query(~s([data-role="call-rail-chat-wrap"])) |> Enum.count() == 1
+
+      # …and it holds the real embedded chat, not the no-space placeholder:
+      # `meeting!/2` goes through `Meetings.create_meeting/1`, which creates
+      # the backing chat space, and `fetch_meeting_for_user/2` preloads it. If
+      # this ever reads the placeholder branch instead, the pane is "present"
+      # while the discussion is not, which is the blank-pane defect wearing a
+      # different mask.
+      assert doc |> LazyHTML.query(~s([data-pane="meeting-chat-panel"])) |> Enum.count() == 1
+
+      assert doc
+             |> LazyHTML.query(~s([id="meeting-chat-panel-#{meeting.id}"]))
+             |> Enum.count() == 1,
+             "the shell's Chat pane must still mount the embedded chat LiveView"
+
+      assert doc
+             |> LazyHTML.query(~s([data-placeholder="chat-panel-empty"]))
+             |> Enum.empty?(),
+             "a meeting WITH a bound chat space must not render the no-space " <>
+               "placeholder — that would make the assertion above pass over an " <>
+               "empty pane"
+
+      # And selecting Chat really shows it: the wrap is the caller's slot and
+      # `call_rail/1` flips `hidden` on it rather than unmounting it, so
+      # "active" is the observable state here.
+      render_click(view, "meeting_tab_select", %{"tab" => "chat"})
+
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-role="call-rail-chat-wrap"][data-active="true"]))
+             |> Enum.count() == 1,
+             "the shell viewer must still be able to reach the discussion"
     end
   end
 end

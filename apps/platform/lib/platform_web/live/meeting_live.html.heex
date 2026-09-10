@@ -1918,9 +1918,32 @@
 
             <div class="my-1 h-px w-5 flex-shrink-0 bg-edge" aria-hidden="true"></div>
 
-            <%!-- One button per tab, off `CallShell.tabs/0` so the strip and
-               the expanded tablist can never disagree about which tabs exist
-               or in what order.
+            <%!-- One button per tab THIS SURFACE SERVES — the same
+               `CallShell.served_tabs/1` derivation the expanded rail below
+               runs, via `served_meeting_tabs/1` (task 01a089fe stage 1), so
+               the strip and the expanded tablist can never disagree about
+               which tabs exist or in what order.
+
+               THAT IS NOW LOAD-BEARING RATHER THAN PRECAUTIONARY (stage 3).
+               `<:chat>` below is `:if={@shell?}`, so for a guest the served
+               list is three tabs and the vocabulary is four. This loop and
+               that `:if` read one condition.
+
+               IT USED TO LOOP `CallShell.tabs/0`: the unfiltered vocabulary,
+               regardless of what this caller can fill. That matched the rail
+               only because `<:chat>` below is supplied unconditionally — a
+               coincidence, not a guarantee, and one that breaks the moment
+               that slot is gated. `served_tabs/1` is the guarantee.
+
+               BOUND ONCE, READ FOUR TIMES. `strip_tabs` feeds the `:for` and
+               `strip_active` is the coercion, so the dimming, `data-active`
+               and the marker below cannot drift from the buttons or from each
+               other. `normalize_tab/2` is called with `strip_tabs`
+               EXPLICITLY: its second argument defaults to the module's full
+               `@tabs`, so `normalize_tab(@active_meeting_tab)` here would
+               compile clean, pass every test, and silently coerce against the
+               unfiltered list — re-creating exactly the defect this loop was
+               changed to remove. The arity is the fix; do not drop it.
 
                CHAT IS ONE OF THEM NOW. 01a0740d's strip looped three tabs and
                carried a SEPARATE, hand-written Chat button beside them,
@@ -1950,8 +1973,10 @@
                the rail is already pointed at the right pane by the time
                it opens. The toggle is what sets `:call_rail_animate`
                true, which is correct: the viewer asked for this one. --%>
+            <% strip_tabs = served_meeting_tabs(@shell?) %>
+            <% strip_active = CallShell.normalize_tab(@active_meeting_tab, strip_tabs) %>
             <button
-              :for={{id, label} <- CallShell.tabs()}
+              :for={{id, label} <- strip_tabs}
               type="button"
               phx-click={
                 JS.push("meeting_tab_select", value: %{tab: id})
@@ -1963,13 +1988,13 @@
               title={label}
               class={[
                 "btn btn-ghost btn-sm btn-square relative text-base-content hover:text-base-content",
-                if(id != CallShell.normalize_tab(@active_meeting_tab), do: "opacity-60")
+                if(id != strip_active, do: "opacity-60")
               ]}
               data-role={
                 if id == "chat", do: "call-rail-strip-chat", else: "call-rail-strip-icon"
               }
               data-tab={id}
-              data-active={to_string(id == CallShell.normalize_tab(@active_meeting_tab))}
+              data-active={to_string(id == strip_active)}
             >
               <span class={[CallShell.tab_icon(id), "size-4"]} aria-hidden="true"></span>
               <%!-- THE SIGNATURE ELEMENT (Saru's canvas 01a08374). A 2px
@@ -1983,11 +2008,14 @@
                  which reads as the app losing their place. One bar makes
                  collapsed a paused state instead of an amnesiac one.
 
-                 Normalised through `CallShell.normalize_tab/1` so a junk
+                 Normalised through `CallShell.normalize_tab/2` AGAINST THE
+                 DERIVED LIST (`strip_active`, bound above) so a junk
                  `@active_meeting_tab` marks People here exactly as the
-                 expanded pane renders People. --%>
+                 expanded pane renders People — and so a tab this surface
+                 does not serve can never be marked active in a strip that
+                 has no button for it. --%>
               <span
-                :if={id == CallShell.normalize_tab(@active_meeting_tab)}
+                :if={id == strip_active}
                 class="absolute inset-y-0 left-0 w-0.5 bg-primary"
                 aria-hidden="true"
                 data-role="call-rail-strip-active-marker"
@@ -2169,11 +2197,40 @@
                  as a known defect it declined to paper over. The rail's
                  Chat tab is the surface that was missing.
 
-                 `@shell?`-gated, exactly as the drawer was: the guest
-                 bundle has no discussion surface and `@user_id` is `nil`
-                 there, so a guest gets the rail's Chat tab with its empty
-                 state and never mounts a chat LiveView. The
-                 `data-pane="chat-panel"` refutations in
+                 `@shell?`-GATED ON THE SLOT ITSELF, not on a div inside
+                 the slot body (task 01a089fe stage 3). The guest bundle has
+                 no discussion surface and `@user_id` is `nil` there, so
+                 this pane cannot render for them at all — as it could not
+                 before. What changed is that the rail can now SEE that.
+
+                 THE GATE USED TO SIT ON THE `<div>` BELOW, WHICH MEANT THE
+                 SLOT WAS STILL SUPPLIED. `served_tabs/1` keys on whether a
+                 slot was PASSED, never on whether that slot renders
+                 anything (see `tab_served?/2` in `call_shell.ex`), and an
+                 `:if` inside a slot body is invisible to it. So a viewer
+                 with `@shell?` false was served a Chat tab whose pane
+                 rendered literally nothing: the `case @active` has no
+                 markup on its `"chat"` branch by design, and the
+                 `call-rail-chat-wrap` below it was present but empty. A tab
+                 over a blank pane — defect 2 of this task. Moving the `:if`
+                 up one level makes the slot genuinely ABSENT, which is the
+                 only form of "no chat here" slot introspection can read.
+
+                 THAT IS EVERY `@shell?`-FALSE VIEWER, not only the
+                 guest-token one: the `:meet_member` live_session reaches
+                 the same mount with `chrome_mode: :none` and a real signed
+                 -in account (see the `@shell?` note on the invite control
+                 above). Both already got a blank pane; both now get no tab.
+
+                 THIS IS WHY STAGE 1 HAD TO LAND FIRST. With the collapsed
+                 44px strip still looping `CallShell.tabs/0` this one line
+                 would have handed a guest a Chat button in the strip, plus
+                 an active marker, for a tab the expanded rail no longer
+                 has. The strip derives now, through
+                 `served_meeting_tabs/1`, and that function reads the SAME
+                 `@shell?` this `:if` reads.
+
+                 The `data-pane="chat-panel"` refutations in
                  `meeting_live_guest_mount_test.exs` are what hold that.
 
                  THE SLOT RENDERS OUTSIDE THE TAB `case`. `call_rail/1`
@@ -2204,9 +2261,8 @@
                  `data-intent-panel-host="true"` travels with it because it
                  is the greppable marker a future intent-panel swap-out
                  depends on. Chat brings its own typography and keeps it. --%>
-              <:chat>
+              <:chat :if={@shell?}>
                 <div
-                  :if={@shell?}
                   class="flex min-h-0 flex-1 flex-col"
                   data-pane-section="body"
                   data-intent-panel-host="true"

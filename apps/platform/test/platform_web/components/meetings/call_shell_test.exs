@@ -87,6 +87,22 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
   # chat pane.
   defp chat_slot(body), do: [%{__slot__: :chat, inner_block: fn _, _ -> body end}]
 
+  # THIS FIXTURE IS A GENUINE ALL-TABS CALLER, AND THAT IS WHAT ENTITLES THE
+  # LOOPS BELOW TO `CallShell.tabs/0` (task 01a089fe stage 4's census).
+  #
+  # `chat: chat_slot(...)` is in the DEFAULTS, so unless a case overrides it
+  # this rail is handed every slot and `served_tabs/1` returns all four —
+  # the derived list and the unfiltered vocabulary are EQUAL here. Several
+  # cases below iterate `CallShell.tabs()` to assert a per-tab property
+  # (every id has a pane clause, an icon, an aria-label); those are asking
+  # what the rail KNOWS ABOUT, which is exactly what that function answers,
+  # and they are correct.
+  #
+  # DROP `chat:` FROM THESE DEFAULTS AND THOSE LOOPS GO WRONG QUIETLY. They
+  # would render a rail serving three tabs and then assert `"chat"` has a
+  # pane — `data-pane-tab="chat"` would simply not be found, and the failure
+  # would read as "the chat pane broke" rather than "the fixture stopped
+  # serving chat". Override `chat:` per case, not here.
   defp rail(overrides) do
     render_component(
       &CallShell.call_rail/1,
@@ -286,6 +302,36 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       # The fallback must itself be servable by every caller, or the coercion
       # just moves the unreachable-pane problem.
       assert Enum.any?(three, fn {id, _} -> id == "people" end)
+    end
+
+    test "served_tabs/1 reads :chat as a boolean capability, not just a slot list" do
+      # Task 01a089fe stage 1. The `/meetings` COLLAPSED 44px icon strip is
+      # markup in `meeting_live.html.heex`, not a call to `call_rail/1`, so it
+      # holds no slots and cannot state its capability as one. It states it as
+      # a boolean and reaches the SAME derivation, which is what stops it
+      # looping the unfiltered `tabs/0`.
+      ids = fn assigns -> Enum.map(CallShell.served_tabs(assigns), &elem(&1, 0)) end
+
+      assert ids.(%{chat: true}) == ["people", "chat", "canvas", "transcript"]
+      assert ids.(%{chat: false}) == ["people", "canvas", "transcript"]
+
+      # DISCRIMINATING, unlike anything that can be asserted against
+      # `/meetings` today: that surface supplies `<:chat>` unconditionally, so
+      # its derived list is EQUAL to `tabs/0` and no render of it can tell the
+      # two apart. Here they must differ, or `served_tabs/1` is not filtering.
+      refute ids.(%{chat: false}) == Enum.map(CallShell.tabs(), &elem(&1, 0))
+
+      # The boolean form must agree with the slot form it stands in for —
+      # otherwise the strip and the rail derive different lists from the same
+      # capability, which is the defect restated.
+      assert ids.(%{chat: false}) == ids.(%{})
+      assert ids.(%{chat: false}) == ids.(%{chat: []})
+      assert ids.(%{chat: true}) == ids.(%{chat: [%{inner_block: nil}]})
+
+      # And the coercion has to follow the filtered list, or a strip with no
+      # Chat button can still mark Chat active.
+      assert CallShell.normalize_tab("chat", CallShell.served_tabs(%{chat: false})) == "people"
+      assert CallShell.normalize_tab("chat", CallShell.served_tabs(%{chat: true})) == "chat"
     end
   end
 
