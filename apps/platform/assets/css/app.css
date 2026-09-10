@@ -619,6 +619,18 @@ body {
   overscroll-behavior: none;
 }
 
+/* root.html.heex paints the install's branding background_color INLINE on
+   <html> so an installed iOS web app's cold launch shows a dark first frame
+   before this stylesheet arrives (task 01a0879a stage 8). An inline style
+   would otherwise beat daisyUI's `:root { background-color: base-100 }`
+   for good and pin a light-theme page to the dark colour, so once this
+   file is loaded the themed value wins again. `!important` is the only
+   way an author stylesheet outranks a style attribute; it is deliberate
+   and scoped to this one property. */
+html {
+  background-color: var(--color-base-100) !important;
+}
+
 @media all and (display-mode: standalone) {
   html,
   body,

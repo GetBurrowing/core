@@ -156,7 +156,22 @@ defmodule Platform.MixProject do
       # (`ICalendar.from_ics/1`, which performs line-unfolding and value
       # unescaping) instead of a regex over the payload. A regex passes on
       # output no calendar client would accept.
-      {:icalendar, "~> 1.1", only: :test}
+      {:icalendar, "~> 1.1", only: :test},
+      # image / vix: libvips bindings, backing Platform.Branding.IconSet's
+      # derivation of the seven PWA icon variants from one uploaded square
+      # (task 01a0879a stage 2).
+      #
+      # `image` and NOT `mogrify`: mogrify shells out to an ImageMagick
+      # binary that is not present in this repo's runtime image, so every
+      # upload would die with `:enoent` at request time while every test
+      # passed — the same failure mode the `gh` comment in
+      # apps/platform/Dockerfile documents having already shipped once.
+      # `vix` resolves a PRECOMPILED NIF that bundles its own libvips
+      # (`VIX_COMPILATION_MODE` defaults to `PRECOMPILED_NIF_AND_LIBVIPS`),
+      # so the runtime image needs no libvips package — verified by running
+      # the derivation inside a container built from the Dockerfile's `app`
+      # stage, not merely under `mix test`.
+      {:image, "~> 0.54"}
     ]
   end
 

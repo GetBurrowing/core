@@ -17,7 +17,14 @@ defmodule PlatformWeb do
   those modules here.
   """
 
-  def static_paths, do: ~w(assets audio fonts images favicon.ico robots.txt manifest.json sw.js)
+  # `manifest.json` and `favicon.ico` are deliberately NOT here (task
+  # 01a0879a stage 6): both are routes now — `ManifestController` renders
+  # the manifest from the branding record and `/favicon.ico` 302s to the
+  # current favicon — and `Plug.Static` runs before the router, so listing
+  # either here would shadow the route with a file (or, with
+  # `raise_on_missing_only`, raise at boot once the file is gone). The
+  # shipped `.ico` moved under `images/`, which still serves it.
+  def static_paths, do: ~w(assets audio fonts images robots.txt sw.js)
 
   def router do
     quote do

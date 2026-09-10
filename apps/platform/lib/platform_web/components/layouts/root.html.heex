@@ -1,5 +1,14 @@
-<!DOCTYPE html>
-<html lang="en">
+<%!-- The inline background is the FIRST-PAINT colour (task 01a0879a stage 8).
+     An installed iOS web app cold-launches into a white web view and paints
+     nothing until app.css arrives and applies; the manifest's
+     background_color is not used as a launch shade. Painting the branding
+     background on the root element makes the first frame dark as soon as
+     the HTML is parsed, before the stylesheet. It is NOT the themed
+     background: app.css overrides it with `!important` once loaded so a
+     light-theme user still gets base-100. No hex literal here — the value
+     is the branding row's. --%>
+<% branding = Platform.Branding.get() %> <!DOCTYPE html>
+<html lang="en" style={"background-color: #{branding.background_color}"}>
   <head>
     <meta charset="utf-8" />
     <meta
@@ -7,18 +16,43 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <.live_title default="Platform" suffix=" · Phoenix Framework">
+    <%!-- Install identity (task 01a0879a stage 7). ONE row read per render,
+         deliberately uncached: "upload, refresh, Add to Home Screen" is the
+         requirement, and Safari reads `apple-touch-icon` and
+         `apple-mobile-web-app-title` from THIS head at add-time — the
+         manifest is Android's half, these tags are iOS's. Every identity
+         value here routes through Platform.Branding; no literal name, hex
+         or icon path may be reintroduced. --%>
+    <.live_title default={branding.app_name}>
       {assigns[:page_title]}
     </.live_title>
     <link rel="manifest" href="/manifest.json" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Suite" />
-    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon.png" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="apple-mobile-web-app-title" content={branding.app_name} />
+    <link
+      rel="icon"
+      type="image/x-icon"
+      href={Platform.Branding.icon_url(branding, :favicon_ico)}
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href={Platform.Branding.icon_url(branding, :favicon_32)}
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href={Platform.Branding.icon_url(branding, :favicon_16)}
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href={Platform.Branding.icon_url(branding, :apple_touch)}
+    />
+    <meta name="theme-color" content={branding.theme_color} />
     <meta name="vapid-public-key" content={Platform.Push.vapid_public_key()} />
     <meta
       name="webmcp-enabled"

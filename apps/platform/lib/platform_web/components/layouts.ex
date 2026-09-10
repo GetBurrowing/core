@@ -102,7 +102,14 @@ defmodule PlatformWeb.Layouts do
   def guest_root(assigns) do
     ~H"""
     <!DOCTYPE html>
-    <html lang="en">
+    <%!-- Same install-identity wiring as root.html.heex (task 01a0879a
+         stage 7): a guest landing on `meet.` must see the same favicon
+         and tab suffix as the app shell, or the install has two
+         identities. One row read per render, no literals. The inline
+         background is the pre-stylesheet first-paint colour, as on the
+         app-shell root (stage 8). --%>
+    <% branding = Platform.Branding.get() %>
+    <html lang="en" style={"background-color: #{branding.background_color}"}>
       <head>
         <meta charset="utf-8" />
         <meta
@@ -110,14 +117,32 @@ defmodule PlatformWeb.Layouts do
           content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
         />
         <meta name="csrf-token" content={get_csrf_token()} />
-        <.live_title default="Guest meeting" suffix=" · Suite">
+        <.live_title default="Guest meeting" suffix={" · " <> branding.app_name}>
           {assigns[:page_title]}
         </.live_title>
-        <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-        <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32.png" />
-        <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16.png" />
-        <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon.png" />
-        <meta name="theme-color" content="#000000" />
+        <link
+          rel="icon"
+          type="image/x-icon"
+          href={Platform.Branding.icon_url(branding, :favicon_ico)}
+        />
+        <link
+          rel="icon"
+          type="image/png"
+          sizes="32x32"
+          href={Platform.Branding.icon_url(branding, :favicon_32)}
+        />
+        <link
+          rel="icon"
+          type="image/png"
+          sizes="16x16"
+          href={Platform.Branding.icon_url(branding, :favicon_16)}
+        />
+        <link
+          rel="apple-touch-icon"
+          sizes="180x180"
+          href={Platform.Branding.icon_url(branding, :apple_touch)}
+        />
+        <meta name="theme-color" content={branding.theme_color} />
         <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
         <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
         </script>

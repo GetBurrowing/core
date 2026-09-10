@@ -183,6 +183,46 @@ defmodule PlatformWeb.Router do
     get("/agents/:id/avatar", AgentAvatarController, :show)
   end
 
+  # Install PWA icon reads (task 01a0879a stage 3). NOTHING but `:accepts` —
+  # no `fetch_session`, no `RequireAuth`, deliberately. See
+  # `BrandingIconController`'s moduledoc: a PWA icon is fetched by the OS at
+  # install time with no session and no cookie, and every other byte route's
+  # gate answers that fetcher with a 401/redirect that shows up as a blank
+  # glyph on a home screen with nothing logged.
+  #
+  # `:accepts ["html", "json"]` copies `:agent_avatar` rather than naming an
+  # image type: browsers send `Accept: image/avif,…,*/*` for an <img>, and
+  # naming an image type here would break the very requests this serves.
+  pipeline :public_branding do
+    plug(:accepts, ["html", "json"])
+  end
+
+  # HOST-AGNOSTIC and UNAUTHENTICATED, both deliberate: icon URLs are minted
+  # RELATIVE into the <head> of pages served from the app, `chat.` and `meet.`
+  # hosts alike (so `:require_app_surface` would 404 two of the three once
+  # `:host_surface_enforcement` is on), and the OS installer that fetches them
+  # carries no session to authenticate with. The version segment is a content
+  # hash, which is what lets the controller cache these immutably.
+  scope "/", PlatformWeb do
+    pipe_through(:public_branding)
+
+    get("/branding/:version/:variant", BrandingIconController, :show)
+
+    # The PWA manifest (stage 5). HOST-AGNOSTIC because `Plug.Static` served
+    # `/manifest.json` on the app, `chat.` and `meet.` hosts alike and
+    # app-fencing it would silently break install on the external surfaces;
+    # UNAUTHENTICATED because the OS fetches it with no session, exactly as
+    # it fetches the icons above.
+    get("/manifest.json", ManifestController, :show)
+
+    # The document-root favicon probe (stage 6). Clients request
+    # `/favicon.ico` REGARDLESS of markup, so it must follow the upload like
+    # the other six variants; a 302 to `Branding.icon_url(:favicon_ico)`
+    # keeps one source of truth instead of a second knob. Host-agnostic and
+    # unauthenticated for the same reasons as the two routes above.
+    get("/favicon.ico", BrandingIconController, :favicon)
+  end
+
   # Presigned upload POST — HMAC token in the URL is the only auth. No
   # session / no bearer. Body parsers are bypassed via the endpoint's
   # body-reader skip-list so the controller can stream raw bytes.
@@ -715,6 +755,13 @@ defmodule PlatformWeb.Router do
       # (`Lifecycle.with_fabrikam_admin_authz/2`) so neither half is load-bearing
       # alone.
       live("/admin/orgs", AdminOrgsLive, :index)
+      # Task 01a0879a stage 4: this install's PWA identity (name, colours,
+      # icon source). Install-wide, NOT per-org — an org is a client, and
+      # one deployment serves them all the same home-screen icon. Takes the
+      # `:ensure_admin` gate from this live_session for the same reason
+      # `/admin/orgs` does, and `Platform.Branding` re-checks the actor on
+      # both writes.
+      live("/admin/branding", AdminBrandingLive, :index)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)
