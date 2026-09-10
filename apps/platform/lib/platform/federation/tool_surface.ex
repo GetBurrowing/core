@@ -2579,37 +2579,6 @@ defmodule Platform.Federation.ToolSurface do
           "Provide either `assignee_id` (simple) or per-phase ids (advanced) — if any per-phase id is given, `assignee_id` is ignored. Members with `metadata.assignee_override == true` are never overwritten; clear the override first to make them inherit again. Partial per-phase updates are merged phase-by-phase onto the existing stack default.",
         when_to_use:
           "When you want to assign agents once at the stack level instead of drilling into each member task individually."
-      },
-      %{
-        name: "meeting_activity_push",
-        description:
-          "Declare what YOU are doing in a meeting right now, so the meeting's agent rail shows it instead of showing you idle. Only two states can be declared — `thinking` (you are working on something) and `composing` (you are drafting a reply you have not started sending) — because those are the only two the meeting cannot already observe for itself; it already sees when you are typing, when an intent is in flight for you, when one failed, and when a transcript segment reached you. The declaration EXPIRES on its own after a ttl the server sets (returned as `ttl_ms`), so call this again on roughly half that interval for as long as the state holds. There is nothing to call to clear it: stop pushing and it lapses. That is deliberate — it means a state you declared still lapses correctly if your runtime crashes, is killed, or loses its socket mid-turn.",
-        parameters: %{
-          meeting_id: %{
-            type: "string",
-            required: true,
-            description:
-              "The meeting to declare the state in. NOT a room name and not a chat space id."
-          },
-          state: %{
-            type: "string",
-            required: true,
-            description:
-              "Exactly `thinking` or `composing`. Any other value — including `idle`, `typing`, `computing`, `failed` or `heard` — is refused, not coerced."
-          },
-          reason: %{
-            type: "string",
-            required: false,
-            description:
-              "Optional short note shown beside the state, e.g. \"reading the last ten minutes of transcript\". Truncated past 200 characters; blank is treated as absent."
-          }
-        },
-        returns:
-          "%{meeting_id, agent_id, state, reason, pushed_at, ttl_ms, expires_at}. `pushed_at` and `expires_at` are ISO8601 UTC; `expires_at` is when the declaration lapses if you do not push again.",
-        limitations:
-          "You must be an active participant of the meeting's live room — seated by a human and not yet departed. Being in the meeting's chat space is not enough, and neither is having been in the room earlier. The state applies to YOU: there is no parameter for declaring another agent's state. It cannot overwrite what the meeting observed directly — a failed intent still reads as failed, and output you are actually emitting still reads as typing — but it does take precedence over a merely in-flight intent, and it holds off the 120-second stall cap for as long as you keep refreshing. It does not make you speak, does not post to chat, and is not persisted: it is in-memory per node and gone after a restart.",
-        when_to_use:
-          "When you are about to spend more than a few seconds on something in a meeting that the meeting has no other way to see — a long tool chain, a document read, drafting a summary — and the humans in the room would otherwise be watching you sit there looking idle or, past two minutes, looking failed."
       }
     ]
   end
@@ -2689,6 +2658,37 @@ defmodule Platform.Federation.ToolSurface do
           "You must be a current participant of the room — invited by a human from the meeting page and not yet dismissed. Being a member of the meeting's chat space is not enough. Text over 2000 characters is refused, not truncated. A reply budget applies: at most 6 says per minute per room (`reply_budget_exhausted`), and no say at all while the last 3 utterances in the room were agents — a human must speak before you may reply again (`agent_chain_too_deep`). `no_ack` is not a failure and not a success: the dispatch went out and nothing came back, and it still spends budget. Do not retry in a loop on `no_ack`; if it repeats, say so in chat instead.",
         when_to_use:
           "When you are in a meeting and want to say something specific out loud — an answer, a summary, a question — rather than waiting for the intent pipeline to prompt you."
+      },
+      %{
+        name: "meeting_activity_push",
+        description:
+          "Declare what YOU are doing in a meeting right now, so the meeting's agent rail shows it instead of showing you idle. Only two states can be declared — `thinking` (you are working on something) and `composing` (you are drafting a reply you have not started sending) — because those are the only two the meeting cannot already observe for itself; it already sees when you are typing, when an intent is in flight for you, when one failed, and when a transcript segment reached you. The declaration EXPIRES on its own after a ttl the server sets (returned as `ttl_ms`), so call this again on roughly half that interval for as long as the state holds. There is nothing to call to clear it: stop pushing and it lapses. That is deliberate — it means a state you declared still lapses correctly if your runtime crashes, is killed, or loses its socket mid-turn.",
+        parameters: %{
+          meeting_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The meeting to declare the state in. NOT a room name and not a chat space id."
+          },
+          state: %{
+            type: "string",
+            required: true,
+            description:
+              "Exactly `thinking` or `composing`. Any other value — including `idle`, `typing`, `computing`, `failed` or `heard` — is refused, not coerced."
+          },
+          reason: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional short note shown beside the state, e.g. \"reading the last ten minutes of transcript\". Truncated past 200 characters; blank is treated as absent."
+          }
+        },
+        returns:
+          "%{meeting_id, agent_id, state, reason, pushed_at, ttl_ms, expires_at}. `pushed_at` and `expires_at` are ISO8601 UTC; `expires_at` is when the declaration lapses if you do not push again.",
+        limitations:
+          "You must be an active participant of the meeting's live room — seated by a human and not yet departed. Being in the meeting's chat space is not enough, and neither is having been in the room earlier. The state applies to YOU: there is no parameter for declaring another agent's state. It cannot overwrite what the meeting observed directly — a failed intent still reads as failed, and output you are actually emitting still reads as typing — but it does take precedence over a merely in-flight intent, and it holds off the 120-second stall cap for as long as you keep refreshing. It does not make you speak, does not post to chat, and is not persisted: it is in-memory per node and gone after a restart.",
+        when_to_use:
+          "When you are about to spend more than a few seconds on something in a meeting that the meeting has no other way to see — a long tool chain, a document read, drafting a summary — and the humans in the room would otherwise be watching you sit there looking idle or, past two minutes, looking failed."
       }
     ]
   end

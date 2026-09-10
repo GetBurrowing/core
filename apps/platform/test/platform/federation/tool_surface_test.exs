@@ -146,6 +146,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # bundle and MOVED `meeting_create` and `meeting_say` into it out of
       # `task`. A move registers no new tool, so the total is unchanged — a
       # change here would mean a tool was copied rather than moved.
+      # Still 104 after task 01a083c3 stage 1, which MOVED
+      # `meeting_activity_push` out of `task` into `meetings`, joining the
+      # two tools 01a066af stage 4 moved — 01a07400 stage 1 had registered it
+      # in `task`, so a default runtime could speak in a meeting but could not
+      # say it was thinking. A move registers no new tool, so the total is
+      # unchanged — a change here would mean the tool was copied, not moved.
       assert length(tools) == 104
 
       tool_names = Enum.map(tools, & &1.name)
@@ -305,6 +311,64 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute "meeting_create" in task
 
       assert Enum.all?(ToolSurface.list_tools(["meetings"]), &(&1.bundle == "meetings"))
+    end
+
+    # Task 01a083c3 stage 1 — `meeting_activity_push` was registered in
+    # `task_tools/0` by 01a07400 stage 1, after 01a066af stage 4 had already
+    # moved the other two meeting tools out, so it was stamped `"task"`.
+    #
+    # This asserts bundle MEMBERSHIP only, and is deliberately independent of
+    # `AgentRuntime.default_allowed_bundles/0`: removing `"meetings"` from the
+    # default grant must leave this test green, because a bundle can exist and
+    # be populated without being granted by default. The companion test in
+    # `agent_runtime_test.exs` is what pins the grant.
+    #
+    # Both directions are required. Presence in `meetings` alone still passes
+    # if the tool was COPIED rather than moved, and a copy is the plausible
+    # wrong implementation here.
+    test "meeting_activity_push is in the meetings bundle and not in task" do
+      meetings = ToolSurface.list_tools(["meetings"]) |> Enum.map(& &1.name)
+      task = ToolSurface.list_tools(["task"]) |> Enum.map(& &1.name)
+
+      assert "meeting_activity_push" in meetings
+      refute "meeting_activity_push" in task
+    end
+
+    # Task 01a083c3 stage 3 — the CLASS guard, not the instance. Stage 1 moved
+    # `meeting_activity_push` out of `task`; 01a066af stage 4 had already moved
+    # `meeting_create` and `meeting_say`. Two tickets for the same mistake is
+    # enough: this pins the RULE rather than a third name, so a future
+    # `meeting_*` descriptor added to `task_tools/0` reddens here instead of
+    # arriving as another follow-up. `task` is absent from
+    # `AgentRuntime.default_allowed_bundles/0`, so a `meeting_*` tool landing
+    # there is simply unreachable for a default runtime.
+    #
+    # KNOWN EXCEPTION, deliberate, and NOT catchable by a prefix guard:
+    # `intent_ack` is meeting-scoped by function — its `intent_id` resolves the
+    # owning meeting and the queue is meeting-lifetime — but it is not a
+    # `meeting_*` name, and its placement in `task` is a recorded decision, not
+    # an oversight: every dispatch-capable runtime already holds `task`, so
+    # answering a meeting intent needs no permissions change. See
+    # `tool_surface_intent_ack_test.exs`, "intent_ack ships in the task bundle
+    # alongside task_ack". This guard therefore claims exactly what it says —
+    # nothing NAMED `meeting_*` sits in `task` — and does not claim that `task`
+    # holds nothing meeting-related.
+    #
+    # The two assertions are anti-vacuity and both are load-bearing: without
+    # them the refute would still pass if `list_tools/1` started returning `[]`,
+    # or if the `meetings` bundle were emptied.
+    test "no meeting_* tool is registered in the task bundle" do
+      refute Enum.any?(
+               ToolSurface.list_tools(["task"]),
+               &String.starts_with?(&1.name, "meeting_")
+             )
+
+      assert Enum.any?(
+               ToolSurface.list_tools(["meetings"]),
+               &String.starts_with?(&1.name, "meeting_")
+             )
+
+      assert length(ToolSurface.list_tools(["task"])) > 0
     end
 
     test "returns the union when multiple bundles are requested" do

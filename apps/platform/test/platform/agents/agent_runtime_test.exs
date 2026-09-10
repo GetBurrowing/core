@@ -46,6 +46,29 @@ defmodule Platform.Agents.AgentRuntimeTest do
       assert "meeting_say" in ToolAuthorization.tool_names(runtime)
     end
 
+    # Task 01a083c3 stage 1 — the same defect as above, one tool later.
+    # `meeting_activity_push` was registered in `task_tools/0` by task 01a07400
+    # stage 1, AFTER 01a066af stage 4 had moved `meeting_create` and
+    # `meeting_say` into `meetings`, so it stayed stamped `"task"`. A default
+    # runtime could therefore speak in a meeting but could not declare that it
+    # was thinking, so it read as idle and, past 120s, as failed.
+    #
+    # Built from the accessor, never a literal bundle list: the proposition is
+    # that WHATEVER the defaults are, they reach this tool. Hardcoding
+    # `["federation", ..., "meetings"]` would assert something else entirely
+    # and would survive removal of `"meetings"` from `@default_allowed_bundles`.
+    #
+    # `authorize/2` returns a BARE `{:error, :forbidden}`; the readable
+    # `tool '...' not in allowed bundles` string is rendered only at the
+    # transport boundaries (`runtime_channel.ex`, `mcp_controller.ex`), so
+    # there is nothing to match on here beyond `:ok`.
+    test "a runtime on default bundles may call meeting_activity_push" do
+      runtime = %AgentRuntime{allowed_bundles: AgentRuntime.default_allowed_bundles()}
+
+      assert :ok = ToolAuthorization.authorize("meeting_activity_push", runtime)
+      assert "meeting_activity_push" in ToolAuthorization.tool_names(runtime)
+    end
+
     test "\"meetings\" is a default, not merely grantable" do
       assert "meetings" in AgentRuntime.default_allowed_bundles()
       assert "meetings" in AgentRuntime.valid_bundles()
