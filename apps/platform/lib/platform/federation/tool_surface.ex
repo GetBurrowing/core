@@ -1757,7 +1757,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "execution_lease_list",
         description:
-          "Read a task's execution leases — the lifecycle/liveness records the safety-net timer reasons over — newest first. Pure read; creates and mutates nothing.",
+          "Read a task's durable `execution_leases` rows — created only by the blocker/lifecycle path (`RuntimeSupervision.persist_lease/4`), read back for the `needs_human` hold — newest first. These are NOT the records the no-ack/safety-net countdown reasons over: that countdown reads a separate ephemeral ETS store (`Platform.Orchestration.LeaseManager`) this tool does not read, so an empty result here does NOT mean no safety-net timer is armed. Pure read; creates and mutates nothing.",
         parameters: %{
           task_id: %{
             type: "string",

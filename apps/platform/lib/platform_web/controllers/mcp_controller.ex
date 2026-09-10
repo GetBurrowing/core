@@ -22,6 +22,7 @@ defmodule PlatformWeb.MCPController do
   alias Platform.Federation.ResultBound
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
+  alias Platform.Federation.ToolDoc
 
   @protocol_version "2025-06-18"
   @server_name "startup-suite"
@@ -169,10 +170,17 @@ defmodule PlatformWeb.MCPController do
   # for any client that honours the field. The real enforcement is
   # `ResultBound.fit/2` on the way out, because this field is advisory, is
   # Claude-Code-specific, and does nothing at all for the other transport.
+  #
+  # `description` is rendered by `ToolDoc.render_description/1`, which folds the
+  # tool's `returns` / `limitations` / `when_to_use` prose into the string —
+  # original description first and unmodified. Those three fields are NOT added
+  # as sibling keys here on purpose: the MCP tool object is a closed schema, so
+  # a client is entitled to drop keys it does not know and the change would be
+  # a silent no-op. See `Platform.Federation.ToolDoc`.
   defp to_mcp_tool(tool) do
     %{
       name: tool.name,
-      description: tool.description,
+      description: ToolDoc.render_description(tool),
       inputSchema: to_input_schema(tool.parameters),
       _meta: %{"anthropic/maxResultSizeChars" => ResultBound.max_result_bytes()}
     }

@@ -179,10 +179,15 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
     end
 
     # The gate has to be in `description`, not only in `limitations`.
-    # `MCPController.to_mcp_tool/1` forwards name, description and inputSchema
-    # and nothing else, so a gate stated only in `limitations` is read by
-    # maintainers and by no caller. A denied agent needs to know from the
-    # description whether to ask for roster or to drop a stale attachment.
+    #
+    # It used to be that `MCPController.to_mcp_tool/1` forwarded name,
+    # description and inputSchema and nothing else, so a gate stated only in
+    # `limitations` was read by maintainers and by no caller. Task 01a08a0c
+    # fixed that — `ToolDoc.render_description/1` now appends the other three
+    # fields — but this assertion stands on its own footing: `description` is
+    # what a client shows first and what a truncating reader keeps. A denied
+    # agent needs to know from the opening paragraph whether to ask for roster
+    # or to drop a stale attachment, not from a block three headings down.
     test "every gated read carries the read gate in its description" do
       gate = Tools.read_gate()
       defs = ToolSurface.tool_definitions()
@@ -208,11 +213,15 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
   end
 
   # The hosted transport is where the sentence has to survive. `tools/list`
-  # projects each tool through `MCPController.to_mcp_tool/1`, which forwards
-  # ONLY name, description and inputSchema — a boundary stated in
-  # `limitations`, `returns` or `when_to_use` reads correctly in this repo and
-  # reaches no agent. This drives the real endpoint rather than the definition
-  # map, because the definition map is not what ships.
+  # projects each tool through `MCPController.to_mcp_tool/1`. As of task
+  # 01a08a0c that projection runs `ToolDoc.render_description/1` and the
+  # `limitations` / `returns` / `when_to_use` prose DOES reach an agent, folded
+  # into `description` under headings — before that it reached no one. The
+  # assertion below is therefore checked twice on purpose: once against the
+  # definition's OWN `description` (so the folding cannot be what makes it
+  # pass, which would quietly relax the requirement this file exists for) and
+  # once at the wire. Driving the real endpoint still matters, because the
+  # definition map is not what ships.
   describe "the hosted /mcp transport" do
     test "tools/list carries the sharing boundary to a real MCP client", %{conn: conn} do
       {:ok, space} =
@@ -245,8 +254,15 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
         tool = Enum.find(tools, &(&1["name"] == name))
         assert tool, "#{name} missing from tools/list"
 
+        defn = Enum.find(ToolSurface.tool_definitions(), &(&1.name == name))
+        assert defn, "#{name} missing from the federation tool surface"
+
+        assert defn.description =~ boundary,
+               "#{name} states the boundary only outside `description`, so the " <>
+                 "opening paragraph a client shows first no longer carries it"
+
         assert tool["description"] =~ boundary,
-               "#{name} loses the boundary once the transport drops limitations/returns"
+               "#{name} loses the boundary on the hosted transport"
       end
     end
   end

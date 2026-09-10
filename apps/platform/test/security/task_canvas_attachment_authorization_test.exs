@@ -1334,20 +1334,30 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   # 9. The transport gap, as an executable claim
   # ══════════════════════════════════════════════════════════════════════════
 
-  describe "GUARD — limitations does not reach a hosted runtime" do
-    # Stage 4 found this and wrote it in a comment. A comment is what drifts.
+  describe "GUARD — limitations DOES reach a hosted runtime, folded into description" do
+    # INVERTED by task 01a08a0c stage 1. Read the history, because the
+    # inversion is the whole content of this block.
     #
-    # The consequence is real: the refusal taxonomy the tests above pin ships
-    # only on the capabilities push. An agent on `/mcp` gets `description` and
-    # `inputSchema` and nothing else, so it learns the gate exists only by
-    # being refused by it. `canvas.create` works around this by duplicating its
-    # boundary into `description`; stage 4 decided NOT to for these three,
-    # because it would have to be done for all three and the whole definition
-    # map is the attention-broadcast payload.
+    # Stage 4 of task 019fb581 found that the refusal taxonomy these tests pin
+    # shipped only on the WebSocket capabilities push: an agent on `/mcp` got
+    # `description` and `inputSchema` and nothing else, so it learned the gate
+    # existed only by being refused by it. `canvas.create` worked around that
+    # by hand-duplicating its boundary sentence into `description`. Stage 4
+    # decided NOT to do the same for these three and wrote a guard recording
+    # the decision — the version of this test that asserted the taxonomy did
+    # NOT survive the projection.
     #
-    # This test does not argue either way. It makes the fact go red when it
-    # stops being a fact.
-    test "tools/list forwards only name, description, inputSchema and _meta" do
+    # That decision has now been reversed, and by the general route rather than
+    # by more hand-duplication: `PlatformWeb.MCPController.to_mcp_tool/1` runs
+    # `Platform.Federation.ToolDoc.render_description/1`, which appends the
+    # non-blank `returns` / `limitations` / `when_to_use` prose to
+    # `description` under stable headings, original text first and unmodified.
+    #
+    # WHAT DID NOT CHANGE, and is still asserted below: the MCP tool object's
+    # key set. The fix adds no sibling JSON keys, deliberately — the tool
+    # object is a closed schema, so a client may drop keys it does not know and
+    # sibling keys would have been a no-op that looked fixed in the diff.
+    test "tools/list folds limitations into description and adds no new keys" do
       token = runtime_token!(agent!(), ["task"])
 
       %{"result" => %{"tools" => tools}} = rpc!(token, "tools/list", %{})
@@ -1381,10 +1391,11 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
         # test would pass against a tool with no `limitations` at all, or
         # against a `tools/list` that returned nothing useful.
         assert is_binary(definition.limitations) and byte_size(definition.limitations) > 200
-        assert wire["description"] == definition.description
+        assert String.starts_with?(wire["description"], definition.description)
 
-        # …and the taxonomy specifically does not survive.
-        refute wire["description"] =~ "task_forbidden"
+        # …and the taxonomy specifically DOES survive now, by riding in the
+        # appended `Limitations:` block rather than as a key of its own.
+        assert wire["description"] =~ "task_forbidden"
       end
     end
   end

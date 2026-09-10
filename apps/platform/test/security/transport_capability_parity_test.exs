@@ -16,7 +16,17 @@ defmodule Platform.Security.TransportCapabilityParityTest do
       read off the STRUCTURAL denial field, never off the denial sentence; on
       top of that, each transport's message must equal
       `ToolAuthorization.deny_message/1` — the shared formatter — so a
-      transport cannot start composing its own denial wording.
+      transport cannot start composing its own denial wording; and
+    * CONTENT PARITY — for every tool advertised on BOTH transports, each
+      non-blank prose field the WS definition map carries (`description`,
+      `returns`, `limitations`, `when_to_use`) is findable in that same tool's
+      HTTP payload. The transports carry it in DIFFERENT SHAPES — the WS push
+      ships the definition map whole, so the four are separate keys, while
+      `tools/list` projects onto the closed MCP tool object and
+      `Platform.Federation.ToolDoc.render_description/1` folds three of them
+      into `description` — so the claim is REACHABILITY, not key equality.
+      Before task 01a08a0c the HTTP side dropped three of the four outright
+      and this file did not notice, because it only ever compared NAMES.
 
   An edit that fixes or breaks one transport and forgets the other fails here
   instead of shipping — which is precisely how the original bug survived CI:
@@ -70,6 +80,11 @@ defmodule Platform.Security.TransportCapabilityParityTest do
   # Spans granted / ungranted / legacy-alias / external-allowlist names.
   @probes ~w(task_create space_list canvas_create send_media memory_delete stack_abandon prompt_template_update)
 
+  # The prose a WS runtime reads off the definition map. Literal for the same
+  # reason the grant sets are: nothing here reads `ToolDoc`'s section list, so
+  # a renderer that quietly stops folding one of them still reddens.
+  @prose_fields [:description, :returns, :limitations, :when_to_use]
+
   setup do
     world = World.external_world()
     Map.put(world, :agent, create_agent!())
@@ -90,6 +105,14 @@ defmodule Platform.Security.TransportCapabilityParityTest do
 
     test "EXTERNAL owner, #{label}: both transports return the same verdict per tool", ctx do
       assert_verdict_parity(ctx, ctx.ext.id, unquote(bundles))
+    end
+
+    test "INTERNAL owner, #{label}: both transports carry the same tool prose", ctx do
+      assert_content_parity(ctx, ctx.int.id, unquote(bundles))
+    end
+
+    test "EXTERNAL owner, #{label}: both transports carry the same tool prose", ctx do
+      assert_content_parity(ctx, ctx.ext.id, unquote(bundles))
     end
   end
 
@@ -156,7 +179,104 @@ defmodule Platform.Security.TransportCapabilityParityTest do
     end
   end
 
+  # The third property: the two transports agree about what each tool SAYS,
+  # not merely about which tools exist. Asserted as reachability because the
+  # shapes differ on purpose — see the moduledoc.
+  defp assert_content_parity(ctx, owner_user_id, bundles) do
+    {runtime, token} = runtime_for(ctx, owner_user_id, bundles)
+    {_socket, capabilities} = join_runtime(runtime, token)
+
+    http_tools = http_tools_by_name(token)
+
+    shared =
+      Enum.filter(capabilities.tools, fn tool -> Map.has_key?(http_tools, tool.name) end)
+
+    # A quiet empty intersection would make everything below vacuously true, so
+    # pin that "advertised on both" is in fact the whole WS surface. (The
+    # advertisement test owns the converse direction.)
+    assert shared |> Enum.map(& &1.name) |> Enum.sort() == ws_tool_names(capabilities),
+           "a WS-advertised tool had no HTTP payload to compare against"
+
+    {checked, prose_checked, missing} =
+      Enum.reduce(shared, {0, 0, []}, fn tool, acc ->
+        haystack = payload_text(Map.fetch!(http_tools, tool.name))
+
+        Enum.reduce(@prose_fields, acc, fn field, {checked, prose_checked, missing} ->
+          case non_blank(Map.get(tool, field)) do
+            nil ->
+              {checked, prose_checked, missing}
+
+            text ->
+              prose_checked = if field == :description, do: prose_checked, else: prose_checked + 1
+
+              missing =
+                if String.contains?(haystack, text),
+                  do: missing,
+                  else: [{tool.name, field} | missing]
+
+              {checked + 1, prose_checked, missing}
+          end
+        end)
+      end)
+
+    assert missing == [],
+           """
+           prose the WS transport carries was unreachable over HTTP \
+           for bundles #{inspect(bundles)}
+             #{missing |> Enum.reverse() |> Enum.map(fn {n, f} -> "#{n}.#{f}" end) |> Enum.join(", ")}
+           """
+
+    # ANTI-VACUITY. `missing == []` is satisfied by checking nothing, and a
+    # field-by-field loop over blank values checks nothing while looking
+    # thorough, so the counters have to be asserted too.
+    #
+    # The condition is the ADVERTISED surface, deliberately not `bundles != []`.
+    # Keying it off the grant looks equivalent and is not: an EXTERNAL owner is
+    # narrowed to `@external_chat_tools` by `ToolSurface.scope_for_external/2`,
+    # so the external half of the `["federation"]` row advertises nothing at all
+    # and a grant-keyed floor fails there for a reason that has nothing to do
+    # with parity. When the surface IS empty we say so out loud rather than let
+    # the case pass quietly on an empty loop.
+    if shared == [] do
+      assert ws_tool_names(capabilities) == [],
+             "content parity checked nothing despite a non-empty advertised surface"
+    else
+      assert checked > 0, "content parity examined no fields at all for #{inspect(bundles)}"
+
+      assert prose_checked > 0,
+             "content parity examined only `description` for #{inspect(bundles)}; " <>
+               "the returns/limitations/when_to_use claim was never exercised"
+    end
+  end
+
+  defp non_blank(value) when is_binary(value) do
+    if String.trim(value) == "", do: nil, else: value
+  end
+
+  defp non_blank(_), do: nil
+
+  # Location-agnostic by design: the property is "this prose is reachable in
+  # this tool's HTTP payload", not "it lives in `description`". Today
+  # `ToolDoc.render_description/1` puts it there; a future move into `_meta`
+  # or a sibling key should not need this file edited to stay honest. Every
+  # string VALUE in the tool object is flattened and searched (keys are not).
+  defp payload_text(tool_payload), do: tool_payload |> collect_strings() |> Enum.join("\n")
+
+  defp collect_strings(value) when is_binary(value), do: [value]
+
+  defp collect_strings(value) when is_map(value),
+    do: value |> Map.values() |> Enum.flat_map(&collect_strings/1)
+
+  defp collect_strings(value) when is_list(value), do: Enum.flat_map(value, &collect_strings/1)
+  defp collect_strings(_), do: []
+
   # ── HTTP transport (POST /mcp) ─────────────────────────────────────────
+
+  defp http_tools_by_name(token) do
+    conn = mcp_post(token, rpc("tools/list"))
+    %{"result" => %{"tools" => tools}} = json_response(conn, 200)
+    Map.new(tools, fn tool -> {tool["name"], tool} end)
+  end
 
   defp http_tool_names(token) do
     conn = mcp_post(token, rpc("tools/list"))

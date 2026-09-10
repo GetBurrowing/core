@@ -144,8 +144,24 @@ defmodule PlatformWeb.RuntimeChannel do
     # pushed the entire catalogue regardless of `allowed_bundles`, so the
     # advertised surface and the (HTTP-side) authorized surface disagreed.
     # `ToolAuthorization.effective_tools/1` is the same function
-    # `MCPController`'s `tools/list` maps over, so the two transports now
-    # advertise identically for a given runtime.
+    # `MCPController`'s `tools/list` maps over, so for a given runtime the two
+    # transports advertise the same tool NAMES.
+    #
+    # NAMES, not CONTENT — and that distinction cost a ticket. The `push/3`
+    # below ships each definition map WHOLE, so a WS runtime reads all four
+    # prose fields (`description`, `returns`, `limitations`, `when_to_use`) as
+    # separate keys. `MCPController.to_mcp_tool/1` projects onto the MCP tool
+    # object, a closed schema with no key for the other three, and until
+    # `Platform.Federation.ToolDoc.render_description/1` landed (task
+    # 01a08a0c) it dropped them outright: identical names, a quarter of the
+    # prose. The two transports agree on content only since that renderer, and
+    # they agree by REACHABILITY, not by shape — WS still carries the fields as
+    # separate keys while MCP carries them folded into `description`. That
+    # residual asymmetry is named here on purpose: this comment previously
+    # ended "the two transports now advertise identically for a given
+    # runtime", and that unqualified sentence is why three dropped fields
+    # stayed invisible. Both halves are pinned by
+    # `test/security/transport_capability_parity_test.exs`.
     #
     # Fail closed on a missing row: an absent runtime gets an empty set,
     # never the full surface.
