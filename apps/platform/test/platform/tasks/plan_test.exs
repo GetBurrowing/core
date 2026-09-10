@@ -7,6 +7,7 @@ defmodule Platform.Tasks.PlanTest do
 
   alias Platform.Tasks
   alias Platform.Tasks.Plan
+  alias Platform.Tasks.Stage
   alias Platform.Tasks.Validation
 
   setup do
@@ -584,6 +585,95 @@ defmodule Platform.Tasks.PlanTest do
       deploy = List.last(returned.stages)
       assert deploy.name == "Deploy"
       assert Enum.map(deploy.validations, & &1.kind) == ["lint_pass"]
+    end
+
+    # Ticket 01a089e6 — the gap the two tests above leave open. They prove
+    # `position` is respected; this one proves the resulting order is TOTAL.
+    # `asc: :position` is only a total order if positions are distinct, and
+    # nothing enforces that: no unique index on `(plan_id, position)`, no
+    # uniqueness validation in `Stage.changeset/2`, and "Stages must have
+    # unique positions" living only in a tool description. See the
+    # `preload_order` comment in `Platform.Tasks.Plan` for the full argument.
+    #
+    # WHY THIS FIXTURE INSERTS ROWS ITSELF, WITH IDS IT CHOSE. Two things have
+    # to be true at once before this test is capable of failing, and dropping
+    # either one produces a test that passes with or without the tiebreak —
+    # which is how the ordering defect underneath it survived for months in
+    # the first place:
+    #
+    #   1. Two stages must SHARE a `position`. With distinct positions the
+    #      tiebreak is never consulted.
+    #   2. The tied rows' PHYSICAL order must disagree with their `id` order.
+    #      If storage order and id order agree, a bare `ORDER BY position`
+    #      returns id order by accident and the assertion proves nothing.
+    #
+    # (2) is why `replace_plan_stages/3` cannot build this fixture: it mints
+    # each id with `Platform.Types.UUIDv7` as it inserts, so there id order
+    # and insertion order always agree. So the rows go in with pre-chosen
+    # ids, HIGHEST FIRST, making physical order the exact reverse of id order.
+    #
+    # Both conditions are reachable in production. Duplicate positions are
+    # what `PlanEngine`'s "legacy duplicate pair" comment
+    # (`plan_engine.ex:286`) is about. And physical order stops tracking
+    # creation order as soon as rows are rewritten — `shift_stages_from/2`
+    # updates every stage at or after an inserted remediation stage, and each
+    # update writes a new row version — or as soon as an insert reuses the
+    # free space left behind by the DELETE in `replace_plan_stages/3`.
+    #
+    # Every ordering asserted below comes back from a real `Repo.preload`.
+    # Building the disagreement in memory and sorting it in memory would test
+    # `Enum.sort_by`; the defect is in what Postgres returns.
+    test "a preload breaks a tie on position by id, identically on every read", %{task: task} do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+
+      # Sorted rather than assumed-ordered: what this test asserts is that the
+      # preload comes back in ID order, so the ids have to be known to be
+      # ascending independently of how they were minted.
+      [low, mid, high] =
+        Enum.sort([
+          Platform.Types.UUIDv7.generate(),
+          Platform.Types.UUIDv7.generate(),
+          Platform.Types.UUIDv7.generate()
+        ])
+
+      insert_stage = fn id, name, position ->
+        %Stage{}
+        |> Stage.changeset(%{plan_id: plan.id, name: name, position: position})
+        |> Ecto.Changeset.put_change(:id, id)
+        |> Platform.Repo.insert!()
+      end
+
+      # Highest id first. "Surface" and "Build" are the tie; "Deploy" sits at
+      # a distinct higher position so a broken tiebreak cannot be mistaken for
+      # `position` itself being ignored.
+      insert_stage.(high, "Deploy", 2)
+      insert_stage.(mid, "Surface", 1)
+      insert_stage.(low, "Build", 1)
+
+      # The tie is the point of the fixture, so it is asserted rather than
+      # assumed — and this doubles as the standing proof that the schema
+      # ACCEPTS two stages at one position.
+      assert 2 ==
+               Platform.Repo.aggregate(
+                 from(s in Stage, where: s.plan_id == ^plan.id and s.position == 1),
+                 :count
+               )
+
+      # Read three times, and assert the ID ORDER each time rather than that
+      # the reads agree with each other — a single lucky scan satisfies
+      # "they agree", and the claim being made is stronger than that.
+      for _ <- 1..3 do
+        reread = Tasks.get_plan(plan.id)
+        assert Enum.map(reread.stages, & &1.id) == [low, mid, high]
+        assert Enum.map(reread.stages, & &1.name) == ["Build", "Surface", "Deploy"]
+        assert Enum.map(reread.stages, & &1.position) == [1, 1, 2]
+      end
+
+      # And through the nested keyword preload that task 01a088c4's helper
+      # uses, since that is the shape most production reads of a plan tree
+      # take.
+      nested = Platform.Repo.preload(Platform.Repo.get!(Plan, plan.id), stages: :validations)
+      assert Enum.map(nested.stages, & &1.id) == [low, mid, high]
     end
   end
 

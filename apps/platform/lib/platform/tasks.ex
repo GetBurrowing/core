@@ -2325,10 +2325,38 @@ defmodule Platform.Tasks do
       # tree is built by mapping over `stages_input`, so without this the
       # returned struct carries the caller's list order while a reload of the
       # same plan carries position order (`Plan.has_many(:stages)` declares
-      # `preload_order: [asc: :position]`). Those two disagreeing is ticket
-      # 01a077e7: a plan is an ordered sequence, and "stage 3/6" has to mean
-      # the same thing whichever handle you are holding.
-      Map.put(fresh, :stages, Enum.sort_by(stages, & &1.position))
+      # `preload_order: [asc: :position, asc: :id]`). Those two disagreeing is
+      # ticket 01a077e7: a plan is an ordered sequence, and "stage 3/6" has to
+      # mean the same thing whichever handle you are holding.
+      #
+      # The `:id` half of the key is ticket 01a089e6, and it is here for the
+      # same reason: to keep this expression IDENTICAL to the association's
+      # `preload_order`, so the two handles cannot be ordered by different
+      # rules. `position` is not unique — there is no unique index and no
+      # validation, see the `preload_order` comment in `Platform.Tasks.Plan`
+      # — so a tie has to be broken somewhere, and it must be broken the same
+      # way at both sites or a plan with two stages at position 2 gets one
+      # answer from `plan_update`'s own response and another from `plan_get`.
+      #
+      # Stated plainly because it invites a "then why bother": on today's code
+      # path this cannot change the result, and no test reds when it is
+      # removed. `stages` is built by `Enum.map`-ing `stages_input`, so ids are
+      # minted in list order and ascend with the index, and `Enum.sort_by/2` is
+      # a stable sort — sorting on `position` alone therefore ALREADY returns
+      # id order within a tie. A test claiming to prove this line would be
+      # testing `Enum.sort_by`'s stability, not this function, so none was
+      # written; that is a deliberate absence, not an oversight.
+      #
+      # It is still right, because the no-op holds only under two assumptions
+      # that this function does not state and cannot enforce. First, that
+      # "created later" implies "greater id": `Platform.Types.UUIDv7` reads a
+      # wall clock, so an NTP step backwards — or 4096 ids inside one
+      # millisecond — inverts a pair, and then a position-only sort hands back
+      # an order that a re-read of the same plan contradicts. Second, that this
+      # list is assembled in creation order at all: an edit that re-preloads,
+      # appends a synthesized stage, or reuses existing stage rows silently
+      # ends that. The tiebreak costs one tuple and removes both.
+      Map.put(fresh, :stages, Enum.sort_by(stages, &{&1.position, &1.id}))
     end)
   end
 

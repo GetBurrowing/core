@@ -164,7 +164,45 @@ defmodule Platform.Tasks.Plan do
     # per-call-site `order_by` leaves every other caller, including future
     # ones, holding an unordered list, and the next occurrence reads as a
     # fresh mystery.
-    has_many(:stages, Platform.Tasks.Stage, preload_order: [asc: :position])
+    #
+    # THE TIEBREAK (ticket 01a089e6). `asc: :position` on its own is a total
+    # order only if positions are DISTINCT, and nothing in this system
+    # enforces that. `stages` carries one index and it is
+    # `index(:stages, [:plan_id])` — plan_id alone, plain, with no unique
+    # index on `(plan_id, position)` and no index on `position` at all
+    # (`20260320120000_create_tasks_tables.exs:110`, and `PlanEngine`'s
+    # `shift_stages_from/2` relies on exactly that plainness). `Stage.changeset/2`
+    # validates `position` as required and nothing more. The one place
+    # distinctness is written down is prose in the `plan_create` tool
+    # description — "Stages must have unique positions" — which is a request
+    # to a planner, not a constraint on a writer. And duplicates are not
+    # hypothetical: `PlanEngine.open_remediation_stage_for/1` reasons
+    # explicitly about a plan "carrying a legacy duplicate pair"
+    # (`plan_engine.ex:286`).
+    #
+    # Two rows tied on `position` therefore fall back to whatever order the
+    # scan hands the sort node — the exact nondeterminism the paragraph above
+    # removes, in a narrower case, and one that would read as a FRESH mystery
+    # precisely BECAUSE the association now looks ordered.
+    #
+    # `asc: :id` closes it. `id` is the primary key, so it can never tie
+    # itself and no migration is needed; it is `Platform.Types.UUIDv7`, whose
+    # `rand_a` is a per-millisecond monotonic counter, so in the ordinary case
+    # the tiebreak reads as creation order. It is worth being exact about the
+    # weaker guarantee, because the strong one is not what is being bought
+    # here: where the wall clock steps backwards, or where more than 4096 ids
+    # are minted inside one millisecond (both documented on
+    # `Platform.Types.UUIDv7`), "creation order" can be wrong while the order
+    # remains TOTAL and STABLE across reads. Total and stable is the property
+    # every consumer of this list actually needs.
+    #
+    # A unique index on `(plan_id, position)` is the OTHER repair, and it is
+    # deliberately not taken here. It would need a census of existing
+    # duplicate rows in production before it could be migrated safely, and it
+    # answers a different question — it makes a duplicate an error rather
+    # than making the read deterministic. This makes the read deterministic
+    # whether or not that index ever lands; it stays parked in 01a089e6.
+    has_many(:stages, Platform.Tasks.Stage, preload_order: [asc: :position, asc: :id])
 
     timestamps(type: :utc_datetime_usec)
   end
