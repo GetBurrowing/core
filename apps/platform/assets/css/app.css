@@ -87,6 +87,27 @@
      by a hair. If base-300 is ever re-tuned, decide explicitly whether this
      follows it; do not assume. */
   --edge: oklch(88% 0 0);
+  /* Focus-ring slot, theme-split (task 01a0833d). WCAG 2.2 SC 1.4.11 Non-text
+     Contrast wants 3:1 minimum against every adjacent ground, and
+     --color-primary cannot supply it here: #06D5ED is 1.7875:1 on base-100,
+     1.5913:1 on base-200 and 1.2452:1 on base-300. The darkened action cyan
+     does: #087F93 measures 4.7007:1 on base-100 (#FFFFFF), 4.1847:1 on
+     base-200 (#F2F2F2) and 3.2747:1 on base-300 (#D7D7D7). base-300 is the
+     tightest ground, 0.27 above the floor, so re-tuning base-300 lighter is
+     what breaks this first.
+
+     Every ratio above was computed from this file's own declarations by
+     test/platform/design/focus_ring_slot_test.exs through
+     Platform.Design.WcagContrast; none is copied from another comment, because
+     the comments in this file are known to drift (light --color-base-200 is
+     commented #F5F5F5 and renders #F2F2F2).
+
+     Must be named --focus-ring, never --color-focus-ring — see the
+     @theme inline block below for why a --color-* name here breaks. The
+     colon is deliberately not adjacent to that name: this file's own guard
+     matches a declaration as `--color-focus-ring` followed by a colon at the
+     start of a line, and prose must not be able to trip it. */
+  --focus-ring: var(--color-interactive);
   --color-base-content: oklch(0% 0 0);        /* #000000 */
   /* Fabrikam cyan primary. ONE value in both themes (task 01a07435).
 
@@ -195,6 +216,13 @@
      Direction, not value, is what is pinned. See
      test/platform/design/border_token_direction_test.exs. */
   --edge: #232A38;
+  /* Focus-ring slot, theme-split (task 01a0833d). Dark keeps the brand cyan
+     and clears WCAG 2.2 SC 1.4.11 with room to spare: #06D5ED measures
+     9.6304:1 on base-100 (#171B25), 11.5762:1 on base-200 (#000306) and
+     10.1049:1 on base-300 (#091821). Light is the theme that had to move off
+     primary; see the light block above. Ratios computed by
+     test/platform/design/focus_ring_slot_test.exs, not copied. */
+  --focus-ring: var(--color-primary);
   --color-base-content: oklch(95% 0 0);       /* near-white text */
   /* Fabrikam cyan, the SAME value as light. See the light block above for why
      the two themes were unified. The declaration this replaces,
@@ -256,6 +284,11 @@
    breaks. */
 @theme inline {
   --color-edge: var(--edge);
+  /* Same arrangement for the focus ring (task 01a0833d): the theme blocks
+     declare --focus-ring, and this mapping is the only thing that mints a
+     ring-focus-ring utility for the WCAG 2.2 SC 1.4.11 focus indicator.
+     Without it every ring-focus-ring call site falls back to currentColor. */
+  --color-focus-ring: var(--focus-ring);
 }
 
 /* Add variants based on LiveView classes */
@@ -4985,7 +5018,7 @@ body, .font-fabrikam {
 
   .channel-section-move-button--touch {
     @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
     touch-action: manipulation;
   }
 
@@ -5011,7 +5044,7 @@ body, .font-fabrikam {
 
   .channel-row-move-button--touch {
     @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
     touch-action: manipulation;
   }
 
@@ -5308,7 +5341,7 @@ body, .font-fabrikam {
   /* The "More" (kebab) trigger in normal mode. Square, compact, quiet until
      hover/open so it doesn't compete with the CHANNELS label. */
   .channel-sidebar-menu-button {
-    @apply inline-flex items-center justify-center w-7 h-7 rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60;
+    @apply inline-flex items-center justify-center w-7 h-7 rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
   }
 
   .channel-sidebar-menu-button[aria-expanded="true"] {
@@ -5518,14 +5551,14 @@ body, .font-fabrikam {
   }
 
   .channel-hidden-drawer-show {
-    @apply ml-auto flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-[0.7rem] font-medium rounded text-primary hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
+    @apply ml-auto flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-[0.7rem] font-medium rounded text-primary hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
   }
 
   /* Trigger row — silent at N=0 (the wrapper :if guards that). Visually
      quiet by default so it reads as "rail chrome" not "actionable noise".
      No leading eye icon — Marlowe's review explicitly removed it. */
   .channel-hidden-drawer-trigger {
-    @apply flex items-center gap-2 px-3 py-2 min-h-[36px] rounded text-xs font-medium text-base-content/55 hover:text-base-content hover:bg-base-300/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
+    @apply flex items-center gap-2 px-3 py-2 min-h-[36px] rounded text-xs font-medium text-base-content/55 hover:text-base-content hover:bg-base-300/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
   }
 
   .channel-hidden-drawer-caret {

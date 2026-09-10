@@ -324,14 +324,14 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           <button
             type="button"
             phx-click="cancel_save_edit"
-            class="rounded-md px-3 py-1.5 text-sm text-base-content/70 hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="rounded-md px-3 py-1.5 text-sm text-base-content/70 hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Cancel
           </button>
           <button
             type="button"
             phx-click="confirm_save_edit"
-            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-content hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-content hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Edit anyway
           </button>
@@ -427,7 +427,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
             }
             phx-value-message-id={@open_message_actions_id}
             phx-value-emoji={emoji}
-            class="flex size-11 shrink-0 items-center justify-center rounded-lg text-2xl leading-none text-base-content hover:bg-base-200 active:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="flex size-11 shrink-0 items-center justify-center rounded-lg text-2xl leading-none text-base-content hover:bg-base-200 active:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             {emoji}
           </button>
@@ -454,7 +454,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
               )
               |> Phoenix.LiveView.JS.push("close_message_actions")
             }
-            class="flex size-11 shrink-0 items-center justify-center rounded-full bg-base-200 text-base-content transition-transform active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="flex size-11 shrink-0 items-center justify-center rounded-full bg-base-200 text-base-content transition-transform active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <span class="hero-plus size-5"></span>
           </button>
@@ -468,7 +468,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
             )
             |> Phoenix.LiveView.JS.push("close_message_actions")
           }
-          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <span class="hero-chat-bubble-left-right size-5 text-base-content/70"></span>
           <span class="font-medium">Reply in thread</span>
@@ -479,7 +479,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
             Phoenix.LiveView.JS.push("pin_toggle", value: %{"message-id" => @open_message_actions_id})
             |> Phoenix.LiveView.JS.push("close_message_actions")
           }
-          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <span class="hero-bookmark size-5 text-base-content/70"></span>
           <span class="font-medium">Pin / Unpin</span>
@@ -504,7 +504,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
             )
             |> Phoenix.LiveView.JS.push("close_message_actions")
           }
-          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <span class="hero-pencil-square size-5 text-base-content/70"></span>
           <span class="font-medium">Edit message</span>

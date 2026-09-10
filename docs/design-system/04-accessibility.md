@@ -18,28 +18,72 @@ Every interactive element (`<button>`, `<a>`, `<input>`, `<textarea>`, `<select>
 
 | Property         | Value                                                                                |
 |------------------|--------------------------------------------------------------------------------------|
-| Color            | `var(--color-primary)` (cyan; same in light + dark themes)                            |
+| Color            | `var(--color-focus-ring)` — theme-split, NOT one cyan (see 1.2.1)                    |
 | Width            | 2px                                                                                   |
 | Offset           | 2px outside the element (so the ring doesn't overlap the element's own border)        |
 | Style            | Solid                                                                                  |
 | Shape            | Inherits the element's `border-radius` (i.e. matches a rounded button's curve)        |
+
+### 1.2.1 Why the colour is theme-split, and why it carries no alpha
+
+`--color-primary` (`#06D5ED`) cannot serve as the focus indicator in the light
+theme. WCAG 2.2 SC 1.4.11 Non-text Contrast requires **3:1** against every
+adjacent ground, and the cyan measures **1.7875:1** on light `base-100`. It gets
+worse, not better, on the other grounds. In dark it clears the floor threefold.
+One token cannot satisfy both, so the ring has its own slot, `--focus-ring`,
+declared per theme and exposed as `--color-focus-ring` (task `01a0833d`):
+
+| theme | resolves to                          | base-100    | base-200    | base-300     |
+|-------|--------------------------------------|-------------|-------------|--------------|
+| light | `var(--color-interactive)` `#087F93` | 4.7007:1    | 4.1847:1    | 3.2747:1     |
+| dark  | `var(--color-primary)` `#06D5ED`     | 9.6304:1    | 11.5762:1   | 10.1049:1    |
+
+Light `base-300` is the tightest pair at 3.2747:1, roughly 0.27 above the floor,
+so re-tuning `base-300` lighter is what breaks this first.
+
+**Never write an alpha modifier on the ring colour.** `ring-focus-ring/60` and
+`ring-focus-ring/40` both fail the floor even though the token itself passes: in
+light they composite to `#6BB2BE` = **2.3994:1** and `#9CCCD4` = **1.7523:1**
+over white. An alpha modifier is a change that measures compliant on the token
+and fails on the pixels, which is precisely how the previous 37 call sites
+passed review while shipping an invisible ring.
+
+Every ratio in this section was computed from `app.css`'s own declarations by
+`Platform.Design.WcagContrast`, pinned in
+`test/platform/design/focus_ring_slot_test.exs`. None is transcribed from
+another document.
+
+### 1.2.2 Known live miss: the `.focus-visible-ring` class
+
+`app.css` also carries a `.focus-visible-ring` **class** (and an
+`.input`/`.textarea`/`.select` no-offset variant). As of this writing those
+still draw their band from `var(--color-primary)`, so they paint **1.7875:1** on
+light `base-100` and **do not** meet SC 1.4.11. That is a real, shipped miss,
+not a documentation lag, and it is owned by task
+`01a0785c-bf6f-7001-824d-dd99bcb7db89`, whose fix is written but **not merged**.
+`test/platform/design/primary_contrast_sweep_test.exs` deliberately pins the
+current behaviour, so this section describes what the stylesheet does today
+rather than what that branch will do. Do not copy the class for new work — use
+the utilities in 1.3.
 
 ### 1.3 Tailwind utility shorthand
 
 Use this exact set on every interactive element (Phase 4 components apply globally):
 
 ```
-focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
+focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2
 ```
 
 `outline-none` removes the browser default (which is inconsistent across browsers), and the `ring-*` utilities provide the consistent replacement.
+
+**`ring-focus-ring`, with no alpha modifier and no substitute.** The utility exists only because `--color-focus-ring` is registered in the `@theme inline` block of `app.css`; the vendored daisyUI theme plugin registers nothing with Tailwind on its own. Hand-rolling a `box-shadow` instead looks correct in a screenshot while leaving the utility unminted, so a later reader cannot tell the ring from a styling opinion. See 1.2.1 for the measured ratios.
 
 ### 1.4 The exception
 
 Inputs use the ring AT the element edge (not offset), because input borders are themselves visually offset from surrounding content. Apply:
 
 ```
-focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-0
+focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-0
 ```
 
 (or equivalently `focus-visible:ring-offset-0` to override the default).

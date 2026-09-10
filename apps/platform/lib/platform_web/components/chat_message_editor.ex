@@ -37,7 +37,7 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
         name="body"
         rows="3"
         aria-label="Edit message"
-        class="min-w-0 w-full resize-y rounded-lg border border-base-content/10 bg-base-200/40 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+        class="min-w-0 w-full resize-y rounded-lg border border-base-content/10 bg-base-200/40 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         style="field-sizing:content;min-height:48px;max-height:400px"
       ><%= @msg.content || "" %></textarea>
 
@@ -52,13 +52,13 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
           <button
             type="button"
             phx-click="cancel_edit"
-            class="rounded-md px-3 py-1.5 text-sm text-base-content/70 hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="rounded-md px-3 py-1.5 text-sm text-base-content/70 hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Cancel
           </button>
           <button
             type="submit"
-            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-content hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-content hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Save
           </button>

@@ -49,7 +49,7 @@ defmodule PlatformWeb.Components.ChatVersionHistory do
             type="button"
             phx-click="close_version_history"
             aria-label="Close edit history"
-            class="rounded-lg p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="rounded-lg p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <span class="hero-x-mark size-4"></span>
           </button>

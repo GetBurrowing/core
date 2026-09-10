@@ -85,7 +85,7 @@ defmodule PlatformWeb.Components.EmptyState do
         type="button"
         phx-click={chip.event}
         phx-value-label={chip.label}
-        class="empty-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+        class="empty-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
       >
         {chip.label}
       </button>

@@ -71,7 +71,7 @@ DaisyUI's `.btn` is the base. This spec defines the wrapper + state coverage on 
 |------------------|---------------------------------------------------------------------------------------------|
 | Default          | DaisyUI variant default.                                                                     |
 | Hover            | DaisyUI default hover (lightness shift).                                                     |
-| Focus-visible    | 2px ring in `--color-primary`, 2px offset from button edge. Per `04-accessibility.md`. **Apply via `focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2`** — NOT plain `focus:`. |
+| Focus-visible    | 2px ring in `--color-focus-ring` (theme-split; light resolves to `--color-interactive`, dark to `--color-primary`), 2px offset from button edge. Per `04-accessibility.md` §1.2.1. **Apply via `focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2`** — NOT plain `focus:`, and NEVER with an alpha modifier: `ring-focus-ring/60` measures 2.3994:1 in light and fails SC 1.4.11. |
 | Active           | DaisyUI default active.                                                                       |
 | Disabled         | `aria-disabled="true"` + `pointer-events-none opacity-50`. Click handlers no-op.              |
 | **Loading**      | **NEW.** When ancestor has `.phx-click-loading` OR `loading={true}` prop set, replace icon (or prepend if label-only) with `<.icon name="hero-arrow-path" class="animate-spin">`, dim label by `opacity-70`, set `aria-busy="true"`. Click handlers no-op. **Delay-before-show: ~100ms** (Marlowe pin 2026-05-09) — most messages send near-instantly; the spinner should only render once the action exceeds 100ms so fast paths don't flash. Implement via a `setTimeout(showSpinner, 100)` cleared on completion (Phase 4 wires this in the JS hook). |
@@ -160,7 +160,7 @@ attr :rest, :global
 |-----------------|--------------------------------------------------------------------------------------|
 | Default         | DaisyUI `input input-bordered`.                                                       |
 | Hover           | Border slightly darker.                                                               |
-| Focus-visible   | 2px ring `--color-primary`, no offset (the input border itself is the offset). Per `04-accessibility.md`. |
+| Focus-visible   | 2px ring `--color-primary`, no offset (the input border itself is the offset). Per `04-accessibility.md`. **This is what ships today and it is a known SC 1.4.11 miss** — 1.7875:1 in light. See `04-accessibility.md` §1.2.2; owned by task `01a0785c`, not yet merged. New work should use `focus-visible:ring-focus-ring` per §1.4 rather than copying this row. |
 | Active          | N/A (form controls don't have a separate active state).                                |
 | Disabled        | `disabled` attribute + `bg-base-200 opacity-50 cursor-not-allowed`.                   |
 | Loading         | N/A (input loading is the form's button loading).                                      |

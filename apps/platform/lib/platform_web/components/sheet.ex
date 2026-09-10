@@ -74,7 +74,7 @@ defmodule PlatformWeb.Components.Sheet do
             aria-label="Close"
             phx-click={@on_close}
             phx-target={@on_close_target}
-            class="sheet-close-button rounded-full p-1 text-base-content/60 hover:text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="sheet-close-button rounded-full p-1 text-base-content/60 hover:text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <.icon name="hero-x-mark" class="size-5" />
           </button>

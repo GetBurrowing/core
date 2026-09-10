@@ -169,7 +169,7 @@ defmodule PlatformWeb.Components.ChatMessage do
               phx-value-message-id={@msg.id}
               aria-label="Show edit history"
               title="View version history"
-              class="text-[10px] text-base-content/40 hover:text-base-content/70 hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
+              class="text-[10px] text-base-content/40 hover:text-base-content/70 hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
             >
               (edited)
             </button>
@@ -222,7 +222,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-value-message-id={@msg.id}
                 phx-value-emoji={emoji}
                 title={"React with #{emoji}"}
-                class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 {emoji}
               </button>
@@ -248,7 +248,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 title="Add reaction"
                 phx-click="open_reaction_picker"
                 phx-value-message-id={@msg.id}
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-plus size-4"></span>
               </button>
@@ -259,7 +259,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 id={"copy-msg-#{@msg.id}"}
                 data-clipboard-text={@msg.content}
                 title="Copy message"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-clipboard-document-list size-4"></span>
               </button>
@@ -268,7 +268,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-click="toggle_inline_thread"
                 phx-value-message-id={@msg.id}
                 title="Reply"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-chat-bubble-left-right size-4"></span>
               </button>
@@ -277,7 +277,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-click="toggle_inline_thread"
                 phx-value-message-id={@msg.id}
                 title="Open thread"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/40 hover:text-base-content/60 hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-base-content/40 hover:text-base-content/60 hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-arrow-top-right-on-square size-4"></span>
               </button>
@@ -287,7 +287,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-value-message-id={@msg.id}
                 phx-value-space-id={@msg.space_id}
                 title={if MapSet.member?(@pinned_message_ids, @msg.id), do: "Unpin", else: "Pin"}
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class={[
                   "size-4",
@@ -311,7 +311,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-value-id={@msg.id}
                 aria-label="More message actions"
                 title="More"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-ellipsis-horizontal size-4"></span>
               </button>
@@ -354,7 +354,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             type="button"
             phx-click="scroll_to_message"
             phx-value-id={@msg.corrects_message_id}
-            class="flex items-center gap-1 text-[11px] text-base-content/60 hover:text-base-content/80 transition-colors mb-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded"
+            class="flex items-center gap-1 text-[11px] text-base-content/60 hover:text-base-content/80 transition-colors mb-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring rounded"
           >
             <span class="hero-arrow-up-circle size-3.5"></span>
             <span>Correction to earlier message</span>

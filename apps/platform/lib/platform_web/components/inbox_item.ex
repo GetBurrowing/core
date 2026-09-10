@@ -107,7 +107,7 @@ defmodule PlatformWeb.Components.InboxItem do
         phx-value-id={@item.id}
         phx-value-url={@item.url}
         class={[
-          "flex min-w-0 flex-1 items-start gap-3 rounded-2xl py-3 pr-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100",
+          "flex min-w-0 flex-1 items-start gap-3 rounded-2xl py-3 pr-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-base-100",
           if(@selectable, do: "pl-3", else: "pl-4")
         ]}
         data-role="inbox-item-open"

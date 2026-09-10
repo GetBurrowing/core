@@ -420,7 +420,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <button
       type="button"
-      class="mr-2 flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-base-content/60 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      class="mr-2 flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-base-content/60 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
       phx-click="open_row_actions"
       phx-value-space_id={@space_id}
       data-role="drawer-row-actions"
@@ -514,7 +514,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <li>
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             phx-click="toggle_pinned"
             phx-value-space_id={@target && @target.space_id}
             phx-value-pinned={@target && to_string(not @target.pinned)}
@@ -533,7 +533,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <li class="border-t border-edge">
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             phx-click="hide_channel"
             phx-value-id={@target && @target.space_id}
             data-role="row-actions-hide"
@@ -545,7 +545,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <li :if={@target && @target.closeable} class="border-t border-edge">
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             phx-click="close_dm"
             phx-value-id={@target && @target.space_id}
             data-role="row-actions-close-dm"
@@ -781,7 +781,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             <li>
               <button
                 type="button"
-                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 phx-click="unpin_task_from_chat"
                 phx-value-task-id={@target.task_id}
                 data-role="pinned-task-rail-unpin"
@@ -797,7 +797,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             <li>
               <button
                 type="button"
-                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 phx-click="toggle_pinned"
                 phx-value-space_id={@target.space_id}
                 phx-value-pinned={to_string(not @target.pinned)}
@@ -817,7 +817,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             <li :if={@target.hideable} class="border-t border-edge">
               <button
                 type="button"
-                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 phx-click="hide_channel"
                 phx-value-id={@target.space_id}
                 data-role="rail-row-actions-hide"
@@ -834,7 +834,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             <li :if={@fabrikam_admin? and @target.movable} class="border-t border-edge">
               <button
                 type="button"
-                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 phx-click={
                   JS.pop_focus() |> JS.push("close_row_actions") |> JS.push("toggle_reassign_menu")
                 }
@@ -854,7 +854,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             <li :if={@target.closeable} class="border-t border-edge">
               <button
                 type="button"
-                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 phx-click="close_dm"
                 phx-value-id={@target.space_id}
                 data-role="rail-row-actions-close"
