@@ -497,6 +497,94 @@ defmodule Platform.Tasks.PlanTest do
                [validation.id]
              ]
     end
+
+    # Tasks 01a077e7 (root cause: no `preload_order`) and 01a088c4 (the same
+    # defect seen through a test helper that preloaded with no ORDER BY).
+    #
+    # There are TWO independent orderings to get right, and the two tests
+    # below are deliberately split one-per-defect so that each fails on its
+    # own change and neither can mask the other:
+    #
+    #   1. What a RE-READ returns. `Plan.has_many(:stages)` carried no
+    #      `preload_order`, so every preload emitted a bare
+    #      `WHERE plan_id = ANY($1)` and Postgres returned the rows in
+    #      whatever order it liked.
+    #   2. What `replace_plan_stages/3` RETURNS. It builds its list by
+    #      `Enum.map`-ing the caller's `stages_input` and staples it on with
+    #      `Map.put`, so that value never passes through the association at
+    #      all and no `preload_order` can reach it.
+    #
+    # Both tests feed a DESCENDING-position payload, which is what makes them
+    # able to fail. `plan_update`'s pre-existing fixtures all feed ascending
+    # position order, so physical row order and `position` agree by accident
+    # and the assertions pass with or without either fix — vacuous for this
+    # bug. Descending input makes heap order the exact REVERSE of `position`,
+    # so these red on every run with no seed dependence. Descending input is
+    # reachable in production: neither `plan_update` nor this function sorts
+    # its input, and nothing requires a planner to list stages in order.
+    test "a re-read preloads stages in position order when physical row order is the reverse",
+         %{task: task} do
+      %{plan: plan} = seed_old_tree(task)
+
+      {:ok, _returned} =
+        Tasks.replace_plan_stages(plan, [
+          stage_input("Deploy", 3, []),
+          stage_input("Surface", 2, []),
+          stage_input("Build", 1, [])
+        ])
+
+      # Deliberately does NOT look at the return value — that is defect 2's
+      # test. Every assertion here re-reads through Postgres, because an
+      # in-memory list cannot detect a database ordering bug.
+      #
+      # `Tasks.get_plan/1` is itself one of the ~30 unordered preload sites
+      # (`Plan |> Repo.get(id) |> Repo.preload(:stages)`), so this is a real
+      # production read path, not a synthetic one.
+      from_get_plan = Tasks.get_plan(plan.id)
+      assert Enum.map(from_get_plan.stages, & &1.position) == [1, 2, 3]
+      assert Enum.map(from_get_plan.stages, & &1.name) == ["Build", "Surface", "Deploy"]
+
+      # The nested shape from task 01a088c4's helper — `preload_order` has to
+      # survive being reached through a keyword preload, not just an atom one.
+      nested = Platform.Repo.preload(Platform.Repo.get!(Plan, plan.id), stages: :validations)
+      assert Enum.map(nested.stages, & &1.name) == ["Build", "Surface", "Deploy"]
+
+      # And through a query-level `preload:`, the third spelling in use.
+      queried =
+        Platform.Repo.one!(from(p in Plan, where: p.id == ^plan.id, preload: [:stages]))
+
+      assert Enum.map(queried.stages, & &1.name) == ["Build", "Surface", "Deploy"]
+    end
+
+    test "the returned plan carries stages in position order, not caller-payload order", %{
+      task: task
+    } do
+      %{plan: plan} = seed_old_tree(task)
+
+      {:ok, returned} =
+        Tasks.replace_plan_stages(plan, [
+          stage_input("Deploy", 3, [%{"kind" => "lint_pass"}]),
+          stage_input("Surface", 2, []),
+          stage_input("Build", 1, [])
+        ])
+
+      # Deliberately does NOT re-read — that is defect 1's test. This asserts
+      # ONLY on the in-memory value the function hands back, which is what
+      # the MCP `plan_update` tool serializes straight to the caller via
+      # `serialize_plan/1`. Without the sort this is the payload order
+      # `[3, 2, 1]`, so a planner listing stages out of order would get one
+      # answer from the tool's own response and a different one from
+      # `plan_get`/`stage_list`.
+      assert Enum.map(returned.stages, & &1.position) == [1, 2, 3]
+      assert Enum.map(returned.stages, & &1.name) == ["Build", "Surface", "Deploy"]
+
+      # Sorting must not detach the freshly-created validations the function
+      # already had in hand — this is what would break if the sort were
+      # implemented by re-preloading without `:validations`.
+      deploy = List.last(returned.stages)
+      assert deploy.name == "Deploy"
+      assert Enum.map(deploy.validations, & &1.kind) == ["lint_pass"]
+    end
   end
 
   describe "approve_plan/2 auto-supersession" do

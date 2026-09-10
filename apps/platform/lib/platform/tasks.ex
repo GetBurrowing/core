@@ -2255,7 +2255,8 @@ defmodule Platform.Tasks do
   must keep at least one stage — the context function's contract mirrors the
   create paths, which are permissive.
 
-  Returns `{:ok, plan}` with the new `stages` and their `validations` loaded,
+  Returns `{:ok, plan}` with the new `stages` — ordered by `position`, NOT in
+  `stages_input` order — and their `validations` loaded,
   or `{:error, :invalid_transition}` for anything that is not a draft —
   clause shape mirrors `submit_plan_for_review/1`. The status is RE-CHECKED
   inside the transaction against the persisted row, so a draft that flips to
@@ -2320,7 +2321,14 @@ defmodule Platform.Tasks do
           end
         end)
 
-      Map.put(fresh, :stages, stages)
+      # Ordered by position, NOT by the order the caller listed them. The
+      # tree is built by mapping over `stages_input`, so without this the
+      # returned struct carries the caller's list order while a reload of the
+      # same plan carries position order (`Plan.has_many(:stages)` declares
+      # `preload_order: [asc: :position]`). Those two disagreeing is ticket
+      # 01a077e7: a plan is an ordered sequence, and "stage 3/6" has to mean
+      # the same thing whichever handle you are holding.
+      Map.put(fresh, :stages, Enum.sort_by(stages, & &1.position))
     end)
   end
 

@@ -4437,15 +4437,21 @@ defmodule Platform.Orchestration.TaskRouter do
   defp first_pending_stage(nil), do: nil
 
   # Returns the LOWEST-position pending stage, not whatever Ecto's preload
-  # happened to surface first. `Platform.Tasks.Plan` declares
-  # `has_many(:stages, …)` without a default preload order, so preloaded
-  # stages come back in incidental DB order — usually insertion order, but
-  # plan_create can insert out of position when stages are written
-  # individually. Without the sort here the engine would dispatch a higher-
-  # position stage while lower-position ones are still pending (observed on
-  # task 019edb16: engine dispatched stage 3, then 4, while 1 and 2 stayed
-  # `pending`). Sorting explicitly makes the dispatch order deterministic
-  # regardless of how the stages were preloaded.
+  # happened to surface first. Historically `Platform.Tasks.Plan` declared
+  # `has_many(:stages, …)` with NO default preload order, so preloaded stages
+  # came back in incidental DB order and the engine would dispatch a
+  # higher-position stage while lower-position ones were still pending
+  # (observed on task 019edb16: engine dispatched stage 3, then 4, while 1
+  # and 2 stayed `pending`). That association now carries
+  # `preload_order: [asc: :position]` (ticket 01a077e7), so a PRELOADED list
+  # already arrives sorted.
+  #
+  # The sort stays anyway, and not as superstition: `plan` reaches here from
+  # several places, and nothing stops a caller building the struct with a
+  # hand-assembled `:stages` list that never went through the association at
+  # all — `Tasks.replace_plan_stages/3` returns exactly such a struct. Sorting
+  # here makes dispatch order a property of this function rather than a
+  # property of how its argument happened to be constructed.
   defp first_pending_stage(plan) do
     (plan.stages || [])
     |> Enum.sort_by(& &1.position)

@@ -4197,6 +4197,60 @@ defmodule Platform.Federation.ToolSurfaceTest do
       )
     end
 
+    # Discriminating fixture for the `Plan.stages` ordering contract (ticket
+    # 01a077e7). Every other test in this block feeds `corrected_stages/0`,
+    # whose list order ALREADY matches position order — so it passes whether
+    # or not the association orders by position, which is how the missing
+    # `preload_order` survived. Here the input list is deliberately in
+    # DESCENDING position order, so insertion order and position order
+    # disagree: without `preload_order: [asc: :position]` on
+    # `Plan.has_many(:stages)` the reload comes back ["Surface", "Build"],
+    # and without the sort in `replace_plan_stages/3` so does the value the
+    # tool returns.
+    defp out_of_order_stages do
+      [
+        %{
+          "name" => "Surface",
+          "description" => "Second by position, FIRST in the input list",
+          "position" => 2,
+          "validations" => [%{"kind" => "code_review"}]
+        },
+        %{
+          "name" => "Build",
+          "description" => "First by position, SECOND in the input list",
+          "position" => 1,
+          "validations" => [%{"kind" => "test_pass"}]
+        }
+      ]
+    end
+
+    test "plan_update returns and persists stages in POSITION order, not insertion order" do
+      %{plan: plan} = staged_draft_task("Out-of-order update task")
+
+      {:ok, updated} =
+        ToolSurface.execute(
+          "plan_update",
+          %{"plan_id" => plan.id, "stages" => out_of_order_stages()},
+          %{}
+        )
+
+      # The value the tool hands back is ordered by position, even though the
+      # caller supplied the stages the other way round.
+      assert Enum.map(updated.stages, & &1.position) == [1, 2]
+      assert Enum.map(updated.stages, & &1.name) == ["Build", "Surface"]
+
+      # …and a fresh preload agrees, which is the association's contract
+      # rather than one call site remembering to sort.
+      reloaded = plan_tree(plan.id)
+      assert Enum.map(reloaded.stages, & &1.position) == [1, 2]
+      assert Enum.map(reloaded.stages, & &1.name) == ["Build", "Surface"]
+
+      # The tree is still correct, not merely sorted: validations followed
+      # their own stage across the recreation.
+      build = Enum.find(reloaded.stages, &(&1.name == "Build"))
+      assert Enum.map(build.validations, & &1.kind) == ["test_pass"]
+    end
+
     test "plan_update swaps the draft's tree in place: id + version stable, no orphans" do
       %{plan: plan} = staged_draft_task("Update task")
 
@@ -4267,8 +4321,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert submitted.version == plan.version
       assert submitted.status == "pending_review"
 
-      # plan_submit preloads :stages without an ORDER BY, so assert by
-      # position, not list order.
+      # The sort is now belt-and-braces: `Plan.has_many(:stages)` carries
+      # `preload_order: [asc: :position]` (ticket 01a077e7), so plan_submit's
+      # preload arrives ordered. It used to preload with no ORDER BY, which is
+      # what this sort was written to work around. Kept because this asserts a
+      # property of the TREE, not of one preload's ordering.
       assert Enum.map(Enum.sort_by(submitted.stages, & &1.position), & &1.name) ==
                ["Build", "Surface"]
 

@@ -147,7 +147,24 @@ defmodule Platform.Tasks.Plan do
     # deliberately absent from `changeset/2`'s cast list below.
     field(:architecture_verdict, :map)
 
-    has_many(:stages, Platform.Tasks.Stage)
+    # `preload_order` is part of the contract, not a convenience (ticket
+    # 01a077e7). A plan IS an ordered sequence — every dispatch says
+    # "stage 3/6" — and `replace_plan_stages/3` DELETES and RECREATES the
+    # rows rather than editing them, so after a `plan_update` the physical
+    # row order carries no relation to `position`. Without an order here the
+    # preload returns whatever Postgres hands back: stable enough to look
+    # deterministic when a file is run in isolation, and shuffled under
+    # concurrent load. That made any test asserting stage order a coin flip
+    # (observed on `ToolSurfaceTest`, ordering came back ["Surface","Build"]),
+    # and — worse, because it does not announce itself — left every
+    # production consumer that indexes into `plan.stages` or takes `hd/1`
+    # reading an unordered list.
+    #
+    # Ordering the ASSOCIATION rather than the call sites is deliberate: a
+    # per-call-site `order_by` leaves every other caller, including future
+    # ones, holding an unordered list, and the next occurrence reads as a
+    # fresh mystery.
+    has_many(:stages, Platform.Tasks.Stage, preload_order: [asc: :position])
 
     timestamps(type: :utc_datetime_usec)
   end
