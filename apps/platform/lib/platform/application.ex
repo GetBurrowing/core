@@ -9,6 +9,17 @@ defmodule Platform.Application do
   def start(_type, _args) do
     Platform.Config.validate!()
 
+    # Task 01a08b49 stage 1 — FIRST, ahead of the seven handlers below.
+    # `:telemetry` detaches a handler that raises OR exits, VM-wide and for
+    # the rest of the run; this listens on `[:telemetry, :handler, :failure]`
+    # and re-attaches the casualty before `:telemetry.execute/3` returns to
+    # the emitter. Going first is a window argument, not an ordering one:
+    # `:telemetry` only orders handlers within one event name and none of the
+    # seven subscribe to the failure event, so this cannot be about dispatch
+    # order. It is so that no handler is ever attached-and-unguarded, not even
+    # for the microseconds between these lines. See the moduledoc for what
+    # this does NOT do — it does not save the failed write.
+    Platform.Telemetry.HandlerGuardian.attach()
     Platform.Audit.TelemetryHandler.attach()
     Platform.Vault.TelemetryHandler.attach()
     Platform.Chat.TelemetryHandler.attach()

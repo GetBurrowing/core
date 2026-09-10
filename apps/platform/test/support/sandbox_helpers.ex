@@ -71,16 +71,70 @@ defmodule Platform.SandboxHelpers do
   supervised writers completes an existing mechanism instead of adding a
   parallel one, and it covers future emitters for free.
 
-  ## Why only shared (non-`async`) tests
+  ## Why the UNCONDITIONAL drain is shared-mode only
 
-  In `:manual` mode a `Task.Supervisor` child is not in the owner chain
-  at all — it has no connection to protect, and `Repo` calls from it
-  raise `DBConnection.OwnershipError` (which the handler's existing
-  `rescue` does cover). Worse, `async: true` modules run concurrently, so
-  `Platform.TaskSupervisor`'s child set there belongs to *other* modules
-  as much as to this one, and waiting on it would be waiting on an
-  unrelated test. The drain is only meaningful, and only correct, for a
-  shared-mode owner.
+  `async: true` modules run concurrently, so `Platform.TaskSupervisor`'s
+  child set there belongs to *other* modules as much as to this one, and
+  waiting on all of it would be waiting on an unrelated test. That
+  objection stands and is not negotiable: `await_supervised_writes/1` and
+  `drain_or_warn/1` are called only from the shared-mode branch of
+  `Platform.DataCase` and `PlatformWeb.ConnCase`, and must stay there.
+
+  ### A correction to the reason this paragraph used to give
+
+  Until task 01a08b49 stage 2 this section ALSO said that in `:manual`
+  mode "a `Task.Supervisor` child is not in the owner chain at all — it
+  has no connection to protect, and `Repo` calls from it raise
+  `DBConnection.OwnershipError`". **That half is false**, and it mattered:
+  it made the async case look like it had nothing to protect.
+
+  Measured. `Ecto.Adapters.SQL.Sandbox.start_owner!/2` on its
+  `shared: false` branch calls `allow(repo, self(), parent)` — the TEST
+  process is an allowed process even in `async: true`. A supervised child
+  therefore resolves that owner through `:"$callers"`
+  (`DBConnection.Ownership.Manager.proxy_for/2` walks the caller list
+  against the ownership table) and its `Repo` calls SUCCEED while the test
+  is alive. `PlatformWeb.ConnCaseSupervisedOrphanTest`'s positive control
+  2 asserts exactly that from an `async: true` ConnCase case, and passes.
+  What raises `DBConnection.OwnershipError` is a child that reaches the
+  Repo *after* the owner is gone — which is a statement about timing, not
+  about mode.
+
+  So the async case has the same thing to protect as the shared one. It is
+  only the SET that differs.
+
+  ## The scoped drain, and why it is admissible where the other is not
+
+  `await_own_supervised_writes/2` keeps only the children whose
+  `:"$callers"` chain contains a given owner pid. The asymmetry that makes
+  this safe is that the mechanism creating the exposure is the mechanism
+  that scopes the remedy: `Task.Supervisor.start_child/2` seeds
+  `:"$callers"` in the child, that entry is *why* the child can reach the
+  sandbox connection, and the same entry says whose child it is. Waiting
+  on that filtered set cannot wait on a concurrent module, so the
+  objection above does not apply to it.
+
+  `PlatformWeb.ConnCase`'s `async: true` branch calls it (via
+  `drain_own_or_warn/2`) before `Sandbox.stop_owner/1`, which is what
+  removes the orphan this module's opening section describes. Both
+  directions of the filter are pinned by
+  `Platform.SandboxHelpersScopedDrainTest`, in particular that a child
+  started by a foreign process is NOT waited for — because "excludes
+  everything" would satisfy a one-sided test and would silently reinstate
+  the defect.
+
+  ## What NO drain here can see: bare `spawn`
+
+  A bare `spawn(fn -> ... end)` does not seed `:"$callers"`. Such a child
+  never resolves a sandbox owner, so it is invisible to both drains **by
+  construction** — not by omission, and not because the filter is too
+  narrow. That is the INVERSE defect family (task 01a06638 / PR #965,
+  where the remedy is to give those sites a caller chain at the spawn
+  site), and the two must not be conflated: aiming an ownership drain at
+  a process that has no ownership to key on is a fix at the wrong layer.
+  `Platform.SandboxHelpersScopedDrainTest` pins this as a stated
+  limitation so a later reader does not try to "widen" the drain to
+  reach it.
   """
 
   require Logger
@@ -110,7 +164,7 @@ defmodule Platform.SandboxHelpers do
     timeout = Keyword.get(opts, :timeout, @default_timeout_ms)
     supervisor = Keyword.get(opts, :supervisor, Platform.TaskSupervisor)
 
-    poll(supervisor, System.monotonic_time(:millisecond) + timeout)
+    poll(fn -> active_children(supervisor) end, System.monotonic_time(:millisecond) + timeout)
   end
 
   @doc """
@@ -146,8 +200,119 @@ defmodule Platform.SandboxHelpers do
     end
   end
 
-  defp poll(supervisor, deadline) do
-    case active_children(supervisor) do
+  # ONE poller for both drains: the only thing that varies between them is
+  # which children get counted, so that is the only thing parameterised. A
+  # second copy would be a second deadline shape to keep in step.
+  @doc """
+  Block until every supervised child **started by `owner_pid`** has exited,
+  or until `:timeout` elapses.
+
+  This is `await_supervised_writes/1` narrowed to one owner, and the
+  narrowing is what makes it admissible from an `async: true` case where
+  the unconditional drain is not. `Task.Supervisor.start_child/2` seeds
+  the child's `:"$callers"` process-dictionary entry — which is why such
+  a child reaches the sandbox connection at all, since
+  `DBConnection.Ownership.Manager.proxy_for/2` resolves an owner by
+  walking that chain
+  (`deps/db_connection/lib/db_connection/ownership/manager.ex:24-27`).
+  The same entry says whose child it is, so the mechanism that creates
+  the exposure is the mechanism that scopes the remedy.
+
+  Returns `:ok` when the owner's filtered child set is empty, or
+  `{:timeout, active}` with the number of the OWNER'S children still
+  running when the deadline passed. As with `await_supervised_writes/1` a
+  timeout is **reported, never swallowed** — see `drain_own_or_warn/2`.
+
+  ## Options
+
+    * `:timeout` — milliseconds to wait (default `#{@default_timeout_ms}`,
+      the same number as the shared-mode drain). The shared default
+      encodes "a supervised writer still running 5 s after its test
+      finished is a finding about that test", and that judgement does not
+      change with the sharing mode. What changes is the cost of being
+      wrong, and it changes in the SAFE direction: this set contains only
+      children this owner started, so an idle test pays one poll and
+      exits, and the only thing a long wait can be waiting on is work
+      this test itself launched. A shorter async-only default would buy
+      nothing at the median and would convert a real finding into a
+      warning nobody reads.
+    * `:supervisor` — supervisor to drain (default `Platform.TaskSupervisor`)
+  """
+  @spec await_own_supervised_writes(pid(), keyword()) :: :ok | {:timeout, non_neg_integer()}
+  def await_own_supervised_writes(owner_pid, opts \\ []) when is_pid(owner_pid) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout_ms)
+    supervisor = Keyword.get(opts, :supervisor, Platform.TaskSupervisor)
+
+    poll(
+      fn -> length(own_children(owner_pid, supervisor)) end,
+      System.monotonic_time(:millisecond) + timeout
+    )
+  end
+
+  @doc """
+  The children of `supervisor` whose `:"$callers"` chain contains `owner_pid`.
+
+  Ownership is the WHOLE chain, not its head: a child that starts a
+  further supervised child passes its own callers down, and the audit
+  path is exactly that shape (test -> emitter -> `Platform.Audit.record/1`).
+  Matching only the head would miss every transitive writer.
+
+  `Process.info/2` returns `nil` for a pid that has already exited, which
+  is counted as **not ours** — a child that is gone needs no waiting for,
+  and it is the common case in a tight poll loop.
+
+  Returns `[]` when `supervisor` is not running, for the same reason
+  `active_children/1` returns `0`: several test setups boot a trimmed
+  supervision tree, and "not started" is indistinguishable from "nothing
+  in flight" for drain purposes.
+  """
+  @spec own_children(pid(), Supervisor.supervisor()) :: [pid()]
+  def own_children(owner_pid, supervisor \\ Platform.TaskSupervisor) when is_pid(owner_pid) do
+    case Process.whereis(supervisor) do
+      nil ->
+        []
+
+      _pid ->
+        supervisor
+        |> Task.Supervisor.children()
+        |> Enum.filter(&started_by?(&1, owner_pid))
+    end
+  end
+
+  @doc false
+  @spec drain_own_or_warn(pid(), keyword()) :: :ok
+  def drain_own_or_warn(owner_pid, opts \\ []) do
+    case await_own_supervised_writes(owner_pid, opts) do
+      :ok ->
+        :ok
+
+      {:timeout, active} ->
+        Logger.warning(
+          "[SandboxHelpers] #{active} supervised child(ren) started by " <>
+            "#{inspect(owner_pid)} still running when the sandbox owner released " <>
+            "its connection — their Repo writes will be killed mid-flight. " <>
+            "See Platform.SandboxHelpers's moduledoc."
+        )
+
+        :ok
+    end
+  end
+
+  defp started_by?(pid, owner_pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dictionary} ->
+        case List.keyfind(dictionary, :"$callers", 0) do
+          {_key, callers} when is_list(callers) -> owner_pid in callers
+          _other -> false
+        end
+
+      nil ->
+        false
+    end
+  end
+
+  defp poll(count_fun, deadline) do
+    case count_fun.() do
       0 ->
         :ok
 
@@ -156,7 +321,7 @@ defmodule Platform.SandboxHelpers do
           {:timeout, active}
         else
           Process.sleep(@poll_interval_ms)
-          poll(supervisor, deadline)
+          poll(count_fun, deadline)
         end
     end
   end

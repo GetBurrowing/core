@@ -72,23 +72,71 @@ defmodule PlatformWeb.ConnCase do
 
     shared_mode? = not tags[:async]
 
+    # `on_exit` runs in a DIFFERENT process, after the test process is already
+    # dead, so `self()` inside the callback is not the test. The scoped drain
+    # below needs the test's own pid as the ownership key, so capture it here.
+    test_pid = self()
+
+    # Per-test escape hatch for the drain deadline. Its ONLY purpose is to let
+    # a test force the timeout branch — a case that constructs a supervised
+    # orphan on purpose (`conn_case_supervised_orphan_test.exs`) needs the drain
+    # to give up so the orphan is still in flight when `stop_owner/1` runs, and
+    # a characterisation of the un-drained defect is otherwise impossible to
+    # write once the drain exists. Absent the tag the helper's own default
+    # applies; nothing here re-states it, so there is one number.
+    drain_opts =
+      case tags[:sandbox_drain_timeout] do
+        nil -> []
+        timeout_ms -> [timeout: timeout_ms]
+      end
+
     on_exit(fn ->
-      # Shared mode ONLY, and it must stay that way. `Platform.SandboxHelpers`'
-      # moduledoc records why: in `async: true` modules run concurrently, so
-      # `Platform.TaskSupervisor`'s child set belongs to OTHER modules as much
-      # as to this one, and draining it would be waiting on an unrelated test.
-      # The consequence is that this drain does NOT cover `async: true`, so a
-      # supervised orphan spawned by an async ConnCase test is still not waited
-      # for. That residual is real and is not closed by this change: measured
-      # on both the pre- and post-migration trees, such an orphan's in-flight
-      # audit write still arrives as a process exit and still detaches
-      # `"platform-audit-telemetry"` for the whole VM. The 16 `async: true`
-      # files are therefore NOT covered by anything below, and they are a
-      # DISJOINT set from the ones this on_exit protects. See
+      # TWO drains, because ownership is what separates them — NOT one drain
+      # widened to cover both modes.
+      #
+      # The UNCONDITIONAL drain stays shared-mode ONLY, and it must stay that
+      # way. `Platform.SandboxHelpers`' moduledoc records why: in `async: true`
+      # modules run concurrently, so `Platform.TaskSupervisor`'s child set
+      # belongs to OTHER modules as much as to this one, and draining all of it
+      # would be waiting on an unrelated test. That objection is about the SET
+      # being drained, not about draining, and it is unchanged.
+      #
+      # What closes the async residual is therefore a drain SCOPED to this
+      # test's own children. `Task.Supervisor.start_child/2` seeds the child's
+      # `:"$callers"`, which is why such a child reaches the sandbox connection
+      # at all (`DBConnection.Ownership.Manager.proxy_for/2` walks that chain),
+      # and the same entry identifies whose child it is —
+      # `Platform.SandboxHelpersScopedDrainTest` pins both directions of that
+      # discrimination, including that a foreign child is NOT waited for.
+      #
+      # HISTORY, because the previous version of this comment asserted the
+      # opposite and was right at the time: before task 01a08b49 stage 2 the
+      # 16 `async: true` ConnCase files (18 on this branch) were covered by
+      # nothing here, and a supervised orphan they spawned had its in-flight
+      # audit write arrive as a process exit, detaching
+      # `"platform-audit-telemetry"` for the whole VM. Stage 1's
+      # `Platform.Telemetry.HandlerGuardian` bounded that blast radius but did
+      # not save the write. This drain removes the orphan instead, so there is
+      # nothing to kill and no audit row lost. See
       # `notes/2026-09-10-conncase-sandbox-owner.md` §4 for the
-      # `:telemetry.list_handlers/1` readings on both trees, and
-      # `conn_case_supervised_orphan_test.exs` for the construction.
-      if shared_mode?, do: Platform.SandboxHelpers.drain_or_warn()
+      # `:telemetry.list_handlers/1` readings that established the residual, and
+      # `conn_case_supervised_orphan_test.exs` for the construction — which since
+      # task 01a08b49 stage 3 exercises BOTH branches of the deadline from one
+      # construction: a QUEUED-DRAINED case whose orphan this drain waits for
+      # (its write COMPLETES, and `:telemetry` never detaches anything) and a
+      # QUEUED-BEYOND-DRAIN case that forces the timeout branch via `@tag
+      # sandbox_drain_timeout:` so the un-drained shape is still measured. The
+      # pair is what shows this call is load-bearing: delete it and the drained
+      # case goes red with the owner gone from under the write.
+      #
+      # NOT covered, by construction: bare-`spawn` children (task 01a06638 /
+      # PR #965). They carry no `$callers`, never resolve an owner, and no
+      # ownership-scoped drain can see them. Do not "fix" that here.
+      if shared_mode? do
+        Platform.SandboxHelpers.drain_or_warn()
+      else
+        Platform.SandboxHelpers.drain_own_or_warn(test_pid, drain_opts)
+      end
 
       # LAST. Everything above needs a live connection.
       Sandbox.stop_owner(owner)

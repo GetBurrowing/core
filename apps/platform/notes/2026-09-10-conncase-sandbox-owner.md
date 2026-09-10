@@ -186,8 +186,17 @@ orphan emits:**
 | QUEUED | POST-migration (`Sandbox.start_owner!/2`) | **true**     | **false** — DETACHED |
 | LATE   | PRE-migration (`Sandbox.checkout/1`)   | **true**        | **true** — still attached |
 | LATE   | POST-migration (`Sandbox.start_owner!/2`) | **true**     | **true** — still attached |
+| QUEUED-BEYOND-DRAIN | POST + stages 1–2, drain forced to time out | **true** | **true** — detached, then repaired inside `execute/3` |
+| QUEUED-DRAINED | POST + stages 1–2, drain allowed to finish | **true** | **true** — never detached at all |
+| LATE   | POST + stages 1–2                      | **true**        | **true** — unchanged, still rescued |
 
-**Identical on both trees. The migration does not close the async hole.**
+**Identical on both trees. The migration does not close the async hole** — the
+two remedies in task `01a08b49` do, and the last three rows are that result.
+Note that `attached AFTER` reads **true** on every one of those rows, including
+one where the handler really was detached: once stage 1's guardian repairs a
+detach from inside `:telemetry.execute/3`, this column stops discriminating and
+is no longer the measurement. See "What stages 1–2 changed" at the end of this
+section for the readings that replaced it.
 
 The mechanism, classified in-process rather than inferred. The queued orphan's
 raw failure:
@@ -219,14 +228,89 @@ detaches, 0 misses (plus 5 POST and 3 PRE committed-file runs, all EXIT=0);
 LATE at 25 ms / 250 ms / 500 ms, 12 attempts across both trees, 0 detaches.
 The stage-4 re-run reproduced both rows of each shape.
 
-The file restores the handler three times over and asserts each restore,
-because the detach is VM-global and permanent for the rest of the run.
-**Known residual, stated rather than hidden:** between `:telemetry`'s internal
-detach and the orphan's re-attach there is a sub-millisecond VM-global window
-in which a concurrently scheduled async test could emit an audited event and
-find no listener. It is inherent to measuring the real handler id rather than a
-stand-in, and it is the same window the actual defect opens. Observed cost in a
-full concurrent run: 0 failures across 16 377 tests, with exactly 1 detach.
+The file restores the handler four times over (the guardian first, since stage
+1) and asserts each restore, because absent a repair the detach is VM-global and
+permanent for the rest of the run. **Known residual, stated rather than
+hidden:** between `:telemetry`'s internal detach and the first re-attach there
+is a sub-millisecond VM-global window in which a concurrently scheduled async
+test could emit an audited event and find no listener. Stage 1's guardian
+narrows that window from "the rest of the run" to one synchronous `execute/3` on
+the failure event; it does not remove it. It is inherent to measuring the real
+handler id rather than a stand-in, and it is the same window the actual defect
+opens. Observed cost in a full concurrent run: 0 failures across 16 377 tests,
+with exactly 1 detach.
+
+### What stages 1–2 changed, and which half of the defect each one closes
+
+The defect has two halves and they are closed by different changes. Stating them
+separately matters because each remedy is silent about the other's half:
+
+* **The lost audit row** — closed by stage 2's `$callers`-scoped drain
+  (`SandboxHelpers.await_own_supervised_writes/2`, called from
+  `PlatformWeb.ConnCase`'s `async: true` teardown before
+  `Sandbox.stop_owner/1`). The orphan is waited for, its queued write is
+  **served**, and the row is written. There is no orphan left to kill, so
+  nothing reaches `:telemetry` and no detach occurs at all.
+* **The blast radius** — closed by stage 1's `Platform.Telemetry.HandlerGuardian`,
+  which re-attaches the handler from inside `[:telemetry, :handler, :failure]`.
+  This runs before `:telemetry.execute/3` returns and before `:telemetry` logs
+  its `Class=:exit` line (`deps/telemetry/src/telemetry.erl`: `detach/1` at 205,
+  the failure event at 213, the log at 214). It does **not** save the write — the
+  row is still lost — it bounds who else is harmed.
+
+The scoped drain removes the orphan and so saves the row; the guardian bounds
+the detach and so saves the run. Neither substitutes for the other, which is why
+`conn_case_supervised_orphan_test.exs` now carries both a QUEUED-DRAINED case
+(drain allowed to finish) and a QUEUED-BEYOND-DRAIN case (drain forced to time
+out via `@tag sandbox_drain_timeout:`), differing in exactly that one variable.
+
+**Re-measured in the original units** (task `01a08b49` stage 3, Mac mini,
+`PLATFORM_TEST_DATABASE=platform_test_01a08b49_s3`, the whole file at 20 distinct
+seeds — 1–10 and 11–20):
+
+| case | attempts | left DETACHED at `execute/3` return | write outcome |
+|------|----------|-------------------------------------|---------------|
+| QUEUED-DRAINED | 20 | **0** | `:inserted` — the row survives |
+| QUEUED-BEYOND-DRAIN | 20 | **0** (was 10 of 10) | `{:exit, _}` — row still lost |
+| LATE | 20 | 0 | `{:raise, DBConnection.OwnershipError, _}`, rescued |
+
+Against the original reproduction record of QUEUED **10 attempts / 10 detaches /
+0 misses**, the queued shape now leaves the handler detached **0 times out of 20**.
+That is the guardian's result and it holds for both queued cases. It is NOT by
+itself evidence that the drain works: in QUEUED-BEYOND-DRAIN the detach still
+happens and is merely repaired, which is why the restore counter and the write
+outcome are reported beside it. Exactly **one** `Class=:exit` line appears per
+run — from the beyond-drain case, by design — and exactly one
+`[SandboxHelpers] N supervised child(ren) started by #PID<…> still running`
+warning, which is the positive control that its drain was genuinely bypassed
+rather than the case having quietly degraded into the drained one.
+
+**Instrument note, measured the hard way.** `HandlerGuardian`'s restore counter
+is BEAM-global per handler id and cannot attribute a detach to a particular
+emission, so it is usable on BEYOND-DRAIN (the only case that detaches on the
+unmutated tree) but not on DRAINED. `Sandbox.stop_owner/1` returns **before** the
+`{:shutdown, %DBConnection.ConnectionError{}}` exits have propagated to the
+orphans, so a detach can land after its own test's teardown has finished and
+inside a sibling test's sampling window; ExUnit shuffles test order within a
+module by seed, so it is seed-dependent. With a `delta == 0` assertion on
+DRAINED the file was green 4 of 10 seeds and red 6 of 10, each red run reporting
+delta 1 while the same run's write outcome read `:inserted` — contradictory for a
+real drain failure. With the sibling skipped it was green 10 of 10. DRAINED is
+therefore decided on the write outcome (`:inserted`), which is process-local and
+is the outcome stage 2 exists to produce.
+
+### What neither remedy does
+
+* A process **`:kill`ed** between `:telemetry`'s internal detach and the failure
+  event is still unrepaired. The guardian runs *from* the failure event, so a
+  process that never reaches it leaves the handler detached, and no drain helps
+  because the write was already in flight.
+* **Bare-`spawn` writers** (task `01a06638` / PR #965) are invisible to both
+  drains **by construction**. They carry no `:"$callers"`, so they never resolve
+  an owner and an ownership-scoped drain cannot see them. This is not a gap to
+  be closed in `SandboxHelpers`; it is a different defect with a different fix.
+* `Platform.DataCase`'s `async: true` branch has the identical hole and is
+  **flagged, not fixed** — stage 2 deliberately left it alone.
 
 ## 5. Does any ConnCase test rely on the test process being the connection OWNER?
 
@@ -352,3 +436,122 @@ suite that runs work concurrently. Whether it should be re-attachable, scoped
 per test, or whether `async: true` ConnCase tests should be prevented from
 leaving supervised children behind at all, is the real question — and it is
 open, not answered here.
+
+**RESOLVED by task `01a08b49`, and the answer was two of the three options §8
+listed, not one.** "Re-attachable" was taken by stage 1's
+`Platform.Telemetry.HandlerGuardian` (blast radius) and "scoped per test" by
+stage 2's `$callers`-scoped drain (§9, the lost row). The third option —
+preventing `async: true` ConnCase tests from leaving supervised children behind
+— was NOT taken, and deliberately so: the drain waits for such children rather
+than forbidding them, which is why
+`conn_case_supervised_orphan_test.exs` can still construct the un-drained shape
+on demand via `@tag sandbox_drain_timeout:`. The paragraph above is left as the
+dated record of what was open at the time. See §4, "What stages 1–2 changed",
+for which half each remedy closes and for what neither of them does.
+
+## 9. Closed by task `01a08b49` stage 2 — a `$callers`-scoped drain
+
+§8 asked whether `async: true` ConnCase tests "should be prevented from leaving
+supervised children behind at all". They are now, and the mechanism is the third
+option §8 listed: **scoped per test**.
+
+`Platform.SandboxHelpers.await_own_supervised_writes/2` polls
+`Task.Supervisor.children(Platform.TaskSupervisor)` and keeps only the pids whose
+`:"$callers"` chain contains a given owner pid. `PlatformWeb.ConnCase`'s `async:
+true` teardown calls it (via `drain_own_or_warn/2`) **before**
+`Sandbox.stop_owner/1`, keyed on the test pid captured in `setup` — `on_exit`
+runs in a different process, so `self()` there is not the test.
+
+### The asymmetry that makes this admissible where §4's unconditional drain is not
+
+The reason §4's residual looked unfixable was that draining ALL of
+`Platform.TaskSupervisor` from an `async: true` case waits on concurrent modules'
+children. That objection is about **the set**, not about draining. The mechanism
+that creates the exposure is the mechanism that scopes the remedy:
+`Task.Supervisor.start_child/2` seeds `:"$callers"` in the child, that entry is
+*why* the child reaches the sandbox connection at all
+(`DBConnection.Ownership.Manager.proxy_for/2` walks the caller list against the
+ownership table), and the same entry says whose child it is.
+
+`Platform.SandboxHelpersScopedDrainTest` pins the discrimination in both
+directions, because "excludes everything" would satisfy a one-sided test and
+would silently reinstate the defect. The exclusion case was written FIRST and
+shown red against a naive unfiltered poller: it returned `{:timeout, 1}` after
+200 ms where `:ok` is required. Ownership is the whole `$callers` chain, not its
+head — a grandchild's chain contains the test pid with an intermediate child at
+the head, and the real audit path is exactly that shape.
+
+### CORRECTION to `Platform.SandboxHelpers`' moduledoc, and it mattered
+
+Until this stage the moduledoc said that in `:manual` mode "a `Task.Supervisor`
+child is not in the owner chain at all — it has no connection to protect, and
+`Repo` calls from it raise `DBConnection.OwnershipError`". **The first half is
+false.** `Ecto.Adapters.SQL.Sandbox.start_owner!/2` on its `shared: false` branch
+calls `allow(repo, self(), parent)`, so the TEST process is an *allowed* process
+even under `async: true`, and a `$callers`-chained child resolves that owner. Its
+`Repo` calls succeed while the test is alive —
+`PlatformWeb.ConnCaseSupervisedOrphanTest`'s positive control 2 asserts exactly
+that from an `async: true` ConnCase case, and has been passing throughout. What
+raises `OwnershipError` is a child reaching the Repo *after* the owner is gone,
+which is a statement about timing and not about mode.
+
+Why it mattered: that framing made the async case look like it had nothing to
+protect, which is part of why §4's residual read as inherent. The surviving half
+of the objection is intact and both refusal comments were amended rather than
+deleted.
+
+Also: `proxy_for/2` sits at `manager.ex:23-31` today, not the `:24-27` that three
+comments in this tree cite. Cite the symbol.
+
+### A drained write can still be lost — to DBConnection's queue budget
+
+Wiring the drain does **not** simply make §4's queued orphan succeed. With the
+tag removed, its failure class changes from `{:exit, "owner … exited"}` to
+`{:raise, DBConnection.ConnectionError, "…request was dropped from queue after
+493 ms…"}`. The drain holds the owner alive, but
+`conn_case_supervised_orphan_test.exs`'s own `@blocker_hold_ms 3_000`
+monopolises the single sandbox connection for longer than DBConnection's default
+`:queue_target` 50 ms / `:queue_interval` 1000 ms, so the orphan is dropped from
+the queue before it is ever served.
+
+Consequence for any later "drained and written" case: **do not reuse a
+multi-second blocker.** The write you expect to succeed will be starved by the
+construction rather than served by the drain, and it will read as "the drain does
+not work" — a clean measurement of the wrong quantity.
+
+### Why `conn_case_supervised_orphan_test.exs` now tags itself
+
+Once the drain exists by default, the un-drained shape cannot be constructed. The
+per-test `@tag sandbox_drain_timeout: <ms>` seam (read in ConnCase's `setup
+tags`; absent, the helper default of 5 000 ms applies) forces the timeout branch,
+and under that forcing §4's readings are unchanged: same `{:exit, _}` class for
+QUEUED, same rescued `OwnershipError` for LATE, same guardian restore-count delta
+of 1. That the readings survive is the point — the defect is still there when
+nothing waits.
+
+### Counts, re-derived once more
+
+Anchored on `^[[:space:]]*use`, there are **16** `async: true` ConnCase files at
+`ccb93cb4`, confirming §2. The loose grep there returns **17**, not 19, and the
+loose/anchored gap is exactly ONE file — this tree's own
+`test/support/conn_case.ex` moduledoc sentence. 19 is a HEAD-tree number
+(anchored 18; the two extra files arrived with #973).
+
+### Mutations
+
+* Drop the `$callers` filter → the exclusion case goes red (above).
+* Drop the ConnCase call → nothing in the helper-level test file notices, because
+  those tests call the helper directly. `conn_case_scoped_drain_test.exs` exists
+  for that reason: it asserts an observable consequence of the CALL, and under
+  the mutation reads `{:error, %DBConnection.OwnershipError{}}`. Note the shape —
+  `Repo.query/2` RETURNS the ownership error rather than raising it, so a guard
+  that only looks for a raise buries its own diagnosis.
+* Make the timeout effectively infinite → three red, including both readings
+  above, so the tag seam is reachable.
+
+### Still not covered
+
+`Platform.DataCase`'s `async: true` branch has the identical hole and is
+untouched by this stage, which owns ConnCase only. And bare-`spawn` children
+remain invisible to both drains **by construction** — see §7; that is the inverse
+family and no ownership-scoped drain can reach it.
