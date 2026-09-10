@@ -1205,6 +1205,50 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   ordering and the authorization it is gated on. An agent that is already a
   member takes the identical path it took before.
 
+  ## A failed invite that DID add the agent says so (task 01a06e39)
+
+  The space write and `Meetings.invite_agent/3` are sequenced, not wrapped in
+  a transaction, so a `chat_participants` row written by the step above
+  survives an invite that then fails its own voice pre-flight — the common
+  case being `:voice_runtime_offline`, since a voice-capable-but-disconnected
+  agent is `join_capability/1` `:capable` and therefore still gets a button.
+  The operator saw only an error and could not know the agent had just
+  joined the space's chat, where it now has presence, attention routing and
+  message visibility.
+
+  **The membership is kept and disclosed, not rolled back.** Three reasons,
+  in order of weight:
+
+    1. `Chat.add_space_agent/3` emits `[:platform, :chat,
+       :agent_roster_changed]` telemetry and TWO PubSub broadcasts from
+       inside itself. `Ecto` can roll back the row; it cannot roll back a
+       broadcast every open shell has already acted on, nor an audit-shaped
+       telemetry event. A transaction here would trade a visible surprise
+       for an invisible one — subscribers left showing a member that no
+       longer exists — which is the same defect one layer down.
+    2. Chat membership is not voice-gated anywhere else in the system.
+       `Federation.auto_roster_federated_agent/1` adds a linked agent to
+       every channel space with no capability check at all, and
+       `ControlCenterLive` does the same on operator action. Making THIS
+       path voice-gated would make it the only one, and would contradict
+       task 01a06686's finding that the brain can be online and answering
+       chat while the mouth is down.
+    3. The membership read comes first, so a retry after the worker is up
+       reaches the right end state with no duplicate row. Rolling back
+       would delete that property and make the second click re-do work the
+       first click already did correctly.
+
+  So the remedy is copy, and the copy is CONDITIONAL on this click having
+  actually written the row: `membership_note/1` is appended only for
+  `:added`, never for `:unchanged`. An unconditional note would be a fresh
+  false statement for the already-a-member case, i.e. the same class of
+  defect in a new place.
+
+  Because an `else` clause cannot see the bindings of its own `with`, the
+  chain below stops at resolution and hands off to
+  `invite_resolved_agent/3`, which keeps `agent` and the membership outcome
+  in scope for the flash.
+
   The success flash says "Invited", not "is joining" (task 01a0554f). A
   successful return from `invite_agent/3` means the join was BROADCAST, and
   `Phoenix.Endpoint.broadcast/3` returns `:ok` into a topic with no
@@ -1216,45 +1260,76 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   @spec invite_agent_into_call(Phoenix.LiveView.Socket.t(), binary() | nil, binary()) ::
           Phoenix.LiveView.Socket.t()
   def invite_agent_into_call(socket, space_id, agent_id) do
+    # Resolution only. Every step here fails as `nil` or a non-binary, so the
+    # single `else` is the catch-all it always was; the reason-specific
+    # flashes moved to `invite_error_flash/2` with the mutations that can
+    # produce them.
     with space_id when is_binary(space_id) <- space_id,
          %Agent{} = agent <-
            Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)),
-         %Room{} = room <- Meetings.get_active_room(space_id),
-         :ok <- ensure_agent_in_space(room, agent, socket.assigns[:current_user_record]),
-         {:ok, _participant} <-
-           Meetings.invite_agent(room, agent, socket.assigns[:current_user_record]) do
-      put_flash(socket, :info, invite_flash(agent, room, socket.assigns[:user_id]))
+         %Room{} = room <- Meetings.get_active_room(space_id) do
+      invite_resolved_agent(socket, room, agent)
     else
-      {:error, :forbidden} ->
-        put_flash(socket, :error, "You do not have permission to invite an agent here.")
-
-      # Distinguished from the catch-all because it is the one failure a
-      # human can act on: the agent is real and on the roster, but no
-      # runtime is connected to it, so nothing could receive the join.
-      # Before task 01a04f31 this case returned `{:ok, participant}` and
-      # flashed success.
-      {:error, :no_runtime} ->
-        put_flash(
-          socket,
-          :error,
-          "That agent has no connected runtime, so it cannot join the meeting."
-        )
-
-      # Task 01a06686: the agent's voice worker has its own runtime row, and
-      # it is that row — not the brain — that is not connected. Named apart
-      # from `:no_runtime` because the remedy differs: the brain may be
-      # online and answering chat while the mouth is down.
-      {:error, :voice_runtime_offline} ->
-        put_flash(
-          socket,
-          :error,
-          "#{voice_offline_agent_name(socket, agent_id)}'s voice worker is offline, so it cannot join the meeting."
-        )
-
-      _ ->
-        put_flash(socket, :error, "That agent could not be invited.")
+      _ -> put_flash(socket, :error, "That agent could not be invited.")
     end
   end
+
+  # The two mutating steps, in the order `ensure_agent_in_space/3` documents,
+  # with the membership outcome carried forward so a failure can report what
+  # the click already did. `agent` stays in scope, which is why the flash no
+  # longer has to re-find it in `:invitable_agents`.
+  defp invite_resolved_agent(socket, %Room{} = room, %Agent{} = agent) do
+    actor = socket.assigns[:current_user_record]
+
+    case ensure_agent_in_space(room, agent, actor) do
+      {:ok, membership} ->
+        case Meetings.invite_agent(room, agent, actor) do
+          {:ok, _participant} ->
+            put_flash(socket, :info, invite_flash(agent, room, socket.assigns[:user_id]))
+
+          error ->
+            put_flash(
+              socket,
+              :error,
+              invite_error_flash(agent, error) <> membership_note(membership)
+            )
+        end
+
+      # The space write itself failed, so nothing was written and there is
+      # nothing to disclose — `:unchanged`, not a bare `""`, so a future
+      # third outcome cannot silently default to silence.
+      error ->
+        put_flash(socket, :error, invite_error_flash(agent, error) <> membership_note(:unchanged))
+    end
+  end
+
+  defp invite_error_flash(%Agent{}, {:error, :forbidden}),
+    do: "You do not have permission to invite an agent here."
+
+  # Distinguished from the catch-all because it is the one failure a human can
+  # act on: the agent is real and on the roster, but no runtime is connected
+  # to it, so nothing could receive the join. Before task 01a04f31 this case
+  # returned `{:ok, participant}` and flashed success.
+  defp invite_error_flash(%Agent{}, {:error, :no_runtime}),
+    do: "That agent has no connected runtime, so it cannot join the meeting."
+
+  # Task 01a06686: the agent's voice worker has its own runtime row, and it is
+  # that row — not the brain — that is not connected. Named apart from
+  # `:no_runtime` because the remedy differs: the brain may be online and
+  # answering chat while the mouth is down.
+  defp invite_error_flash(%Agent{} = agent, {:error, :voice_runtime_offline}),
+    do: "#{agent_label(agent)}'s voice worker is offline, so it cannot join the meeting."
+
+  defp invite_error_flash(%Agent{}, _other), do: "That agent could not be invited."
+
+  # Task 01a06e39. Appended ONLY when this click wrote the row; see the
+  # moduledoc of `invite_agent_into_call/3` for why the row is kept rather
+  # than rolled back, and why an unconditional note would be its own defect.
+  defp membership_note(:added) do
+    " It was added to the meeting chat space, so once that is fixed one more click is all it needs."
+  end
+
+  defp membership_note(:unchanged), do: ""
 
   # Task 01a05553 stage 2: the click is the whole intention. Before this, an
   # agent the list offered but that held no `chat_participants` row on the
@@ -1281,13 +1356,20 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # A membership read first, so an agent that is already in the space takes
   # exactly the path it took before this task: no insert, no
   # `broadcast_roster_changed/3`, no extra authorization round-trip.
+  #
+  # Task 01a06e39 turned the `:ok` into `{:ok, :added | :unchanged}`. The
+  # caller needs to distinguish them because a later failure has to say
+  # whether THIS click granted the membership, and "is a member now" cannot
+  # answer that — it is true in both branches by the time the invite fails.
+  @spec ensure_agent_in_space(Room.t(), Agent.t(), SpaceAccess.actor()) ::
+          {:ok, :added | :unchanged} | {:error, term()}
   defp ensure_agent_in_space(%Room{} = room, %Agent{} = agent, actor) do
     if Chat.get_agent_participant(room.space_id, agent.id) do
-      :ok
+      {:ok, :unchanged}
     else
       with {:ok, _writer} <- SpaceAccess.authorize_writer(room.space_id, actor),
            {:ok, _entry} <- Chat.add_space_agent(room.space_id, agent.id) do
-        :ok
+        {:ok, :added}
       end
     end
   end
@@ -1331,16 +1413,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     end
   end
 
-  # The `with` above has already bound `agent` by the time `invite_agent/3`
-  # can answer `:voice_runtime_offline`, but an `else` clause cannot see the
-  # bindings of the `with` chain, so the name is looked up again from the
-  # same list the chain read.
-  defp voice_offline_agent_name(socket, agent_id) do
-    case Enum.find(socket.assigns[:invitable_agents] || [], &(&1.id == agent_id)) do
-      %Agent{name: name} when is_binary(name) and name != "" -> name
-      _ -> "That agent"
-    end
-  end
+  # How an agent is named in a flash. A blank name would otherwise produce
+  # "'s voice worker is offline"; the fallback is the same wording the
+  # catch-all uses, so the sentence reads as one voice either way. Task
+  # 01a06e39 replaced the previous `voice_offline_agent_name/2`, which had to
+  # re-find the agent in `:invitable_agents` because the old `else` clause
+  # could not see the `with` bindings.
+  defp agent_label(%Agent{name: name}) when is_binary(name) and name != "", do: name
+  defp agent_label(%Agent{}), do: "That agent"
 
   defp do_join(socket) do
     # Stage 4 (task 019e2d1a) bugfix: the participant-row check used to

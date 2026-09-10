@@ -114,6 +114,68 @@ defmodule PlatformWeb.ChatLive.MeetingHooksInviteTest do
     channel
   end
 
+  # An ACTIVE agent that is NOT in this space, holding one linked runtime that
+  # DECLARES `meeting_voice` and is never connected. That combination is the
+  # whole reproduction of task 01a06e39:
+  #
+  #   * declaring voice makes `Meetings.join_capability/1` answer `:capable`
+  #     (positive evidence), so `invite_rows/2` states the row `:invitable`
+  #     and renders a real button — the agent is NOT filtered out the way the
+  #     `features: []` agent above is;
+  #   * never joining the runtime channel leaves `RuntimePresence.online?/1`
+  #     false, so `resolve_voice_target/1` finds a capable row, finds none
+  #     connected, and answers `{:error, :voice_runtime_offline}` — the branch
+  #     `invite_agent/3` pre-flights BEFORE it writes a participant row;
+  #   * not being in the space is what makes `ensure_agent_in_space/3` take
+  #     its writing branch rather than its read-only one.
+  #
+  # A `features: []` agent would be `:incapable` and lose its button; a
+  # connected one would succeed. Neither reproduces this.
+  defp voice_offline_outsider!(label) do
+    n = System.unique_integer([:positive])
+
+    agent =
+      Repo.insert!(%Agent{
+        slug: "quickmeet-voice-offline-#{label}-#{n}",
+        name: "Vox #{label} #{n}",
+        status: "active"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(user!("voice-owner").id, %{
+        runtime_id: "quickmeet-voice-rt-#{label}-#{n}"
+      })
+
+    {:ok, activated, _raw_token} = Federation.activate_runtime(runtime)
+    {:ok, agent} = Federation.link_agent(activated, agent)
+
+    {:ok, _runtime} =
+      Federation.update_metadata(activated, %{
+        "client_info" => %{
+          "product" => "suite-voice-worker",
+          "version" => "0.1.0",
+          "features" => ["meeting_voice"]
+        }
+      })
+
+    agent
+  end
+
+  # A channel space created DURING a test, i.e. one that postdates every agent
+  # the test has already linked. See the ORDER note in the 01a06e39 test.
+  defp fresh_channel!(label) do
+    n = System.unique_integer([:positive])
+
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Quickmeet Invite #{label} #{n}",
+        slug: "quickmeet-invite-#{label}-#{n}",
+        kind: "channel"
+      })
+
+    space
+  end
+
   defp agent_participant_rows(space_id, agent_id) do
     space_id
     |> Meetings.active_participants_for_space()
@@ -245,6 +307,133 @@ defmodule PlatformWeb.ChatLive.MeetingHooksInviteTest do
 
       # Still listed, still blocked, still explained.
       assert has_element?(view, row_selector(text_only.id, "incapable"))
+    end
+  end
+
+  describe "a voice-offline agent, whose invite fails after the space write (01a06e39)" do
+    # RED BEFORE THE FIX on the "added to the meeting chat space" assertion
+    # alone: the two assertions above it — the honest voice-worker error, and
+    # the `chat_participants` row that survives it — both already held. That
+    # is the defect, not a regression: `ensure_agent_in_space/3` and
+    # `Meetings.invite_agent/3` are sequenced, not wrapped, so the membership
+    # write outlives the failed invite and the flash never mentioned it.
+    #
+    # The membership assertion is deliberately kept in the FIXED test rather
+    # than deleted with the bug: this task decided the row is legitimate (see
+    # `invite_agent_into_call/3`), so the row is now a claim the copy makes
+    # and must therefore stay pinned. If a later change makes the invite
+    # atomic instead, this assertion fails and forces the copy to change with
+    # it — the two can never drift apart silently.
+    test "the error names the offline worker AND discloses the space membership it just granted",
+         %{conn: conn} do
+      voice = voice_offline_outsider!("outsider")
+
+      # ORDER IS LOAD-BEARING, and this is the only reason the test does not
+      # reuse the space from `setup`. `Federation.link_agent/2` — which
+      # `voice_offline_outsider!/1` must call to give the agent a runtime at
+      # all — ends in `auto_roster_federated_agent/1`, which adds the agent to
+      # every channel space that EXISTS AT THAT MOMENT. So an agent linked
+      # after the space is already a member of it, and the writing branch of
+      # `ensure_agent_in_space/3` is unreachable.
+      #
+      # A space created after the agent is not hypothetical: it is the normal
+      # case for a meeting, and `invite_rows/2` says so in its own comment —
+      # `Chat.list_space_agents/1` "answers `[]` on the first render of every
+      # meeting that has ever been created". This is that space.
+      space = fresh_channel!("outsider")
+
+      # Direction control for the whole test: it really is an outsider, and it
+      # really is offered a button anyway.
+      assert Chat.get_agent_participant(space.id, voice.id) == nil
+      assert Meetings.join_capability(voice) == :capable
+
+      view = join(conn, space)
+
+      assert has_element?(view, row_selector(voice.id, "invitable"))
+      assert has_element?(view, button_selector(voice.id))
+
+      html = render_click(view, "quickmeet_invite_agent", %{"agent-id" => voice.id})
+
+      # 1. The invite failed, and said why — the pre-existing behaviour that
+      #    task 01a06686 paid for. Named, not folded into `:no_runtime`.
+      assert html =~ "voice worker is offline"
+      assert html =~ voice.name
+      refute html =~ "no connected runtime"
+      refute html =~ "waiting for it to join"
+
+      # 2. And the side effect really did land. `invite_agent/3` refuses
+      #    before writing its own roster row, so the MEETING roster is empty
+      #    while the CHAT roster gained a row.
+      assert %Chat.Participant{} = Chat.get_agent_participant(space.id, voice.id)
+      assert agent_participant_rows(space.id, voice.id) == []
+
+      # 3. The claim of this task: the flash says so. Without this the
+      #    operator reads "error" and cannot know the agent now sees the
+      #    space's messages and can be routed attention in it.
+      assert html =~ "added to the meeting chat space"
+    end
+
+    # The same defect, one error code over — and the reason the note is
+    # appended per-FAILURE rather than per-reason. The ticket named only
+    # `:voice_runtime_offline`, but an agent with NO runtime at all is
+    # `join_capability/1` `:unknown`, which `invite_rows/2` also states
+    # `:invitable`, so it too gets a button, gets its space row written, and
+    # then fails `invite_agent/3`'s pre-flight — with `:no_runtime`. The
+    # class is "the invite failed after the space write", not one code.
+    test "the same disclosure reaches the :no_runtime failure the ticket did not name",
+         %{conn: conn, space: space} do
+      n = System.unique_integer([:positive])
+
+      runtimeless =
+        Repo.insert!(%Agent{
+          slug: "quickmeet-runtimeless-#{n}",
+          name: "Mute #{n}",
+          status: "active"
+        })
+
+      # Never linked to a runtime, so `auto_roster_federated_agent/1` never
+      # ran and no other source has given it a row in this space.
+      assert Chat.get_agent_participant(space.id, runtimeless.id) == nil
+      assert Meetings.join_capability(runtimeless) == :unknown
+
+      view = join(conn, space)
+      assert has_element?(view, button_selector(runtimeless.id))
+
+      html = render_click(view, "quickmeet_invite_agent", %{"agent-id" => runtimeless.id})
+
+      # The two errors stay separated, as task 01a06686 required.
+      assert html =~ "no connected runtime"
+      refute html =~ "voice worker is offline"
+
+      assert %Chat.Participant{} = Chat.get_agent_participant(space.id, runtimeless.id)
+      assert html =~ "added to the meeting chat space"
+    end
+
+    # The pairing that stops assertion 3 above from passing against a note
+    # pasted onto every error. Same agent shape, same failure, same flash
+    # sentence — but the membership row predates the click (the auto-roster
+    # described above wrote it, because this space existed first), so there is
+    # nothing for the click to disclose. A note that fired unconditionally
+    # would be a NEW false statement in exactly the class of defect this epic
+    # exists to remove.
+    test "an agent ALREADY in the space gets the same error and no membership claim",
+         %{conn: conn, space: space} do
+      voice = voice_offline_outsider!("member")
+      assert %Chat.Participant{} = existing = Chat.get_agent_participant(space.id, voice.id)
+
+      view = join(conn, space)
+
+      assert has_element?(view, button_selector(voice.id))
+
+      html = render_click(view, "quickmeet_invite_agent", %{"agent-id" => voice.id})
+
+      assert html =~ "voice worker is offline"
+      refute html =~ "added to the meeting chat space"
+
+      # The read-only branch of `ensure_agent_in_space/3`: the row is the one
+      # that was already there, untouched, not a second one.
+      assert %Chat.Participant{id: same_id} = Chat.get_agent_participant(space.id, voice.id)
+      assert same_id == existing.id
     end
   end
 end
