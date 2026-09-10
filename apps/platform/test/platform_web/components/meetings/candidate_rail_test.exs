@@ -1309,6 +1309,183 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
     end
   end
 
+  # ── The guarded selectors actually reach a real row (task 01a07a90 stage 3) ──
+  #
+  # `Platform.Design.CandidateClosedRowContrastTest` asserts what
+  # `.candidate-card--closed`, `.candidate-card__title--dead` and
+  # `.candidate-card__reason` DECLARE. A stylesheet clause can be perfectly true
+  # and reach nothing: every one of those would still pass if the component
+  # stopped emitting the class, or emitted it on a different element. These
+  # clauses are the other half — they pin that the selectors that guard the
+  # contrast are the selectors a real non-accepted closed row renders.
+  #
+  # Neither file is sufficient alone and neither is redundant. Deleting these
+  # leaves the contrast guard measuring a rule nobody paints; deleting the
+  # contrast guard leaves these pinning class names with no contrast meaning.
+  describe "the contrast-guarded classes reach a non-accepted closed row" do
+    test "a vetoed row carries the guarded classes and neither outcome treatment" do
+      vetoed =
+        closed_rejected(%{
+          evidence_quote: "maybe we should rebuild the billing screen",
+          closed_reason: :vetoed
+        })
+
+      html = rail_closed([vetoed])
+      row = closed_row(html, vetoed)
+
+      assert attr(row, "data-closed-reason") == "not-taken-up"
+
+      classes = class_set(row)
+      assert "candidate-card" in classes
+      assert "candidate-card--closed" in classes
+
+      refute "candidate-card--outcome" in classes,
+             "a vetoed row must not get the outcome treatment; it opted the accepted row " <>
+               "out of the fade that task 01a07a90 removed, and on this row it would " <>
+               "silently change which colour rule applies. classes: #{inspect(classes)}"
+
+      # The two elements the contrast guard measures, each pinned to the
+      # ELEMENT and the class the stylesheet keys on, not merely to the
+      # data-role.
+      assert present?(row, "p.candidate-card__title.candidate-card__title--dead"),
+             "the title must carry `candidate-card__title--dead`, which is the selector " <>
+               "the contrast guard measures. #{LazyHTML.to_html(row)}"
+
+      assert present?(
+               row,
+               "p.candidate-card__reason[data-role='meeting-candidate-closed-reason']"
+             ),
+             "the reason line must carry `candidate-card__reason`. #{LazyHTML.to_html(row)}"
+    end
+
+    # THE CLAUSE THIS DESCRIBE EXISTS FOR.
+    #
+    # The ticket reported the vetoed row at 2.45:1 and the duplicate row at
+    # 2.26:1 and read as though the two rows differed. They cannot: they are
+    # the same selectors with a different string in them. Stage 1's own
+    # painted-pixel run measured 2.4501 and 2.2161, and those are the light
+    # TITLE and the dark REASON LINE — two different elements in two different
+    # themes, not two rows in one theme. Vetoed and duplicate measure
+    # identically as each other in either theme.
+    #
+    # Pinning that the two rows carry an identical class set is what stops a
+    # later reader re-deriving a per-`closed_reason` colour to explain a
+    # difference that was never a colour difference.
+    test "a vetoed row and a duplicate row carry byte-identical class sets" do
+      vetoed = closed_rejected(%{closed_reason: :vetoed, evidence_quote: "rebuild billing"})
+
+      duplicate =
+        closed_rejected(%{
+          closed_reason: :duplicate,
+          closed_note: "01a03f57",
+          evidence_quote: "chase the invoices",
+          closed_at: DateTime.add(@now, -60, :second)
+        })
+
+      html = rail_closed([vetoed, duplicate])
+
+      vetoed_classes = class_set(closed_row(html, vetoed))
+      duplicate_classes = class_set(closed_row(html, duplicate))
+
+      assert vetoed_classes == duplicate_classes,
+             "the vetoed and duplicate rows must be styled identically — they differ only " <>
+               "in the string they carry, and any contrast difference between them is a " <>
+               "difference of THEME or GROUND, never of colour.\n" <>
+               "  vetoed    (#{attr(closed_row(html, vetoed), "data-closed-reason")}): " <>
+               "#{inspect(Enum.sort(vetoed_classes))}\n" <>
+               "  duplicate (#{attr(closed_row(html, duplicate), "data-closed-reason")}): " <>
+               "#{inspect(Enum.sort(duplicate_classes))}"
+
+      # And they are genuinely two different rows, so the assertion above is
+      # not comparing something with itself.
+      assert attr(closed_row(html, vetoed), "data-closed-reason") == "not-taken-up"
+      assert attr(closed_row(html, duplicate), "data-closed-reason") == "already-tracked"
+    end
+
+    test "the accepted shapes still render their own treatment, unchanged" do
+      with_deliverable =
+        closed_accepted(%{
+          evidence_quote: "write up the migration plan",
+          task_id: "01a078d0-bedd-7001-a3d5-ee9c6c85aa59"
+        })
+
+      minted_nothing =
+        closed_accepted(%{
+          evidence_quote: "look at the churn dashboard",
+          task_id: nil,
+          canvas_id: nil,
+          closed_at: DateTime.add(@now, -60, :second)
+        })
+
+      html = rail_closed([with_deliverable, minted_nothing])
+
+      assert "candidate-card--outcome" in class_set(closed_row(html, with_deliverable))
+      assert present?(closed_row(html, with_deliverable), "a.candidate-closed__link")
+
+      assert present?(
+               closed_row(html, with_deliverable),
+               "[data-role='meeting-candidate-closed-bar']"
+             )
+
+      assert "candidate-card--outcome" in class_set(closed_row(html, minted_nothing))
+
+      assert present?(
+               closed_row(html, minted_nothing),
+               "[data-role='meeting-candidate-closed-outcome']"
+             )
+
+      refute present?(closed_row(html, minted_nothing), "a[data-role='meeting-candidate-title']")
+
+      refute present?(
+               closed_row(html, minted_nothing),
+               "[data-role='meeting-candidate-closed-bar']"
+             )
+    end
+
+    # THE NEGATIVE CONTROL, and the check that it is not a vacuous pair.
+    #
+    # A negative control earns nothing by merely taking a different input: if
+    # it produces the same verdict as the positive case, the two together
+    # discriminate nothing. So this compares the two shapes FIELD BY FIELD and
+    # requires every field to disagree. If the component ever collapsed the
+    # vetoed and accepted treatments into one, this is the clause that fires —
+    # and it fires on the shapes, not on the fixtures.
+    test "the vetoed shape and the accepted shape disagree on every field" do
+      vetoed = closed_rejected(%{closed_reason: :vetoed, evidence_quote: "rebuild billing"})
+
+      accepted =
+        closed_accepted(%{
+          evidence_quote: "write up the migration plan",
+          task_id: "01a078d0-bedd-7001-a3d5-ee9c6c85aa59",
+          closed_at: DateTime.add(@now, -60, :second)
+        })
+
+      html = rail_closed([vetoed, accepted])
+
+      vetoed_shape = shape(html, vetoed)
+      accepted_shape = shape(html, accepted)
+
+      agreed =
+        vetoed_shape
+        |> Map.keys()
+        |> Enum.filter(fn k -> Map.fetch!(vetoed_shape, k) == Map.fetch!(accepted_shape, k) end)
+
+      assert agreed == [],
+             "these fields read the same on a vetoed row and an accepted row, so they " <>
+               "cannot tell the two treatments apart and any clause resting on them is " <>
+               "vacuous: #{inspect(agreed)}\n" <>
+               "  vetoed:   #{inspect(vetoed_shape)}\n" <>
+               "  accepted: #{inspect(accepted_shape)}"
+
+      # Positive assertions, so this clause states what each shape IS rather
+      # than only that they differ. A pair can differ and both be wrong.
+      assert vetoed_shape.dead_title? and vetoed_shape.reason_line?
+      refute vetoed_shape.outcome_modifier? or vetoed_shape.linked_title?
+      assert accepted_shape.outcome_modifier? and accepted_shape.linked_title?
+      refute accepted_shape.dead_title? or accepted_shape.reason_line?
+    end
+  end
+
   # A closed, accepted row. `closed_at` is required rather than defaulted
   # to nil because the rail sorts the closed list on it.
   defp closed_accepted(attrs) do
@@ -1351,4 +1528,49 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
     do: text_of(closed_row(html, candidate), "[data-role='meeting-candidate-outcome-kind']")
 
   defp attr(nodes, name), do: nodes |> LazyHTML.attribute(name) |> List.first()
+
+  # A closed row that was NOT accepted — the surface task 01a07a90 is about.
+  # `disposition: :rejected` is what `closed_card/1` keys the treatment on, and
+  # it is set explicitly rather than left nil so the fixture cannot drift into
+  # the accepted branch if the default ever changes.
+  defp closed_rejected(attrs) do
+    %{
+      state: :closed,
+      disposition: :rejected,
+      disposition_at: @now,
+      closed_at: @now,
+      classified_intent: "action_item"
+    }
+    |> Map.merge(Map.new(attrs))
+    |> candidate()
+  end
+
+  # The class attribute of a row as a set. A set rather than the raw string so
+  # a reordered class list is not a failure, and so the equality assertion
+  # between two rows is about which classes are present rather than about the
+  # order the compiler happened to emit them in.
+  defp class_set(row) do
+    row
+    |> attr("class")
+    |> to_string()
+    |> String.split(~r/\s+/, trim: true)
+    |> MapSet.new()
+  end
+
+  # The six facts that distinguish the three closed-row treatments from each
+  # other. Written as one map so the negative control can diff two rows field
+  # by field rather than asserting a handful of things that might all happen to
+  # agree.
+  defp shape(html, candidate) do
+    row = closed_row(html, candidate)
+
+    %{
+      outcome_modifier?: "candidate-card--outcome" in class_set(row),
+      dead_title?: present?(row, "p.candidate-card__title--dead"),
+      linked_title?: present?(row, "a[data-role='meeting-candidate-title']"),
+      reason_line?: present?(row, "p.candidate-card__reason"),
+      kind_label?: present?(row, "[data-role='meeting-candidate-outcome-kind']"),
+      static_bar?: present?(row, "[data-role='meeting-candidate-closed-bar']")
+    }
+  end
 end

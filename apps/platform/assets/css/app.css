@@ -6209,7 +6209,14 @@ body, .font-fabrikam {
   --cc-title-half: #626b7d;
   --cc-title-dead: #767d8d;
   --cc-byline: #6a7284;
-  --cc-stage: #7b8395;
+  /* The "N closed" disclosure label (task 01a07a90). `--cc-stage` has exactly
+     ONE consumer, `.candidate-closed__summary`, so this is a rail-local retune
+     and not a shared-token change. Its old value #7B8395 measured 3.5494:1 on
+     the rail's own ground and #5D6577 measured 3.3658:1 in dark: both under AA
+     for a 10px uppercase label, and neither caused by the `opacity` this task
+     removed — this label sits OUTSIDE the card. `--cc-title-half` measures
+     5.0024:1 light / 6.7068:1 dark on that ground. */
+  --cc-stage: var(--cc-title-half);
   --cc-reason: #6a7284;
   --cc-micro: #6b7385;
   --cc-chip-bg: #eef0f4;
@@ -6319,7 +6326,7 @@ body, .font-fabrikam {
   --cc-title-half: #8f97a8;
   --cc-title-dead: #767d8d;
   --cc-byline: #7f8798;
-  --cc-stage: #5d6577;
+  --cc-stage: var(--cc-title-half);
   --cc-reason: #5f6779;
   --cc-micro: #6b7385;
   --cc-chip-bg: #1b202c;
@@ -6410,7 +6417,7 @@ body, .font-fabrikam {
     --cc-title-half: #8f97a8;
     --cc-title-dead: #767d8d;
     --cc-byline: #7f8798;
-    --cc-stage: #5d6577;
+    --cc-stage: var(--cc-title-half);
     --cc-reason: #5f6779;
     --cc-micro: #6b7385;
     --cc-chip-bg: #1b202c;
@@ -6544,10 +6551,60 @@ body, .font-fabrikam {
   background: var(--cc-bg-acting);
 }
 
+/* ── The closed row (task 01a07a90) ──
+   DELIBERATELY NO `opacity`. This rule carried `opacity: 0.72` until this
+   task, and that one declaration was the whole defect: `opacity` composites
+   the element against its backdrop AFTER the colour has been resolved, so it
+   multiplies whatever contrast the token gave you and NO token substitution
+   can undo it from inside.
+
+   MEASURED on the rendered rail in Chrome 152 (painted pixels sampled from a
+   screenshot, grounds sampled rather than assumed — the rail's ground is
+   `bg-base-200/40` on BOTH the `<aside>` and the rail `<section>`, so it is
+   that layer composited TWICE, #F7F7F7 light / #090B11 dark).
+
+   The four `at opacity 0.72` figures were CORRECTED in stage 3 and are the
+   ratios of the composited hex pairs the same browser run produced
+   (#9A9FAB on #F5F6F7 light, #575D6A on #0F1219 dark, and the reason line's
+   #9197A4 / #474D5C). The first set of figures written here was wrong in the
+   third decimal: it divided an UNQUANTIZED float composite by a SAMPLED
+   quantized background, mixing the two conventions inside one ratio. The
+   corrected values reproduce from the tokens alone under the painted
+   convention — quantize to 8 bits at each composite — and were confirmed
+   independently by the stage-3 e2e review. Nothing about the verdict moves:
+   the floor is 4.5 and every one of these is under 3.
+
+                        at opacity 0.72        with the fade gone
+     title  light        2.4501:1  FAILS        4.9127:1  passes
+     title  dark         2.8363:1  FAILS        6.2274:1  passes
+     reason light        2.7081:1  FAILS        4.9127:1  passes
+     reason dark         2.2161:1  FAILS        6.2274:1  passes
+
+   The floor is 4.5:1: the title is 11.5px/500 and the reason 11px/400, which
+   is nowhere near the 18pt / 14pt-bold large-text allowance.
+
+   If you are about to add `opacity` back to make this row recede: don't. The
+   recession is already carried by `--cc-bg-closed` against the live cards'
+   ground plus the muted foreground below, which is the same mechanism
+   `.candidate-card--spent` documents above and the same one FE-9 chose for
+   exactly this reason. Adding a fade here silently drops all three of this
+   row's colours back under AA and nothing goes red.
+
+   AND THE BLAST RADIUS IS NOW WIDER THAN IT WAS. Before this task the
+   ACCEPTED row was shielded: `.candidate-card--outcome` carried `opacity: 1`
+   purely to opt that row out of this rule's fade. That override was inert
+   once the fade went, so it was deleted — which means nothing shields the
+   accepted row any more. Re-adding `opacity: 0.72` here would now take the
+   accepted row down WITH the other three, measured:
+
+     accepted link       --cc-outcome-link    5.2833:1  ->  3.1428:1
+     accepted kind label --cc-outcome-muted   6.8674:1  ->  3.5441:1
+
+   Both currently pass and both would fail. `01a078d0` stage 2 fixed that link
+   deliberately; a fade here undoes it silently. */
 .candidate-card--closed {
   background: var(--cc-bg-closed);
   border-color: var(--cc-border-closed);
-  opacity: 0.72;
 }
 
 /* ── The spent row (task 01a0740e stage 5) ──
@@ -6655,8 +6712,24 @@ body, .font-fabrikam {
   font-weight: 500;
 }
 
+/* The closed row's title (task 01a07a90). `--cc-title-dead` (#767D8D in both
+   themes) cannot be used here: MEASURED on the closed row's own ground it is
+   3.7833:1 light and 4.4260:1 dark, under AA in both — and that is BEFORE the
+   `opacity` this task removed took another third off it.
+
+   `--cc-title-half` is the rail's existing "present but not current" title
+   colour and measures 4.9127:1 light / 6.2274:1 dark on `--cc-bg-closed`.
+   It is also exactly what `01a078d0` stage 2 had already chosen for this same
+   element on the accepted row, so the two closed shapes now converge on ONE
+   colour and the `.candidate-card--outcome` override that used to say this is
+   gone rather than duplicated.
+
+   `--cc-title-dead` and `--cc-reason` are left declared but now have no
+   consumer. They are deliberately not deleted here — that is token-vocabulary
+   churn this task did not sign up for — but nothing reads them, so nothing is
+   styled by them. Do not reach for either one on this row. */
 .candidate-card__title--dead {
-  color: var(--cc-title-dead);
+  color: var(--cc-title-half);
   font-weight: 500;
 }
 
@@ -6714,9 +6787,25 @@ body, .font-fabrikam {
   overflow-wrap: anywhere;
 }
 
+/* The closed row's reason line — "Already on the backlog — 01a03f57", the whole
+   value of the Closed section. This selector has exactly ONE call site and it
+   is on the non-accepted closed row, so retargeting it cannot touch a live
+   card (task 01a07a90).
+
+   `--cc-reason` measured 4.4220:1 light and 3.2200:1 dark on this row's ground
+   — under AA in both, and note it FAILED WORSE IN LIGHT THAN THE TITLE DID,
+   the opposite way round from dark. That inconsistency is why both lines now
+   take one measured colour instead of two nearly-equal ones: 4.9127:1 light /
+   6.2274:1 dark.
+
+   The hierarchy between the quote and its reason is carried by SIZE and
+   WEIGHT, not by contrast — 11.5px/500 above, 11px/400 here, which is how this
+   rail separates a title from its supporting line everywhere else. Do not
+   re-separate them by dimming this line: there is only 0.41 of headroom above
+   the floor in light, and that is what the previous pair spent going under. */
 .candidate-card__reason {
   font-size: 11px;
-  color: var(--cc-reason);
+  color: var(--cc-title-half);
   margin-top: 3px;
   line-height: 1.4;
 }
@@ -7017,32 +7106,19 @@ body, .font-fabrikam {
    Only an ACCEPTED row gets this treatment; a vetoed or duplicate row
    is untouched and keeps its reason line.
 
-   `opacity` is the first thing that has to go, and it is the reason
-   this modifier exists at all rather than the colours being set on the
-   children. `.candidate-card--closed` carries `opacity: 0.72`, which
-   composites EVERY colour on the row toward the ground behind it: at
-   0.72 the link measures 2.78:1 no matter which token it is given,
-   because the dimming happens after the colour is chosen. This is the
-   same trap `.candidate-card--spent` documents above and solves the
-   same way — one measured colour per element instead of a blanket
-   fade. The row still recedes: `--cc-bg-closed` against the live
-   cards' white IS the recession, and it is what Saru's palette
-   specifies. */
-.candidate-card--outcome {
-  opacity: 1;
-}
+   This modifier used to carry `opacity: 1`, to undo the blanket
+   `opacity: 0.72` that `.candidate-card--closed` set. Task 01a07a90
+   removed the fade from that rule outright — for the vetoed and
+   duplicate rows, which never had an opt-out and were sitting at
+   2.4501:1 / 2.2161:1 because of it — so this override became a no-op
+   and is gone rather than left to read as load-bearing. The argument
+   it carried is preserved on `.candidate-card--closed` itself, which
+   is where a reader tempted to re-add a fade will look.
 
-/* The failed row's title. It is the one title on an outcome row that is
-   NOT a link, so it does not get `--cc-outcome-link` — but it cannot
-   keep `--cc-title-dead` either, which measures 3.78:1 light and 4.43:1
-   dark on this ground and fails AA in both. `--cc-title-half` is the
-   rail's existing "present but not current" title colour and measures
-   4.91:1 light / 6.23:1 dark here, so the row keeps a real hierarchy —
-   the quote reads as the stronger line and `Nothing was created` sits
-   under it in the muted colour — without inventing a value. */
-.candidate-card--outcome .candidate-card__title--dead {
-  color: var(--cc-title-half);
-}
+   Its second rule, `.candidate-card--outcome .candidate-card__title--dead`,
+   is gone for the same reason: `.candidate-card__title--dead` now takes
+   `--cc-title-half` for EVERY closed row, so scoping it to this one said
+   nothing. The measured basis is recorded at that rule. */
 
 /* Title and class marker on one line. `min-width: 0` on the flex parent
    is what actually lets the title truncate — without it the flex item's
