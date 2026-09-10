@@ -418,19 +418,38 @@ defmodule PlatformWeb.ControlCenter.AgentData do
     Enum.find(@workspace_defaults, &(not MapSet.member?(used, &1))) || "NOTES.md"
   end
 
+  # Two different forms submit `save_config`: `AgentDetail.config_form/1` for
+  # built-in agents, and `federated-identity-form` for external ones. They mean
+  # OPPOSITE things by an absent param — the built-in form renders every field,
+  # so a missing value is a human clearing a box; the external form renders
+  # only name, colour, avatar and voice, so a missing value is a field that
+  # screen does not edit at all.
+  #
+  # `name`, `status`, `max_concurrent` and `sandbox_mode` already fell back to
+  # the stored agent. Model routing and `thinking_default` did not, so every
+  # external save wiped them (01a06e25) — silent data loss on fields the
+  # operator could not even see from that panel.
+  #
+  # The discriminator is key PRESENCE, not the surface. An enabled named input
+  # always submits its key, blank or not, so a submitted `""` still means "the
+  # human cleared this box" and a real clear stays a real clear; only a wholly
+  # absent key means "this form does not own that field". Branching on
+  # `agent.runtime_type` instead would duplicate the render branch in
+  # `control_center_live.ex` and need the two kept in step by hand, and it
+  # would keep ignoring the inputs if the external form ever grew them.
   def config_attrs_from_params(%Agent{} = agent, params) do
     params = normalize_map(params)
     model_config = normalize_map(agent.model_config || %{})
 
     updated_model_config =
       model_config
-      |> Map.put("primary", String.trim(Map.get(params, "primary_model", "")))
-      |> Map.put("fallbacks", parse_fallbacks(Map.get(params, "fallback_models", "")))
+      |> put_submitted(params, "primary_model", "primary", &String.trim(to_string(&1)))
+      |> put_submitted(params, "fallback_models", "fallbacks", &parse_fallbacks/1)
 
     %{
       name: String.trim(Map.get(params, "name", agent.name || "")),
       status: Map.get(params, "status", agent.status),
-      thinking_default: blank_to_nil(Map.get(params, "thinking_default")),
+      thinking_default: submitted_or_stored(params, "thinking_default", agent.thinking_default),
       max_concurrent:
         parse_positive_integer(Map.get(params, "max_concurrent")) || agent.max_concurrent || 1,
       sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), agent.sandbox_mode || "off"),
@@ -438,6 +457,23 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       model_config: updated_model_config,
       voice_config: voice_config_from_params(params)
     }
+  end
+
+  # Leaves the key untouched when the param is absent — including leaving it
+  # ABSENT if it was never there, rather than writing a phantom `""`. Every
+  # reader of `model_config` goes through `Map.get/3` with a default.
+  defp put_submitted(model_config, params, param_key, config_key, cast) do
+    case Map.fetch(params, param_key) do
+      {:ok, raw} -> Map.put(model_config, config_key, cast.(raw))
+      :error -> model_config
+    end
+  end
+
+  defp submitted_or_stored(params, param_key, stored) do
+    case Map.fetch(params, param_key) do
+      {:ok, raw} -> blank_to_nil(raw)
+      :error -> stored
+    end
   end
 
   # Voice selection round-trips through the SAME form that already edits
