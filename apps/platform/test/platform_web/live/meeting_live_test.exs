@@ -388,7 +388,10 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert html =~ ~s(data-pane="call-rail")
       assert html =~ ~s(data-pane="center-stage")
-      assert html =~ ~s(data-pane="chat-panel")
+      # `data-pane="chat-panel"` was the chat DRAWER, deleted in task
+      # 01a084bf stage 3. The pane it hosted is now the rail's Chat tab, so
+      # the skeleton's third pane is the chat BODY inside the rail.
+      assert html =~ ~s(data-pane="meeting-chat-panel")
       # On default-gallery mount, the strip is intentionally hidden.
       refute html =~ ~s(data-pane="bottom-strip")
 
@@ -448,7 +451,15 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
-  describe "chat-panel header (stage 2)" do
+  describe "chat-panel framing — the drawer's, re-pointed at the rail (stage 2, task 01a084bf)" do
+    # These four cases pinned the framing of `<aside id="meeting-chat-drawer">`:
+    # a `w-80` desktop column and a `data-pane-section="header"` naming the
+    # meeting. Task 01a084bf stage 3 DELETED that aside and moved its single
+    # `live_render` into the call rail's Chat pane, so the framing they
+    # described is now the RAIL's framing. They are re-pointed rather than
+    # dropped: each one still asserts the property it was written to protect,
+    # against the element that now owns it.
+
     setup %{conn: conn} do
       {meeting, space} =
         create_meeting(%{slug: "kickoff-header", name: "Stage Two Header"})
@@ -457,52 +468,75 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "chat panel pane is ~320px wide on desktop (w-80)", %{
+    test "the chat pane is the rail's 312px column, and the 320px drawer is gone", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Match the chat panel aside element + its width class. We assert
-      # the order data-pane="chat-panel" + w-80 to guard the desktop
-      # framing the stage 2 contract pins (~320px).
-      assert html =~ ~r/data-pane="chat-panel"[^>]*w-80|w-80[^>]*data-pane="chat-panel"/
+      # WAS: `data-pane="chat-panel"` co-occurring with `w-80`, pinning the
+      # drawer's ~320px desktop framing. That aside no longer exists, and a
+      # bare `refute` on `w-80` would pass for the wrong reason the moment
+      # anything else on this screen used that utility — so assert the
+      # POSITIVE replacement too.
+      refute html =~ ~s(data-pane="chat-panel")
+      refute html =~ ~r/data-pane="chat-panel"[^>]*w-80|w-80[^>]*data-pane="chat-panel"/
+
+      # The chat body is now a DESCENDANT of the one call-rail node, whose
+      # expanded desktop width is 312px.
+      assert count(
+               html,
+               ~s([data-pane="call-rail"] [data-pane="meeting-chat-panel"])
+             ) == 1
+
+      [rail_class] =
+        html |> within(~s([data-pane="call-rail"])) |> LazyHTML.attribute("class")
+
+      assert "lg:w-[312px]" in String.split(rail_class)
     end
 
-    test "chat panel renders a header section with the meeting name", %{
+    test "the pane is identified by the rail's Chat tab, not by a drawer header", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(data-pane-section="header")
-      # Meeting name appears at least twice on the page now: once in the
-      # top bar and once in the chat panel header. Sanity-check it is
-      # present at all and the header section exists.
+      # WAS: `data-pane-section="header"` + the meeting name, i.e. the
+      # drawer's own titled header. The rail names its panes with a tab
+      # strip, so a second header inside one pane would be redundant chrome
+      # in a 312px column. What must still hold is that the pane is
+      # IDENTIFIED at all.
+      assert count(html, ~s([data-role="call-rail-tab"][data-tab="chat"])) == 1
+
+      # The meeting name is still on the page — it moved nowhere, the top
+      # bar has always carried it. This is what the original assertion was
+      # really checking once the header it named is gone.
       assert html =~ "Stage Two Header"
     end
 
-    test "chat panel header drops the 'placeholder for intent panel' caption (stage 5 swap)",
+    test "the 'placeholder for intent panel' caption is still gone (stage 5 swap)",
          %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Stage 5 (019e2d1a) replaced the stub MeetingChatPanelLive with
-      # the real ChatLive embed. The placeholder caption that named the
-      # stub as a surface-marker for the eventual intent panel is gone
-      # — the pane header now carries the meeting name + chat icon
-      # only. The greppable migration hook moved to the
-      # `data-intent-panel-host` data-attribute on the embed wrapper.
+      # Unchanged by the move, and deliberately kept: stage 5 of 019e2d1a
+      # replaced the stub `MeetingChatPanelLive` with the real ChatLive
+      # embed, and this refutation is what stops the stub's caption coming
+      # back. The greppable migration hook is the
+      # `data-intent-panel-host` attribute, which travelled with the body.
       refute html =~ "placeholder for intent panel"
+      assert html =~ ~s(data-intent-panel-host="true")
     end
 
-    test "chat panel header uses hero-chat-bubble-left-right (no emoji)", %{
+    test "the chat glyph is a hero-icon, never an emoji", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
+      # Unchanged in substance: the glyph now appears on the top-bar
+      # control and on the rail's Chat tab rather than in a drawer header,
+      # and the no-emoji rule is a whole-chrome rule either way.
       assert html =~ "hero-chat-bubble-left-right"
-      # Belt-and-suspenders: no emoji codepoints in the chrome.
       refute html =~ "💬"
       refute html =~ "💭"
     end
@@ -706,7 +740,18 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
-  describe "mobile drawer + toggle (stage 3)" do
+  describe "chat opens in the rail (was: mobile drawer + toggle, stage 3)" do
+    # Task 01a084bf stage 3 deleted `<aside id="meeting-chat-drawer">`, its
+    # `data-role="chat-panel-backdrop"`, its `data-role="chat-panel-close"`
+    # and the `:chat_panel_open` assign the three of them shared. The one
+    # `PlatformWeb.ChatLive.Embedded` `live_render` MOVED into the call
+    # rail's Chat pane; `"toggle_chat_panel"` survives as the event the top
+    # bar pushes and now OPENS that rail on the Chat tab.
+    #
+    # Every case below is the original re-pointed at whatever now owns the
+    # property it was protecting. None was deleted to make the suite green,
+    # and each names what it used to assert.
+
     setup %{conn: conn} do
       {meeting, space} =
         create_meeting(%{slug: "kickoff-drawer", name: "Drawer Meeting"})
@@ -715,155 +760,255 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "mounts with :chat_panel_open false (mobile drawer default closed)", %{
-      conn: conn,
-      meeting: meeting
-    } do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # Source-of-truth: assign on the parent LV. We can't pull the
-      # raw assign from the test client, so assert via the rendered
-      # `data-chat-panel-open` attribute on the aside.
-      html = render(view)
-      assert html =~ ~s(data-chat-panel-open="false")
-    end
-
-    test "top bar renders the chat-panel toggle button (mobile-only, hero icon)", %{
+    test "mounts with chat NOT the active pane, and no drawer anywhere", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(data-role="chat-panel-toggle")
-      # Mobile-only — the button itself carries `lg:hidden` so it
-      # disappears at desktop breakpoint.
-      assert html =~
-               ~r/data-role="chat-panel-toggle"[^>]*lg:hidden|lg:hidden[^>]*data-role="chat-panel-toggle"/
+      # WAS: `data-chat-panel-open="false"`, read off the drawer aside as a
+      # proxy for the `:chat_panel_open` assign. Both are gone. The
+      # equivalent default is that the rail does not open ON Chat.
+      refute html =~ ~s(id="meeting-chat-drawer")
+      refute html =~ ~s(data-chat-panel-open)
 
-      # phx-click event hook (the only event the parent LV handles).
-      assert html =~ ~s(phx-click="toggle_chat_panel")
-      # Hero-icon (no emoji codepoint).
-      assert html =~ "hero-chat-bubble-left-right"
-      refute html =~ "💬"
+      assert count(html, ~s([data-role="call-rail-chat-wrap"][data-active="false"])) == 1
+
+      [tab_attrs] =
+        html
+        |> within(~s([data-role="call-rail-tab"][data-tab="chat"]))
+        |> LazyHTML.attribute("aria-selected")
+
+      assert tab_attrs == "false"
     end
 
-    test "clicking the toggle flips :chat_panel_open and renders the backdrop", %{
-      conn: conn,
-      meeting: meeting
-    } do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # Closed by default — no backdrop, drawer attribute reads "false".
-      refute html =~ ~s(data-role="chat-panel-backdrop")
-      assert html =~ ~s(data-chat-panel-open="false")
-
-      # Open: click the top-bar toggle.
-      html_after_open =
-        view
-        |> element(~s([data-role="chat-panel-toggle"]))
-        |> render_click()
-
-      assert html_after_open =~ ~s(data-chat-panel-open="true")
-      assert html_after_open =~ ~s(data-role="chat-panel-backdrop")
-
-      # Close: click again on the toggle.
-      html_after_close =
-        view
-        |> element(~s([data-role="chat-panel-toggle"]))
-        |> render_click()
-
-      assert html_after_close =~ ~s(data-chat-panel-open="false")
-      refute html_after_close =~ ~s(data-role="chat-panel-backdrop")
-    end
-
-    test "backdrop click also toggles the drawer closed", %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # Open the drawer first via the top-bar toggle.
-      _ = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
-      open_html = render(view)
-      assert open_html =~ ~s(data-chat-panel-open="true")
-      assert open_html =~ ~s(data-role="chat-panel-backdrop")
-
-      # Now click the backdrop — should close.
-      closed_html =
-        view
-        |> element(~s([data-role="chat-panel-backdrop"]))
-        |> render_click()
-
-      assert closed_html =~ ~s(data-chat-panel-open="false")
-      refute closed_html =~ ~s(data-role="chat-panel-backdrop")
-    end
-
-    test "in-drawer close button (mobile-only) also toggles closed", %{
-      conn: conn,
-      meeting: meeting
-    } do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      _ = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
-      assert render(view) =~ ~s(data-chat-panel-open="true")
-
-      closed_html =
-        view
-        |> element(~s([data-role="chat-panel-close"]))
-        |> render_click()
-
-      assert closed_html =~ ~s(data-chat-panel-open="false")
-    end
-
-    test "drawer aside is the *single* DOM host for the embedded LV (no double-mount)",
+    test "the top-bar chat control survives, is no longer lg-hidden, and points at the rail",
          %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Exactly one aside with data-pane="chat-panel" — desktop column
-      # and mobile drawer share one DOM node, repositioned via
-      # responsive classes. Two would mean two `live_render`s with the
-      # same id which would collide.
-      occurrences =
-        html |> String.split(~s(data-pane="chat-panel")) |> length() |> Kernel.-(1)
+      assert html =~ ~s(data-role="chat-panel-toggle")
+      assert html =~ ~s(phx-click="toggle_chat_panel")
+      assert html =~ "hero-chat-bubble-left-right"
+      refute html =~ "💬"
 
-      assert occurrences == 1
+      [toggle_class] =
+        html |> within(~s([data-role="chat-panel-toggle"])) |> LazyHTML.attribute("class")
+
+      # WAS: an assertion that this button carries `lg:hidden`, on the
+      # reasoning that the desktop right column was always visible. That was
+      # the defect — the drawer it opened was `lg:!hidden`, so from `lg` up
+      # the click had nowhere to land. It must NOT be `lg:hidden` now.
+      refute "lg:hidden" in String.split(toggle_class)
+
+      # And it names the surface it actually controls.
+      [controls] =
+        html |> within(~s([data-role="chat-panel-toggle"])) |> LazyHTML.attribute("aria-controls")
+
+      assert controls == "meeting-call-rail-pane"
+      assert count(html, "#meeting-call-rail-pane") == 1
     end
 
-    test "drawer carries safe-area-inset-bottom + bottom-nav-height bottom offset", %{
-      conn: conn,
-      meeting: meeting
-    } do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # Mirrors the tasks_live.html.heex:1881 pattern — drawer's bottom
-      # edge sits above the iOS home indicator + bottom-nav.
-      assert html =~ "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
-    end
-
-    test "drawer aside keeps its slide-in shape and is drawer-only at lg", %{
-      conn: conn,
-      meeting: meeting
-    } do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # On `<lg`: fixed slide-in (translate-x-full closed).
-      # On `>=lg`: hidden outright (task 01a05b14 stage 3) — the desktop
-      # right column belongs to the shared call rail, and the embedded
-      # `live_render` must stay in EXACTLY ONE DOM node, so the pane is
-      # hidden rather than duplicated.
-      assert html =~ "translate-x-full"
-      assert html =~ "lg:!hidden"
-    end
-
-    test "toggle button has aria-expanded reflecting :chat_panel_open", %{
+    test "clicking the top-bar control opens the rail ON the Chat tab, expanded", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(aria-expanded="false")
+      # WAS: "flips :chat_panel_open and renders the backdrop". The backdrop
+      # is deleted with the drawer, so the observable is the rail's state.
+      refute html =~ ~s(data-role="chat-panel-backdrop")
 
-      open_html =
-        view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
+      opened = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
 
-      assert open_html =~ ~s(aria-expanded="true")
+      # The Chat pane is the one on screen…
+      assert count(opened, ~s([data-role="call-rail-chat-wrap"][data-active="true"])) == 1
+
+      # …the rail is expanded rather than the 44px strip (the desktop half
+      # of the fix: a click that lands on a collapsed rail would be another
+      # invisible surface)…
+      [rail_attrs] = call_rail_panes(opened)
+      assert rail_attrs["data-collapsed"] == "false"
+
+      # …and the `<lg` drawer is latched open (the mobile half).
+      assert rail_attrs["data-call-rail-open"] == "true"
+
+      # The chat backdrop never comes back.
+      refute opened =~ ~s(data-role="chat-panel-backdrop")
+    end
+
+    test "below lg the CALL-RAIL backdrop is what dismisses chat now", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # WAS: "backdrop click also toggles the drawer closed", driven through
+      # `data-role="chat-panel-backdrop"`. Chat rides the rail's drawer now,
+      # so the rail's own backdrop is the dismissal — there is exactly one
+      # backdrop for one drawer, which is the point.
+      opened = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
+
+      refute opened =~ ~s(data-role="chat-panel-backdrop")
+      assert count(opened, ~s([data-role="call-rail-backdrop"])) == 1
+
+      closed =
+        view |> element(~s([data-role="call-rail-backdrop"])) |> render_click()
+
+      [rail_attrs] = call_rail_panes(closed)
+      assert rail_attrs["data-call-rail-open"] == "false"
+      refute closed =~ ~s(data-role="call-rail-backdrop")
+    end
+
+    test "the rail's own close button replaces the in-drawer close", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # WAS: `data-role="chat-panel-close"` inside the drawer header. Both
+      # the header and the button went with the aside; the rail already had
+      # its own `<lg` close affordance, so no second one was invented.
+      opened = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
+      refute opened =~ ~s(data-role="chat-panel-close")
+      assert count(opened, ~s([data-role="call-rail-close"])) == 1
+
+      closed = view |> element(~s([data-role="call-rail-close"])) |> render_click()
+
+      [rail_attrs] = call_rail_panes(closed)
+      assert rail_attrs["data-call-rail-open"] == "false"
+    end
+
+    @tag :single_mount_guard
+    test "EXACTLY ONE ChatLive.Embedded mount in the document — never two, never none", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # THE SINGLE-MOUNT GUARD (task 01a084bf stage 3). The move is only
+      # correct if it was a MOVE: chat rendered twice passes a screenshot
+      # review and then loses someone's scroll position in a real call,
+      # because two `live_render`s of one child id collide.
+      #
+      # `== 1`, never `>= 1`: the whole failure this guards is a SECOND
+      # mount, and `>=` cannot see it. Counted two independent ways, since
+      # the wrapper attribute and the child LiveView's own root id are
+      # separate things that a bad edit can desync.
+      #
+      # `LazyHTML.query/2`, never `filter/2`: `filter/2` matches only the
+      # fragment's ROOT nodes, and both of these are deeply nested inside
+      # the rail — it would return `[]` and read as "not there".
+      assert count(html, ~s([data-pane="meeting-chat-panel"])) == 1
+      assert count(html, ~s([id^="meeting-chat-panel"])) == 1
+
+      # The id-prefix count must be the child LiveView itself, not the
+      # wrapper matched twice under two selectors.
+      [embed_id] =
+        html |> within(~s([id^="meeting-chat-panel"])) |> LazyHTML.attribute("id")
+
+      assert embed_id == "meeting-chat-panel-#{meeting.id}"
+      assert find_live_child(view, embed_id)
+
+      # And it holds on the OTHER tabs too, which is the mount-once rule:
+      # the wrapper is a persistent sibling of the tab `case`, so switching
+      # tabs hides it rather than unmounting it. A `case` branch would make
+      # both counts 0 here.
+      for tab <- ["people", "canvas", "transcript", "chat"] do
+        switched =
+          view
+          |> element(~s([data-role="call-rail-tab"][data-tab="#{tab}"]))
+          |> render_click()
+
+        assert count(switched, ~s([data-pane="meeting-chat-panel"])) == 1,
+               "chat pane vanished on the #{tab} tab — the mount-once rule was broken"
+
+        assert count(switched, ~s([id^="meeting-chat-panel"])) == 1,
+               "chat mount count wrong on the #{tab} tab"
+      end
+    end
+
+    test "the rail carries the safe-area + bottom-nav bottom offset the drawer used to", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # WAS: asserted against the chat drawer. The offset is a property of
+      # whichever element is the `<lg` slide-in whose bottom edge must clear
+      # the iOS home indicator and the bottom nav — that is the rail now.
+      [rail_class] =
+        html |> within(~s([data-pane="call-rail"])) |> LazyHTML.attribute("class")
+
+      assert rail_class =~
+               "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
+    end
+
+    test "chat is reachable at EVERY width — nothing hides it at lg", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # WAS: "drawer aside keeps its slide-in shape and is drawer-only at
+      # lg", which asserted `lg:!hidden` — i.e. it PINNED the defect this
+      # task exists to remove. Inverted: the element hosting chat must not
+      # be hidden at `lg`, and the rail keeps its `<lg` slide-in shape.
+      opened = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
+
+      [rail_class] =
+        opened |> within(~s([data-pane="call-rail"])) |> LazyHTML.attribute("class")
+
+      rail_classes = String.split(rail_class)
+
+      refute "lg:!hidden" in rail_classes
+      assert "translate-x-0" in rail_classes
+      assert "lg:static" in rail_classes
+
+      # No ancestor of the chat body may be display:none at lg. The wrap is
+      # `hidden`-flipped by tab only, and Chat is the active tab here.
+      assert count(opened, ~s([data-role="call-rail-chat-wrap"][data-active="true"])) == 1
+
+      assert count(
+               opened,
+               ~s([data-role="call-rail-expanded"] [data-pane="meeting-chat-panel"])
+             ) == 1
+    end
+
+    test "aria-expanded on the top-bar control reports whether chat is the pane on screen", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # WAS: reflected `:chat_panel_open`. That assign is retired; the
+      # honest reading is now "is Chat the pane on screen", which is the
+      # tab plus the desktop collapse state.
+      [before_click] =
+        html |> within(~s([data-role="chat-panel-toggle"])) |> LazyHTML.attribute("aria-expanded")
+
+      assert before_click == "false"
+
+      opened = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
+
+      [after_click] =
+        opened
+        |> within(~s([data-role="chat-panel-toggle"]))
+        |> LazyHTML.attribute("aria-expanded")
+
+      assert after_click == "true"
+
+      # Leaving the Chat tab makes it false again without touching the rail.
+      moved =
+        view
+        |> element(~s([data-role="call-rail-tab"][data-tab="people"]))
+        |> render_click()
+
+      [after_move] =
+        moved
+        |> within(~s([data-role="chat-panel-toggle"]))
+        |> LazyHTML.attribute("aria-expanded")
+
+      assert after_move == "false"
     end
   end
 
@@ -909,27 +1054,42 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ "Discussion · placeholder"
     end
 
-    test "toggle assign flip is *idempotent* (no drift across multiple cycles)", %{
+    test "asking for chat repeatedly is idempotent (no drift across cycles)", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Three open/close cycles — guards against any latent state-drift
-      # bug in toggle_chat_panel that would gradually desync the
-      # rendered attribute from the assign.
+      # WAS: three open/CLOSE cycles on `toggle_chat_panel`, guarding against
+      # state drift between the assign and the rendered attribute.
+      #
+      # `"toggle_chat_panel"` no longer toggles (task 01a084bf stage 3): its
+      # target is one tab among four rather than a drawer that owned the
+      # viewport, so a second click that closed the rail or deselected Chat
+      # would leave the viewer on no tab at all. Asking for chat twice asks
+      # for the same thing twice. The drift this case exists to catch is
+      # therefore tested as IDEMPOTENCE, and the round trip through another
+      # tab is what proves the handler still re-selects rather than sticking.
       for _ <- 1..3 do
-        opened =
-          view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
+        opened = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
 
-        assert opened =~ ~s(data-chat-panel-open="true")
-        assert opened =~ ~s(aria-expanded="true")
+        assert count(opened, ~s([data-role="call-rail-chat-wrap"][data-active="true"])) == 1
+        assert count(opened, ~s([data-pane="meeting-chat-panel"])) == 1
 
-        closed =
-          view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
+        # Pushing it AGAIN must not close, deselect or collapse anything.
+        again = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
 
-        assert closed =~ ~s(data-chat-panel-open="false")
-        assert closed =~ ~s(aria-expanded="false")
+        assert count(again, ~s([data-role="call-rail-chat-wrap"][data-active="true"])) == 1
+        assert count(again, ~s([data-pane="meeting-chat-panel"])) == 1
+
+        [rail_attrs] = call_rail_panes(again)
+        assert rail_attrs["data-collapsed"] == "false"
+
+        # Leave the tab so the next iteration is a real re-open.
+        _ =
+          view
+          |> element(~s([data-role="call-rail-tab"][data-tab="people"]))
+          |> render_click()
       end
     end
 
@@ -6889,9 +7049,13 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # The call rail renders wide (no `data-pane-collapsed` attr).
+      # The call rail renders wide. Task 01a084bf stage 2: the collapse
+      # state is an ATTRIBUTE on the one rail node (`data-collapsed`), so
+      # this reads the value rather than the absence of a second node —
+      # which is a stronger read, because absence also held when the rail
+      # failed to render at all.
       assert html =~ ~s(data-pane="call-rail")
-      refute html =~ ~s(data-pane-collapsed="true")
+      assert html =~ ~s(data-pane="call-rail" data-collapsed="false")
     end
 
     # THE GUARD (task 01a05b14 stage 3). The left rail is gone, and so is
@@ -6914,6 +7078,165 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ ~s(data-change-event="meeting_participant_rail_collapsed_changed")
     end
 
+    # ── THE GUARD (task 01a084bf stage 2) ────────────────────────────────
+    #
+    # STRUCTURAL, deliberately. The rail's collapse used to swap between
+    # two sibling nodes that BOTH carried `data-pane="call-rail"`: a wide
+    # one hidden at `lg`, and a 48px `<aside :if={@chat_panel_collapsed}>`.
+    # A per-node CSS transition cannot animate a width that moves between
+    # two nodes, so the collapse filmed frame-by-frame as a single-frame
+    # 312px → 48px jump (task 01a0740d's V5 case).
+    #
+    # The check that let that through asserted THAT A TRANSITION CLASS WAS
+    # PRESENT. It was present — on the node being replaced. That assertion
+    # was vacuous and is not repeated here in any form.
+    #
+    # What this pins instead is the property the animation actually needs,
+    # and nothing about styling: `[data-pane="call-rail"]` matches exactly
+    # ONE node in each state, and it is THE SAME node — same stable `id` —
+    # in both, with the state carried as an attribute on it. Named mutation
+    # `two-node` (re-split the rail into two `:if`-gated
+    # `data-pane="call-rail"` siblings) was run against this and turns it
+    # red on the collapsed count.
+    test "the call rail is ONE node in both states, and the SAME node — collapsed is an attribute, not a sibling swap",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, expanded} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      expanded_rails = call_rail_panes(expanded)
+
+      assert length(expanded_rails) == 1,
+             "expected exactly ONE [data-pane=\"call-rail\"] while expanded, got " <>
+               "#{length(expanded_rails)}: #{inspect(expanded_rails)}"
+
+      collapsed = render_hook(view, "toggle_meeting_chat_pane", %{})
+      collapsed_rails = call_rail_panes(collapsed)
+
+      assert length(collapsed_rails) == 1,
+             "expected exactly ONE [data-pane=\"call-rail\"] while collapsed, got " <>
+               "#{length(collapsed_rails)}: #{inspect(collapsed_rails)}"
+
+      [expanded_attrs] = expanded_rails
+      [collapsed_attrs] = collapsed_rails
+
+      # The state is ON the node, both ways round. Asserting both values
+      # (rather than the absence of an attribute) is what makes the count
+      # above mean something: a document with no rail at all would satisfy
+      # "no collapsed marker" but not this.
+      assert expanded_attrs["data-collapsed"] == "false"
+      assert collapsed_attrs["data-collapsed"] == "true"
+
+      # …and it is the SAME element. A count of 1 either side would also
+      # hold if collapsing swapped one node for a DIFFERENT single node,
+      # which is precisely the structure this guard forbids.
+      assert collapsed_attrs["id"] == expanded_attrs["id"],
+             "the collapsed rail is a DIFFERENT element " <>
+               "(#{inspect(collapsed_attrs["id"])}) from the expanded one " <>
+               "(#{inspect(expanded_attrs["id"])}); a width transition cannot " <>
+               "animate a value that moves between two nodes"
+
+      assert expanded_attrs["id"] == "meeting-call-rail-pane"
+
+      # Both former siblings are now BRANCHES INSIDE that node. Queried as
+      # descendants of it, so a branch hoisted back out to sibling
+      # position fails here even if it drops `data-pane`. `LazyHTML.query/2`
+      # descends the whole tree; `filter/2` would only match the fragment's
+      # root nodes and read as "not there".
+      collapsed_doc = frag(collapsed)
+
+      assert collapsed_doc
+             |> LazyHTML.query(~s([data-pane="call-rail"] [data-role="call-rail-collapsed"]))
+             |> Enum.count() == 1
+
+      assert collapsed_doc
+             |> LazyHTML.query(~s([data-pane="call-rail"] [data-role="call-rail-expanded"]))
+             |> Enum.count() == 1
+    end
+
+    # The other half of the restructure. Folding the slim strip INTO the rail
+    # node put the desktop collapse and the `<lg` drawer on one element for
+    # the first time, which is exactly where "a preference flipped on a
+    # laptop silently breaks the rail toggle on a phone" becomes reachable.
+    # Nothing covered the rail drawer before this stage.
+    test "collapse stays a DESKTOP concern — the `<lg` drawer still opens while collapsed, and the slim strip is `lg:`-only",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      collapsed = render_hook(view, "toggle_meeting_chat_pane", %{})
+      assert collapsed =~ ~s(data-pane="call-rail" data-collapsed="true")
+
+      # The branch that IS the drawer is still in the document while
+      # collapsed — hidden at `lg` by CSS, never `:if`-removed, so
+      # `#meeting-call-rail` and the hooks under it survive.
+      assert collapsed
+             |> frag()
+             |> LazyHTML.query(~s([data-role="call-rail-expanded"] #meeting-call-rail))
+             |> Enum.count() == 1
+
+      # Open the `<lg` drawer WHILE collapsed.
+      opened = view |> element(~s([data-role="call-rail-toggle"])) |> render_click()
+
+      [opened_attrs] = call_rail_panes(opened)
+      assert opened_attrs["data-call-rail-open"] == "true"
+      assert opened_attrs["data-collapsed"] == "true"
+
+      classes = String.split(opened_attrs["class"])
+
+      # The drawer's visibility is the BASE layer (`translate-x-0`, no
+      # prefix); the desktop collapse width is `lg:`-prefixed. Tokenised
+      # rather than matched as a substring: `=~ "translate-x-0"` is also
+      # true of `lg:translate-x-0`, which is present unconditionally and
+      # would make this pass with the mobile path broken.
+      assert "translate-x-0" in classes
+
+      # 44px, not 48px. Task 01a0740d shipped and MEASURED the collapsed
+      # strip at exactly 44.000 and derives the 268px stage delta
+      # (312 - 44) from it; this stage's one-node fold was drafted at
+      # `w-12` before that landed and adopts the shipped width, because
+      # two different collapsed widths in one file is the failure mode.
+      # Tokenised: the bare `w-11` refutation is what catches the width
+      # leaking out of its `lg:` scope onto the `<lg` drawer.
+      assert "lg:w-11" in classes
+      refute "w-11" in classes
+      refute "lg:w-12" in classes
+
+      # The slim strip is `>=lg` ONLY: `hidden` at the base layer means a
+      # phone never sees it, whatever the stored desktop preference says.
+      [strip_class] =
+        opened
+        |> frag()
+        |> LazyHTML.query(~s([data-role="call-rail-collapsed"]))
+        |> LazyHTML.attribute("class")
+
+      strip_classes = String.split(strip_class)
+      assert "hidden" in strip_classes
+      assert "lg:flex" in strip_classes
+
+      # …and the expanded branch's hiding is likewise `lg:`-scoped, so the
+      # collapse cannot blank the drawer.
+      [expanded_class] =
+        opened
+        |> frag()
+        |> LazyHTML.query(~s([data-role="call-rail-expanded"]))
+        |> LazyHTML.attribute("class")
+
+      expanded_classes = String.split(expanded_class)
+      assert "lg:hidden" in expanded_classes
+      refute "hidden" in expanded_classes
+    end
+
+    # Attribute maps for every `[data-pane="call-rail"]` in a document, one
+    # map per matching node. `LazyHTML.attributes/1` is per-node, unlike
+    # `attribute/2`, which flattens and silently drops nodes that lack the
+    # attribute — that flattening would make a two-node document
+    # indistinguishable from a one-node one here.
+    defp call_rail_panes(html) do
+      html
+      |> frag()
+      |> LazyHTML.query(~s([data-pane="call-rail"]))
+      |> LazyHTML.attributes()
+      |> Enum.map(&Map.new/1)
+    end
+
     test "toggle_meeting_chat_pane flips the chat_panel_collapsed assign", %{
       conn: conn,
       meeting: meeting
@@ -6921,20 +7244,33 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       after_collapse = render_hook(view, "toggle_meeting_chat_pane", %{})
-      # The slim rail replaces the wide call rail on `>=lg`.
-      assert after_collapse =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+      # The one rail node reports itself collapsed on `>=lg`.
+      assert after_collapse =~ ~s(data-pane="call-rail" data-collapsed="true")
       # CHANGED BY task 01a05b14 stage 6. `@chat_panel_collapsed` used to
       # remove the rail from the document outright; it now hides it at
-      # `lg` ONLY (`lg:!hidden`), because the rail is also the `<lg`
-      # drawer and this collapse is a DESKTOP affordance driven by a
-      # `lg:`-only chevron. Letting a preference set on a laptop silently
-      # break the rail toggle on a phone was the alternative.
+      # `lg` ONLY, because the rail is also the `<lg` drawer and this
+      # collapse is a DESKTOP affordance driven by a `lg:`-only chevron.
+      # Letting a preference set on a laptop silently break the rail
+      # toggle on a phone was the alternative.
+      #
+      # RE-ANCHORED by task 01a084bf stage 2. This used to assert the bare
+      # string `"lg:!hidden"` against the whole document, which the chat
+      # drawer also carries unconditionally — so it would have kept
+      # passing with the rail's own hiding removed entirely. The hiding is
+      # now read off the expanded branch's own class attribute.
       assert after_collapse =~ ~s(data-component="call-rail")
-      assert after_collapse =~ "lg:!hidden"
+
+      [expanded_class] =
+        after_collapse
+        |> frag()
+        |> LazyHTML.query(~s([data-role="call-rail-expanded"]))
+        |> LazyHTML.attribute("class")
+
+      assert expanded_class =~ "lg:hidden"
       assert_push_event(view, "meeting_chat_pane_collapsed_changed", %{collapsed: true})
 
       after_expand = render_hook(view, "toggle_meeting_chat_pane", %{})
-      refute after_expand =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+      assert after_expand =~ ~s(data-pane="call-rail" data-collapsed="false")
       assert after_expand =~ ~s(data-component="call-rail")
       assert_push_event(view, "meeting_chat_pane_collapsed_changed", %{collapsed: false})
     end
@@ -6948,7 +7284,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       after_hydrate =
         render_hook(view, "meeting_chat_pane_hydrate", %{"collapsed" => true})
 
-      assert after_hydrate =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+      assert after_hydrate =~ ~s(data-pane="call-rail" data-collapsed="true")
     end
 
     test "hydrate is idempotent when the value matches the current assign", %{
@@ -6960,7 +7296,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       _ = render_hook(view, "meeting_chat_pane_hydrate", %{"collapsed" => false})
 
       html = render(view)
-      refute html =~ ~s(data-pane-collapsed="true")
+      assert html =~ ~s(data-pane="call-rail" data-collapsed="false")
     end
 
     test "clicking chat-pane-toggle collapses the call rail to the slim strip",
@@ -6968,14 +7304,14 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       assert html =~ ~s(data-role="chat-pane-toggle")
-      refute html =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+      assert html =~ ~s(data-pane="call-rail" data-collapsed="false")
 
       after_collapse =
         view
         |> element(~s([data-role="chat-pane-toggle"]))
         |> render_click()
 
-      assert after_collapse =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+      assert after_collapse =~ ~s(data-pane="call-rail" data-collapsed="true")
       assert after_collapse =~ "hero-chevron-double-left"
     end
 
@@ -7002,30 +7338,41 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert length(String.split(html, ~s(data-storage-key="suite.meeting.))) - 1 == 1
     end
 
-    test "mobile drawer path is byte-identical — `:chat_panel_open` is orthogonal", %{
+    test "the `<lg` drawer latch stays orthogonal to the desktop collapse", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Open the mobile drawer (the existing pre-task-019e40f2 path).
+      # WAS phrased against `:chat_panel_open` and `data-chat-panel-open`,
+      # the chat drawer's own latch. Task 01a084bf stage 3 deleted that
+      # drawer and that assign; chat rides the RAIL's drawer now, whose
+      # latch is `:call_rail_open` / `data-call-rail-open`.
+      #
+      # The property under test is unchanged and is the one that matters:
+      # the `<lg` open-state and the `>=lg` collapse preference are
+      # INDEPENDENT, so a laptop collapse cannot silently disable a phone's
+      # drawer. It is now strictly more load-bearing than before, because
+      # after the fold both live on the same DOM node.
       _ =
         view
         |> element(~s([data-role="chat-panel-toggle"]))
         |> render_click()
 
-      html_open = render(view)
-      # Drawer attribute reflects the mobile state, NOT the collapse state.
-      assert html_open =~ ~s(data-chat-panel-open="true")
-      # Desktop collapse remains false — the two assigns are independent.
-      refute html_open =~ ~s(data-pane-collapsed="true")
+      [open_attrs] = call_rail_panes(render(view))
+      assert open_attrs["data-call-rail-open"] == "true"
+      assert open_attrs["data-collapsed"] == "false"
 
-      # Now collapse the chat pane (desktop). The mobile drawer assign
-      # is unchanged.
+      # Now collapse the rail (desktop). The `<lg` latch is unchanged.
       _ = render_hook(view, "toggle_meeting_chat_pane", %{})
-      html_collapsed = render(view)
-      assert html_collapsed =~ ~s(data-chat-panel-open="true")
-      assert html_collapsed =~ ~s(data-pane="call-rail" data-pane-collapsed="true")
+
+      [collapsed_attrs] = call_rail_panes(render(view))
+      assert collapsed_attrs["data-call-rail-open"] == "true"
+      assert collapsed_attrs["data-collapsed"] == "true"
+
+      # Same node throughout — the one-node property this describe pins.
+      assert open_attrs["id"] == collapsed_attrs["id"]
+      assert collapsed_attrs["id"] == "meeting-call-rail-pane"
     end
   end
 
@@ -7062,12 +7409,12 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "renders the three tabs with exactly one active", %{conn: conn, meeting: meeting} do
+    test "renders the four tabs with exactly one active", %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert count(html, ~s([data-role="call-rail-tab"])) == 3
+      assert count(html, ~s([data-role="call-rail-tab"])) == 4
 
-      for tab <- ~w(people canvas transcript) do
+      for tab <- ~w(people chat canvas transcript) do
         assert count(html, ~s([data-role="call-rail-tab"][data-tab="#{tab}"])) == 1
       end
 
@@ -8725,7 +9072,12 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(data-pane="chat-panel")
+      # The chat DRAWER (`data-pane="chat-panel"`) is gone as of task
+      # 01a084bf stage 3, so the shell-only surface to sanity-check is the
+      # chat BODY in the rail plus the top-bar control. Both are `@shell?`-
+      # gated, which is what this regression check is really about — the
+      # guest counterpart above refutes them.
+      assert html =~ ~s(data-pane="meeting-chat-panel")
       assert html =~ "chat-panel-toggle"
     end
   end

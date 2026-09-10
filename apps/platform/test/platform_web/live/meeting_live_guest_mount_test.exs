@@ -399,7 +399,11 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert html =~ "This invite has expired"
       refute html =~ ~s(id="meeting-client")
       refute html =~ ~s(data-role="meeting-controls")
-      refute html =~ ~s(data-pane="chat-panel")
+      # `data-pane="chat-panel"` was the chat drawer, deleted in task
+      # 01a084bf stage 3 — refuting it here would pass for free now. The
+      # marker that still means "no discussion surface rendered" is the
+      # chat BODY, which is where the one `ChatLive.Embedded` mount lives.
+      refute html =~ ~s(data-pane="meeting-chat-panel")
     end
   end
 
@@ -502,12 +506,15 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
         |> with_meet_host()
         |> live("/#{meeting.slug}/#{token}")
 
-      refute html =~ ~s(data-pane="chat-panel")
+      # Re-pointed by task 01a084bf stage 3: the chat drawer
+      # (`data-pane="chat-panel"` / `id="meeting-chat-drawer"`) no longer
+      # exists on ANY surface, so refuting it proves nothing. The chat body
+      # is the marker that still discriminates guest from shell.
+      refute html =~ ~s(data-pane="meeting-chat-panel")
       refute html =~ ~s(data-role="chat-panel-toggle")
       refute html =~ ~s(data-role="meeting-copy-guest-link")
       refute html =~ ~s(data-role="chat-pane-toggle")
       refute html =~ ~s(id="meeting-chat-pane-collapse-hook")
-      refute html =~ ~s(id="meeting-chat-drawer")
     end
 
     # Task 01a0691d stage 2: the invite section is gated on a signed-in
@@ -671,12 +678,16 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
         |> Phoenix.ConnTest.init_test_session(current_user_id: user.id)
         |> live("/meetings/#{meeting.slug}")
 
-      # All chat-panel + rail-toggle markers present under :shell.
-      assert html =~ ~s(data-pane="chat-panel")
+      # All chat + rail-toggle markers present under :shell. The chat DRAWER
+      # is gone (task 01a084bf stage 3) and the discussion is a pane of the
+      # rail, so the shell-only marker is the chat body plus the one rail
+      # node that hosts it.
+      assert html =~ ~s(data-pane="meeting-chat-panel")
       assert html =~ ~s(data-role="chat-panel-toggle")
       assert html =~ ~s(data-role="chat-pane-toggle")
       assert html =~ ~s(id="meeting-chat-pane-collapse-hook")
-      assert html =~ ~s(id="meeting-chat-drawer")
+      assert html =~ ~s(id="meeting-call-rail-pane")
+      refute html =~ ~s(id="meeting-chat-drawer")
       # Guest identity badge is NOT rendered on the shell surface.
       refute html =~ ~s(data-role="guest-identity-badge")
 

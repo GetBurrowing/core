@@ -1,0 +1,48 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  html,body{margin:0;height:100%}
+  [hidden]:where(:not([hidden='until-found'])) { display: none !important; }
+  #pane{position:relative;height:300px;width:400px;overflow-y:auto;border:1px solid #000}
+  .wrap{display:flex;height:100%;min-height:0;flex-direction:column}
+  #scroller{flex:1 1 0%;min-height:0;overflow-y:auto;overflow-anchor:none}
+  .row{height:60px;border-bottom:1px solid #ccc}
+</style></head>
+<body>
+<div id="pane"><div id="sib">people</div><div id="wrap" class="wrap"><div id="scroller"></div></div></div>
+<pre id="out"></pre>
+<script>
+const log = [];
+const scroller = document.getElementById("scroller");
+const wrap = document.getElementById("wrap");
+const addRows = (n) => { for (let i=0;i<n;i++){const d=document.createElement("div");d.className="row";d.textContent="row";scroller.appendChild(d);} };
+addRows(20);
+const snap = (label) => log.push({label, st: scroller.scrollTop, sh: scroller.scrollHeight, ch: scroller.clientHeight});
+const frames = (n) => new Promise(res => { let i=0; const step=()=>{ if(++i>=n) return res(); requestAnimationFrame(step); }; requestAnimationFrame(step); });
+
+(async () => {
+  await frames(4); scroller.scrollTop = 354; await frames(4); snap("1 parked");
+
+  // Q1: plain hide/show round trip, with overflow-anchor:none
+  wrap.hidden = true;  await frames(4); snap("2 hidden");
+  wrap.hidden = false; await frames(4); snap("3 shown  <- does Chrome restore?");
+
+  // Q2: content APPENDED while hidden (a message arriving on the People tab)
+  scroller.scrollTop = 354; await frames(4);
+  wrap.hidden = true;  await frames(4); addRows(5); await frames(4); snap("4 hidden+appended");
+  wrap.hidden = false; await frames(4); snap("5 shown after append");
+
+  // Q3: a programmatic scrollTop WRITE while hidden (what the hook does today)
+  scroller.scrollTop = 354; await frames(4);
+  wrap.hidden = true;  await frames(4);
+  scroller.scrollTop = scroller.scrollHeight; // hook's snap, on a 0-sized box
+  snap("6 hidden after snap write");
+  wrap.hidden = false; await frames(4); snap("7 shown after hidden write <- clobbered?");
+
+  // Q4: many frames hidden, then show
+  scroller.scrollTop = 300; await frames(4);
+  wrap.hidden = true;  await frames(60);
+  wrap.hidden = false; await frames(4); snap("8 shown after 60 hidden frames");
+
+  document.getElementById("out").textContent = "RESULT " + JSON.stringify(log);
+})();
+</script></body></html>

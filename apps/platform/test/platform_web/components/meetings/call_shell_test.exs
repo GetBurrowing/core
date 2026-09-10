@@ -56,6 +56,37 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
   defp count(html, selector),
     do: html |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> Enum.count()
 
+  defp nodes(html, selector),
+    do: html |> LazyHTML.from_fragment() |> LazyHTML.query(selector)
+
+  defp label_for(id) do
+    {^id, label} = Enum.find(CallShell.tabs(), fn {tab, _} -> tab == id end)
+    label
+  end
+
+  defp tab_ids(html),
+    do: html |> nodes(~s([data-role="call-rail-tab"])) |> LazyHTML.attribute("data-tab")
+
+  # The ACCESSIBLE name of every tab, in render order. Only the active tab
+  # draws its word; the other three are icon-only, so reading visible text
+  # here would report three empty strings and call it a regression.
+  defp tab_names(html),
+    do: html |> nodes(~s([data-role="call-rail-tab"])) |> LazyHTML.attribute("aria-label")
+
+  defp visible_tab_labels(html) do
+    html
+    |> nodes(~s([data-role="call-rail-tab-label"]))
+    |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
+  end
+
+  # A `:chat` slot entry, in the shape `render_component/2` hands a function
+  # component. Supplying one is what CREATES the Chat tab as of task 01a084bf
+  # stage 4 (`CallShell.served_tabs/1`), so `rail/1` supplies one by default
+  # — that is the `/meetings` shape, which every four-up assertion below is
+  # about. Pass `chat: []` for the QUICKMEET shape: a caller that serves no
+  # chat pane.
+  defp chat_slot(body), do: [%{__slot__: :chat, inner_block: fn _, _ -> body end}]
+
   defp rail(overrides) do
     render_component(
       &CallShell.call_rail/1,
@@ -64,7 +95,8 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
           tab_event: "call_rail_tab",
           participants: [human("Harper", "u-1"), agent("Saru", "a-1")],
           agents_by_id: %{},
-          meeting: meeting()
+          meeting: meeting(),
+          chat: chat_slot("MOUNTED CHAT PANE")
         ],
         overrides
       )
@@ -72,16 +104,35 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
   end
 
   describe "the tab strip" do
-    test "renders all three tabs with exactly one active" do
+    test "renders all four tabs in render order, with exactly one active" do
       html = rail(active_tab: "people")
 
-      assert html =~ ">People<" or html =~ "People"
-      assert html =~ "Canvas"
-      assert html =~ "Transcript"
+      # ORDER is part of the contract, not just membership: Chat sits
+      # second, between People and Canvas (task 01a084bf).
+      assert tab_ids(html) == ~w(people chat canvas transcript)
+      assert tab_names(html) == ["People", "Chat", "Canvas", "Transcript"]
 
-      assert length(Regex.scan(~r/data-role="call-rail-tab"/, html)) == 3
-      assert length(Regex.scan(~r/data-active="true"/, html)) == 1
-      assert html =~ ~s(data-tab="people" data-active="true")
+      assert count(html, ~s([data-role="call-rail-tab"])) == 4
+
+      # Scoped to the tabs. `data-active` is also carried by the two
+      # persistent pane wrappers, so an unscoped count of
+      # `data-active="true"` measures something else.
+      assert count(html, ~s([data-role="call-rail-tab"][data-active="true"])) == 1
+
+      assert count(html, ~s([data-role="call-rail-tab"][data-tab="people"][data-active="true"])) ==
+               1
+    end
+
+    test "every tab id the strip renders has a pane clause" do
+      # The pane `case` has NO catch-all, deliberately, so a tab added to
+      # `@tabs` without a branch raises `CaseClauseError` at RUNTIME and
+      # compiles clean. This walks the real list rather than a copy of it.
+      for {id, label} <- CallShell.tabs() do
+        html = rail(active_tab: id)
+
+        assert html =~ ~s(data-pane-tab="#{id}"), label
+        assert count(html, ~s([data-role="call-rail-pane"])) == 1, label
+      end
     end
 
     test "the active marker moves with active_tab" do
@@ -100,11 +151,242 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       assert html =~ ~s(data-tab="people" data-active="true")
     end
 
+    test "only the active tab spends width on a word; the other three are icons" do
+      # THE MEASURED RULE (task 01a084bf stage 1). Four equal text tabs in a
+      # 312px rail give each label a 62px box, and "Transcript" is 60.91px
+      # inactive / 62.67px semibold-active — so the active Transcript tab
+      # rendered "Transcri…". The brand rule: the active tab keeps its word
+      # and takes the leftover width, the rest go icon-only.
+      for {active, _} <- CallShell.tabs() do
+        html = rail(active_tab: active)
+
+        assert visible_tab_labels(html) == [label_for(active)],
+               "exactly one visible label, the active one (#{active})"
+
+        assert count(html, ~s([data-role="call-rail-tab-icon"])) == 3, active
+
+        assert count(
+                 html,
+                 ~s([data-role="call-rail-tab"][data-active="true"] [data-role="call-rail-tab-icon"])
+               ) ==
+                 0,
+               "the active tab is never reduced to an icon (#{active})"
+
+        # Whatever is selected, the a11y tree still exposes all four words.
+        assert tab_names(html) == ["People", "Chat", "Canvas", "Transcript"], active
+      end
+    end
+
+    test "Transcript is never abbreviated, in any state, anywhere in the markup" do
+      # The rule allows dropping a label entirely in favour of an icon. It
+      # does NOT allow shortening the word: no "Trans", no "Script", no
+      # server-rendered ellipsis. If the strip ever gets tight again the
+      # answer is the icon, not a truncated string.
+      for {active, _} <- CallShell.tabs() do
+        html = rail(active_tab: active)
+
+        assert html =~ ~s(aria-label="Transcript"), active
+        refute html =~ ~r/aria-label="Trans(?!cript")/, active
+        refute html =~ "Transcr…", active
+        refute html =~ "Transcript…", active
+      end
+    end
+
+    test "each tab id maps to its own icon, and no two share one" do
+      icons = for {id, _} <- CallShell.tabs(), do: CallShell.tab_icon(id)
+
+      assert length(Enum.uniq(icons)) == 4, "four tabs, four distinct glyphs: #{inspect(icons)}"
+      assert Enum.all?(icons, &String.starts_with?(&1, "hero-"))
+      assert CallShell.tab_icon("chat") == "hero-chat-bubble-left-right"
+    end
+
     test "the tab click pushes the event it was given, carrying the tab id" do
       html = rail(active_tab: "people", tab_event: "zzz_fake_tab_event")
 
       assert html =~ ~s(phx-click="zzz_fake_tab_event")
       assert html =~ ~s(phx-value-tab="canvas")
+    end
+  end
+
+  # ── The strip is PER-CALLER (ticket 01a089ae, fixed in task 01a084bf
+  #    stage 4) ─────────────────────────────────────────────────────────────
+  #
+  # Stage 1 added `{"chat", "Chat"}` to `@tabs` and the strip rendered off
+  # `tabs()`, the module function — so the in-chat quickmeet, which passes NO
+  # `:chat` slot because the real discussion is already on screen beside it,
+  # grew a Chat tab whose pane was empty. These cases pin the fix as
+  # PER-CALLER: the four-up assertions above (which use `rail/1`, i.e. WITH a
+  # chat slot) are the other half, and one surface alone cannot tell "the fix
+  # worked" from "Chat disappeared everywhere".
+  describe "the strip a caller can actually serve" do
+    test "no chat slot means no Chat tab — and a chat slot still means four" do
+      quickmeet = rail(active_tab: "people", chat: [])
+      meeting_surface = rail(active_tab: "people")
+
+      assert tab_ids(quickmeet) == ~w(people canvas transcript)
+      assert count(quickmeet, ~s([data-role="call-rail-tab"])) == 3
+      assert tab_names(quickmeet) == ["People", "Canvas", "Transcript"]
+
+      # POSITIVE CONTROL on the same selector, in the same assertion pair:
+      # a `refute`/`== 0` on a selector that has stopped matching anywhere
+      # passes forever.
+      assert count(quickmeet, ~s([data-role="call-rail-tab"][data-tab="chat"])) == 0
+      assert count(meeting_surface, ~s([data-role="call-rail-tab"][data-tab="chat"])) == 1
+
+      assert tab_ids(meeting_surface) == ~w(people chat canvas transcript)
+      assert count(meeting_surface, ~s([data-role="call-rail-tab"])) == 4
+    end
+
+    test "a caller with no chat slot gets no empty chat wrapper either" do
+      assert count(rail(active_tab: "people", chat: []), ~s([data-role="call-rail-chat-wrap"])) ==
+               0
+
+      assert count(rail(active_tab: "people"), ~s([data-role="call-rail-chat-wrap"])) == 1
+    end
+
+    test "a slotless caller asking for `chat` lands on People, not on a pane with no button" do
+      # THE TRAP THE TICKET DID NOT MENTION. `normalize_tab/1` coerces to
+      # `@tabs`, which still contains "chat" — so filtering the strip alone
+      # would leave a quickmeet arriving with `active_tab: "chat"` (a stale
+      # `?tab=` param, a bookmark, or its own `"meeting_tab_select"` handler,
+      # which assigns any binary) sitting on a Chat pane it cannot navigate
+      # away from. The pane `case` has no catch-all, so getting this wrong is
+      # a `CaseClauseError`, not a cosmetic slip — rendering at all is part
+      # of what this asserts.
+      quickmeet = rail(active_tab: "chat", chat: [])
+
+      assert quickmeet =~ ~s(data-pane-tab="people")
+
+      assert count(
+               quickmeet,
+               ~s([data-role="call-rail-tab"][data-tab="people"][data-active="true"])
+             ) == 1
+
+      assert count(quickmeet, ~s([data-role="call-rail-tab"][data-active="true"])) == 1
+
+      # POSITIVE CONTROL: the very same `active_tab` DOES select Chat once
+      # the caller can serve it, so the fallback above is about the slot and
+      # not about the string "chat" being rejected everywhere.
+      served = rail(active_tab: "chat")
+      assert served =~ ~s(data-pane-tab="chat")
+
+      assert count(served, ~s([data-role="call-rail-tab"][data-tab="chat"][data-active="true"])) ==
+               1
+    end
+
+    test "normalize_tab/2 answers for the caller's list, and /1 still answers for all four" do
+      three = [{"people", "People"}, {"canvas", "Canvas"}, {"transcript", "Transcript"}]
+
+      assert CallShell.normalize_tab("chat") == "chat"
+      assert CallShell.normalize_tab("chat", three) == "people"
+      assert CallShell.normalize_tab("canvas", three) == "canvas"
+      assert CallShell.normalize_tab("nonsense", three) == "people"
+      assert CallShell.normalize_tab(nil, three) == "people"
+
+      # The fallback must itself be servable by every caller, or the coercion
+      # just moves the unreachable-pane problem.
+      assert Enum.any?(three, fn {id, _} -> id == "people" end)
+    end
+  end
+
+  # ── The unread dot on the EXPANDED strip (task 01a084bf stage 4, FE-5's
+  #    V2 case) ──────────────────────────────────────────────────────────────
+  describe "the Chat tab's unread dot" do
+    defp dots(html), do: nodes(html, ~s([data-role="call-rail-tab-unread-dot"]))
+
+    test "it is absent while nothing is unread and present when it is" do
+      # Transcript active, so Chat is one of the icon-only tabs — the state a
+      # viewer is actually in when a dot is raised, since arriving at Chat
+      # clears it.
+      quiet = rail(active_tab: "transcript", chat_unread: false)
+      raised = rail(active_tab: "transcript", chat_unread: true)
+
+      assert Enum.count(dots(quiet)) == 0
+      assert Enum.count(dots(raised)) == 1
+    end
+
+    test "it rides the Chat tab and no other" do
+      html = rail(active_tab: "transcript", chat_unread: true)
+
+      assert count(
+               html,
+               ~s([data-role="call-rail-tab"][data-tab="chat"] [data-role="call-rail-tab-unread-dot"])
+             ) == 1
+
+      for other <- ~w(people canvas transcript) do
+        assert count(
+                 html,
+                 ~s([data-role="call-rail-tab"][data-tab="#{other}"] [data-role="call-rail-tab-unread-dot"])
+               ) == 0,
+               other
+      end
+    end
+
+    test "6px, round, `info`, aria-hidden, and it NEVER animates" do
+      html = rail(active_tab: "transcript", chat_unread: true)
+      node = dots(html)
+
+      assert LazyHTML.attribute(node, "aria-hidden") == ["true"]
+
+      class = node |> LazyHTML.attribute("class") |> List.first()
+
+      # `size-1.5` is 6px at the default root size — the figure the stage
+      # names, not a nearby one.
+      assert class =~ ~r/\bsize-1\.5\b/, class
+      assert class =~ ~r/\brounded-full\b/, class
+      assert class =~ ~r/\bbg-info\b/, class
+
+      # `error`, `success` and `warning` are all already spent on this
+      # screen; `info` is the one meaning-bearing slot left.
+      for spent <- ["bg-error", "bg-success", "bg-warning"] do
+        refute class =~ ~r/\b#{spent}\b/, class
+      end
+
+      # A blinking dot in peripheral vision during a call is hostile.
+      for motion <- ["animate-", "transition", "duration-", "motion-safe:"] do
+        refute class =~ motion, "the dot must not animate in any form. Got: #{class}"
+      end
+    end
+
+    test "the accessible name says so, since the dot itself is aria-hidden" do
+      raised = rail(active_tab: "transcript", chat_unread: true)
+      quiet = rail(active_tab: "transcript", chat_unread: false)
+
+      assert tab_names(raised) == ["People", "Chat, unread messages", "Canvas", "Transcript"]
+      assert tab_names(quiet) == ["People", "Chat", "Canvas", "Transcript"]
+
+      # Only Chat's name moves. "Transcript" in particular is never
+      # abbreviated or re-worded, in either state.
+      assert raised =~ ~s(aria-label="Transcript")
+    end
+
+    test "the dot is inline AFTER the label, so it cannot clip `Transcript`" do
+      # Read on the ACTIVE Chat tab, the only state where a label and the dot
+      # are in the same button. `shrink-0` is what makes the truncating label
+      # give way first rather than the dot being squeezed out of the box.
+      html = rail(active_tab: "chat", chat_unread: true)
+      class = html |> dots() |> LazyHTML.attribute("class") |> List.first()
+
+      assert class =~ ~r/\bshrink-0\b/, class
+      refute class =~ ~r/\babsolute\b/, class
+
+      # Structural, not a class check: the dot is a child of the Chat BUTTON
+      # and a following sibling of its label, so it reads after the word.
+      assert count(
+               html,
+               ~s([data-role="call-rail-tab"][data-tab="chat"] > [data-role="call-rail-tab-label"] ~ [data-role="call-rail-tab-unread-dot"])
+             ) == 1
+    end
+
+    test "a caller that serves no Chat tab cannot be given a dot" do
+      # There is nowhere honest to draw it: the pane it points at does not
+      # exist on that surface.
+      assert Enum.count(dots(rail(active_tab: "people", chat: [], chat_unread: true))) == 0
+      assert Enum.count(dots(rail(active_tab: "people", chat_unread: true))) == 1
+    end
+
+    test "false is the default, so a caller that forgets the attr under-reports" do
+      assert Enum.count(dots(rail(active_tab: "transcript"))) == 0
     end
   end
 
@@ -209,6 +491,39 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
 
         hidden = count(html, ~s([data-role="meeting-transcript-wrap"][hidden]))
         assert hidden == if(tab == "transcript", do: 0, else: 1), tab
+      end
+    end
+
+    test "Chat mounts its pane wrapper once, on every tab, and hides it off-tab" do
+      # Mirrors the transcript contract above, for a harder case: this
+      # wrapper will hold a `live_render` of a nested LiveView. A branch
+      # that unmounts it kills the child process, its message stream and
+      # the reader's scroll position, so the wrapper is present on EVERY
+      # tab (count == 1, never 0) and what flips is `hidden`.
+      for tab <- ~w(people chat canvas transcript) do
+        html = rail(active_tab: tab)
+
+        assert count(html, ~s([data-role="call-rail-chat-wrap"])) == 1, tab
+
+        assert count(
+                 html,
+                 ~s([data-role="call-rail-chat-wrap"][data-active="#{tab == "chat"}"])
+               ) == 1,
+               tab
+
+        hidden = count(html, ~s([data-role="call-rail-chat-wrap"][hidden]))
+        assert hidden == if(tab == "chat", do: 0, else: 1), tab
+      end
+    end
+
+    test "the chat slot's own DOM survives every tab, it is not re-rendered per tab" do
+      # The wrapper being present proves nothing on its own — an empty
+      # wrapper would pass the test above. This asserts the SLOT CONTENT,
+      # the thing whose unmounting is the actual defect.
+      for tab <- ~w(people chat canvas transcript) do
+        html = rail(active_tab: tab, chat: chat_slot("MOUNTED CHAT PANE"))
+
+        assert html =~ "MOUNTED CHAT PANE", tab
       end
     end
 
@@ -706,7 +1021,11 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
     # `text-base-content/90` is a COLOUR, not a size — the lookahead
     # stops `text-base` matching inside it.
     defp size_utilities(class),
-      do: Regex.scan(~r/(?:\S+:)?text-(?:xs|sm|base|\[\d+px\])(?![\w\/-])/, class)
+      do:
+        Regex.scan(
+          ~r/(?:\S+:)?text-(?:xs|sm|base|\[\d+(?:\.\d+)?px\])(?![\w\/-])/,
+          class
+        )
 
     test "participant names are pinned to text-xs with no breakpoint variant" do
       html =
@@ -749,9 +1068,38 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       end
     end
 
-    test "the tab labels match the rail's 11px scale" do
-      for class <- class_of(rail(active_tab: "people"), ~s([data-role="call-rail-tab"])) do
-        assert size_utilities(class) == [["text-[11px]"]]
+    # The tab strip is the one place the rail leaves 11px, and it is a
+    # DESIGN RULING rather than drift: 12.5px matches the size the
+    # transcript pane already uses for its own utility copy (design canvas
+    # 01a084be, "Type"), and the four-up strip was measured at that size
+    # rather than at 11px, because the size is what decides whether four
+    # labels fit in 312px.
+    test "the tab labels are 12.5px, unconditionally, and selection carries weight" do
+      html = rail(active_tab: "canvas")
+
+      classes = class_of(html, ~s([data-role="call-rail-tab"]))
+      assert length(classes) == 4
+
+      for class <- classes do
+        assert size_utilities(class) == [["text-[12.5px]"]], class
+        refute class =~ "text-[11px]"
+      end
+
+      active = class_of(html, ~s([data-role="call-rail-tab"][data-active="true"]))
+      assert length(active) == 1
+      assert hd(active) =~ "font-semibold"
+
+      inactive = class_of(html, ~s([data-role="call-rail-tab"][data-active="false"]))
+      assert length(inactive) == 3
+
+      for class <- inactive do
+        assert class =~ "font-medium"
+        refute class =~ "font-semibold"
+
+        # `/40` is the DISABLED treatment on this rail and an inactive tab
+        # is not disabled (design canvas 01a084be, "Palette").
+        assert class =~ "text-base-content/60"
+        refute class =~ "text-base-content/40"
       end
     end
 

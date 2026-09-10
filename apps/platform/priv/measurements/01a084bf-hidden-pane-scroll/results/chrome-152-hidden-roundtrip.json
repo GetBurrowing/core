@@ -1,0 +1,56 @@
+{
+  "browser": "Google Chrome 152.0.7977.83",
+  "platform": "macOS arm64, --headless=new",
+  "tailwind_preflight": "[hidden]:where(:not([hidden='until-found'])) { display: none !important; }",
+  "tailwind_version": "4.1.12 (config/config.exs)",
+  "steps": [
+    {
+      "label": "1 parked",
+      "st": 354,
+      "sh": 1220,
+      "ch": 300
+    },
+    {
+      "label": "2 hidden",
+      "st": 0,
+      "sh": 0,
+      "ch": 0
+    },
+    {
+      "label": "3 shown  <- does Chrome restore?",
+      "st": 354,
+      "sh": 1220,
+      "ch": 300
+    },
+    {
+      "label": "4 hidden+appended",
+      "st": 0,
+      "sh": 0,
+      "ch": 0
+    },
+    {
+      "label": "5 shown after append",
+      "st": 354,
+      "sh": 1525,
+      "ch": 300
+    },
+    {
+      "label": "6 hidden after snap write",
+      "st": 0,
+      "sh": 0,
+      "ch": 0
+    },
+    {
+      "label": "7 shown after hidden write <- clobbered?",
+      "st": 354,
+      "sh": 1525,
+      "ch": 300
+    },
+    {
+      "label": "8 shown after 60 hidden frames",
+      "st": 300,
+      "sh": 1525,
+      "ch": 300
+    }
+  ]
+}

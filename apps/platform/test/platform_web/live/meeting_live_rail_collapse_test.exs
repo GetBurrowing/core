@@ -449,11 +449,14 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       }
     end
 
-    test "a message arriving while the discussion drawer is CLOSED raises the flag",
+    test "a message arriving while chat is NOT the pane on screen raises the flag",
          %{conn: conn, viewer: viewer, meeting: meeting, other_participant: other_participant} do
       view = open_meeting(conn, viewer, meeting)
 
-      assert assigns(view).chat_panel_open == false
+      # WAS `chat_panel_open == false`. Task 01a084bf stage 3 deleted the
+      # chat drawer and that assign with it; "is the viewer looking at the
+      # discussion" is now a question about which rail TAB is active.
+      refute assigns(view).active_meeting_tab == "chat"
       assert assigns(view).call_rail_unread == false
 
       post!(meeting.chat_space_id, other_participant, "did you see this")
@@ -471,8 +474,11 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
          %{conn: conn, viewer: viewer, meeting: meeting, other_participant: other_participant} do
       view = open_meeting(conn, viewer, meeting)
 
+      # `toggle_chat_panel` now OPENS the rail on the Chat tab rather than
+      # toggling a drawer (task 01a084bf stage 3).
       render_click(view, "toggle_chat_panel", %{})
-      assert assigns(view).chat_panel_open == true
+      assert assigns(view).active_meeting_tab == "chat"
+      assert assigns(view).chat_panel_collapsed == false
 
       post!(meeting.chat_space_id, other_participant, "you are looking right at me")
       settle(view)
@@ -481,10 +487,11 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
              "a message you are looking at is not unread"
 
       # DISCRIMINATOR: the very same broadcast, on the very same space, DOES
-      # raise the flag once the drawer is closed. Without this the assertion
-      # above would also pass on a flag that never rises at all.
-      render_click(view, "toggle_chat_panel", %{})
-      assert assigns(view).chat_panel_open == false
+      # raise the flag once chat is no longer the pane on screen. Without
+      # this the assertion above would also pass on a flag that never rises.
+      # Driven by LEAVING the tab, since the event no longer toggles.
+      render_click(view, "meeting_tab_select", %{"tab" => "people"})
+      refute assigns(view).active_meeting_tab == "chat"
 
       post!(meeting.chat_space_id, other_participant, "and now you are not")
       settle(view)
@@ -492,7 +499,29 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       assert assigns(view).call_rail_unread == true
     end
 
-    test "opening the drawer clears the flag; closing it does not",
+    test "a COLLAPSED rail sitting on the Chat tab still raises the flag",
+         %{conn: conn, viewer: viewer, meeting: meeting, other_participant: other_participant} do
+      view = open_meeting(conn, viewer, meeting)
+
+      # The Chat tab can be the active tab while the viewer can see nothing
+      # of it: at `lg` a collapsed rail is a 44px icon strip with no pane in
+      # it. Suppressing the dot on the tab alone would hide activity behind
+      # a preference the viewer set once — this is the second half of
+      # `chat_on_screen?/1` and nothing else in this file covers it.
+      render_click(view, "meeting_tab_select", %{"tab" => "chat"})
+      force_collapsed(view, true)
+
+      assert assigns(view).active_meeting_tab == "chat"
+      assert assigns(view).chat_panel_collapsed == true
+
+      post!(meeting.chat_space_id, other_participant, "behind the strip")
+      settle(view)
+
+      assert assigns(view).call_rail_unread == true,
+             "a collapsed rail shows no chat, so the message is unread"
+    end
+
+    test "opening chat clears the flag; LEAVING the tab does not re-raise it",
          %{conn: conn, viewer: viewer, meeting: meeting, other_participant: other_participant} do
       view = open_meeting(conn, viewer, meeting)
 
@@ -501,17 +530,32 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       assert assigns(view).call_rail_unread == true
 
       render_click(view, "toggle_chat_panel", %{})
-      assert assigns(view).chat_panel_open == true
+      assert assigns(view).active_meeting_tab == "chat"
 
       assert assigns(view).call_rail_unread == false,
              "opening the discussion must clear the marker"
 
-      render_click(view, "toggle_chat_panel", %{})
-      assert assigns(view).chat_panel_open == false
+      # WAS: a second `toggle_chat_panel` push, asserting that CLOSING did
+      # not clear the flag. The event no longer toggles (task 01a084bf stage
+      # 3) — asking for chat twice asks for the same thing twice — so the
+      # equivalent move is to leave the tab. The property is unchanged and is
+      # the one that matters: navigating away must not invent unread messages
+      # that never arrived, and must leave the flag ready to count again.
+      render_click(view, "meeting_tab_select", %{"tab" => "people"})
 
       assert assigns(view).call_rail_unread == false,
-             "closing must NOT clear: clearing on close would wipe the dot " <>
-               "at the exact moment it should start counting again"
+             "leaving the Chat tab must NOT raise the dot by itself — there " <>
+               "is nothing new to read"
+
+      # And it really is ready to count again.
+      post!(meeting.chat_space_id, other_participant, "two")
+      settle(view)
+      assert assigns(view).call_rail_unread == true
+
+      # Selecting the tab directly clears it, exactly as the top-bar control
+      # does — the strip's chained push arrives this way.
+      render_click(view, "meeting_tab_select", %{"tab" => "chat"})
+      assert assigns(view).call_rail_unread == false
     end
 
     test "the viewer's own message does not mark itself unread",
@@ -589,10 +633,22 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
   # a fragment's ROOT nodes, so every one of these nested lookups would come
   # back `[]` and read as "the element is not there".
 
+  # RE-POINTED by task 01a084bf stage 2/3. This selector used to be
+  # `[data-pane="call-rail"][data-pane-collapsed="true"]`, which encoded two
+  # assumptions that stopped being true when the rail was folded into ONE
+  # node: that `data-pane="call-rail"` sits on the collapsed strip itself
+  # (it is now on the single rail node, of which the strip is a DESCENDANT),
+  # and that the strip carries `data-pane-collapsed` (retired in favour of
+  # `data-collapsed` on the rail node).
+  #
+  # Anchored on `data-role="call-rail-collapsed"` instead, which names the
+  # strip specifically and cannot be confused with the rail that contains
+  # it. Deliberately NOT a bare `[data-collapsed="true"]`:
+  # `#meeting-chat-pane-collapse-hook` also carries `data-collapsed`.
   defp strip_html(view) do
     doc = view |> render() |> LazyHTML.from_fragment()
 
-    nodes = LazyHTML.query(doc, ~s([data-pane="call-rail"][data-pane-collapsed="true"]))
+    nodes = LazyHTML.query(doc, ~s([data-pane="call-rail"] [data-role="call-rail-collapsed"]))
 
     # `LazyHTML.query/2` hands back a `%LazyHTML{}`, NOT a list — a
     # zero-node result is still a truthy struct, so `if result` reads as
@@ -608,6 +664,21 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
 
   defp strip_class(view) do
     strip!(view) |> LazyHTML.attribute("class") |> List.first() || ""
+  end
+
+  # The class list of the ONE rail node. The width and its transition live
+  # here, not on the strip: after task 01a084bf stage 2 the rail is a single
+  # element present in both states, and the animated quantity has to be a
+  # property of the element that survives the change. Reading the transition
+  # off the strip — which is `:if`-gated and therefore replaced rather than
+  # resized — is exactly the measurement that let FE-5's V5 case through.
+  defp rail_class(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-pane="call-rail"]))
+    |> LazyHTML.attribute("class")
+    |> List.first() || ""
   end
 
   # Drive the rail into COLLAPSED through the chevron, i.e. the one path
@@ -627,6 +698,25 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
     test "it is absent while the rail is expanded", %{view: view} do
       force_collapsed(view, false)
       refute strip_html(view), "the strip must not co-exist with the expanded rail"
+
+      # ANTI-VACUITY. This case is a `refute` on a selector, so it passes
+      # for free the moment the selector stops matching anything — which is
+      # precisely what happened to its previous form
+      # (`[data-pane="call-rail"][data-pane-collapsed="true"]`) when the rail
+      # became one node. Two guards against that:
+      #
+      #   1. the selector must be capable of matching — collapse and see it.
+      #   2. a strip-specific marker that cannot be confused with the rail
+      #      is separately absent while expanded.
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-role="call-rail-strip-icon"]))
+             |> Enum.empty?(),
+             "no strip button may render while the rail is expanded"
+
+      assert view |> collapse_by_chevron() |> strip_html(),
+             "the selector must be able to MATCH, or this test's refute is vacuous"
     end
 
     test "w-11 (44px), NOT w-12 — and the class is the house spelling", %{view: view} do
@@ -686,31 +776,59 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       %{meeting: meeting, view: view}
     end
 
-    test "one icon per REAL tab, in `CallShell.tabs/0` order", %{view: view} do
+    test "one button per tab, in `CallShell.tabs/0` order", %{view: view} do
+      strip = strip!(view)
+
+      # The strip renders one button per entry in `CallShell.tabs/0`, in that
+      # order, and every button's `data-tab` is read here regardless of which
+      # `data-role` it carries — see the next case for why Chat's differs.
       tabs =
-        view
-        |> strip!()
-        |> LazyHTML.query(~s([data-role="call-rail-strip-icon"]))
+        strip
+        |> LazyHTML.query(
+          ~s([data-role="call-rail-strip-icon"], [data-role="call-rail-strip-chat"])
+        )
         |> LazyHTML.attribute("data-tab")
 
       assert tabs == Enum.map(PlatformWeb.Components.Meetings.CallShell.tabs(), &elem(&1, 0))
-      assert tabs == ["people", "canvas", "transcript"]
+      assert tabs == ["people", "chat", "canvas", "transcript"]
     end
 
-    test "NO Chat tab was smuggled into the shared tab list", %{view: view} do
-      tabs =
-        view
-        |> strip!()
-        |> LazyHTML.query(~s([data-role="call-rail-strip-icon"]))
-        |> LazyHTML.attribute("data-tab")
-
-      refute "chat" in tabs
-
-      refute Enum.any?(
+    test "Chat IS in the shared tab list now, and keeps the strip-chat role", %{view: view} do
+      # INVERTED by task 01a084bf. This case used to assert that no Chat tab
+      # had been "smuggled into" `CallShell.tabs/0`, which was right while
+      # Chat was a separate `#meeting-chat-drawer`: a Chat entry would have
+      # rendered a tab leading to a surface the rail did not own.
+      #
+      # Stage 1 of 01a084bf made Chat the rail's FOURTH TAB and stage 3 moved
+      # the one `ChatLive.Embedded` mount into it, which is what gave the tab
+      # somewhere to lead. The old assertion now pins the defect, so it is
+      # inverted rather than deleted.
+      assert Enum.any?(
                PlatformWeb.Components.Meetings.CallShell.tabs(),
                fn {id, _} -> id == "chat" end
              ),
-             "`CallShell.tabs/0` feeds the in-chat quickmeet rail too"
+             "Chat is a rail tab as of task 01a084bf stage 1"
+
+      strip = strip!(view)
+
+      # 01a0740d shipped a hand-written Chat button beside the three looped
+      # icons. Now that the loop yields Chat, a second button would put two
+      # chat glyphs in a 44px strip — so the loop's Chat entry CARRIES
+      # 01a0740d's role instead. Button count and both role names are
+      # unchanged; only which element owns `call-rail-strip-chat` moved.
+      assert strip
+             |> LazyHTML.query(~s([data-role="call-rail-strip-chat"]))
+             |> LazyHTML.attribute("data-tab") == ["chat"]
+
+      icon_tabs =
+        strip
+        |> LazyHTML.query(~s([data-role="call-rail-strip-icon"]))
+        |> LazyHTML.attribute("data-tab")
+
+      refute "chat" in icon_tabs,
+             "Chat must not carry BOTH roles — that would double-count the button"
+
+      assert icon_tabs == ["people", "canvas", "transcript"]
     end
 
     test "every tab icon carries a hero glyph and an aria-label naming its tab",
@@ -718,7 +836,10 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       strip = strip!(view)
 
       for {id, label} <- PlatformWeb.Components.Meetings.CallShell.tabs() do
-        button = LazyHTML.query(strip, ~s([data-role="call-rail-strip-icon"][data-tab="#{id}"]))
+        # Matched on `data-tab` rather than on a role, so the Chat entry —
+        # which carries `call-rail-strip-chat` — is covered by this loop
+        # exactly like the other three. Every tab must name itself.
+        button = LazyHTML.query(strip, ~s([data-tab="#{id}"]))
 
         assert LazyHTML.attribute(button, "aria-label") == [label]
 
@@ -778,11 +899,17 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
 
       force_collapsed(view, false)
 
+      # Scoped to the EXPANDED branch specifically. Before the one-node fold
+      # the collapsed strip was a SIBLING of `[data-pane="call-rail"]`, so
+      # this descendant selector could only ever reach the expanded rail's
+      # chevron. Both branches are descendants of the one rail node now, and
+      # an unscoped query would return two elements the moment the collapsed
+      # branch stopped being `:if`-gated.
       expanded =
         view
         |> render()
         |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s([data-pane="call-rail"] [data-role="chat-pane-toggle"]))
+        |> LazyHTML.query(~s([data-role="call-rail-expanded"] [data-role="chat-pane-toggle"]))
 
       assert LazyHTML.attribute(expanded, "aria-expanded") == ["true"]
     end
@@ -887,11 +1014,33 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
              "a screen-reader user gets no benefit from the space the " <>
                "collapse buys and must lose nothing for it"
 
+      # Clicking Chat in the strip now EXPANDS the rail onto the Chat tab
+      # (task 01a084bf stage 3), where 01a0740d's version pushed
+      # `toggle_chat_panel` at a drawer that was `lg:!hidden` — it cleared
+      # this dot and showed the reader nothing, which 01a0740d reported as a
+      # known defect. So the strip is gone after the click, by design, and
+      # the assertions move to the surface that replaced it.
       view |> element(~s([data-role="call-rail-strip-chat"])) |> render_click()
 
-      assert assigns(view).call_rail_unread == false
-      assert dot(view) |> Enum.empty?()
-      assert chat_label(view) == ["Chat"]
+      assert assigns(view).call_rail_unread == false,
+             "arriving at the Chat tab is reading the messages"
+
+      assert assigns(view).chat_panel_collapsed == false, "the rail must expand"
+      assert assigns(view).active_meeting_tab == "chat", "onto the Chat tab"
+
+      refute strip_html(view), "the strip is replaced by the expanded rail"
+
+      html = view |> render() |> LazyHTML.from_fragment()
+
+      # The dot is gone everywhere, not merely gone from the strip…
+      assert html |> LazyHTML.query(~s([data-role="call-rail-unread-dot"])) |> Enum.empty?()
+
+      # …and the chat the dot was advertising is on screen and mounted once.
+      assert html
+             |> LazyHTML.query(~s([data-role="call-rail-chat-wrap"][data-active="true"]))
+             |> Enum.count() == 1
+
+      assert html |> LazyHTML.query(~s([data-pane="meeting-chat-panel"])) |> Enum.count() == 1
     end
 
     test "it is the `info` slot and it NEVER animates",
@@ -938,6 +1087,168 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
     end
   end
 
+  # ── The EXPANDED strip's unread dot (task 01a084bf stage 4 — FE-5's
+  #    unresolved V2 case) ────────────────────────────────────────────────────
+  #
+  # The block above covers the COLLAPSED 44px strip, which is where 01a0740d
+  # put the only dot there was. It is a different element, on a different
+  # geometry, and the expanded rail — the state a desktop viewer sits in — had
+  # no unread affordance at all. Same assign, so a test that read the assign
+  # would pass on both while only one rendered anything.
+  #
+  # Every raise here is driven by a REAL `Chat.post_message/2`, per this file's
+  # moduledoc: nothing hand-sends a `%Message{}` to the view's pid.
+  describe "(g) the unread dot on the EXPANDED Chat tab" do
+    setup %{conn: conn, org: org, viewer: viewer} do
+      meeting = meeting!(org, "expanded-dot")
+      other = create_member!(org, "other")
+      other_participant = join!(meeting.chat_space_id, other)
+      _viewer_participant = join!(meeting.chat_space_id, viewer)
+
+      view = open_meeting_shell(conn, viewer, meeting)
+
+      # The rail is EXPANDED — the state this block is about. `gallery` is the
+      # mount default, so this is an assertion rather than a set-up step.
+      assert assigns(view).chat_panel_collapsed == false
+
+      %{meeting: meeting, view: view, other_participant: other_participant}
+    end
+
+    defp rail_html(view), do: view |> render() |> LazyHTML.from_fragment()
+
+    defp expanded_dots(view) do
+      view
+      |> rail_html()
+      |> LazyHTML.query(
+        ~s([data-role="call-rail-tab"][data-tab="chat"] [data-role="call-rail-tab-unread-dot"])
+      )
+    end
+
+    defp expanded_chat_name(view) do
+      view
+      |> rail_html()
+      |> LazyHTML.query(~s([data-role="call-rail-tab"][data-tab="chat"]))
+      |> LazyHTML.attribute("aria-label")
+    end
+
+    test "a real message on another tab raises it, on the Chat TAB and nowhere else",
+         %{view: view, meeting: meeting, other_participant: other_participant} do
+      # Anti-vacuity: the rail really is expanded with a Chat tab in it, and
+      # the dot really is absent first — so the count below is a transition.
+      assert view
+             |> rail_html()
+             |> LazyHTML.query(~s([data-role="call-rail-tab"][data-tab="chat"]))
+             |> Enum.count() == 1
+
+      refute assigns(view).active_meeting_tab == "chat"
+      assert Enum.empty?(expanded_dots(view))
+      assert expanded_chat_name(view) == ["Chat"]
+
+      post!(meeting.chat_space_id, other_participant, "did you see this")
+      settle(view)
+
+      assert Enum.count(expanded_dots(view)) == 1
+
+      # Exactly one in the whole document, and it is on Chat. Hanging "there
+      # is something to read" on People or Canvas would point the viewer at
+      # the wrong pane.
+      html = rail_html(view)
+
+      assert html |> LazyHTML.query(~s([data-role="call-rail-tab-unread-dot"])) |> Enum.count() ==
+               1
+
+      for other <- ~w(people canvas transcript) do
+        assert html
+               |> LazyHTML.query(
+                 ~s([data-role="call-rail-tab"][data-tab="#{other}"] [data-role="call-rail-tab-unread-dot"])
+               )
+               |> Enum.empty?(),
+               other
+      end
+
+      # The dot is `aria-hidden`, so the accessible name carries the state.
+      assert expanded_chat_name(view) == ["Chat, unread messages"]
+    end
+
+    # THE CLEAR, ON ITS OWN. The raise test above must not be allowed to stand
+    # in for this half: a rule that raises and never clears passes a raise
+    # test, and a dot that never goes away is the whole reason FE-5's version
+    # was reported as a defect rather than shipped.
+    test "selecting the Chat TAB clears it, and the chat it advertised is on screen",
+         %{view: view, meeting: meeting, other_participant: other_participant} do
+      post!(meeting.chat_space_id, other_participant, "unread please")
+      settle(view)
+
+      assert Enum.count(expanded_dots(view)) == 1, "nothing to clear — the raise did not happen"
+
+      view
+      |> element(~s([data-role="call-rail-tab"][data-tab="chat"]))
+      |> render_click()
+
+      assert assigns(view).active_meeting_tab == "chat"
+
+      assert assigns(view).call_rail_unread == false,
+             "arriving at the Chat tab is reading the messages"
+
+      html = rail_html(view)
+
+      # Gone everywhere, not merely gone from the Chat tab…
+      assert html |> LazyHTML.query(~s([data-role="call-rail-tab-unread-dot"])) |> Enum.empty?()
+      assert expanded_chat_name(view) == ["Chat"]
+
+      # …and the pane it was advertising is showing, mounted once.
+      assert html
+             |> LazyHTML.query(~s([data-role="call-rail-chat-wrap"][data-active="true"]))
+             |> Enum.count() == 1
+
+      assert html |> LazyHTML.query(~s([data-pane="meeting-chat-panel"])) |> Enum.count() == 1
+    end
+
+    test "the dot never rides `chat-pane-toggle`, whose job is to HIDE the rail",
+         %{view: view, meeting: meeting, other_participant: other_participant} do
+      post!(meeting.chat_space_id, other_participant, "ping")
+      settle(view)
+
+      html = rail_html(view)
+
+      # Anti-vacuity for both refutes: the toggle is on the page and the dot
+      # was raised, so a zero count means "not there", not "nothing rendered".
+      assert html |> LazyHTML.query(~s([data-role="chat-pane-toggle"])) |> Enum.count() == 1
+
+      assert html |> LazyHTML.query(~s([data-role="call-rail-tab-unread-dot"])) |> Enum.count() ==
+               1
+
+      assert html
+             |> LazyHTML.query(
+               ~s([data-role="chat-pane-toggle"] [data-role="call-rail-tab-unread-dot"])
+             )
+             |> Enum.empty?(),
+             "hanging 'there is something to read' on a control that COLLAPSES " <>
+               "the rail passes a render test and points the viewer away from " <>
+               "the messages"
+
+      assert html
+             |> LazyHTML.query(
+               ~s([data-role="chat-pane-toggle"] [data-role="call-rail-unread-dot"])
+             )
+             |> Enum.empty?()
+    end
+
+    test "the expanded strip still renders all FOUR tabs — the meeting surface serves chat",
+         %{view: view} do
+      # The other half of ticket 01a089ae's fix. The quickmeet's three-up is
+      # pinned in `chat/partials_meeting_panel_test.exs`; this pins that the
+      # fix is PER-CALLER and did not remove Chat everywhere.
+      tabs =
+        view
+        |> rail_html()
+        |> LazyHTML.query(~s([data-component="call-rail"] [data-role="call-rail-tab"]))
+        |> LazyHTML.attribute("data-tab")
+
+      assert tabs == ~w(people chat canvas transcript)
+    end
+  end
+
   describe "(f) motion asymmetry — the chevron animates, a mode change snaps" do
     setup %{conn: conn, org: org, viewer: viewer} do
       meeting = meeting!(org, "motion")
@@ -946,10 +1257,22 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
 
     @width_transition ~r/transition-\[width\]/
 
+    # READ OFF THE RAIL NODE, NOT THE STRIP (task 01a084bf stage 2). These
+    # four cases used `strip_class/1`, because 01a0740d put the gated
+    # transition on the collapsed strip. That was the wrong element and the
+    # reason FE-5's V5 case filmed a single-frame jump while a class-presence
+    # check passed: an `:if`-gated strip is REPLACED, not resized, so no
+    # transition on it can ever interpolate. The width and its transition now
+    # live on the one rail node, and that is where the assertion must look.
+    #
+    # `refute` cases are the hazard here — a selector that matches nothing
+    # makes them pass for free — so each one is paired with a positive
+    # control proving the regex can still fire against this same node.
+
     test "a chevron collapse carries the width transition", %{view: view} do
       collapse_by_chevron(view)
 
-      assert strip_class(view) =~ @width_transition,
+      assert rail_class(view) =~ @width_transition,
              "motion there confirms *you did that*"
     end
 
@@ -960,21 +1283,32 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       assert assigns(view).chat_panel_collapsed == true
       assert assigns(view).call_rail_animate == false
 
-      refute strip_class(view) =~ @width_transition,
+      refute rail_class(view) =~ @width_transition,
              "nobody asked for this width change, the mode switch did — a " <>
                "slab of screen sliding at you every time you change what you " <>
                "are looking at is the app moving furniture mid-sentence"
+
+      # Positive control: the same node, the same regex, after a move the
+      # viewer DID ask for. Out AND back, because `force_collapsed/1` is a
+      # no-op when the rail is already in the state asked for — and the rail
+      # is already collapsed here, so a bare `collapse_by_chevron/1` would
+      # never push the chevron and never set `:call_rail_animate`.
+      force_collapsed(view, false)
+      force_collapsed(view, true)
+
+      assert rail_class(view) =~ @width_transition,
+             "the refute above must be capable of failing"
     end
 
     test "a chevron move AFTER a mode change animates again", %{view: view} do
       set_mode(view, :screen)
-      refute strip_class(view) =~ @width_transition
+      refute rail_class(view) =~ @width_transition
 
       # Out and back, both by hand.
       force_collapsed(view, false)
       force_collapsed(view, true)
 
-      assert strip_class(view) =~ @width_transition
+      assert rail_class(view) =~ @width_transition
     end
 
     test "the first paint never animates", %{conn: conn, org: org, viewer: viewer} do
@@ -986,7 +1320,14 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       # Gallery is the open default, so drive a fresh mount that starts
       # collapsed the only way a mount can: by mode.
       set_mode(view, :canvas)
-      refute strip_class(view) =~ @width_transition
+      refute rail_class(view) =~ @width_transition
+
+      # Positive control, out and back for the same reason as above.
+      force_collapsed(view, false)
+      force_collapsed(view, true)
+
+      assert rail_class(view) =~ @width_transition,
+             "the refute above must be capable of failing"
     end
   end
 end

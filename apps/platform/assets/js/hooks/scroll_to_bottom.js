@@ -365,6 +365,10 @@ const ScrollToBottom = {
   _beginConversation(spaceId) {
     this._spaceId = spaceId;
     this._initialScroll = true;
+    // A deferred restore belongs to the conversation that was on screen when
+    // the relocation happened. Applying it to a different space would drop the
+    // reader at an offset that means nothing there.
+    this._pendingRealignTop = null;
     // Message id whose arrival position has already been honoured, so a
     // later stream batch doesn't re-centre a reader who has since
     // scrolled away. Cleared here so a deep link into a DIFFERENT space is
@@ -456,7 +460,85 @@ const ScrollToBottom = {
       this._viewportObserver = null;
     }
   },
+  // TRUE when the scroller currently has a layout box to measure.
+  //
+  // An element inside a `display: none` subtree reports clientWidth,
+  // clientHeight AND scrollHeight as 0 — every input the resize paths below
+  // read at once. The predicate cannot tell that apart from a genuinely
+  // rendered 0x0 box, and deliberately does not try: in both cases the honest
+  // answer is that this hook knows nothing about where the reader is and must
+  // not decide anything.
+  _hasMeasurableBox() {
+    return this.scrollEl.clientWidth > 0 || this.scrollEl.clientHeight > 0;
+  },
   _onViewportResize() {
+    // ── The hidden-pane guard (task 01a084bf stage 5) ───────────────────────
+    //
+    // WHAT WAS MEASURED, and by whom. The behavioural gate on task 01a084bf
+    // reported a reader parked at scrollTop 354 (max 614) on the call rail's
+    // Chat tab, sent to 614 — the exact bottom — by a People/Transcript/Chat
+    // tab round trip. The gate's own diagnosis was that `display: none`
+    // discards the offset and the browser drops the reader at the bottom on
+    // return. BOTH HALVES OF THAT ARE WRONG, and the numbers it recorded are
+    // what refute it: a discarded offset lands at 0, the TOP; 614 is
+    // `scrollHeight - clientHeight`, which only a write can reach.
+    //
+    // Measured in Chrome 152.0.7977.83 over CDP against a static page
+    // carrying Tailwind v4.1.12's preflight rule verbatim
+    // (`[hidden]:where(:not([hidden='until-found'])) { display: none
+    // !important }`, so the `hidden` attribute really does beat the wrap's
+    // own `.flex`): the browser RETAINS the offset across the round trip and
+    // hands it back. 354 -> 0 while hidden -> 354 on return. It also retains
+    // it when rows are appended to the hidden scroller, when a `scrollTop`
+    // write is attempted on the box-less element (the write is discarded),
+    // and across 60 hidden frames.
+    //
+    // So the destroyer is THIS FUNCTION. `[data-role="call-rail-chat-wrap"]`
+    // in `call_shell.ex` flips `hidden`, the ResizeObserver above delivers
+    // 0x0, and the old code recorded that: `_lastClientWidth`,
+    // `_lastClientHeight` and `_lastScrollHeight` all became 0. On the way
+    // back the WIDTH path then reconstructed the reader's pre-resize distance
+    // from those zeroes — `0 - 354 - 0 = -354`, comfortably under
+    // NEAR_BOTTOM_PX — concluded the reader had been following the live edge,
+    // and snapped. Seeded with the gate's own three numbers the arithmetic
+    // reproduces its trace exactly, 354 -> 0 -> 614; see
+    // `assets/test/scroll_to_bottom_hidden_pane_test.mjs`.
+    //
+    // THE FIX IS TO RECORD NOTHING. Returning before the reads above leaves
+    // all three remembered dimensions at their last RENDERED values, so the
+    // re-show delivery compares like with like: same width, same height, no
+    // change, no snap, and the offset the browser handed back stands. If the
+    // pane's size genuinely changed while it was hidden — a window resize
+    // while the reader was on People — the re-show delivery still sees a real
+    // change against the real pre-hide geometry, which is the comparison the
+    // width path was always trying to make.
+    //
+    // THE SIBLING PANE ALREADY DOES THIS, which is the strongest evidence
+    // here and is not mine. `[data-role="meeting-transcript-wrap"]` sits
+    // beside the chat wrap in the same rail, hides by the same `hidden`
+    // attribute, and `hooks/meeting_transcript.js` gates its own
+    // ResizeObserver on `this.el.clientHeight > 0` — with a comment stating
+    // that a reader who had scrolled up "keeps their place" because the
+    // browser restores the offset. That was written by another author, for
+    // another pane, and it ships. The chat pane was the outlier, and the
+    // measurement above and that precedent are independent of each other.
+    //
+    // WHAT THIS DELIBERATELY DOES NOT CHANGE, because it is load-bearing.
+    // `/meetings` opens on the People tab (`meeting_live.ex`), so the chat
+    // pane MOUNTS box-less and `mounted()` seeds all three dimensions from
+    // that. The reader's FIRST arrival on the Chat tab therefore still runs
+    // the width path against a 0 seed, still reconstructs `0 - 0 - 0 = 0`,
+    // and still snaps to the newest message — which is the correct landing
+    // for a first visit, and is the one case where the zeroes are not a lie.
+    // That behaviour is accidental in shape but required in effect, so it is
+    // pinned by its own case in the test file above. Do not "tidy" the mount
+    // seed without reading it.
+    if (!this._hasMeasurableBox()) return;
+
+    // The box is back. If a relocation was detected while it was gone, the
+    // reader's offset is owed to them before anything below reads `scrollTop`.
+    this._applyPendingRealign();
+
     const width = this.scrollEl.clientWidth;
     const height = this.scrollEl.clientHeight;
     const prevWidth = this._lastClientWidth;
@@ -594,45 +676,156 @@ const ScrollToBottom = {
   // A space switch re-renders the pane and snaps to bottom during arrival,
   // so a transient repair there is immediately overwritten by the arrival
   // snap.
+  // ── WHY THE WHOLE ANCESTOR CHAIN, not just the parent (task 01a084bf
+  // stage 5, second round) ───────────────────────────────────────────────────
+  //
+  // The drawer case above relocates the scroller ONE level up, so observing
+  // `scrollEl.parentElement` was enough for it. The call rail's tab round trip
+  // relocates it FOUR levels up, and the parent-only observer never saw it.
+  //
+  // MEASURED in the app, Chrome 152 over CDP, `/meetings` with the rail's Chat
+  // tab, a `MutationObserver` on `document.body` across a real mouse click on
+  // the People tab. Three childList records, one batch, t=19-20ms:
+  //
+  //   1. a NEW `[data-role="call-rail-chat-wrap"]` ADDED into
+  //      `[data-role="call-rail-pane"]`
+  //   2. `#meeting-chat-panel-<id>` REMOVED from `[data-pane=…chat-panel]`
+  //   3. the SAME `#meeting-chat-panel-<id>` ADDED back into a
+  //      `[data-pane=…chat-panel]`
+  //
+  // Measured node identity across that batch, from the scroller upward:
+  // depths 0-4 are the SAME nodes, depths 5 and 6 are REPLACED, depth 7
+  // (`call-rail-pane`) and everything above it is the same. So the subtree was
+  // MOVED, not removed — which is why `isConnected` reads true at every one of
+  // those records: the node never rests detached, and a hook watching for a
+  // detached scroller sees nothing.
+  //
+  // Moving a scroll container is what loses the offset, and `display: none` is
+  // not involved. Isolated on a static page reproducing this exact three-event
+  // shape (priv/measurements/01a084bf-hidden-pane-scroll/reloc.html):
+  //
+  //   hide then show, NO relocation      354 -> 354   (offset retained)
+  //   hide AND relocate, then show       354 ->   0   (offset lost)
+  //   relocate while fully VISIBLE       354 ->   0   (offset lost)
+  //
+  // The third line is the one that settles it: no `hidden`, no `display: none`,
+  // nothing but the move, and the reader is still lost.
+  //
+  // WHY THE CHAIN IS A PROOF RATHER THAN A TRACE. Relocating the scroller means
+  // detaching it, or some ancestor of it, from wherever it currently sits. That
+  // always produces a childList record whose target is a node in the scroller's
+  // CURRENT ancestor chain. Observing every one of those nodes therefore cannot
+  // miss a relocation, at any depth, from any future markup change — it does not
+  // depend on the rail's shape, which is what the parent-only version did.
+  //
+  // WHY THIS DOES NOT OVER-FIRE, which `subtree: true` on a high ancestor would.
+  // Arriving messages are inserted into `#message-list`, a DESCENDANT of the
+  // scroller. A descendant's childList record has a descendant target, so no
+  // observer here is armed on it and the callback does not run at all — not
+  // "runs and declines". A subtree observer on `call-rail-pane` would run on
+  // every message and have to be talked out of repairing; this cannot be asked.
+  // Pinned by its own case in
+  // `assets/test/scroll_to_bottom_hidden_pane_test.mjs`.
+  _realignAncestorChain() {
+    const chain = [];
+    let n = this.scrollEl.parentElement;
+    while (n) {
+      chain.push(n);
+      n = n.parentElement;
+    }
+    return chain;
+  },
+  // TRUE when the scroller's ancestors are not the ones this observer was armed
+  // on. This is a relocation the `removedNodes` predicate below can MISS: the
+  // callback runs after every mutation in the batch is applied, so a node the
+  // scroller was moved OUT of no longer `contains` it by the time we look.
+  // Identity, not shape — depths 5 and 6 above are new nodes carrying the same
+  // attributes, and a selector or tag comparison would call them unchanged.
+  _realignChainChanged() {
+    const armed = this._realignChain;
+    if (!armed) return false;
+    const live = this._realignAncestorChain();
+    if (live.length !== armed.length) return true;
+    for (let i = 0; i < live.length; i++) {
+      if (live[i] !== armed[i]) return true;
+    }
+    return false;
+  },
   _connectRealignObserver() {
     if (typeof MutationObserver === "undefined") return;
     this._disconnectRealignObserver();
-    const parent = this.scrollEl.parentElement;
-    if (!parent) return;
-    this._realignObservedParent = parent;
-    this._realignObserver = new MutationObserver((muts) => {
-      // The patch that moved the scroller may also have swapped its
-      // parent; re-arm on the new one before judging this batch.
-      if (this.scrollEl.parentElement !== this._realignObservedParent) {
-        this._connectRealignObserver();
-      }
-      for (const mut of muts) {
-        for (const n of mut.removedNodes) {
-          if (
-            n === this.scrollEl ||
-            (n.contains && n.contains(this.scrollEl))
-          ) {
-            this._repairRealignedScroll();
-            return;
-          }
+    const chain = this._realignAncestorChain();
+    if (!chain.length) return;
+    this._realignChain = chain;
+    // ONE observer, many targets. `observe` is additive, and a single
+    // disconnect drops all of them — so re-arming after a relocation cannot
+    // leak the observers armed on the nodes that were replaced.
+    this._realignObserver = new MutationObserver((muts) =>
+      this._onRealignMutations(muts),
+    );
+    for (const node of chain) {
+      this._realignObserver.observe(node, { childList: true });
+    }
+  },
+  _onRealignMutations(muts) {
+    let carriedScroller = false;
+    for (const mut of muts) {
+      for (const n of mut.removedNodes) {
+        if (n === this.scrollEl || (n.contains && n.contains(this.scrollEl))) {
+          carriedScroller = true;
+          break;
         }
       }
-    });
-    this._realignObserver.observe(parent, { childList: true });
+      if (carriedScroller) break;
+    }
+    const chainChanged = this._realignChainChanged();
+    if (carriedScroller || chainChanged) this._repairRealignedScroll();
+    // Re-arm on the nodes that exist NOW. Two of the four ancestors between the
+    // scroller and the rail pane are replaced by this patch, and an observer
+    // armed on a node that has been thrown away observes nothing.
+    if (chainChanged) this._connectRealignObserver();
   },
   _disconnectRealignObserver() {
     if (this._realignObserver) {
       this._realignObserver.disconnect();
       this._realignObserver = null;
-      this._realignObservedParent = null;
+      this._realignChain = null;
     }
   },
   _repairRealignedScroll() {
     const memory = this._scrollObservedTop;
     if (memory == null) return;
+    // A `scrollTop` WRITE ON A BOX-LESS ELEMENT IS DISCARDED. Measured twice in
+    // Chrome 152: on the static probe, and in the app — at the People tab the
+    // hidden scroller was written 696, read back 0 in the same expression, and
+    // returned to the Chat tab at 0. The tab patch relocates the scroller in
+    // the SAME batch that takes the wrap to `display: none`, so this callback
+    // always runs box-less and an immediate write here would be a silent no-op
+    // that LOOKS like a fix. Hold the offset and apply it when there is a box.
+    if (!this._hasMeasurableBox()) {
+      this._pendingRealignTop = memory;
+      return;
+    }
     const live = this.scrollEl.scrollTop;
     if (live === memory) return;
     this.scrollEl.scrollTop = memory;
+  },
+  // Apply a restore that was deferred because the scroller had no box when its
+  // relocation was detected. Called from the two paths that run with a box:
+  // `_onViewportResize`, which the ResizeObserver delivers when the wrap loses
+  // `hidden`, and `_safeUpdate`. Deliberately BEFORE either of them decides
+  // anything, so the follow rule reads the reader's real position rather than
+  // the 0 the relocation left behind.
+  _applyPendingRealign() {
+    const pending = this._pendingRealignTop;
+    if (pending == null) return;
+    if (!this._hasMeasurableBox()) return;
+    this._pendingRealignTop = null;
+    if (this.scrollEl.scrollTop === pending) return;
+    this.scrollEl.scrollTop = pending;
+    // The write fires a scroll event which would refresh this anyway; setting
+    // it here means the memory is never momentarily older than the DOM.
+    this._scrollObservedTop = pending;
   },
   // Restart the quiet-period countdown. Called on every snap and every
   // observed resize during the arrival phase, so the phase ends only once
@@ -675,6 +868,10 @@ const ScrollToBottom = {
     // One reading for BOTH decisions. The follow rule and the pill predicate
     // must not disagree in the very frame this capture exists to correct.
     const preDistance = this._preUpdateDistance;
+    // A deferred realign restore is owed before `scrollToBottom` below reads
+    // the reader's position: a patch can be what makes the pane measurable
+    // again, and the ResizeObserver is not guaranteed to get there first.
+    this._applyPendingRealign();
     // Disconnect observer to prevent infinite loop from our own DOM changes
     if (this._observer) this._observer.disconnect();
     this.applyGrouping();
@@ -691,7 +888,20 @@ const ScrollToBottom = {
     // ONLY term the WIDTH path of `_onViewportResize` cannot reconstruct
     // after a rewrap, and a stale value there strands a bottom-parked
     // reader on the next window resize / sidebar drag (task 01a05873).
-    this._lastScrollHeight = this.scrollEl.scrollHeight;
+    //
+    // NOT WHILE THE PANE IS BOX-LESS (task 01a084bf stage 5). The chat pane
+    // keeps streaming while the reader is on the People tab, so this line runs
+    // on a `display: none` scroller and used to record `scrollHeight` 0. The
+    // hidden-pane guard in `_onViewportResize` means that zero is no longer
+    // read on the way back to the Chat tab, but it SURVIVES there until the
+    // next patch, and the first genuine width change after it — a sidebar
+    // drag, a window resize — reconstructs `0 - scrollTop - prevHeight`,
+    // decides the reader was at the live edge, and yanks them to the bottom.
+    // Same defect as the one above, one interaction later. Freshness is only
+    // worth having if the value is real.
+    if (this._hasMeasurableBox()) {
+      this._lastScrollHeight = this.scrollEl.scrollHeight;
+    }
   },
   updated() {
     // A `patch=` navigation to another channel/DM re-renders `#message-list`

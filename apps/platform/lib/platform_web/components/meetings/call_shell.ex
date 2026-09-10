@@ -6,8 +6,16 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
   Exports two pieces:
 
-    * `call_rail/1` — the 312px right rail: a three-up tab strip
-      (People / Canvas / Transcript) over a scrolling pane.
+    * `call_rail/1` — the 312px right rail: a tab strip over a scrolling
+      pane. The active tab carries its word, the rest are icons — 312px
+      does not hold four labels, measured rather than assumed.
+
+      THE STRIP IS PER-CALLER, not a fixed four-up. It is derived from
+      the slots the caller supplied (`served_tabs/1`): `/meetings` fills
+      `<:chat>` and gets People / Chat / Canvas / Transcript, and the
+      quickmeet — which cannot mount a second chat inside the chat
+      surface — passes no chat slot and gets the three it serves. A
+      shared list rendered a Chat tab the quickmeet could not fill.
     * `call_controls/1` — Mute / Camera / Share / Leave.
 
   ## Why ONE implementation and not one per surface
@@ -92,17 +100,73 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
   @tabs [
     {"people", "People"},
+    {"chat", "Chat"},
     {"canvas", "Canvas"},
     {"transcript", "Transcript"}
   ]
 
   @doc """
-  The tab identifiers this rail knows about, in render order.
+  Every tab identifier this rail KNOWS ABOUT, in render order.
 
   Exposed so a caller can validate an incoming tab param against the
   same list the strip renders from rather than repeating the strings.
+
+  NOT the list any given rail renders. Since task 01a084bf stage 4 the
+  strip is derived from the slots the CALLER actually supplied — see
+  `served_tabs/1` — because a tab whose pane the caller cannot fill is a
+  button that leads nowhere. `/meetings` serves all four; the in-chat
+  quickmeet serves three. Only a caller that genuinely serves every tab
+  (the meeting surface's collapsed icon strip mirrors the expanded rail on
+  the same socket) should read this list directly.
   """
   def tabs, do: @tabs
+
+  @doc """
+  The tabs THIS caller can actually serve, in render order.
+
+  ## Why the strip is derived and not shared (task 01a084bf stage 4)
+
+  Stage 1 added `{"chat", "Chat"}` to `@tabs` and the strip rendered
+  `:for={{id, label} <- tabs()}` — off the module attribute, ignoring
+  what the caller had passed. There are two callers. `/meetings`
+  (`meeting_live.html.heex`) fills `<:chat>` with the one
+  `ChatLive.Embedded` `live_render`; the in-chat quickmeet
+  (`PlatformWeb.ChatLive.Partials.meeting_panel/1`) passes NO chat slot,
+  because it is embedded in the chat surface itself and a second mount
+  would put two chats on one screen. So the quickmeet grew a Chat tab
+  whose pane was empty while the real discussion sat beside it.
+
+  Capability is therefore read off the SLOTS, not off a second list a
+  caller has to remember to keep in sync: a caller that supplies no
+  `:chat` slot gets no Chat tab, forever, and a future slot-backed tab
+  inherits the same rule by adding one `tab_served?/2` clause. The
+  alternative — a `tabs` attr each call site overrides — makes capability
+  explicit but reintroduces exactly the second list that let this
+  regression through.
+
+  People, Canvas and Transcript are unconditional: each renders something
+  honest with no slot at all (a roster, `call-rail-canvas-empty`, and the
+  JS-owned transcript pane with its own empty state).
+  """
+  @spec served_tabs(map()) :: [{String.t(), String.t()}]
+  def served_tabs(assigns) do
+    Enum.filter(@tabs, fn {id, _label} -> tab_served?(assigns, id) end)
+  end
+
+  defp tab_served?(assigns, "chat"), do: Map.get(assigns, :chat, []) != []
+  defp tab_served?(_assigns, _id), do: true
+
+  # The tab's ACCESSIBLE name. The unread dot is `aria-hidden`, so without
+  # this the state it announces would exist only in pixels and a
+  # screen-reader user would be told nothing arrived. Same string the
+  # COLLAPSED strip already uses, so the two states of one rail read the
+  # same way.
+  #
+  # Only Chat ever changes name; every other tab's accessible name is its
+  # word in every state (the inactive tabs are icon-only, so `aria-label` is
+  # the whole of their a11y identity).
+  defp tab_name("chat", _label, true), do: "Chat, unread messages"
+  defp tab_name(_id, label, _unread), do: label
 
   @doc """
   The hero-icon class for one tab id (task 01a0740d).
@@ -113,9 +177,11 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   contract two surfaces have to agree on. A second copy in the template
   would be free to drift from whatever the expanded rail grows later.
 
-  Deliberately NO catch-all clause: a fourth entry in `@tabs` must fail
+  Deliberately NO catch-all clause: a NEW entry in `@tabs` must fail
   to compile here rather than render a blank 44px square that the user
-  can click but cannot identify.
+  can click but cannot identify. `"chat"` is one of the four (task
+  01a084bf stage 1), and its glyph is the same
+  `hero-chat-bubble-left-right` the top bar's chat control already uses.
 
   Glyphs match how the rest of the meeting surface already spells these
   concepts, rather than being picked fresh: `hero-user-group` is the top
@@ -124,6 +190,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   """
   @spec tab_icon(String.t()) :: String.t()
   def tab_icon("people"), do: "hero-user-group"
+  def tab_icon("chat"), do: "hero-chat-bubble-left-right"
   def tab_icon("canvas"), do: "hero-squares-2x2"
   def tab_icon("transcript"), do: "hero-document-text"
 
@@ -141,13 +208,33 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   An unrecognised tab renders People rather than an empty rail: a stale
   bookmark or a bad param should cost the user the tab they asked for,
   not the whole pane.
+
+  ## The second argument, and why the default is not good enough inside
+  ## `call_rail/1` (task 01a084bf stage 4)
+
+  `@tabs` is what the rail knows; `served_tabs/1` is what a given caller
+  can fill. Coercing to `@tabs` is right for the meeting surface's
+  collapsed strip — that socket serves all four — and WRONG inside
+  `call_rail/1`, which must land on a tab the caller can actually serve.
+  A quickmeet arriving with `active_tab: "chat"` (a stale `?tab=` param, a
+  bookmark, or its own `"meeting_tab_select"` handler, which assigns any
+  binary) would otherwise select a pane whose button is not in the strip:
+  an active pane the viewer cannot navigate away from. Worse, the pane
+  `case` in `call_rail/1` has NO catch-all, so an id outside the rendered
+  strip is one `CaseClauseError` away rather than one bad pixel away.
+
+  `"people"` is the fallback for both arities and is safe for every
+  caller: People is unconditional in `served_tabs/1`, so the fallback can
+  never name a tab the strip does not render.
   """
-  @spec normalize_tab(term()) :: String.t()
-  def normalize_tab(tab) when is_binary(tab) do
-    if Enum.any?(@tabs, fn {id, _} -> id == tab end), do: tab, else: "people"
+  @spec normalize_tab(term(), [{String.t(), String.t()}]) :: String.t()
+  def normalize_tab(tab, tabs \\ @tabs)
+
+  def normalize_tab(tab, tabs) when is_binary(tab) do
+    if Enum.any?(tabs, fn {id, _} -> id == tab end), do: tab, else: "people"
   end
 
-  def normalize_tab(_), do: "people"
+  def normalize_tab(_tab, _tabs), do: "people"
 
   attr(:id, :string, default: "call-rail")
   attr(:class, :string, default: nil)
@@ -172,12 +259,31 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
   attr(:active_tab, :string,
     default: "people",
-    doc: ~s(one of "people" | "canvas" | "transcript"; anything else falls back to people)
+    doc:
+      ~s(one of "people" | "chat" | "canvas" | "transcript"; anything else falls back to people)
   )
 
   attr(:tab_event, :string,
     required: true,
     doc: "event pushed on tab click, with `phx-value-tab` carrying the tab id"
+  )
+
+  attr(:chat_unread, :boolean,
+    default: false,
+    doc: """
+    Whether a message has landed in the bound chat space that the viewer
+    has not seen (task 01a084bf stage 4 — FE-5's unresolved V2 case).
+
+    An ATTR, not an assign this component derives, for the same reason
+    `active_tab` is: the rail holds no state. `/meetings` passes
+    `:call_rail_unread`, which `MeetingLive` raises from a real
+    `{:new_message, %Platform.Chat.Message{}}` broadcast and clears when
+    the Chat tab becomes active. The quickmeet has no such assign and
+    serves no Chat tab, so it passes nothing and the default is false.
+
+    FALSE IS THE ONLY HONEST DEFAULT. A caller that forgets this attr
+    must under-report, never invent a dot.
+    """
   )
 
   # ── People pane ──────────────────────────────────────────────────
@@ -261,6 +367,25 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     doc: "stage 5 fills this; the pane renders an empty-state line when the slot is absent"
   )
 
+  slot(:chat,
+    doc: """
+    The typed conversation that runs alongside the call (task 01a084bf).
+    A caller fills this with the embedded chat `live_render`.
+
+    SUPPLYING THIS SLOT IS WHAT CREATES THE CHAT TAB (stage 4). See
+    `served_tabs/1`: a caller that passes no `:chat` gets a three-up
+    strip and no Chat button, because a tab it cannot fill is a button
+    that leads nowhere. This is not a fallback, it is the contract.
+
+    MOUNT-ONCE, like `:transcript` and for a harder reason. This slot is
+    rendered in a persistent sibling wrapper BELOW the `case @active`,
+    never inside a branch of it. A nested `live_render` that is unmounted
+    on every tab switch loses the child LiveView, its message stream and
+    the reader's scroll position — so the wrapper carries `hidden` and
+    stays in the document for as long as the rail lives.
+    """
+  )
+
   slot(:people_extra, doc: "surface-specific rows appended below the People pane")
 
   slot(:canvas_extra,
@@ -273,7 +398,16 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   )
 
   def call_rail(assigns) do
-    assigns = assign(assigns, :active, normalize_tab(assigns.active_tab))
+    # ONE derivation, used twice. The strip renders `@rail_tabs` and the
+    # active tab is coerced against THAT list, not against `@tabs` — see
+    # `normalize_tab/2`. Filtering the strip alone would leave a caller that
+    # asked for a tab it does not serve sitting on a pane with no button.
+    rail_tabs = served_tabs(assigns)
+
+    assigns =
+      assigns
+      |> assign(:rail_tabs, rail_tabs)
+      |> assign(:active, normalize_tab(assigns.active_tab, rail_tabs))
 
     ~H"""
     <aside
@@ -288,24 +422,101 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     >
       <div class="flex border-b border-edge" role="tablist" data-role="call-rail-tabs">
         <button
-          :for={{id, label} <- tabs()}
+          :for={{id, label} <- @rail_tabs}
           type="button"
           role="tab"
           phx-click={@tab_event}
           phx-value-tab={id}
           aria-selected={to_string(id == @active)}
+          aria-label={tab_name(id, label, @chat_unread)}
+          title={if(id == @active, do: nil, else: label)}
           data-role="call-rail-tab"
           data-tab={id}
           data-active={to_string(id == @active)}
           class={[
-            "relative flex-1 px-2 py-2.5 text-[11px] font-medium transition-colors",
+            "relative flex items-center justify-center px-2 py-2.5 text-[12.5px] transition-colors",
             if(id == @active,
-              do: "text-base-content",
-              else: "text-base-content/55 hover:text-base-content/80"
+              do: "min-w-0 flex-1 font-semibold text-base-content",
+              else: "flex-none font-medium text-base-content/60 hover:text-base-content/80"
             )
           ]}
         >
-          {label}
+          <%!-- MEASURED, NOT ARGUED (task 01a084bf stage 1). At 1280x800
+               with the rail at its default `w-[312px]`, four equal tabs
+               are 78px wide and give each label a 62px content box.
+               Measured label widths at 12.5px Public Sans:
+
+                 People 41.70  Chat 28.25  Canvas 43.64  Transcript 60.91
+
+               Transcript clears 62px by a pixel while INACTIVE — and the
+               active tab is semibold, which costs it 62.67px. So the one
+               tab whose label matters most is the one that clips, and a
+               four-up of equal text tabs renders "Transcri…" on the tab
+               you are currently reading.
+
+               The brand truncation rule then applies as written: the
+               ACTIVE tab keeps its text and takes the leftover width, the
+               other three go icon-only. "Transcript" is never abbreviated
+               and never shortened to fit — every tab carries the full word
+               as its accessible name in every state, so the a11y tree is
+               the same four strings whichever tab is selected. Shrinking
+               the type to make four labels fit was not on the table: the
+               12.5px is the design ruling that the measurement tested. --%>
+          <span
+            :if={id == @active}
+            class="block truncate"
+            data-role="call-rail-tab-label"
+          >
+            {label}
+          </span>
+          <span
+            :if={id != @active}
+            class={[tab_icon(id), "size-4"]}
+            aria-hidden="true"
+            data-role="call-rail-tab-icon"
+          >
+          </span>
+          <%!-- THE UNREAD DOT (task 01a084bf stage 4 — FE-5's V2 case).
+               6px (`size-1.5`) round, INLINE and immediately after
+               whichever of the two spans above rendered: after the word on
+               the active Chat tab, and after the glyph on an inactive one,
+               which is the state a viewer actually sees. The dot clears
+               when Chat becomes active, so in practice it is only ever
+               drawn beside the icon — but hanging it on the icon branch
+               alone would make it vanish for one render if the two rules
+               ever diverged.
+
+               `shrink-0` so the ACTIVE tab's `truncate` label gives way
+               first: the dot must never be what pushes "Transcript" into
+               an ellipsis, and a 6px dot plus its margin takes 10px off
+               the 200px content box the active tab has spare at 312px.
+
+               `info`, and only `info`: `error`, `success` and `warning` are
+               all already spent on this screen (Leave, the live pill, and
+               "a human is being asked for something"), and an unread
+               message is informational state — not an alarm, not a
+               success, not a request. Same slot as the COLLAPSED strip's
+               dot, so the two states of one rail agree.
+
+               NO ANIMATION CLASSES WHATSOEVER — no pulse, no fade. A
+               blinking dot in peripheral vision during a call is hostile
+               and this state is not urgent enough to earn it.
+
+               `:if` rather than an always-present transparent node, so
+               ABSENCE is the contract and the node is testable.
+
+               It rides the CHAT tab and nothing else. It is deliberately
+               NOT on `data-role="chat-pane-toggle"`: that button's job is
+               to COLLAPSE the rail, and hanging "there is something to
+               read" on a control that hides things passes a render test
+               while pointing the viewer away from the messages. --%>
+          <span
+            :if={id == "chat" and @chat_unread}
+            class="ml-1 size-1.5 shrink-0 rounded-full bg-info"
+            aria-hidden="true"
+            data-role="call-rail-tab-unread-dot"
+          >
+          </span>
           <%!-- The active marker is an inset bottom bar on `primary`,
                per the approved target and Saru's slot list. A real
                element rather than a border so the inactive tabs do not
@@ -376,6 +587,32 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               <% end %>
             </p>
             {render_slot(@canvas_extra)}
+          <% "chat" -> %>
+            <%!-- NOTHING renders inside the case for Chat, deliberately.
+                 The pane is the caller's `:chat` slot and it is mounted
+                 unconditionally below, because a branch that unmounts it
+                 on People/Canvas/Transcript destroys the nested
+                 `live_render` and with it the message stream and the
+                 reader's scroll position (task 01a084bf). Necessary, and
+                 stage 5 measured that it is not sufficient for the scroll
+                 position — see the note on the wrap itself below.
+
+                 This branch used to hold the `data-role="call-rail-chat-empty"`
+                 line, gated on `@chat == []`. Stage 4 deleted it, because
+                 `@chat == []` means "the CALLER supplied no slot" and
+                 stage 4's `served_tabs/1` makes that state unreachable
+                 through a rendered Chat tab — a caller with no slot has no
+                 Chat button to press. It also was never the state the
+                 stage asked about: "a bound chat space with no messages"
+                 is a fact only the chat LiveView knows, and it is answered
+                 there, by `PlatformWeb.ChatLive.Partials.Composer.message_scroller/1`,
+                 which already maintains the readable message count. See
+                 that function for the copy and the role name.
+
+                 A clause is still REQUIRED even though it draws nothing:
+                 this `case` has no catch-all, so a tab id with no branch
+                 raises `CaseClauseError` at runtime rather than failing to
+                 compile. --%>
           <% "transcript" -> %>
             <%!-- Only the OVERRIDE renders inside the case. The JS-owned
                  pane is mounted unconditionally below the case, because a
@@ -425,6 +662,56 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
           class="flex h-full min-h-0 flex-col"
         >
           <.transcript_pane id={"#{@id}-transcript"} captions_available={@captions_available} />
+        </div>
+
+        <%!-- The chat pane, mounted ONCE and never unmounted while the rail
+             lives (task 01a084bf stage 1). Same shape as the transcript
+             wrap above, same reason, one degree worse: this slot carries a
+             `live_render` of a NESTED LiveView. Rendering it inside the
+             `case` would mean a fresh child process on every return to the
+             Chat tab — new stream, no scrollback, cursor at the bottom —
+             for the cost of glancing at the roster. So LiveView owns this
+             outer div and flips `hidden` on it, and the slot's own DOM is
+             never removed.
+
+             KEEPING IT MOUNTED IS NECESSARY AND WAS NOT SUFFICIENT (stage 5).
+             Stage 3 shipped this wrap and the behavioural gate then measured
+             a reader parked at scrollTop 354 sent to 614 — the bottom — by a
+             tab round trip, with the node never unmounted. So the sentence
+             above is true and was read as settling more than it does: the
+             node surviving buys the message STREAM, and the reader's scroll
+             position turned out to be a second question with a second owner.
+
+             `hidden` is not the culprit and is deliberately kept. Measured in
+             Chrome 152 over CDP against Tailwind v4.1.12's preflight rule:
+             the browser RETAINS the offset across a `display: none` round
+             trip and hands it back. What discarded it was `ScrollToBottom`'s
+             viewport ResizeObserver recording the hidden pane's 0x0 box and
+             then reconstructing the reader's distance from those zeroes. The
+             full account, the numbers and the regression tests live in
+             `assets/js/hooks/scroll_to_bottom.js` (`_hasMeasurableBox`) and
+             `assets/test/scroll_to_bottom_hidden_pane_test.mjs`. Read that
+             before changing how this wrap hides — an out-of-flow or
+             `visibility`-based rewrite here would fix nothing, because the
+             offset was never the browser's to lose.
+
+             `data-active` mirrors the transcript wrap's contract so a
+             caller (or a test) can tell "mounted and showing" from
+             "mounted and hidden" without reading the `hidden` attribute.
+
+             `:if={@chat != []}` is a CALLER-CONSTANT, not per-tab state
+             (stage 4): a caller either supplies the slot for the whole life
+             of the rail or never does, so this can never toggle at runtime
+             and cannot unmount a live child. A quickmeet, which serves no
+             Chat tab, gets no empty wrapper either. --%>
+        <div
+          :if={@chat != []}
+          data-role="call-rail-chat-wrap"
+          data-active={to_string(@active == "chat")}
+          hidden={@active != "chat"}
+          class="flex h-full min-h-0 flex-col"
+        >
+          {render_slot(@chat)}
         </div>
       </div>
     </aside>

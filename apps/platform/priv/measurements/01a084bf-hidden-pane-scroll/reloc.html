@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  html,body{margin:0;height:100%}
+  [hidden]:where(:not([hidden='until-found'])) { display: none !important; }
+  #pane{position:relative;height:300px;width:400px;overflow-y:auto;border:1px solid #000}
+  .wrap{display:flex;height:100%;min-height:0;flex-direction:column}
+  .scroller{flex:1 1 0%;min-height:0;overflow-y:auto;overflow-anchor:none}
+  .row{height:60px;border-bottom:1px solid #ccc}
+  .chain{display:flex;flex:1 1 0%;min-height:0;flex-direction:column}
+</style></head>
+<body>
+<div id="pane"><div id="sib">people</div><div id="wrap" class="wrap"><div id="d5" class="chain" data-pane="meeting-chat-panel"><div id="d4" class="chain" data-panel="1"><div id="scroller" class="scroller"></div></div></div></div></div>
+<pre id="out"></pre>
+<script>
+const log = [];
+const scroller = document.getElementById("scroller");
+let wrap = document.getElementById("wrap");
+const pane = document.getElementById("pane");
+const addRows = (n) => { for (let i=0;i<n;i++){const d=document.createElement("div");d.className="row";d.textContent="row";scroller.appendChild(d);} };
+addRows(20);
+const snap = (label) => log.push({label, st: scroller.scrollTop, sh: scroller.scrollHeight, ch: scroller.clientHeight});
+const frames = (n) => new Promise(res => { let i=0; const step=()=>{ if(++i>=n) return res(); requestAnimationFrame(step); }; requestAnimationFrame(step); });
+
+// Reproduce morphdom's shape: build a NEW wrap + NEW d5, MOVE the id'd d4 into it,
+// insert the new wrap into the pane, drop the old wrap. Exactly the three events measured.
+function relocate(hiddenState) {
+  const d4 = document.getElementById("d4");
+  const newWrap = document.createElement("div");
+  newWrap.className = "wrap"; newWrap.id = "wrap";
+  if (hiddenState) newWrap.hidden = true;
+  const newD5 = document.createElement("div");
+  newD5.setAttribute("data-pane", "meeting-chat-panel");
+  newD5.className = "chain";
+  newWrap.appendChild(newD5);
+  const oldWrap = document.getElementById("wrap");
+  oldWrap.removeAttribute("id");
+  pane.appendChild(newWrap);
+  newD5.appendChild(d4);      // <- the MOVE
+  oldWrap.remove();
+  wrap = newWrap;
+}
+
+(async () => {
+  // BASELINE A: hide -> show, NO relocation. (Prior round's result: retains.)
+  await frames(4);
+  if (scroller.scrollHeight - scroller.clientHeight < 500) {
+    document.getElementById("out").textContent = "RESULT " + JSON.stringify([{label:"INSTRUMENT BROKEN: maxScroll=" + (scroller.scrollHeight-scroller.clientHeight)}]);
+    return;
+  }
+  scroller.scrollTop = 354; await frames(4); snap("A1 parked");
+  wrap.hidden = true;  await frames(4);
+  wrap.hidden = false; await frames(4); snap("A2 hide/show, no relocation");
+
+  // CASE B: hide AND relocate in the same task (the app's actual patch), then show.
+  scroller.scrollTop = 354; await frames(4); snap("B1 re-parked");
+  wrap.hidden = true; relocate(true); await frames(4);
+  snap("B2 hidden+relocated (box-less, reads 0 regardless)");
+  wrap.hidden = false; await frames(4); snap("B3 shown after hidden relocation <- THE CLAIM");
+
+  // CASE C: relocation while VISIBLE (isolates the move from the hide).
+  scroller.scrollTop = 354; await frames(4); snap("C1 re-parked, visible");
+  relocate(false); await frames(4); snap("C2 relocated while visible");
+
+  // CASE D: hide, show, THEN relocate later while visible -> confirms C is the move not the hide.
+  scroller.scrollTop = 354; await frames(4);
+  wrap.hidden = true; await frames(4); wrap.hidden = false; await frames(4);
+  snap("D1 hide/show only, still parked?");
+
+  document.getElementById("out").textContent = "RESULT " + JSON.stringify(log);
+})();
+</script></body></html>

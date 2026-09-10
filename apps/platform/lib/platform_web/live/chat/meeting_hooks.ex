@@ -93,6 +93,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   alias Platform.Meetings.Room
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Tenancy
+  alias PlatformWeb.Components.Meetings.CallShell
   alias PlatformWeb.Components.Meetings.CandidateRail
   alias PlatformWeb.SpaceTopics
 
@@ -483,18 +484,6 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, socket |> assign(:screen_share_enabled, enabled) |> maybe_switch_to_screen(enabled)}
   end
 
-  # Right-rail tab select. DELIBERATELY the same event name
-  # `MeetingLive` already ships (`"meeting_tab_select"`) rather than a
-  # quickmeet-flavoured second name: `CallShell.call_rail/1` takes the
-  # event as an attr precisely so both surfaces can speak one
-  # vocabulary, and a second name would mean a reader of the rail's
-  # markup could not tell which handler a click reaches.
-  #
-  # `{:halt, …}` is safe on `/meetings` too — `MeetingLive`'s own
-  # clause performs the identical assign, so halting here costs
-  # nothing. The value is NOT validated: `call_rail/1` normalises an
-  # unrecognised tab to People itself, so a stale `?tab=` costs the tab
-  # and not the pane.
   # The `<lg` call-rail sheet. Server state rather than a `JS.toggle/1`
   # because the overlay header's toggle and the sheet's own close button
   # are in two different breakpoint subtrees, and because the sheet must
@@ -541,8 +530,49 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, assign(socket, :candidate_order, nil)}
   end
 
+  # Right-rail tab select. DELIBERATELY the same event name `MeetingLive`
+  # already ships (`"meeting_tab_select"`) rather than a quickmeet-flavoured
+  # second name: `CallShell.call_rail/1` takes the event as an attr precisely
+  # so both surfaces can speak one vocabulary, and a second name would mean a
+  # reader of the rail's markup could not tell which handler a click reaches.
+  #
+  # THIS COMMENT SAT ABOVE `quickmeet_toggle_rail` until task 01a084bf stage
+  # 4. It was written for this clause, the clause moved, and the block did
+  # not — so the file described the tab handler over the body of the sheet
+  # toggle. Anchored on the function it documents now.
+  #
+  # `{:halt, …}` means this hook, not `MeetingLive`'s own clause, is what
+  # actually services the event on `/meetings` — the hook is attached there
+  # too (`MeetingHooks.attach/2`, called from the `:show` `handle_params/3`).
+  # That used to cost nothing, because the two clauses performed the identical
+  # assign. It stopped being free in task 01a084bf stage 3, when arriving at
+  # the Chat tab acquired a SECOND effect: clearing the unread dot. A clear
+  # implemented only in `MeetingLive` is DEAD CODE on the surface that owns
+  # the dot — verified by mutation in stage 4: deleting the clear from
+  # `meeting_live.ex` reds nothing, deleting it from here reds three tests.
+  #
+  # `:call_rail_unread` is a `/meetings` assign; the quickmeet has no unread
+  # affordance, so the clear is guarded on the key being present rather than
+  # assigned unconditionally. Adding the key on the chat surface would put
+  # state on a socket whose template never reads it.
+  #
+  # The value is NOT validated: `call_rail/1` coerces a tab this caller
+  # cannot serve to People itself (`CallShell.served_tabs/1`), so a stale
+  # `?tab=chat` on the quickmeet costs the tab and not the pane. It IS
+  # normalised before the chat comparison, though, because a junk tab renders
+  # People and must not clear a dot the viewer never read.
   defp handle_event("meeting_tab_select", %{"tab" => tab}, socket) when is_binary(tab) do
-    {:halt, assign(socket, :active_meeting_tab, tab)}
+    socket = assign(socket, :active_meeting_tab, tab)
+
+    cleared =
+      if CallShell.normalize_tab(tab) == "chat" and
+           Map.has_key?(socket.assigns, :call_rail_unread) do
+        assign(socket, :call_rail_unread, false)
+      else
+        socket
+      end
+
+    {:halt, cleared}
   end
 
   # Active speakers from the viewer's own LiveKit client. The `MeetingRoom`

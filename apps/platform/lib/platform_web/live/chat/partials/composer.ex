@@ -174,6 +174,18 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
       "MapSet of the message ids currently in the `:messages` stream. Streams are write-only in the template, so this is the only way to ask whether the pane is empty."
   )
 
+  attr(:embedded, :boolean,
+    default: false,
+    doc: """
+    True when this chat is a nested `PlatformWeb.ChatLive.Embedded` inside
+    the meetings call rail's Chat pane, rather than the URL-routed `/chat`
+    surface. Its only effect here is WHICH zero-message empty state renders
+    — see the two `:if`s below. Defaults false so a caller that omits it
+    gets the standalone copy, which is the correct answer everywhere except
+    inside a call.
+    """
+  )
+
   @doc """
   The scrolling message viewport: both infinite-scroll sentinels and
   `#message-list`.
@@ -277,7 +289,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
                to prevent. --%>
       <.empty_state
         :if={
-          @active_space != nil and @active_space.archived_at == nil and
+          not @embedded and @active_space != nil and @active_space.archived_at == nil and
             MapSet.size(@rendered_message_ids) == 0
         }
         variant={:conversational}
@@ -288,6 +300,52 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         </:body>
         <:chips label="+ Add an agent" event={JS.navigate(~p"/control")} />
       </.empty_state>
+
+      <%!-- THE SAME STATE, WORDED FOR A CALL (task 01a084bf stage 4).
+
+           WHY THIS LIVES HERE AND NOT IN THE RAIL. The rail's Chat pane has
+           to distinguish itself from its Transcript pane — both are "words
+           from this call" and "Chat" / "Transcript" are too short to carry
+           the difference — so the distinction goes in the empty states.
+           The condition is "the bound chat space has no messages", and this
+           function is the only place that fact is known: it is
+           `:rendered_message_ids`, this LiveView's own MapSet, maintained on
+           every path that adds or removes a row. `CallShell.call_rail/1`
+           cannot see it, and `MeetingLive` counting the space itself would
+           be a second source of truth for one fact, drifting on every
+           delete and prune. The rail's own former
+           `data-role="call-rail-chat-empty"` was gated on `@chat == []` —
+           "the caller supplied no slot", a DIFFERENT state, and one
+           `served_tabs/1` has since made unreachable through a rendered
+           Chat tab.
+
+           The role name is the rail's because the rail's gate and its e2e
+           case read it; `@embedded` is what scopes it, and today the
+           meetings Chat pane is the only embed there is.
+
+           REPLACES the conversational card above rather than stacking on
+           it: two empty states in one 312px column is worse than either,
+           and "Connect your agent and @ them to plan and work in this
+           space" is not what someone mid-call needs. The type matches
+           `transcript_pane.ex`'s `data-role="transcript-empty"` line
+           exactly, because the two panes are read side by side and the
+           difference between them should be the WORDS.
+
+           THE COPY MUST NOT IMPLY CAPTURE OR LOADING. No spinner, no
+           "listening", no "waiting" — the same refusal the transcript
+           pane's own empty state is held to. It names typing, says where
+           speech goes instead, and stops. --%>
+      <p
+        :if={
+          @embedded and @active_space != nil and @active_space.archived_at == nil and
+            MapSet.size(@rendered_message_ids) == 0
+        }
+        class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
+        data-role="call-rail-chat-empty"
+      >
+        Nothing typed yet. Messages appear here as people type them; the Transcript tab is for
+        what people say out loud.
+      </p>
 
       <%!-- Bottom sentinel: fires `load_newer_messages` when visible AND
            :newest_evicted? is true. Only renders after the live tail

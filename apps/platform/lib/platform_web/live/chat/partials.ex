@@ -1684,8 +1684,30 @@ defmodule PlatformWeb.ChatLive.Partials do
     </div>
 
     <%!-- ── THE CALL RAIL, hoisted out of BOTH breakpoint subtrees ────
-         People / Canvas / Transcript, the same `CallShell.call_rail/1`
-         `/meetings` renders. Authored ONCE and positioned by CSS, for
+         The same `CallShell.call_rail/1` `/meetings` renders, but with
+         THREE tabs, not four: People / Canvas / Transcript.
+
+         NO `<:chat>` SLOT, AND THAT IS THE POINT (task 01a084bf stage 4).
+         This panel is embedded IN the chat surface — the discussion is
+         already on screen beside it — so a Chat pane here would be a
+         second `ChatLive.Embedded` mount of the space the user is
+         reading, and stage 3's whole discipline is that the one
+         `live_render` MOVES and is never duplicated. `call_rail/1`
+         derives its strip from the slots it was given
+         (`CallShell.served_tabs/1`) and coerces `active_tab` against that
+         same list, so this caller gets no Chat button and cannot land on
+         a Chat pane it does not serve — including via a stale
+         `"meeting_tab_select"` push carrying `"chat"`.
+
+         The comment that used to sit here said "People / Canvas /
+         Transcript, the same `CallShell.call_rail/1` /meetings renders",
+         which was true until stage 1 added a fourth entry to the shared
+         `@tabs` and this surface silently grew a Chat tab whose pane fell
+         through to an empty state. That false comment is what surfaced
+         the bug (ticket 01a089ae); it is corrected rather than deleted so
+         the next reader knows the three-up is chosen, not stale.
+
+         Authored ONCE and positioned by CSS, for
          the reason the captions host above it was hoisted in task
          019ff712: the `hidden lg:flex` desktop panel and the
          `lg:hidden` mobile overlay are BOTH in the document at all

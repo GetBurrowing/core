@@ -375,14 +375,55 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       end
     end
 
-    test "the rail carries the three tabs, People active by default" do
+    test "the rail carries the THREE tabs this surface can serve, People active by default" do
       html = render_panel(%{})
 
-      labels = text(html, ~s([data-component="call-rail"] [data-role="call-rail-tab"]))
-      assert labels =~ "People"
-      assert labels =~ "Canvas"
-      assert labels =~ "Transcript"
+      # The ACCESSIBLE names, not the visible text: only the active tab
+      # draws its word, the others are icon-only at 312px (task 01a084bf
+      # stage 1).
+      names =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-component="call-rail"] [data-role="call-rail-tab"]))
+        |> LazyHTML.attribute("aria-label")
+
+      # THREE, NOT FOUR — and this is the regression ticket 01a089ae, not a
+      # relaxed assertion. Stage 1 of task 01a084bf added Chat to
+      # `CallShell`'s shared `@tabs` and the strip rendered off the module
+      # function, so THIS surface — which passes no `:chat` slot, because it
+      # is embedded in the chat surface and the real discussion is already on
+      # screen beside it — grew a Chat tab whose pane fell through to an
+      # empty state. `CallShell.served_tabs/1` derives the strip from the
+      # slots the caller supplied.
+      #
+      # The meeting surface's own four-up is pinned in `meeting_live_test.exs`
+      # and `call_shell_test.exs`. Neither file alone can distinguish "the fix
+      # is per-caller" from "Chat disappeared everywhere"; the pair can.
+      assert names == ["People", "Canvas", "Transcript"]
+      assert text(html, ~s([data-role="call-rail-tab"][data-active="true"])) =~ "People"
       assert count(html, ~s([data-component="call-rail"] [data-role="call-rail-tab"])) == 3
+
+      # The absence, with the three that must still be there as its
+      # anti-vacuity control: an `== 0` on a selector that stopped matching
+      # anywhere would pass forever.
+      assert count(
+               html,
+               ~s([data-component="call-rail"] [data-role="call-rail-tab"][data-tab="chat"])
+             ) ==
+               0
+
+      for served <- ~w(people canvas transcript) do
+        assert count(
+                 html,
+                 ~s([data-component="call-rail"] [data-role="call-rail-tab"][data-tab="#{served}"])
+               ) == 1,
+               served
+      end
+
+      # No pane wrapper for a tab that does not exist, and no unread dot
+      # either — there would be nowhere honest for it to lead.
+      assert count(html, ~s([data-role="call-rail-chat-wrap"])) == 0
+      assert count(html, ~s([data-role="call-rail-tab-unread-dot"])) == 0
 
       assert count(
                html,
@@ -390,6 +431,43 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
              ) == 1
 
       assert count(html, ~s([data-component="call-rail"] [data-tab="people"][data-active="true"])) ==
+               1
+    end
+
+    test "an `active_meeting_tab` of \"chat\" lands on People, not on a pane with no button" do
+      # `MeetingHooks."meeting_tab_select"` assigns any binary it is handed,
+      # and `?tab=`/a stale bookmark can put "chat" in there. Filtering the
+      # strip alone would leave this surface on a Chat pane with no Chat
+      # button to leave by — and the pane `case` in `call_rail/1` has no
+      # catch-all, so the id has to be coerced against what THIS caller
+      # serves. Rendering without raising `CaseClauseError` is half of what
+      # this asserts.
+      html = render_panel(%{active_meeting_tab: "chat"})
+
+      assert count(
+               html,
+               ~s([data-component="call-rail"] [data-role="call-rail-pane"][data-pane-tab="people"])
+             ) ==
+               1
+
+      assert count(html, ~s([data-component="call-rail"] [data-tab="people"][data-active="true"])) ==
+               1
+
+      assert count(
+               html,
+               ~s([data-component="call-rail"] [data-role="call-rail-tab"][data-active="true"])
+             ) ==
+               1
+
+      # DIRECTION CONTROL: a tab this surface DOES serve is honoured, so the
+      # People fallback above is about capability and not about every
+      # `active_meeting_tab` being ignored.
+      canvas = render_panel(%{active_meeting_tab: "canvas"})
+
+      assert count(
+               canvas,
+               ~s([data-component="call-rail"] [data-role="call-rail-pane"][data-pane-tab="canvas"])
+             ) ==
                1
     end
 

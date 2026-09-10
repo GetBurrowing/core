@@ -1,0 +1,18 @@
+{
+  "browser": "Google Chrome 152.0.7977.83",
+  "platform": "macOS arm64, --headless=new, 1280x800",
+  "question": "Is it the hide or the MOVE that loses the reader's scroll offset?",
+  "rig": "reloc.html, driven over CDP with the browser cache disabled. Reproduces the app's measured three-record morphdom shape: a NEW wrap and a NEW pane are built, the SAME id'd panel node is moved into them, the old wrap is dropped.",
+  "instrument_guard": "reloc.html refuses to report unless maxScroll >= 500. The first draft nested the panel divs without the flex/min-height chain, so clientHeight equalled scrollHeight, maxScroll was 0, and the 354 park clamped to 0 — every case then read 0 and looked like a confirmation.",
+  "steps": [
+    { "label": "A1 parked", "st": 354, "sh": 1220, "ch": 300 },
+    { "label": "A2 hide/show, NO relocation", "st": 354, "sh": 1220, "ch": 300 },
+    { "label": "B1 re-parked", "st": 354, "sh": 1220, "ch": 300 },
+    { "label": "B2 hidden+relocated (box-less, reads 0 regardless)", "st": 0, "sh": 0, "ch": 0 },
+    { "label": "B3 shown after hidden relocation", "st": 0, "sh": 1220, "ch": 300 },
+    { "label": "C1 re-parked, VISIBLE", "st": 354, "sh": 1220, "ch": 300 },
+    { "label": "C2 relocated while VISIBLE — no hidden, no display:none", "st": 0, "sh": 1220, "ch": 300 },
+    { "label": "D1 hide/show only, positive control", "st": 354, "sh": 1220, "ch": 300 }
+  ],
+  "conclusion": "The MOVE loses the offset. C2 is the isolation: fully visible, never hidden, offset gone. A2 and D1 are the positive controls: hiding and re-showing the same subtree with no move retains 354. display:none is not involved in either direction."
+}

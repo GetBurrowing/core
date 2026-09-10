@@ -1,0 +1,60 @@
+{
+  "browser": "Google Chrome 152.0.7977.83",
+  "platform": "macOS arm64, --headless=new, 1280x800",
+  "route": "/meetings/<slug>, 16 seeded messages, rail expanded",
+  "input": "real Input.dispatchMouseEvent mouseWheel to park; real mousePressed/mouseReleased on the rail tabs",
+  "preconditions_checked_each_run": [
+    "window.liveSocket is an object and isConnected() is true",
+    "a real tab click changes [data-component=call-rail] data-active-tab",
+    "the LOADED hook object carries the fix (liveSocket hooks -> ScrollToBottom._applyPendingRealign), not merely the file on disk"
+  ],
+  "cache": "Network.setCacheDisabled true. WITHOUT this the page served a STALE app.js and a fixed build measured P4 = 0 — a false RED that reads exactly like an unfixed build. Recorded because it cost a run.",
+  "before_fix_head": "2f003257",
+  "before_fix": {
+    "first_arrival_on_chat": { "st": 1216, "sh": 1709, "ch": 493, "note": "snapped to the newest message: the CORRECT first-visit landing, not under test" },
+    "P1_chat_parked": { "st": 696, "sh": 1709, "ch": 493, "maxScroll": 1216 },
+    "P2_people": { "st": 0, "sh": 0, "ch": 0 },
+    "P3_transcript": { "st": 0, "sh": 0, "ch": 0 },
+    "P4_chat_returned": { "st": 0, "sh": 1709, "ch": 493 }
+  },
+  "after_fix": {
+    "runs": 4,
+    "identical": true,
+    "P1_chat_parked": { "st": 696, "sh": 1709, "ch": 493, "maxScroll": 1216 },
+    "P2_people": { "st": 0, "sh": 0, "ch": 0 },
+    "P3_transcript": { "st": 0, "sh": 0, "ch": 0 },
+    "P4_chat_returned": { "st": 696, "sh": 1709, "ch": 493 }
+  },
+  "relocation_records_chat_to_people": [
+    { "t_ms": 15, "op": "added", "node": "DIV[call-rail-chat-wrap]", "mutation_target": "DIV[call-rail-pane]", "scroller_isConnected": true, "measurable": false },
+    { "t_ms": 16, "op": "removed", "node": "DIV[meeting-chat-panel-<id>]", "mutation_target": "DIV[data-pane=meeting-chat-panel]", "scroller_isConnected": true, "measurable": false },
+    { "t_ms": 16, "op": "added", "node": "DIV[meeting-chat-panel-<id>]", "mutation_target": "DIV[data-pane=meeting-chat-panel]", "scroller_isConnected": true, "measurable": false }
+  ],
+  "relocation_records_people_to_transcript_to_chat": [],
+  "node_identity_across_the_batch": {
+    "depth0_scroller": "same",
+    "depth1_chat_drop_zone": "same",
+    "depth2_unnamed": "same",
+    "depth3_unnamed": "same",
+    "depth4_meeting_chat_panel_id": "same",
+    "depth5_data_pane_meeting_chat_panel": "REPLACED",
+    "depth6_call_rail_chat_wrap": "REPLACED",
+    "depth7_call_rail_pane": "same",
+    "depth8_and_above": "same"
+  },
+  "boxless_write_is_discarded": {
+    "at": "P2, People tab",
+    "wrote": 696,
+    "read_back_same_expression": 0,
+    "P4_after": 0,
+    "conclusion": "A repair inside the MutationObserver callback cannot land: that callback always runs box-less on this transition. The restore has to be deferred."
+  },
+  "visible_write_sticks": { "at": "P4", "wrote": 696, "read_back": 696, "after_1500ms": 696 },
+  "message_insert_does_not_disturb_a_parked_reader": {
+    "parked": 696,
+    "appended_rows": 3,
+    "scrollHeight": "1709 -> 1931",
+    "scrollTop_after": 696,
+    "note": "#chat-message-scroller.contains(#message-list) is true, so a stream insert is a DESCENDANT mutation and no ancestor observer is armed on its target. DOM-level equivalence to a streamed message, not a server round trip."
+  }
+}

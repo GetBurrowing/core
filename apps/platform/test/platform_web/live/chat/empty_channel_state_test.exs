@@ -154,4 +154,122 @@ defmodule PlatformWeb.ChatLive.EmptyChannelStateTest do
       assert count(html, @selector) == 0
     end
   end
+
+  # ── The SAME zero-message state, worded for a call (task 01a084bf stage 4)
+  #    ─────────────────────────────────────────────────────────────────────
+  #
+  # The meetings call rail's Chat and Transcript panes are both "words from
+  # this call" and their labels are too short to carry the difference, so the
+  # distinction goes in the two empty states. The Chat one is
+  # `data-role="call-rail-chat-empty"`, and it lives in
+  # `Composer.message_scroller/1` because "the bound chat space has no
+  # messages" is `:rendered_message_ids` — this LiveView's own count, not
+  # something `CallShell.call_rail/1` or `MeetingLive` can see without keeping
+  # a second copy of it.
+  #
+  # `ChatLive.Embedded` is the module `MeetingLive` `live_render`s, mounted
+  # here in isolation because that is the only thing `@embedded` distinguishes.
+  # Every test in this block is paired with its `/chat` counterpart above or
+  # below: the two states share one selector each, one condition apart.
+  @embedded_selector ~s([data-role="call-rail-chat-empty"])
+
+  defp embedded_pane(conn, user, slug) do
+    live_isolated(conn, PlatformWeb.ChatLive.Embedded,
+      session: %{"current_user_id" => user.id, "chat_space_slug" => slug}
+    )
+  end
+
+  describe "the EMBEDDED chat pane with a bound space and no messages" do
+    test "says nothing is TYPED yet, and never that anything is being captured",
+         %{conn: conn} do
+      {conn, user} = login(conn)
+      space = new_space("empty-embedded")
+      join(space, user)
+
+      {:ok, _view, html} = embedded_pane(conn, user, space.slug)
+
+      assert count(html, "#chat-message-scroller") == 1
+      assert count(html, @embedded_selector) == 1
+
+      text = html |> query(@embedded_selector) |> LazyHTML.text()
+
+      # It names TYPED words, and it names the other pane so the two are told
+      # apart by their copy rather than by a four-letter label.
+      assert text =~ ~r/typed/i
+      assert text =~ ~r/Transcript\s+tab/
+
+      # It must be a DIFFERENT sentence from the transcript pane's
+      # "No speech yet. Lines appear here as people talk." — asserted as the
+      # literal, so a future edit that converges the two reds here.
+      refute text =~ "No speech yet"
+
+      # THE REFUSAL, as a test rather than a comment. This pane must never
+      # read as "something is being recorded" or "content is on its way".
+      for lie <- [~r/listening/i, ~r/transcrib/i, ~r/captur/i, ~r/recording/i, ~r/loading/i] do
+        refute text =~ lie, "the Chat empty state must not imply capture or loading: #{text}"
+      end
+    end
+
+    test "it REPLACES the standalone card rather than stacking a second empty state",
+         %{conn: conn} do
+      {conn, user} = login(conn)
+      space = new_space("embedded-single")
+      join(space, user)
+
+      {:ok, _view, html} = embedded_pane(conn, user, space.slug)
+
+      # Anti-vacuity for the `== 0`: the pane rendered, the space really is
+      # empty, and the rail's own line really is there — the SAME conditions
+      # that make `@selector` match on `/chat`.
+      assert count(html, @embedded_selector) == 1
+      assert count(html, @selector) == 0
+
+      # Two empty states in one 312px column is worse than either, and
+      # "Connect your agent and @ them to plan and work in this space" is not
+      # what someone mid-call needs.
+      refute html =~ "This space is quiet"
+    end
+
+    test "a space with a message gets neither empty state", %{conn: conn} do
+      {conn, user} = login(conn)
+      space = new_space("embedded-populated")
+      participant = join(space, user)
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: "typed out loud"
+        })
+
+      {:ok, _view, html} = embedded_pane(conn, user, space.slug)
+
+      # The gate reads message emptiness, not "this is an embed".
+      assert html =~ "typed out loud"
+      assert count(html, @embedded_selector) == 0
+      assert count(html, @selector) == 0
+    end
+  end
+
+  describe "the two empty states are scoped to their own surface" do
+    test "/chat never renders the rail's line, and the embed never renders /chat's",
+         %{conn: conn} do
+      {conn, user} = login(conn)
+      space = new_space("scoped-both")
+      join(space, user)
+
+      {:ok, _view, standalone} = live(conn, ~p"/chat/#{space.slug}")
+      {:ok, _view, embedded} = embedded_pane(conn, user, space.slug)
+
+      # Both `refute`s are guarded by the positive on the SAME selector in the
+      # other surface, one assign apart, so neither can pass because a
+      # selector stopped matching anywhere.
+      assert count(standalone, @selector) == 1
+      assert count(standalone, @embedded_selector) == 0
+
+      assert count(embedded, @embedded_selector) == 1
+      assert count(embedded, @selector) == 0
+    end
+  end
 end

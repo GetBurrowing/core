@@ -90,17 +90,30 @@ defmodule PlatformWeb.MeetingLive do
     * Right pane: the embedded `PlatformWeb.ChatLive` surface (stage 5
       of 019e2d1a; was `MeetingChatPanelLive`).
 
-  ## Mobile drawer (sibling 019e2475-87a8 stage 3)
+  ## The discussion is a rail pane, not a drawer (task 01a084bf stage 3)
 
-  The right pane has two presentations:
+  There used to be a standalone chat `<aside id="meeting-chat-drawer">`
+  here with its own two presentations and its own `:chat_panel_open`
+  assign. It is deleted, and with it that assign.
 
-    * `>=lg` (desktop): always-visible right column. The desktop column
-      is rendered with `hidden lg:flex` and **does not consult the
-      `:chat_panel_open` assign**, so the panel is never collapsed on
-      desktop regardless of assign state.
-    * `<lg` (mobile/tablet): a slide-in drawer from the right with a
-      backdrop. The drawer reads `:chat_panel_open` and is hidden by
-      default (assign defaults to `false`).
+  It had to go because its class list ended in an unconditional
+  `lg:!hidden`: from `lg` up there was no readable discussion surface on
+  this screen at all, so the top bar's toggle and the collapsed strip's
+  Chat button both flipped state — and cleared the unread dot — against a
+  `display: none` element. Task 01a0740d reported that as a known defect
+  it declined to paper over.
+
+  The single `PlatformWeb.ChatLive.Embedded` `live_render` now lives in the
+  `<:chat>` slot of `CallShell.call_rail/1`, so it inherits the RAIL's two
+  presentations instead of maintaining a second set:
+
+    * `>=lg` — an in-flow right column, 312px expanded, collapsing to a
+      44px icon strip under `:chat_panel_collapsed`.
+    * `<lg` — the `toggle_call_rail` slide-in drawer, latched by
+      `:call_rail_open`, with the call-rail backdrop.
+
+  `"toggle_chat_panel"` survives as the event the top bar pushes, but it
+  now OPENS that rail on the Chat tab rather than toggling a drawer.
 
   ## Routes
 
@@ -150,8 +163,11 @@ defmodule PlatformWeb.MeetingLive do
     * `:user_id` — authenticated user_id off the session (same pattern
       as ChatLive); used as the canvas-creator participant when the
       Canvas-mode "Create canvas" CTA fires.
-    * `:chat_panel_open` — mobile drawer open-state for the sibling's
-      embedded chat panel.
+    * `:active_meeting_tab` — which pane the right rail renders. `"chat"`
+      is one of the four (task 01a084bf stage 1), which is why there is no
+      longer a `:chat_panel_open`: "is the discussion on screen" is now a
+      question about this assign and `:chat_panel_collapsed`, answered by
+      `chat_on_screen?/1`.
     * `:chrome_mode` — one of `:shell` (default, used by the authenticated
       `/meetings/:slug` surface) or `:none` (used by the guest ingress on
       the `meet.` host). Driven by `session["chrome_mode"]`, which the
@@ -400,7 +416,6 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:chrome_mode, :none)
       |> assign(:shell?, false)
       |> assign(:stage_modes, @stage_modes)
-      |> assign(:chat_panel_open, false)
       # Mobile-drawer open-state for the CALL RAIL (task 01a05b14 stage
       # 6). Orthogonal to `:chat_panel_collapsed`, which is the desktop
       # affordance. Before this the rail was `hidden lg:flex` and stage 5
@@ -513,15 +528,13 @@ defmodule PlatformWeb.MeetingLive do
      # no badge, and nil for the `Ecto.UUID.generate()` anonymous-test
      # fallback above, where there is no account to name.
      |> assign(:display_name, member_display_name(socket.assigns[:current_user_record]))
-     # Mobile drawer state — defaults CLOSED. Desktop ignores this
-     # assign (column is `hidden lg:flex`). See @moduledoc for the
-     # reconciliation against the stack-spec's "defaults to true" line.
-     |> assign(:chat_panel_open, false)
-     # Desktop collapse state for the participant rail + chat pane
-     # (task 019e40f2). These are ORTHOGONAL to `:chat_panel_open`:
-     # `:chat_panel_open` is mobile-drawer (<lg), the new
-     # `:chat_panel_collapsed` flips the desktop chat aside between
-     # the wide (~320px) pane and a slim 48px collapsed rail. Same
+     # Desktop collapse state for the call rail (task 019e40f2).
+     # `:chat_panel_open` — the retired chat drawer's `<lg` latch — used to
+     # sit here and be described as orthogonal to this one. The drawer is
+     # gone (task 01a084bf stage 3) and so is that assign; the `<lg`
+     # equivalent for the rail is `:call_rail_open`, assigned just below.
+     # `:chat_panel_collapsed` flips the desktop rail between
+     # the wide 312px pane and a slim 44px collapsed strip. Same
      # default-expanded posture as `:sidebar_collapsed` in
      # `shell_live.ex` — first-time users see the full layout. The
      # `SidebarCollapse` JS hook (parameterized via `data-*` attrs in
@@ -2400,42 +2413,82 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, invite_agent_into_call(socket, agent_id)}
   end
 
-  # The two `<lg` drawers are MUTUALLY EXCLUSIVE. Both slide in from the
-  # right at `z-40` over the same backdrop, so letting both open would
-  # stack one unreachably behind the other — a state the user can enter
-  # with two taps and cannot obviously leave. Opening either therefore
-  # closes the other.
+  # "Show me the discussion" (task 01a084bf stage 3). This used to toggle
+  # `:chat_panel_open` for `#meeting-chat-drawer`; that drawer is deleted
+  # and chat is a PANE of the call rail, so the event was re-pointed rather
+  # than removed — the top bar still pushes it, and so does the collapsed
+  # strip's Chat control by way of `meeting_tab_select` +
+  # `toggle_meeting_chat_pane`.
   #
-  # Opening the drawer CLEARS `:call_rail_unread` (task 01a0740d) — the
-  # messages are now on screen, so the marker has nothing left to say.
-  # Deliberately only on the OPEN result: clearing on close would wipe the
-  # dot at the exact moment it should start counting again.
+  # IT OPENS, IT DOES NOT TOGGLE. The old handler flipped a boolean, which
+  # was defensible when the target was a drawer that owned the whole
+  # viewport. The target is now one tab among four, and "toggle" would mean
+  # a second click closes the rail or deselects Chat — leaving the viewer on
+  # no tab at all, or collapsing a rail they may have opened for People.
+  # Asking for chat twice asks for the same thing twice.
+  #
+  # THREE ASSIGNS, ONE PER BREAKPOINT CONCERN:
+  #   * `:active_meeting_tab` — the rail renders Chat.
+  #   * `:chat_panel_collapsed` — false, so at `lg` the rail is expanded
+  #     rather than the 44px strip. This is the desktop-only concern.
+  #   * `:call_rail_open` — true, so below `lg` the rail drawer slides in.
+  #     Harmless at `lg`, where the rail is an in-flow column and this
+  #     assign is not consulted.
+  #
+  # `:call_rail_animate` is true because the viewer asked for this width
+  # change themselves, which is exactly the distinction 01a0740d drew, and
+  # the `push_event` persists the un-collapse to the same localStorage host
+  # the chevron writes to — otherwise opening chat here would silently
+  # disagree with the stored preference on the next mount.
+  #
+  # Opening chat CLEARS `:call_rail_unread` (task 01a0740d): the messages
+  # are on screen, so the marker has nothing left to say. Unlike the old
+  # handler this is unconditional, because there is no longer a "closing"
+  # result that would wipe the dot at the moment it should start counting
+  # again.
   def handle_event("toggle_chat_panel", _params, socket) do
-    next = !socket.assigns.chat_panel_open
-
     {:noreply,
      socket
-     |> assign(:chat_panel_open, next)
-     |> assign(:call_rail_unread, if(next, do: false, else: socket.assigns.call_rail_unread))
-     |> assign(:call_rail_open, if(next, do: false, else: socket.assigns.call_rail_open))}
+     |> assign(:active_meeting_tab, "chat")
+     |> assign(:chat_panel_collapsed, false)
+     |> assign(:call_rail_open, true)
+     |> assign(:call_rail_animate, true)
+     |> assign(:call_rail_unread, false)
+     |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: false})}
   end
 
   # Mobile call-rail drawer (task 01a05b14 stage 6). `lg:hidden` control;
   # at `lg` the rail is an in-flow column and this state is not consulted.
+  #
+  # The mutual exclusion with `:chat_panel_open` is gone with the chat
+  # drawer (task 01a084bf stage 3). There was only ever one reason for it —
+  # two `<lg` drawers sliding in from the same edge at the same `z-40`
+  # could stack one unreachably behind the other — and there is now exactly
+  # one such drawer, which holds the chat as a tab.
   def handle_event("toggle_call_rail", _params, socket) do
-    next = !socket.assigns.call_rail_open
-
-    {:noreply,
-     socket
-     |> assign(:call_rail_open, next)
-     |> assign(:chat_panel_open, if(next, do: false, else: socket.assigns.chat_panel_open))}
+    {:noreply, assign(socket, :call_rail_open, !socket.assigns.call_rail_open)}
   end
 
   # Right-rail tab select (task 01a05b14 stage 3). An unrecognised tab
   # is normalised by `CallShell.call_rail/1` itself rather than being
   # rejected here, so a stale value costs the tab, not the pane.
+  #
+  # SELECTING CHAT CLEARS THE UNREAD DOT (task 01a084bf stage 3). Chat is a
+  # tab now, so arriving at it by clicking the tab — or by the collapsed
+  # strip's chained `meeting_tab_select` + `toggle_meeting_chat_pane` — is
+  # the same act of reading the messages that `"toggle_chat_panel"` performs
+  # from the top bar. Normalised before comparing, because `tab` is assigned
+  # from a URL param behind nothing stronger than `is_binary/1` and a junk
+  # value renders People.
   def handle_event("meeting_tab_select", %{"tab" => tab}, socket) when is_binary(tab) do
-    {:noreply, assign(socket, :active_meeting_tab, tab)}
+    socket = assign(socket, :active_meeting_tab, tab)
+
+    socket =
+      if CallShell.normalize_tab(tab) == "chat",
+        do: assign(socket, :call_rail_unread, false),
+        else: socket
+
+    {:noreply, socket}
   end
 
   # `toggle_participant_rail` and `meeting_participant_rail_hydrate` were
@@ -2444,9 +2497,9 @@ defmodule PlatformWeb.MeetingLive do
   # that drove them. Removing one without the other would have left a
   # live `SidebarCollapse` hook pushing at a missing handler.
 
-  # Desktop chat-pane collapse (task 019e40f2). Strictly DESKTOP — the
-  # mobile drawer continues to use `:chat_panel_open`. Same shape as
-  # the retired `toggle_participant_rail` (see above).
+  # Desktop call-rail collapse (task 019e40f2). Strictly DESKTOP — the
+  # `<lg` drawer latch is `:call_rail_open`. Same shape as the retired
+  # `toggle_participant_rail` (see above).
   #
   # THE ONE PATH THAT ANIMATES (task 01a0740d). `:call_rail_animate` is set
   # `true` here and `false` on every mode-driven reassert, because this is
@@ -4172,10 +4225,13 @@ defmodule PlatformWeb.MeetingLive do
 
   # Three gates, each closing a different way the dot would lie.
   #
-  #   * `:chat_panel_open` — the drawer is on screen, so the viewer is
-  #     looking at the message as it lands. A message you are reading is
-  #     not unread. Left FALSE rather than set, never cleared here: the
-  #     clear belongs to `"toggle_chat_panel"`.
+  #   * chat is on screen — the viewer is looking at the message as it
+  #     lands, and a message you are reading is not unread. This used to
+  #     read `:chat_panel_open`; task 01a084bf stage 3 deleted that drawer
+  #     and made chat a rail pane, so the question became "is the Chat tab
+  #     the pane on screen" (see `chat_on_screen?/1`). Left FALSE rather
+  #     than set, never cleared here: the clear belongs to
+  #     `"toggle_chat_panel"` and to selecting the Chat tab.
   #   * space — this pid holds more than one `chat:space:<id>` topic (the
   #     shell holds the viewer's whole presence set on the same process),
   #     so an unrelated room's traffic would otherwise raise a dot on this
@@ -4194,12 +4250,32 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp rail_unread_worthy?(socket, %Platform.Chat.Message{} = msg) do
-    # `!` rather than `not`: the assign is seeded at both mount sites, but
-    # `not nil` would RAISE on any path that ever missed one, and a crashed
-    # LiveView is a worse answer than a missing dot.
-    !socket.assigns[:chat_panel_open] and
+    not chat_on_screen?(socket.assigns) and
       message_for_this_meeting?(socket, msg) and
       not own_chat_message?(socket, msg)
+  end
+
+  # Is the discussion the pane the viewer is actually looking at?
+  #
+  # Two assigns, because the rail can be showing Chat and still not be
+  # showing it: at `lg` a collapsed rail is a 44px icon strip with no pane
+  # in it at all, so `:active_meeting_tab` alone would suppress a dot the
+  # viewer has no way to read.
+  #
+  # `:call_rail_open` is deliberately NOT consulted. It is the `<lg` drawer
+  # latch and is `false` on a desktop viewport where the rail is a
+  # permanently in-flow column, so folding it in would raise a dot for every
+  # desktop viewer sitting on the Chat tab — the exact lie this predicate
+  # exists to prevent. The server cannot see the viewport; between the two
+  # errors available to it, missing a dot for a phone viewer who left the
+  # rail drawer closed on the Chat tab is the cheaper one.
+  #
+  # Subscript access and `!` rather than `not`: both assigns are seeded at
+  # both mount sites, but `not nil` would RAISE on any path that ever missed
+  # one, and a crashed LiveView is a worse answer than a wrong dot.
+  defp chat_on_screen?(assigns) do
+    CallShell.normalize_tab(assigns[:active_meeting_tab]) == "chat" and
+      !assigns[:chat_panel_collapsed]
   end
 
   # A struct that carries NO space id is not attributed to another room, so
