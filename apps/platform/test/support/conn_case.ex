@@ -43,11 +43,56 @@ defmodule PlatformWeb.ConnCase do
   end
 
   setup tags do
-    :ok = Sandbox.checkout(Repo)
+    # The sandbox connection is owned by a SEPARATE agent process, not by the
+    # test process. This mirrors `Platform.DataCase`, which moved to the same
+    # shape for the same measured reason (`test/support/data_case.ex:24-41`).
+    #
+    # With the previous `Sandbox.checkout(Repo)` form the TEST process was the
+    # owner, and ExUnit runs `on_exit` callbacks in a different process *after*
+    # the test process has already terminated — so the connection went away
+    # with its owner and every connection-dependent `on_exit` under ConnCase
+    # was a silent no-op. `conn_case_owner_lifecycle_test.exs` pins that.
+    #
+    # The sharing policy is UNCHANGED: `shared: not tags[:async]` sets
+    # `{:shared, owner}` for non-async cases and leaves async ones in manual
+    # mode, exactly as the old `unless tags[:async]` gate did. The only
+    # difference is which process is the owner — and the owner is the thing
+    # that must survive.
+    owner = Sandbox.start_owner!(Repo, shared: not tags[:async])
 
-    unless tags[:async] do
-      Sandbox.mode(Repo, {:shared, self()})
-    end
+    # `start_owner!/2` allows the calling process ONLY on its `shared: false`
+    # branch (`deps/ecto_sql/.../sandbox.ex`, `start_owner!/2`); the shared
+    # branch just sets `{:shared, owner}`, which lets the test process USE the
+    # connection but leaves it neither owner nor allowed. Any test that calls
+    # `Sandbox.allow(Repo, self(), pid)` itself needs `self()` to be a valid
+    # `owner_or_allowed` parent — `test/security/external_attachment_scope_test.exs:55`
+    # is the one such ConnCase call site today. Explicitly allowing the test
+    # process keeps `self()` a valid parent in both modes.
+    if not tags[:async], do: Sandbox.allow(Repo, owner, self())
+
+    shared_mode? = not tags[:async]
+
+    on_exit(fn ->
+      # Shared mode ONLY, and it must stay that way. `Platform.SandboxHelpers`'
+      # moduledoc records why: in `async: true` modules run concurrently, so
+      # `Platform.TaskSupervisor`'s child set belongs to OTHER modules as much
+      # as to this one, and draining it would be waiting on an unrelated test.
+      # The consequence is that this drain does NOT cover `async: true`, so a
+      # supervised orphan spawned by an async ConnCase test is still not waited
+      # for. That residual is real and is not closed by this change: measured
+      # on both the pre- and post-migration trees, such an orphan's in-flight
+      # audit write still arrives as a process exit and still detaches
+      # `"platform-audit-telemetry"` for the whole VM. The 16 `async: true`
+      # files are therefore NOT covered by anything below, and they are a
+      # DISJOINT set from the ones this on_exit protects. See
+      # `notes/2026-09-10-conncase-sandbox-owner.md` §4 for the
+      # `:telemetry.list_handlers/1` readings on both trees, and
+      # `conn_case_supervised_orphan_test.exs` for the construction.
+      if shared_mode?, do: Platform.SandboxHelpers.drain_or_warn()
+
+      # LAST. Everything above needs a live connection.
+      Sandbox.stop_owner(owner)
+    end)
 
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
