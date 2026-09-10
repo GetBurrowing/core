@@ -68,8 +68,15 @@ never by bare number:
   bare number carrying NO section sign (`ADR-0042`, `ADR-0046 decision 7`) is
   still unenforced, for the reasons below.
 - **Keep the citation on one source line.** Wrap the prose around it, not
-  through it — a citation split across two comment lines is invisible to the
-  audit and only looks resolvable.
+  through it. Not because a split hides — it no longer does, and the guidance
+  survives the reason for it changing. The anchored form split across two
+  lines is *rejected by name* by the audit, which refuses to guess where a
+  wrapped heading ends rather than rejoin it; and a bare ADR number whose
+  newline falls before its section sign is now read across the break and
+  rejected as well, so pressing Enter one character earlier is no longer a way
+  around that ban. What a split costs now is a failure that talks about the
+  wrap instead of about the citation, and a reader who has to reassemble the
+  reference by eye.
 - Cite a heading that **actually exists** in the target file. The point of
   the form is that it is machine-checkable: a heading either is in the file
   or is not, whereas a line number records no expectation and so can never
@@ -78,7 +85,8 @@ never by bare number:
 `test/platform/regression/adr_citation_audit_test.exs` enforces all of the
 above — it bans the line-pinned form outright, resolves every `§` citation
 against the named ADR, **rejects a bare ADR number followed by a section
-sign**, rejects a citation split across two lines, and keeps citations out of
+sign** — including when the newline falls between the two — rejects a
+citation split across two lines, and keeps citations out of
 `test` / `describe` names. If it fails, update the citation or restore the
 heading; adding an exclusion is not a third option.
 

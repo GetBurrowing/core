@@ -45,7 +45,7 @@ defmodule Platform.Regression.AdrCitationAuditTest do
        renumbering rots pointers, which is the defect this whole file exists
        to stop. `system_event_envelope_record_audit_test.exs` hit the identical
        fork and numbered its new assertion `6b` for the identical reason.
-       The 58 sites that predate the rule are registered in
+       The 60 sites that predate the rule are registered in
        `@dangling_anchor_pins`; see the ratchet comment below.
 
   ## Why rule 3 rejects rather than rejoins
@@ -64,6 +64,17 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   heading does not exist in the ADR. Rule 3 exists to catch the case where the
   break falls right after the `§`, which leaves no heading text to resolve at
   all, and to produce an error message that says what actually happened.
+
+  **This argument is about rule 3 and does not carry to rule 5.** It is an
+  argument about where a HEADING ends, and only rule 3 reads heading text.
+  Rule 5 fires on two tokens — an ADR number and a section sign — and its
+  selector stops at the sign, so a one-line lookahead across the break has
+  nothing to guess and cannot truncate or over-swallow anything. Rule 5
+  therefore affords the lookahead rule 3 cannot, and it takes it (see the
+  widened third escape below). This paragraph exists because the unqualified
+  version of the section above read as a decision already made for the whole
+  file, which is how the wrapped bare anchor stayed out of scope for as long
+  as it did.
 
   ## What is deliberately NOT covered
 
@@ -104,10 +115,50 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   `docs/decisions/` itself is out of scope: ADRs cross-reference each other in
   prose, and stage 1 left the documents untouched by design.
 
+  ### A third escape, found later and WIDENED rather than named
+
+  The list below reads as exhaustive and was not. A third escape existed and
+  is now closed: **line-wrapping**. An author who put the newline between the
+  ADR number and the section sign fell out of rule 5 entirely — not because
+  the selector forbade it (its trailing `\\s*` spans a newline perfectly well)
+  but because `line_offences/5` hands the detector one line at a time. The
+  per-line feed was the constraint, and nothing in the escape inventory said
+  so.
+
+  **Provenance.** It was found by the end-to-end reviewer of task `019fb9e2`,
+  reading this file against sha `90bab4f0`: two sites in the tree, and a
+  whole-file scan reporting 60 sites across 30 files where the line-scoped
+  scan reported 58 across 29. The two-site delta IS the escape; it was not
+  inferred from the prose, it was measured by running the selector two ways.
+
+  The fork was real: name it as a fourth documented escape, or widen. Widening
+  won, for three reasons.
+
+    * The terminator argument that keeps the *anchored* form's lookahead
+      modest does not transfer. It is an argument about where a heading ENDS,
+      and rule 5 never reads heading text at all — it fires on the number and
+      the sign, both of which are unambiguous across a line break.
+    * The mechanism already existed in this file and was already pinned. Rule
+      3's second branch does exactly this bounded one-line lookahead, under
+      `the detector names the two split shapes and clears the wrapped-prose
+      fix`. This is a mirror of a proven in-file pattern, not a new capability.
+    * **Documenting only would have left a live bypass.** The other two
+      escapes below are shapes that carry no reliable signal — widening to
+      catch them would fire on ordinary prose. This one is the banned form
+      exactly, defeated by pressing Enter one character earlier. A ratchet
+      with a keystroke-sized bypass is not a ratchet, and a gate an author can
+      step around without changing what they meant is worse than an absent
+      one, because it reports green.
+
+  Two sites in the tree were escaping this way and are now in scope and
+  pinned. Neither was rewritten to make anything green: the prose in both is
+  byte-identical to what it was before this rule saw it.
+
   ### Two measured escapes from rule 5, named and NOT widened
 
   Recorded the way the precedent recorded its `#L485` gap: measured, scoped,
-  left alone rather than chased.
+  left alone rather than chased. Unlike the wrapping escape above, widening
+  for either of these would fire on ordinary prose.
 
     * **The parenthetical dodge.** `lib/platform/tasks/stacks.ex` (currently
       line 5132, stated for orientation only — locate it by content) reads
@@ -129,6 +180,33 @@ defmodule Platform.Regression.AdrCitationAuditTest do
       `notes/2026-07-26-boot-telemetry-detach.md` *does* have the ADR filename
       shape and had to be excluded explicitly. Resolving either against
       `docs/decisions/` would report a missing ADR that was never claimed.
+
+  ### The ratchet cannot see an over-greedy bare-anchor selector
+
+  Measured, not reasoned: stage 2 of task `01a0851f` mutated the wrapped
+  branch's lookahead to be greedy — matching an ADR number at end of line no
+  matter what followed on the next line — and the ratchet **did not move**.
+  Two tests failed, both fixtures; zero ratchet reds, zero count drift.
+
+  The mechanism is worth stating, because a reader who knows only the
+  conclusion will delete the control that catches it as redundant.
+  `bare_anchor_counts/1` and `sites_for/2` do not carry the ADR number out of
+  the match; they recover it by re-scanning the offence's `detail` with
+  `@bare_anchor_regex`, which requires a section sign. A greedy match fires on
+  roughly 120 lines that merely END on an ADR number, whose successor lines
+  carry no section sign, so the joined detail carries none either, recovery
+  matches nothing, and those sites contribute **zero** `{path, number}` keys.
+  The ratchet compares key sets, so it sees no change. And the vacuity control
+  `the scan is not vacuous` asserts a floor of 40, not equality, so ~120 extra
+  raw sites sail past it too.
+
+  So the guard against the greedy direction is **not** the ratchet and **not**
+  the vacuity floor. It is the full-list negative control
+  `one scan over the four wrapped shapes returns exactly the two that offend`,
+  which asserts the non-offending shapes are absent from the result and is the
+  only assertion in this file that goes red on over-selection. Do not weaken
+  it, and do not delete it as duplicated by the ratchet — the ratchet is
+  structurally unable to do its job.
 
   ### What green means, and what it does not
 
@@ -239,6 +317,65 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   # `system_event_envelope_record_audit_test.exs`.
   @bare_anchor_regex ~r/\bADR[\s-]?(\d{4})\s*§/
 
+  # The same bare form, wrapped: the line ENDS on the ADR number and the
+  # section sign opens the next line. `@bare_anchor_regex`'s `\s*` would span a
+  # newline on its own, but it never sees one — `line_offences/5` feeds the
+  # detector a single line at a time, so the per-line feed is the constraint,
+  # not the pattern. This regex is paired with the EXISTING
+  # `@orphan_section_regex` on the following line rather than cloning it: rule
+  # 3 already established that "the next line resumes with a section sign"
+  # shape, and one definition keeps the two lookaheads from drifting apart.
+  #
+  # Disjoint from rule 3 by construction, and asserted below: rule 3's
+  # lookahead branch requires the line to END on an ADR `.md` filename, this
+  # one requires it to END on four digits, and no line can do both.
+  # MEASURED AGAINST THE REAL TREE, mirroring the four-mutation run recorded
+  # above `@bare_anchor_regex`. Stage 2 ran four mutations of the wrapped
+  # branch, one at a time, reverting between; the file holds 21 tests and 0
+  # failures unmutated. Citations are DESCRIBED, never spelled — a contiguous
+  # instance here would be a real offence against this file's own rule.
+  #
+  #   1. BRANCH DELETED — the wrapped clause removed entirely. 21 tests, FIVE
+  #      failures: `one scan over the four wrapped shapes returns exactly the
+  #      two that offend`, `a bare anchor wrapped across a line break is
+  #      caught, and reports both lines`, `the wrapped offence's detail is
+  #      what the ratchet recovers its ADR number from`, and BOTH ratchet
+  #      tests — `no pin names a citation that no longer exists` and `no pin
+  #      carries a stale count`, because the two pinned wrapped sites vanish.
+  #   2. LOOKAHEAD MADE GREEDY — the next-line-section-sign requirement
+  #      dropped, so any line ending on an ADR number offends. 21 tests, TWO
+  #      failures, BOTH of them fixture tests: the full-list scan and the
+  #      wrapped-line test. **THE RATCHET DID NOT MOVE, and that is a
+  #      measurement worth stating rather than an oversight.** The ~120
+  #      out-of-scope trailing-number sites this mutation swallows all have a
+  #      successor line with no section sign, so their joined `detail` carries
+  #      no sign either, `@bare_anchor_regex` recovers no number from it, and
+  #      they contribute ZERO `{path, number}` keys. The ratchet compares
+  #      keys, and `the scan is not vacuous` asserts a FLOOR of 40, so an
+  #      over-greedy selector is invisible to every set-equality test in this
+  #      file. Only a full-list assertion on a fixture — one that fails by
+  #      gaining a tuple — can see it. That is why the negative control in
+  #      `one scan over the four wrapped shapes` is the highest-value
+  #      assertion in the stage.
+  #   3. DETAIL DEGRADED TO FIRST-LINE-ONLY — the join dropped. 21 tests, FIVE
+  #      failures: the vacuity control, the full-list scan, the wrapped-line
+  #      test, and both ratchet tests (the pinned wrapped sites stop
+  #      contributing keys, so the pin reads as naming citations that no
+  #      longer exist). The vacuity control detonates through
+  #      `bare_anchor_counts/1`, the consumer, not through the string's shape.
+  #   4. MUTATIONS 2 AND 3 TOGETHER. Mutation 1 is not independent of these —
+  #      deleting the branch subsumes both, so "all three at once" is not a
+  #      constructible state and the honest combination is this pair. TWO
+  #      things broken, FIVE distinct failures, and the failing set is exactly
+  #      the UNION of mutation 2's and mutation 3's (they overlap on the two
+  #      fixture tests). Union, not a subset: no test is passing on another's
+  #      behalf, and each break still has at least one test that fires on it
+  #      alone — the greedy lookahead through the full-list negative control,
+  #      the dropped join through the vacuity control.
+  #
+  # All reverted; the file returns 21 tests, 0 failures.
+  @wrapped_bare_anchor_regex ~r/\bADR[\s-]?(\d{4})\s*$/
+
   # The anchored form's head: an ADR filename immediately followed by `§`. The
   # heading is NOT captured here — it is resolved against the target file's
   # real headings instead of guessed at with a terminator (see moduledoc).
@@ -301,6 +438,16 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   # 29 files. The plan was written against a 49/26 measurement and did not list
   # ADR 0044 at all; ten 0044 sites landed in between with the auto-approve
   # fan-out work (tasks 01a05877 / 01a0589b).
+  #
+  # Re-measured at `ccb93cb4` after rule 5 grew its wrapped branch: **60 sites
+  # across 30 files**, 35 rows. The delta is exactly the two LINE-WRAPPED sites
+  # the widening brought into scope and nothing else — `stack_graph.ex` is a
+  # new file key (the 30th), `stacks.ex` goes 8 -> 9. Both were escaping every
+  # rule in this file before; neither citation was touched to produce this.
+  # Confirmed by a scan run independently of this list, not derived from it:
+  # 60 sites / 30 files / 35 `{path, number}` keys, per-key diff empty in both
+  # directions, zero count drift. The 49/26 note above stands as the record of
+  # the plan's wrong figure.
   @dangling_anchor_pins [
     {"lib/platform/audit/event.ex", "0040", 1},
     {"lib/platform/federation/invocation_visibility_grant.ex", "0040", 2},
@@ -320,7 +467,8 @@ defmodule Platform.Regression.AdrCitationAuditTest do
     {"lib/platform/tasks.ex", "0041", 3},
     {"lib/platform/tasks/rollup_webhook_processor.ex", "0041", 1},
     {"lib/platform/tasks/stack.ex", "0041", 1},
-    {"lib/platform/tasks/stacks.ex", "0041", 8},
+    {"lib/platform/tasks/stack_graph.ex", "0041", 1},
+    {"lib/platform/tasks/stacks.ex", "0041", 9},
     {"lib/platform_web/controllers/github_webhook_controller.ex", "0041", 1},
     {"lib/platform_web/live/tasks/board_component.ex", "0042", 1},
     {"lib/platform_web/live/tasks/task_detail_component.ex", "0042", 1},
@@ -696,6 +844,165 @@ defmodule Platform.Regression.AdrCitationAuditTest do
       refute heading_detail =~ "0099"
     end
 
+    test "a bare anchor wrapped across a line break is caught, and reports both lines" do
+      # Fixtures piecewise across the line boundary, harder here than anywhere
+      # else in this file: the form under test IS a line ending on an ADR
+      # number followed by a line opening with a section sign, which is
+      # precisely what this source file must never contain. Every `<>` below
+      # is load-bearing — collapse one into a literal and this file becomes a
+      # real offender against its own rule.
+      headings = adr_headings_by_file()
+      sign = "§"
+      number = "0099"
+
+      wrapped =
+        "  # positions map to the digits per ADR " <>
+          number <> "\n" <> "  " <> sign <> "\"Phantom halt semantics\"; the rest."
+
+      assert [{:bare_anchor, "fixture.ex", 1, detail}] =
+               offences_in("fixture.ex", wrapped, headings)
+
+      # THE ANTI-VACUITY ASSERTION. `bare_anchor_counts/1` and `sites_for/2`
+      # recover the ADR number by re-scanning this `detail` with the on-line,
+      # section-sign-requiring `@bare_anchor_regex`. If `detail` were the first
+      # line alone the recovery would find nothing, the offence would
+      # contribute no `{path, number}` key, and it would be invisible to all
+      # three ratchet tests while still appearing in `offences_in/3` — a
+      # detector that fires attached to a ratchet that cannot see it. Asserting
+      # the recovery directly, rather than the string shape, is what makes this
+      # fail if the join is ever dropped.
+      assert detail =~ number
+      assert detail =~ sign
+
+      assert [[_match, ^number]] = Regex.scan(@bare_anchor_regex, detail)
+
+      # The orphaned section line is reported as part of line 1's offence, not
+      # as a second site: one wrapped citation is one offence.
+      assert length(offences_in("fixture.ex", wrapped, headings)) == 1
+
+      # The unwrapped equivalent is still exactly one offence, same kind, and
+      # its detail recovers the same number — the two branches agree.
+      inline = "  # positions map to the digits per ADR " <> number <> " " <> sign <> "\"X\"."
+
+      assert [{:bare_anchor, "fixture.ex", 1, inline_detail}] =
+               offences_in("fixture.ex", inline, headings)
+
+      assert [[_m, ^number]] = Regex.scan(@bare_anchor_regex, inline_detail)
+
+      # A line ending on an ADR number whose successor does NOT open with a
+      # section sign stays out of scope, exactly as the unwrapped bare-number
+      # form does. Widening rule 5 to the wrapped shape must not widen it to
+      # every trailing ADR number in the repo — there are roughly 120 of those.
+      trailing = "  # the rule is in ADR " <> number <> "\n" <> "  # and it says so."
+      assert offences_in("fixture.ex", trailing, headings) == []
+    end
+
+    test "rule 3's wrapped split and rule 5's wrapped bare anchor cannot both fire" do
+      # Disjointness, stated in the regex comment and CHECKED here rather than
+      # left as an argument. Rule 3's lookahead branch requires the line to end
+      # on an ADR `.md` filename; rule 5's new branch requires it to end on
+      # four digits. No line can end on both, so a wrapped citation that names
+      # a file is a `:split` and never also a `:bare_anchor`.
+      headings = adr_headings_by_file()
+      sign = "§"
+      adr = "0046-design-and-architecture-phases-in-planning" <> ".md"
+
+      # The word ADR and a four-digit number are present on the first line, and
+      # deliberately so: without them the bare selector could not have fired
+      # here whatever its anchoring, and the assertion below would pass for the
+      # wrong reason. With them, the ONLY thing keeping rule 5 off this line is
+      # the end-of-string anchor — drop it from `@wrapped_bare_anchor_regex`
+      # and this test goes red, which is the positive control that the
+      # disjointness claim is about the anchor and not about the fixture.
+      split =
+        "  # see ADR " <> adr <> "\n" <> "  # " <> sign <> " Per-step outcome" <> " — the rule."
+
+      offences = offences_in("fixture.ex", split, headings)
+
+      assert [{:split, "fixture.ex", 1, _}] = offences
+      refute Enum.any?(offences, &(elem(&1, 0) == :bare_anchor))
+    end
+
+    test "one scan over the four wrapped shapes returns exactly the two that offend" do
+      # THE FULL-LIST PIN. One call, and the whole returned list is asserted —
+      # kinds, path, LINE INDICES and all — rather than "at least one offence
+      # was found". A selector that got greedier would have to fail by
+      # producing an EXTRA tuple, which no `assert ... =~` or non-emptiness
+      # check can see. The four shapes are in one string so they are scanned
+      # with real neighbours, which is the only way a lookahead bug can show.
+      #
+      # Fixtures piecewise across every line boundary, and that is
+      # load-bearing rather than stylistic: this file is inside the corpus the
+      # audit walks, and the shape under test IS a line ending on an ADR
+      # number above a line opening with a section sign. A literal heredoc
+      # here would make this file a genuine offender against its own rule, and
+      # the resulting red would read as a detector bug.
+      headings = adr_headings_by_file()
+      sign = "§"
+      number = "0099"
+      adr = "0046-design-and-architecture-phases-in-planning" <> ".md"
+
+      # THE WRAPPED BARE ANCHOR. Offends, at the FIRST line's index.
+      wrapped =
+        "  # positions map to the digits per ADR " <>
+          number <> "\n" <> "  " <> sign <> "\"Phantom halt semantics\"; the rest.\n"
+
+      # RULE 3's WRAPPED SPLIT. Offends as `:split`, never also as
+      # `:bare_anchor`: the line ends on an ADR `.md` filename, not on four
+      # digits. The disjointness control.
+      split =
+        "  # see " <> adr <> "\n" <> "  # " <> sign <> " Per-step outcome" <> " — the rule.\n"
+
+      # NEGATIVE CONTROL, and the highest-value one in the file. A line ending
+      # on a bare ADR number whose successor does NOT open with a section sign
+      # is the ~120-site out-of-scope corpus. An over-greedy lookahead — one
+      # that drops the next-line requirement — swallows all of it, and this is
+      # what says so.
+      trailing = "  # the rule is in ADR " <> number <> "\n" <> "  # and it says so.\n"
+
+      # NEGATIVE CONTROL. A correct anchored citation, spanning nothing. It
+      # clears every rule.
+      anchored = "  # " <> adr <> " " <> sign <> " Per-step outcome" <> " governs this."
+
+      source = wrapped <> split <> trailing <> anchored
+
+      joined =
+        "# positions map to the digits per ADR " <>
+          number <> " " <> sign <> "\"Phantom halt semantics\"; the rest."
+
+      assert [
+               {:bare_anchor, "fixture.ex", 1, ^joined},
+               {:split, "fixture.ex", 3, _}
+             ] = offences_in("fixture.ex", source, headings)
+    end
+
+    test "the wrapped offence's detail is what the ratchet recovers its ADR number from" do
+      # THE VACUITY CONTROL for the detail-join, asserted through the consumer
+      # that depends on it rather than through the string's shape.
+      # `bare_anchor_counts/1` does not carry the ADR number forward from the
+      # detector — it RE-SCANS each offence's `detail` with the on-line,
+      # section-sign-requiring `@bare_anchor_regex`. A wrapped offence whose
+      # detail were its first line alone carries no section sign, so the
+      # recovery matches nothing, the offence contributes ZERO `{path, number}`
+      # keys, and it disappears from all three ratchet tests while still being
+      # "detected" — the widening green and asserting nothing.
+      #
+      # Stage 1 measured that hole once, by hand, and reverted. This is the
+      # permanent form: trim the detail back to one line and this goes red.
+      headings = adr_headings_by_file()
+      sign = "§"
+      number = "0099"
+
+      wrapped =
+        "  # positions map to the digits per ADR " <>
+          number <> "\n" <> "  " <> sign <> "\"Phantom halt semantics\"; the rest."
+
+      offences = offences_in("fixture.ex", wrapped, headings)
+
+      assert %{{"fixture.ex", number} => 1} ==
+               bare_anchor_counts(%{offenders: offences, headings_by_adr: headings})
+    end
+
     test "the advisory anchor read handles the three shapes in the corpus, and decides nothing" do
       # Fixtures piecewise, as everywhere in this file: a contiguous literal of
       # the banned form here would be a real offence against the rule.
@@ -903,7 +1210,7 @@ defmodule Platform.Regression.AdrCitationAuditTest do
     split_offences(path, line, index, next_line) ++
       resolution_offences(path, line, index, headings_by_adr) ++
       pin_offences(path, line, index) ++
-      bare_anchor_offences(path, line, index) ++
+      bare_anchor_offences(path, line, index, next_line) ++
       test_name_offences(path, line, index)
   end
 
@@ -954,11 +1261,36 @@ defmodule Platform.Regression.AdrCitationAuditTest do
   # A bare anchor inside a test name is already caught here, wherever on the
   # line it appears; adding it there would report one site under two kinds,
   # which is the collapse problem of rationale 2 above running in reverse.
-  defp bare_anchor_offences(path, line, index) do
-    if Regex.match?(@bare_anchor_regex, line) do
-      [{:bare_anchor, path, index, String.trim(line)}]
-    else
-      []
+  #
+  # Two branches, ONE kind. The wrapped form is the same defect with a newline
+  # in it, and the ratchet is keyed off `:bare_anchor`; a separate kind would
+  # need a parallel pin set for two sites and would let each half hide behind
+  # the other's count.
+  #
+  # The wrapped branch's `detail` is the JOINED text of both lines, and that is
+  # load-bearing, not cosmetic. `bare_anchor_counts/1` and `sites_for/2` do not
+  # carry the ADR number forward — they RECOVER it by re-scanning the offence's
+  # own `detail` with `@bare_anchor_regex`, which requires the section sign. A
+  # wrapped offence whose detail were its first line alone carries no section
+  # sign, so the recovery would match nothing, the offence would contribute
+  # ZERO `{path, number}` keys, and it would vanish from every pin comparison
+  # while still being "detected" — all three ratchet tests green, the pin never
+  # moving, the widening asserting nothing. Measured, not assumed: with the
+  # first-line-only detail the pin stayed satisfied at its pre-widening total;
+  # with the joined detail the ratchet went red naming both new sites. Joining
+  # here rather than special-casing the wrapped shape in the two consumers
+  # keeps that recovery a single unbranched path.
+  defp bare_anchor_offences(path, line, index, next_line) do
+    cond do
+      Regex.match?(@bare_anchor_regex, line) ->
+        [{:bare_anchor, path, index, String.trim(line)}]
+
+      Regex.match?(@wrapped_bare_anchor_regex, line) and
+          Regex.match?(@orphan_section_regex, next_line) ->
+        [{:bare_anchor, path, index, String.trim(line) <> " " <> String.trim(next_line)}]
+
+      true ->
+        []
     end
   end
 
