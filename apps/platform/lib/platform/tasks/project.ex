@@ -14,6 +14,10 @@ defmodule Platform.Tasks.Project do
     field(:tech_stack, :map, default: %{})
     field(:deploy_config, :map, default: %{})
     field(:config, :map, default: %{})
+    # Task 01a08c1e stage 3: a paused project is invisible to the
+    # TaskRouterWatcher (both `should_run?/1` and `list_should_run_tasks/0`),
+    # so none of its tasks is ever dispatched. Written via `project_update`.
+    field(:dispatch_paused, :boolean, default: false)
     field(:archived_at, :utc_datetime_usec)
     field(:deletion_scheduled_at, :utc_datetime_usec)
     field(:archived_cascade_org_id, :binary_id)
@@ -26,7 +30,7 @@ defmodule Platform.Tasks.Project do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @cast_fields ~w(workspace_id name slug repo_url default_branch tech_stack deploy_config config org_id archived_at deletion_scheduled_at archived_cascade_org_id)a
+  @cast_fields ~w(workspace_id name slug repo_url default_branch tech_stack deploy_config config dispatch_paused org_id archived_at deletion_scheduled_at archived_cascade_org_id)a
 
   def changeset(project, attrs) do
     project
@@ -38,6 +42,58 @@ defmodule Platform.Tasks.Project do
     |> foreign_key_constraint(:org_id)
     |> validate_deploy_strategy()
     |> validate_lifecycle_pipeline()
+    |> validate_plan_auto_approve()
+  end
+
+  # Project-level plan auto-approval policy (task 01a08c1e stage 2).
+  #
+  # `config["plan_auto_approve"]` arms `Platform.Tasks.maybe_auto_approve/1`
+  # for every task in the project whose submitted plan fits the policy:
+  # `%{"enabled" => boolean, "max_stages" => pos_integer,
+  # "allow_manual_approval" => boolean (optional, default false)}`.
+  # Validated at write time for the same reason `lifecycle_pipeline` is: a
+  # malformed policy discovered at plan-submit time would be a silent
+  # "not armed" inside somebody else's task. Same shape as
+  # `validate_lifecycle_pipeline/1`; absence is not a failure.
+  defp validate_plan_auto_approve(changeset) do
+    case get_change(changeset, :config) do
+      nil ->
+        changeset
+
+      config when is_map(config) ->
+        case Map.get(config, "plan_auto_approve") do
+          nil ->
+            changeset
+
+          policy when is_map(policy) ->
+            case plan_auto_approve_error(policy) do
+              nil -> changeset
+              reason -> add_error(changeset, :config, reason)
+            end
+
+          _ ->
+            add_error(changeset, :config, "plan_auto_approve must be a map")
+        end
+
+      _ ->
+        changeset
+    end
+  end
+
+  defp plan_auto_approve_error(policy) do
+    cond do
+      not is_boolean(Map.get(policy, "enabled")) ->
+        "plan_auto_approve.enabled must be a boolean"
+
+      not (is_integer(Map.get(policy, "max_stages")) and Map.get(policy, "max_stages") > 0) ->
+        "plan_auto_approve.max_stages must be a positive integer"
+
+      not is_boolean(Map.get(policy, "allow_manual_approval", false)) ->
+        "plan_auto_approve.allow_manual_approval must be a boolean"
+
+      true ->
+        nil
+    end
   end
 
   # Lifecycle hook pipelines (ADR-0046 Amendment 1, task 019fe1b6 stage 3).

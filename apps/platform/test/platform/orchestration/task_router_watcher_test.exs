@@ -142,6 +142,178 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
     end
   end
 
+  # ── should_run?/1 and the query path against dispatch_paused (01a08c1e) ──
+
+  describe "should_run?/1 — dispatch_paused project (01a08c1e stage 3)" do
+    test "returns false for an otherwise-eligible task in a paused project" do
+      task = %Platform.Tasks.Task{
+        assignee_type: "agent",
+        assignee_id: "some-uuid",
+        status: "planning",
+        deleted_at: nil,
+        project: %Platform.Tasks.Project{dispatch_paused: true}
+      }
+
+      assert TaskRouterWatcher.should_run?(task) == false
+    end
+
+    test "returns true for the same task in an unpaused project" do
+      task = %Platform.Tasks.Task{
+        assignee_type: "agent",
+        assignee_id: "some-uuid",
+        status: "planning",
+        deleted_at: nil,
+        project: %Platform.Tasks.Project{dispatch_paused: false}
+      }
+
+      assert TaskRouterWatcher.should_run?(task) == true
+    end
+
+    test "an unloaded project association falls through to the ordinary clauses" do
+      task = %Platform.Tasks.Task{
+        assignee_type: "agent",
+        assignee_id: "some-uuid",
+        status: "planning",
+        deleted_at: nil
+      }
+
+      assert TaskRouterWatcher.should_run?(task) == true
+    end
+  end
+
+  describe "dispatch_paused query path (01a08c1e stage 3)" do
+    setup %{project: sibling_project} do
+      {:ok, paused_project} =
+        Tasks.create_project(%{
+          name: "Paused Project #{System.unique_integer([:positive])}",
+          dispatch_paused: true
+        })
+
+      assert paused_project.dispatch_paused == true
+
+      # Both tasks are created already eligible so no `:task_updated`
+      # broadcast races the reconcile below (see the cancelled-router test).
+      agent_id = Ecto.UUID.generate()
+
+      {:ok, paused_task} =
+        Tasks.create_task(%{
+          project_id: paused_project.id,
+          title: "Paused-project task",
+          status: "planning",
+          assignee_type: "agent",
+          assignee_id: agent_id
+        })
+
+      {:ok, sibling_task} =
+        Tasks.create_task(%{
+          project_id: sibling_project.id,
+          title: "Unpaused sibling task",
+          status: "planning",
+          assignee_type: "agent",
+          assignee_id: agent_id
+        })
+
+      on_exit(fn ->
+        stop_router_if_running(paused_task.id)
+        stop_router_if_running(sibling_task.id)
+      end)
+
+      %{paused_project: paused_project, paused_task: paused_task, sibling_task: sibling_task}
+    end
+
+    test "list_should_run_tasks/0 excludes tasks of a paused project and preloads the project",
+         %{paused_task: paused_task, sibling_task: sibling_task} do
+      rows = TaskRouterWatcher.list_should_run_tasks()
+      ids = Enum.map(rows, & &1.id)
+
+      refute paused_task.id in ids
+      assert sibling_task.id in ids
+
+      sibling = Enum.find(rows, &(&1.id == sibling_task.id))
+      assert %Platform.Tasks.Project{dispatch_paused: false} = sibling.project
+    end
+
+    test "reconcile starts no router for the paused task and stops one already running",
+         %{paused_task: paused_task, sibling_task: sibling_task} do
+      fake_assignee = %{
+        type: :federated,
+        id: "runtime-paused-#{System.unique_integer([:positive])}"
+      }
+
+      # A router that predates the pause (or was started by hand) is an
+      # orphan the sweep must retire, exactly like a soft-deleted task's.
+      {:ok, router_pid} = TaskRouterSupervisor.start_assignment(paused_task.id, fake_assignee)
+      assert TaskRouterWatcher.router_running?(paused_task.id) == true
+      assert TaskRouterWatcher.router_running?(sibling_task.id) == false
+
+      watcher_pid = Process.whereis(TaskRouterWatcher)
+      send(watcher_pid, :reconcile)
+      TaskRouterWatcher.sync()
+
+      assert_router_stopped(router_pid, paused_task.id)
+      assert TaskRouterWatcher.router_running?(paused_task.id) == false
+
+      # The sibling's assignee id is not a real agent, so resolve_and_start
+      # fails to START its router; the query path is what this test pins,
+      # asserted above through list_should_run_tasks/0. What must hold here
+      # is that the sweep never touched the paused task's project state.
+      assert Tasks.get_project(paused_task.project_id).dispatch_paused == true
+    end
+
+    # The broadcast path (evaluate_task/1 -> should_run?/1), with a REAL
+    # linked agent so that, without the dispatch_paused clause, a router
+    # would start — the sibling proves the fixture can start one.
+    test "a :task_updated broadcast for a paused-project task starts no router",
+         %{paused_task: paused_task, sibling_task: sibling_task} do
+      user = create_user()
+      agent = create_agent()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "watcher-paused-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, activated, _raw_token} = Federation.activate_runtime(runtime)
+      {:ok, _linked_agent} = Federation.link_agent(activated, agent)
+
+      # Direct Repo writes: no `:task_updated` broadcast, so the sends below
+      # are the only events the watcher sees for these two rows.
+      Repo.update_all(
+        from(t in Platform.Tasks.Task, where: t.id in ^[paused_task.id, sibling_task.id]),
+        set: [assignee_id: agent.id]
+      )
+
+      paused_row = Repo.get!(Platform.Tasks.Task, paused_task.id)
+      sibling_row = Repo.get!(Platform.Tasks.Task, sibling_task.id)
+      assert TaskRouterWatcher.router_running?(paused_task.id) == false
+
+      watcher_pid = Process.whereis(TaskRouterWatcher)
+      send(watcher_pid, {:task_updated, paused_row})
+      send(watcher_pid, {:task_updated, sibling_row})
+      TaskRouterWatcher.sync()
+
+      assert TaskRouterWatcher.router_running?(sibling_task.id) == true,
+             "fixture cannot start a router at all — the paused assertion below would be vacuous"
+
+      assert TaskRouterWatcher.router_running?(paused_task.id) == false
+
+      # Inline, like every other real-runtime router in this file: a router
+      # left for `on_exit` outlives the sandbox owner, crashes on its dead
+      # connection and can trip TaskRouterSupervisor's restart intensity —
+      # which takes the NEXT test's router down with it.
+      TaskRouterSupervisor.stop_assignment(sibling_task.id)
+    end
+
+    test "unpausing the project makes its task eligible again on the next reconcile",
+         %{paused_project: paused_project, paused_task: paused_task} do
+      refute paused_task.id in Enum.map(TaskRouterWatcher.list_should_run_tasks(), & &1.id)
+
+      {:ok, _} = Tasks.update_project(paused_project, %{dispatch_paused: false})
+
+      assert paused_task.id in Enum.map(TaskRouterWatcher.list_should_run_tasks(), & &1.id)
+    end
+  end
+
   # ── should_run?/1 as the cascade invariant (01a05394 stage 6) ─────────
   #
   # `Stacks.dispatchable_planning_assignee?/2` (stage 1) mirrors this

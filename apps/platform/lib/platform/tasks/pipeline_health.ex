@@ -57,8 +57,14 @@ defmodule Platform.Tasks.PipelineHealth do
 
   import Ecto.Query
 
+  alias Platform.Agents.Agent
   alias Platform.Repo
   alias Platform.Tasks.{PhaseTransition, PhaseTransitions, Task}
+
+  # `payload->>'reported_by'` when the tool surface had no agent in its
+  # context (`Map.get(context, :agent_id) || "agent"` in ToolSurface). Such a
+  # blocker is real and is shown as its own row rather than dropped.
+  @unattributed "unattributed"
 
   # The status phases, in pipeline order. `awaiting_plan_approval` and
   # `awaiting_manual_approval` are NOT statuses — they are sub-phase waits
@@ -270,6 +276,58 @@ defmodule Platform.Tasks.PipelineHealth do
     }
   end
 
+  @doc """
+  Per-agent completions and blockers across the window, sorted by
+  completions descending and then by agent name.
+
+  Each entry is `%{agent_id, agent_name, completions, blockers_needs_human,
+  blockers_no_human, blockers_per_completion}`.
+
+  Completions count ALL tasks that reached `done` in the window — the
+  `done_task_ids/1` cohort, not the decomposable subset — because attributing
+  a completion to an agent needs no phase decomposition. Attribution reads
+  the task's CURRENT `phase_assignees["execution"]` (agent-typed only):
+  `task_phase_transitions` records no assignee, so this is a present-tense
+  read of who holds the execution slot today, not a reconstruction of who
+  held it at the transition. A task whose execution slot is unset or
+  user-typed is in nobody's row.
+
+  Blockers are `execution.blocked` runtime events whose `occurred_at` falls
+  in the window, grouped by `payload->>'reported_by'` and split on
+  `payload->>'needs_human'`. A `reported_by` that is not an agent id (the
+  tool surface writes the literal `"agent"` when its context has no
+  agent) is reported under the `"unattributed"` row, never dropped.
+
+  `blockers_per_completion` is `nil` when there are no completions — an
+  absence, never `0.0`. An agent with blockers and no completions appears
+  with `completions: 0` and a nil ratio.
+  """
+  def agent_activity(window) do
+    completions = completions_by_agent(done_task_ids(window))
+    blockers = blockers_by_agent(window)
+
+    ids = Enum.uniq(Map.keys(completions) ++ Map.keys(blockers))
+    names = agent_names(ids)
+
+    ids
+    |> Enum.map(fn id ->
+      done = Map.get(completions, id, 0)
+
+      %{needs_human: needs_human, no_human: no_human} =
+        Map.get(blockers, id, %{needs_human: 0, no_human: 0})
+
+      %{
+        agent_id: id,
+        agent_name: Map.get(names, id, fallback_name(id)),
+        completions: done,
+        blockers_needs_human: needs_human,
+        blockers_no_human: no_human,
+        blockers_per_completion: ratio(needs_human + no_human, done)
+      }
+    end)
+    |> Enum.sort_by(&{-&1.completions, &1.agent_name})
+  end
+
   # --- cohort -------------------------------------------------------------
 
   defp done_task_ids(%{since: since, until: until}) do
@@ -425,6 +483,78 @@ defmodule Platform.Tasks.PipelineHealth do
     |> Repo.all()
     |> Enum.map(&DateTime.to_date/1)
   end
+
+  # --- agent activity -----------------------------------------------------
+
+  defp completions_by_agent([]), do: %{}
+
+  defp completions_by_agent(ids) do
+    sql = """
+    SELECT
+      t.phase_assignees->'execution'->>'assignee_id' AS agent_id,
+      count(*) AS completions
+    FROM tasks t
+    WHERE t.id = ANY($1::uuid[])
+      AND t.phase_assignees->'execution'->>'assignee_type' = 'agent'
+      AND t.phase_assignees->'execution'->>'assignee_id' IS NOT NULL
+    GROUP BY 1
+    """
+
+    %{rows: rows} = Repo.query!(sql, [uuids(ids)])
+
+    Map.new(rows, fn [agent_id, completions] -> {agent_id, completions} end)
+  end
+
+  defp blockers_by_agent(%{since: since, until: until}) do
+    sql = """
+    SELECT
+      e.payload->>'reported_by' AS reported_by,
+      count(*) FILTER (WHERE e.payload->>'needs_human' = 'true') AS needs_human,
+      count(*) FILTER (WHERE e.payload->>'needs_human' IS DISTINCT FROM 'true') AS no_human
+    FROM runtime_events e
+    WHERE e.event_type = 'execution.blocked'
+      AND e.occurred_at >= $1
+      AND e.occurred_at < $2
+    GROUP BY 1
+    """
+
+    %{rows: rows} = Repo.query!(sql, [since, until])
+
+    Enum.reduce(rows, %{}, fn [reported_by, needs_human, no_human], acc ->
+      Map.update(
+        acc,
+        attribution_key(reported_by),
+        %{needs_human: needs_human, no_human: no_human},
+        &%{needs_human: &1.needs_human + needs_human, no_human: &1.no_human + no_human}
+      )
+    end)
+  end
+
+  # Anything that is not an agent id collapses into the one unattributed row.
+  defp attribution_key(value) do
+    if is_binary(value) and Platform.UUID.valid?(value), do: value, else: @unattributed
+  end
+
+  defp agent_names(ids) do
+    case Enum.filter(ids, &Platform.UUID.valid?/1) do
+      [] ->
+        %{}
+
+      valid ->
+        Agent
+        |> where([a], a.id in ^valid)
+        |> select([a], {a.id, a.name})
+        |> Repo.all()
+        |> Map.new()
+    end
+  end
+
+  defp fallback_name(@unattributed), do: @unattributed
+  defp fallback_name(id), do: String.slice(id, 0, 8)
+
+  # `nil`, not `0.0`: no completions means the ratio has no denominator.
+  defp ratio(_blockers, 0), do: nil
+  defp ratio(blockers, completions), do: blockers / completions
 
   # --- shared -------------------------------------------------------------
 

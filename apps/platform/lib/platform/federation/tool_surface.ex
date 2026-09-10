@@ -1533,14 +1533,26 @@ defmodule Platform.Federation.ToolSurface do
               "Answer the once-per-project brand escalation (ADR 0046). One of: " <>
                 Enum.join(Brand.recordable_modes(), " | ") <>
                 ". Recorded at config.brand_decision. Brand sets how strictly design is enforced, never whether work proceeds — a project with no brand is advisory, not blocked."
+          },
+          dispatch_paused: %{
+            type: "boolean",
+            required: false,
+            description:
+              "Pause (true) or resume (false) dispatch for every task in the project. While paused, the TaskRouterWatcher starts no TaskRouter for the project's tasks whatever their status or assignee, and stops any that are running on its next reconcile; tasks can still be created, assigned and moved to planning. The Process project ships paused."
+          },
+          plan_auto_approve: %{
+            type: "object",
+            required: false,
+            description:
+              "Project-wide plan auto-approval policy, recorded at config.plan_auto_approve and merged over the project's other config keys. Shape: {enabled: boolean, max_stages: positive integer, allow_manual_approval?: boolean (default false)}. When enabled, a submitted plan in this project with at most max_stages implementation stages (the auto-injected deploy stage does not count) and — unless allow_manual_approval — no manual_approval validation is auto-approved as if the task carried auto_approve_plan, with plans.approved_by = \"system:project_policy\". The policy only arms the path: the execution/review agent-assignee precondition and the ADR-0046 architecture gate still apply. A malformed policy is refused and nothing is written."
           }
         },
         returns:
-          "The updated project object, including brand_decision when one is recorded on the project",
+          "The updated project object, including dispatch_paused, brand_decision when one is recorded on the project and plan_auto_approve when a policy is set",
         limitations:
-          "deploy_config.default_strategy is validated; unknown strategy types are rejected. `config` is NOT writable through this tool — only the named brand_decision enum reaches it, because Project.changeset/2 does not validate config's shape and a malformed brand_decision is read as no decision at all.",
+          "deploy_config.default_strategy is validated; unknown strategy types are rejected. `config` is NOT writable through this tool — only the named brand_decision enum and the named plan_auto_approve object reach it (each validated by Project.changeset/2 or Brand), because a blanket config write would let a malformed brand_decision land, which is read as no decision at all.",
         when_to_use:
-          "When you need to set a project-level default deploy strategy, answer the brand-direction question posted to a task's execution space, or update other project fields"
+          "When you need to set a project-level default deploy strategy, pause or resume dispatch for a whole project, set or change the project's plan auto-approval policy, answer the brand-direction question posted to a task's execution space, or update other project fields"
       },
       %{
         name: "epic_list",
@@ -3149,7 +3161,17 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "report_blocker",
         description:
-          "Report a blocker for the current task stage. Records a structured execution.blocked event so the router can stop treating silence as liveness.",
+          "Report a blocker for the current task stage. Records a structured execution.blocked " <>
+            "event so the router can stop treating silence as liveness. A blocker is EXPENSIVE: " <>
+            "it is filed only after three distinct attempts to get past the problem, a read of " <>
+            "org memory for prior art, and a named smallest action that would unblock you plus " <>
+            "who performs it. All of those are required params and the call is refused (nothing " <>
+            "recorded) when any is missing or short. `category` is one of `infra` (moon, " <>
+            "containers, deps, ssh, CI runners), `product` (the feature cannot be built as " <>
+            "specified) or `decision` (a person must choose between named options). Infra " <>
+            "blockers are the infra agent's job: `category: \"infra\"` with `needs_human: true` " <>
+            "is refused; post the exact error to @[Dalton] in the execution space instead and " <>
+            "keep working on what does not depend on it.",
         parameters: %{
           task_id: %{type: "string", required: true, description: "The task ID"},
           stage_id: %{type: "string", required: true, description: "The current stage ID"},
@@ -3161,13 +3183,46 @@ defmodule Platform.Federation.ToolSurface do
           needs_human: %{
             type: "boolean",
             required: false,
-            description: "Whether the blocker requires human intervention"
+            description:
+              "Whether the blocker requires human intervention. Refused together with category infra."
+          },
+          attempts: %{
+            type: "array",
+            items: %{type: "string"},
+            required: true,
+            description:
+              "At least three DISTINCT things you already tried, one per string, each with its outcome " <>
+                "(e.g. \"re-ran with --trace: same failure\"). Blank or duplicate entries do not count."
+          },
+          memory_ref: %{
+            type: "string",
+            required: true,
+            description:
+              "Path of the org-memory page or journal you read looking for prior art (memory_search / memory_view), e.g. `org/page/identity.md`."
+          },
+          unblock_action: %{
+            type: "string",
+            required: true,
+            description:
+              "The smallest single action that would unblock you AND who performs it, e.g. \"Rowan picks option A or B\"."
+          },
+          category: %{
+            type: "string",
+            required: true,
+            enum: ["infra", "product", "decision"],
+            description: "One of infra | product | decision (see the tool description)."
           }
         },
         returns: "Structured blocker acknowledgement with event ID and escalation hint",
-        limitations: "Requires task_id and stage_id from the current execution context.",
+        limitations:
+          "Requires task_id and stage_id from the current execution context. Refused (nothing " <>
+            "recorded, error lists every missing or short field) when attempts has fewer than three " <>
+            "distinct non-blank entries, memory_ref or unblock_action is blank, or category is not " <>
+            "infra | product | decision. Refused when category is infra and needs_human is true.",
         when_to_use:
-          "When you cannot proceed and need the orchestrator to pause silence-based escalation"
+          "When you cannot proceed after three distinct attempts and an org-memory read, and you " <>
+            "can name the smallest unblock action and who performs it. Not for infra problems: " <>
+            "those go to @[Dalton] in the execution space while you continue."
       },
       %{
         name: "validation_list",
@@ -4012,9 +4067,10 @@ defmodule Platform.Federation.ToolSurface do
         # enum param cannot do that.
         update_attrs =
           args
-          |> Map.take(["name", "repo_url", "default_branch", "deploy_config"])
+          |> Map.take(["name", "repo_url", "default_branch", "deploy_config", "dispatch_paused"])
           |> Map.reject(fn {_k, v} -> is_nil(v) end)
           |> Enum.into(%{}, fn {k, v} -> {String.to_existing_atom(k), v} end)
+          |> put_plan_auto_approve(project, Map.get(args, "plan_auto_approve"))
 
         with {:ok, updated} <- Tasks.update_project(project, update_attrs),
              {:ok, updated} <-
@@ -4027,7 +4083,9 @@ defmodule Platform.Federation.ToolSurface do
              repo_url: updated.repo_url,
              default_branch: updated.default_branch,
              deploy_config: updated.deploy_config,
-             brand_decision: brand_decision_of(updated)
+             dispatch_paused: updated.dispatch_paused,
+             brand_decision: brand_decision_of(updated),
+             plan_auto_approve: Map.get(updated.config || %{}, "plan_auto_approve")
            }}
         else
           {:error, :invalid_brand_decision} ->
@@ -4047,7 +4105,7 @@ defmodule Platform.Federation.ToolSurface do
                error: "Failed to update project: #{inspect_errors_safe(changeset)}",
                recoverable: true,
                suggestion:
-                 "Check that deploy_config.default_strategy uses a valid strategy type (none, pr_merge, docker_deploy, fly, skill_driven, manual, project_files)"
+                 "Check that deploy_config.default_strategy uses a valid strategy type (none, pr_merge, docker_deploy, fly, skill_driven, manual, project_files) and that plan_auto_approve is {enabled: boolean, max_stages: positive integer, allow_manual_approval?: boolean}"
              }}
         end
     end
@@ -6623,46 +6681,9 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("report_blocker", args, context) do
-    task_id = Map.get(args, "task_id")
-    stage_id = Map.get(args, "stage_id")
-    description = Map.get(args, "description")
-    needs_human = Map.get(args, "needs_human", false)
-
-    attrs = %{
-      "task_id" => task_id,
-      "phase" => current_phase_for_blocker(task_id),
-      "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
-      "event_type" => "execution.blocked",
-      "execution_space_id" => execution_space_id_for_task(task_id),
-      "payload" => %{
-        "stage_id" => stage_id,
-        "description" => description,
-        "needs_human" => needs_human,
-        "reported_by" => Map.get(context, :agent_id) || "agent"
-      }
-    }
-
-    case Platform.Orchestration.record_runtime_event(attrs) do
-      {:ok, event} ->
-        if needs_human do
-          if space_id = execution_space_id_for_task(task_id) do
-            Platform.Orchestration.ExecutionSpace.post_engagement(
-              space_id,
-              "Blocker reported: #{description}",
-              metadata: %{"reason" => "runtime_blocker", "stage_id" => stage_id}
-            )
-          end
-        end
-
-        {:ok, %{event_id: event.id, task_id: task_id, stage_id: stage_id, blocked: true}}
-
-      {:error, reason} ->
-        {:error,
-         %{
-           error: "Failed to record blocker: #{inspect(reason)}",
-           recoverable: true,
-           suggestion: "Retry the blocker report or post the blocker in the execution space"
-         }}
+    with :ok <- validate_blocker_args(args),
+         :ok <- refuse_infra_needs_human(args) do
+      record_blocker(args, context)
     end
   end
 
@@ -12831,6 +12852,120 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
+  @blocker_categories ["infra", "product", "decision"]
+  @blocker_min_attempts 3
+
+  # A blocker is expensive on purpose: the cost is paid up front (three
+  # distinct attempts, an org-memory read, a named unblock action) so the
+  # human who reads the notice never has to ask "what did you try?". The
+  # error names EVERY missing or short field, because the reader is an agent
+  # that will refile from the message alone.
+  defp validate_blocker_args(args) do
+    attempts = Map.get(args, "attempts")
+
+    distinct_attempts =
+      if is_list(attempts) do
+        attempts
+        |> Enum.filter(&non_blank_string?/1)
+        |> Enum.map(&String.trim/1)
+        |> Enum.uniq()
+      else
+        []
+      end
+
+    missing =
+      [
+        {"attempts (need #{@blocker_min_attempts} distinct non-blank strings)",
+         length(distinct_attempts) < @blocker_min_attempts},
+        {"memory_ref", not non_blank_string?(Map.get(args, "memory_ref"))},
+        {"unblock_action", not non_blank_string?(Map.get(args, "unblock_action"))},
+        {"category (one of #{Enum.join(@blocker_categories, "|")})",
+         Map.get(args, "category") not in @blocker_categories}
+      ]
+      |> Enum.filter(fn {_name, bad?} -> bad? end)
+      |> Enum.map(fn {name, _} -> name end)
+
+    case missing do
+      [] ->
+        :ok
+
+      missing ->
+        {:error,
+         %{
+           error: "report_blocker refused, missing or short: " <> Enum.join(missing, ", "),
+           recoverable: true,
+           suggestion:
+             "Try three distinct things, read org memory, name the smallest unblock action and who performs it, then refile."
+         }}
+    end
+  end
+
+  defp refuse_infra_needs_human(args) do
+    if Map.get(args, "category") == "infra" and truthy?(Map.get(args, "needs_human", false)) do
+      {:error,
+       %{
+         error:
+           "report_blocker refused: infra blockers are the infra agent's job, not a human's. " <>
+             "Post the exact error to @[Dalton] in the execution space and continue.",
+         recoverable: true,
+         suggestion:
+           "Post the exact command and error with suite_reply in the execution space mentioning @[Dalton], keep working on what does not depend on it, or refile with needs_human: false."
+       }}
+    else
+      :ok
+    end
+  end
+
+  defp non_blank_string?(value), do: is_binary(value) and String.trim(value) != ""
+
+  defp record_blocker(args, context) do
+    task_id = Map.get(args, "task_id")
+    stage_id = Map.get(args, "stage_id")
+    description = Map.get(args, "description")
+    needs_human = Map.get(args, "needs_human", false)
+
+    attrs = %{
+      "task_id" => task_id,
+      "phase" => current_phase_for_blocker(task_id),
+      "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
+      "event_type" => "execution.blocked",
+      "execution_space_id" => execution_space_id_for_task(task_id),
+      "payload" => %{
+        "stage_id" => stage_id,
+        "description" => description,
+        "needs_human" => needs_human,
+        "reported_by" => Map.get(context, :agent_id) || "agent",
+        "attempts" => Map.get(args, "attempts"),
+        "memory_ref" => Map.get(args, "memory_ref"),
+        "unblock_action" => Map.get(args, "unblock_action"),
+        "category" => Map.get(args, "category")
+      }
+    }
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, event} ->
+        if needs_human do
+          if space_id = execution_space_id_for_task(task_id) do
+            Platform.Orchestration.ExecutionSpace.post_engagement(
+              space_id,
+              "Blocker reported: #{description}",
+              metadata: %{"reason" => "runtime_blocker", "stage_id" => stage_id}
+            )
+          end
+        end
+
+        {:ok, %{event_id: event.id, task_id: task_id, stage_id: stage_id, blocked: true}}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to record blocker: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Retry the blocker report or post the blocker in the execution space"
+         }}
+    end
+  end
+
   defp current_phase_for_blocker(task_id) do
     case Platform.Tasks.current_plan(task_id) do
       %{stages: stages} ->
@@ -13038,6 +13173,18 @@ defmodule Platform.Federation.ToolSurface do
 
   defp recorded_by(context) when is_map(context), do: Map.get(context, :agent_id)
   defp recorded_by(_), do: nil
+
+  # `plan_auto_approve` is the second named key (after `brand_decision`)
+  # that reaches `config` through `project_update`. It is merged OVER the
+  # existing config so unrelated keys (brand_decision, lifecycle_pipeline)
+  # survive; `Project.changeset/2` validates its shape and refuses the
+  # whole update on a malformed value. Non-map values are passed through
+  # so the changeset reports them rather than a `Map.merge` crash.
+  defp put_plan_auto_approve(update_attrs, _project, nil), do: update_attrs
+
+  defp put_plan_auto_approve(update_attrs, project, policy) do
+    Map.put(update_attrs, :config, Map.put(project.config || %{}, "plan_auto_approve", policy))
+  end
 
   defp brand_decision_of(%{config: config}) when is_map(config),
     do: Map.get(config, "brand_decision")

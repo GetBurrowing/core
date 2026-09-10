@@ -62,6 +62,29 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
     assert lease.block_reason == "waiting on human"
   end
 
+  test "record_event/1 folds attempts and unblock_action into the lease block_reason" do
+    task = create_task!()
+
+    assert {:ok, _blocked} =
+             RuntimeSupervision.record_event(%{
+               "task_id" => task.id,
+               "phase" => "execution",
+               "runtime_id" => "runtime:test",
+               "event_type" => "execution.blocked",
+               "payload" => %{
+                 "description" => "migration fails",
+                 "attempts" => ["ran mix test", "read the ADR", "reset the DB"],
+                 "unblock_action" => "Rowan picks A or B"
+               }
+             })
+
+    lease = RuntimeSupervision.current_lease_for_task(task.id)
+    assert lease.status == "blocked"
+
+    assert lease.block_reason ==
+             "migration fails | tried: ran mix test; read the ADR; reset the DB | unblock: Rowan picks A or B"
+  end
+
   test "record_event/1 is idempotent by idempotency_key" do
     task = create_task!()
 

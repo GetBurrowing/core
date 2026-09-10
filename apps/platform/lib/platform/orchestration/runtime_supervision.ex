@@ -437,9 +437,29 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
   defp progress_at(_event_type, _occurred_at), do: nil
 
+  # The lease's block_reason is the ONLY text the awaiting-human notice in
+  # TaskRouter renders, so the cost the executor paid (attempts, unblock
+  # action) is folded in here; the human reads it without opening anything.
   defp block_reason("blocked", attrs) do
-    attrs.payload["description"] || attrs.payload[:description] || attrs.payload["block_reason"] ||
-      attrs.payload[:block_reason]
+    payload = attrs.payload || %{}
+
+    base =
+      payload["description"] || payload[:description] || payload["block_reason"] ||
+        payload[:block_reason]
+
+    attempts = payload["attempts"] || payload[:attempts]
+    unblock = payload["unblock_action"] || payload[:unblock_action]
+
+    [
+      base,
+      if(is_list(attempts) and attempts != [], do: "tried: " <> Enum.join(attempts, "; ")),
+      if(is_binary(unblock) and unblock != "", do: "unblock: " <> unblock)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, " | ")
+    end
   end
 
   defp block_reason(_status, _attrs), do: nil

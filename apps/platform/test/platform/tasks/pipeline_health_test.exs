@@ -18,6 +18,8 @@ defmodule Platform.Tasks.PipelineHealthTest do
 
   use Platform.DataCase
 
+  alias Platform.Agents.Agent
+  alias Platform.Orchestration.RuntimeEvent
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{PhaseTransition, PipelineHealth}
@@ -304,6 +306,154 @@ defmodule Platform.Tasks.PipelineHealthTest do
                series: [],
                best_day: 0
              }
+    end
+  end
+
+  # --- agent activity fixtures --------------------------------------------
+
+  defp agent(name) do
+    n = System.unique_integer([:positive])
+    Repo.insert!(%Agent{slug: "ph-#{n}", name: name, status: "active"})
+  end
+
+  # A done task whose CURRENT execution slot is held by `agent`. The window
+  # keys off `inserted_at`, exactly as `done_task/3` does.
+  defp done_task_for(project, agent, created_at) do
+    task = done_task(project, created_at, title: "Task for #{agent.name}")
+
+    {1, _} =
+      Platform.Tasks.Task
+      |> where([t], t.id == ^task.id)
+      |> Repo.update_all(
+        set: [
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+          }
+        ]
+      )
+
+    task
+  end
+
+  defp blocker(task, reported_by, needs_human, opts \\ []) do
+    Repo.insert!(%RuntimeEvent{
+      task_id: task.id,
+      phase: "execution",
+      runtime_id: "tool-surface",
+      event_type: Keyword.get(opts, :event_type, "execution.blocked"),
+      occurred_at: Keyword.get(opts, :occurred_at, at(10)),
+      idempotency_key: "blocker-#{System.unique_integer([:positive])}",
+      payload: %{
+        "description" => "stuck",
+        "needs_human" => needs_human,
+        "reported_by" => reported_by,
+        "stage_id" => Ecto.UUID.generate()
+      }
+    })
+  end
+
+  describe "agent_activity/1" do
+    test "counts completions and blockers per agent, sorted by completions then name", %{
+      project: project
+    } do
+      a = agent("Agent A")
+      b = agent("Agent B")
+      c = agent("Agent C")
+
+      a1 = done_task_for(project, a, at(3))
+      done_task_for(project, a, at(4))
+      b1 = done_task_for(project, b, at(5))
+
+      blocker(a1, a.id, true)
+      blocker(b1, b.id, true)
+      blocker(b1, b.id, false)
+      blocker(b1, c.id, false)
+
+      assert [
+               %{
+                 agent_id: a_id,
+                 agent_name: "Agent A",
+                 completions: 2,
+                 blockers_needs_human: 1,
+                 blockers_no_human: 0,
+                 blockers_per_completion: 0.5
+               },
+               %{
+                 agent_id: b_id,
+                 agent_name: "Agent B",
+                 completions: 1,
+                 blockers_needs_human: 1,
+                 blockers_no_human: 1,
+                 blockers_per_completion: 2.0
+               },
+               %{
+                 agent_id: c_id,
+                 agent_name: "Agent C",
+                 completions: 0,
+                 blockers_needs_human: 0,
+                 blockers_no_human: 1,
+                 blockers_per_completion: nil
+               }
+             ] = PipelineHealth.agent_activity(@window)
+
+      assert {a_id, b_id, c_id} == {a.id, b.id, c.id}
+    end
+
+    test "a done task outside the window and a non-blocked event are not counted", %{
+      project: project
+    } do
+      a = agent("Agent A")
+
+      inside = done_task_for(project, a, at(3))
+      done_task_for(project, a, DateTime.add(@until, 86_400, :second))
+
+      blocker(inside, a.id, true)
+      blocker(inside, a.id, true, event_type: "execution.progress")
+      blocker(inside, a.id, false, occurred_at: DateTime.add(@since, -1, :second))
+
+      assert [
+               %{
+                 completions: 1,
+                 blockers_needs_human: 1,
+                 blockers_no_human: 0,
+                 blockers_per_completion: 1.0
+               }
+             ] = PipelineHealth.agent_activity(@window)
+    end
+
+    test "a done task without an agent execution assignee is in nobody's row", %{
+      project: project
+    } do
+      done_task(project, at(3))
+      assert PipelineHealth.agent_activity(@window) == []
+    end
+
+    test "a blocker whose reported_by is not an agent id lands in the unattributed row", %{
+      project: project
+    } do
+      a = agent("Agent A")
+      task = done_task_for(project, a, at(3))
+      blocker(task, "agent", false)
+
+      assert [
+               %{agent_name: "Agent A", completions: 1, blockers_no_human: 0},
+               %{
+                 agent_id: "unattributed",
+                 agent_name: "unattributed",
+                 completions: 0,
+                 blockers_no_human: 1,
+                 blockers_per_completion: nil
+               }
+             ] = PipelineHealth.agent_activity(@window)
+    end
+
+    test "an unknown agent id falls back to its first eight characters", %{project: project} do
+      ghost = Ecto.UUID.generate()
+      task = done_task(project, at(3))
+      blocker(task, ghost, true)
+
+      assert [%{agent_id: ^ghost, agent_name: name}] = PipelineHealth.agent_activity(@window)
+      assert name == String.slice(ghost, 0, 8)
     end
   end
 

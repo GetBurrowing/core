@@ -141,7 +141,15 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # that refuses every non-binary, including absence. Neither is tolerated
   # absent, and neither may be: a declaration with no meeting has no rail to
   # appear on, and one with no state is not a declaration.
-  @surveyed_required_count 146
+  # 150 with `report_blocker`'s `attempts` + `memory_ref` + `unblock_action` +
+  # `category` (task 01a08c1e stage 1). All four HONEST. Each is read under
+  # its declared key only and checked by `validate_blocker_args/1` before
+  # `record_runtime_event/1`: fewer than three distinct non-blank attempts, a
+  # blank memory_ref or unblock_action, or a category outside
+  # infra|product|decision is a recoverable refusal naming every missing
+  # field, with nothing written. None is tolerated absent, and none may be:
+  # a blocker is expensive by design, and the cost IS these four fields.
+  @surveyed_required_count 150
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

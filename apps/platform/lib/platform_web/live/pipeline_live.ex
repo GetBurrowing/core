@@ -110,6 +110,7 @@ defmodule PlatformWeb.PipelineLive do
     |> assign(:breakdown, breakdown)
     |> assign(:distribution, PipelineHealth.cycle_time_distribution(window))
     |> assign(:throughput, PipelineHealth.throughput(window))
+    |> assign(:agent_activity, PipelineHealth.agent_activity(window))
     |> assign(:sparse?, cohort.decomposable < @distribution_floor)
   end
 
@@ -143,6 +144,11 @@ defmodule PlatformWeb.PipelineLive do
   end
 
   defp round1(x), do: :erlang.float_to_binary(Float.round(x * 1.0, 1), decimals: 1)
+
+  # Same convention as `duration/1`: a missing denominator prints as an
+  # absence, never as a zero.
+  defp ratio(nil), do: "—"
+  defp ratio(value) when is_number(value), do: round1(value)
 
   defp distribution_floor, do: @distribution_floor
 
@@ -543,6 +549,52 @@ defmodule PlatformWeb.PipelineLive do
           <p class="text-xs text-neutral">
             Days with no completions are shown in the series and excluded from the divisor, so the
             rate is the pace the pipeline ran at rather than an average over idle days.
+          </p>
+        </section>
+
+        <section
+          id="agent-activity"
+          class="bg-base-200 rounded-lg overflow-x-auto shrink-0 lg:col-span-2"
+        >
+          <h2 class="text-sm font-semibold uppercase tracking-wider p-4 pb-2">
+            Agent activity
+          </h2>
+
+          <table :if={@agent_activity != []} class="table table-sm w-full">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th class="text-right">Done</th>
+                <th class="text-right">Blockers (human)</th>
+                <th class="text-right">Blockers (no human)</th>
+                <th class="text-right">Blockers per done</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={row <- @agent_activity} id={"agent-row-#{row.agent_id}"}>
+                <td class="whitespace-nowrap">{row.agent_name}</td>
+                <td class="text-right font-mono" data-role="completions">{row.completions}</td>
+                <td class="text-right font-mono" data-role="blockers-needs-human">
+                  {row.blockers_needs_human}
+                </td>
+                <td class="text-right font-mono" data-role="blockers-no-human">
+                  {row.blockers_no_human}
+                </td>
+                <td class="text-right font-mono" data-role="ratio">
+                  {ratio(row.blockers_per_completion)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <p :if={@agent_activity == []} class="text-sm text-base-content px-4 pb-4">
+            No agent activity in this window.
+          </p>
+
+          <p class="text-xs text-neutral px-4 pb-4">
+            Done counts every task completed in the window, attributed to its current execution
+            assignee. Blockers are the runtime events filed with report_blocker. An agent with
+            no completions has no ratio.
           </p>
         </section>
       </div>

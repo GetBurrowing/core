@@ -542,6 +542,8 @@ defmodule Platform.Tasks do
     * `{:ok, task}` when the transition writer refused; a warning is
       logged with the reason.
   """
+  # A task in a `dispatch_paused` project may still land in `planning` here;
+  # the watcher consults the project and starts no router, so nothing fires.
   @spec maybe_start_planning_on_create(Task.t()) :: {:ok, Task.t()}
   def maybe_start_planning_on_create(
         %Task{
@@ -3160,12 +3162,12 @@ defmodule Platform.Tasks do
   # without a mutation storm across member tasks.
   defp maybe_auto_approve(%Plan{} = plan) do
     task = plan.task_id |> then(&Repo.get!(Task, &1)) |> Repo.preload(:stack)
-    via = auto_approve_via(task)
+    via = auto_approve_via(task, plan)
 
     if via do
       case auto_approve_precondition(task, plan) do
         :ok ->
-          case approve_plan(plan, "system:auto", auto: true) do
+          case approve_plan(plan, auto_approver_for(via), auto: true) do
             {:ok, approved_plan} ->
               :telemetry.execute(
                 [:platform, :plan, :auto_approved],
@@ -3225,14 +3227,68 @@ defmodule Platform.Tasks do
   # decline, and would log a skip on every reconcile tick forever.
   #
   # `task` must arrive with `:stack` preloaded — both callers do it.
-  @spec auto_approve_via(%Task{}) :: :task | :stack | nil
-  defp auto_approve_via(%Task{} = task) do
+  #
+  # Task 01a08c1e stage 2 added the third arm, `:project_policy`: the
+  # project's `config["plan_auto_approve"]` (validated by
+  # `Project.changeset/2`) arms the path for a plan that FITS the policy —
+  # at most `max_stages` implementation stages and, unless
+  # `allow_manual_approval`, no `manual_approval` gate. The policy only
+  # ARMS; `auto_approve_precondition/2` and the ADR-0046 architecture gate
+  # are untouched. Because the answer now depends on the plan's shape, the
+  # function takes the plan too.
+  @spec auto_approve_via(%Task{}, %Plan{}) :: :task | :stack | :project_policy | nil
+  defp auto_approve_via(%Task{} = task, %Plan{} = plan) do
     cond do
       task.auto_approve_plan -> :task
       task.stack && task.stack.auto_accept_plan -> :stack
+      project_policy_fits?(task, plan) -> :project_policy
       true -> nil
     end
   end
+
+  # The string that lands in `plans.approved_by` (the existing audit
+  # field). `human_approver/1` returns nil for both, exactly as it does for
+  # every non-user id, so neither records an architecture human override.
+  defp auto_approver_for(:project_policy), do: "system:project_policy"
+  defp auto_approver_for(_via), do: "system:auto"
+
+  defp project_policy_fits?(%Task{project_id: nil}, _plan), do: false
+
+  defp project_policy_fits?(%Task{project_id: project_id}, %Plan{} = plan) do
+    policy =
+      case Repo.get(Project, project_id) do
+        %Project{config: %{"plan_auto_approve" => %{} = policy}} -> policy
+        _ -> nil
+      end
+
+    with %{"enabled" => true, "max_stages" => max_stages} when is_integer(max_stages) <- policy do
+      stages = implementation_stages(plan)
+
+      length(stages) <= max_stages and
+        (Map.get(policy, "allow_manual_approval", false) == true or
+           not Enum.any?(stages, &manual_approval_gated?/1))
+    else
+      _ -> false
+    end
+  end
+
+  # "Implementation stages": the plan's stages minus the auto-injected
+  # deploy stage (name starts with `deploy:`), whose own gate is not the
+  # planner's work and must not count against `max_stages`.
+  defp implementation_stages(%Plan{} = plan) do
+    plan
+    |> plan_stages()
+    |> Repo.preload(:validations)
+    |> Enum.reject(fn stage ->
+      String.starts_with?(String.downcase(stage.name || ""), "deploy:")
+    end)
+  end
+
+  defp manual_approval_gated?(%Stage{validations: validations}) when is_list(validations) do
+    Enum.any?(validations, &(&1.kind == "manual_approval"))
+  end
+
+  defp manual_approval_gated?(_stage), do: false
 
   # ── ADR-0046 member 5: the architecture gate ────────────────────────
   #
@@ -3818,7 +3874,7 @@ defmodule Platform.Tasks do
     with {:gate, {:resolved, %{"state" => state}}} <- {:gate, architecture_gate(plan.id)},
          {:retryable, true, _state} <- {:retryable, state in @retry_auto_approval_states, state},
          task = plan.task_id |> then(&Repo.get!(Task, &1)) |> Repo.preload(:stack),
-         {:armed, via} when not is_nil(via) <- {:armed, auto_approve_via(task)},
+         {:armed, via} when not is_nil(via) <- {:armed, auto_approve_via(task, plan)},
          {:precondition, :ok} <- {:precondition, auto_approve_precondition(task, plan)} do
       run_lost_deferred_tail(plan)
     else

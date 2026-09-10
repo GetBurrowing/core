@@ -109,6 +109,25 @@ defmodule Platform.Tasks.ProjectTest do
     end
   end
 
+  # ── dispatch_paused (task 01a08c1e stage 3) ───────────────────────────
+
+  describe "dispatch_paused" do
+    test "defaults to false" do
+      assert {:ok, project} = Tasks.create_project(%{name: "Dispatching"})
+      assert project.dispatch_paused == false
+      assert Tasks.get_project(project.id).dispatch_paused == false
+    end
+
+    test "casts true on create and flips back on update" do
+      assert {:ok, project} = Tasks.create_project(%{name: "Paused", dispatch_paused: true})
+      assert project.dispatch_paused == true
+      assert Tasks.get_project(project.id).dispatch_paused == true
+
+      assert {:ok, resumed} = Tasks.update_project(project, %{dispatch_paused: false})
+      assert resumed.dispatch_paused == false
+    end
+  end
+
   describe "update_project/2" do
     test "updates project attributes" do
       {:ok, project} = Tasks.create_project(%{name: "Old Name"})
@@ -227,6 +246,104 @@ defmodule Platform.Tasks.ProjectTest do
 
       assert project.config == %{"some_other_feature" => %{"enabled" => true}}
       assert Platform.Lifecycle.resolve_pipeline(project) == %{}
+    end
+  end
+
+  # task 01a08c1e stage 2: project-level plan auto-approval policy.
+  describe "plan_auto_approve validation in the changeset" do
+    defp with_policy(policy), do: %{"plan_auto_approve" => policy}
+
+    test "a valid policy saves" do
+      assert {:ok, project} =
+               Tasks.create_project(%{
+                 name: "Policy Project",
+                 config: with_policy(%{"enabled" => true, "max_stages" => 5})
+               })
+
+      assert project.config["plan_auto_approve"] == %{"enabled" => true, "max_stages" => 5}
+    end
+
+    test "a policy with allow_manual_approval saves" do
+      assert {:ok, project} =
+               Tasks.create_project(%{
+                 name: "Policy Manual",
+                 config:
+                   with_policy(%{
+                     "enabled" => false,
+                     "max_stages" => 2,
+                     "allow_manual_approval" => true
+                   })
+               })
+
+      assert project.config["plan_auto_approve"]["allow_manual_approval"] == true
+    end
+
+    test "a non-integer max_stages is rejected on :config and NOT persisted" do
+      assert {:error, changeset} =
+               Tasks.create_project(%{
+                 name: "Bad Max",
+                 config: with_policy(%{"enabled" => true, "max_stages" => "five"})
+               })
+
+      assert %{config: [reason]} = errors_on(changeset)
+      assert reason =~ "max_stages must be a positive integer"
+      assert Tasks.list_projects_unscoped() |> Enum.all?(&(&1.name != "Bad Max"))
+    end
+
+    test "a zero max_stages is rejected" do
+      assert {:error, changeset} =
+               Tasks.create_project(%{
+                 name: "Zero Max",
+                 config: with_policy(%{"enabled" => true, "max_stages" => 0})
+               })
+
+      assert %{config: [reason]} = errors_on(changeset)
+      assert reason =~ "max_stages must be a positive integer"
+    end
+
+    test "a missing enabled is rejected" do
+      assert {:error, changeset} =
+               Tasks.create_project(%{
+                 name: "No Enabled",
+                 config: with_policy(%{"max_stages" => 3})
+               })
+
+      assert %{config: [reason]} = errors_on(changeset)
+      assert reason =~ "enabled must be a boolean"
+    end
+
+    test "a non-boolean allow_manual_approval is rejected" do
+      assert {:error, changeset} =
+               Tasks.create_project(%{
+                 name: "Bad Allow",
+                 config:
+                   with_policy(%{
+                     "enabled" => true,
+                     "max_stages" => 3,
+                     "allow_manual_approval" => "yes"
+                   })
+               })
+
+      assert %{config: [reason]} = errors_on(changeset)
+      assert reason =~ "allow_manual_approval must be a boolean"
+    end
+
+    test "a non-map plan_auto_approve is rejected" do
+      assert {:error, changeset} =
+               Tasks.create_project(%{name: "Not A Map Policy", config: with_policy(true)})
+
+      assert %{config: [reason]} = errors_on(changeset)
+      assert reason =~ "plan_auto_approve must be a map"
+    end
+
+    test "a project with unrelated config keys and no policy still saves" do
+      assert {:ok, project} =
+               Tasks.create_project(%{
+                 name: "Unrelated Config No Policy",
+                 config: %{"brand_decision" => "advisory"}
+               })
+
+      assert project.config == %{"brand_decision" => "advisory"}
     end
   end
 

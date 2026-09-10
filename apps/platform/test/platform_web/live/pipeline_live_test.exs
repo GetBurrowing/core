@@ -30,6 +30,8 @@ defmodule PlatformWeb.PipelineLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
+  alias Platform.Agents.Agent
+  alias Platform.Orchestration.RuntimeEvent
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.PhaseTransition
@@ -511,6 +513,92 @@ defmodule PlatformWeb.PipelineLiveTest do
       {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
 
       assert view |> element("#instrumentation-note") |> render() =~ "instrumented from"
+    end
+  end
+
+  # --- agent activity -----------------------------------------------------
+
+  defp agent(name) do
+    n = System.unique_integer([:positive])
+    Repo.insert!(%Agent{slug: "pl-#{n}", name: name, status: "active"})
+  end
+
+  defp done_task_for(project, agent, days_ago) do
+    task = done_task(project, at(days_ago), "Task for #{agent.name}")
+
+    {1, _} =
+      Tasks.Task
+      |> where([t], t.id == ^task.id)
+      |> Repo.update_all(
+        set: [
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+          }
+        ]
+      )
+
+    task
+  end
+
+  defp blocker(task, agent, needs_human) do
+    Repo.insert!(%RuntimeEvent{
+      task_id: task.id,
+      phase: "execution",
+      runtime_id: "tool-surface",
+      event_type: "execution.blocked",
+      occurred_at: at(2),
+      idempotency_key: "blocker-#{System.unique_integer([:positive])}",
+      payload: %{
+        "description" => "stuck",
+        "needs_human" => needs_human,
+        "reported_by" => agent.id
+      }
+    })
+  end
+
+  describe "agent activity" do
+    test "renders one row per agent with counts, and a dash for an agent with no completions",
+         %{conn: conn, project: project} do
+      a = agent("Agent A")
+      b = agent("Agent B")
+      c = agent("Agent C")
+
+      a1 = done_task_for(project, a, 3)
+      done_task_for(project, a, 4)
+      b1 = done_task_for(project, b, 5)
+      blocker(a1, a, true)
+      blocker(b1, b, true)
+      blocker(b1, b, false)
+      blocker(b1, c, false)
+
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
+
+      assert has_element?(view, "#agent-activity table")
+
+      row_a = view |> element("#agent-row-#{a.id}") |> render()
+      assert row_a =~ "Agent A"
+      assert row_a =~ ~r|data-role="completions">\s*2\s*<|
+      assert row_a =~ ~r|data-role="blockers-needs-human">\s*1\s*<|
+      assert row_a =~ ~r|data-role="ratio">\s*0\.5\s*<|
+
+      row_b = view |> element("#agent-row-#{b.id}") |> render()
+      assert row_b =~ ~r|data-role="ratio">\s*2\.0\s*<|
+
+      row_c = view |> element("#agent-row-#{c.id}") |> render()
+      assert row_c =~ ~r|data-role="completions">\s*0\s*<|
+      assert row_c =~ ~r|data-role="ratio">\s*—\s*<|
+      refute row_c =~ ~r|data-role="ratio">\s*0|
+
+      refute view |> element("#agent-activity") |> render() =~ "No agent activity"
+    end
+
+    test "an empty window says so and draws no table", %{conn: conn} do
+      {:ok, view, _html} = conn |> authenticated_conn() |> live("/admin/pipeline")
+
+      assert view |> element("#agent-activity") |> render() =~
+               "No agent activity in this window."
+
+      refute has_element?(view, "#agent-activity table")
     end
   end
 

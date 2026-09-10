@@ -38,9 +38,10 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   the end-of-test sandbox rollback does not undo any of it.
 
   A return-value check cannot enforce that. The stop branch of
-  `evaluate_task/1` performs **zero Repo calls**, so no Repo-derived
-  `:sandbox_unowned` signal ever reaches the code that terminates a router and
-  clears its lease. The guard therefore has to be a *precondition on handling
+  `evaluate_task/1` performs **zero Repo calls** (the only Repo work ahead of
+  it is the `:project` preload at the top of `evaluate_task/1`, a no-op for
+  an already-loaded association), so no Repo-derived `:sandbox_unowned`
+  signal ever reaches the code that terminates a router and clears its lease. The guard therefore has to be a *precondition on handling
   the broadcast at all*. See `Platform.Orchestration.SandboxGuard` and
   `notes/2026-07-06-datacase-cascade-rootcause.md`.
   """
@@ -316,7 +317,9 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   #
   #   * `should_run?/1` is pure struct reads and `router_running?/1` is a bare
   #     `Registry.lookup` — neither touches Repo, so neither has an error to
-  #     short-circuit on.
+  #     short-circuit on. (`evaluate_task/1` preloads `:project` for
+  #     `should_run?/1` — task 01a08c1e stage 3 — but that runs inside this
+  #     guard, and the STOP branch below it still does no Repo work.)
   #   * `evaluate_task/1`'s STOP branch reaches `terminate_child` (and through
   #     its terminate, `LeaseManager.clear/1`) with ZERO Repo calls. There is
   #     no return value anywhere on that path that could carry an ownership
@@ -439,6 +442,13 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   Returns true if the given task should have a router running.
   """
   @spec should_run?(map()) :: boolean()
+  # Task 01a08c1e stage 3: a paused project suppresses every one of its
+  # tasks, checked FIRST so no other field can override it. Pure struct
+  # read — the project is preloaded by `evaluate_task/1` (inside the sandbox
+  # precondition) and joined in `list_should_run_tasks/0`; an unloaded or
+  # absent project falls through to the ordinary clauses.
+  def should_run?(%{project: %{dispatch_paused: true}}), do: false
+
   def should_run?(%{assignee_type: "agent", assignee_id: aid, status: status} = task)
       when not is_nil(aid) and status in @active_statuses do
     # `deleted_at` is present on `%Task{}` structs loaded from the DB and
@@ -1036,6 +1046,8 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   end
 
   defp evaluate_task(task) do
+    task = preload_project(task)
+
     cond do
       should_run?(task) && !router_running?(task.id) ->
         case resolve_and_start(task) do
@@ -1073,6 +1085,18 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
         :ok
     end
   end
+
+  # Task 01a08c1e stage 3: `should_run?/1` reads `task.project.dispatch_paused`
+  # and stays pure, so the project is loaded here — every caller of
+  # `evaluate_task/1` is already past the sandbox precondition (or is
+  # `force_dispatch/1`, whose `get_task_detail/1` preloads it anyway).
+  # `Repo.preload/2` is a no-op on an already-loaded association. Plain maps
+  # without a `project_id` (test helpers, transient payloads) are left as-is.
+  defp preload_project(%Task{project_id: project_id} = task) when not is_nil(project_id) do
+    Repo.preload(task, :project)
+  end
+
+  defp preload_project(task), do: task
 
   defp resolve_and_start(task) do
     case resolve_runtime_for_task(task) do
@@ -1143,13 +1167,19 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     {started, stopped}
   end
 
-  defp list_should_run_tasks do
+  # Public for test only (task 01a08c1e stage 3): the reconcile tests assert
+  # the query path excludes paused projects without racing router startup.
+  @doc false
+  def list_should_run_tasks do
     from(t in Task,
+      join: p in assoc(t, :project),
       where:
         t.assignee_type == "agent" and
           not is_nil(t.assignee_id) and
           t.status in @active_statuses and
-          is_nil(t.deleted_at)
+          is_nil(t.deleted_at) and
+          p.dispatch_paused == false,
+      preload: [project: p]
     )
     |> Repo.all()
   end

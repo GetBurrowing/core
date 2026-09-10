@@ -3195,6 +3195,94 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "unknown strategy type"
     end
 
+    # task 01a08c1e stage 2: the named plan_auto_approve param is the
+    # only way the policy reaches config through this tool.
+    test "project_update writes plan_auto_approve and preserves other config keys" do
+      project = create_project(%{name: "Policy project"})
+
+      {:ok, project} =
+        Tasks.update_project(project, %{config: %{"brand_decision" => "advisory"}})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "project_update",
+          %{
+            "project_id" => project.id,
+            "plan_auto_approve" => %{"enabled" => true, "max_stages" => 5}
+          },
+          %{}
+        )
+
+      assert result.plan_auto_approve == %{"enabled" => true, "max_stages" => 5}
+
+      reloaded = Tasks.get_project(project.id)
+      assert reloaded.config["plan_auto_approve"] == %{"enabled" => true, "max_stages" => 5}
+      assert reloaded.config["brand_decision"] == "advisory"
+    end
+
+    test "project_update refuses a malformed plan_auto_approve and writes nothing" do
+      project = create_project(%{name: "Malformed policy project"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "project_update",
+          %{
+            "project_id" => project.id,
+            "name" => "Renamed alongside a bad policy",
+            "plan_auto_approve" => %{"enabled" => true, "max_stages" => "five"}
+          },
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "max_stages must be a positive integer"
+
+      reloaded = Tasks.get_project(project.id)
+      assert reloaded.name == "Malformed policy project"
+      refute Map.has_key?(reloaded.config || %{}, "plan_auto_approve")
+    end
+
+    # task 01a08c1e stage 3: dispatch_paused is a named boolean param.
+    test "project_update pauses and un-pauses dispatch for a project" do
+      project = create_project(%{name: "Pausable project"})
+      assert project.dispatch_paused == false
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "project_update",
+          %{"project_id" => project.id, "dispatch_paused" => true},
+          %{}
+        )
+
+      assert result.dispatch_paused == true
+      assert Tasks.get_project(project.id).dispatch_paused == true
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "project_update",
+          %{"project_id" => project.id, "dispatch_paused" => false},
+          %{}
+        )
+
+      assert result.dispatch_paused == false
+      assert Tasks.get_project(project.id).dispatch_paused == false
+    end
+
+    test "task_create into a paused project with no assignee succeeds" do
+      project = create_project(%{name: "Paused intake", dispatch_paused: true})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "Queued for later"},
+          %{}
+        )
+
+      task = Repo.get!(Platform.Tasks.Task, result.id)
+      assert task.project_id == project.id
+      assert is_nil(task.assignee_id)
+    end
+
     test "project_update returns not-found error for unknown project_id" do
       {:error, error} =
         ToolSurface.execute("project_update", %{"project_id" => Ecto.UUID.generate()}, %{})
@@ -4759,7 +4847,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
             "task_id" => task.id,
             "stage_id" => stage.id,
             "description" => "Missing deploy credentials",
-            "needs_human" => true
+            "needs_human" => true,
+            "attempts" => [
+              "checked the deploy secret in 1Password: absent",
+              "searched the repo for DEPLOY_TOKEN: only CI references",
+              "asked the deploy agent in the execution space: no reply in 30m"
+            ],
+            "memory_ref" => "org/page/deploy.md",
+            "unblock_action" => "Rowan pastes the deploy token into the CI secret",
+            "category" => "decision"
           },
           %{runtime_id: "runtime:test", agent_id: "agent:test"}
         )
@@ -8631,5 +8727,127 @@ defmodule Platform.Federation.ToolSurfaceTest do
         }
       ]
     })
+  end
+
+  describe "report_blocker cost" do
+    alias Platform.Orchestration.RuntimeEvent
+
+    defp blocker_stage do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Costly blocker"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+      {task, stage}
+    end
+
+    defp full_blocker_args(task, stage, overrides \\ %{}) do
+      Map.merge(
+        %{
+          "task_id" => task.id,
+          "stage_id" => stage.id,
+          "description" => "mix test fails on a migration",
+          "needs_human" => false,
+          "attempts" => [
+            "ran mix test: fails on migration 20260808",
+            "read the ADR: no answer",
+            "reset the test DB: same failure"
+          ],
+          "memory_ref" => "org/page/identity.md",
+          "unblock_action" => "Rowan picks A or B",
+          "category" => "product"
+        },
+        overrides
+      )
+    end
+
+    defp blocker_context, do: %{runtime_id: "runtime:test", agent_id: "agent:cost"}
+
+    test "two attempts are refused and nothing is recorded" do
+      {task, stage} = blocker_stage()
+      before = Repo.aggregate(RuntimeEvent, :count)
+
+      args =
+        full_blocker_args(task, stage, %{
+          "attempts" => ["ran mix test, failed", "read the ADR, no answer"]
+        })
+
+      assert {:error, %{error: msg, recoverable: true}} =
+               ToolSurface.execute("report_blocker", args, blocker_context())
+
+      assert msg =~ "report_blocker refused"
+      assert msg =~ "attempts"
+      assert Repo.aggregate(RuntimeEvent, :count) == before
+    end
+
+    test "duplicate or blank attempts do not count as distinct" do
+      {task, stage} = blocker_stage()
+
+      args =
+        full_blocker_args(task, stage, %{
+          "attempts" => ["ran mix test", "ran mix test", "  ", "read the ADR"]
+        })
+
+      assert {:error, %{error: msg}} =
+               ToolSurface.execute("report_blocker", args, blocker_context())
+
+      assert msg =~ "attempts"
+    end
+
+    test "missing memory_ref, unblock_action and category are all named" do
+      {task, stage} = blocker_stage()
+      before = Repo.aggregate(RuntimeEvent, :count)
+
+      args =
+        task
+        |> full_blocker_args(stage)
+        |> Map.drop(["memory_ref", "unblock_action", "category"])
+
+      assert {:error, %{error: msg}} =
+               ToolSurface.execute("report_blocker", args, blocker_context())
+
+      assert msg =~ "memory_ref"
+      assert msg =~ "unblock_action"
+      assert msg =~ "category"
+      refute msg =~ "attempts"
+      assert Repo.aggregate(RuntimeEvent, :count) == before
+    end
+
+    test "infra with needs_human is refused and nothing is recorded" do
+      {task, stage} = blocker_stage()
+      before = Repo.aggregate(RuntimeEvent, :count)
+
+      args = full_blocker_args(task, stage, %{"category" => "infra", "needs_human" => true})
+
+      assert {:error, %{error: msg, recoverable: true}} =
+               ToolSurface.execute("report_blocker", args, blocker_context())
+
+      assert msg =~ "@[Dalton]"
+      assert msg =~ "infra"
+      assert Repo.aggregate(RuntimeEvent, :count) == before
+    end
+
+    test "full valid args record the event with the four new payload keys" do
+      {task, stage} = blocker_stage()
+      args = full_blocker_args(task, stage)
+
+      assert {:ok, %{blocked: true, event_id: event_id}} =
+               ToolSurface.execute("report_blocker", args, blocker_context())
+
+      event = Repo.get!(RuntimeEvent, event_id)
+      assert event.event_type == "execution.blocked"
+      assert event.payload["attempts"] == args["attempts"]
+      assert event.payload["memory_ref"] == "org/page/identity.md"
+      assert event.payload["unblock_action"] == "Rowan picks A or B"
+      assert event.payload["category"] == "product"
+      assert event.payload["reported_by"] == "agent:cost"
+    end
+
+    test "infra without needs_human is accepted" do
+      {task, stage} = blocker_stage()
+      args = full_blocker_args(task, stage, %{"category" => "infra", "needs_human" => false})
+
+      assert {:ok, %{blocked: true}} =
+               ToolSurface.execute("report_blocker", args, blocker_context())
+    end
   end
 end

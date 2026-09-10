@@ -4317,7 +4317,9 @@ defmodule Platform.Orchestration.TaskRouter do
   # an hourly cadence would have been a fourth echo, unbounded in length.
   # A human reading the notice needs to know WHICH blocker, not to re-read
   # it — the full text is one message above, on the blocker itself.
-  @awaiting_human_reason_chars 200
+  # Wide enough that a description plus three attempts and an unblock action
+  # (the cost report_blocker demands) survive into the notice.
+  @awaiting_human_reason_chars 1_200
 
   defp awaiting_human_notice(hold, elapsed_ms) do
     minutes = div(elapsed_ms, 60_000)
