@@ -1906,6 +1906,186 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
   end
 
+  # Task 01a089c8: the channel used to say `not in allowed bundles` for two
+  # unrelated conditions — a real tool this runtime just lacks the grant
+  # for, and a name absent from the catalogue entirely (typo, or the
+  # dots-vs-underscores mismatch between `plan_update` and `plan.update`).
+  # The default grant excludes the `plan` bundle, so `plan_update` here is
+  # the real-but-ungranted case and `plan.update` is the undeclared one.
+  describe "tool_call denial message distinguishes unknown-tool from missing-grant" do
+    test "an undeclared name (separator mismatch) gets the unknown-tool message with a suggestion",
+         ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-unknown",
+        "tool" => "plan.update",
+        "args" => %{}
+      })
+
+      assert_push "tool_result", %{call_id: "call-unknown", status: "error", error: error}
+      assert error.error =~ "unknown tool 'plan.update'"
+      assert error.error =~ "Closest declared name: 'plan_update'"
+      refute error.error =~ "not in allowed bundles"
+      assert error.code == "forbidden"
+    end
+
+    # Load-bearing: without this, rewording every denial to "unknown tool"
+    # would also pass the test above.
+    test "a real catalogue tool outside this runtime's granted bundles still says not in allowed bundles",
+         ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-forbidden",
+        "tool" => "plan_update",
+        "args" => %{}
+      })
+
+      assert_push "tool_result", %{call_id: "call-forbidden", status: "error", error: error}
+      assert error.error == "tool 'plan_update' not in allowed bundles"
+    end
+
+    test "the two denial messages differ for the two inputs", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{"call_id" => "call-a", "tool" => "plan.update", "args" => %{}})
+      assert_push "tool_result", %{call_id: "call-a", status: "error", error: unknown_error}
+
+      push(socket, "tool_call", %{"call_id" => "call-b", "tool" => "plan_update", "args" => %{}})
+      assert_push "tool_result", %{call_id: "call-b", status: "error", error: forbidden_error}
+
+      # Not just "the strings differ" — the two tool spellings alone would
+      # make that trivially true. Pin that the WORDING differs by reason:
+      # one names itself a lookup miss and the other doesn't.
+      assert unknown_error.error =~ "unknown tool"
+      refute forbidden_error.error =~ "unknown tool"
+      assert unknown_error.error != forbidden_error.error
+    end
+
+    # `effective_tools/1` resolves a nil/empty `allowed_bundles` column to an
+    # empty list, so a no-bundles runtime and a narrow-bundles runtime look
+    # identical from inside `authorize/2` — this pins that the no-bundles
+    # case still gets the grant-denial wording for a real tool, not the
+    # unknown-tool one.
+    test "a runtime granted NO bundles still gets a denial for a real tool, not an unknown-tool answer",
+         ctx do
+      {:ok, _updated} = Federation.update_allowed_bundles(ctx.runtime, [])
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-nobundles",
+        "tool" => "task_create",
+        "args" => %{}
+      })
+
+      assert_push "tool_result", %{call_id: "call-nobundles", status: "error", error: error}
+      assert error.error == "tool 'task_create' not in allowed bundles"
+      refute error.error =~ "unknown tool"
+    end
+
+    test "emits tool_call_denied telemetry with reason :unknown_tool for an undeclared name",
+         ctx do
+      handler_id = "channel-tool-call-denied-unknown-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :federation, :tool_call_denied],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:tool_call_denied, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-telemetry-unknown",
+        "tool" => "plan.update",
+        "args" => %{}
+      })
+
+      assert_receive {:tool_call_denied, _measurements, metadata}
+      assert metadata.reason == :unknown_tool
+      assert metadata.tool == "plan.update"
+    end
+
+    test "emits tool_call_denied telemetry with reason :forbidden for a real-but-ungranted tool",
+         ctx do
+      handler_id = "channel-tool-call-denied-forbidden-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :federation, :tool_call_denied],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:tool_call_denied, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-telemetry-forbidden",
+        "tool" => "plan_update",
+        "args" => %{}
+      })
+
+      assert_receive {:tool_call_denied, _measurements, metadata}
+      assert metadata.reason == :forbidden
+      assert metadata.tool == "plan_update"
+    end
+  end
+
   # Pins the refusal contract AT THE WIRE for both federation transports at
   # once. Asserting each side in its own file cannot catch a divergence — and
   # a divergence is exactly what shipped: `MCPController.error_content/1`

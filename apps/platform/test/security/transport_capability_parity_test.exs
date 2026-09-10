@@ -12,8 +12,11 @@ defmodule Platform.Security.TransportCapabilityParityTest do
       equal the sorted names in the WS `capabilities` push; and
     * VERDICT PARITY — for a probe list spanning granted, ungranted, legacy
       alias and external-allowlist names, the HTTP verdict (`-32001` or not)
-      and the WS verdict (`not in allowed bundles` / `code: "forbidden"` or
-      not) agree.
+      and the WS verdict (`code: "forbidden"` or not) agree. Both verdicts are
+      read off the STRUCTURAL denial field, never off the denial sentence; on
+      top of that, each transport's message must equal
+      `ToolAuthorization.deny_message/1` — the shared formatter — so a
+      transport cannot start composing its own denial wording.
 
   An edit that fixes or breaks one transport and forgets the other fails here
   instead of shipping — which is precisely how the original bug survived CI:
@@ -50,6 +53,7 @@ defmodule Platform.Security.TransportCapabilityParityTest do
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.ExternalUserFixtures, as: World
+  alias Platform.Federation.ToolAuthorization
   alias Platform.Repo
 
   # Literal grant sets. Deliberately NOT derived from any module attribute in
@@ -164,8 +168,16 @@ defmodule Platform.Security.TransportCapabilityParityTest do
     conn = mcp_post(token, rpc("tools/call", %{"name" => name, "arguments" => %{}}))
 
     case json_response(conn, 200) do
-      %{"error" => %{"code" => -32001}} -> :denied
-      _ -> :allowed
+      %{"error" => %{"code" => -32001, "message" => message}} ->
+        # Same discipline as `ws_verdict/2`: classify on the structural JSON-RPC
+        # code, then require the sentence to come from the shared formatter.
+        # The two together are what makes a denial byte-identical on HTTP and
+        # WS — the parity claim this file exists to hold.
+        assert message == ToolAuthorization.deny_message(name)
+        :denied
+
+      _ ->
+        :allowed
     end
   end
 
@@ -193,7 +205,18 @@ defmodule Platform.Security.TransportCapabilityParityTest do
 
     case frame do
       %{status: "error", error: %{code: "forbidden", error: message}} ->
-        assert message == "tool '#{name}' not in allowed bundles"
+        # The VERDICT is read structurally, off `code: "forbidden"` — that is
+        # the field both transports agree on and the only thing this file
+        # classifies. The message is then compared to the SHARED formatter
+        # rather than to a literal sentence, which is what this file actually
+        # wants to pin: neither transport builds its own denial wording. A
+        # literal here made a wording change (task 01a089c8, which split
+        # "unknown tool" out of "missing grant") read as a security failure
+        # even though the call was still denied. The wording itself is pinned
+        # where wording is the subject —
+        # `test/platform/federation/tool_authorization_test.exs`,
+        # `mcp_controller_test.exs` and `runtime_channel_test.exs`.
+        assert message == ToolAuthorization.deny_message(name)
         :denied
 
       _ ->

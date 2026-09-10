@@ -111,6 +111,90 @@ defmodule Platform.Federation.ToolAuthorization do
 
   def authorize(_name, _runtime), do: {:error, :forbidden}
 
+  @doc """
+  Classifies a name `authorize/2` has ALREADY denied.
+
+  Consult this only after `authorize/2` returns `{:error, :forbidden}` — it
+  does not decide whether a call is allowed and does not change
+  `authorize/2`'s behaviour or two-value signature (`:ok` /
+  `{:error, :forbidden}`) in any way. It answers a purely diagnostic
+  question so a denial message can stop conflating two different failures:
+
+    * `:forbidden` — `name` IS in `ToolSurface.tool_definitions/0` (the full
+      catalogue, independent of any runtime's grant). The tool exists; this
+      runtime's `allowed_bundles` just doesn't cover it. The grant tables are
+      the right place to look.
+    * `{:unknown_tool, suggestion}` — `name` is absent from the catalogue
+      entirely. There is no grant to be missing — a typo, or a separator
+      mismatch (`canvas.create` vs `canvas_create`) named something that was
+      never registered. `suggestion` is a catalogue name reachable by
+      separator-normalised equality, or `nil` if none matches.
+
+  `ToolSurface.tool_definitions/0` is resolved at call time, every call —
+  never cached into a module attribute, which would freeze the catalogue at
+  compile time and silently stop tracking additions/removals.
+  """
+  def deny_reason(name) when is_binary(name) do
+    catalogue = ToolSurface.tool_definitions()
+
+    if Enum.any?(catalogue, &(&1.name == name)) do
+      :forbidden
+    else
+      {:unknown_tool, suggest(name, catalogue)}
+    end
+  end
+
+  def deny_reason(_name), do: :forbidden
+
+  @doc """
+  Formats the denial message for a name `authorize/2` has already denied.
+
+  Both transports (`PlatformWeb.MCPController` and `PlatformWeb.RuntimeChannel`)
+  call this rather than building their own sentence, so a denial reads
+  identically on both — the same "cannot answer differently" property this
+  module already holds for the authorization decision, extended to the
+  message text.
+
+  Case 1 (`:forbidden`) keeps the pre-existing wording verbatim — a genuine
+  missing-grant denial must still read as one. Case 2
+  (`{:unknown_tool, suggestion}`) says plainly that this is a name lookup
+  miss, not a permissions problem, and appends the closest declared name
+  only when `deny_reason/1` found one — never an empty
+  `Closest declared name: ''`.
+  """
+  def deny_message(name) do
+    case deny_reason(name) do
+      :forbidden ->
+        "tool '#{name}' not in allowed bundles"
+
+      {:unknown_tool, nil} ->
+        "unknown tool '#{name}' (no such tool in the catalogue — this is a name lookup miss, not a permissions problem)."
+
+      {:unknown_tool, suggestion} ->
+        "unknown tool '#{name}' (no such tool in the catalogue — this is a name lookup miss, not a permissions problem). Closest declared name: '#{suggestion}'."
+    end
+  end
+
+  # Separator-normalised equality only — downcase, strip `.`, `_`, `-`, then
+  # look for a catalogue name whose normalised form matches exactly.
+  # Deliberately NOT Jaro/Levenshtein or any edit-distance threshold: an
+  # edit-distance match can invent a plausible-but-wrong suggestion, but
+  # normalised equality either matches the one name a separator swap or
+  # typo-in-case could produce, or it matches nothing.
+  defp suggest(name, catalogue) do
+    target = normalize_separators(name)
+
+    Enum.find_value(catalogue, fn %{name: candidate} ->
+      if normalize_separators(candidate) == target, do: candidate
+    end)
+  end
+
+  defp normalize_separators(name) do
+    name
+    |> String.downcase()
+    |> String.replace([".", "_", "-"], "")
+  end
+
   defp allowed_bundles(%{allowed_bundles: bundles}) when is_list(bundles), do: bundles
   defp allowed_bundles(_runtime), do: []
 end

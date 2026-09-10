@@ -183,6 +183,62 @@ defmodule Platform.Federation.ToolAuthorizationTest do
     end
   end
 
+  # ── deny_reason/1 ────────────────────────────────────────────────────────
+
+  describe "deny_reason/1" do
+    test "a real catalogue tool name is :forbidden" do
+      assert ToolAuthorization.deny_reason("plan_update") == :forbidden
+    end
+
+    test "a dots-vs-underscores miss suggests the real catalogue name" do
+      assert ToolAuthorization.deny_reason("plan.update") == {:unknown_tool, "plan_update"}
+    end
+
+    test "a name with no plausible match suggests nothing" do
+      assert ToolAuthorization.deny_reason("totally_made_up_tool") == {:unknown_tool, nil}
+    end
+
+    test "authorize/2 still denies both an undeclared name and a real-but-ungranted name, on a narrow-bundle runtime",
+         ctx do
+      runtime = runtime(ctx.internal_id, ["federation"])
+
+      # Undeclared name entirely (separator mismatch on a catalogue tool).
+      assert {:error, :forbidden} = ToolAuthorization.authorize("plan.update", runtime)
+      # Real catalogue tool, just outside this runtime's granted bundles.
+      assert {:error, :forbidden} = ToolAuthorization.authorize("plan_update", runtime)
+
+      # Splitting the diagnostic in deny_reason/1 must never leak into
+      # authorize/2 itself — a later refactor could otherwise turn this
+      # diagnostic split into an authorization bypass.
+      assert ToolAuthorization.deny_reason("plan.update") == {:unknown_tool, "plan_update"}
+      assert ToolAuthorization.deny_reason("plan_update") == :forbidden
+    end
+  end
+
+  # ── deny_message/1 ───────────────────────────────────────────────────────
+
+  describe "deny_message/1" do
+    test "a real catalogue tool keeps the pre-existing wording verbatim" do
+      assert ToolAuthorization.deny_message("plan_update") ==
+               "tool 'plan_update' not in allowed bundles"
+    end
+
+    test "an undeclared name with a suggestion names the closest declared tool" do
+      assert ToolAuthorization.deny_message("plan.update") ==
+               "unknown tool 'plan.update' (no such tool in the catalogue — this is a name lookup miss, not a permissions problem). Closest declared name: 'plan_update'."
+    end
+
+    test "an undeclared name with no suggestion has no trailing clause and no empty quotes" do
+      message = ToolAuthorization.deny_message("totally_made_up_tool")
+
+      assert message ==
+               "unknown tool 'totally_made_up_tool' (no such tool in the catalogue — this is a name lookup miss, not a permissions problem)."
+
+      refute message =~ "Closest declared name"
+      refute message =~ "''"
+    end
+  end
+
   # ── Helpers ────────────────────────────────────────────────────────────
 
   defp runtime(owner_user_id, allowed_bundles) do

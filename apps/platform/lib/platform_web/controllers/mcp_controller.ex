@@ -100,7 +100,13 @@ defmodule PlatformWeb.MCPController do
         end
 
       {:error, :forbidden} ->
-        {:error, -32001, "tool '#{name}' not in allowed bundles"}
+        :telemetry.execute(
+          [:platform, :federation, :tool_call_denied],
+          %{system_time: System.system_time()},
+          %{runtime_id: runtime.runtime_id, tool: name, reason: deny_reason_tag(name)}
+        )
+
+        {:error, -32001, ToolAuthorization.deny_message(name)}
     end
   end
 
@@ -110,6 +116,16 @@ defmodule PlatformWeb.MCPController do
 
   defp dispatch(method, _params, _runtime) do
     {:error, -32601, "method not found: #{method}"}
+  end
+
+  # Telemetry-only projection of `ToolAuthorization.deny_reason/1` down to
+  # the bare atom the `[:platform, :federation, :tool_call_denied]` metadata
+  # carries — the suggestion (if any) is in the message text, not here.
+  defp deny_reason_tag(name) do
+    case ToolAuthorization.deny_reason(name) do
+      :forbidden -> :forbidden
+      {:unknown_tool, _suggestion} -> :unknown_tool
+    end
   end
 
   # ── Execution context ───────────────────────────────────────────────

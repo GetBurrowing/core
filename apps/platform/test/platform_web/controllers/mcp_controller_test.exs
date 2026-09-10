@@ -301,6 +301,132 @@ defmodule PlatformWeb.MCPControllerTest do
     end
   end
 
+  # Task 01a089c8: both federation transports used to say
+  # `tool '<name>' not in allowed bundles` for two unrelated conditions — a
+  # real tool this runtime just lacks the grant for, and a name that does
+  # not exist in the catalogue at all (typo, or the dots-vs-underscores
+  # mismatch between the HTTP endpoint's `plan_update` and a hypothetical
+  # `plan.update`). The second case sent readers to check grant tables for a
+  # grant that was never missing. This block pins that the two cases now
+  # read differently, without changing `-32001` or authorization itself.
+  describe "tools/call denial message distinguishes unknown-tool from missing-grant" do
+    test "an undeclared name (separator mismatch) gets the unknown-tool message with a suggestion",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+
+      conn =
+        mcp_post(conn, token, rpc("tools/call", %{"name" => "plan.update", "arguments" => %{}}))
+
+      %{"error" => %{"code" => code, "message" => message}} = json_response(conn, 200)
+      assert code == -32001
+      assert message =~ "unknown tool 'plan.update'"
+      assert message =~ "Closest declared name: 'plan_update'"
+      refute message =~ "not in allowed bundles"
+    end
+
+    # Load-bearing: without this, rewording every denial to "unknown tool"
+    # would also pass the test above.
+    test "a real catalogue tool outside this runtime's granted bundles still says not in allowed bundles",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+
+      conn =
+        mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
+
+      %{"error" => %{"message" => message}} = json_response(conn, 200)
+      assert message == "tool 'task_create' not in allowed bundles"
+    end
+
+    test "the two denial messages differ for the two inputs", %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+
+      unknown_conn =
+        mcp_post(conn, token, rpc("tools/call", %{"name" => "plan.update", "arguments" => %{}}))
+
+      %{"error" => %{"message" => unknown_message}} = json_response(unknown_conn, 200)
+
+      forbidden_conn =
+        build_conn()
+        |> mcp_post(token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
+
+      %{"error" => %{"message" => forbidden_message}} = json_response(forbidden_conn, 200)
+
+      # Not just "the strings differ" — that would trivially hold for any two
+      # denials naming different tools. Pin that the WORDING differs by
+      # reason: one names itself a lookup miss and the other doesn't.
+      assert unknown_message =~ "unknown tool"
+      refute forbidden_message =~ "unknown tool"
+      assert unknown_message != forbidden_message
+    end
+
+    # `effective_tools/1` resolves a nil/empty `allowed_bundles` column to an
+    # empty list, so a no-bundles runtime and a narrow-bundles runtime look
+    # identical from inside `authorize/2` — this pins that the no-bundles
+    # case still gets the grant-denial wording for a real tool, not the
+    # unknown-tool one.
+    test "a runtime granted NO bundles still gets a denial for a real tool, not an unknown-tool answer",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: []})
+
+      conn =
+        mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
+
+      %{"error" => %{"message" => message}} = json_response(conn, 200)
+      assert message == "tool 'task_create' not in allowed bundles"
+      refute message =~ "unknown tool"
+    end
+
+    test "emits tool_call_denied telemetry with reason :unknown_tool for an undeclared name",
+         %{conn: conn} do
+      handler_id = "mcp-tool-call-denied-unknown-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :federation, :tool_call_denied],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:tool_call_denied, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+
+      mcp_post(conn, token, rpc("tools/call", %{"name" => "plan.update", "arguments" => %{}}))
+
+      assert_receive {:tool_call_denied, _measurements, metadata}
+      assert metadata.reason == :unknown_tool
+      assert metadata.tool == "plan.update"
+    end
+
+    test "emits tool_call_denied telemetry with reason :forbidden for a real-but-ungranted tool",
+         %{conn: conn} do
+      handler_id = "mcp-tool-call-denied-forbidden-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :federation, :tool_call_denied],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:tool_call_denied, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+
+      mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
+
+      assert_receive {:tool_call_denied, _measurements, metadata}
+      assert metadata.reason == :forbidden
+      assert metadata.tool == "task_create"
+    end
+  end
+
   # Before this block existed, the ONLY error-adjacent assertion in this file
   # was `isError == false` above — the error branch of the controller was
   # entirely uncovered, so nothing pinned the response shape in either

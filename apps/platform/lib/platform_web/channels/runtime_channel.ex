@@ -743,28 +743,38 @@ defmodule PlatformWeb.RuntimeChannel do
   # Denial frame shape is load-bearing: the message MUST sit at `error.error`
   # as a string, because openclaw-suite-channel's suite-client.ts rejects with
   # `payload.error?.error || "Tool call failed"`. Any other shape reaches the
-  # agent as the useless generic string. The wording matches the `-32001`
-  # message MCPController returns for the same refusal so both transports
-  # produce identical, greppable operator-facing text.
+  # agent as the useless generic string. `ToolAuthorization.deny_message/1`
+  # is the same call `MCPController` makes for the same refusal, so both
+  # transports produce identical, greppable operator-facing text — and the
+  # `code` field stays `"forbidden"` for both denial shapes, unchanged, since
+  # no client should be keying different behavior off it.
   defp deny_tool_call(tool, call_id, socket) do
     runtime_id = socket.assigns.runtime_id
+    reason = ToolAuthorization.deny_reason(tool)
+    reason_tag = deny_reason_tag(reason)
 
     Logger.warning(
-      "[RuntimeChannel] tool_call denied: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} reason=forbidden"
+      "[RuntimeChannel] tool_call denied: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} reason=#{reason_tag}"
     )
 
     :telemetry.execute(
       [:platform, :federation, :tool_call_denied],
       %{system_time: System.system_time()},
-      %{runtime_id: runtime_id, tool: tool, reason: :forbidden}
+      %{runtime_id: runtime_id, tool: tool, reason: reason_tag}
     )
 
     push(socket, "tool_result", %{
       call_id: call_id,
       status: "error",
-      error: %{error: "tool '#{tool}' not in allowed bundles", code: "forbidden"}
+      error: %{error: ToolAuthorization.deny_message(tool), code: "forbidden"}
     })
   end
+
+  # Telemetry-only projection of `ToolAuthorization.deny_reason/1` down to
+  # the bare atom the `[:platform, :federation, :tool_call_denied]` metadata
+  # carries — the suggestion (if any) is in the message text, not here.
+  defp deny_reason_tag(:forbidden), do: :forbidden
+  defp deny_reason_tag({:unknown_tool, _suggestion}), do: :unknown_tool
 
   defp schedule_presence_retrack do
     Process.send_after(self(), :presence_retrack, @presence_retrack_interval_ms)

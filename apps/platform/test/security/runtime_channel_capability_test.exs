@@ -53,6 +53,7 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
   alias Platform.ExternalUserFixtures, as: World
+  alias Platform.Federation.ToolAuthorization
   alias Platform.Repo
   alias Platform.Tasks
 
@@ -230,9 +231,22 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
   # The denial frame shape is load-bearing: openclaw-suite-channel's
   # suite-client.ts rejects with `payload.error?.error`, and the wording is
   # byte-identical to the `-32001` message `/mcp` returns for the same refusal.
+  #
+  # DENIAL is asserted structurally — `status == "error"` plus
+  # `code == "forbidden"` — and stays exactly as strict as it was. Only the
+  # message expectation moved: it now comes from the shared formatter
+  # `ToolAuthorization.deny_message/1` instead of a hardcoded sentence, which
+  # is what actually holds the byte-identical-across-transports property. Task
+  # 01a089c8 split the single sentence into "missing grant" vs "unknown tool";
+  # a literal here turned that wording change into a false security failure on
+  # the two undeclared canvas aliases even though both were still denied. The
+  # sentences themselves are pinned literally where the wording IS the subject:
+  # `test/platform/federation/tool_authorization_test.exs`,
+  # `test/platform_web/controllers/mcp_controller_test.exs` and
+  # `test/platform_web/channels/runtime_channel_test.exs`.
   defp assert_denied(frame, tool) do
     assert frame.status == "error"
-    assert frame.error.error == "tool '#{tool}' not in allowed bundles"
+    assert frame.error.error == ToolAuthorization.deny_message(tool)
     assert frame.error.code == "forbidden"
   end
 
