@@ -50,7 +50,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
       `--color-base-content` and `--edge`
     * the `[data-role="canvas-result-snippet"] mark` rule in `app.css`, for the
       fill's token and its percentage
-    * the container's own `class` attribute in `conversation.ex`, for the
+    * the container's own `class` attribute in `canvas_explorer.ex`, for the
       ground's alpha (`bg-base-content/5`) and the context runs'
       (`text-base-content/65`)
 
@@ -77,8 +77,19 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
   alias Platform.Design.WcagContrast, as: W
 
   @css_path Path.expand("../../../assets/css/app.css", __DIR__)
+  # The snippet markup MOVED in task 01a0740d stage 3, from
+  # `Conversation.canvas_result_snippet/1` to
+  # `CanvasExplorer.explorer_row_snippet/1`, when the explorer took over the
+  # drawer's results rows. The classes, the data-roles and the `<mark>` rule are
+  # the shipped ones — only the file changed — so every pin below still resolves
+  # to the same colours.
+  #
+  # This path being wrong does not fail a test; it fails `setup_all`, which
+  # marks all 14 tests here INVALID and leaves the suite reading "0 failures".
+  # That is exactly what happened on the first full run of that stage, and it is
+  # the reason this comment names the file rather than leaving the path bare.
   @template_path Path.expand(
-                   "../../../lib/platform_web/live/chat/partials/conversation.ex",
+                   "../../../lib/platform_web/components/canvases/canvas_explorer.ex",
                    __DIR__
                  )
 

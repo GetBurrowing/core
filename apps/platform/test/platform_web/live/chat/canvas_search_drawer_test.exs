@@ -50,7 +50,11 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
   alias Platform.Chat
   alias Platform.Chat.CanvasSearchBackfill
   alias Platform.Chat.CanvasSearchIndex
+  alias Platform.Meetings
+  alias Platform.Meetings.Meeting
   alias Platform.Repo
+  alias Platform.Tasks
+  alias Platform.Tasks.CanvasAttachments
 
   @snippet_selector ~s([data-role="canvas-result-snippet"])
   @leading_selector ~s([data-role="canvas-result-snippet-leading"])
@@ -212,7 +216,10 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
       assert attrs["type"] == "search"
       assert attrs["name"] == "query"
       assert attrs["phx-debounce"] == "300"
-      assert attrs["aria-label"] == "Search canvases in this channel"
+      # "across your spaces", not "in this channel": stage 3 made the query
+      # multi-space, and a label naming one channel would misdescribe where the
+      # results below can come from.
+      assert attrs["aria-label"] == "Search canvases across your spaces"
     end
   end
 
@@ -367,7 +374,15 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
       # POSITIVE first: the row IS rendered. Without this the negative below
       # would also pass on an empty result list, which is a different bug.
       assert has_element?(view, ~s([phx-value-canvas-id="#{titled.id}"]))
-      assert html =~ "Frimsy Toadlark Review"
+
+      # Read the title through the DOM, not off the raw HTML. Since task
+      # 01a0740d stage 3 the explorer marks the matched substring, so this
+      # title's markup is `<mark>Frimsy</mark> Toadlark Review` and the
+      # untouched string no longer appears anywhere in `html` — the assertion
+      # this replaced failed on a row that was rendering perfectly.
+      # `LazyHTML.text/1` reassembles across the element boundary.
+      assert text_of(html, ~s([data-role="canvas-explorer-row-title"])) ==
+               "Frimsy Toadlark Review"
 
       assert query_all(html, @snippet_selector) == [],
              "a title match must not carry a body fragment"
@@ -593,7 +608,318 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
       html = search(view, "zorbling")
 
       refute has_element?(view, ~s([phx-value-canvas-id="#{other.id}"]))
-      assert html =~ "No canvases in this channel match"
+
+      # The explorer owns the no-results line now, and it is a DIFFERENT line
+      # from the drawer's old one: the archive is not empty, the filter is, and
+      # the component keeps `canvas-explorer-empty` for the other case.
+      assert [line] = query_all(html, ~s([data-role="canvas-explorer-no-matches"]))
+      assert LazyHTML.text(line) =~ "Nothing matched"
+
+      assert query_all(html, ~s([data-role="canvas-explorer-empty"])) == [],
+             "the archive holds a canvas, so this is an empty FILTER, not an empty archive"
+    end
+  end
+
+  # ── the explorer's groups (task 01a0740d stage 3) ─────────────────────────
+  #
+  # These drive the real `ChatLive` mount, like everything above, because all
+  # three behaviours are decided by the round trip: `CanvasHooks` resolving the
+  # pinned groups, the multi-space id list reaching `Chat.search_canvases/3`,
+  # and the component picking its expansion off the rows it was handed.
+  #
+  # ASSERTION SHAPE. Every count here is a NUMBER, and every row assertion is
+  # SCOPED to the group it must be inside — `[data-group-key=…]
+  # [data-role="canvas-explorer-row"]`. Two reasons, both of them bugs this
+  # epic has already produced: "a row exists somewhere in the document" passes
+  # against a row rendered in the wrong group, and "a row is missing" passes
+  # against an explorer that rendered nothing at all.
+
+  defp group_rows(html, key) do
+    html
+    |> query_all(~s([data-group-key="#{key}"] [data-role="canvas-explorer-row-title"]))
+    |> Enum.map(&LazyHTML.text/1)
+  end
+
+  defp group_count_text(html, key) do
+    html
+    |> text_of(~s([data-group-key="#{key}"] [data-role="canvas-explorer-group-count"]))
+    |> String.replace(["·", " "], " ")
+    |> String.trim()
+  end
+
+  defp group_keys(html) do
+    html
+    |> query_all(~s([data-role="canvas-explorer-group"]))
+    |> Enum.map(&(&1 |> LazyHTML.attribute("data-group-key") |> List.first()))
+  end
+
+  # An execution space whose metadata names a task, with THREE canvases attached
+  # to that task and ONE of the three soft-deleted — the stale attachment row.
+  # `task_canvas_attachments.canvas_id` has no foreign key, which is exactly why
+  # this state is reachable in production.
+  defp execution_space_with_task(author_name \\ "Exec Bot") do
+    n = System.unique_integer([:positive])
+
+    {:ok, project} = Tasks.create_project(%{name: "Explorer Fixture Project #{n}"})
+
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Explorer fixture task #{n}",
+        status: "backlog"
+      })
+
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Execution #{n}",
+        slug: "explorer-exec-#{n}",
+        kind: "execution",
+        metadata: %{"task_id" => task.id}
+      })
+
+    {:ok, participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "agent",
+        participant_id: Ecto.UUID.generate(),
+        display_name: author_name,
+        joined_at: DateTime.utc_now()
+      })
+
+    canvases =
+      for title <- ["Stage 1 evidence", "Stage 2 evidence", "Stage 3 evidence"] do
+        canvas(space, participant, title, "body for #{title}")
+      end
+
+    attacher = %{kind: "agent", id: Ecto.UUID.generate()}
+
+    for c <- canvases do
+      {:ok, _} = CanvasAttachments.attach_canvas(:system, task.id, c.id, attached_by: attacher)
+    end
+
+    doomed = List.last(canvases)
+
+    {:ok, _} =
+      doomed
+      |> Platform.Chat.Canvas.delete_changeset(%{deleted_at: DateTime.utc_now()})
+      |> Repo.update()
+
+    # Asserted, not assumed. A fixture whose soft delete silently failed would
+    # make the stale-row test pass by there being no stale row to skip.
+    entries = CanvasAttachments.list_task_canvases(task.id)
+    assert length(entries) == 3, "expected 3 attachment rows, got #{length(entries)}"
+
+    assert Enum.count(entries, &is_nil(&1.canvas)) == 1,
+           "expected exactly ONE stale attachment (canvas: nil), got " <>
+             inspect(Enum.map(entries, & &1.canvas))
+
+    %{space: space, task: task, project: project, canvases: canvases, doomed: doomed}
+  end
+
+  describe "the pinned On this task group" do
+    test "renders 2 rows and a header count of 2 for 3 attachments whose third canvas was deleted",
+         %{conn: conn, user: user} do
+      %{space: space, canvases: canvases, doomed: doomed} = execution_space_with_task()
+
+      view = open_drawer(conn, user, space)
+      html = render(view)
+
+      # THE ROWS. Scoped to the pinned group, so a row rendered into the space
+      # group instead would not satisfy this.
+      assert group_rows(html, "task") == ["Stage 1 evidence", "Stage 2 evidence"]
+
+      # THE NUMBER, not "a row is missing". A count taken from `length(entries)`
+      # rather than from the surviving rows reads 3 here.
+      assert group_count_text(html, "task") == "2"
+
+      # And the stale row leaves NOTHING behind: no ghost, no blank-titled row,
+      # no error state. Checked against the deleted canvas's own id, anywhere in
+      # the document.
+      assert query_all(html, ~s([data-canvas-id="#{doomed.id}"])) == [],
+             "the soft-deleted canvas must not render a row anywhere"
+
+      # The positive half of the pair: the two live attachments ARE reachable,
+      # so the assertions above cannot be satisfied by an explorer that failed
+      # to render the group at all.
+      for live <- Enum.take(canvases, 2) do
+        assert has_element?(view, ~s([phx-value-canvas-id="#{live.id}"]))
+      end
+    end
+
+    test "sits above the space groups, after In this meeting, when a meeting is live",
+         %{conn: conn, user: user} do
+      %{space: space, project: project} = execution_space_with_task()
+
+      # A live meeting bound to THIS space, written directly: `create_meeting/1`
+      # mints its own backing chat space, and this meeting has to be bound to
+      # the execution space for `get_live_meeting_for_space/1` to find it.
+      {:ok, _meeting} =
+        %Meeting{}
+        |> Meeting.changeset(%{
+          project_id: project.id,
+          chat_space_id: space.id,
+          slug: "explorer-meeting-#{System.unique_integer([:positive])}",
+          name: "Explorer fixture standup",
+          status: "live",
+          livekit_room_name: "space-#{space.id}",
+          started_at: DateTime.utc_now()
+        })
+        |> Repo.insert()
+
+      assert Meetings.get_live_meeting_for_space(space.id), "fixture meeting is not live"
+
+      view = open_drawer(conn, user, space)
+      html = render(view)
+
+      # ORDER is the assertion, not mere presence: the pinned pair first, in
+      # this sequence, then the space groups.
+      assert group_keys(html) == ["meeting", "task", "space:" <> space.id]
+
+      assert text_of(
+               html,
+               ~s([data-group-key="meeting"] [data-role="canvas-explorer-group-label"])
+             ) ==
+               "In this meeting"
+
+      assert text_of(html, ~s([data-group-key="task"] [data-role="canvas-explorer-group-label"])) ==
+               "On this task"
+    end
+
+    test "is absent entirely in a plain channel, which names no task", %{
+      conn: conn,
+      user: user,
+      space: space,
+      author: author
+    } do
+      # The negative half. Without it, a drawer that rendered an "On this task"
+      # group unconditionally — empty, in every channel — would satisfy every
+      # assertion in the first test.
+      canvas(space, author, "Ordinary Board", "body")
+
+      view = open_drawer(conn, user, space)
+      html = render(view)
+
+      assert group_keys(html) == ["space:" <> space.id]
+      assert query_all(html, ~s([data-group-key="task"])) == []
+      assert query_all(html, ~s([data-group-key="meeting"])) == []
+    end
+  end
+
+  describe "searching across spaces" do
+    test "finds a match in ANOTHER space the viewer participates in, inside that space's own group",
+         %{conn: conn, user: user, space: space, author: author} do
+      n = System.unique_integer([:positive])
+
+      # The space the viewer is STANDING IN.
+      here = canvas(space, author, "Zorbling Here", "body")
+
+      # A second space the viewer PARTICIPATES IN but is not looking at.
+      # `Chat.list_user_conversations/2` reads participant rows, so the
+      # participant row is what puts this space in the explorer's scope.
+      {:ok, elsewhere_space} =
+        Chat.create_space(%{
+          name: "Elsewhere #{n}",
+          slug: "explorer-elsewhere-#{n}",
+          kind: "channel"
+        })
+
+      {:ok, _member} =
+        Chat.add_participant(elsewhere_space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "Canvas Searcher",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, elsewhere_author} =
+        Chat.add_participant(elsewhere_space.id, %{
+          participant_type: "agent",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Elsewhere Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      there = canvas(elsewhere_space, elsewhere_author, "Zorbling Elsewhere", "body")
+
+      view = open_drawer(conn, user, space)
+      html = search(view, "zorbling")
+
+      # THE CROSS-SPACE HALF: the far match is rendered, and rendered INSIDE the
+      # far space's own group rather than merged into the active space's.
+      assert group_rows(html, "space:" <> elsewhere_space.id) == ["Zorbling Elsewhere"]
+      assert has_element?(view, ~s([phx-value-canvas-id="#{there.id}"]))
+
+      # THE POSITIVE PAIR: the active space's match still appears. Without this,
+      # a single-space revert that returned NOTHING would satisfy nothing here,
+      # but a search that silently broke altogether could still look like a
+      # scoping change rather than a failure.
+      assert group_rows(html, "space:" <> space.id) == ["Zorbling Here"]
+      assert has_element?(view, ~s([phx-value-canvas-id="#{here.id}"]))
+
+      # Both groups are open BECAUSE they hold matches, and both header counts
+      # read against their space's real size.
+      assert group_count_text(html, "space:" <> space.id) == "1 of 1"
+      assert group_count_text(html, "space:" <> elsewhere_space.id) == "1 of 1"
+    end
+
+    test "leaves a participating space with NO match collapsed and rendering no rows", %{
+      conn: conn,
+      user: user,
+      space: space,
+      author: author
+    } do
+      n = System.unique_integer([:positive])
+      canvas(space, author, "Zorbling Here", "body")
+
+      {:ok, quiet_space} =
+        Chat.create_space(%{
+          name: "Quiet #{n}",
+          slug: "explorer-quiet-#{n}",
+          kind: "channel"
+        })
+
+      {:ok, _member} =
+        Chat.add_participant(quiet_space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "Canvas Searcher",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, quiet_author} =
+        Chat.add_participant(quiet_space.id, %{
+          participant_type: "agent",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Quiet Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      canvas(quiet_space, quiet_author, "Nothing To See", "no mention of the term")
+
+      view = open_drawer(conn, user, space)
+      html = search(view, "zorbling")
+
+      quiet_key = "space:" <> quiet_space.id
+
+      # The group is still LISTED — dropping it would make a space holding no
+      # match indistinguishable from a space the viewer is not in — and it reads
+      # its miss as a number against its real size.
+      assert quiet_key in group_keys(html)
+      assert group_count_text(html, quiet_key) == "0 of 1"
+
+      # COLLAPSED means it rendered no rows, not that it carries a class saying
+      # so. The row count IS the behaviour.
+      assert group_rows(html, quiet_key) == []
+
+      assert query_all(
+               html,
+               ~s([data-group-key="#{quiet_key}"] [data-role="canvas-explorer-group-rows"])
+             ) ==
+               [],
+             "a collapsed group must render no rows container at all"
+
+      # Paired with the space that DID match, on the same render, so a selector
+      # that matches nothing cannot be read as a group that collapsed.
+      assert group_rows(html, "space:" <> space.id) == ["Zorbling Here"]
     end
   end
 end

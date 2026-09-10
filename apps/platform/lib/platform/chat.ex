@@ -3892,6 +3892,283 @@ defmodule Platform.Chat do
   defp canvas_order(query, _inserted_asc),
     do: order_by(query, [c], asc: c.inserted_at, asc: c.id)
 
+  @default_canvas_group_limit 20
+
+  @typedoc """
+  One space's slice of the canvas explorer. `total_count` is the space's true
+  live-canvas count; `rows` is at most `:limit` of them.
+  """
+  @type canvas_group :: %{
+          space_id: binary(),
+          space_name: String.t() | nil,
+          total_count: non_neg_integer(),
+          rows: [canvas_group_row()]
+        }
+
+  @typedoc """
+  A canvas as the explorer needs it. Deliberately NOT a `%Canvas{}`: no
+  `:document` key at all. See `list_canvas_groups/2`.
+  """
+  @type canvas_group_row :: %{
+          id: binary(),
+          title: String.t() | nil,
+          space_id: binary(),
+          updated_at: DateTime.t(),
+          inserted_at: DateTime.t(),
+          created_by_display_name: String.t() | nil,
+          cloned_from: binary() | nil
+        }
+
+  @doc """
+  Bounded canvas listing across MANY spaces, grouped one entry per space.
+
+  This exists because `list_canvases/2` cannot serve an explorer. That function
+  takes one space id, has no `:limit`, and selects the full `%Canvas{}`
+  **including `document`** — a node tree. At the scale this was built for (409
+  canvases over 14 spaces) reusing it means loading 409 node trees in order to
+  render 409 titles, and it cannot page at all.
+
+  Returns one `t:canvas_group/0` per space id given, ordered alphabetically
+  (case-insensitively) by space name. Space ids that name no row are dropped;
+  a space with no live canvases is KEPT, as `total_count: 0, rows: []`, because
+  the explorer has to be able to say "this space is empty" rather than silently
+  omitting it.
+
+  ## `total_count` is a COUNT, not `length(rows)`
+
+  `total_count` is the number of live canvases in the space, computed by the
+  database over the whole partition and therefore unaffected by `:limit`. That
+  is the entire point: a group header must be able to read "41" while the group
+  shows 20 rows. Deriving it from `length(rows)` would make the header agree
+  with the cap forever and the paging control would never appear.
+
+  ## Rows are lightweight maps
+
+  Each row carries exactly `:id`, `:title`, `:space_id`, `:updated_at`,
+  `:inserted_at`, `:created_by_display_name` and `:cloned_from`. **`:document`
+  is not selected and the key is not present.** A `%Canvas{}` struct would
+  carry `document` whether or not the caller touched it, so the rows are plain
+  maps: the absence of the key is assertable, and it is asserted in
+  `canvas_explorer_listing_test.exs`.
+
+  ## Ordering and paging
+
+  Rows are ordered `asc: lower(title), asc: inserted_at`, so the same canvas
+  sits in the same place on every visit — a title sort without the
+  `inserted_at` tiebreaker lets two canvases sharing a title swap between
+  reads, which is the paging defect #864 fixed for tasks.
+
+  Both bounds are applied per space by a single windowed query rather than one
+  query per space, so a 14-space explorer is two round trips (spaces+counts,
+  then rows) regardless of how many spaces are open.
+
+  ## Options
+
+    * `:limit` — max rows per space. Defaults to
+      `#{@default_canvas_group_limit}`.
+    * `:offset` — rows to skip per space. Defaults to `0`.
+    * `:order` — `:title_asc` (default), `:updated_desc`, `:inserted_desc` or
+      `:inserted_asc`. These are exactly the four the canvases drawer's sort
+      control offers (`PlatformWeb.ChatLive.CanvasHooks.sort_options/0`), and
+      they exist here rather than in the caller for one reason: the caller only
+      ever holds ONE PAGE of a group, so sorting in memory would order 20 rows
+      out of 41 and present the result as the group's order. That is not a
+      slower version of this — it is a different, wrong answer. An unrecognised
+      value falls back to `:title_asc` rather than raising, matching how the
+      drawer's own allow-list parses an unknown sort.
+
+      Every ordering ends in a tiebreaker (`inserted_at`, then `id`), so a page
+      boundary cannot let two rows sharing a sort key swap between reads — the
+      paging defect #864 fixed for tasks. The window and the outer query are
+      driven from the SAME list, so a page's contents and its sequence cannot
+      disagree about what page 2 is.
+  """
+  @spec list_canvas_groups([binary()], keyword()) :: [canvas_group()]
+  def list_canvas_groups(space_ids, opts \\ [])
+
+  def list_canvas_groups([], _opts), do: []
+
+  def list_canvas_groups(space_ids, opts) when is_list(space_ids) do
+    limit = Keyword.get(opts, :limit, @default_canvas_group_limit)
+    offset = Keyword.get(opts, :offset, 0)
+    order = Keyword.get(opts, :order, :title_asc)
+
+    spaces =
+      from(s in Space,
+        where: s.id in ^space_ids,
+        order_by: [asc: fragment("lower(?)", s.name), asc: s.id],
+        select: %{id: s.id, name: s.name}
+      )
+      |> Repo.all()
+
+    counts = canvas_group_counts(space_ids)
+    rows_by_space = canvas_group_rows(space_ids, limit, offset, order)
+
+    Enum.map(spaces, fn space ->
+      %{
+        space_id: space.id,
+        space_name: space.name,
+        total_count: Map.get(counts, space.id, 0),
+        rows: Map.get(rows_by_space, space.id, [])
+      }
+    end)
+  end
+
+  # The true per-space total, independent of `:limit`. A GROUP BY over the
+  # same `is_nil(deleted_at)` filter the rows use, so the header count and the
+  # rows can never disagree about what "live" means.
+  defp canvas_group_counts(space_ids) do
+    from(c in Canvas,
+      where: c.space_id in ^space_ids and is_nil(c.deleted_at),
+      group_by: c.space_id,
+      select: {c.space_id, count(c.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # One query for every space's page. `row_number()` partitioned by space is
+  # what makes a per-space LIMIT expressible in a single statement — a bare
+  # `limit:` would cap the whole result set, handing all 20 rows to whichever
+  # space sorted first and none to the rest.
+  #
+  # The outer select re-lists the columns rather than passing the subquery row
+  # through, so `row_number` is dropped and the returned maps carry exactly the
+  # seven documented keys. `document` is absent from both selects.
+  defp canvas_group_rows(space_ids, limit, offset, order) do
+    row_order = canvas_group_order(order)
+
+    numbered =
+      from(c in Canvas,
+        where: c.space_id in ^space_ids and is_nil(c.deleted_at),
+        windows: [
+          space: [
+            partition_by: c.space_id,
+            order_by: ^row_order
+          ]
+        ],
+        select: %{
+          id: c.id,
+          title: c.title,
+          space_id: c.space_id,
+          updated_at: c.updated_at,
+          inserted_at: c.inserted_at,
+          created_by_display_name: c.created_by_display_name,
+          cloned_from: c.cloned_from,
+          rank: over(row_number(), :space)
+        }
+      )
+
+    from(r in subquery(numbered),
+      where: r.rank > ^offset and r.rank <= ^(offset + limit),
+      order_by: [asc: r.space_id, asc: r.rank],
+      select: %{
+        id: r.id,
+        title: r.title,
+        space_id: r.space_id,
+        updated_at: r.updated_at,
+        inserted_at: r.inserted_at,
+        created_by_display_name: r.created_by_display_name,
+        cloned_from: r.cloned_from
+      }
+    )
+    |> Repo.all()
+    |> Enum.group_by(& &1.space_id)
+  end
+
+  # The four orderings the canvases drawer's sort control offers, as ONE list
+  # each, handed to the window that numbers the rows. The outer query then only
+  # has to order by `rank`, so the sequence a page is CUT at and the sequence it
+  # is RENDERED in are the same expression rather than two that have to be kept
+  # in step.
+  #
+  # Every one ends in a tiebreaker, `inserted_at` then `id`. Without it two
+  # canvases sharing a title (or a same-second `updated_at`, which the
+  # near-duplicate clusters this explorer exists for produce readily) can swap
+  # places between two reads, and a row that swaps across a page boundary is a
+  # row the reader sees twice or never — the paging defect #864 fixed for tasks.
+  # `id` is UUIDv7, so the final tiebreaker is itself stable and total.
+  #
+  # An unrecognised atom falls back to `:title_asc` rather than raising, for the
+  # same reason `CanvasHooks`' `@sorts` map falls back instead of calling
+  # `String.to_existing_atom/1`: the value's provenance is a client `<select>`,
+  # and a drawer that crashes on a stale option is worse than one that sorts
+  # alphabetically.
+  defp canvas_group_order(:updated_desc) do
+    [desc: dynamic([c], c.updated_at), asc: dynamic([c], c.inserted_at), asc: dynamic([c], c.id)]
+  end
+
+  defp canvas_group_order(:inserted_desc) do
+    [desc: dynamic([c], c.inserted_at), asc: dynamic([c], c.id)]
+  end
+
+  defp canvas_group_order(:inserted_asc) do
+    [asc: dynamic([c], c.inserted_at), asc: dynamic([c], c.id)]
+  end
+
+  defp canvas_group_order(_title_asc) do
+    [
+      asc: dynamic([c], fragment("lower(?)", c.title)),
+      asc: dynamic([c], c.inserted_at),
+      asc: dynamic([c], c.id)
+    ]
+  end
+
+  @doc """
+  Resolve a batch of `cloned_from` ids to their parent canvases' titles.
+
+  ONE query for the whole batch. The explorer renders a "cloned from …" line
+  per row, and resolving that per row is an N+1 that scales with the page.
+
+  ## The three outcomes are three distinct values
+
+    * parent is live — maps to its `title` (a binary, possibly `nil` if the
+      parent was saved without one);
+    * parent is soft-deleted, or names no row at all — maps to `:deleted`;
+    * id was never asked about — **absent** from the map.
+
+  `:deleted` is an atom rather than `nil` on purpose. The UI must render
+  "cloned from a deleted canvas", which is a real piece of provenance, so the
+  deleted case has to be distinguishable from "this canvas is not a clone".
+  With `nil` for both, `Map.get/2` returns the same thing for a clone of a
+  deleted parent and for a canvas that was never cloned, and the deleted case
+  silently loses its line. Callers should match on `:deleted`, never on
+  presence — `nil` is present too.
+
+  A malformed id is treated as `:deleted` for the same reason a missing one is:
+  it can never name a live canvas, and dropping it would erase the fact that
+  the row IS a clone.
+  """
+  @spec canvas_parent_titles([binary() | nil]) :: %{
+          optional(binary()) => String.t() | nil | :deleted
+        }
+  def canvas_parent_titles(cloned_from_ids)
+
+  def canvas_parent_titles(cloned_from_ids) when is_list(cloned_from_ids) do
+    ids =
+      cloned_from_ids
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    case Enum.filter(ids, &Platform.UUID.valid?/1) do
+      [] ->
+        Map.new(ids, &{&1, :deleted})
+
+      valid_ids ->
+        live =
+          from(c in Canvas,
+            where: c.id in ^valid_ids and is_nil(c.deleted_at),
+            select: {c.id, c.title}
+          )
+          |> Repo.all()
+          |> Map.new()
+
+        # Default is `:deleted`, so soft-deleted parents, ids naming no row and
+        # malformed ids all land on the marker without a second query.
+        Map.new(ids, fn id -> {id, Map.get(live, id, :deleted)} end)
+    end
+  end
+
   @doc """
   List the ids of non-deleted messages that reference a given canvas.
   Used by the chat LiveView to know which stream items to re-insert when

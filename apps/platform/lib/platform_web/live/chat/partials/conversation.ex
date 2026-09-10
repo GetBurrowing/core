@@ -70,21 +70,26 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
   import PlatformWeb.ChatLive.RenderHelpers,
     only: [
-      marked_text: 1,
       search_headline: 1,
       sidebar_display_name: 2,
       space_header_name: 4,
-      split_marked_snippet: 1,
       unread_label: 1
     ]
 
   import PlatformWeb.ChatLive.Partials, only: [brand_new_user_empty_state: 1]
-  import PlatformWeb.Components.ChatHelpers, only: [present?: 1, relative_time: 1]
+  # `relative_time/1` left this list in task 01a0740d stage 3 along with the
+  # flat canvas rows that used it. The explorer's browse row is title-only by
+  # design (the group header has already said where you are) and its search row
+  # calls the same shared helper from inside the component, so importing it here
+  # would be an import for nothing.
+  import PlatformWeb.Components.ChatHelpers, only: [present?: 1]
+  import PlatformWeb.Components.Canvases.CanvasExplorer, only: [canvas_explorer: 1]
   import PlatformWeb.CoreComponents, only: [input: 1]
   import PlatformWeb.Components.ChatMessage, only: [local_time: 1]
   import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
   import PlatformWeb.Components.ScopePill, only: [scope_pill: 1]
 
+  alias Phoenix.LiveView.JS
   alias Platform.Chat.Sidebar
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.CanvasHooks
@@ -910,17 +915,48 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   end
 
   attr(:active_canvas, :any, required: true)
-  attr(:canvases, :list, required: true)
   attr(:current_participant, :any, required: true)
   attr(:new_canvas_form, :any, required: true)
   attr(:show_canvases, :boolean, required: true)
   attr(:canvas_sort, :atom, required: true)
   attr(:canvas_search_query, :string, required: true)
-  attr(:canvas_search_results, :list, required: true)
   attr(:canvas_unindexed_count, :integer, required: true)
+
+  # ── The explorer's inputs (task 01a0740d stage 3) ─────────────────────────
+  #
+  # All resolved in `CanvasHooks`, never here. The drawer hands the explorer
+  # what it was given: it does not know what a live meeting is, which spaces
+  # the viewer is in, or how a `cloned_from` id becomes a title. Those are
+  # queries, and a template that runs queries runs them on every keystroke of
+  # the busiest LiveView in the app.
+  #
+  # `canvas_groups` is MODE-AWARE and arrives already correct for
+  # `@canvas_search_query`: browse groups from `Chat.list_canvas_groups/2`, or
+  # search groups derived from `Chat.search_canvases/3`. It is one assign
+  # rather than two-plus-a-branch here for the reason the drawer already
+  # records about `search_active?/1` — the pane that renders and the branch
+  # that queried must not be able to disagree about which mode it is in.
+  attr(:canvas_groups, :list, required: true)
+  attr(:canvas_pinned_groups, :list, required: true)
+  attr(:canvas_parent_titles, :map, required: true)
+  attr(:canvas_expanded_keys, :list, required: true)
+  attr(:canvas_explorer_collapsed, :boolean, required: true)
+  attr(:canvas_archive_count, :integer, required: true)
+  attr(:canvas_search_focus, :boolean, required: true)
 
   @doc """
   The live-canvases drawer and its `#new-canvas-form`.
+
+  ## The list is `CanvasExplorer`, not this module's own markup
+
+  Task `01a0740d` stage 3 replaced this drawer's flat single-space list AND its
+  flat results list with `PlatformWeb.Components.Canvases.CanvasExplorer`. What
+  stayed here is everything the explorer deliberately does not own: the search
+  form and its 300ms debounce, the `canvas-search-indexing-state` caveat line
+  and its three recompute points, the sort control, and the new-canvas form.
+
+  The explorer is grouped and multi-space, so a search now reaches every space
+  the viewer participates in rather than only the one they are standing in.
   """
   def canvases_drawer(assigns) do
     ~H"""
@@ -947,19 +983,58 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           <%!-- Search input (task 01a07402 stage 5). `phx-change` on the form
                rather than the input so the payload is `%{"query" => ...}`
                whatever the browser does with implicit submission. The 300ms
-               debounce is what keeps a full-text query off every keystroke. --%>
+               debounce is what keeps a full-text query off every keystroke.
+
+               THE LABEL SAYS "your spaces", NOT "this channel". Task 01a0740d
+               stage 3 made this query multi-space: every space the viewer
+               participates in, plus the one they are standing in. A
+               screen-reader user told "this channel" would have no way to
+               account for a result from somewhere else, and the group headers
+               that explain it are below the field, not on it. --%>
           <form phx-change="canvas_search" class="flex items-center gap-2">
             <.input
               type="search"
               name="query"
               value={@canvas_search_query}
-              aria-label="Search canvases in this channel"
+              aria-label="Search canvases across your spaces"
               placeholder="Search titles and contents"
               data-role="canvas-search-input"
               phx-debounce="300"
               class="input input-xs input-bordered w-full text-xs"
             />
           </form>
+
+          <%!-- ── FOCUS THE FIELD WHEN THE STRIP'S SEARCH ICON ASKS ────────
+               The explorer's collapsed strip carries a search icon that must
+               open the list AND land the cursor in the field. The explorer owns
+               no field — this one is the drawer's — so it emits
+               `canvas_explorer_expand` with `phx-value-focus="search"` and
+               `CanvasHooks` flips `:canvas_search_focus`.
+
+               A MOUNT-TIME `JS.focus`, not a `push_event`: `push_event/3` needs
+               a JS hook on the receiving end, and the only focus hook in the app
+               (`InlineFocus`) is hard-wired to inline thread compose ids. This
+               needs no new JavaScript at all — `phx-mounted` is the same
+               mechanism `Partials` already uses for `JS.focus_first/0` in three
+               places.
+
+               It works because the element is ABSENT until the flag is set, so
+               inserting it is what fires `phx-mounted`. That also explains why
+               `"canvas_explorer_collapse"` clears the flag: left set, the
+               trigger stays in the DOM and a second search-icon expand would
+               mount nothing and focus nothing.
+
+               `sr-only` rather than `hidden`: `display: none` is not focus- or
+               animation-eligible in every engine, and this element's whole job
+               is to be processed on insert. It has no text, so there is nothing
+               for a screen reader to announce either way. --%>
+          <div
+            :if={@canvas_search_focus}
+            id="canvas-search-focus-trigger"
+            phx-mounted={JS.focus(to: ~s([data-role="canvas-search-input"]))}
+            class="sr-only"
+          >
+          </div>
 
           <%!-- ── THE PARTIAL-INDEX LINE ───────────────────────────────────
                Directly under the search form and OUTSIDE both mode divs, so it
@@ -1001,173 +1076,79 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             Older canvases are still being indexed, so a phrase you remember may not be findable yet.
           </p>
 
-          <%!-- ── LIST MODE ────────────────────────────────────────────────
-               A blank query shows the sorted list exactly as it was before
-               this feature existed. `CanvasHooks.search_active?/1` is the ONE
-               predicate deciding this, shared with the event handler, so the
-               pane that renders and the branch that queries cannot disagree
-               about what "searching" means. --%>
-          <div :if={not CanvasHooks.search_active?(@canvas_search_query)} class="space-y-2">
-            <%!-- Sort control. Options and labels come from
-                 `CanvasHooks.sort_options/0`, so the allow-list that PARSES the
-                 incoming value and the list that OFFERS it are one list. A select
-                 that can emit a value its handler rejects is a bug waiting for
-                 whoever adds the fifth option.
+          <%!-- ── SORT, BROWSE MODE ONLY ───────────────────────────────────
+               Options and labels come from `CanvasHooks.sort_options/0`, so the
+               allow-list that PARSES the incoming value and the list that
+               OFFERS it are one list. A select that can emit a value its
+               handler rejects is a bug waiting for whoever adds the fifth
+               option.
 
-                 Deliberately inside LIST MODE only: results come back in rank
-                 order from `Chat.search_canvases/3`, and the sort control does
-                 NOT apply to them. Offering a sort that silently does nothing
-                 would be worse than not offering it. --%>
-            <form phx-change="canvas_sort" class="flex items-center gap-2">
-              <label for="canvas-sort" class="text-[11px] text-base-content/50">Sort</label>
-              <select
-                id="canvas-sort"
-                name="order"
-                class="select select-xs select-bordered w-auto text-xs"
+               Deliberately browse-mode only, unchanged from the flat list this
+               replaced: results come back in `ts_rank_cd` order from
+               `Chat.search_canvases/3` and this control does NOT apply to
+               them. Offering a sort that silently does nothing would be worse
+               than not offering it.
+
+               WHAT CHANGED IN STAGE 3, because it is the only reason this
+               control still means anything: the sort is now passed THROUGH to
+               `Chat.list_canvas_groups/2` as its `:order` option. The explorer
+               holds one bounded page of each group, so an in-memory sort here
+               would order 20 rows out of 41 and present the answer as the
+               group's order — not a slower version of the query, a different
+               and wrong one. Left unwired it would have been a live control
+               that moved nothing, which is the failure the paragraph above
+               refuses. --%>
+          <form
+            :if={not CanvasHooks.search_active?(@canvas_search_query)}
+            phx-change="canvas_sort"
+            class="flex items-center gap-2"
+          >
+            <label for="canvas-sort" class="text-[11px] text-base-content/50">Sort</label>
+            <select
+              id="canvas-sort"
+              name="order"
+              class="select select-xs select-bordered w-auto text-xs"
+            >
+              <option
+                :for={{value, label} <- CanvasHooks.sort_options()}
+                value={value}
+                selected={to_string(@canvas_sort) == value}
               >
-                <option
-                  :for={{value, label} <- CanvasHooks.sort_options()}
-                  value={value}
-                  selected={to_string(@canvas_sort) == value}
-                >
-                  {label}
-                </option>
-              </select>
-            </form>
+                {label}
+              </option>
+            </select>
+          </form>
 
-            <%!-- Scroll container, matching `pins_drawer/1` above. Without a
-               height bound this list grows with the space's canvas count, and
-               the drawer is a flex child of a `flex-col overflow-hidden`
-               column — so the overflow is CLIPPED with no scrollbar anywhere
-               and the last entries become unreachable rather than merely far
-               down. Reported at 16 canvases; the heading stays outside so it
-               does not scroll away with the items. --%>
-            <div class="flex flex-col gap-2 max-h-80 overflow-y-auto">
-              <button
-                :for={canvas <- @canvases}
-                type="button"
-                phx-click="canvas_open"
-                phx-value-canvas-id={canvas.id}
-                class={[
-                  "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors",
-                  "border-edge bg-base-100 hover:border-primary/40 hover:bg-base-100/80",
-                  @active_canvas && @active_canvas.id == canvas.id && "border-primary bg-primary/5"
-                ]}
-              >
-                <div class="min-w-0">
-                  <p class="truncate text-sm font-semibold text-base-content">
-                    {canvas.title || CanvasHooks.humanize_kind(canvas)}
-                  </p>
-                  <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-                    {CanvasHooks.humanize_kind(canvas)}
-                    <%!-- `title` carries the absolute timestamps: the relative
-                       form is what you scan a list with, the absolute is what
-                       you need once you care about one row. `relative_time/1`
-                       is imported from `ChatHelpers` rather than written here —
-                       four implementations of it already exist in this app and
-                       a fifth would be the drift this panel keeps
-                       demonstrating. --%>
-                    <span
-                      class="normal-case tracking-normal"
-                      title={"updated #{canvas.updated_at} · created #{canvas.inserted_at}"}
-                    >
-                      · {relative_time(canvas.updated_at)}
-                    </span>
-                  </p>
-                </div>
+          <%!-- ── THE EXPLORER ─────────────────────────────────────────────
+               One component for both modes. It decides collapse, paging and
+               match-opening off what it is handed; it does not query.
 
-                <span class="ml-3 rounded-full bg-base-300 px-2 py-0.5 text-[11px] text-base-content/60">
-                  Open
-                </span>
-              </button>
+               The height bound stays here rather than moving into the
+               component, because it is a fact about THIS drawer: the drawer is
+               a flex child of a `flex-col overflow-hidden` column, so without
+               one the overflow is CLIPPED with no scrollbar anywhere and the
+               last groups become unreachable rather than merely far down
+               (reported at 16 canvases, long before grouping existed). The
+               explorer's own bound is the page size, which is a different
+               guarantee: it caps what is RENDERED, not what is visible.
 
-              <div
-                :if={@canvases == []}
-                class="rounded-xl border border-dashed border-edge bg-base-100 px-3 py-4 text-sm text-base-content/50"
-              >
-                No canvases yet. Create one to collaborate live in this channel.
-              </div>
-            </div>
-          </div>
-
-          <%!-- ── RESULTS MODE ─────────────────────────────────────────────
-               Rank order from `Chat.search_canvases/3`, rendered as given. --%>
-          <div :if={CanvasHooks.search_active?(@canvas_search_query)} class="space-y-2">
-            <div class="flex flex-col gap-2 max-h-80 overflow-y-auto">
-              <button
-                :for={hit <- @canvas_search_results}
-                type="button"
-                phx-click="canvas_open"
-                phx-value-canvas-id={hit.canvas.id}
-                class={[
-                  "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors",
-                  "border-edge bg-base-100 hover:border-primary/40 hover:bg-base-100/80",
-                  @active_canvas && @active_canvas.id == hit.canvas.id &&
-                    "border-primary bg-primary/5"
-                ]}
-              >
-                <div class="min-w-0">
-                  <p class="min-w-0 truncate text-sm font-semibold text-base-content">
-                    {hit.canvas.title || CanvasHooks.humanize_kind(hit.canvas)}
-                  </p>
-
-                  <%!-- THE SPLIT THAT MAKES THE LIST SCANNABLE: a title match
-                       shows the title alone, a body match shows the title plus
-                       one snippet line. A snippet on every row doubles the
-                       list's height and turns a scan into a reading task.
-
-                       The RULE is not restated here. `Chat.search_canvases/3`
-                       already returns `snippet: nil` unless the body matched
-                       and the title did not, enforced in Elixir after the
-                       query; rendering on the snippet's presence keeps one
-                       source of truth for it. A second copy of the condition in
-                       this template is exactly the kind of pair that drifts.
-
-                       Never `raw/1` on this — the body is user-written.
-                       `marked_text/1` escapes the whole fragment and then
-                       re-enables only the `<mark>` pair `ts_headline` was asked
-                       for. `bg-base-content/5` for the lifted ground, NOT
-                       `base-200`: the dark ladder is not monotonic and
-                       `base-200` renders as a near-black band there. --%>
-                  <.canvas_result_snippet
-                    :if={present?(hit.snippet)}
-                    snippet={hit.snippet}
-                  />
-
-                  <%!-- The design canvas gives a `--color-neutral` slot to the
-                       space name. This drawer is single-space, so a space name
-                       would be the same string on every row; the slot is served
-                       by this existing kind + relative-time line and no space
-                       name is added.
-
-                       P4's last-editor column is a separate ticket and is
-                       deliberately not running alongside this one, so there is
-                       no placeholder left for it here — the row reads correctly
-                       as it stands. --%>
-                  <p class="mt-0.5 text-[11px] uppercase tracking-widest text-base-content/50">
-                    {CanvasHooks.humanize_kind(hit.canvas)}
-                    <span
-                      class="normal-case tracking-normal"
-                      title={"updated #{hit.canvas.updated_at} · created #{hit.canvas.inserted_at}"}
-                    >
-                      · {relative_time(hit.canvas.updated_at)}
-                    </span>
-                  </p>
-                </div>
-
-                <span class="ml-3 shrink-0 rounded-full bg-base-300 px-2 py-0.5 text-[11px] text-base-content/60">
-                  Open
-                </span>
-              </button>
-
-              <div
-                :if={@canvas_search_results == []}
-                class="rounded-xl border border-dashed border-edge bg-base-100 px-3 py-4 text-sm text-base-content/50"
-              >
-                No canvases in this channel match “{@canvas_search_query}”.
-              </div>
-            </div>
-          </div>
+               No bound while collapsed — the 44px strip is three icons tall and
+               a `max-h` there would only be a scrollbar on nothing. --%>
+          <.canvas_explorer
+            id="canvas-explorer"
+            query={@canvas_search_query}
+            collapsed={@canvas_explorer_collapsed}
+            pinned_groups={@canvas_pinned_groups}
+            space_groups={@canvas_groups}
+            expanded_keys={@canvas_expanded_keys}
+            parent_titles={@canvas_parent_titles}
+            active_canvas_id={@active_canvas && @active_canvas.id}
+            archive_count={@canvas_archive_count}
+            class={[
+              "overflow-hidden rounded-xl border border-edge",
+              not @canvas_explorer_collapsed && "max-h-80 overflow-y-auto"
+            ]}
+          />
         </div>
 
         <.form
@@ -1203,76 +1184,17 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     """
   end
 
-  # THE SNIPPET IS THREE PARTS IN A ROW, NOT ONE TRUNCATING STRING.
-  #
-  # The brand rule: the last thing allowed to truncate is the most meaningful.
-  # On this row that is the MATCH, and the surrounding context is the
-  # expendable part — the title above already failed to disambiguate, which is
-  # the whole reason the snippet line exists. So the match is held at
-  # `shrink-0 whitespace-nowrap` and the two context runs are `min-w-0
-  # truncate` and yield around it. It holds at every width by construction:
-  # there is no breakpoint to tune, no second server-side fragment
-  # configuration, and no viewport for the server to guess at.
-  #
-  # Measured before this split, at 375px: the snippet box's right edge sat at
-  # x=286 and the `<mark>` at x=317-377, entirely past it. A phone reader got
-  # "… until their manager r…" — context without the word they searched for.
-  # At 1440px the mark ended at 825 inside a box ending at 943, which is why
-  # nobody reviewing on a laptop saw it.
-  #
-  # `data-role="canvas-result-snippet"` stays on the CONTAINER: the drawer
-  # tests and the `mark` CSS rule both key off it. The three children carry
-  # their own roles so the browser-geometry spec has stable handles.
-  #
-  # LEFT-SIDE CLIPPING on the leading run, because `truncate` clips from the
-  # right and would keep the words FURTHEST from the match — the wrong half.
-  # `direction: rtl` moves the clip and the ellipsis to the left edge (the CSS
-  # rule is in `app.css`, scoped to the leading role), and the `<bdi>` inside
-  # keeps the text itself in logical order: without it the neutral characters
-  # at the run's edges, including the literal "… " the server prepends in
-  # `Chat.ellipsised_headline/2`, get reordered to the wrong end at widths
-  # where the run does not overflow.
-  #
-  # `max-w-full truncate` on the match is a guard, not a feature: a match
-  # wider than the whole row cannot shrink (that is the point), so without a
-  # cap it would overflow the row. Capped, it degrades to a clipped match with
-  # both context runs at zero width, which is the least-wrong reading of a
-  # case the design left open.
-  defp canvas_result_snippet(assigns) do
-    {leading, match, trailing} = split_marked_snippet(assigns.snippet)
-
-    assigns = assign(assigns, leading: leading, match: match, trailing: trailing)
-
-    ~H"""
-    <%!-- `phx-no-format` is load-bearing, not tidiness. Left to itself the HEEx
-         formatter puts each interpolation on its own line, which lands a
-         newline and an indent INSIDE the run — so the leading run's last text
-         node becomes whitespace instead of the character next to the match.
-         Every markup assertion still passes on that, and the browser
-         measurement in stage 2 reads the last character's rect, so it would be
-         measuring a space. Same reflow hazard the moduledoc records for the two
-         mask calls, one element further in. --%>
-    <p
-      phx-no-format
-      data-role="canvas-result-snippet"
-      class="mt-0.5 flex min-w-0 items-baseline gap-1 overflow-hidden rounded bg-base-content/5 px-1.5 py-0.5 text-xs font-normal text-base-content/65"
-    ><%= if @match do %><span
-        :if={@leading}
-        data-role="canvas-result-snippet-leading"
-        class="min-w-0 truncate"
-      ><bdi>{@leading}</bdi></span><mark
-        data-role="canvas-result-snippet-match"
-        class="max-w-full shrink-0 truncate whitespace-nowrap"
-      >{@match}</mark><span
-        :if={@trailing}
-        data-role="canvas-result-snippet-trailing"
-        class="min-w-0 truncate"
-      >{@trailing}</span><% else %><%!-- No mark in the fragment: nothing to
-        protect, so this is the single truncating span it always was. --%><span
-        class="min-w-0 truncate"
-      >{marked_text(@snippet)}</span><% end %></p>
-    """
-  end
+  # `canvas_result_snippet/1` USED TO LIVE HERE. It moved, unchanged, to
+  # `PlatformWeb.Components.Canvases.CanvasExplorer.explorer_row_snippet/1`
+  # in task 01a0740d stage 3, when the explorer took over this drawer's
+  # results markup — the snippet is part of a search ROW, and the rows are no
+  # longer rendered here. The data-roles, classes and `phx-no-format` went
+  # with it verbatim, because `app.css` keys two rules off
+  # `[data-role="canvas-result-snippet"]` and
+  # `[data-role="canvas-result-snippet-leading"]` and this drawer's own tests
+  # assert that three-part structure. `marked_text/1` and
+  # `split_marked_snippet/1` left this module's import list with it; they had
+  # no other caller here.
 
   # Wrappers, not qualified calls — see "WHY THE TWO MASK CALLS ARE WRAPPED"
   # in the moduledoc. Same name, same arity, same call text at the call site,

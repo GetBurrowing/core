@@ -6,11 +6,38 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
     * Assigns: `:canvases`, `:canvases_by_id`, `:active_canvas`,
       `:show_canvases`, `:new_canvas_form`, `:canvas_search_query`,
-      `:canvas_search_results`, `:canvas_unindexed_count`
+      `:canvas_search_results`, `:canvas_unindexed_count`, and the explorer's
+      `:canvas_groups`, `:canvas_pinned_groups`, `:canvas_parent_titles`,
+      `:canvas_expanded_keys`, `:canvas_explorer_collapsed`,
+      `:canvas_explorer_offsets`, `:canvas_archive_count`,
+      `:canvas_search_focus`
     * Events:  `"canvas_panel_toggle"`, `"canvas_close"`,
       `"canvas_open_mobile"`, `"canvas_patch"`, `"canvas_action_click"`,
-      `"canvas_form_submit"`, `"canvas_search"`
+      `"canvas_form_submit"`, `"canvas_search"`,
+      `"canvas_explorer_toggle_group"`, `"canvas_explorer_page"`,
+      `"canvas_explorer_expand"`, `"canvas_explorer_collapse"`
     * Info:    `{:canvas_created, canvas}`, `{:canvas_updated, canvas}`
+
+  ## The explorer's data (task `01a0740d` stage 3)
+
+  The canvases drawer's list is `PlatformWeb.Components.Canvases.CanvasExplorer`,
+  which renders exactly what it is handed and resolves nothing. Everything it
+  needs is derived HERE, by `refresh_explorer/1`, which names its own refresh
+  points — see the long comment above it. Two rules that comment expands on:
+
+    * `:canvases` and `:canvas_groups` are NOT the same list and neither is
+      derived from the other. `:canvases` is the whole space's canvases as full
+      `%Canvas{}` structs (`document` node trees and all) and still backs the
+      drawer-toggle badge, `:canvases_by_id`, and every message that names a
+      canvas. `:canvas_groups` is bounded, multi-space and document-free. A
+      "simplification" that fed the explorer from `:canvases` would put 400 node
+      trees back in the socket and cap the explorer at one space.
+    * the explorer is MULTI-space. The space set is the viewer's own
+      participation (`Chat.list_user_conversations/2`, which is the
+      participant-row read and applies the external scope) plus the space they
+      are standing in. It is not `Chat.list_spaces/1`, which is workspace-wide
+      for internal users and would show a viewer canvas titles out of spaces
+      they are not in.
 
   Per-type LiveView event handlers (canvas_save_form, canvas_save_code,
   canvas_save_diagram, canvas_refresh_dashboard, canvas_sort) are removed.
@@ -30,12 +57,22 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   alias Platform.Chat.CanvasSearchIndex
   alias Platform.Chat.Presence
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Meetings
+  alias Platform.Tasks.CanvasAttachments
   alias PlatformWeb.ChatLive.MessagesHooks
 
   # Most-recently-edited first. `Chat.list_canvases/2` still defaults to
   # `:inserted_asc` for its other callers — the panel asks for what it wants
   # rather than changing the sequence the MCP tools already see.
   @default_sort :updated_desc
+
+  # Rows per GROUP per page. Matches `CanvasExplorer`'s own `page_size` default,
+  # and the two are a pair on purpose: the component takes at most `page_size`
+  # of whatever list it is handed, so a query limit LARGER than the component's
+  # page would load rows nothing renders, and a smaller one would make the
+  # pager offer a next page that repeats rows already shown. If either moves,
+  # both move.
+  @canvas_explorer_page_size 20
 
   # The allow-list IS the parse. `String.to_existing_atom/1` on a client-supplied
   # string would still admit any atom the VM happens to have loaded, which is
@@ -86,6 +123,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:canvas_search_query, "")
     |> assign(:canvas_search_results, [])
     |> assign(:canvas_unindexed_count, 0)
+    |> reset_explorer()
     |> assign(:recent_canvas_events, [])
     |> assign(:show_versions_panel, false)
     |> assign(:canvas_versions, [])
@@ -116,6 +154,27 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:canvas_search_query, "")
     |> assign(:canvas_search_results, [])
     |> assign(:canvas_unindexed_count, CanvasSearchIndex.unindexed_count([space_id]))
+    # The explorer's groups are NOT loaded here, on purpose. This function
+    # leaves `:show_canvases` false, so nothing the explorer would render is on
+    # screen — and the three queries behind it would run on every space nav for
+    # a drawer most navigations never open. They are loaded at the moment the
+    # drawer opens instead (`refresh_explorer/1`'s refresh-point list).
+    #
+    # The one thing set here is which groups start OPEN: the two pinned groups
+    # and the space being entered. Every OTHER space starts collapsed, which is
+    # the explorer's default and what makes it survive 400 canvases.
+    #
+    # Why these three and not none. Collapsing the space you are standing in
+    # would mean opening the drawer in a channel and seeing no canvases at all,
+    # where the flat list this replaced showed them immediately — a regression
+    # dressed as a feature. And a PINNED group that arrives collapsed is a
+    # contradiction: pinning is a claim that these two or three canvases are the
+    # ones in play right now, and a claim you have to click to read is not being
+    # made. Both keys are listed unconditionally; a key naming a group that does
+    # not exist (no live meeting, not an execution space) matches nothing and
+    # costs nothing.
+    |> reset_explorer()
+    |> assign(:canvas_expanded_keys, ["meeting", "task", "space:" <> space_id])
     |> assign_new_form()
   end
 
@@ -152,6 +211,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:canvases, canvases)
     |> assign(:canvases_by_id, build_map(canvases))
     |> maybe_update_active(canvas)
+    # Keep the explorer's bounded groups in step with a canvas that appeared or
+    # changed under an OPEN drawer, the way the flat list this replaced was kept
+    # in step by the `:canvases` assign above. Gated on `:show_canvases` inside
+    # `maybe_refresh_explorer/1`, so a busy space's canvas broadcasts do not run
+    # three queries each into a socket nobody is looking at.
+    |> maybe_refresh_explorer()
   end
 
   @doc "Remove a canvas from the socket's local list (paired with `{:canvas_deleted, canvas}` broadcasts)."
@@ -196,6 +261,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:canvases, canvases)
     |> assign(:canvases_by_id, build_map(canvases))
     |> assign(:active_canvas, active)
+    |> maybe_refresh_explorer()
   end
 
   @doc "Set the active canvas."
@@ -204,7 +270,16 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   @doc "Show the canvases panel."
   @spec show_panel(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  def show_panel(socket), do: assign(socket, :show_canvases, true)
+  def show_panel(socket) do
+    # `refresh_explorer/1` here as well as in `"canvas_panel_toggle"`: a canvas
+    # message can open this panel without the toggle ever being clicked, and an
+    # explorer opened that way would render whatever groups were last loaded —
+    # in the worst case the previous space's, because `load_for_space/2`
+    # deliberately leaves them empty.
+    socket
+    |> assign(:show_canvases, true)
+    |> refresh_explorer()
+  end
 
   @doc "Reset the new-canvas form."
   @spec reset_new_form(Phoenix.LiveView.Socket.t(), map()) :: Phoenix.LiveView.Socket.t()
@@ -272,7 +347,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
          socket
          |> assign(:canvas_sort, sort)
          |> assign(:canvases, canvases)
-         |> assign(:canvases_by_id, build_map(canvases))}
+         |> assign(:canvases_by_id, build_map(canvases))
+         # The explorer holds ONE bounded page of each group, so its order is a
+         # query option and not a list to re-sort. See `refresh_explorer/1`'s
+         # refresh points.
+         |> maybe_refresh_explorer()}
 
       _ ->
         {:halt, assign(socket, :canvas_sort, sort)}
@@ -297,9 +376,21 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     # turn a malformed value into a crashed LiveView rather than a miss.
     case socket.assigns[:active_space] do
       %{id: space_id} when is_binary(space_id) ->
+        # MULTI-SPACE from task 01a0740d stage 3. `search_canvases/3` always
+        # took a LIST; this used to hand it `[space_id]` and so could only ever
+        # find a canvas in the space you happened to be standing in — which is
+        # the wrong shape for the question "where is that approval canvas".
+        #
+        # The cast-safety argument above is unchanged and still discharged:
+        # every id in this list is DB-derived. `explorer_space_ids/1` reads
+        # `:active_space` (a `Chat.get_space/1` row) and the ids of
+        # `Chat.list_user_conversations/2` rows. None of it comes from `params`.
+        # Widening the list did not widen the trust boundary.
+        space_ids = explorer_space_ids(socket)
+
         results =
           if search_active?(query) do
-            Chat.search_canvases([space_id], query)
+            Chat.search_canvases(space_ids, query)
           else
             []
           end
@@ -308,10 +399,24 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
          socket
          |> assign(:canvas_search_query, query)
          |> assign(:canvas_search_results, results)
+         # AFTER the results assign: the search groups are derived from it.
+         |> maybe_refresh_explorer()
          # Re-read per keystroke rather than only on space entry: the backfill
          # runs while the drawer is open, so a line that was true at mount
          # would otherwise stay up for the whole session after the count hit
          # zero. `phx-debounce` bounds how often this runs.
+         #
+         # STILL SCOPED TO THE ACTIVE SPACE, while the search above is not.
+         # Stated rather than left to be discovered: the search now spans every
+         # space the viewer participates in, so an unindexed canvas in a
+         # DIFFERENT space can make a phrase unfindable without lighting this
+         # line. The error is one-directional — the line under-warns, it never
+         # claims an index is incomplete when it is not — and widening it means
+         # widening it at all three recompute points, one of which
+         # (`load_for_space/2`) runs before `:active_space` exists and has only
+         # the entered space id to hand. Left alone deliberately; it belongs
+         # with the push-based refresh the block below already names as the real
+         # fix.
          |> assign(:canvas_unindexed_count, CanvasSearchIndex.unindexed_count([space_id]))}
 
       _ ->
@@ -335,8 +440,66 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     # the space visit.
     #
     # Only on the OPEN half: closing the drawer unrenders the line, so a count
-    # taken there is a query whose answer is thrown away.
-    {:halt, if(show?, do: refresh_unindexed_count(socket), else: socket)}
+    # taken there is a query whose answer is thrown away. Same argument for the
+    # explorer's own three queries.
+    {:halt,
+     if(show?, do: socket |> refresh_unindexed_count() |> refresh_explorer(), else: socket)}
+  end
+
+  # ── The explorer's four events (task 01a0740d stage 3) ────────────────────
+
+  # Group collapse is USER INTENT, held here and nowhere else, and it survives
+  # every data refresh — see the note above `reset_explorer/1`. In search mode
+  # the component ignores these keys entirely and opens on matches instead, so
+  # a group the reader collapsed before searching does not hide a hit from them.
+  defp handle_event("canvas_explorer_toggle_group", %{"key" => key}, socket)
+       when is_binary(key) do
+    keys = Map.get(socket.assigns, :canvas_expanded_keys, [])
+
+    keys = if key in keys, do: List.delete(keys, key), else: [key | keys]
+
+    {:halt, assign(socket, :canvas_expanded_keys, keys)}
+  end
+
+  # `phx-value-offset` arrives as a STRING off the wire and is parsed, not
+  # trusted: `Integer.parse/1` on anything else leaves the offsets map alone.
+  # A negative offset is refused rather than clamped — the component never emits
+  # one, so a negative here means something other than the component sent it.
+  defp handle_event("canvas_explorer_page", %{"key" => key, "offset" => offset}, socket)
+       when is_binary(key) do
+    case Integer.parse(to_string(offset)) do
+      {parsed, ""} when parsed >= 0 ->
+        offsets =
+          socket.assigns
+          |> Map.get(:canvas_explorer_offsets, %{})
+          |> Map.put(key, parsed)
+
+        {:halt, socket |> assign(:canvas_explorer_offsets, offsets) |> refresh_explorer()}
+
+      _ ->
+        {:halt, socket}
+    end
+  end
+
+  # The strip's search icon asks for the field to be focused, and the field is
+  # the DRAWER's — the explorer owns no search input. `:canvas_search_focus`
+  # drives a mount-time `JS.focus` trigger in `Conversation.canvases_drawer/1`;
+  # see the note there for why it is a mount and not a `push_event`.
+  defp handle_event("canvas_explorer_expand", params, socket) do
+    {:halt,
+     socket
+     |> assign(:canvas_explorer_collapsed, false)
+     |> assign(:canvas_search_focus, params["focus"] == "search")}
+  end
+
+  defp handle_event("canvas_explorer_collapse", _params, socket) do
+    {:halt,
+     socket
+     |> assign(:canvas_explorer_collapsed, true)
+     # Cleared on the way out so the next search-icon expand re-mounts the
+     # focus trigger. Left true, the trigger element stays in the DOM and
+     # `phx-mounted` never fires a second time.
+     |> assign(:canvas_search_focus, false)}
   end
 
   defp handle_event("canvas_close", _params, socket) do
@@ -903,6 +1066,314 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
       _ ->
         socket
     end
+  end
+
+  # ── The explorer's data (task 01a0740d stage 3) ───────────────────────────
+  #
+  # `refresh_explorer/1` is recomputed at exactly these points, and this is the
+  # list:
+  #
+  #   1. Drawer open — `"canvas_panel_toggle"` and `show_panel/1`. Both, because
+  #      a canvas message can open the panel without the toggle being clicked,
+  #      and an explorer opened that way with stale groups would render the
+  #      previous space's canvases.
+  #   2. Each (300ms-debounced) search — the `"canvas_search"` handler, which
+  #      must run it AFTER assigning `:canvas_search_results`, because the
+  #      search groups are derived from those hits.
+  #   3. Sort change — `"canvas_sort"`. The order is a QUERY option
+  #      (`Chat.list_canvas_groups/2`'s `:order`), so a sort that did not
+  #      re-query would reorder nothing.
+  #   4. Paging — `"canvas_explorer_page"`.
+  #   5. A canvas created, deleted or restored while the drawer is OPEN, via
+  #      `maybe_refresh_explorer/1` from `put/2` and `remove/2`. Gated on
+  #      `:show_canvases` so a busy space's canvas broadcasts do not run three
+  #      queries each into a socket nobody is looking at.
+  #
+  # NOT in the render path, for the same reason `:canvas_unindexed_count` is
+  # not: `ChatLive` is the busiest LiveView in the app and these are three
+  # round trips.
+  #
+  # NOT in `load_for_space/2` either — see the note there.
+  #
+  # Group EXPANSION and page OFFSETS are deliberately not recomputed here; they
+  # are user intent, held in `:canvas_expanded_keys` and
+  # `:canvas_explorer_offsets`, and refreshing the data must not close a group
+  # the reader opened. `reset_explorer/1` is the only thing that clears them,
+  # and it runs on space entry, where they refer to spaces that may no longer
+  # be listed.
+  defp reset_explorer(socket) do
+    socket
+    |> assign(:canvas_groups, [])
+    |> assign(:canvas_pinned_groups, [])
+    |> assign(:canvas_parent_titles, %{})
+    |> assign(:canvas_expanded_keys, [])
+    |> assign(:canvas_explorer_offsets, %{})
+    |> assign(:canvas_explorer_collapsed, false)
+    |> assign(:canvas_archive_count, 0)
+    |> assign(:canvas_search_focus, false)
+  end
+
+  defp maybe_refresh_explorer(socket) do
+    if Map.get(socket.assigns, :show_canvases, false),
+      do: refresh_explorer(socket),
+      else: socket
+  end
+
+  defp refresh_explorer(socket) do
+    space_ids = explorer_space_ids(socket)
+    order = Map.get(socket.assigns, :canvas_sort, @default_sort)
+    offsets = Map.get(socket.assigns, :canvas_explorer_offsets, %{})
+    query = Map.get(socket.assigns, :canvas_search_query, "")
+
+    # Browse groups are built in BOTH modes, and not wastefully: search mode
+    # reads its space names and its `total_count` off them, and the header has
+    # to read "3 of 41" against the space's real size rather than against the
+    # number of matches. That is the whole reason stage 1 made `total_count` a
+    # COUNT instead of `length(rows)`.
+    browse_groups = explorer_browse_groups(space_ids, order, offsets)
+    pinned = explorer_pinned_groups(socket, order)
+
+    {groups, pinned} =
+      if search_active?(query) do
+        hits = Map.get(socket.assigns, :canvas_search_results, [])
+        {explorer_search_groups(browse_groups, hits), explorer_pinned_matches(pinned, hits)}
+      else
+        {browse_groups, pinned}
+      end
+
+    socket
+    |> assign(:canvas_groups, groups)
+    |> assign(:canvas_pinned_groups, pinned)
+    |> assign(:canvas_parent_titles, explorer_parent_titles(groups, pinned))
+    # The strip's number is the ARCHIVE's size, so it comes off the browse
+    # groups in both modes — a count that fell to 3 while a filter was set
+    # would be describing the filter, and the strip is exactly where the
+    # reader can no longer see that a filter exists.
+    |> assign(:canvas_archive_count, Enum.reduce(browse_groups, 0, &(&2 + &1.total_count)))
+  end
+
+  # WHICH SPACES THE EXPLORER READS.
+  #
+  # `Chat.list_user_conversations/2` is the participant-row read: non-archived
+  # spaces where this user is an active participant, every kind, with the
+  # external scope applied. Deliberately NOT `Chat.list_spaces/1`, which is
+  # workspace-wide for an internal user and only narrows for externals — using
+  # it here would widen a per-space drawer into a workspace-wide canvas index
+  # and put titles from spaces the viewer is not in on their screen.
+  #
+  # The active space is unioned in because a viewer can be READING a channel
+  # without being a participant of it, and the drawer they have open must list
+  # the canvases of the space they are standing in.
+  #
+  # Embedded mode gets the active space alone, matching what
+  # `ChatLive.dm_conversations_for/3` already does for the rail: an embedded
+  # pane is scoped to one conversation by construction and has no rail to
+  # justify a cross-space list.
+  defp explorer_space_ids(socket) do
+    active =
+      case socket.assigns[:active_space] do
+        %{id: id} when is_binary(id) -> [id]
+        _ -> []
+      end
+
+    participating =
+      with false <- !!socket.assigns[:embedded],
+           user_id when is_binary(user_id) <- socket.assigns[:user_id] do
+        user_id
+        |> Chat.list_user_conversations(scope: socket.assigns[:external_scope])
+        |> Enum.map(& &1.id)
+      else
+        _ -> []
+      end
+
+    Enum.uniq(active ++ participating)
+  end
+
+  # One `list_canvas_groups/2` call for every space's first page. A group the
+  # reader has PAGED gets one extra query for its own page, because the option
+  # is a single `:offset` applied to every space and per-group offsets are the
+  # point of a pager. Only paged groups pay for it, and only while they stay
+  # paged.
+  defp explorer_browse_groups(space_ids, order, offsets) do
+    space_ids
+    |> Chat.list_canvas_groups(limit: @canvas_explorer_page_size, order: order)
+    |> Enum.map(fn group ->
+      case Map.get(offsets, "space:" <> group.space_id, 0) do
+        offset when offset > 0 -> explorer_paged_group(group, offset, order)
+        _ -> Map.put(group, :offset, 0)
+      end
+    end)
+  end
+
+  defp explorer_paged_group(group, offset, order) do
+    Chat.list_canvas_groups([group.space_id],
+      limit: @canvas_explorer_page_size,
+      offset: offset,
+      order: order
+    )
+    |> case do
+      # An offset past the end renders an empty group with no pager, which is a
+      # dead end the reader cannot get out of — reachable by deleting canvases
+      # while paged. Fall back to page one rather than stranding them.
+      [%{rows: []}] -> Map.put(group, :offset, 0)
+      [paged] -> Map.put(paged, :offset, offset)
+      _ -> Map.put(group, :offset, 0)
+    end
+  end
+
+  # Search mode keeps EVERY browse group and replaces its rows with that
+  # space's matches — it does not drop the groups that missed. A group with no
+  # match has to render, collapsed, reading "0 of 41": dropping it would make a
+  # space that holds nothing matching indistinguishable from a space the viewer
+  # is not in, and the explorer's whole claim is that you can see where you are
+  # not looking. `:offset` is forced to 0 because a ranked result set is not
+  # paged (the component renders no pager in search mode).
+  defp explorer_search_groups(browse_groups, hits) do
+    rows_by_space = hits |> Enum.map(&explorer_search_row/1) |> Enum.group_by(& &1.space_id)
+
+    Enum.map(browse_groups, fn group ->
+      rows = Map.get(rows_by_space, group.space_id, [])
+
+      group
+      |> Map.put(:rows, rows)
+      |> Map.put(:matched_count, length(rows))
+      |> Map.put(:offset, 0)
+    end)
+  end
+
+  # A hit rebuilt as an explorer row. `hit.canvas` is a full `%Canvas{}` —
+  # `document` node tree included — and this drops it: the explorer renders
+  # titles, and the socket does not need 25 node trees to do that. `:snippet`
+  # rides along because a body match whose title contains none of the query is
+  # the one row nothing else on it can explain.
+  defp explorer_search_row(hit) do
+    canvas = hit.canvas
+
+    %{
+      id: canvas.id,
+      title: canvas.title,
+      space_id: canvas.space_id,
+      updated_at: canvas.updated_at,
+      inserted_at: canvas.inserted_at,
+      created_by_display_name: canvas.created_by_display_name,
+      cloned_from: canvas.cloned_from,
+      snippet: hit.snippet
+    }
+  end
+
+  # ── The two pinned groups ─────────────────────────────────────────────────
+  #
+  # Order is load-bearing and is this function's, not the component's: the
+  # component renders `pinned_groups` verbatim in the order it is handed.
+  defp explorer_pinned_groups(socket, order) do
+    explorer_meeting_group(socket, order) ++ explorer_task_group(socket)
+  end
+
+  # "In this meeting". `Meetings.get_live_meeting_for_space/1` matches on
+  # `chat_space_id == space_id`, so the meeting it returns is bound to the space
+  # in hand and `chat_space_id` is that same id — the round trip through the
+  # meeting is not redundant, it is the CONDITION: no live meeting, no group.
+  # The group exists to say "these canvases are in play right now", which is
+  # only true while a meeting is live.
+  defp explorer_meeting_group(socket, order) do
+    with %{id: space_id} when is_binary(space_id) <- socket.assigns[:active_space],
+         %{chat_space_id: chat_space_id} when is_binary(chat_space_id) <-
+           Meetings.get_live_meeting_for_space(space_id),
+         [group] <-
+           Chat.list_canvas_groups([chat_space_id],
+             limit: @canvas_explorer_page_size,
+             order: order
+           ) do
+      [
+        %{
+          key: "meeting",
+          label: "In this meeting",
+          rows: group.rows,
+          total_count: group.total_count
+        }
+      ]
+    else
+      _ -> []
+    end
+  end
+
+  # "On this task". The reverse of `Orchestration.ExecutionSpace.find_by_task_id/1`,
+  # which resolves an execution space by `metadata->>'task_id'` — so going back
+  # the other way is a plain string-keyed map read on a jsonb column, with no
+  # query at all.
+  defp explorer_task_group(socket) do
+    with %{metadata: metadata} <- socket.assigns[:active_space],
+         task_id when is_binary(task_id) <- Map.get(metadata || %{}, "task_id"),
+         [_ | _] = rows <- explorer_task_rows(CanvasAttachments.list_task_canvases(task_id)) do
+      [%{key: "task", label: "On this task", rows: rows, total_count: length(rows)}]
+    else
+      _ -> []
+    end
+  end
+
+  # THE STALE ATTACHMENT ROW.
+  #
+  # `task_canvas_attachments.canvas_id` is a SOFT reference with no foreign
+  # key, so soft-deleting a canvas leaves its attachment row behind and
+  # `list_task_canvases/1` hands it over as `%{attachment: …, canvas: nil}`
+  # (its own `canvas_envelope(%Canvas{deleted_at: %DateTime{}}), do: nil`
+  # clause). It is not an error and it is not a ghost: it renders NO row and it
+  # is not counted, so a task with three attachments and one deleted canvas
+  # reads "2". The count comes from `length(rows)` AFTER this rejection, which
+  # is what makes the two facts impossible to disagree — a count taken from
+  # `length(entries)` would say 3 beside two rows.
+  #
+  # These rows are deliberately thin: `list_task_canvases/1` returns a
+  # four-key envelope (`id`, `title`, `kind`, `deleted_at`) precisely so
+  # callers do not drag the document graph around, so there is no
+  # `updated_at`, `created_by_display_name` or `cloned_from` to give. The
+  # explorer's row falls back to a title-only line for them rather than
+  # inventing a recency it cannot know — every one of those readers is a
+  # tolerant clause on the row map, not a required key.
+  defp explorer_task_rows(entries) do
+    entries
+    |> Enum.map(&explorer_task_row/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp explorer_task_row(%{canvas: nil}), do: nil
+
+  defp explorer_task_row(%{canvas: %{id: id} = canvas}) when is_binary(id) do
+    %{id: id, title: canvas.title, space_id: nil}
+  end
+
+  defp explorer_task_row(_entry), do: nil
+
+  # In search mode a pinned group is filtered to its matches, the same way a
+  # space group is, so the component's "expand every group holding a match"
+  # rule reaches them too and the header reads "1 of 3". Matching is by hit ID
+  # rather than by re-running a query per group: the hits are already the
+  # authoritative answer to "does this canvas match", and asking twice is how
+  # two answers start to differ.
+  defp explorer_pinned_matches(pinned, hits) do
+    snippets = Map.new(hits, &{&1.canvas.id, &1.snippet})
+
+    Enum.map(pinned, fn group ->
+      rows =
+        group.rows
+        |> Enum.filter(&Map.has_key?(snippets, &1.id))
+        |> Enum.map(&Map.put(&1, :snippet, Map.get(snippets, &1.id)))
+
+      group
+      |> Map.put(:rows, rows)
+      |> Map.put(:matched_count, length(rows))
+    end)
+  end
+
+  # ONE batched query for every `cloned_from` on screen, pinned rows included.
+  # Resolving them per row is an N+1 that scales with the page, and the page is
+  # the thing this ticket exists to bound.
+  defp explorer_parent_titles(groups, pinned) do
+    (groups ++ pinned)
+    |> Enum.flat_map(& &1.rows)
+    |> Enum.map(&Map.get(&1, :cloned_from))
+    |> Enum.reject(&is_nil/1)
+    |> Chat.canvas_parent_titles()
   end
 
   defp register_canvas_engagement(socket, canvas, engagement) do
