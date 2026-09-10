@@ -205,7 +205,19 @@ defmodule Platform.Tasks.ArchitectureRejection do
   def objection_history(task_id) when is_binary(task_id) do
     task_id
     |> rejected_run()
-    |> Repo.preload(stages: from(s in Stage, order_by: [asc: s.position]))
+    # A query-level preload REPLACES `Plan.has_many(:stages)`'s own
+    # `preload_order` rather than merging with it, so the tiebreak is repeated
+    # here. `position` is not unique — no unique index on `(plan_id, position)`
+    # and no uniqueness validation; see the argument at
+    # `PlanEngine.open_remediation_stage_for/1` — so `asc: :position` alone is
+    # not a total order, and `:stage_names` below is a POSITIONAL list a human
+    # reads next to the architect's finding. Two stages sharing a position and
+    # no tiebreak means the same rejection history can render in two different
+    # orders on two refreshes. `asc: :id` makes it total and stable; it does
+    # not promise creation order, since `Platform.Types.UUIDv7`'s counter wraps
+    # at 4096 per millisecond and its timestamp is a wall clock. Ticket
+    # 01a089e6.
+    |> Repo.preload(stages: from(s in Stage, order_by: [asc: s.position, asc: s.id]))
     |> Enum.map(&objection/1)
   end
 

@@ -287,6 +287,45 @@ defmodule Platform.Tasks.PlanEngine do
   # carrying a legacy duplicate pair (inserted before this fix) can exist: the
   # EARLIER stage is the one that sits in front of the gate.
   #
+  # `asc: :id` IS WHAT DELIVERS THAT (ticket 01a089e6). `position` on its own
+  # cannot, and this comment used to claim it did. `position` is not unique:
+  # `stages` carries exactly one index and it is `index(:stages, [:plan_id])`
+  # — plan_id alone, plain, with no unique index on `(plan_id, position)` and
+  # no index on `position` at all (`20260320120000_create_tasks_tables.exs:110`)
+  # — `Stage.changeset/2` validates `position` as required and nothing more,
+  # and the only place distinctness is written down is prose in `plan_create`'s
+  # tool description. So the very legacy pair the paragraph above reasons about
+  # can sit at ONE position, and there `ORDER BY position LIMIT 1` returns
+  # whichever row the scan happened to hand the sort node. In exactly the
+  # scenario the paragraph was written for, the engine could open the wrong
+  # remediation stage — and a comment asserting a guarantee is precisely what
+  # stops the next reader checking whether the query provides one.
+  #
+  # What `asc: :id` buys is a TOTAL, STABLE order. Not "creation order": `id`
+  # is `Platform.Types.UUIDv7`, whose `rand_a` is a per-millisecond monotonic
+  # counter, so the earlier row sorts first in the ordinary case, but the
+  # counter WRAPS after 4096 ids inside one millisecond and the timestamp is a
+  # WALL CLOCK, so a step backwards inverts a pair. Total and stable is the
+  # property this call site actually needs — `id` is the primary key so it can
+  # never tie itself, and one row therefore wins every time.
+  #
+  # The consequence of not having it was MEASURED, not reasoned about, and it
+  # is worse than "unspecified once": successive rounds of the SAME gate
+  # ALTERNATE between the two rows. Four consecutive rounds against a tied pair
+  # picked LATER, EARLIER, LATER, EARLIER. The mechanism is this function's own
+  # caller — `reuse_remediation_stage/1` `Repo.update!`s the row it chose, and
+  # an UPDATE writes a new row version at the end of the heap, so the next
+  # sequential scan hands the sort node the OTHER row first. The effect is one
+  # gate's accumulated findings split across two stages, each holding half the
+  # rounds, which defeats the one-stage bound above. With the tiebreak the same
+  # four rounds picked EARLIER every time.
+  #
+  # A unique index on `(plan_id, position)` is the OTHER repair and it stays
+  # parked in 01a089e6. The paragraph above says legacy duplicate pairs
+  # already exist, so that migration has a known-nonempty adversary and needs
+  # a production census first; this makes the read deterministic whether or
+  # not the index ever lands.
+  #
   # Matched on the synthesized name, which `remediation_stage_name/0` is the
   # single source of.
   defp open_remediation_stage_for(plan_id) do
@@ -296,7 +335,7 @@ defmodule Platform.Tasks.PlanEngine do
       s.plan_id == ^plan_id and s.name == ^@remediation_stage_name and
         s.status in ~w(pending running failed passed)
     )
-    |> order_by([s], asc: s.position)
+    |> order_by([s], asc: s.position, asc: s.id)
     |> limit(1)
     |> Repo.one()
   end
@@ -2094,8 +2133,18 @@ defmodule Platform.Tasks.PlanEngine do
     end
   end
 
+  # A query-level preload REPLACES the association's own `preload_order`
+  # (`Plan.has_many(:stages)`) rather than merging with it, so the tiebreak has
+  # to be repeated here or every plan this module hands back is ordered by a
+  # different rule than the same plan reloaded through `Repo.preload(:stages)`.
+  # `position` is not unique — see the long argument at
+  # `open_remediation_stage_for/1` — so `asc: :position` alone is not a total
+  # order, and this list is what the thirteen call sites above hand back to
+  # their caller as `{:ok, plan}`. `asc: :id` makes it total and stable; it does not
+  # promise creation order (`Platform.Types.UUIDv7`'s counter wraps at 4096 per
+  # millisecond and its timestamp is a wall clock). Ticket 01a089e6.
   defp stages_query do
-    [stages: from(s in Stage, order_by: [asc: s.position])]
+    [stages: from(s in Stage, order_by: [asc: s.position, asc: s.id])]
   end
 
   # ── Telemetry ───────────────────────────────────────────────────────────

@@ -358,6 +358,122 @@ defmodule Platform.Tasks.PlanEngineRemediationTest do
     assert Repo.get!(Stage, ctx.gate.id).status == "pending"
   end
 
+  # Ticket 01a089e6 — `open_remediation_stage_for/1` under the exact scenario
+  # its own comment was written for.
+  #
+  # That comment says `asc: :position` is load-bearing because "the EARLIER
+  # stage is the one that sits in front of the gate". `asc: :position` cannot
+  # deliver that on its own: `position` is not unique (no unique index on
+  # `(plan_id, position)`, no uniqueness validation), so under a legacy
+  # duplicate pair sharing ONE position, `ORDER BY position LIMIT 1` returns
+  # whichever row the scan handed the sort node. `asc: :id` is what makes the
+  # pick total and stable.
+  #
+  # THIS FIXTURE INSERTS THE PAIR ITSELF, WITH IDS IT CHOSE, HIGHEST FIRST.
+  # Two conditions have to hold at once or the test passes with or without the
+  # tiebreak:
+  #
+  #   1. The two remediation stages must SHARE a `position`. With distinct
+  #      positions the tiebreak is never consulted.
+  #   2. Their PHYSICAL order must disagree with their `id` order. If storage
+  #      order and id order agree, a bare `ORDER BY position` returns id order
+  #      by accident and the assertion proves nothing — which is why the
+  #      engine's own reuse path cannot build this fixture: it mints each id
+  #      with `Platform.Types.UUIDv7` as it inserts, so there the two always
+  #      agree.
+  #
+  # Both are production-reachable. The duplicate pair is what the engine's
+  # "legacy duplicate pair (inserted before this fix)" comment is about, and
+  # physical order stops tracking creation order as soon as rows are rewritten
+  # — `shift_stages_from/2` updates every stage at or after an inserted
+  # remediation stage and each update writes a new row version.
+  #
+  # The assertion is on WHICH row was reopened, not that one was: "a stage came
+  # back" and "two calls agree" both pass against an arbitrary pick.
+  test "a legacy duplicate pair at one position reopens the EARLIER stage, not an arbitrary one",
+       ctx do
+    # Sorted rather than assumed-ordered — the claim is about id order, so the
+    # ids have to be known to ascend independently of how they were minted.
+    [low, high] = Enum.sort([Platform.Types.UUIDv7.generate(), Platform.Types.UUIDv7.generate()])
+
+    # The gate moves to 4 so the pair can share position 3, in front of it —
+    # the shape `insert_remediation_stage/3` produces, doubled.
+    ctx.gate |> Stage.changeset(%{position: 4}) |> Repo.update!()
+
+    insert_remediation = fn id, description ->
+      %Stage{}
+      |> Stage.changeset(%{
+        plan_id: ctx.plan.id,
+        position: 3,
+        name: PlanEngine.remediation_stage_name(),
+        description: description,
+        status: "passed",
+        origin: "synthesized"
+      })
+      |> Ecto.Changeset.put_change(:id, id)
+      |> Repo.insert!()
+    end
+
+    # HIGHEST ID FIRST, so heap order is the reverse of id order.
+    insert_remediation.(high, "the LATER duplicate")
+    insert_remediation.(low, "the EARLIER duplicate")
+
+    # The tie is the point of the fixture, so it is asserted rather than
+    # assumed — and this doubles as the standing proof that the schema ACCEPTS
+    # two stages at one position.
+    assert 2 ==
+             Repo.aggregate(
+               Ecto.Query.from(s in Stage, where: s.plan_id == ^ctx.plan.id and s.position == 3),
+               :count
+             )
+
+    fail_gate!(ctx, %{"observed" => "round two: the tool answered :unauthorized"})
+
+    assert {:ok, reused} = PlanEngine.open_remediation_stage(ctx.gate.id)
+
+    # THE ASSERTION. The earlier row — and named explicitly, so a failure
+    # reports which of the two was picked.
+    assert reused.id == low
+    assert reused.description =~ "the EARLIER duplicate"
+    refute reused.description =~ "the LATER duplicate"
+
+    # And the other row is untouched: an arbitrary pick does not just reopen
+    # the wrong stage, it leaves the right one sitting `passed` with the new
+    # finding filed against its sibling, splitting one gate's history in two.
+    later = Repo.get!(Stage, high)
+    assert later.status == "passed"
+    assert later.description == "the LATER duplicate"
+
+    # Still exactly two remediation rows: reuse must not have inserted a third.
+    assert 2 ==
+             Enum.count(
+               stages(ctx.plan.id),
+               &(&1.name == PlanEngine.remediation_stage_name())
+             )
+
+    # A SECOND round, because "unspecified once" understates it. Reuse
+    # `Repo.update!`s the row it chose, and an UPDATE writes a new row version
+    # at the end of the heap — so without the tiebreak the next sequential scan
+    # hands the sort node the OTHER row first and the pick ALTERNATES. Measured
+    # on the reverted code across four rounds: LATER, EARLIER, LATER, EARLIER.
+    # That is one gate's findings split across two stages, each holding half
+    # the rounds, which is what defeats the one-stage bound the tests above
+    # assert. The property is that the SAME row absorbs every round.
+    ctx.gate
+    |> Stage.changeset(%{status: "pending"})
+    |> Repo.update!()
+
+    fail_gate!(ctx, %{"observed" => "round three: the tool answered :not_found"})
+
+    assert {:ok, again} = PlanEngine.open_remediation_stage(ctx.gate.id)
+    assert again.id == low
+    assert again.description =~ "round two: the tool answered :unauthorized"
+    assert again.description =~ "round three: the tool answered :not_found"
+
+    # And the sibling has still never been written to.
+    assert Repo.get!(Stage, high).description == "the LATER duplicate"
+  end
+
   test "re-dispositioning a failed validation to passed still self-heals the stage", ctx do
     # `maybe_advance_resolved_stage/1` is the path that let a bounced task heal
     # itself when a validation was flipped to `passed`. This stage must not

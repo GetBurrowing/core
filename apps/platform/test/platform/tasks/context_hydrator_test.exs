@@ -261,6 +261,91 @@ defmodule Platform.Tasks.ContextHydratorTest do
     end
   end
 
+  # ── stage ordering under a duplicate position (ticket 01a089e6) ──────────
+  describe "hydrate_for_run/2 with two stages at one position" do
+    # `current_approved_plan/1` preloads stages with a QUERY-LEVEL preload,
+    # which REPLACES `Plan.has_many(:stages)`'s `preload_order` rather than
+    # merging with it — so the association's tiebreak does not reach here and
+    # has to be repeated. `asc: :position` alone is not a total order:
+    # `position` is not unique (no unique index on `(plan_id, position)`, no
+    # uniqueness validation; "Stages must have unique positions" lives only in
+    # prose in `plan_create`'s tool description).
+    #
+    # The consequence is sharper here than at most read sites, because
+    # `push_plan_items/2` keys every item on the stage's POSITION and
+    # `push_items/3` calls `Context.put_item/4` in list order. Two stages at
+    # one position therefore COLLIDE on `plan.stage.1.*` and the LAST write
+    # wins — so the order of the preload decides which stage's description the
+    # executing agent is hydrated with. Without a tiebreak that is whatever
+    # order the scan produced, and two runs of the same plan can disagree.
+    #
+    # WHICH of the two wins is not the property being asserted (ascending id
+    # plus last-write-wins makes it the higher id, and that is a consequence,
+    # not a design goal). The property is that it is the SAME one every time.
+    #
+    # THE FIXTURE MINTS THE DUPLICATE'S ID BEFORE THE PLAN EXISTS and inserts
+    # the row AFTER it, because two conditions have to hold at once or this
+    # test passes with or without the tiebreak:
+    #
+    #   1. Two stages must SHARE a `position`.
+    #   2. Their PHYSICAL order must disagree with their `id` order —
+    #      otherwise a bare `ORDER BY position` returns id order by accident.
+    #      Minting first and inserting last is what produces the
+    #      disagreement; `Tasks.create_stage/1` cannot, since it mints each id
+    #      as it inserts and the two always agree there.
+    test "the colliding plan.stage item is resolved the same way on every hydration" do
+      # Minted FIRST, so it is the LOWEST id of the three stages...
+      duplicate_id = Platform.Types.UUIDv7.generate()
+
+      project = create_project()
+      task = create_task(project)
+      plan = create_approved_plan(task)
+
+      [code_stage | _] = Tasks.list_stages(plan.id)
+      assert code_stage.name == "Code"
+      assert code_stage.position == 1
+
+      # ...asserted rather than assumed, since the whole test turns on it.
+      assert duplicate_id < code_stage.id
+
+      # ...and inserted LAST, so heap order is the reverse of id order for the
+      # tied pair.
+      %Platform.Tasks.Stage{}
+      |> Platform.Tasks.Stage.changeset(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Duplicate",
+        description: "the legacy duplicate at position 1"
+      })
+      |> Ecto.Changeset.put_change(:id, duplicate_id)
+      |> Platform.Repo.insert!()
+
+      # The tie is asserted, not assumed — and doubles as the standing proof
+      # that the schema accepts two stages at one position.
+      assert 2 ==
+               Platform.Repo.aggregate(
+                 from(s in Platform.Tasks.Stage,
+                   where: s.plan_id == ^plan.id and s.position == 1
+                 ),
+                 :count
+               )
+
+      task_scope = %{project_id: project.id, epic_id: nil, task_id: task.id}
+
+      # Hydrated three times, asserting the VALUE each time rather than that
+      # the runs agree with each other: one lucky scan satisfies "they agree".
+      for _ <- 1..3 do
+        assert {:ok, _} = ContextHydrator.hydrate_for_run(task.id, Ecto.UUID.generate())
+
+        items = task_scope |> snapshot_items() |> item_map()
+
+        assert items["plan.stage.1.title"].value == "Code"
+        assert items["plan.stage.1.description"].value == "Write the code"
+        assert items["plan.stage.2.title"].value == "Test"
+      end
+    end
+  end
+
   # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
   describe "UUID boundary: hydrate_for_run/2 task_id comes off a dispatch payload" do
     test "a malformed task id reports :task_not_found rather than raising" do

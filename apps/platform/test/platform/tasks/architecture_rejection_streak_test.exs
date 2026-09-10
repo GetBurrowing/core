@@ -5,6 +5,10 @@ defmodule Platform.Tasks.ArchitectureRejectionStreakTest do
 
   ## Every test here is a GUARD, and that is not a hedge
 
+  With ONE exception, added later and labelled at its own call site: "two
+  stages at one position render in a total order" is a DETECTOR for ticket
+  01a089e6, and it reds on unfixed `main`. Everything else here is a guard.
+
   `Platform.Tasks.ArchitectureRejection` is entirely new code in this
   stage. There is no defect on unfixed `main` for any of it to detonate
   against — nothing calls it yet, and nothing behaves differently because
@@ -433,6 +437,62 @@ defmodule Platform.Tasks.ArchitectureRejectionStreakTest do
       assert [entry] = ArchitectureRejection.objection_history(task.id)
       assert entry.findings == []
       assert entry.stage_names == ["Alpha"]
+    end
+
+    # Ticket 01a089e6, and the one DETECTOR in this file: unlike the guards
+    # above, there is a defect on unfixed `main` for this to detonate against.
+    # Vacuity control: reverting `objection_history/1`'s preload to
+    # `order_by: [asc: s.position]` — 1 failure, this test. Detected.
+    #
+    # `objection_history/1` uses a QUERY-LEVEL preload, which REPLACES
+    # `Plan.has_many(:stages)`'s `preload_order` rather than merging with it,
+    # so the association's tiebreak does not reach it. And `asc: :position`
+    # alone is not a total order: `position` is not unique — `stages` carries
+    # one index and it is `index(:stages, [:plan_id])`, plan_id alone and
+    # plain, `Stage.changeset/2` validates `position` as required and nothing
+    # more, and "Stages must have unique positions" lives only in prose in
+    # `plan_create`'s tool description. `:stage_names` is the positional list a
+    # human reads beside the architect's finding, so a nondeterministic order
+    # means the same rejection history renders differently on two refreshes.
+    #
+    # THIS FIXTURE INSERTS THE TIED PAIR WITH IDS IT CHOSE, HIGHEST FIRST,
+    # rather than going through `add_stages/2`. Two conditions have to hold at
+    # once or the test passes with or without the tiebreak:
+    #
+    #   1. Two stages must SHARE a `position` — otherwise the tiebreak is
+    #      never consulted, which is why `add_stages/2` (distinct positions,
+    #      reverse insertion) cannot build it.
+    #   2. Their PHYSICAL order must disagree with their `id` order —
+    #      otherwise a bare `ORDER BY position` returns id order by accident.
+    #      Letting the id autogenerate on insert cannot produce this: the id
+    #      is minted as the row is written, so the two always agree.
+    test "two stages at one position render in a total order, not an arbitrary one", %{task: task} do
+      plan = insert_plan(task, 1, verdict: "rejected", stages: [])
+
+      # Sorted rather than assumed-ordered — the claim is about id order, so
+      # the ids have to be known to ascend however they were minted.
+      [low, high] =
+        Enum.sort([Platform.Types.UUIDv7.generate(), Platform.Types.UUIDv7.generate()])
+
+      # HIGHEST ID FIRST: heap order becomes the reverse of id order.
+      Repo.insert!(%Stage{id: high, plan_id: plan.id, position: 1, name: "Later"})
+      Repo.insert!(%Stage{id: low, plan_id: plan.id, position: 1, name: "Earlier"})
+      Repo.insert!(%Stage{plan_id: plan.id, position: 2, name: "Third"})
+
+      # The tie is asserted, not assumed — and doubles as the standing proof
+      # that the schema accepts two stages at one position.
+      assert 2 ==
+               Repo.aggregate(
+                 from(s in Stage, where: s.plan_id == ^plan.id and s.position == 1),
+                 :count
+               )
+
+      # Read three times, asserting the ORDER each time rather than that the
+      # reads agree with each other: one lucky scan satisfies "they agree".
+      for _ <- 1..3 do
+        assert [entry] = ArchitectureRejection.objection_history(task.id)
+        assert entry.stage_names == ["Earlier", "Later", "Third"]
+      end
     end
   end
 end

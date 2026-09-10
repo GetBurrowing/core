@@ -127,7 +127,23 @@ defmodule Platform.Tasks.ContextHydrator do
         nil
 
       plan ->
-        Repo.preload(plan, stages: from(s in Platform.Tasks.Stage, order_by: [asc: s.position]))
+        # A query-level preload REPLACES `Plan.has_many(:stages)`'s own
+        # `preload_order` rather than merging with it, so the tiebreak is
+        # repeated here. `position` is not unique (no unique index on
+        # `(plan_id, position)`, no uniqueness validation — see the argument at
+        # `PlanEngine.open_remediation_stage_for/1`), so `asc: :position` alone
+        # is not a total order. It matters more here than at most read sites:
+        # `push_plan_items/2` keys every item on the stage's POSITION, so two
+        # stages sharing one collide on `plan.stage.N.title` and the LAST
+        # write wins. Without a tiebreak, which of the two an executing agent
+        # is handed is decided by whatever order the scan produced, and two
+        # runs of the same plan can hydrate different descriptions. `asc: :id`
+        # makes it total and stable — not "creation order", since
+        # `Platform.Types.UUIDv7`'s counter wraps at 4096 per millisecond and
+        # its timestamp is a wall clock. Ticket 01a089e6.
+        Repo.preload(plan,
+          stages: from(s in Platform.Tasks.Stage, order_by: [asc: s.position, asc: s.id])
+        )
     end
   end
 

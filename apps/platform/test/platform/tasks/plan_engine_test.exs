@@ -1993,6 +1993,82 @@ defmodule Platform.Tasks.PlanEngineTest do
     end
   end
 
+  # ── stages_query/0 — the ordering every `{:ok, plan}` this module returns
+  # carries (ticket 01a089e6) ──────────────────────────────────────────────
+
+  describe "advance/2 stage ordering" do
+    # `stages_query/0` is a QUERY-LEVEL preload, and a query-level preload
+    # REPLACES `Plan.has_many(:stages)`'s `preload_order` rather than merging
+    # with it — so the association's ordering rules do not reach it and the
+    # tiebreak has to be repeated. Twelve call sites in `PlanEngine` hand the
+    # result straight back to a caller as `{:ok, plan}`.
+    #
+    # `asc: :position` alone is not a total order because `position` is not
+    # unique: `stages` carries one index and it is `index(:stages, [:plan_id])`
+    # — plan_id alone, plain — `Stage.changeset/2` validates `position` as
+    # required and nothing more, and "Stages must have unique positions" lives
+    # only in prose in `plan_create`'s tool description.
+    #
+    # THE FIXTURE INSERTS THE TIED ROWS ITSELF, WITH IDS IT CHOSE, HIGHEST
+    # FIRST, because two conditions have to hold at once or this test passes
+    # with or without the tiebreak:
+    #
+    #   1. Two stages must SHARE a `position` — otherwise the tiebreak is
+    #      never consulted.
+    #   2. Their PHYSICAL order must disagree with their `id` order —
+    #      otherwise a bare `ORDER BY position` returns id order by accident.
+    #      `Tasks.create_stage/1` cannot produce (2): it mints each id as it
+    #      inserts, so id order and heap order always agree.
+    test "a position tie is broken by id, so the returned plan is totally ordered", %{plan: plan} do
+      {:ok, build} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(build.id)
+
+      # Keeps `advance/2` on its no-op branch: a running stage whose
+      # validations are still pending returns the preloaded plan and changes
+      # nothing, so this test reads the ordering without also asserting a
+      # transition.
+      {:ok, _} = Tasks.create_validation(%{stage_id: build.id, kind: "test_pass"})
+
+      # Sorted rather than assumed-ordered — the claim is about id order.
+      [low, high] =
+        Enum.sort([Platform.Types.UUIDv7.generate(), Platform.Types.UUIDv7.generate()])
+
+      insert_tied = fn id, name ->
+        %Platform.Tasks.Stage{}
+        |> Platform.Tasks.Stage.changeset(%{plan_id: plan.id, position: 2, name: name})
+        |> Ecto.Changeset.put_change(:id, id)
+        |> Platform.Repo.insert!()
+      end
+
+      # HIGHEST ID FIRST: heap order becomes the reverse of id order.
+      insert_tied.(high, "Later")
+      insert_tied.(low, "Earlier")
+
+      # The tie is asserted, not assumed — and doubles as the standing proof
+      # that the schema accepts two stages at one position.
+      assert 2 ==
+               Platform.Repo.aggregate(
+                 from(s in Platform.Tasks.Stage,
+                   where: s.plan_id == ^plan.id and s.position == 2
+                 ),
+                 :count
+               )
+
+      assert {:ok, advanced} = PlanEngine.advance(plan.id)
+
+      # Read three times, asserting the ID ORDER each time rather than that
+      # the reads agree with each other: one lucky scan satisfies "they agree".
+      for _ <- 1..3 do
+        assert {:ok, again} = PlanEngine.advance(plan.id)
+        assert Enum.map(again.stages, & &1.id) == [build.id, low, high]
+      end
+
+      assert Enum.map(advanced.stages, & &1.id) == [build.id, low, high]
+      assert Enum.map(advanced.stages, & &1.name) == ["Build", "Earlier", "Later"]
+      assert Enum.map(advanced.stages, & &1.position) == [1, 2, 2]
+    end
+  end
+
   # ── Test helpers ────────────────────────────────────────────────────────
 
   # Two sentences that appear ONLY in the single-repo rendering, and four
