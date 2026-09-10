@@ -76,6 +76,15 @@ defmodule Platform.Org.Wiki.Search do
   @channel_timeout_ms 2_000
   @lexical_fallback_meta_key :lexical_fallback
 
+  # Queries at or under this many distinct tokens keep the implicit conjunction
+  # `websearch_to_tsquery` applies — they are precise today and the AND is doing
+  # useful work. See `prepare_lexical_query/1`.
+  @lexical_short_query_tokens 6
+
+  # Upper bound on the number of alternation terms. An OR over a full ticket
+  # body would be a GIN scan over nearly the whole table.
+  @lexical_query_token_cap 32
+
   @type corpus :: :page | :journal | :message | :task | :excluded | :unknown
 
   @type hit :: %{
@@ -371,7 +380,83 @@ defmodule Platform.Org.Wiki.Search do
   ## Lexical channels — tsvector first, ilike fallback when empty
   ## ─────────────────────────────────────────────────────────────────────
 
+  # Rewrite a long natural-language query so `websearch_to_tsquery/2` parses it
+  # as an ALTERNATION instead of a conjunction.
+  #
+  # `websearch_to_tsquery('english', "a b c")` yields `'a' & 'b' & 'c'` — every
+  # stem must be present. For a ticket-length query that is unsatisfiable
+  # against any real row, so the lexical channel returns `[]` and the caller
+  # cannot tell a false negative from a true absence. Measured on the seeded
+  # corpus for this ticket the conjunction empties at 8 stems.
+  #
+  # A bare lowercase `or` is parsed by `websearch_to_tsquery` as the `|`
+  # operator, so joining tokens with `" or "` yields `'a' | 'b' | ...` with no
+  # new SQL function, no migration, and no change to the generated
+  # `search_vector` columns or their GIN indexes. Verified on PostgreSQL 16.14:
+  #
+  #     websearch_to_tsquery('english', 'alpha or beta or gamma')
+  #       => 'alpha' | 'beta' | 'gamma'
+  #
+  # The cost, stated plainly: an OR matches far more rows than an AND, so
+  # `ts_rank_cd` now carries the whole burden of precision and the channel cap
+  # bites on broad queries. That is the right trade against a confident false
+  # empty.
+  #
+  # Exposed as `@doc false` public rather than `defp` so the anti-AND guard in
+  # `search_lexical_query_test.exs` can assert on the OPERATOR this produces —
+  # `SELECT websearch_to_tsquery('english', $1)::text` must contain `|` and no
+  # `&`. Asserting on a downstream result set instead would let a future
+  # refactor back to conjunction pass silently. Not part of the public API.
+  @doc false
+  def prepare_lexical_query(query) when is_binary(query) do
+    trimmed = String.trim(query)
+
+    cond do
+      # A deliberate operator query is user intent — a phrase search, a
+      # negation, or an explicit uppercase OR. Never rewrite it into
+      # alternation; doing so would silently disarm a caller who was already
+      # being precise.
+      deliberate_operator_query?(trimmed) ->
+        trimmed
+
+      true ->
+        tokens = lexical_tokens(trimmed)
+
+        # Short queries are precise today and the conjunction is doing useful
+        # work there, so leave them byte-identical to the previous behaviour.
+        # Only long queries — exactly the ones that currently empty — are
+        # rewritten.
+        if length(tokens) <= @lexical_short_query_tokens do
+          trimmed
+        else
+          Enum.join(tokens, " or ")
+        end
+    end
+  end
+
+  defp deliberate_operator_query?(trimmed) do
+    String.contains?(trimmed, "\"") or
+      Regex.match?(~r/(?:^|\s)-\S/u, trimmed) or
+      Regex.match?(~r/(?:^|\s)OR(?:\s|$)/, trimmed)
+  end
+
+  # Split on anything that is not a letter or a digit, downcase, drop empties,
+  # dedupe preserving first-seen order, then cap. The cap exists because an OR
+  # over a two-hundred-token ticket body is a GIN scan over nearly the whole
+  # table; taking the FIRST 32 of a title-then-description query text keeps the
+  # subject terms, which are the discriminating ones.
+  defp lexical_tokens(trimmed) do
+    trimmed
+    |> String.split(~r/[^\p{L}\p{N}]+/u)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.take(@lexical_query_token_cap)
+  end
+
   defp lexical_pages(query, opts, cap) do
+    prepared = prepare_lexical_query(query)
+
     tsvector_hits =
       WikiPage
       |> filter_workspace(opts.workspace_id)
@@ -381,7 +466,7 @@ defmodule Platform.Org.Wiki.Search do
       |> maybe_filter_since_inserted(opts.since)
       |> where(
         [p],
-        fragment("? @@ websearch_to_tsquery('english', ?)", p.search_vector, ^query)
+        fragment("? @@ websearch_to_tsquery('english', ?)", p.search_vector, ^prepared)
       )
       |> order_by(
         [p],
@@ -389,7 +474,7 @@ defmodule Platform.Org.Wiki.Search do
           fragment(
             "ts_rank_cd(?, websearch_to_tsquery('english', ?))",
             p.search_vector,
-            ^query
+            ^prepared
           ),
         desc: p.inserted_at
       )
@@ -422,6 +507,8 @@ defmodule Platform.Org.Wiki.Search do
   end
 
   defp lexical_journal(query, opts, cap) do
+    prepared = prepare_lexical_query(query)
+
     tsvector_hits =
       WikiJournalEntry
       |> filter_workspace(opts.workspace_id)
@@ -431,7 +518,7 @@ defmodule Platform.Org.Wiki.Search do
       |> maybe_filter_since_date(opts.since)
       |> where(
         [e],
-        fragment("? @@ websearch_to_tsquery('english', ?)", e.search_vector, ^query)
+        fragment("? @@ websearch_to_tsquery('english', ?)", e.search_vector, ^prepared)
       )
       |> order_by(
         [e],
@@ -439,7 +526,7 @@ defmodule Platform.Org.Wiki.Search do
           fragment(
             "ts_rank_cd(?, websearch_to_tsquery('english', ?))",
             e.search_vector,
-            ^query
+            ^prepared
           ),
         desc: e.inserted_at
       )
@@ -519,6 +606,8 @@ defmodule Platform.Org.Wiki.Search do
   #
   # Soft-deleted tasks (`deleted_at != nil`) are dropped in both channels.
   defp lexical_tasks(query, opts, cap) do
+    prepared = prepare_lexical_query(query)
+
     tsvector_hits =
       TaskRecord
       |> filter_task_deleted()
@@ -527,7 +616,7 @@ defmodule Platform.Org.Wiki.Search do
       |> maybe_filter_since_inserted(opts.since)
       |> where(
         [t],
-        fragment("? @@ websearch_to_tsquery('english', ?)", t.search_vector, ^query)
+        fragment("? @@ websearch_to_tsquery('english', ?)", t.search_vector, ^prepared)
       )
       |> order_by(
         [t],
@@ -535,7 +624,7 @@ defmodule Platform.Org.Wiki.Search do
           fragment(
             "ts_rank_cd(?, websearch_to_tsquery('english', ?))",
             t.search_vector,
-            ^query
+            ^prepared
           ),
         desc: t.updated_at
       )
@@ -549,6 +638,12 @@ defmodule Platform.Org.Wiki.Search do
     end
   end
 
+  # NOTE: the fallback deliberately receives the ORIGINAL query, never the
+  # prepared one — a `%a or b or c%` LIKE pattern matches nothing. Since
+  # `prepare_lexical_query/1` landed this fallback is near-dead for long
+  # queries: the OR-tsquery will almost always return something, so the
+  # `tsvector_hits == []` branch that reaches here is now rare. It is kept
+  # because deleting it is a separate decision.
   defp ilike_tasks_fallback(query, opts, cap) do
     pattern = "%" <> escape_like(query) <> "%"
 

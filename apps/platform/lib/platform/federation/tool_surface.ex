@@ -1698,7 +1698,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The created task object with id, title, status, priority, and sponsor (nil unless sponsor_user_id was supplied, else %{id, name, email}). When stack_id is supplied, the response also includes stack_id and stack_position. Response also includes advisory `similar_tasks: [%{id, title, status, priority, similarity_score, updated_at, merged_pr_url, follow_up_task_ids, cancellation_note}]` (0-5 near-duplicate hits with similarity_score >= 0.5, scoped to the same project) so the caller can detect near-duplicates and decide to fold, reference, or file fresh without a follow-up memory_search. Empty array (not nil) when no matches or when the similarity search fails.",
+          "The created task object with id, title, status, priority, and sponsor (nil unless sponsor_user_id was supplied, else %{id, name, email}). When stack_id is supplied, the response also includes stack_id and stack_position. Response also includes advisory `similar_tasks: [%{id, title, status, priority, similarity_score, updated_at, merged_pr_url, follow_up_task_ids, cancellation_note}]` (0-5 near-duplicate hits scoped to the same project, each with a similarity_score >= 0.35; the score is the token-overlap coefficient between the new body and the candidate's title+description, NOT a rank) so the caller can detect near-duplicates and decide to fold, reference, or file fresh without a follow-up memory_search. Empty array (not nil) when no matches or when the similarity search fails.",
         limitations:
           "Requires a valid project_id. If stack_id is supplied, the stack must exist and the resulting in-stack DAG must remain acyclic with no cross-stack dependency edges. If sponsor_user_id is supplied it must reference an existing user (FK enforced). When auto_approve_plan is true, the plan won't auto-approve unless every phase assignee resolves to an agent.",
         when_to_use: "When you need to track a work item, feature, bug, or action item"
@@ -7696,28 +7696,82 @@ defmodule Platform.Federation.ToolSurface do
   defp maybe_apply_phase_assignees(task, phase_attrs) when is_map(phase_attrs),
     do: Tasks.set_phase_assignees(task, phase_attrs)
 
+  # Single source of truth for the `similar_tasks` cutoff. Was an inline
+  # `>= 0.5` literal against a reciprocal-rank score, where 0.5 meant
+  # "rank 2 or better in some channel". Against the overlap coefficient
+  # 0.5 would mean "half the query's non-stopword vocabulary appears in
+  # the candidate", which is a different quantity, so the constant was
+  # recalibrated rather than carried across. Calibrated against the two
+  # scoring tests in `tool_surface_test.exs` and nothing else.
+  @similarity_threshold 0.35
+
+  # Deliberately small and hand-listed, not a linguistics dependency.
+  # These are the tokens that appear in almost every ticket body and
+  # would otherwise inflate `|Q ∩ C|` for any two unrelated tasks. The
+  # list is dropped from BOTH the query and the candidate.
+  @similarity_stopwords MapSet.new(~w(
+    a about after all also an and any are as at be because been before being
+    but by can could did do does doing for from had has have he her here hers
+    him his how i if in into is it its just me more most my no nor not of off
+    on once only or other our out over own same she should so some such than
+    that the their them then there these they this those through to too under
+    until up very was we were what when where which while who whom why will
+    with would you your
+  ))
+
   # Stage 4 (019f3dbb) — advisory self-similarity search for
   # `task_create`. Runs synchronously post-create because the caller
   # needs the field in the same response envelope (a follow-up
   # `memory_search` round-trip would double the create's latency).
   #
-  # ## Threshold
+  # ## Score and threshold (task 01a08a27 stage 3)
   #
-  # The plan (task 019f3dbb stage 4) expresses the "strong match" cutoff
-  # as `similarity_score >= 0.5`. `Platform.Org.Wiki.Search` produces
-  # RRF-fused scores bounded by roughly `2 * 1/(k + 1) ≈ 0.033` at k=60,
-  # so the fused `score` on the hit envelope never crosses 0.5 in
-  # practice. We derive `similarity_score` from the hit's channel ranks
-  # instead — `1.0 / min(semantic_rank, lexical_rank)` — which cleanly
-  # maps to the plan's mental model:
+  # `similarity_score` is a MATCH-QUALITY measure and reads NEITHER
+  # channel rank. It is the overlap coefficient
   #
-  #   * rank 1 → 1.0 (near-identical content, both channels rank 1
-  #     usually means the title tokens overlap fully)
-  #   * rank 2 → 0.5 (still a plausible duplicate)
-  #   * rank 3 → 0.33 (weak — filtered out)
+  #     |Q ∩ C| / min(|Q|, |C|)
   #
-  # So the effective filter is "top-2 in at least one channel," which
-  # is the "strong match" bar the plan describes.
+  # where `Q` is the tokenised new-ticket body (`normalize_similarity_query/1`
+  # output, downcased, deduped) and `C` is the tokenised `hit.content`
+  # (which `Search` builds as `title` or `title <> " — " <> description`).
+  # A small English stopword list is dropped from BOTH sides before
+  # intersecting. Rounded to 3 places. See `@similarity_threshold`.
+  #
+  # What this replaced and why: the score used to be
+  # `1.0 / min(semantic_rank, lexical_rank)`, i.e. a POSITIONAL score. It
+  # reported 1.000 — "certain duplicate" — for whatever the lexical
+  # channel happened to return first, regardless of subject. The old
+  # comment here conceded that rank 1 "usually" means the title tokens
+  # overlap fully; that `usually` WAS the defect, and the rank-1/rank-2/
+  # rank-3 confidence table it carried is deleted rather than adjusted
+  # because it describes a quantity this function no longer computes.
+  # Since task 01a08a27 stage 2 widened the lexical channel from an
+  # implicit AND to a capped OR-alternation, a positional score would be
+  # actively worse than before: it would stamp 1.000 on the first row of
+  # a much wider candidate set.
+  #
+  # Overlap coefficient rather than Jaccard, deliberately: a
+  # ticket-length new body against a one-line seeded task has wildly
+  # asymmetric set sizes, and Jaccard would drive every genuine
+  # duplicate toward zero purely on length. Admitted cost, kept
+  # admitted: this is UNSTEMMED, so `returns` and `return` do not
+  # intersect. That is a symmetric loss — it lowers all scores slightly
+  # rather than biasing between candidates — and it keeps the score
+  # computable in pure Elixir with no DB round-trip and no dependence on
+  # the semantic channel, which matters because that channel is dropped
+  # on task scope until task 01a08a6e-973f lands.
+  #
+  # ## Structural bound on this whole feature — read before calling a
+  # ## residual duplicate filing a regression of task 01a08a27
+  #
+  # `similar_tasks` is computed and returned by `task_create` AFTER the
+  # row has been written. Even a perfect implementation therefore cannot
+  # PREVENT two agents filing the same ticket within sixty seconds of
+  # each other: by the time either caller sees this field, both rows
+  # exist. This is a post-hoc account of a race, not a check against
+  # one. The only thing that prevents the duplicate is announcing a
+  # claim before the write. So "success" here means the advisory list is
+  # honest about match quality — not that duplicates stop happening.
   #
   # ## Advisory guarantees
   #
@@ -7749,6 +7803,8 @@ defmodule Platform.Federation.ToolSurface do
         |> Enum.join(" ")
         |> normalize_similarity_query()
 
+      query_tokens = similarity_tokens(query_text)
+
       case Search.search(query_text,
              source: "task",
              project_id: task.project_id,
@@ -7762,8 +7818,8 @@ defmodule Platform.Federation.ToolSurface do
         {:ok, %{results: results}} ->
           results
           |> Enum.reject(fn hit -> hit.id == task.id end)
-          |> Enum.map(&similar_task_entry/1)
-          |> Enum.filter(fn entry -> entry.similarity_score >= 0.5 end)
+          |> Enum.map(&similar_task_entry(&1, query_tokens))
+          |> Enum.filter(fn entry -> entry.similarity_score >= @similarity_threshold end)
           |> Enum.take(5)
       end
     rescue
@@ -7786,13 +7842,13 @@ defmodule Platform.Federation.ToolSurface do
   # Project a `Platform.Org.Wiki.Search` task hit into the advisory
   # `similar_tasks` entry the plan spec calls out. Fields flow through
   # from stage 3's hydration — see `Search.task_to_hit/2`.
-  defp similar_task_entry(hit) do
+  defp similar_task_entry(hit, query_tokens) do
     %{
       id: hit.id,
       title: hit_title(hit),
       status: hit.status,
       priority: hit.priority,
-      similarity_score: hit_similarity_score(hit),
+      similarity_score: hit_similarity_score(hit, query_tokens),
       updated_at: hit.updated_at,
       merged_pr_url: hit.merged_pr_url,
       follow_up_task_ids: hit.follow_up_task_ids,
@@ -7811,23 +7867,50 @@ defmodule Platform.Federation.ToolSurface do
 
   defp hit_title(_), do: ""
 
-  # See `similar_tasks_for/1` for the rationale — rank-based confidence
-  # in [0, 1]. `100` is the "not present in this channel" sentinel; both
-  # ranks missing would already have been filtered upstream (a hit with
-  # no channel rank cannot exist), so the max is a defensive floor.
-  defp hit_similarity_score(%{semantic_rank: semantic_rank, lexical_rank: lexical_rank}) do
-    ranks = Enum.reject([semantic_rank, lexical_rank], &is_nil/1)
-
-    min_rank =
-      case ranks do
-        [] -> 100
-        list -> Enum.min(list)
-      end
-
-    Float.round(1.0 / min_rank, 3)
+  # Overlap coefficient between the query token set and the hit's own
+  # content tokens — see `similar_tasks_for/1` for why this shape and
+  # not Jaccard, and for the admitted unstemmed cost.
+  #
+  # Deliberately reads NEITHER `semantic_rank` NOR `lexical_rank`. A
+  # rank is a position in a result list; it says how a candidate placed
+  # against the other candidates, never how well it matches the query.
+  # If this function ever grows a rank argument again, the score has
+  # stopped measuring match quality.
+  defp hit_similarity_score(%{content: content}, query_tokens) when is_binary(content) do
+    overlap_coefficient(query_tokens, similarity_tokens(content))
   end
 
-  defp hit_similarity_score(_), do: 0.0
+  defp hit_similarity_score(_hit, _query_tokens), do: 0.0
+
+  # Empty on either side scores 0.0 rather than dividing by zero. An
+  # empty set is "nothing to compare", which is the weakest possible
+  # match, not the strongest.
+  defp overlap_coefficient(query_tokens, content_tokens) do
+    q_size = MapSet.size(query_tokens)
+    c_size = MapSet.size(content_tokens)
+
+    if q_size == 0 or c_size == 0 do
+      0.0
+    else
+      shared = MapSet.size(MapSet.intersection(query_tokens, content_tokens))
+
+      Float.round(shared / min(q_size, c_size), 3)
+    end
+  end
+
+  # Tokenise for scoring: split on the same non-alphanumeric class
+  # `normalize_similarity_query/1` uses, downcase, drop stopwords, dedupe
+  # (MapSet). Applied to BOTH sides — an asymmetric stopword policy would
+  # shrink one set and not the other and skew `min(|Q|, |C|)`.
+  defp similarity_tokens(text) when is_binary(text) do
+    text
+    |> String.downcase()
+    |> String.split(~r/[^\p{L}\p{N}]+/u, trim: true)
+    |> Enum.reject(&MapSet.member?(@similarity_stopwords, &1))
+    |> MapSet.new()
+  end
+
+  defp similarity_tokens(_), do: MapSet.new()
 
   # `Search.search` funnels the query into `websearch_to_tsquery('english', ?)`,
   # which treats `-` as a NOT operator (`meeting -fix` → `meeting & !fix`),

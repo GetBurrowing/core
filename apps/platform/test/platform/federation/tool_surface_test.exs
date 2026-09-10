@@ -7996,11 +7996,19 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.similar_tasks == []
     end
 
-    test "similar_tasks filters weak matches below the 0.5 confidence threshold" do
-      # The rank-based confidence is `1.0 / min(semantic_rank, lexical_rank)`,
-      # so rank-3 hits (confidence 0.33) fall below the 0.5 cutoff. Seed
-      # three tsvector-matching tasks; the top-2 pass the threshold, the
-      # third is filtered out.
+    test "similar_tasks entries all clear the confidence threshold" do
+      # REWRITTEN, task 01a08a27 stage 3. This test used to assert
+      # `length(result.similar_tasks) <= 2`, which pinned the OLD
+      # positional semantics: the score was `1.0 / min(semantic_rank,
+      # lexical_rank)`, so rank 3 scored 0.33 and fell under the 0.5
+      # cutoff, making the filter equivalent to "top-2 in some channel".
+      # A COUNT bound is the wrong assertion for a match-quality score —
+      # three equally-good duplicates should all be returned, and under
+      # the overlap coefficient these three fixtures are equally good
+      # (they differ only by a trailing index digit). Keeping `<= 2`
+      # would have pinned the defect rather than the requirement, so the
+      # assertion moves to the SCORE, which is what the threshold
+      # actually filters on.
       project = create_project()
 
       for i <- 1..3 do
@@ -8018,16 +8026,34 @@ defmodule Platform.Federation.ToolSurfaceTest do
           %{
             "project_id" => project.id,
             "title" => "raspberry gizmo cluster",
-            "description" => "the definitive one"
+            # Body widened at stage 3, and NOT to make the assertion
+            # easier. With the stage-1 body ("the definitive one") the
+            # whole query was 6 raw tokens, which sits at
+            # `prepare_lexical_query/1`'s short-query floor, so it kept
+            # the implicit AND — and the seeds contain no "definitive",
+            # so the conjunction returned zero rows. The test therefore
+            # asserted over an EMPTY list, and both of its original
+            # assertions (`length(...) <= 2` and `Enum.all?(...)`) are
+            # trivially true of `[]`. It had been passing vacuously.
+            # This body clears the floor into the OR-alternation path so
+            # the seeds are actually retrieved and actually scored; the
+            # `refute ... == []` below is what stops the vacuity
+            # returning silently.
+            "description" =>
+              "the definitive raspberry gizmo cluster ticket, superseding the earlier near-matches"
           },
           %{}
         )
 
-      assert length(result.similar_tasks) <= 2
+      # Non-vacuity: the list must not be empty, or "every entry clears
+      # the threshold" is vacuously true over zero entries.
+      refute result.similar_tasks == []
 
       assert Enum.all?(result.similar_tasks, fn entry ->
-               entry.similarity_score >= 0.5
-             end)
+               entry.similarity_score >= 0.35
+             end),
+             "every returned entry must clear the threshold, got: " <>
+               inspect(Enum.map(result.similar_tasks, &{&1.title, &1.similarity_score}))
     end
 
     test "similar_tasks: [] when the semantic provider is unavailable (advisory degrade)" do
@@ -8085,6 +8111,196 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert task_create.returns =~ "similar_tasks"
       assert task_create.returns =~ "similarity_score"
+    end
+  end
+
+  # ── similar_tasks scoring (task 01a08a27, stage 1) ────────────────────
+  #
+  # `hit_similarity_score/1` is `1.0 / min(semantic_rank, lexical_rank)`,
+  # so whatever the lexical channel happens to return first is stamped
+  # 1.000 — "certain duplicate" — regardless of whether it has anything
+  # to do with the ticket being filed. The two tests below are a PAIR and
+  # NEITHER PINS ANYTHING ALONE: the negative is satisfied by a scorer
+  # hardcoded to 0.0, the positive is satisfied by the current
+  # reciprocal-rank implementation. Only together do they constrain the
+  # score to track match quality. Do not delete either as redundant.
+  #
+  # STAGE 3 UPDATE: the negative's create body is no longer short — see
+  # the FIXTURE CORRECTED note inside that test for why a fully-shared
+  # short query is degenerate rather than hard, and for the retrieval
+  # control that replaces "short body" as the guard against vacuity. The
+  # paragraph below still governs the POSITIVE control's body, which
+  # remains short.
+  #
+  # WHY THE CREATE BODIES ARE SHORT. Measured on this branch against
+  # this corpus: a 58-stem create body returns 0 lexical hits, a 33-stem
+  # body returns 0, an 8-stem body returns 0, and a 3-stem body returns
+  # the row at `lexical_rank 1`. That is the fault-2 conjunction, and it
+  # means a ticket-length fixture here would make BOTH tests vacuous —
+  # `similar_tasks == []` would hold because the channel returned
+  # nothing, not because any score was filtered, and the positive control
+  # would fail for a reason that has nothing to do with scoring. Short
+  # bodies keep both tests inside the regime where the lexical channel
+  # actually produces the candidates the scorer is supposed to judge.
+  # Ticket-length behaviour is pinned separately, in
+  # `search_lexical_query_test.exs`.
+  #
+  # Both force the Noop memory provider (see the describe setup). The
+  # semantic channel is never asserted on in either direction — it stalls
+  # in episodes and either assertion is a flake. Ordering and `min_rank`
+  # are deliberately not asserted on; both are correct today.
+  describe "task_create similar_tasks scoring (task 01a08a27, noop semantic provider)" do
+    setup do
+      prev = Application.get_env(:platform, :memory_service, [])
+
+      Application.put_env(:platform, :memory_service, provider: Platform.Memory.Providers.Noop)
+
+      on_exit(fn -> Application.put_env(:platform, :memory_service, prev) end)
+      :ok
+    end
+
+    test "an unrelated top-ranked task scores below threshold" do
+      project = create_project()
+
+      # Fixture shapes taken from the two hits observed live against a
+      # board-reporting create: `01a06575-4786` (status :done) reported
+      # 1.000 and `01a04516-d064` (status :cancelled, "NOT A DEFECT"
+      # title) reported 0.500. Neither had anything to do with the
+      # ticket being filed — they shared only generic vocabulary.
+      {:ok, decoy_done} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Nightly export job writes a duplicate status row",
+          description:
+            "The nightly export job writes a duplicate status row into the finance reconciliation sheet whenever two runs overlap."
+        })
+
+      {:ok, decoy_done} = Tasks.transition_task_status(decoy_done, "in_progress")
+      {:ok, decoy_done} = Tasks.transition_task_status(decoy_done, "done")
+
+      {:ok, decoy_cancelled} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "NOT A DEFECT: the transcription worker retries by design",
+          description:
+            "Filed and cancelled. The retry loop in the transcription worker is intentional backoff, not a bug."
+        })
+
+      {:ok, decoy_cancelled} = Tasks.transition_task_status(decoy_cancelled, "cancelled")
+
+      # A ticket on a third subject — the deploy dashboard — that shares
+      # the generic words "nightly", "status" and "row" with the finance
+      # export decoy but nothing else. Sharing generic vocabulary is
+      # exactly the case the confidence score is supposed to
+      # discriminate, and exactly the case the reciprocal-rank score
+      # cannot.
+      #
+      # FIXTURE CORRECTED, task 01a08a27 stage 3, and the correction is
+      # a STRENGTHENING — read this before shortening it back. As landed
+      # in stage 1 the filed title was the bare string "Nightly job
+      # status row", whose every non-stopword token also appears in the
+      # finance-export decoy. That makes Q a SUBSET of C, which forces
+      # |Q ∩ C| = |Q| and min(|Q|, |C|) = |Q|, so the overlap
+      # coefficient is exactly 1.000 — and so is the positive control in
+      # the next test, which is also a containment. Two fixtures that
+      # both score 1.000 cannot be separated by ANY threshold, and the
+      # problem is not the choice of coefficient: Jaccard scores this
+      # decoy 0.286 against the true near-duplicate's 0.263, i.e. it
+      # ranks the decoy HIGHER. No symmetric token-set measure can
+      # discriminate a query whose entire vocabulary is shared, because
+      # there is nothing in the query that is not in the candidate.
+      # That fixture was therefore not a hard case for the scorer, it
+      # was a degenerate one — and note the stage-1 comment already
+      # described this ticket as being about "the deploy dashboard"
+      # while the string carried no deploy vocabulary at all. The body
+      # below gives the ticket the subject the comment always claimed.
+      #
+      # It is still nowhere near ticket length (the stage-1 measurements
+      # that motivated short bodies were taken at 33 and 58 stems, and
+      # before stage 2 replaced the implicit AND with an OR-alternation,
+      # under which a longer query returns MORE candidates rather than
+      # emptying). The retrieval assertion below is what keeps that
+      # judgement honest rather than assumed.
+      create_title = "Deploy dashboard shows a stale status row after nightly rollback"
+
+      create_body =
+        "The deploy dashboard tile keeps rendering yesterday's release status row " <>
+          "after the nightly rollback finishes, so operators comparing tiles read a " <>
+          "stale artefact version."
+
+      # ANTI-VACUITY CONTROL, and it is the whole reason this test can be
+      # trusted. `similar_tasks == []` has TWO causes that are
+      # indistinguishable from the assertion alone: the scorer filtered
+      # the decoys out (what is under test), or the lexical channel never
+      # returned them (a vacuous pass that would survive any scorer,
+      # including one hardcoded to 1.0). Pin retrieval separately and
+      # directly, so the emptiness below can only mean "filtered".
+      {:ok, %{results: raw_hits}} =
+        Platform.Org.Wiki.Search.search(create_title <> " " <> create_body,
+          source: "task",
+          project_id: project.id,
+          agent: nil,
+          limit: 6
+        )
+
+      assert decoy_done.id in Enum.map(raw_hits, & &1.id),
+             "the finance-export decoy must be RETRIEVED, or this test passes vacuously " <>
+               "no matter what the scorer does; got: " <> inspect(Enum.map(raw_hits, & &1.id))
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => create_title,
+            "description" => create_body
+          },
+          %{}
+        )
+
+      assert is_binary(result.id)
+      refute result.id in [decoy_done.id, decoy_cancelled.id]
+
+      # RED before stage 3: whatever the lexical channel returned first
+      # was rank 1, and rank 1 always reported 1.000, so no unrelated hit
+      # could ever be filtered by the threshold. Green now because the
+      # score reads token overlap and not position — the decoy shares 3
+      # of its 14 tokens with a 21-token query, scoring 0.214.
+      assert result.similar_tasks == [],
+             "expected no unrelated hit to clear the threshold, got: " <>
+               inspect(Enum.map(result.similar_tasks, &{&1.title, &1.similarity_score}))
+    end
+
+    test "a genuine near-duplicate still clears the threshold" do
+      project = create_project()
+
+      {:ok, seeded} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Nightly deploy webhook drops the release tag on rollback",
+          description:
+            "On rollback the deploy webhook posts the previous release tag rather than the tag being rolled back to, so the changelog entry and the deployed artefact disagree about which commit is live."
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "deploy webhook release tag rollback"},
+          %{}
+        )
+
+      entry = Enum.find(result.similar_tasks, fn e -> e.id == seeded.id end)
+
+      assert entry,
+             "expected the near-duplicate to be returned, got: " <>
+               inspect(Enum.map(result.similar_tasks, & &1.id))
+
+      # Green today, and green BECAUSE a hit cleared the threshold —
+      # not by accident of an empty list. Asserted at 0.5 rather than at
+      # the 0.35 gate deliberately: a genuine near-duplicate should clear
+      # the bar with margin, so this stays a real constraint even if the
+      # threshold is later lowered.
+      assert entry.similarity_score >= 0.5
     end
   end
 
