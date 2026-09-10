@@ -2021,15 +2021,72 @@
         </aside>
 
         <%!-- Collapsed slim rail (task 019e40f2, re-pointed by
-           01a05b14 stage 3). Only on `>=lg` AND when
-           `@chat_panel_collapsed`. It now expands the CALL RAIL, since
-           that is what the desktop right column holds. --%>
+           01a05b14 stage 3, rebuilt as a real icon strip by 01a0740d).
+           Only on `>=lg` AND when `@chat_panel_collapsed`. It expands
+           the CALL RAIL, since that is what the desktop right column
+           holds.
+
+           WHAT CHANGED IN 01a0740d, and why the width is the point.
+           This was a 48px (`w-12`) dead end: one chevron and one
+           DECORATIVE, non-interactive chat glyph. Collapsing therefore
+           cost the viewer every affordance in the rail and gave them
+           back nothing but a way to undo it. It is now 44px (`w-11`,
+           the house spelling already used elsewhere in this template)
+           and every glyph is a real control. The stage grows by
+           312 - 44 = 268px at `lg`, measured on
+           `<main data-pane="center-stage">`.
+
+           GROUND IS `bg-base-200`, FLAT — not `bg-base-200/40`, and no
+           shadow (Saru's canvas 01a08374). The strip is recessed from
+           the stage so the eye reads it as an edge rather than as
+           content, and `border-l` is a LINE: a shadow would imply the
+           rail floats over the stage, which it does not. `border-edge`
+           rather than a literal `border-base-300` is the base-300
+           border SLOT as this codebase now spells it — task 01a0740b
+           split `--edge` out of `--color-base-300` because dark
+           base-300 (#091821) is DARKER than dark base-100 (#171b25) and
+           renders an invisible border at 1.0478:1. `--edge` is
+           byte-identical to base-300 in light and is the value that
+           actually draws the canvas's one rule in dark.
+
+           NO TEXT ANYWHERE. That is the definition of this state rather
+           than an omission, so each button's `aria-label` carries the
+           whole burden — a screen-reader user gets no benefit from the
+           pixels the collapse buys and must lose nothing for them.
+
+           NOT `@shell?`-gated, matching the rail it collapses: a guest
+           has People, Canvas and Transcript and this is their only way
+           back to them. The Chat button below IS gated, because a guest
+           has no discussion drawer. --%>
         <aside
           :if={@chat_panel_collapsed}
-          class="hidden w-12 flex-shrink-0 flex-col items-center border-l border-edge bg-base-200/40 py-2 lg:flex"
+          class={
+            [
+              "hidden w-11 flex-shrink-0 flex-col items-center gap-1 border-l border-edge bg-base-200 py-2 lg:flex",
+              # MOTION ASYMMETRY (task 01a0740d, Saru's canvas 01a08374).
+              # The transition class is present ONLY when the viewer moved
+              # the rail themselves via a chevron. `:call_rail_animate` is
+              # `false` at both mounts and on every mode-driven reassert,
+              # so switching to screen share SNAPS the width instead of
+              # sliding a slab of the screen at someone whose attention is
+              # already committed to the stage. Motion should say "you",
+              # never "it".
+              #
+              # No local `prefers-reduced-motion` handling, deliberately:
+              # `assets/css/app.css` carries a universal reduce block
+              # (`transition-duration: 0.01ms !important` on `*`,
+              # `*::before`, `*::after`) that already covers this, so both
+              # paths end instant for a viewer who asked for that. A second
+              # rule would be dead code.
+              if(@call_rail_animate, do: "transition-[width] duration-200 ease-out")
+            ]
+          }
           data-pane="call-rail"
           data-pane-collapsed="true"
         >
+          <%!-- Chevron. Points LEFT because that is where the rail's
+             stage-facing edge travels when it expands — it flips to
+             point where it will move, not at where it is. --%>
           <button
             type="button"
             phx-click="toggle_meeting_chat_pane"
@@ -2041,11 +2098,114 @@
           >
             <span class="hero-chevron-double-left size-4"></span>
           </button>
-          <span
-            class="hero-chat-bubble-left-right mt-2 size-4 text-base-content/40"
-            aria-hidden="true"
+
+          <div class="my-1 h-px w-5 flex-shrink-0 bg-edge" aria-hidden="true"></div>
+
+          <%!-- One button per REAL tab, off `CallShell.tabs/0` so the
+             strip and the expanded tablist can never disagree about
+             which tabs exist or in what order. There is deliberately no
+             Chat entry here and `CallShell.tabs/0` is unchanged: Chat is
+             a SEPARATE drawer (`data-pane="chat-panel"`), and that tab
+             list feeds the in-chat quickmeet rail as well.
+
+             EXPAND AND SELECT IN ONE ACTION. A chained `JS.push` fires
+             both `meeting_tab_select` and `toggle_meeting_chat_pane`
+             from the single click, so an icon is a shortcut into the
+             rail rather than a two-step (expand, then hunt for the tab
+             you already asked for). `meeting_tab_select` goes FIRST so
+             the rail is already pointed at the right pane by the time
+             it opens. The toggle is what sets `:call_rail_animate`
+             true, which is correct: the viewer asked for this one. --%>
+          <button
+            :for={{id, label} <- CallShell.tabs()}
+            type="button"
+            phx-click={
+              JS.push("meeting_tab_select", value: %{tab: id})
+              |> JS.push("toggle_meeting_chat_pane")
+            }
+            aria-label={label}
+            title={label}
+            class={[
+              "btn btn-ghost btn-sm btn-square relative text-base-content hover:text-base-content",
+              if(id != CallShell.normalize_tab(@active_meeting_tab), do: "opacity-60")
+            ]}
+            data-role="call-rail-strip-icon"
+            data-tab={id}
+            data-active={to_string(id == CallShell.normalize_tab(@active_meeting_tab))}
           >
-          </span>
+            <span class={[CallShell.tab_icon(id), "size-4"]} aria-hidden="true"></span>
+            <%!-- THE SIGNATURE ELEMENT (Saru's canvas 01a08374). A 2px
+               full-height bar in the `primary` slot on the STAGE-FACING
+               edge — the LEFT edge, since the rail is the right-hand
+               column, so the marker points at the content it belongs to.
+
+               It exists because the strip is a launcher AND the rail
+               still has a current tab while collapsed. Without it the
+               chevron reopens onto a tab the viewer cannot predict,
+               which reads as the app losing their place. One bar makes
+               collapsed a paused state instead of an amnesiac one.
+
+               Normalised through `CallShell.normalize_tab/1` so a junk
+               `@active_meeting_tab` marks People here exactly as the
+               expanded pane renders People. --%>
+            <span
+              :if={id == CallShell.normalize_tab(@active_meeting_tab)}
+              class="absolute inset-y-0 left-0 w-0.5 bg-primary"
+              aria-hidden="true"
+              data-role="call-rail-strip-active-marker"
+            >
+            </span>
+          </button>
+
+          <%!-- The Chat affordance, and the one control on this strip
+             that owns the unread dot. `@shell?`-gated because the guest
+             surface has no `#meeting-chat-drawer` at all.
+
+             KNOWN DEFECT, REPORTED NOT PAPERED OVER (task 01a0740d):
+             `#meeting-chat-drawer` carries an UNCONDITIONAL `lg:!hidden`
+             (see its class list above), so at `lg` — the only width this
+             strip exists at — pushing `toggle_chat_panel` flips
+             `:chat_panel_open` and clears the unread dot but renders no
+             visible drawer. The desktop discussion surface was retired
+             by task 01a05b14 stage 3 and nothing replaced it. Wiring the
+             button as specified is correct and the dot's clear-on-open
+             contract works; making the drawer visible at `lg` is a
+             layout decision with no design backing and is not this
+             ticket's to take. --%>
+          <button
+            :if={@shell?}
+            type="button"
+            phx-click="toggle_chat_panel"
+            aria-label={if @call_rail_unread, do: "Chat, unread messages", else: "Chat"}
+            title="Chat"
+            class="btn btn-ghost btn-sm btn-square relative text-base-content hover:text-base-content"
+            data-role="call-rail-strip-chat"
+          >
+            <span class="hero-chat-bubble-left-right size-4" aria-hidden="true"></span>
+            <%!-- The unread dot. `info` slot, and only `info`: `error`,
+               `success` and `warning` are all already spent on this
+               screen (recording pill, live pill, and "a human is being
+               asked for something"), and an unread message is
+               informational state — not an alarm, not a success, not a
+               request.
+
+               `:if` rather than an always-present transparent node, so
+               ABSENCE is the contract. That is what `rail_badge/1` in
+               `icon_rail.ex` already does, and a node that is always
+               there is untestable.
+
+               NO ANIMATION CLASSES WHATSOEVER — no pulse, no fade-in. A
+               blinking dot in peripheral vision during a call is
+               hostile and this state is not urgent enough to earn it.
+               It appears, it sits there, it goes when chat is opened. --%>
+            <span
+              :if={@call_rail_unread}
+              class="absolute top-1 right-1 size-1.5 rounded-full bg-info"
+              aria-hidden="true"
+              data-role="call-rail-unread-dot"
+            >
+            </span>
+          </button>
         </aside>
       </div>
 

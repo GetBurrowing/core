@@ -104,6 +104,51 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   """
   def tabs, do: @tabs
 
+  @doc """
+  The hero-icon class for one tab id (task 01a0740d).
+
+  Exported because the COLLAPSED strip in `meeting_live.html.heex` has no
+  labels at all — the icon is the entire visual identity of a tab there,
+  so the icon-to-tab mapping stops being private styling and becomes a
+  contract two surfaces have to agree on. A second copy in the template
+  would be free to drift from whatever the expanded rail grows later.
+
+  Deliberately NO catch-all clause: a fourth entry in `@tabs` must fail
+  to compile here rather than render a blank 44px square that the user
+  can click but cannot identify.
+
+  Glyphs match how the rest of the meeting surface already spells these
+  concepts, rather than being picked fresh: `hero-user-group` is the top
+  bar's own call-rail toggle, and `hero-squares-2x2` / `hero-document-text`
+  are `archive_chip_icon/1`'s canvas and summary icons in `MeetingLive`.
+  """
+  @spec tab_icon(String.t()) :: String.t()
+  def tab_icon("people"), do: "hero-user-group"
+  def tab_icon("canvas"), do: "hero-squares-2x2"
+  def tab_icon("transcript"), do: "hero-document-text"
+
+  @doc """
+  Coerce an arbitrary tab string to one this rail actually renders.
+
+  Public since task 01a0740d: the collapsed strip draws the active-tab
+  marker off `@active_meeting_tab`, and `MeetingLive`'s
+  `"meeting_tab_select"` handler assigns any binary it is handed. Without
+  the same normalisation the expanded pane applies, a junk value would
+  leave the strip with NO marker while the rail below it renders People —
+  the collapsed state claiming to have forgotten a place it has not
+  actually lost.
+
+  An unrecognised tab renders People rather than an empty rail: a stale
+  bookmark or a bad param should cost the user the tab they asked for,
+  not the whole pane.
+  """
+  @spec normalize_tab(term()) :: String.t()
+  def normalize_tab(tab) when is_binary(tab) do
+    if Enum.any?(@tabs, fn {id, _} -> id == tab end), do: tab, else: "people"
+  end
+
+  def normalize_tab(_), do: "people"
+
   attr(:id, :string, default: "call-rail")
   attr(:class, :string, default: nil)
 
@@ -769,12 +814,8 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     """
   end
 
-  # An unrecognised tab renders People rather than an empty rail: a
-  # stale bookmark or a bad param should cost the user the tab they
-  # asked for, not the whole pane.
-  defp normalize_tab(tab) when is_binary(tab) do
-    if Enum.any?(@tabs, fn {id, _} -> id == tab end), do: tab, else: "people"
-  end
-
-  defp normalize_tab(_), do: "people"
+  # `normalize_tab/1` moved to the top of this module and became public
+  # in task 01a0740d — the collapsed strip needs the same coercion. Its
+  # clauses had to travel with it: Elixir warns (and `mix precommit`
+  # runs `--warnings-as-errors`) on clauses of one function split apart.
 end

@@ -310,6 +310,32 @@ defmodule PlatformWeb.MeetingLive do
   @doc "Stage modes the segmented control exposes (ADR 0042)."
   def stage_modes, do: @stage_modes
 
+  @doc """
+  Whether the right rail starts COLLAPSED for a given stage mode (task
+  01a0740d).
+
+  The rail's collapse default follows what the stage is showing: gallery is
+  the only mode where the stage is not competing for the pixels, so it is
+  the only mode that opens the rail. Screen share, canvas and whiteboard are
+  full-stage surfaces and open collapsed.
+
+  **ONE CLAUSE PER MODE AND DELIBERATELY NO CATCH-ALL.** A fifth stage mode
+  added to `@stage_modes` must fail to compile here rather than silently
+  inheriting whichever default a fallthrough happened to name — that exact
+  fallthrough shape (`AgentActivity`'s `meta(_)`) has already shipped a wrong
+  default on this surface once.
+
+  Public rather than private because `PlatformWeb.ChatLive.MeetingHooks` has
+  to reassert the same default on the screen-share auto-switch: that hook
+  returns `:halt`, so on `/meetings` it — not this module — is the path a
+  share-start actually takes. Two copies of the table would be two answers.
+  """
+  @spec default_rail_collapsed?(:canvas | :screen | :gallery | :whiteboard) :: boolean()
+  def default_rail_collapsed?(:gallery), do: false
+  def default_rail_collapsed?(:screen), do: true
+  def default_rail_collapsed?(:canvas), do: true
+  def default_rail_collapsed?(:whiteboard), do: true
+
   # How long the canvas tile's just-changed highlight stays on before the
   # LV clears it. Long enough to notice on a glance back at the grid,
   # short enough that it does not become permanent chrome.
@@ -383,6 +409,11 @@ defmodule PlatformWeb.MeetingLive do
       # only exists above `lg:` is not the target that was approved.
       |> assign(:call_rail_open, false)
       |> assign(:chat_panel_collapsed, false)
+      # Rail width animation + unread flag (task 01a0740d). See the
+      # matching pair in the general `mount/3` below for the reasoning;
+      # both mount sites seed them so no path renders with the key absent.
+      |> assign(:call_rail_animate, false)
+      |> assign(:call_rail_unread, false)
       |> assign(:active_meeting_tab, "people")
       |> assign(:captions_visible, false)
       |> assign(:speaking_identities, MapSet.new())
@@ -497,6 +528,21 @@ defmodule PlatformWeb.MeetingLive do
      # stage 3) hydrates from localStorage so the preference survives
      # navigation + reload.
      |> assign(:chat_panel_collapsed, false)
+     # Snap-vs-animate for the rail's WIDTH change (task 01a0740d, per
+     # Saru's design canvas 01a08374). `true` only when the viewer moved
+     # the rail themselves via the chevron; `false` on every mode-driven
+     # reassert, so switching to screen share does not slide a slab of
+     # the screen at someone whose attention is on the stage. Motion
+     # should say "you", never "it". FALSE AT MOUNT is not incidental —
+     # a first paint must never animate.
+     |> assign(:call_rail_animate, false)
+     # Unread marker for the discussion drawer (task 01a0740d). Raised by
+     # the `{:new_message, _}` clause below when a message lands on this
+     # meeting's chat space while the drawer is CLOSED, cleared when the
+     # drawer is opened. Collapsing the rail must not silently hide that
+     # something happened, and until this ticket the meeting surface had
+     # no unread plumbing of any kind.
+     |> assign(:call_rail_unread, false)
      # Mobile-drawer open-state for the CALL RAIL (task 01a05b14 stage
      # 6). Orthogonal to `:chat_panel_collapsed`, which is the DESKTOP
      # affordance. Before this the rail was `hidden lg:flex` and stage 5
@@ -2359,12 +2405,18 @@ defmodule PlatformWeb.MeetingLive do
   # stack one unreachably behind the other — a state the user can enter
   # with two taps and cannot obviously leave. Opening either therefore
   # closes the other.
+  #
+  # Opening the drawer CLEARS `:call_rail_unread` (task 01a0740d) — the
+  # messages are now on screen, so the marker has nothing left to say.
+  # Deliberately only on the OPEN result: clearing on close would wipe the
+  # dot at the exact moment it should start counting again.
   def handle_event("toggle_chat_panel", _params, socket) do
     next = !socket.assigns.chat_panel_open
 
     {:noreply,
      socket
      |> assign(:chat_panel_open, next)
+     |> assign(:call_rail_unread, if(next, do: false, else: socket.assigns.call_rail_unread))
      |> assign(:call_rail_open, if(next, do: false, else: socket.assigns.call_rail_open))}
   end
 
@@ -2395,12 +2447,17 @@ defmodule PlatformWeb.MeetingLive do
   # Desktop chat-pane collapse (task 019e40f2). Strictly DESKTOP — the
   # mobile drawer continues to use `:chat_panel_open`. Same shape as
   # the retired `toggle_participant_rail` (see above).
+  #
+  # THE ONE PATH THAT ANIMATES (task 01a0740d). `:call_rail_animate` is set
+  # `true` here and `false` on every mode-driven reassert, because this is
+  # the only width change the viewer asked for.
   def handle_event("toggle_meeting_chat_pane", _params, socket) do
     next = !socket.assigns.chat_panel_collapsed
 
     {:noreply,
      socket
      |> assign(:chat_panel_collapsed, next)
+     |> assign(:call_rail_animate, true)
      |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: next})}
   end
 
@@ -2495,14 +2552,28 @@ defmodule PlatformWeb.MeetingLive do
         # holds `window.__livekit_room`) so relocation fires exactly once per
         # switch. Mirrors the `*_collapsed_changed` push_event idiom above
         # (lines ~311 / ~334).
+        # Task 01a0740d: the new mode REASSERTS its rail default, so it wins
+        # over whatever the viewer last toggled by hand. The
+        # `meeting_chat_pane_collapsed_changed` push keeps the localStorage
+        # copy in step — without it the hydrate handler would restore a
+        # stale manual value on the next mount and the default would look
+        # like it never applied.
+        collapsed = default_rail_collapsed?(stage_mode)
+
         {:noreply,
          socket
          |> assign(:current_stage_mode, stage_mode)
-         |> push_event("meeting_stage_mode_changed", %{mode: Atom.to_string(stage_mode)})}
+         |> assign(:chat_panel_collapsed, collapsed)
+         |> assign(:call_rail_animate, false)
+         |> push_event("meeting_stage_mode_changed", %{mode: Atom.to_string(stage_mode)})
+         |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: collapsed})}
 
       :error ->
         # Unknown mode — keep `:current_stage_mode` unchanged. No
         # FunctionClauseError, no flash; the click is simply a no-op.
+        # It reasserts NOTHING either (task 01a0740d): a hand-crafted
+        # phx-click naming a bogus mode must not be able to shut the
+        # viewer's rail.
         {:noreply, socket}
     end
   end
@@ -2791,9 +2862,17 @@ defmodule PlatformWeb.MeetingLive do
 
     socket =
       if enabled and Map.get(socket.assigns, :current_stage_mode) != :screen do
+        # Task 01a0740d: same reassert as `set_stage_mode`, kept identical
+        # to `MeetingHooks.maybe_switch_to_screen/2` so the backstop and
+        # the live path cannot drift into two behaviours.
+        collapsed = default_rail_collapsed?(:screen)
+
         socket
         |> assign(:current_stage_mode, :screen)
+        |> assign(:chat_panel_collapsed, collapsed)
+        |> assign(:call_rail_animate, false)
         |> push_event("meeting_stage_mode_changed", %{mode: "screen"})
+        |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: collapsed})
       else
         socket
       end
@@ -4068,10 +4147,77 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_info({:recording_updated, _recording}, socket), do: {:noreply, socket}
 
+  # Discussion unread marker (task 01a0740d).
+  #
+  # MUST STAY ABOVE THE CATCH-ALL. Until this ticket `meeting_live.ex` had
+  # no `{:new_message, _}` clause at all and every one of these fell into
+  # the ignore-everything clause below. The data was already arriving: the
+  # connected-mount branch takes `SpaceTopics.hold(socket, chat_space_id,
+  # :meeting)`, which subscribes `chat:space:<id>`, and `Platform.Chat`
+  # broadcasts `{:new_message, %Message{}}` there on every post. Nothing
+  # was listening.
+  #
+  # The real handler for a message is `ChatLive.MessagesHooks`, running
+  # inside the SEPARATE embedded `ChatLive.Embedded` that the drawer
+  # `live_render`s. That process streams the message; this one only needs
+  # to know whether the viewer SAW it.
+  def handle_info({:new_message, %Platform.Chat.Message{} = msg}, socket) do
+    {:noreply, maybe_raise_rail_unread(socket, msg)}
+  end
+
   # Catch-all: chat-space topic carries many event shapes (messages,
   # reactions, pins, …). The shell only cares about roster + canvas
   # events; ignore the rest so a broadcast can't crash the LV.
   def handle_info(_event, socket), do: {:noreply, socket}
+
+  # Three gates, each closing a different way the dot would lie.
+  #
+  #   * `:chat_panel_open` — the drawer is on screen, so the viewer is
+  #     looking at the message as it lands. A message you are reading is
+  #     not unread. Left FALSE rather than set, never cleared here: the
+  #     clear belongs to `"toggle_chat_panel"`.
+  #   * space — this pid holds more than one `chat:space:<id>` topic (the
+  #     shell holds the viewer's whole presence set on the same process),
+  #     so an unrelated room's traffic would otherwise raise a dot on this
+  #     meeting's rail.
+  #   * author — `author_user_id` is the ADR 0038 identity snapshot written
+  #     at post time, so the viewer's own message never marks itself
+  #     unread. It is a real column on `Platform.Chat.Message`, not a
+  #     guess, which is why this sub-rule is implemented rather than
+  #     skipped.
+  defp maybe_raise_rail_unread(socket, %Platform.Chat.Message{} = msg) do
+    if rail_unread_worthy?(socket, msg) do
+      assign(socket, :call_rail_unread, true)
+    else
+      socket
+    end
+  end
+
+  defp rail_unread_worthy?(socket, %Platform.Chat.Message{} = msg) do
+    # `!` rather than `not`: the assign is seeded at both mount sites, but
+    # `not nil` would RAISE on any path that ever missed one, and a crashed
+    # LiveView is a worse answer than a missing dot.
+    !socket.assigns[:chat_panel_open] and
+      message_for_this_meeting?(socket, msg) and
+      not own_chat_message?(socket, msg)
+  end
+
+  # A struct that carries NO space id is not attributed to another room, so
+  # it is not filtered out on that basis — only a space id that is present
+  # and different disqualifies.
+  defp message_for_this_meeting?(socket, %Platform.Chat.Message{space_id: space_id}) do
+    case socket.assigns[:meeting] do
+      %{chat_space_id: meeting_space_id} when is_binary(meeting_space_id) ->
+        not is_binary(space_id) or space_id == meeting_space_id
+
+      _ ->
+        false
+    end
+  end
+
+  defp own_chat_message?(socket, %Platform.Chat.Message{author_user_id: author_user_id}) do
+    is_binary(author_user_id) and author_user_id == socket.assigns[:user_id]
+  end
 
   # Flip a `scheduled` meeting to `live` (stamping `started_at` and
   # broadcasting `{:meeting_started, _}` so the index re-buckets it under

@@ -677,12 +677,32 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         socket
 
       _other ->
+        # Task 01a0740d: the rail's collapse default is reasserted HERE and
+        # not only in `MeetingLive`, because this hook returns `:halt` — on
+        # `/meetings` a share-start never reaches `MeetingLive`'s own
+        # `"meeting_screen_share_state"` clause, which survives purely as a
+        # detach backstop. Reasserting in only one of the two would leave
+        # the feature half-dead on the primary surface.
+        #
+        # The table itself is `MeetingLive.default_rail_collapsed?/1`. A
+        # local `true` here would be a second copy of the same decision,
+        # free to drift.
+        collapsed = PlatformWeb.MeetingLive.default_rail_collapsed?(:screen)
+
         socket
         |> assign(:current_stage_mode, :screen)
+        |> assign(:chat_panel_collapsed, collapsed)
+        # Snap, never animate: nobody asked for this width change, the
+        # share did.
+        |> assign(:call_rail_animate, false)
         |> push_event("meeting_stage_mode_changed", %{mode: "screen"})
+        |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: collapsed})
     end
   end
 
+  # Disable edge: no stage switch, and therefore NO rail reassert either
+  # (task 01a0740d). Stopping a share must not yank the rail back open on
+  # someone who collapsed it deliberately.
   defp maybe_switch_to_screen(socket, false), do: socket
 
   # Return `{:cont, socket}` so the event continues to the host LV's own
