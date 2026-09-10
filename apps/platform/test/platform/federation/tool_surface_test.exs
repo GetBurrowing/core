@@ -334,41 +334,52 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute "meeting_activity_push" in task
     end
 
-    # Task 01a083c3 stage 3 — the CLASS guard, not the instance. Stage 1 moved
-    # `meeting_activity_push` out of `task`; 01a066af stage 4 had already moved
-    # `meeting_create` and `meeting_say`. Two tickets for the same mistake is
-    # enough: this pins the RULE rather than a third name, so a future
-    # `meeting_*` descriptor added to `task_tools/0` reddens here instead of
-    # arriving as another follow-up. `task` is absent from
-    # `AgentRuntime.default_allowed_bundles/0`, so a `meeting_*` tool landing
-    # there is simply unreachable for a default runtime.
+    # Task 01a083c3 stage 3, WIDENED by task 01a08875 stage 1 — the CLASS
+    # guard, not the instance. 01a066af stage 4 moved `meeting_create` and
+    # `meeting_say` out of `task`; 01a083c3 stage 1 moved
+    # `meeting_activity_push`; 01a08875 stage 1 moved `intent_ack`. This pins
+    # the RULE rather than a fourth name, so a future meeting-scoped
+    # descriptor added to `task_tools/0` reddens here instead of arriving as
+    # yet another follow-up ticket. `task` is absent from
+    # `AgentRuntime.default_allowed_bundles/0`, so a meeting-scoped tool
+    # landing there is simply unreachable for a default runtime.
     #
-    # KNOWN EXCEPTION, deliberate, and NOT catchable by a prefix guard:
-    # `intent_ack` is meeting-scoped by function — its `intent_id` resolves the
-    # owning meeting and the queue is meeting-lifetime — but it is not a
-    # `meeting_*` name, and its placement in `task` is a recorded decision, not
-    # an oversight: every dispatch-capable runtime already holds `task`, so
-    # answering a meeting intent needs no permissions change. See
-    # `tool_surface_intent_ack_test.exs`, "intent_ack ships in the task bundle
-    # alongside task_ack". This guard therefore claims exactly what it says —
-    # nothing NAMED `meeting_*` sits in `task` — and does not claim that `task`
-    # holds nothing meeting-related.
+    # The class is NOT the `meeting_` name prefix, and that mattered. As
+    # originally written this test WAS a prefix guard, and it recorded
+    # `intent_ack` as a "KNOWN EXCEPTION ... NOT catchable by a prefix guard",
+    # justified by the claim that every dispatch-capable runtime already holds
+    # `task`. That claim was false when written — `task` has never appeared in
+    # `@default_allowed_bundles` on any commit — and the exemption it bought is
+    # why `intent_ack` survived two cleanups of this exact bug class. The
+    # prefix WAS the exemption: with the comment deleted and `intent_ack` put
+    # back in `task_tools/0`, the prefix version of this test still passed.
     #
-    # The two assertions are anti-vacuity and both are load-bearing: without
-    # them the refute would still pass if `list_tools/1` started returning `[]`,
-    # or if the `meetings` bundle were emptied.
-    test "no meeting_* tool is registered in the task bundle" do
-      refute Enum.any?(
-               ToolSurface.list_tools(["task"]),
-               &String.starts_with?(&1.name, "meeting_")
-             )
+    # So the class is defined by the HANDLE a tool takes, which is what
+    # actually makes it meeting-scoped: a `meeting_` name, or a `meeting_id` /
+    # `intent_id` parameter. That covers all four names above with no list to
+    # maintain, and it is what reddens under the mutation.
+    test "no meeting-scoped tool is registered in the task bundle" do
+      meeting_scoped? = fn tool ->
+        String.starts_with?(tool.name, "meeting_") or
+          Enum.any?(Map.keys(tool.parameters), &(&1 in [:meeting_id, :intent_id]))
+      end
 
-      assert Enum.any?(
-               ToolSurface.list_tools(["meetings"]),
-               &String.starts_with?(&1.name, "meeting_")
-             )
+      refute Enum.any?(ToolSurface.list_tools(["task"]), meeting_scoped?)
 
+      # Anti-vacuity. Without the first the refute would still pass if
+      # `list_tools/1` started returning `[]`; without the second it would pass
+      # if the `meetings` bundle were emptied.
       assert length(ToolSurface.list_tools(["task"])) > 0
+      assert Enum.any?(ToolSurface.list_tools(["meetings"]), meeting_scoped?)
+
+      # And the predicate must still recognise the NON-prefix member of the
+      # class, or this guard has silently narrowed back to the prefix rule it
+      # replaced and the exemption is back in force by omission.
+      intent_ack = ToolSurface.list_tools(["meetings"]) |> Enum.find(&(&1.name == "intent_ack"))
+
+      assert intent_ack
+      assert meeting_scoped?.(intent_ack)
+      refute String.starts_with?(intent_ack.name, "meeting_")
     end
 
     test "returns the union when multiple bundles are requested" do

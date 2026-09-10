@@ -83,6 +83,7 @@ defmodule Platform.Meetings.IntentDispatcher do
   | `:no_assignee`      | role is valid but unassigned                   |
   | `:agent_not_found`  | assignment points at a deleted agent           |
   | `:no_runtime`       | agent exists but has no linked AgentRuntime    |
+  | `:cannot_ack`       | runtime is linked but not authorized for `intent_ack` |
 
   `:no_target_role` covers BOTH shapes small talk arrives in. The
   classifier's own "nobody" is the STRING `"null"`, but the response
@@ -147,6 +148,60 @@ defmodule Platform.Meetings.IntentDispatcher do
   would make the two look identical to whoever is triaging a red strip. The
   refusal is not lost either: it surfaces as a distinct outcome atom on
   `[:platform, :chat, :dispatch_auto_invite]`.
+
+  ## A reachable runtime is not necessarily an ACK-capable one (task 01a08875 stage 2)
+
+  Being reachable and being able to answer are different facts, and until
+  this stage only the first was checked. `resolve_target/1`'s entire test is
+  `agent.runtime_id != nil`, so a runtime whose `allowed_bundles` did not
+  carry the bundle registering `intent_ack` was dispatched to anyway. It then
+  tried to ack, `Platform.Federation.ToolAuthorization.authorize/2` refused
+  it ABOVE `ToolSurface.execute/3`, and the refusal reached nobody: the MCP
+  transport emits no log, no telemetry and no audit row for a
+  not-in-allowed-bundles denial. The queue therefore heard nothing at all,
+  held the meeting's SERIAL cursor for the whole `:awaiting_delivery` window
+  (`ack_timeout_ms` × 2 — the shorter 90s `:awaiting_ack` phase only arms on
+  first contact, and a refusal is not contact), and finally recorded a plain
+  `:timed_out` / `:never_delivered` that is byte-identical to "the runtime was
+  offline". A real ask spoken behind it sat `:queued` for that entire time.
+
+  So the runtime is now asked, before dispatch, whether it may call
+  `intent_ack` at all. A "no" is a `:dispatch_failed{:cannot_ack}` row
+  recorded IMMEDIATELY — `:dispatch_failed` is in the queue's
+  `@advancing_statuses`, so the cursor releases in the same transaction and
+  the next intent goes out at once instead of ~180s later.
+
+  It costs no extra runtime lookup: `resolve_target/1` already hands back the
+  `%AgentRuntime{}` struct, so the bundle membership is read off something
+  already in hand. It is not free, though — `authorize/2` also asks
+  `Platform.Tenancy.external_user?/1`, which is one indexed `Repo.exists?` on
+  `org_memberships`. One extra indexed existence check on a path that already
+  performs two `Repo.get/2`s inline is the whole price.
+
+  ### Two limits, deliberate — do not design them away
+
+  1. **This is not a substitute for registering `intent_ack` in a bundle the
+     target actually holds** (stage 1 of this task moved it into `meetings`).
+     On its own, this check converts an invisible 180s stall into a visible
+     red row; it does not make the intent answerable. The meeting still does
+     not get what it asked for — it just finds out immediately, and the asks
+     behind it are no longer punished for it.
+  2. **It closes "provably cannot ack", never "didn't ack".** The only thing
+     asked is a membership test against a struct already loaded. A runtime
+     that holds the bundle and then goes silent — offline, wedged, crashed
+     mid-spawn — is still resolved by the full ack timeout, exactly as
+     before. That is the correct boundary: presence and liveness are not
+     capability, and guessing at them here would trade a truthful late answer
+     for a fast wrong one. Same trade, made for the same reason, as stage 4's
+     `:no_runtime` (task 019f70b8): "a surface that cannot ack cannot honour
+     it... the cost is real and deliberate."
+
+  Because stage 1 moved `intent_ack` into `meetings`, and migration
+  20260908150000 appended `meetings` to every `agent_runtimes` row
+  unconditionally, this refusal should essentially never fire today. That is
+  the intended state, not a reason the check is redundant: it is the guard for
+  the NEXT capability gap, which is the class `fcb58cfa` left open when it
+  fixed only the instance.
 
   ## Concurrency
 
@@ -223,6 +278,7 @@ defmodule Platform.Meetings.IntentDispatcher do
   require Logger
 
   alias Platform.Agents.Agent
+  alias Platform.Federation.ToolAuthorization
   alias Platform.Meetings
   alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentQueue
@@ -700,8 +756,65 @@ defmodule Platform.Meetings.IntentDispatcher do
         fail_dispatch(meeting_id, row, runtime_failure_reason(reason), state)
 
       {:ok, target} ->
-        send_dispatch(meeting_id, row, agent, target, role_key, started_at, state)
+        authorize_and_dispatch(meeting_id, row, agent, target, role_key, started_at, state)
     end
+  end
+
+  # The tool the dispatch contract is built on. A target that may not call
+  # this name cannot honour an intent no matter how reachable it is, so the
+  # membership test is the last gate before the row leaves the cursor.
+  #
+  # Not read from a shared constant because there is no shared constant to
+  # read: `Platform.Federation.ToolSurface` registers tool names as literals
+  # inside its per-bundle catalogue functions, and `ToolAuthorization`
+  # authorizes by binary name. A typo here therefore fails CLOSED — an
+  # unknown name is in no bundle and `authorize/2` denies it — which the
+  # positive-control case in the test file is what catches.
+  @ack_tool_name "intent_ack"
+
+  # See "A reachable runtime is not necessarily an ACK-capable one" in the
+  # moduledoc for why this exists, what it costs, and the two things it
+  # deliberately does NOT do.
+  #
+  # Ordered AFTER `resolve_target/1` on purpose. The two failures are
+  # genuinely different — `:no_runtime` means "no surface at all",
+  # `:cannot_ack` means "a surface that is not allowed to answer" — and
+  # whoever is triaging a red strip needs to be able to tell them apart, so
+  # they are separate reasons rather than one merged "unreachable".
+  defp authorize_and_dispatch(meeting_id, row, agent, target, role_key, started_at, state) do
+    case safe_authorize_ack(target.runtime) do
+      :ok ->
+        send_dispatch(meeting_id, row, agent, target, role_key, started_at, state)
+
+      {:error, :forbidden} ->
+        # At :info, matching the `:no_runtime` branch above. Unlike the MCP
+        # transport's silent denial, this one is on the record BEFORE any
+        # time is spent waiting on it.
+        Logger.info(
+          "[IntentDispatcher] target cannot ack — meeting=#{meeting_id} " <>
+            "role=#{role_key} agent=#{agent.slug} runtime=#{target.runtime_id} " <>
+            "tool=#{@ack_tool_name}"
+        )
+
+        fail_dispatch(meeting_id, row, :cannot_ack, state)
+    end
+  end
+
+  # `authorize/2` reads `allowed_bundles` off the struct already in hand, but
+  # `external_principal?/1` inside it does one `Repo.exists?` — so this shares
+  # the sandbox-gone hazard every other DB touch on this path is wrapped for.
+  #
+  # It fails OPEN, and that direction is deliberate: this gate refuses only
+  # what it can PROVE cannot ack, and a check that could not complete has
+  # proved nothing. Failing closed would mint `:cannot_ack` rows for a
+  # database problem, which is precisely the misattribution this stage exists
+  # to remove — the same bug wearing a new reason. A sandbox-gone run
+  # dispatches exactly as it did before this gate existed.
+  defp safe_authorize_ack(runtime) do
+    ToolAuthorization.authorize(@ack_tool_name, runtime)
+  rescue
+    DBConnection.OwnershipError -> :ok
+    Ecto.NoResultsError -> :ok
   end
 
   # Mark `:dispatched` FIRST (arming the queue's ack window), then

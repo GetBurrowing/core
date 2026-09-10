@@ -1952,43 +1952,6 @@ defmodule Platform.Federation.ToolSurface do
           "As your FIRST tool call after being dispatched for a task, before you start reading code or planning steps. Without an ack the router fires an escalation alert in 5 minutes on `coding`/`review`/`deploying` stages (planning: same 5m ack window, longer safety-net)."
       },
       %{
-        name: "intent_ack",
-        description:
-          "Ack a meeting-intent dispatch: report that you spawned a subagent for the intent, and later report how it ended (task 019f70b8 stage 3). The meeting's intent queue is ack-gated and SERIAL — it holds at most one intent per meeting in flight, and the next queued intent does not go out until this one reaches a terminal status. `status: working` says \"I spawned the subagent\" and does NOT advance the queue; `completed`, `rejected` and `cancel_honored` do. Requires a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack. Same contract and the same validation as `task_ack`.",
-        parameters: %{
-          intent_id: %{
-            type: "string",
-            required: true,
-            description:
-              "UUID of the intent from the `meeting_intent_dispatch` attention signal you received. This is the only handle the queue accepts — it resolves the owning meeting for you."
-          },
-          subagent_id: %{
-            type: "string",
-            required: true,
-            description:
-              "Opaque handle identifying the subagent working this intent — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 bytes. Presence forces spawn-before-ack ordering: you cannot ack an intent you never spawned a subagent for. It is also what a later cancellation is addressed to, so it must identify the ACTUAL subagent."
-          },
-          status: %{
-            type: "string",
-            required: true,
-            description:
-              "One of `working` (subagent spawned, work underway — queue does NOT advance), `completed` (work finished — queue advances), `rejected` (this intent was not for you or is not actionable — queue advances and a `wrong_target` correction is recorded as tuning signal), `cancel_honored` (you received an `intent_cancelled` event and stopped the subagent — queue advances)."
-          },
-          note: %{
-            type: "string",
-            required: false,
-            description:
-              "Optional free-text context, most useful with `rejected` — it is carried into the correction record that tunes future classification."
-          }
-        },
-        returns:
-          "%{intent_id, meeting_id, status, subagent_id, acked_at}. `status` is the intent's NEW queue status, which is not the same word you sent: `working` → `acked`, `completed` and `rejected` → `completed`, `cancel_honored` → `cancelled` (or `cancelled_late` if the work had already completed).",
-        limitations:
-          "Invalid subagent_id returns `{:error, :invalid_subagent_id}` — one of `missing` (key absent or nil), `empty_or_whitespace`, or `oversized` (> 128 bytes) — and leaves the queue row COMPLETELY untouched: a schema-rejected ack is never a partial ack. Repeated rejected attempts are counted, and if the intent then times out it is reported as `no_ack_spawn_failed` (the runtime tried and could not spawn) rather than `timed_out` (nothing came back at all). Unknown `intent_id`, or one whose meeting has ended, returns `{:error, :not_found}` — the queue is meeting-lifetime and holds nothing after the meeting. Acking an intent that has not been dispatched, or one already terminal, returns `{:error, :invalid_ack_state}`. If no ack of any kind arrives within the meeting's ack window (default 90s) the intent is timed out and the queue moves on.",
-        when_to_use:
-          "IMMEDIATELY after spawning a subagent in response to a `meeting_intent_dispatch` attention signal — the meeting's whole queue is waiting behind this one intent. Then again when the work ends, or as soon as you decide the intent isn't yours (`rejected`) — an honest early `rejected` unblocks the meeting AND improves future targeting."
-      },
-      %{
         name: "alarm_silence",
         description:
           "Operator escape hatch: suppress the `execution.no_ack_timeout` alarm for a stage's lease without firing a blocker. Use when your MCP client's tool cache lacks `task_ack` (a known cross-version issue where a session's catalog predates a new tool) and you KNOW a subagent is actively working the stage. Sets `silenced_until` on the lease so the TaskRouter's `:check_no_ack` reschedules instead of firing. Does NOT pause `stage_complete` / validation dispatch, does NOT clear on `record_ack/1`, dies with the stage transition. Audit-logged to the runtime_event stream AND `platform.orchestration.alarm_silence` audit rows. Capped at 24h — re-silence if the condition persists. Prefer `task_ack` if it's available; this exists to retire the `report_blocker(needs_human: false)` anti-pattern.",
@@ -2590,6 +2553,27 @@ defmodule Platform.Federation.ToolSurface do
   # `ToolAuthorization.authorize/2` and could not speak at all. Both tool maps
   # moved here VERBATIM — their descriptions carry the `no_ack` contract
   # rewritten in stages 1 and 3 and must not be regenerated.
+  #
+  # Task 01a083c3 stage 1 moved `meeting_activity_push` here for the same
+  # reason, and task 01a08875 stage 1 moved `intent_ack` — the last member of
+  # the class. `intent_ack` shipped in `task_tools/0` (019f70b8 stage 3) on the
+  # rationale that every dispatch-capable runtime already holds `task`. That
+  # was FALSE WHEN WRITTEN, not a claim that went stale: `task` has never
+  # appeared in `@default_allowed_bundles` on any commit. A runtime on the
+  # defaults was therefore dispatched meeting intents it could not ack, and
+  # because `ToolAuthorization.authorize/2` refuses ABOVE `execute/3` the
+  # intent queue never heard about the refusal — the intent held the meeting's
+  # SERIAL cursor for the whole `:awaiting_delivery` window (the ack timeout
+  # doubled, because the shorter `:awaiting_ack` phase only arms on first
+  # contact and a refusal is not contact) and then landed plain `:timed_out`,
+  # indistinguishable from an offline runtime.
+  #
+  # `intent_ack`'s descriptor still says "same contract and the same validation
+  # as `task_ack`", and that is still true after the move: the pairing is a
+  # NAMING symmetry, not a capability one. The two serve different queues with
+  # different lifetimes — `task_ack` writes `execution_leases`, `intent_ack`
+  # writes meeting-lifetime ETS — so the descriptor moved VERBATIM and the
+  # sibling stayed in `task`.
   defp meetings_tools do
     [
       %{
@@ -2689,6 +2673,43 @@ defmodule Platform.Federation.ToolSurface do
           "You must be an active participant of the meeting's live room — seated by a human and not yet departed. Being in the meeting's chat space is not enough, and neither is having been in the room earlier. The state applies to YOU: there is no parameter for declaring another agent's state. It cannot overwrite what the meeting observed directly — a failed intent still reads as failed, and output you are actually emitting still reads as typing — but it does take precedence over a merely in-flight intent, and it holds off the 120-second stall cap for as long as you keep refreshing. It does not make you speak, does not post to chat, and is not persisted: it is in-memory per node and gone after a restart.",
         when_to_use:
           "When you are about to spend more than a few seconds on something in a meeting that the meeting has no other way to see — a long tool chain, a document read, drafting a summary — and the humans in the room would otherwise be watching you sit there looking idle or, past two minutes, looking failed."
+      },
+      %{
+        name: "intent_ack",
+        description:
+          "Ack a meeting-intent dispatch: report that you spawned a subagent for the intent, and later report how it ended (task 019f70b8 stage 3). The meeting's intent queue is ack-gated and SERIAL — it holds at most one intent per meeting in flight, and the next queued intent does not go out until this one reaches a terminal status. `status: working` says \"I spawned the subagent\" and does NOT advance the queue; `completed`, `rejected` and `cancel_honored` do. Requires a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack. Same contract and the same validation as `task_ack`.",
+        parameters: %{
+          intent_id: %{
+            type: "string",
+            required: true,
+            description:
+              "UUID of the intent from the `meeting_intent_dispatch` attention signal you received. This is the only handle the queue accepts — it resolves the owning meeting for you."
+          },
+          subagent_id: %{
+            type: "string",
+            required: true,
+            description:
+              "Opaque handle identifying the subagent working this intent — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 bytes. Presence forces spawn-before-ack ordering: you cannot ack an intent you never spawned a subagent for. It is also what a later cancellation is addressed to, so it must identify the ACTUAL subagent."
+          },
+          status: %{
+            type: "string",
+            required: true,
+            description:
+              "One of `working` (subagent spawned, work underway — queue does NOT advance), `completed` (work finished — queue advances), `rejected` (this intent was not for you or is not actionable — queue advances and a `wrong_target` correction is recorded as tuning signal), `cancel_honored` (you received an `intent_cancelled` event and stopped the subagent — queue advances)."
+          },
+          note: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional free-text context, most useful with `rejected` — it is carried into the correction record that tunes future classification."
+          }
+        },
+        returns:
+          "%{intent_id, meeting_id, status, subagent_id, acked_at}. `status` is the intent's NEW queue status, which is not the same word you sent: `working` → `acked`, `completed` and `rejected` → `completed`, `cancel_honored` → `cancelled` (or `cancelled_late` if the work had already completed).",
+        limitations:
+          "Invalid subagent_id returns `{:error, :invalid_subagent_id}` — one of `missing` (key absent or nil), `empty_or_whitespace`, or `oversized` (> 128 bytes) — and leaves the queue row COMPLETELY untouched: a schema-rejected ack is never a partial ack. Repeated rejected attempts are counted, and if the intent then times out it is reported as `no_ack_spawn_failed` (the runtime tried and could not spawn) rather than `timed_out` (nothing came back at all). Unknown `intent_id`, or one whose meeting has ended, returns `{:error, :not_found}` — the queue is meeting-lifetime and holds nothing after the meeting. Acking an intent that has not been dispatched, or one already terminal, returns `{:error, :invalid_ack_state}`. If no ack of any kind arrives within the meeting's ack window (default 90s) the intent is timed out and the queue moves on.",
+        when_to_use:
+          "IMMEDIATELY after spawning a subagent in response to a `meeting_intent_dispatch` attention signal — the meeting's whole queue is waiting behind this one intent. Then again when the work ends, or as soon as you decide the intent isn't yours (`rejected`) — an honest early `rejected` unblocks the meeting AND improves future targeting."
       }
     ]
   end

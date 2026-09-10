@@ -12,9 +12,21 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       row is **byte-identical** afterwards (AC5),
     * the rejected-attempt counter that turns a later timeout from
       `:timed_out` into `:no_ack_spawn_failed` (AC6),
-    * bundle exposure via `list_tools(["task"])` — the tool has to
-      inherit the bundle every dispatch-capable runtime already holds,
-      not invent a new one.
+    * bundle exposure via `list_tools(["meetings"])` — the tool has to
+      sit in a bundle every dispatch-capable runtime actually holds
+      (task 01a08875 stage 1). It shipped in `task` here, on the
+      rationale that "every dispatch-capable runtime already holds
+      `task`". That was false WHEN WRITTEN, not a claim that went
+      stale: `task` has never appeared in
+      `AgentRuntime.default_allowed_bundles/0` on any commit. So a
+      runtime on the defaults was dispatched meeting intents it could
+      not ack, and since `ToolAuthorization.authorize/2` refuses ABOVE
+      `ToolSurface.execute/3` the queue never heard about the refusal —
+      the intent held the meeting's SERIAL cursor for the full
+      `:awaiting_delivery` window (the ack timeout doubled, because the
+      shorter `:awaiting_ack` phase only arms on first contact and a
+      refusal is not contact) and then landed plain `:timed_out`,
+      indistinguishable from an offline runtime.
 
   The central assertion of this file is negative: a schema-rejected ack
   must never be a partial ack. The queue is ack-gated, so a row that
@@ -440,19 +452,36 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
   # ── Bundle exposure ────────────────────────────────────────────────────────
 
   describe "tool descriptor" do
-    test "intent_ack ships in the task bundle alongside task_ack" do
-      names = ToolSurface.list_tools(["task"]) |> Enum.map(& &1.name)
+    # Task 01a08875 stage 1 — `intent_ack` moved from `task` to `meetings`.
+    # BOTH directions are asserted: presence in `meetings` alone still passes
+    # against a descriptor that was COPIED rather than moved, and a copy leaves
+    # the unreachable `task` registration exactly where it was.
+    #
+    # `task_ack` is asserted to have STAYED, in both directions, because the
+    # pairing with it is a NAMING symmetry and not a capability one. The two
+    # serve different queues with different lifetimes — `task_ack` writes
+    # `execution_leases`, `intent_ack` writes meeting-lifetime ETS — which is
+    # why the descriptor's "same contract and the same validation as `task_ack`"
+    # line survives the move untouched, and why the move must not drag its
+    # sibling along.
+    #
+    # Nobody loses reach: migration 20260908150000 appended `meetings` to EVERY
+    # `agent_runtimes` row unconditionally, so every runtime holding `task`
+    # today also holds `meetings`.
+    test "intent_ack ships in the meetings bundle, not the task bundle" do
+      meetings = ToolSurface.list_tools(["meetings"]) |> Enum.map(& &1.name)
+      task = ToolSurface.list_tools(["task"]) |> Enum.map(& &1.name)
 
-      # Inheriting the `task` bundle is the point — every
-      # dispatch-capable runtime already holds it, so no runtime needs
-      # a permissions change to answer a meeting intent.
-      assert "intent_ack" in names
-      assert "task_ack" in names
+      assert "intent_ack" in meetings
+      refute "intent_ack" in task
+
+      assert "task_ack" in task
+      refute "task_ack" in meetings
     end
 
     test "the descriptor declares the four ack statuses and requires subagent_id" do
       descriptor =
-        ToolSurface.list_tools(["task"])
+        ToolSurface.list_tools(["meetings"])
         |> Enum.find(&(&1.name == "intent_ack"))
 
       assert descriptor.parameters.intent_id.required

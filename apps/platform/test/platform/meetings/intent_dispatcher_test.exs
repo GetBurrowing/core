@@ -49,8 +49,11 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Agents.AgentRuntime
   alias Platform.Chat
   alias Platform.Federation
+  alias Platform.Federation.ToolAuthorization
+  alias Platform.Federation.ToolSurface
   alias Platform.Meetings
   alias Platform.Meetings.IntentClassifier
   alias Platform.Meetings.IntentCorrection
@@ -286,6 +289,63 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     {agent, runtime} = create_runtime_agent!()
     :ok = assign_role!(role_key, agent)
     subscribe_runtime!(runtime)
+    {agent, runtime}
+  end
+
+  # Which bundles actually register `intent_ack`, read out of the catalogue
+  # instead of named here. Hardcoding "meetings" would make these cases
+  # silently vacuous the next time the tool moves: the strip below would
+  # remove a bundle that no longer carries it, the fixture would still be
+  # able to ack, and case 1 would fail for a reason that looks like the
+  # dispatcher's fault.
+  defp ack_carrier_bundles do
+    Enum.filter(ToolSurface.all_bundles(), fn bundle ->
+      Enum.any?(ToolSurface.list_tools([bundle]), &(&1.name == "intent_ack"))
+    end)
+  end
+
+  # A role -> agent -> runtime chain where the runtime's ability to call
+  # `intent_ack` is the ONE thing that varies.
+  #
+  # The starting point is PROVEN rather than assumed: `register_runtime/2`
+  # is passed no `allowed_bundles` key, and the row is re-read from the
+  # database and held to `AgentRuntime.default_allowed_bundles/0`. A
+  # hand-written literal list would pass whatever the real defaults became.
+  defp seed_ack_target!(role_key, can_ack?) do
+    {agent, runtime} = create_runtime_agent!()
+
+    defaults = AgentRuntime.default_allowed_bundles()
+
+    assert Federation.get_runtime(runtime.id).allowed_bundles == defaults,
+           "the fixture must track whatever the defaults actually are"
+
+    carriers = ack_carrier_bundles()
+
+    refute carriers == [],
+           "no bundle registers intent_ack, so `defaults -- carriers` cannot revoke " <>
+             "anything and the negative fixture below would silently BE the positive one"
+
+    bundles =
+      if can_ack?, do: Enum.uniq(defaults ++ carriers), else: defaults -- carriers
+
+    {:ok, runtime} = Federation.update_allowed_bundles(runtime, bundles)
+
+    # The fixture is proved to be what the case needs it to be, on the same
+    # code path production authorizes through, BEFORE anything is enqueued.
+    expected = if can_ack?, do: :ok, else: {:error, :forbidden}
+    assert ToolAuthorization.authorize("intent_ack", runtime) == expected
+
+    # ANTI-VACUITY on the fixture itself. A runtime stripped to an EMPTY
+    # surface would be refused for every tool, so `:cannot_ack` below would
+    # be true of a runtime that cannot do anything at all — which is not the
+    # gap being closed. This one keeps a real surface and lacks exactly one
+    # capability.
+    refute ToolAuthorization.tool_names(runtime) == [],
+           "a runtime with no tools at all is refused for everything and proves nothing"
+
+    :ok = assign_role!(role_key, agent)
+    subscribe_runtime!(runtime)
+
     {agent, runtime}
   end
 
@@ -1939,6 +1999,176 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
       assert length(IntentQueue.list(meeting_id)) == 2
       assert IntentQueue.cursor(meeting_id) == nil
+    end
+  end
+
+  # ── A target that provably cannot ack (task 01a08875 stage 2) ──────────────
+  #
+  # The defect: `resolve_target/1`'s only test is `agent.runtime_id != nil`,
+  # so a runtime that is not authorized to call `intent_ack` was dispatched to
+  # anyway. Its ack was then refused by `ToolAuthorization.authorize/2` ABOVE
+  # `ToolSurface.execute/3`, where the MCP transport emits no log, no
+  # telemetry and no audit row — so the queue heard nothing, held the
+  # meeting's serial cursor for the whole `:awaiting_delivery` window
+  # (`ack_timeout_ms` x 2) and then recorded a plain `:timed_out` that is
+  # indistinguishable from an offline runtime.
+  #
+  # WHY THE EXISTING SUITE PROVES NOTHING HERE. Every other case in this file
+  # goes through `create_runtime_agent!/1`, which calls `register_runtime/2`
+  # with only a `runtime_id` — so every one of them dispatches to a
+  # DEFAULT-bundle runtime, and since stage 1 put `intent_ack` in `meetings`
+  # (which the defaults carry) they are all green against this defect. A
+  # fixture that genuinely lacks the capability has to be built on purpose,
+  # which is what `seed_ack_target!/2` below is for.
+  describe "the target must be able to ack" do
+    # THE CLAIM, and it is about the QUEUE, not about `ToolAuthorization`.
+    # Asserting that `authorize/2` returns `{:error, :forbidden}` would be a
+    # fact about a different module. The harm this exists to remove is the
+    # SECOND ask — a real request, to a different and perfectly capable agent
+    # — sitting `:queued` behind a dispatch that can never be answered.
+    test "a runtime that cannot ack fails fast and does not hold the cursor" do
+      {_designer, _designer_runtime} = seed_ack_target!("designer", false)
+      {scribe, _scribe_runtime} = seed_ack_target!("meeting_scribe", true)
+
+      # 60s, deliberately far beyond `await_status/4`'s 2s budget. With a
+      # short ack window the UNFIXED dispatcher passes this test for the
+      # wrong reason: the cursor is released by the window expiring rather
+      # than by the row being refused.
+      meeting_id = new_meeting!(ack_timeout_ms: 60_000)
+      start_dispatcher!()
+
+      # THE ENQUEUES ARE INSIDE THE CAPTURE WINDOW, and they have to be.
+      # `enqueue/2` broadcasts `:intent_enqueued` synchronously, so the
+      # dispatcher can claim, refuse and LOG before a `capture_log/1` opened
+      # afterwards has installed its handler — the log line is then simply
+      # gone and the assertion below fails with `left: ""`. Measured: 1 in ~3
+      # runs of this file with the enqueues outside. `with_log/1` rather than
+      # `capture_log/1` so the rows can still be named out here.
+      {{failed, dispatched, second_id}, log} =
+        with_log(fn ->
+          first =
+            enqueue!(meeting_id, %{
+              target_role: "designer",
+              classified_intent: "book_followup",
+              chunk_excerpt: "designer, book us a follow-up on the onboarding funnel"
+            })
+
+          second =
+            enqueue!(meeting_id, %{
+              target_role: "meeting_scribe",
+              classified_intent: "summarise_decision",
+              chunk_excerpt: "scribe, write that decision down"
+            })
+
+          # THE CLAIM, waited on FIRST and deliberately so. "The first one
+          # failed" is the easy half and nearly worthless alone; the
+          # user-visible harm this stage exists for is a real request to a
+          # perfectly capable agent sitting `:queued` behind a dispatch that
+          # could never have been answered. Asking this question before
+          # looking at the refused row is also what makes the mutations
+          # legible: a gate that always authorizes, and a gate that records a
+          # NON-advancing status, both fail HERE with "expected intent ... to
+          # reach :dispatched, got :queued" rather than on a status string.
+          dispatched = await_status(meeting_id, second.id, :dispatched)
+
+          # A direct read, not a wait: `second` could only be claimed once
+          # `first` had released the cursor, so `first` is already terminal by
+          # the queue's own ordering. Precedent: the 01a06637 case above.
+          {:ok, failed} = IntentQueue.get(meeting_id, first.id)
+
+          {failed, dispatched, second.id}
+        end)
+
+      assert failed.status == :dispatch_failed
+      assert failed.dispatch_failure_reason == :cannot_ack
+
+      # `target_agent_id` is stamped by `send_dispatch/7`, which never ran, so
+      # it is nil here exactly as it is for every other pre-dispatch failure.
+      # What distinguishes this row from a `:no_runtime` one is the REASON,
+      # and that is the whole point of keeping the two separate: resolution
+      # SUCCEEDED here, authorization did not.
+      assert failed.target_agent_id == nil
+      assert failed.target_role == "designer"
+
+      assert dispatched.target_agent_id == scribe.id
+      assert IntentQueue.cursor(meeting_id) == second_id
+
+      # Unlike the MCP transport's denial, which emits no log, no telemetry
+      # and no audit row, this refusal is on the record — and on the record
+      # BEFORE any time has been spent waiting on it.
+      assert log =~ "target cannot ack"
+
+      # Retained and visible, the contract every other failure branch keeps.
+      assert length(IntentQueue.list(meeting_id)) == 2
+    end
+
+    # Nothing was ever sent, so the capable agent behind it is not merely
+    # first in the queue — it is the only thing that got a signal at all.
+    test "nothing reaches a runtime that cannot ack, and the row is retained" do
+      {_designer, _runtime} = seed_ack_target!("designer", false)
+
+      meeting_id = new_meeting!(ack_timeout_ms: 60_000)
+      start_dispatcher!()
+
+      row = enqueue!(meeting_id, %{target_role: "designer"})
+
+      # No `capture_log` here, matching the `:no_runtime` case above: the
+      # refusal's log line is asserted in the case before this one, and
+      # `capture_log` around a body that also uses `refute_receive` makes the
+      # mailbox harder to reason about than the noise is worth.
+      failed = await_status(meeting_id, row.id, :dispatch_failed)
+      assert failed.dispatch_failure_reason == :cannot_ack
+
+      # `seed_ack_target!/2` subscribed this process to `runtime:<id>`, so the
+      # refute is evidence rather than a missing fixture: the role path is
+      # fully wired and WOULD have delivered.
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+
+      assert [^failed] = IntentQueue.list(meeting_id)
+      assert IntentQueue.cursor(meeting_id) == nil
+    end
+
+    # MANDATORY POSITIVE CONTROL. Without this, the case above passes for a
+    # dispatcher that refuses EVERYTHING — including one where the gate is
+    # asking about a misspelled tool name, since an unknown name is in no
+    # bundle and `authorize/2` denies it. Same fixture, same role chain, same
+    # helper: the only difference is the bundle grant.
+    test "the same fixture with the bundle granted still dispatches, acks and completes" do
+      {designer, _runtime} = seed_ack_target!("designer", true)
+
+      meeting_id = new_meeting!(ack_timeout_ms: 60_000)
+      start_dispatcher!()
+
+      first = enqueue!(meeting_id, %{target_role: "designer", classified_intent: "book_followup"})
+      second = enqueue!(meeting_id, %{target_role: "designer", classified_intent: "next_ask"})
+
+      dispatched = await_status(meeting_id, first.id, :dispatched)
+      assert dispatched.target_agent_id == designer.id
+
+      # It really reached the runtime, over the surface the adapter builds.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{intent_id: signal_intent_id}}
+                     },
+                     1_000
+
+      assert signal_intent_id == first.id
+
+      # And the ack it is now allowed to make is accepted, through the real
+      # tool rather than `IntentQueue.ack/5` directly — the whole point of the
+      # gate is that this call would have been refused.
+      assert {:ok, _} = ack!(first.id, "probe-can-ack", "working")
+      assert status_of(meeting_id, first.id) == :acked
+
+      assert {:ok, _} = ack!(first.id, "probe-can-ack", "completed")
+      assert status_of(meeting_id, first.id) == :completed
+
+      # The cursor advanced for the ordinary reason too.
+      await_status(meeting_id, second.id, :dispatched)
+
+      # Nothing anywhere in this run was refused.
+      refute Enum.any?(IntentQueue.list(meeting_id), &(&1.status == :dispatch_failed))
+      refute Enum.any?(IntentQueue.list(meeting_id), &(&1.dispatch_failure_reason == :cannot_ack))
     end
   end
 
