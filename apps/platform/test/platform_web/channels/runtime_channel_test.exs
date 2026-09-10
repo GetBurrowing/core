@@ -84,6 +84,24 @@ defmodule PlatformWeb.RuntimeChannelTest do
     agent
   end
 
+  # A second activated runtime with its own linked agent, for tests that need
+  # two independent `proven` maps to compare against each other. Same shape as
+  # the `setup` block above; the user is reused because the runtime, not its
+  # owner, is what the presence map is keyed on.
+  defp extra_runtime!(user) do
+    agent = create_agent()
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "test-rt-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, activated, raw_token} = Federation.activate_runtime(runtime)
+    {:ok, _linked} = Federation.link_agent(activated, agent)
+
+    %{runtime: Federation.get_runtime(activated.id), raw_token: raw_token, agent: agent}
+  end
+
   defp create_space(attrs \\ %{}) do
     default = %{name: "Test", slug: "test-#{System.unique_integer([:positive])}", kind: "channel"}
     {:ok, space} = Chat.create_space(Map.merge(default, attrs))
@@ -1259,6 +1277,144 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       assert proven == %{}
       refute Map.has_key?(proven, "meeting_transcript")
+    end
+
+    # Task 01a06f53. Until this test, `handle_in("meeting_say_ack", ...)`
+    # called `prove/2` on ARRIVAL of the frame, before the payload was read
+    # at all — so an ack whose own contents said the utterance failed
+    # stamped `meeting_voice` as observed. Found live: three `meeting_say`
+    # calls returned `no_ack`, `federation_status` reported `meeting_voice`
+    # proven off the late acks, and the human in the room heard nothing at
+    # any point.
+    #
+    # The inbound-frame reasoning is still sound; the conclusion drawn from
+    # it was too strong. What a say-ack evidences unconditionally is "the
+    # worker is connected and running the say-ack code path" — that is
+    # liveness, and `touch/1` is what liveness is for. Only `status:
+    # "spoken"` evidences that audio reached the room.
+    test "a FAILED say-ack does not prove meeting_voice — it is liveness, not capability", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      before = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id)
+
+      # The join alone must not have stamped anything, or the absence below
+      # would be inherited rather than earned.
+      assert before.proven == %{}
+
+      push(socket, "meeting_say_ack", %{
+        "utterance_id" => Platform.Types.UUIDv7.generate(),
+        "room_name" => "space-test",
+        "status" => "failed",
+        "error" => "not joined to the room"
+      })
+
+      Process.sleep(50)
+
+      after_ack = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id)
+
+      refute Map.has_key?(after_ack.proven, "meeting_voice")
+      assert after_ack.proven == %{}
+
+      # The other half of the fix, and the reason this is not simply a
+      # dropped `prove/2` call: a failed ack IS liveness evidence, so
+      # `last_seen_at` must still advance and `connected_at` must not move.
+      # A fix that deleted the presence write entirely would pass the two
+      # assertions above and fail these.
+      assert DateTime.compare(after_ack.last_seen_at, before.last_seen_at) == :gt
+      assert after_ack.connected_at == before.connected_at
+    end
+
+    # Named mutation "default to spoken". `record_agent_say_ack/2` refuses to
+    # default an absent status to its success token, for the same reason: the
+    # success branch there posts text to chat. The proof must refuse it too,
+    # so a worker that sends a bare receipt cannot turn the cell green.
+    test "a say-ack with NO status does not prove meeting_voice", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "meeting_say_ack", %{
+        "utterance_id" => Platform.Types.UUIDv7.generate(),
+        "room_name" => "space-test"
+      })
+
+      Process.sleep(50)
+
+      proven = Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven
+
+      refute Map.has_key?(proven, "meeting_voice")
+      assert proven == %{}
+    end
+
+    # The discrimination, pinned by comparison rather than against a literal
+    # (task 01a06f53's anti-vacuity clause). Two acks on two runtimes,
+    # byte-identical but for `status` — including the same `utterance_id`, so
+    # status really is the only difference. Neither id is in
+    # `Platform.Meetings.SayRegistry`, so both are registry misses and
+    # neither posts anything to chat; only the presence stamp differs.
+    #
+    # Asserting the failed case alone would pass just as well against a
+    # handler that had stopped proving `meeting_voice` altogether. The
+    # spoken half is what rules that out, and the maps are required to
+    # DIFFER so the pair cannot both be satisfied by one behaviour.
+    test "two acks identical but for status: only the spoken one proves meeting_voice", ctx do
+      other = extra_runtime!(ctx.user)
+
+      {:ok, spoken_socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, spoken_socket} =
+        subscribe_and_join(spoken_socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      {:ok, failed_socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => other.runtime.runtime_id,
+          "token" => other.raw_token
+        })
+
+      {:ok, _reply, failed_socket} =
+        subscribe_and_join(failed_socket, "runtime:#{other.runtime.runtime_id}", %{})
+
+      base = %{
+        "utterance_id" => Platform.Types.UUIDv7.generate(),
+        "room_name" => "space-test",
+        "duration_s" => 1.5
+      }
+
+      push(spoken_socket, "meeting_say_ack", Map.put(base, "status", "spoken"))
+      push(failed_socket, "meeting_say_ack", Map.put(base, "status", "failed"))
+
+      Process.sleep(50)
+
+      spoken_proven =
+        Platform.Federation.RuntimePresence.status(ctx.runtime.runtime_id).proven
+
+      failed_proven =
+        Platform.Federation.RuntimePresence.status(other.runtime.runtime_id).proven
+
+      assert Map.has_key?(spoken_proven, "meeting_voice")
+      refute Map.has_key?(failed_proven, "meeting_voice")
+      refute spoken_proven == failed_proven
+
+      # Both runtimes are online and were seen just now. The difference is
+      # confined to the capability map; the failed ack is not a lesser
+      # connection.
+      assert Platform.Federation.RuntimePresence.online?(other.runtime.runtime_id)
     end
   end
 

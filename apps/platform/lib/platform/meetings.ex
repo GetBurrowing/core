@@ -6013,6 +6013,37 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Does this raw say-ack payload report that audio actually PLAYED?
+
+  The one place the success token is compared, so every reader of a say-ack
+  agrees on what "it worked" means. Two callers today:
+  `record_agent_say_ack/2`, which posts the utterance to chat only when this
+  is true, and `PlatformWeb.RuntimeChannel.handle_in("meeting_say_ack", ...)`,
+  which stamps the `meeting_voice` capability proof only when this is true
+  (task 01a06f53).
+
+  `true` for the literal `"spoken"` and nothing else. There is deliberately
+  no default to it: a bare receipt carrying no `status` at all reads as
+  `"unknown"` and is NOT spoken, because both callers' true-branches assert
+  something to a human — one posts text into the meeting, the other turns a
+  capability cell green — and an absent field is not evidence for either.
+
+  A `"failed"` ack is still evidence the worker is alive and running this
+  code path. That is what `Platform.Federation.RuntimePresence.touch/1` and
+  the unconditional audit emits in `record_agent_say_ack/2` are for; it is
+  not evidence that the room heard anything.
+  """
+  @spec say_ack_spoken?(map()) :: boolean()
+  def say_ack_spoken?(payload) when is_map(payload), do: say_ack_status(payload) == "spoken"
+
+  # Normalised exactly once. `to_string/1` because a runtime may send a
+  # non-binary, and `trim/1` because `"spoken "` is a worker typo and not a
+  # different outcome.
+  defp say_ack_status(payload) do
+    payload |> Map.get("status", "unknown") |> to_string() |> String.trim()
+  end
+
+  @doc """
   Record a runtime's receipt for a `meeting_say` dispatch.
 
   Called from `PlatformWeb.RuntimeChannel.handle_in("meeting_say_ack", ...)`
@@ -6083,7 +6114,7 @@ defmodule Platform.Meetings do
     # the success branch POSTS TEXT TO CHAT, so an ack that does not say
     # "spoken" must not be read as one. Anything but the literal token is
     # relayed to the caller as-is and posts nothing.
-    status = payload |> Map.get("status", "unknown") |> to_string() |> String.trim()
+    status = say_ack_status(payload)
 
     ack = %{
       status: status,
@@ -6127,7 +6158,7 @@ defmodule Platform.Meetings do
 
         SpeakingWindow.acked(agent_id, utterance_id)
 
-        if status == "spoken" do
+        if say_ack_spoken?(payload) do
           # The ownership check inside is now unreachable for a registered
           # id — the gate above caught it. It stays as the guard on the
           # WRITE, so a future caller of this function cannot post under

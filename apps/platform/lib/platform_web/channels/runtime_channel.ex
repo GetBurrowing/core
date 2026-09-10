@@ -271,11 +271,26 @@ defmodule PlatformWeb.RuntimeChannel do
   # join ack: nothing is pushed back down the socket.
   @impl true
   def handle_in("meeting_say_ack", %{"utterance_id" => utterance_id} = payload, socket) do
-    # `prove/2` rather than `touch/1`: it advances `last_seen_at` exactly as
-    # `touch/1` does and additionally stamps the capability. A runtime that
-    # returns a say-ack has demonstrably run the meeting-voice path — this
-    # is an INBOUND frame, so it is evidence and not a claim.
-    RuntimePresence.prove(socket.assigns.runtime_id, "meeting_voice")
+    # Gated on the OUTCOME the ack reports, not on its arrival (task
+    # 01a06f53). The inbound-frame reasoning is sound and unchanged: this is
+    # a frame the runtime sent, so it is evidence and not a claim. But what
+    # an ack evidences unconditionally is "the worker is connected and ran
+    # the say-ack code path" — which is liveness, and `touch/1` is what
+    # liveness is for. Proving the capability off arrival alone turned
+    # `meeting_voice` green from an ack whose own `status` said the utterance
+    # FAILED: found live 2026-09-05, where three says returned `no_ack`, the
+    # worker was never joined to the LiveKit room, `federation_status`
+    # reported the capability proven, and the human heard nothing.
+    #
+    # `prove/2` advances `last_seen_at` exactly as `touch/1` does, so the two
+    # branches are the same presence write plus or minus the capability
+    # stamp; neither rewrites `connected_at`.
+    if Meetings.say_ack_spoken?(payload) do
+      RuntimePresence.prove(socket.assigns.runtime_id, "meeting_voice")
+    else
+      RuntimePresence.touch(socket.assigns.runtime_id)
+    end
+
     agent_id = socket.assigns[:agent_id]
 
     Logger.info(
