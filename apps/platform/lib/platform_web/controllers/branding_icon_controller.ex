@@ -90,6 +90,39 @@ defmodule PlatformWeb.BrandingIconController do
   end
 
   @doc """
+  `/branding/current/:variant` — a STABLE url for the current icon.
+
+  Same job as `favicon/2`, for callers that cannot be re-rendered when an
+  upload mints a new version. `sw.js` is the motivating one: it is a static
+  file served to the browser and cached by the browser as the service
+  worker, so a versioned icon url baked into it would freeze at whatever
+  the file said when it was written — which is how it came to hardcode
+  `/images/icon-192.png` and show the shipped icon in notifications on a
+  branded install.
+
+  A 302 rather than the bytes, deliberately: the redirect TARGET is what
+  changes on an upload, and the target keeps its own immutable cache. This
+  response carries `cache-control: no-cache` for the same reason
+  `favicon/2` does — a cached redirect would pin the old icon for as long
+  as the cache lived.
+
+  `:version` and `:current` cannot collide: this route is declared BEFORE
+  `/branding/:version/:variant`, and "current" is not a content hash, so
+  the versioned action would 404 it anyway.
+  """
+  def current(conn, %{"variant" => variant}) when is_binary(variant) do
+    # Allowlist first, exactly as `show/2` does — an unrecognized segment
+    # must never reach `String.to_existing_atom/1`.
+    if variant in @variant_names do
+      conn
+      |> put_resp_header("cache-control", "no-cache")
+      |> redirect(to: Branding.icon_url(String.to_existing_atom(variant)))
+    else
+      send_resp(conn, :not_found, "Not found")
+    end
+  end
+
+  @doc """
   `/favicon.ico` at the document root (stage 6).
 
   Browsers and crawlers probe this path no matter what the `<head>` links,

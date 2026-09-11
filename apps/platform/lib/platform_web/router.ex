@@ -206,6 +206,11 @@ defmodule PlatformWeb.Router do
   scope "/", PlatformWeb do
     pipe_through(:public_branding)
 
+    # BEFORE the versioned route: a stable alias for callers that cannot be
+    # re-rendered on upload (sw.js). Redirects, so the versioned url keeps
+    # its immutable cache.
+    get("/branding/current/:variant", BrandingIconController, :current)
+
     get("/branding/:version/:variant", BrandingIconController, :show)
 
     # The PWA manifest (stage 5). HOST-AGNOSTIC because `Plug.Static` served

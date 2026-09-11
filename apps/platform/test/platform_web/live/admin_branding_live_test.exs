@@ -276,4 +276,52 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
       assert html =~ ~s(navigate="/admin/branding") or html =~ ~s(href="/admin/branding")
     end
   end
+
+  describe "the page owns its scroller" do
+    # The app shell bounds the document: `.app-shell-root` is
+    # `h-[100dvh] overflow-hidden` and `<main data-scroll-container>` is
+    # `overflow-hidden`, whose comment states the contract outright —
+    # "per-LiveView panels supply their own `overflow-y-auto` scrollers."
+    # This page shipped without one, so everything past the fold was
+    # unreachable: it rendered correctly and could not be scrolled to.
+    #
+    # WHAT THIS TEST CANNOT DO, stated so nobody mistakes it for proof:
+    # a LiveView test has no viewport, no layout and no scrolling, so it
+    # cannot demonstrate that the page scrolls. That is exactly why the
+    # original defect passed a green suite. This asserts only that the
+    # structural pieces the shell requires are PRESENT — it is a
+    # regression guard against their removal, not evidence of the fix.
+    test "the root is the bounded column and a scroller is inside it", %{conn: conn} do
+      {:ok, _view, html} = conn |> admin_conn() |> live(~p"/admin/branding")
+
+      {:ok, doc} = Floki.parse_document(html)
+
+      root = Floki.find(doc, ~s([data-role="admin-branding"]))
+      assert root != [], "the page root marker is gone; this guard is now blind"
+
+      root_class = root |> Floki.attribute("class") |> List.first() || ""
+
+      # `h-full` is what lets the column receive <main>'s bounded height;
+      # `min-h-0` is what lets it shrink below its intrinsic content
+      # height. Without both, `flex-1` on the child cannot bound anything.
+      for required <- ["flex", "h-full", "min-h-0", "flex-col"] do
+        assert String.contains?(root_class, required),
+               "page root must carry `#{required}` (shell bounds the document); got: #{root_class}"
+      end
+
+      scrollers =
+        root
+        |> Floki.find("[class]")
+        |> Enum.filter(fn el ->
+          el
+          |> Floki.attribute("class")
+          |> List.first()
+          |> Kernel.||("")
+          |> String.contains?("overflow-y-auto")
+        end)
+
+      assert scrollers != [],
+             "no `overflow-y-auto` inside the page: the shell will clip everything past 100dvh"
+    end
+  end
 end

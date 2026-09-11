@@ -93,15 +93,46 @@ async function staleWhileRevalidate(request) {
   return cached || networkPromise;
 }
 
+// The install's display name, for the fallback title only. Read from the
+// manifest because that is the one document that always names the CURRENT
+// branding (the controller serves it `no-cache` for exactly this reason);
+// a name baked in here would freeze at whatever it said when the file was
+// written, which is what `"Suite"` was doing on a renamed install.
+//
+// `cache: "no-store"` keeps the service worker's own HTTP cache out of it.
+// A failure here must never cost the notification: showNotification needs
+// SOME title, so the chain ends at a neutral last resort rather than at a
+// specific product name that would be wrong on every renamed install.
+async function installName() {
+  try {
+    const res = await fetch("/manifest.json", { cache: "no-store" });
+    if (res.ok) {
+      const manifest = await res.json();
+      if (typeof manifest?.name === "string" && manifest.name.trim() !== "") {
+        return manifest.name;
+      }
+    }
+  } catch (_err) {
+    // offline, or the app is down — fall through
+  }
+  return null;
+}
+
 self.addEventListener("push", (event) => {
   const data = event.data?.json() ?? {};
   event.waitUntil(
-    self.registration.showNotification(data.title ?? "Suite", {
-      body: data.body,
-      icon: "/images/icon-192.png",
-      badge: "/images/icon-192.png",
-      data: { url: data.url ?? "/chat" },
-    })
+    (async () => {
+      // The server normally sends a title; the fetch only happens when it
+      // did not, so the common path costs nothing extra.
+      const title = data.title ?? (await installName()) ?? "Notification";
+
+      await self.registration.showNotification(title, {
+        body: data.body,
+        icon: "/branding/current/icon_192",
+        badge: "/branding/current/icon_192",
+        data: { url: data.url ?? "/chat" },
+      });
+    })()
   );
 });
 

@@ -243,4 +243,58 @@ defmodule PlatformWeb.BrandingIconControllerTest do
       end
     end
   end
+
+  # ── The stable alias sw.js uses ────────────────────────────────────────
+
+  describe "GET /branding/current/:variant" do
+    test "redirects to the CURRENT icon, and follows an upload", %{conn: conn} do
+      # Before any upload it must resolve to the repo default...
+      before = get(conn, "/branding/current/icon_192")
+      assert before.status == 302
+      default_target = redirected_to(before, 302)
+      assert default_target == Branding.default_icon_url(:icon_192)
+
+      # ...and after an upload, to the versioned path. This is the whole
+      # point of the route: the target MOVES. Asserting only the post-upload
+      # shape would pass just as well against a hardcoded redirect.
+      branding = upload!()
+
+      after_upload = get(conn, "/branding/current/icon_192")
+      assert after_upload.status == 302
+      target = redirected_to(after_upload, 302)
+
+      assert target == "/branding/#{branding.version}/icon_192"
+      refute target == default_target
+
+      # And the target actually serves bytes, so the redirect is not a
+      # well-formed pointer at nothing.
+      assert get(conn, target).status == 200
+    end
+
+    test "is no-cache, or a cached redirect pins the old icon", %{conn: conn} do
+      conn = get(conn, "/branding/current/icon_192")
+
+      assert get_resp_header(conn, "cache-control") == ["no-cache"]
+    end
+
+    test "an unknown variant 404s rather than reaching to_existing_atom", %{conn: conn} do
+      assert get(conn, "/branding/current/not_a_variant").status == 404
+
+      # Positive control on the same conn: a real variant on this route
+      # does redirect, so the 404 above is the allowlist and not the route
+      # failing to match at all.
+      assert get(conn, "/branding/current/icon_192").status == 302
+    end
+
+    test "every variant resolves, so sw.js cannot name one that 404s", %{conn: conn} do
+      upload!()
+
+      for variant <- Branding.variants() do
+        resp = get(conn, "/branding/current/#{variant}")
+
+        assert resp.status == 302,
+               "variant #{variant} did not redirect (status #{resp.status})"
+      end
+    end
+  end
 end
