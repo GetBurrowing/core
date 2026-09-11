@@ -1230,6 +1230,109 @@ defmodule Platform.Files do
   end
 
   @doc """
+  Fetches the live (not soft-deleted) `platform_files` row whose
+  `storage_key` is `key`, whatever its `ingest_status`. Returns nil when
+  no live row holds the key. The presigned-upload controller uses this
+  to tell "no such reservation" (404) from "reservation already
+  finalized" (409) — see `get_pending_by_storage_key/1` for the
+  pending-only lookup.
+  """
+  @spec get_by_storage_key(String.t()) :: File.t() | nil
+  def get_by_storage_key(key) when is_binary(key) do
+    File
+    |> not_deleted()
+    |> where([f], f.storage_key == ^key)
+    |> Repo.one()
+  end
+
+  @doc """
+  Fetches the live `platform_files` reservation (ingest_status
+  "pending") for `key`, or nil. Soft-deleted reservations read as absent
+  via `not_deleted/1`, mirroring `get_file/2`: a deleted reservation must
+  not accept a late byte POST.
+  """
+  @spec get_pending_by_storage_key(String.t()) :: File.t() | nil
+  def get_pending_by_storage_key(key) when is_binary(key) do
+    File
+    |> not_deleted()
+    |> where([f], f.storage_key == ^key and f.ingest_status == "pending")
+    |> Repo.one()
+  end
+
+  @doc """
+  Finalizes a presigned-upload reservation once the bytes have landed at
+  `file.storage_key`. Mirrors the inline `file_add` branch
+  (`Platform.Federation.ToolSurface` `file_add_inline/4`) and the
+  LiveView upload path, but starts from an already-reserved row:
+
+    * `file` must still be `ingest_status: "pending"` with a nil
+      `content_hash`, else `{:error, :not_pending}`. The hash is the
+      reservation marker: after an `:async` finalize the row stays
+      `"pending"` until the Ingester runs, and a second finalize on it
+      must be refused (task 01a091b7 stage 2, controller test (5)).
+    * If an ingested sibling in the same project already holds
+      `content_hash`, the reservation is redundant: the just-uploaded
+      bytes are deleted (best-effort) and the reservation row is hard
+      deleted (same as the presign-failure cleanup — it never held
+      finalized content). Returns the sibling with `deduplicated: true`.
+    * Otherwise `byte_size` and `content_hash` are written onto the row
+      and ingest is fired: `mode: :async` (default) via
+      `Platform.Files.Ingester.ingest_async/1`; `mode: :sync` runs the
+      ingester inline and re-reads the row, same shape as
+      `request_ingest/2`.
+
+  A `(content_hash, project_id)` unique-index clash with a non-ingested
+  twin is surfaced as the changeset error, not swallowed.
+  """
+  @spec finalize_presigned_upload(
+          File.t(),
+          %{byte_size: non_neg_integer(), content_hash: String.t()},
+          keyword()
+        ) ::
+          {:ok, %{file: File.t(), deduplicated: boolean()}}
+          | {:error, :not_pending | Ecto.Changeset.t() | term()}
+  def finalize_presigned_upload(file, stat, opts \\ [])
+
+  def finalize_presigned_upload(
+        %File{ingest_status: "pending", content_hash: nil} = file,
+        %{byte_size: size, content_hash: hash},
+        opts
+      )
+      when is_integer(size) and size >= 0 and is_binary(hash) do
+    mode = Keyword.get(opts, :mode, :async)
+
+    case find_ingested_sibling(file.project_id, hash) do
+      %File{} = sibling ->
+        _ = Platform.Files.Storage.delete(file.storage_key)
+        _ = Repo.delete(file)
+        {:ok, %{file: sibling, deduplicated: true}}
+
+      nil ->
+        with {:ok, updated} <-
+               file
+               |> File.changeset(%{byte_size: size, content_hash: hash})
+               |> Repo.update(),
+             {:ok, ingested} <- run_ingest(updated, mode) do
+          {:ok, %{file: ingested, deduplicated: false}}
+        end
+    end
+  end
+
+  def finalize_presigned_upload(%File{}, _stat, _opts), do: {:error, :not_pending}
+
+  defp run_ingest(%File{} = file, :async) do
+    :ok = Platform.Files.Ingester.ingest_async(file)
+    {:ok, file}
+  end
+
+  defp run_ingest(%File{} = file, :sync) do
+    case Platform.Files.Ingester.run(file) do
+      :ok -> {:ok, get_file(file.id)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Inserts a chunk back-reference row. Returns the chunk struct or a
   changeset error (e.g. duplicate `chunk_external_id` for the file).
   """

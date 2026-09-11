@@ -79,9 +79,14 @@ defmodule Platform.Files.Storage do
   def delete(storage_key) when is_binary(storage_key), do: adapter().delete(storage_key)
 
   @doc """
-  Returns a presigned upload URL for the eventual direct-from-browser
-  upload flow (Stage 5). For local-disk dev this is a signed Plug route;
-  for R2/S3 it will be an adapter-native presigned POST.
+  Returns a presigned upload URL for `storage_key`. Under the LocalDisk
+  adapter (the only one on main) the URL is a host-relative signed route
+  served by `PlatformWeb.ChatAttachmentUploadController`, which accepts
+  the byte POST for BOTH chat (`attachment.upload_start`) and Files
+  (`file_add` presigned branch) reservations and finalizes whichever
+  table owns the key (task 01a091b7). A future native-presign adapter
+  (R2/S3 presigned POST) would bypass that controller and needs its own
+  finalize hook for `platform_files` (`Platform.Files.finalize_presigned_upload/3`).
   """
   @spec presigned_url(String.t(), keyword()) ::
           {:ok, %{url: String.t(), expires_at: DateTime.t()}} | {:error, term()}

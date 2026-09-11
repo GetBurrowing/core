@@ -816,7 +816,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/experiments.ex" => 1,
     "platform/federation.ex" => 1,
     "platform/federation/tool_surface.ex" => 2,
-    "platform/files.ex" => 1,
+    # 1 → 3 for task 01a091b7 stage 1: `Files.get_by_storage_key/1` and
+    # `Files.get_pending_by_storage_key/1`. Triaged by hand: both `where:`
+    # clauses pin `f.storage_key == ^key`, a plain string column with no
+    # UUID type on either side, so a malformed value cannot raise
+    # `Ecto.Query.CastError`; the key itself comes out of an HMAC-verified
+    # upload token, not a caller-supplied id. No `Platform.UUID.valid?/1`
+    # guard applies.
+    "platform/files.ex" => 3,
     "platform/inbox.ex" => 1,
     # Task 019fe1b6 stage 1 — `Runs.next_run_seq/2` and `Runs.run_count/2`.
     # Triaged by hand as this map asks: both `where:` clauses pin

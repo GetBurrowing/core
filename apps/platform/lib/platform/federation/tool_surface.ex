@@ -404,7 +404,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "file_add",
         description:
-          "Upload a file into a project's document store (ADR 0042). One tool, two branches — pass `data_base64` for the inline path (small bytes, capped at 25 MB) or pass `byte_size` alone for the presigned-upload path (large files up to 500 MB). Inline branch persists bytes, dedups against prior `(project_id, content_hash)` siblings, fires extract + Memory ingest async, and returns the file id with `state: \"ready\"`. Presigned branch reserves a `platform_files` row in `ingest_status: \"pending\"`, returns an `upload_url` the caller POSTs raw bytes to within `expires_at`, and surfaces `state: \"pending\"` — finalization happens via the upload-controller boot reconciliation / LiveView upload path; the file is not searchable until then.",
+          "Upload a file into a project's document store (ADR 0042). One tool, two branches — pass `data_base64` for the inline path (small bytes, capped at 25 MB) or pass `byte_size` alone for the presigned-upload path (large files up to 500 MB). Inline branch persists bytes, dedups against prior `(project_id, content_hash)` siblings, fires extract + Memory ingest async, and returns the file id with `state: \"ready\"`. Presigned branch reserves a `platform_files` row in `ingest_status: \"pending\"`, returns a host-relative `upload_url` (a `/chat/attachments/upload/<token>` path on this Suite host — prefix your base URL), and surfaces `state: \"pending\"`. POST the raw bytes (`Content-Type` matching `content_type`, e.g. `curl --data-binary @file -H 'Content-Type: application/pdf' <base_url><upload_url>`) before `expires_at`; the response is the same `state: \"ready\"` envelope as the inline branch (`id`, `byte_size`, `content_hash`, `deduplicated`), extract + Memory ingest run async, and the file becomes searchable once `file_list` shows `ingest_status: \"ingested\"`. Expired token 410, body over `max_bytes` 413, wrong content-type 400, second POST 409.",
         parameters: %{
           project_id: %{
             type: "string",
@@ -11528,6 +11528,10 @@ defmodule Platform.Federation.ToolSurface do
   # Presigned branch: build a deterministic storage_key, reserve a pending
   # row (no content_hash yet — the Stage 3 migration allows NULL when
   # ingest_status="pending"), and return a presigned upload URL.
+  # The byte POST lands in PlatformWeb.ChatAttachmentUploadController, whose
+  # lookup_pending/1 falls through from chat_attachments to this
+  # platform_files row and finalizes it via Files.finalize_presigned_upload/2
+  # (task 01a091b7).
   defp file_add_presigned(args, project, filename, content_type) do
     byte_size_arg = Map.get(args, "byte_size")
 
