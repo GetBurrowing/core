@@ -186,6 +186,53 @@ defmodule Platform.Design.WcagContrast do
     (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
   end
 
+  @doc """
+  The band of WCAG relative luminances a colour must sit in to clear `floor`:1
+  against BOTH `ground_a` and `ground_b`.
+
+  Each ground pins one edge of the band. The darker ground needs less absolute
+  contrast to be cleared by a lighter colour, so it sets the low edge; the
+  lighter ground sets the high edge the same way. Returns `{floor_l, ceiling_l}`
+  — luminance low then high, never reordered and never clamped — so a caller
+  can print both bounds in a failure message instead of losing them behind a
+  single boolean:
+
+      floor_l   = floor * (min(la, lb) + 0.05) - 0.05
+      ceiling_l = (max(la, lb) + 0.05) / floor - 0.05
+
+  A colour in the band exists iff `floor_l <= ceiling_l`. Substituting the two
+  lines above and simplifying, that condition is exactly
+  `(L_lighter + 0.05) / (L_darker + 0.05) >= floor * floor` — a colour clearing
+  `floor`:1 against both grounds exists iff the two grounds' OWN contrast ratio
+  is at least `floor` squared. Two grounds FAR APART leave MORE room, not less:
+  the separation between the grounds is the budget the band is cut from. When
+  the grounds themselves fail to clear `floor * floor`, no third colour can
+  clear `floor` against both, and this function reports that by returning the
+  tuple INVERTED (`floor_l > ceiling_l`) rather than a boolean — a bare `false`
+  would say a colour does not exist without saying by how much, at the exact
+  moment the two numbers are most worth printing.
+
+  Pass the grounds as the artefact actually resolves them, never as a hex
+  approximation typed in by eye: a surface declared with an alpha channel is a
+  recipe, not a value, and `oklch(98% 0 0 / 0.96)` composited over `base_100`
+  is not `#F9F9F9`.
+
+  ## Examples
+
+      iex> Platform.Design.WcagContrast.two_ground_window(3.0, Platform.Design.WcagContrast.hex("#FFFFFF"), Platform.Design.WcagContrast.hex("#000000"))
+      {0.10000000000000002, 0.30000000000000004}
+
+      iex> Platform.Design.WcagContrast.two_ground_window(3.0, Platform.Design.WcagContrast.hex("#FFFFFF"), Platform.Design.WcagContrast.hex("#767676"))
+      {0.6434927327495805, 0.30000000000000004}
+  """
+  @spec two_ground_window(number(), color(), color()) :: {float(), float()}
+  def two_ground_window(floor, ground_a, ground_b) do
+    la = luminance(ground_a)
+    lb = luminance(ground_b)
+
+    {floor * (min(la, lb) + 0.05) - 0.05, (max(la, lb) + 0.05) / floor - 0.05}
+  end
+
   @doc "Renders a colour as `#RRGGBB` for failure messages. Clamps and rounds."
   @spec to_hex(color()) :: binary()
   def to_hex(color) do

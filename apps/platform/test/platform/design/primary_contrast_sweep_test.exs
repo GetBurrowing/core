@@ -242,13 +242,44 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
 
   A focused `.input` paints its border `--color-base-content` — `#000000` light,
   `#EEEEEE` dark — and the no-offset ring is drawn immediately outside it, so that
-  border is the ring's inner neighbour. Light clears at 4.4674. Dark reads 1.5447 and
-  cannot be closed: the ring would have to clear 3:1 against a near-white 1px edge AND
-  against the near-black page ground, and `#EEEEEE` is 15.5:1 from `#171b25`, so no
-  colour sits in both windows. It measured the same 1.5447 before this stage. The
-  indicator is identified against the page ground, D7 at 9.6304, and the near-white
-  edge is the input's own outline rather than a surface the ring must be found
-  against. Pinned without a threshold, the way L6 was until this stage promoted it.
+  border is the ring's inner neighbour. Light clears at 4.4674. Dark reads 1.5447
+  under this module's own float-through convention, because the dark border token
+  is declared `oklch(95% 0 0)` rather than the `#EEEEEE` shorthand; a browser that
+  first rounds the border to that shorthand reads 1.5406 instead. It measured the
+  same 1.5447 before this stage.
+
+  A colour that clears 3:1 against both that near-white edge and the near-black page
+  ground at once DOES exist. The two grounds separate by 14.8760:1 under this module's
+  own float-through convention (14.8369:1 if the border is first rounded to its
+  `#EEEEEE` shorthand); either reading clears the 9:1 a shared 3:1 floor needs (`3²`)
+  to leave any window open at all, so the window the next test computes is open, not
+  empty. Its floor, 0.132988, is invariant across convention: it derives from
+  `--color-base-100`'s `#171b25` hex literal alone, with nothing to round. Its
+  ceiling, 0.252458, is the token-space figure produced by the border's
+  `oklch(95% 0 0)` declaration (0.251664 if that border is rounded to `#EEEEEE`
+  first). `#797979` sits in `[0.132988, 0.252458]`, clearing 3:1 against both
+  grounds. Wide separation between two grounds is room for a candidate, not an
+  obstacle to one; this passage previously had that backwards, and previously named
+  the wrong separation (15.5:1, neither convention's figure).
+
+  The miss stands on judgement, not arithmetic: `#797979` reads as the same
+  "legal and weak" dark-on-dark indicator the design canvas already rejected in
+  writing for the brand cyan's own near-miss above, and it would drop the ring's
+  identification against the page ground from D7's 9.6304 to a bare pass at 3.9544.
+  A third option is geometric rather than chromatic, uncosted, and nobody's scope
+  here: give the dark no-offset variant a spacer so the ring stops abutting the
+  input's border and the pairing stops existing at all.
+  `docs/design-system/04-accessibility.md:101` already records that option alongside
+  the corrected band and witness; nothing here supersedes it. The indicator is
+  identified against the page ground, D7 at 9.6304, and the near-white edge is the
+  input's own outline rather than a surface the ring must be found against. Pinned
+  without a threshold, the way L6 was until this stage promoted it.
+
+  This is not F3/F4's shape of miss. Clearing `@aa_text` (4.5) against both nav
+  grounds at once needs them at least 20.25:1 apart (`4.5²`); the nav's actual
+  18.5302:1 falls short, so no colour closes that one under any convention. D8's
+  grounds clear their shared threshold with room to spare either way the border is
+  measured; F3/F4's do not clear theirs at all.
 
   ### Two findings on the focus ring that stage 3 reported and did not fix
 
@@ -344,6 +375,8 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   use ExUnit.Case, async: true
 
   alias Platform.Design.WcagContrast, as: W
+
+  doctest Platform.Design.WcagContrast
 
   @css_path Path.expand("../../../assets/css/app.css", __DIR__)
   @daisyui_path Path.expand("../../../assets/vendor/daisyui.js", __DIR__)
@@ -855,16 +888,36 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       dark: d
     } do
       # The one measurement on this ticket that misses its floor and is left
-      # missing. The focused input's border paints --color-base-content, #EEEEEE
-      # in dark, and the ring's #06D5ED reads 1.5447:1 against it.
+      # missing. The focused input's border paints --color-base-content, declared
+      # oklch(95% 0 0) in dark (#EEEEEE is that value's 8-bit shorthand), and the
+      # ring's #06D5ED reads 1.5447:1 against it under this module's own
+      # float-through convention (1.5406:1 if the border is rounded to #EEEEEE
+      # first).
       #
       # Unchanged by stage 3: it measured the same 1.5447 before, because dark
-      # kept the brand cyan. No candidate closes it either — the ring would have
-      # to clear 3:1 against a near-white 1px edge AND against the near-black
-      # page ground, and #EEEEEE is 15.5:1 from #171b25, so nothing sits in both
-      # windows. The indicator is identified against the page ground, which is
-      # D7 at 9.6304, and the near-white border is the input's own edge rather
-      # than a surface the ring has to be found against.
+      # kept the brand cyan. A candidate DOES exist though: the border and the
+      # near-black page ground separate by 14.8760:1 under this module's own
+      # float-through convention (14.8369:1 rounded to #EEEEEE first), well
+      # past the 9:1 a shared 3:1 floor needs to leave room, so the window the
+      # next test computes is open rather than empty. #797979 clears 3:1
+      # against both grounds. This comment previously said 15.5:1 and called
+      # the window empty; both were wrong, and the direction was backwards —
+      # wide separation between two grounds is room, not an obstacle.
+      #
+      # The miss is refused on quality, not arithmetic: that candidate is the
+      # same "legal and weak" dark-on-dark indicator the design canvas already
+      # rejected for the brand cyan's own near-miss above, and it drops the
+      # ring's identification against the page ground from D7's 9.6304 to a
+      # bare 3.9544. A geometric fix (a spacer on the dark no-offset variant,
+      # so the ring stops abutting the border) is a third, uncosted
+      # alternative, recorded at docs/design-system/04-accessibility.md:101.
+      # The indicator is identified against the page ground, which is D7 at
+      # 9.6304, and the near-white border is the input's own edge rather than
+      # a surface the ring has to be found against.
+      #
+      # This is not F3/F4's shape of miss (see above): those nav grounds
+      # separate by only 18.5302:1 against the 20.25:1 (4.5²) @aa_text needs,
+      # so no colour closes that one under any convention.
       #
       # Pinned without a threshold and recorded, exactly as L6 was before this
       # stage promoted it. If a later change closes it, promote this.
@@ -878,6 +931,67 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
              "D8 now clears the 3:1 floor against the focused input's own border " <>
                "(#{Float.round(ratio, 4)}). Promote this to a threshold assertion and " <>
                "close the finding rather than leaving a fixed miss recorded as open."
+    end
+
+    test "D8's window: no colour clears @non_text against both the input border and the page ground",
+         %{
+           dark: d
+         } do
+      # D8 is a recorded miss because the two grounds the ring would have to
+      # separate from at once — the focused input's own near-white border and
+      # the near-black page ground — are close enough together that the band
+      # of luminances clearing @non_text against BOTH is empty. That is a
+      # claim about the two grounds, not about #06D5ED, so it is checked here
+      # independently of D8's own colour via two_ground_window/3.
+      border = Map.fetch!(d.tokens, focused_input_border_token!())
+
+      {floor_l, ceiling_l} = W.two_ground_window(@non_text, border, d.base_100)
+
+      assert floor_l <= ceiling_l,
+             "the D8 window is now EMPTY: floor #{Float.round(floor_l, 6)} > ceiling " <>
+               "#{Float.round(ceiling_l, 6)}. Either the focused input's border token or " <>
+               "--color-base-100 moved enough to close off every candidate colour, " <>
+               "including the mid-grey one the design canvas already rejected on " <>
+               "quality below."
+
+      # 0.132988 (the floor) is invariant across convention: it derives solely
+      # from --color-base-100's #171b25 hex literal, which has nothing to round.
+      # 0.252458 (the ceiling) is the token-space figure produced by the border's
+      # oklch(95% 0 0) declaration; a browser that first rounds that border to its
+      # #EEEEEE shorthand reads a ceiling of 0.251664 instead. The general rule
+      # for a figure the comments here don't cover: it is convention-independent
+      # iff every operand is declared as a hex literal, and it splits iff any
+      # operand is declared in oklch(...).
+      assert abs(floor_l - 0.132988) < 0.0001 and abs(ceiling_l - 0.252458) < 0.0001,
+             "the D8 window moved: floor #{Float.round(floor_l, 6)} (recorded 0.132988), " <>
+               "ceiling #{Float.round(ceiling_l, 6)} (recorded 0.252458). The focused " <>
+               "input's border token or --color-base-100 changed value; re-derive D8's " <>
+               "disposition rather than re-pinning these bounds blind."
+
+      # The window being non-empty is not the same claim as D8 being an
+      # oversight: a colour living in it is exactly what the design canvas
+      # already turned down. #797979 (measured here, not quoted) clears
+      # @non_text against both grounds and drops the ring's identification
+      # against the page ground from D7's 9.6304 to a bare pass — a
+      # legal-and-weak dark-on-dark indicator, the disposition the canvas
+      # recorded in writing for the brand cyan's own near-miss on the dark
+      # panel above. The shortfall stands on that judgement, not because no
+      # candidate exists.
+      witness = W.hex("#797979")
+      witness_vs_border = W.contrast(witness, border)
+      witness_vs_page = W.contrast(witness, d.base_100)
+
+      assert witness_vs_border >= @non_text,
+             "the #797979 witness no longer clears #{@non_text}:1 against the focused " <>
+               "input's border (#{Float.round(witness_vs_border, 4)}); it is cited above " <>
+               "as proof the window holds a real, rejected candidate, not just that it " <>
+               "is arithmetically non-empty."
+
+      assert witness_vs_page >= @non_text,
+             "the #797979 witness no longer clears #{@non_text}:1 against the dark page " <>
+               "ground (#{Float.round(witness_vs_page, 4)}); it is cited above as proof " <>
+               "the window holds a real, rejected candidate, not just that it is " <>
+               "arithmetically non-empty."
     end
 
     test ".chip-primary in both themes still takes its tint from --color-primary", %{css: css} do
@@ -1037,8 +1151,7 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       near_white = nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100)
       near_black = nav_surface!(css, ".bottom-nav", l.base_100)
 
-      ceiling = (W.luminance(near_white) + 0.05) / @aa_text - 0.05
-      floor = @aa_text * (W.luminance(near_black) + 0.05) - 0.05
+      {floor, ceiling} = W.two_ground_window(@aa_text, near_white, near_black)
 
       assert ceiling < floor,
              "the two nav grounds are no longer mutually exclusive: a text colour of " <>
