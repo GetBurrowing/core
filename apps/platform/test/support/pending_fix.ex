@@ -53,6 +53,11 @@ defmodule Platform.PendingFix do
   #     Registered by stage 1 and retired by stage 2, which wired the existing
   #     `Meetings.resolve_meeting_org_id/1` + `maybe_put_org_id/2` into
   #     `Meetings.create_meeting/1`.
+  #   * task `01a05997` — the agent roster that reached the INLINE fallback
+  #     only, never the `prompt_templates` row. Retired by stage 3 of task
+  #     `01a08f9f`, which shipped the roster on top of the 09-02 un-merged
+  #     body as `20260911030000_force_update_intent_classify_prompt_agent_
+  #     roster_on_unmerged` rather than replaying the 08-31 migration.
   #
   @tag :pending_fix
 
@@ -87,42 +92,6 @@ defmodule Platform.PendingFix do
       work gets lost.
       """,
       added_on: ~D[2026-09-02]
-    },
-    %{
-      tag: @tag,
-      test:
-        "test/platform/meetings/intent_classifier_test.exs: " <>
-          "classify_and_enqueue — agent roster in the MIGRATED template",
-      ticket: "01a05997",
-      reason: """
-      The classifier passes an `agent_roster` assign, but the `prompt_templates`
-      row for `meetings.intent_classify.v1` carries no `{{agent_roster}}`
-      marker, so the roster reaches the INLINE fallback only and never the body
-      production actually renders. `render_template/2` prefers the DB row and
-      `seed_defaults/0` is INSERT-only, so the marker can only arrive through a
-      force-update migration.
-
-      That migration was written (`20260831120000_force_update_intent_classify_
-      prompt_agent_roster`) and deliberately NOT shipped with the code, for two
-      reasons found when the 08-31 branch was rebased onto main on 2026-09-10:
-
-        * `main` since gained `20260902140000_force_update_intent_classify_
-          prompt_unmerge_intent_and_target` (task `01a06575`), which rewrites
-          the same row and explicitly REVERSES the "detection and addressing are
-          ONE question" framing the 08-31 body is built on, on a production
-          measurement. A rebase does not renumber migrations, so the 08-31 file
-          would run as a pending LOWER version and clobber the 09-02 revision on
-          every already-migrated deployment.
-        * The live row was hand-edited by a human on 2026-09-03
-          (`updated_by` `86149c7d-1e45-42aa-a250-1e190e169341`). An
-          unconditional overwrite authored against the 08-31 content reverts
-          that edit with no diff and no error.
-
-      Reconciling the two prompt bodies is a human decision, not an agent's. The
-      stage that ships the reconciled migration deletes the `@describetag
-      :pending_fix` and this entry in the same commit.
-      """,
-      added_on: ~D[2026-09-10]
     }
   ]
 

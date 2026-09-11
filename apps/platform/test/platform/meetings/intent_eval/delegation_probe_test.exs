@@ -10,7 +10,7 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
     * `Dalton file a ticket for the purse-based meeting problem.` — the
       reproduction. The transcript said "Octavius", which is on no roster; the
       slice uses `Dalton`, the agent actually assigned `triage_officer` on the
-      production roster pinned in `configs/agent_roster.json`.
+      production roster pinned in `configs/agent_roster_20260831.json`.
     * `Agent Voice, can you hear me?` — control, `off_topic`.
     * `Is anything happening?` — control, `off_topic`.
 
@@ -48,6 +48,21 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
   `agent_roster` come back populated and named for the broken config. An
   assertion that only ever ran against the good arm would be passing on a
   property it never showed itself able to detect.
+
+  ## Why the arm is named `agent_roster_20260831` and not `agent_roster`
+
+  Task `01a08f9f` stage 2 moved the LIVE `agent_roster` arm onto the body that
+  `20260911030000_force_update_intent_classify_prompt_agent_roster_on_unmerged.exs`
+  actually ships, so the byte-identity drift guard has something true to assert.
+  A cassette key is `sha256(rendered_prompt || 0 || chunk_text)`, so that rewrite
+  turned all 9 rows here into a cassette miss — measured, not predicted:
+  `{:cassette_miss, %{count: 9, total: 9}}` invalidating this whole module.
+
+  The measurement below belongs to the 08-31 prompt and cannot be re-attributed
+  to a different body, so it keeps its own frozen arm — `agent_roster_20260831`,
+  with its own prompt file and the same cassette bytes renamed. The numbers in
+  this file are therefore unchanged: 4 / 5 / 0 still mean what stage 4 measured.
+  Re-recording against the new body is a separate act with a separate name.
   """
   use ExUnit.Case, async: true
 
@@ -69,7 +84,7 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
 
   setup_all do
     %{
-      agent_roster: rows_by_text("agent_roster"),
+      agent_roster: rows_by_text("agent_roster_20260831"),
       baseline: rows_by_text("off_topic_default")
     }
   end
@@ -228,8 +243,8 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
   # ── the gate, and the gate going red ──────────────────────────────────
 
   describe "the negative control" do
-    test "the same three expectations come back EMPTY for agent_roster" do
-      assert check("agent_roster") == []
+    test "the same three expectations come back EMPTY for agent_roster_20260831" do
+      assert check("agent_roster_20260831") == []
     end
 
     test "and come back populated and named for broken_never_off_topic" do

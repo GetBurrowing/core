@@ -153,6 +153,102 @@ defmodule Platform.Repo.Migrations.SeedPromptTemplateIntentClassifyTest do
       end
     end
 
+    test "stage-3 (01a08f9f) refresh: the agent roster grounds the addressing rule" do
+      # `20260911030000_force_update_intent_classify_prompt_agent_roster_on_unmerged`
+      # adds the roster to the 09-02 UN-MERGED body. Reads the LIVE ROW: this
+      # slug has no `do_default_templates/0` entry at all, so source cannot be
+      # the oracle here — a failure means the migration did not reach the DB.
+      #
+      # Re-authored, not replayed, from task 01a05997's orphaned branch
+      # (`rescue/01a05997-agent-roster-d3baf101`): that body merged detection
+      # and addressing into "the one question you are answering", which
+      # `20260902140000` deliberately reversed on a production measurement.
+      # Every assertion below is pinned to a string the 09-11 migration
+      # actually writes.
+      assert %{content: content, variables: variables} =
+               PromptTemplates.get_template_by_slug(@slug)
+
+      assert "agent_roster" in variables,
+             "stage-3 template must declare the agent_roster variable"
+
+      assert content =~ "{{agent_roster}}",
+             "stage-3 template must include the {{agent_roster}} render marker"
+
+      assert content =~ "# Agents available in this org",
+             "stage-3 template must carry the roster section"
+
+      # The roster must sit ABOVE the addressing question, so the model has
+      # the referent before the question is posed. The 08-31 body posed ONE
+      # merged question; the shipped body poses TWO, and it is question 2 —
+      # TARGET — that the roster has to precede.
+      roster_at = :binary.match(content, "# Agents available in this org") |> elem(0)
+      question_at = :binary.match(content, "## Question 2 — TARGET") |> elem(0)
+
+      assert roster_at < question_at,
+             "the roster section must precede the addressing question"
+
+      # The addressing rule must be stated AGAINST the roster, in both
+      # directions. The 08-31 body spelled this "NAME OR SLUG ON THE ROSTER
+      # ABOVE"; the shipped body spells it as prose in Question 2.
+      assert content =~
+               "Decide agent-or-person against the roster above, not against how the name sounds.",
+             "the addressing rule must be decided against the roster, not against the name"
+
+      assert content =~
+               "If the utterance addresses a name or a slug that IS on the roster, an agent is being asked",
+             "an on-roster name must be stated to be an agent"
+
+      assert content =~
+               "A name or slug that does NOT appear in this list is a person, not an agent.",
+             "a name absent from the roster must be stated to be a person"
+
+      assert content =~
+               "If it addresses a name that is NOT on the roster, a person is being asked: " <>
+                 "question 2's answer is `null` and question 1's intent stands unchanged.",
+             "an off-roster name must resolve to target_role null, not to a dropped intent"
+
+      # The Harper exemplar is the one 08-31 assertion that is FALSE BY
+      # DESIGN now. `20260902140000` moved it from an `off_topic` negative to
+      # an intent-keeping `target_role: null` case, because an off-roster name
+      # no longer implies "no intent". Asserting the 08-31 sentence here would
+      # re-assert the merged framing the un-merge exists to remove.
+      assert content =~ "- \"Nah, I'm gonna get Harper in here.\"" and
+               content =~
+                 "-> `action_items`, `target_role: null` " <>
+                   "(a concrete commitment; the owner is a person)",
+             "the Harper exemplar must keep its intent and take a null target"
+
+      refute content =~ "Harper is NOT on the roster above, so Harper is a person",
+             "the 08-31 off_topic framing of the Harper exemplar must not come back"
+
+      # Rebalance discipline: adding the roster must not weaken the default
+      # or the evidence requirement.
+      for role <- ["designer", "meeting_scribe", "historian", "triage_officer"] do
+        assert content =~ "`#{role}`",
+               "stage-3 template dropped target_role enum member #{inspect(role)}"
+      end
+
+      # `@no_target_role` in `Platform.Meetings.IntentClassifier` is the
+      # STRING "null" and `CandidateDisplay.role_label("null")` is written
+      # against this exact spelling.
+      assert content =~ "  - `null`             — no clean mapping; dispatcher drops",
+             "the null sentinel must remain the enum's last member, spelled `null`"
+
+      assert content =~ "MOST MEETING SPEECH IS `off_topic`"
+      assert content =~ "THE DEFAULT ANSWER IS `off_topic`"
+      assert content =~ "evidence_quote"
+
+      for marker <- [
+            "{{correction_exemplars}}",
+            "{{context_lines}}",
+            "{{speaker}}",
+            "{{meeting_transcript_chunk}}"
+          ] do
+        assert content =~ marker,
+               "stage-3 template dropped render marker #{inspect(marker)}"
+      end
+    end
+
     test "seeded slug matches IntentClassify.template_slug/0" do
       # Drift guard (mirrors seed_designer_prompt_templates_test.exs:53-63):
       # if the handler renames its template slug without a matching

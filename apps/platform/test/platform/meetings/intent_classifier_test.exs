@@ -2813,7 +2813,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
   end
 
-  # ── Roster reaches the MIGRATED template (task 01a05997 stage 3) ─────────
+  # ── Roster reaches the MIGRATED template (task 01a08f9f stage 3) ─────────
   #
   # The cases above call `force_fallback_prompt!/0`, so they prove the
   # roster reaches the INLINE fallback and say nothing about what
@@ -2821,26 +2821,29 @@ defmodule Platform.Meetings.IntentClassifierTest do
   # and the row only carries `{{agent_roster}}` once a force-update
   # migration puts it there.
   #
-  # EXCLUDED, not deleted, and the exclusion is the point. Task
-  # 01a05997's migration (`20260831120000_force_update_intent_classify_
-  # prompt_agent_roster`) was NOT shipped with this code, for two
-  # reasons found on rebase: `main` later gained
-  # `20260902140000_force_update_intent_classify_prompt_unmerge_intent_
-  # and_target` (task 01a06575), which rewrites the same row and
-  # deliberately REVERSES the merged-question framing this body depends
-  # on; and the live row was hand-edited by a human on 2026-09-03, so an
-  # unconditional overwrite authored against the 08-31 content would
-  # silently revert it. Migration versions are not renumbered by a
-  # rebase, so the 08-31 file would land as a pending LOWER version and
-  # clobber the 09-02 revision on every already-migrated deployment.
+  # SHIPPED, and this block is its acceptance test. Task 01a05997's
+  # migration (`20260831120000_force_update_intent_classify_prompt_agent_
+  # roster`) was never landed and must not be replayed: it writes the
+  # 08-31 MERGED-question body, which `20260902140000_force_update_intent_
+  # classify_prompt_unmerge_intent_and_target` (task 01a06575) reversed on
+  # a production measurement, and a rebase does not renumber migrations,
+  # so it would run as a pending LOWER version and clobber the 09-02
+  # revision on every already-migrated deployment.
   #
-  # This block is the acceptance test for that migration. Drop the
-  # `:pending_fix` tag in the same change that ships it — a green suite
-  # here without the tag is the signal the row actually carries the
-  # marker.
+  # What shipped instead is `20260911030000_force_update_intent_classify_
+  # prompt_agent_roster_on_unmerged` (task 01a08f9f stage 1), which
+  # applies the roster ON TOP of the 09-02 un-merged body: a
+  # `# Agents available in this org` section carrying `{{agent_roster}}`
+  # above `## Question 2 — TARGET`, the agent-or-person rule stated
+  # against that roster, and `"agent_roster"` added to the row's
+  # variables. The live rows were read on both installs before it was
+  # authored — both were byte-identical to the 09-02 body, so the
+  # 2026-09-03 hand-edit carried no content the branch lacked.
+  #
+  # The `:pending_fix` tag and the `Platform.PendingFix` entry for
+  # `01a05997` were deleted in the same commit that landed this block's
+  # green run (stage 3), per the `PendingFix` contract.
   describe "classify_and_enqueue — agent roster in the MIGRATED template" do
-    @describetag :pending_fix
-
     setup do
       agent = create_agent!(%{slug: "intent-agent-roster-db"})
       assign_intent_role!(agent)
@@ -2864,10 +2867,22 @@ defmodule Platform.Meetings.IntentClassifierTest do
       assert prompt =~ "- \"Orion\" (slug `orion-db`) serves the `designer` role",
              "the roster line must appear in the prompt rendered from the migrated row"
 
-      # Anchors unique to the shipped body — absent from the inline
-      # fallback — so this cannot pass by silently falling back.
-      assert prompt =~ "THE DEFAULT ANSWER IS `off_topic`"
-      assert prompt =~ "NAME OR SLUG ON THE ROSTER ABOVE"
+      # Anchors that are in the MIGRATED body and NOT in the inline
+      # fallback, so this cannot pass by silently falling back. Checked
+      # against `intent_classifier.ex` when they were chosen: the
+      # fallback carries "THE DEFAULT ANSWER IS `off_topic`" and the
+      # two-question framing too, so neither of those discriminates —
+      # these two do.
+      #
+      # The 08-31 anchor was "NAME OR SLUG ON THE ROSTER ABOVE", which
+      # the shipped body does not contain: `20260911030000` states the
+      # same rule as Question 2 prose on the 09-02 un-merged body.
+      assert prompt =~
+               "Decide agent-or-person against the roster above, not against how the name sounds.",
+             "the prompt must come from the migrated row, whose Question 2 states the rule against the roster"
+
+      assert prompt =~ "  - `null`             — no clean mapping; dispatcher drops",
+             "the prompt must carry the row's closed target_role enum, not the fallback's"
 
       refute prompt =~ "{{agent_roster}}",
              "the marker must be interpolated, not rendered literally"
