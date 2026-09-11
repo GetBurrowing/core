@@ -387,5 +387,7 @@ config :platform, :branch_provisioner, runner: Platform.Tasks.BranchProvisioner.
 # `intent_queue/mirror_fatality_test.exs` asserts this line is in force
 # and that the one case which legitimately needs it off — the
 # production-posture case in `server_persistence_test.exs` — is the only
-# place that turns it off.
+# place that turns it off. That same describe block is also where the
+# route the swallow opens is covered: a skeleton the mirror could not
+# fill is reaped `:unclassified` by `CandidateSweeper` (task 01a06638).
 config :platform, :intent_queue_mirror_fatal, true

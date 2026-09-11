@@ -234,6 +234,146 @@ defmodule Platform.Meetings.PressCardTest do
     end
   end
 
+  # ── A press with nothing said closes at release + grace ──────────────────
+
+  describe "a press released with nothing said" do
+    test "is closed as :unclassified / :timed_out once the grace elapses, and mints nothing",
+         %{meeting_id: meeting_id, room_id: room_id, identity: identity} do
+      t0 = DateTime.utc_now()
+
+      {:ok, opened} =
+        PressCard.open(meeting_id, identity, speaker: "alice", room_id: room_id, at: t0)
+
+      {:ok, released} = PressWindow.release(meeting_id, identity, DateTime.add(t0, 1, :second))
+
+      assert PressWindow.claims(meeting_id, identity) == 0
+      :ok = elapse_grace(meeting_id, identity, released.released_at)
+
+      card = await_closed(opened.intent.id)
+      assert card.state == :closed
+      assert card.closed_reason == :unclassified
+      assert card.disposition == :timed_out
+      assert card.task_id == nil
+
+      # And the sweeper has nothing left to graduate: the row is closed,
+      # so neither the fire path nor the reaper touches it.
+      assert Platform.Meetings.CandidateSweeper.sweep(now: DateTime.add(t0, 1, :hour)) == []
+      assert Repo.reload!(card).task_id == nil
+      assert Repo.reload!(card).state == :closed
+    end
+
+    @tag timeout: 10_000
+    test "the REAL timer release/3 arms is what delivers the close — no injection",
+         %{meeting_id: meeting_id, room_id: room_id, identity: identity} do
+      # The other tests in this block inject the timer's message, so
+      # deleting `Process.send_after/3` from release/3 outright would
+      # leave every one of them green. This one waits the grace out.
+      {:ok, opened} = PressCard.open(meeting_id, identity, speaker: "alice", room_id: room_id)
+      {:ok, _} = PressWindow.release(meeting_id, identity)
+
+      Process.sleep(PressWindow.release_grace_ms() + 200)
+
+      card = await_closed(opened.intent.id)
+      assert card.state == :closed
+      assert card.closed_reason == :unclassified
+    end
+
+    # The dispatcher is off in `config/test.exs`, which is the only reason
+    # the cases above were ever green: with it running, the nil-intent
+    # row the press enqueues used to be claimed on the next poll, failed
+    # `:no_target_role`, and mirrored onto the card as `:dismissed` ~1ms
+    # after open (task 01a06638 stage 5). This case boots one.
+    test "WITH the dispatcher running, an empty press still closes :unclassified, never :dismissed",
+         %{meeting_id: meeting_id, room_id: room_id, identity: identity} do
+      Ecto.Adapters.SQL.Sandbox.mode(Repo, {:shared, self()})
+
+      name = :"intent_dispatcher_press_#{System.unique_integer([:positive])}"
+
+      {:ok, _pid} =
+        start_supervised(
+          {Platform.Meetings.IntentDispatcher, name: name, tick_interval_ms: 60_000}
+        )
+
+      Process.sleep(20)
+
+      t0 = DateTime.utc_now()
+
+      {:ok, opened} =
+        PressCard.open(meeting_id, identity, speaker: "alice", room_id: room_id, at: t0)
+
+      # The enqueue notify has woken the dispatcher; drain again by hand
+      # so the claim attempt is certain to have run before we look.
+      assert Platform.Meetings.IntentDispatcher.drain(meeting_id, name) == :empty
+
+      assert {:ok, %{status: :queued}} = IntentQueue.get(meeting_id, opened.intent.id)
+
+      card = Candidates.get_by_intent_id(opened.intent.id)
+      assert card.state != :closed, "dispatcher closed the press card: #{inspect(card)}"
+
+      {:ok, released} = PressWindow.release(meeting_id, identity, DateTime.add(t0, 1, :second))
+      :ok = elapse_grace(meeting_id, identity, released.released_at)
+
+      card = await_closed(opened.intent.id)
+      assert card.state == :closed
+      assert card.closed_reason == :unclassified
+      assert card.disposition == :timed_out
+      refute card.closed_reason == :dismissed
+    end
+
+    test "control: a segment claimed inside the grace keeps the card open",
+         %{meeting_id: meeting_id, room_id: room_id, identity: identity} do
+      t0 = DateTime.utc_now()
+
+      {:ok, opened} =
+        PressCard.open(meeting_id, identity, speaker: "alice", room_id: room_id, at: t0)
+
+      {:ok, released} = PressWindow.release(meeting_id, identity, DateTime.add(t0, 1, :second))
+
+      # The tail of the utterance, finalised after the key came up.
+      assert {:ok, _} =
+               PressWindow.claim(meeting_id, identity, DateTime.add(t0, 2, :second))
+
+      assert PressWindow.claims(meeting_id, identity) == 1
+
+      :ok = elapse_grace(meeting_id, identity, released.released_at)
+
+      # Reachability: the same wait that finds the closed row in the
+      # test above finds it still open here.
+      card = await_closed(opened.intent.id, 8)
+      assert card.state != :closed
+      assert card.closed_reason == nil
+      assert card.disposition == nil
+    end
+
+    test "a stale grace message from an earlier release leaves the new press alone",
+         %{meeting_id: meeting_id, room_id: room_id, identity: identity} do
+      t0 = DateTime.utc_now()
+
+      {:ok, _first} =
+        PressCard.open(meeting_id, identity, speaker: "alice", room_id: room_id, at: t0)
+
+      {:ok, old} = PressWindow.release(meeting_id, identity, DateTime.add(t0, 1, :second))
+
+      # Press again: a NEW window, with its own card and no released_at.
+      t1 = DateTime.add(t0, 10, :second)
+
+      {:ok, second} =
+        PressCard.open(meeting_id, identity, speaker: "alice", room_id: room_id, at: t1)
+
+      refute second.duplicate?
+      assert PressWindow.get(meeting_id, identity).released_at == nil
+
+      # Positive control for the stale message: released_at genuinely
+      # differs, and the first release's timer is what is being replayed.
+      refute PressWindow.get(meeting_id, identity).released_at == old.released_at
+      :ok = elapse_grace(meeting_id, identity, old.released_at)
+
+      card = await_closed(second.intent.id, 8)
+      assert card.state != :closed
+      assert card.closed_reason == nil
+    end
+  end
+
   # ── Harness ──────────────────────────────────────────────────────────────
 
   defmodule StubProvider do
@@ -243,6 +383,33 @@ defmodule Platform.Meetings.PressCardTest do
         nil -> {:error, :no_stub_configured}
         fun when is_function(fun, 3) -> fun.(credentials, messages, opts)
       end
+    end
+  end
+
+  # The grace timer's own message, injected. `release/3` arms it for
+  # `release_grace_ms/0` (3s); sending it directly is how the empty-press
+  # tests stay well under that without sleeping through it.
+  defp elapse_grace(meeting_id, identity, released_at) do
+    send(PressWindow, {:grace_elapsed, meeting_id, identity, released_at})
+    # Synchronise on the GenServer so handle_info has run (and the Task
+    # is started) before the caller polls.
+    :sys.get_state(PressWindow)
+    :ok
+  end
+
+  # The close runs in a supervised Task; poll the row with a short bound.
+  defp await_closed(intent_id, tries \\ 40)
+
+  defp await_closed(intent_id, 0), do: Candidates.get_by_intent_id(intent_id)
+
+  defp await_closed(intent_id, tries) do
+    case Candidates.get_by_intent_id(intent_id) do
+      %MeetingCandidate{state: :closed} = card ->
+        card
+
+      _ ->
+        Process.sleep(25)
+        await_closed(intent_id, tries - 1)
     end
   end
 

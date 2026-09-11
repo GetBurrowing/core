@@ -51,7 +51,9 @@ defmodule Platform.Meetings.PressCard do
 
   require Logger
 
+  alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentQueue
+  alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.PressWindow
   alias Platform.Meetings.SpokenTarget
 
@@ -131,6 +133,74 @@ defmodule Platform.Meetings.PressCard do
           {:error, reason}
       end
     end
+  end
+
+  @telemetry_closed_empty [:platform, :meetings, :press_card_closed_empty]
+
+  @doc """
+  Close the card an EMPTY press opened (task 01a06638, folds in 01a06668).
+
+  Called by `PressWindow` once a released window's grace has elapsed
+  with nothing claimed. Closes the candidate row for `intent_id` with
+  disposition `:timed_out` and reason `:unclassified`, on the record and
+  through `Candidates.close/2` so the rail narrates it — the same close
+  path the sweeper's reaper uses. Operator-visible only (a log line and
+  telemetry); no user-facing notice.
+
+  Returns `{:ok, closed}` when a row was closed, or `:noop` when there
+  is no row, it is already closed, or it HAS been classified — a
+  classified card is not empty, whatever the window's claim count says,
+  and this must never close over a real answer. Never raises: a Repo
+  failure degrades to a warning, exactly like
+  `IntentClassifier.close_skeleton/4`.
+  """
+  @spec close_silent(binary()) :: {:ok, MeetingCandidate.t()} | :noop
+  def close_silent(intent_id) when is_binary(intent_id) do
+    case Candidates.get_by_intent_id(intent_id) do
+      %MeetingCandidate{state: state, classified_intent: nil} = candidate
+      when state != :closed ->
+        with {:ok, _} <- Candidates.record_disposition(candidate, :timed_out),
+             {:ok, closed} <-
+               Candidates.close(candidate, {:unclassified, "nothing was heard during the press"}) do
+          Logger.info(
+            "[PressCard] empty press closed intent_id=#{intent_id} " <>
+              "meeting_id=#{closed.meeting_id} candidate_id=#{closed.id}"
+          )
+
+          :telemetry.execute(
+            @telemetry_closed_empty,
+            %{count: 1},
+            %{meeting_id: closed.meeting_id, candidate_id: closed.id}
+          )
+
+          {:ok, closed}
+        else
+          {:error, reason} ->
+            log_close_failure(intent_id, inspect(reason))
+            :noop
+        end
+
+      _ ->
+        :noop
+    end
+  rescue
+    error ->
+      log_close_failure(intent_id, Exception.message(error))
+      :noop
+  catch
+    :exit, reason ->
+      log_close_failure(intent_id, inspect(reason))
+      :noop
+  end
+
+  def close_silent(_), do: :noop
+
+  @doc "The telemetry event emitted once per empty press whose card was closed."
+  @spec closed_empty_telemetry_event() :: [atom()]
+  def closed_empty_telemetry_event, do: @telemetry_closed_empty
+
+  defp log_close_failure(intent_id, detail) do
+    Logger.warning("[PressCard] empty-press close failed intent_id=#{intent_id} error=#{detail}")
   end
 
   # No text yet, so `resolve/1` can only take the default branch.

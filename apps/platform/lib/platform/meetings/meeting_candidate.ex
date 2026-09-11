@@ -24,7 +24,9 @@ defmodule Platform.Meetings.MeetingCandidate do
 
     * `state` — the coarse lifecycle the board renders.
     * `outcome_kind` — whether the deliverable is a task or an artifact.
-    * `closed_reason` — why a closed candidate closed.
+    * `closed_reason` — why a closed candidate closed. `:unclassified`
+      is the reason for a card that closed without ever receiving a
+      classifier answer (an orphaned skeleton, or an empty press).
     * `disposition` — the measurement axis: did a human accept it,
       reject it, or did it simply expire unanswered.
 
@@ -97,7 +99,7 @@ defmodule Platform.Meetings.MeetingCandidate do
 
   @outcome_kinds [:task, :artifact]
 
-  @closed_reasons [:retracted, :duplicate, :vetoed, :done, :dismissed]
+  @closed_reasons [:retracted, :duplicate, :vetoed, :done, :dismissed, :unclassified]
 
   @dispositions [:accepted, :rejected, :timed_out]
 

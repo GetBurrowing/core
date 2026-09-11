@@ -55,6 +55,28 @@ defmodule Platform.Meetings.PressWindow do
       this number is the dial, and it deserves a measurement before it is
       defended.
 
+  ## The grace also ends an EMPTY press (task 01a06638, folds in 01a06668)
+
+  A press opens a card before anything is said (`PressCard.open/3`),
+  and a press with no speech would otherwise leave that card armed and
+  unclassified for the life of the row — nothing classifies it, so the
+  sweeper passes over it forever. The same grace therefore governs two
+  things: how long a released window still claims, AND when a press that
+  claimed nothing is closed. `release/3` arms one timer for
+  `release_grace_ms/0`; when it fires, and the window still exists with
+  the same `released_at`, has claimed zero segments (`claims/2`) and has
+  a card attached, this server hands the card to
+  `PressCard.close_silent/1` in a supervised `Task`. It is NOT closed at
+  the release instant, because the grace exists precisely so a trailing
+  segment can still be claimed. The close runs in a Task rather than in
+  `handle_info/2` because this process OWNS the ETS table: a Repo
+  exception here would take every live window on the node with it.
+
+  The timer lives in this process and dies with it, so a press released
+  just before a restart is never closed by this path;
+  `Platform.Meetings.CandidateSweeper`'s reaper (`reap_unclassified/2`)
+  is the backstop that closes it after the sweeper's own grace.
+
   ## Stuck keys
 
   A window that is never released would otherwise claim the rest of the
@@ -92,6 +114,13 @@ defmodule Platform.Meetings.PressWindow do
 
   # A press with no release stops claiming after this long.
   @max_hold_ms 120_000
+
+  # Both press/release rewrite the window tuple from the caller's process
+  # while `claim/3` runs in the classifier's; the claim count is a
+  # separate `{meeting_id, identity, :claims}` key so it can be bumped
+  # atomically with `:ets.update_counter/4` and never lost to a tuple
+  # rewrite racing it.
+  @claims :claims
 
   @type identity :: String.t()
 
@@ -179,10 +208,10 @@ defmodule Platform.Meetings.PressWindow do
         window =
           case lookup(meeting_id, known) do
             %{released_at: nil} = live ->
-              if held_expired?(live, at), do: new_window(meeting_id, known, at), else: live
+              if held_expired?(live, at), do: fresh_window(meeting_id, known, at), else: live
 
             _ ->
-              new_window(meeting_id, known, at)
+              fresh_window(meeting_id, known, at)
           end
 
         :ets.insert(@table, {{meeting_id, known}, window})
@@ -222,6 +251,15 @@ defmodule Platform.Meetings.PressWindow do
             released_at = later_of(live.pressed_at, at)
             window = %{live | released_at: released_at}
             :ets.insert(@table, {{meeting_id, known}, window})
+            # The empty-press close (see the moduledoc): fires once the
+            # grace has elapsed, and is a no-op unless the window is
+            # still THIS release with nothing claimed.
+            Process.send_after(
+              __MODULE__,
+              {:grace_elapsed, meeting_id, known, released_at},
+              @release_grace_ms
+            )
+
             {:ok, window}
 
           _ ->
@@ -278,6 +316,7 @@ defmodule Platform.Meetings.PressWindow do
   @spec clear_meeting(binary()) :: non_neg_integer()
   def clear_meeting(meeting_id) when is_binary(meeting_id) do
     if table?() do
+      :ets.select_delete(@table, [{{{meeting_id, :_, @claims}, :_}, [], [true]}])
       :ets.select_delete(@table, [{{{meeting_id, :_}, :_}, [], [true]}])
     else
       0
@@ -285,6 +324,25 @@ defmodule Platform.Meetings.PressWindow do
   end
 
   def clear_meeting(_), do: 0
+
+  @doc """
+  How many segments `claim/3` has matched to `identity`'s CURRENT window
+  in `meeting_id`. Zero when nothing has been claimed or there is no
+  window; reset when `press/3` opens a fresh window (not on a repeat
+  press, which is the same window).
+
+  This is what `release/3`'s grace timer reads to decide whether the
+  press was empty (task 01a06638).
+  """
+  @spec claims(binary(), identity()) :: non_neg_integer()
+  def claims(meeting_id, identity) when is_binary(meeting_id) do
+    case normalize_identity(identity) do
+      nil -> 0
+      known -> claims_of(meeting_id, known)
+    end
+  end
+
+  def claims(_, _), do: 0
 
   # ── Read ───────────────────────────────────────────────────────────────────
 
@@ -384,13 +442,61 @@ defmodule Platform.Meetings.PressWindow do
         end)
         |> Enum.max_by(& &1.pressed_at, DateTime, fn -> nil end)
         |> case do
-          nil -> :none
-          window -> {:ok, window}
+          nil ->
+            :none
+
+          window ->
+            # Atomic against the tuple rewrites in press/3 and release/3;
+            # this is the mark the grace timer reads (task 01a06638).
+            :ets.update_counter(
+              @table,
+              {meeting_id, speaker, @claims},
+              1,
+              {{meeting_id, speaker, @claims}, 0}
+            )
+
+            {:ok, window}
         end
     end
   end
 
   def claim(_meeting_id, _identity, _at), do: :none
+
+  # ── The empty-press close ──────────────────────────────────────────────────
+
+  @impl true
+  def handle_info({:grace_elapsed, meeting_id, identity, released_at}, state) do
+    # Proceed only if the window is still THE release that armed this
+    # timer (a fresh press or a later release carries a different
+    # `released_at`), nothing was claimed in the grace, and there is a
+    # card to close. Everything else is a stale or irrelevant timer.
+    case lookup(meeting_id, identity) do
+      %{released_at: ^released_at, card_intent_id: intent_id} when is_binary(intent_id) ->
+        if claims_of(meeting_id, identity) == 0 do
+          # In a Task, not here: this process owns the table, and a Repo
+          # exception in the close would take every live window with it.
+          # The Task also inherits `$callers`, so the sandbox reaches it.
+          Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+            # `close_silent/1` already degrades every failure to a log
+            # line; this clause is the literal the supervised-Task audit
+            # (`SupervisedTaskRepoAuditTest`) requires of every spawn site
+            # for the async-test sandbox shape.
+            try do
+              Platform.Meetings.PressCard.close_silent(intent_id)
+            rescue
+              DBConnection.OwnershipError -> :ok
+            end
+          end)
+        end
+
+      _ ->
+        :ok
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
 
   # ── Gates ──────────────────────────────────────────────────────────────────
 
@@ -424,6 +530,24 @@ defmodule Platform.Meetings.PressWindow do
     do: DateTime.diff(at, pressed, :millisecond) > @max_hold_ms
 
   # ── Internals ──────────────────────────────────────────────────────────────
+
+  # A NEW window starts with nothing claimed. A repeat press over a live
+  # window never comes through here, so its count survives.
+  defp fresh_window(meeting_id, identity, at) do
+    :ets.delete(@table, {meeting_id, identity, @claims})
+    new_window(meeting_id, identity, at)
+  end
+
+  defp claims_of(meeting_id, identity) do
+    if table?() do
+      case :ets.lookup(@table, {meeting_id, identity, @claims}) do
+        [{_key, count}] when is_integer(count) -> count
+        _ -> 0
+      end
+    else
+      0
+    end
+  end
 
   defp new_window(meeting_id, identity, at) do
     %{

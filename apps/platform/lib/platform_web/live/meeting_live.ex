@@ -5608,8 +5608,17 @@ defmodule PlatformWeb.MeetingLive do
   # The LiveKit participant identity for whoever owns this socket, or nil
   # for a session with no user (a guest joins with a `guest:` identity
   # minted elsewhere and does not get push-to-talk in this stage).
+  #
+  # Read from `:current_user_record`, NOT `:current_user`. On the member
+  # mount `PlatformWeb.ShellLive.on_mount/4` assigns `:current_user` as
+  # the display STRING (name or email) and keeps the `%User{}` under
+  # `:current_user_record`; matching `%{id: id}` on the string never
+  # succeeded, so no authenticated press ever reached `PressCard.open/3`
+  # (task 01a06638 stage 5 — measured: zero press-card rows in either
+  # production install since PR #910). A guest session runs neither
+  # assign and still answers nil here.
   defp press_identity(socket) do
-    case socket.assigns[:current_user] do
+    case socket.assigns[:current_user_record] do
       %{id: id} when is_binary(id) -> "user:#{id}"
       _ -> nil
     end

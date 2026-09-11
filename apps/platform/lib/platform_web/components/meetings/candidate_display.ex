@@ -262,6 +262,10 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
   def closed_reason_label(:vetoed), do: "Not taken up"
   def closed_reason_label(:done), do: "Done"
   def closed_reason_label(:dismissed), do: "Stopped"
+  # One label serves both the orphaned skeleton and the empty press; the
+  # checkable detail ("nothing was heard during the press") travels in
+  # `closed_note` and is joined by `closed_reason_line/2`.
+  def closed_reason_label(:unclassified), do: "Not classified"
 
   @doc """
   The DISPLAY slug for a closed reason. `:vetoed` answers
@@ -279,6 +283,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
   def closed_reason_slug(:vetoed), do: "not-taken-up"
   def closed_reason_slug(:done), do: "done"
   def closed_reason_slug(:dismissed), do: "stopped"
+  def closed_reason_slug(:unclassified), do: "not-classified"
 
   @doc """
   The full reason line: the label, plus `closed_note` when the close

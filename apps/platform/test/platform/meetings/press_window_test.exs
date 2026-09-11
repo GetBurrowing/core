@@ -155,6 +155,39 @@ defmodule Platform.Meetings.PressWindowTest do
       assert second.pressed_at == ms(t0, hold + 1)
       assert PressWindow.get(m, @a).pressed_at == ms(t0, hold + 1)
     end
+
+    test "claims/2 counts what claim/3 matched, and a fresh press resets it",
+         %{meeting_id: m, t0: t0} do
+      hold = PressWindow.max_hold_ms()
+
+      assert PressWindow.claims(m, @a) == 0
+
+      {:ok, _} = PressWindow.press(m, @a, t0)
+      assert PressWindow.claims(m, @a) == 0
+
+      assert {:ok, _} = PressWindow.claim(m, @a, ms(t0, 500))
+      assert PressWindow.claims(m, @a) == 1
+
+      # A miss records nothing: B's segment inside A's window, and a
+      # segment before the press.
+      assert PressWindow.claim(m, @b, ms(t0, 600)) == :none
+      assert PressWindow.claim(m, @a, ms(t0, -1)) == :none
+      assert PressWindow.claims(m, @a) == 1
+
+      # A repeat press over the live window is the SAME window.
+      {:ok, _} = PressWindow.press(m, @a, ms(t0, 50))
+      assert PressWindow.claims(m, @a) == 1
+
+      # A fresh press after max hold is a new window: nothing claimed yet.
+      {:ok, _} = PressWindow.press(m, @a, ms(t0, hold + 1))
+      assert PressWindow.claims(m, @a) == 0
+
+      assert {:ok, _} = PressWindow.claim(m, @a, ms(t0, hold + 2))
+      assert PressWindow.claims(m, @a) == 1
+
+      assert PressWindow.clear_meeting(m) >= 1
+      assert PressWindow.claims(m, @a) == 0
+    end
   end
 
   describe "press/3" do

@@ -22,9 +22,12 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Meetings.Candidates
+  alias Platform.Meetings.CandidateSweeper
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.IntentQueue.Server
   alias Platform.Meetings.IntentQueue.Supervisor, as: QueueSupervisor
+  alias Platform.Meetings.MeetingCandidate
+  alias Platform.Tasks.Task, as: WorkTask
 
   setup do
     meeting_id = Ecto.UUID.generate()
@@ -315,11 +318,17 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
       meeting_id: meeting_id
     } do
       # Deliberately NO Sandbox.allow, AND shared mode is dropped for
-      # the duration: the queue owner is left with no usable connection
-      # while the test process keeps its explicit allowance. That is
-      # this suite's stand-in for "Postgres is momentarily
+      # the duration: the queue owner is left with no usable connection.
+      # That is this suite's stand-in for "Postgres is momentarily
       # unavailable". `start_owner!(shared: true)` in DataCase's setup
       # re-establishes shared mode for the next case.
+      #
+      # Note that the mode change checks EVERY process in, this one and
+      # DataCase's owner included (`DBConnection.Ownership.Manager`,
+      # `proxy_checkin_all_except/3` on a `{:mode, _}` call) — nothing
+      # below reads the database on purpose. The skeleton case further
+      # down needs to, and checks the test process out again as an
+      # owner of its own.
       {:ok, _pid} = QueueSupervisor.ensure_started(meeting_id, [])
       Sandbox.mode(Repo, :manual)
 
@@ -364,5 +373,183 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
       # restored owner is a different sandbox transaction, so such an
       # assertion would read empty whether or not the mirror wrote.
     end
+
+    # ── The skeleton the swallow leaves behind (task 01a06638 stage 4) ──
+    #
+    # `IntentClassifier` opens a candidate row at ARRIVAL, before the
+    # model answers, and `mirror_enqueue/3` is the only thing that ever
+    # fills its classified fields in. When that mirror fails on the
+    # production posture, the case above proves the queue carries on —
+    # and says nothing about the row. This pair says the rest: the
+    # skeleton is left armed and nil (not closed, not filled), and it is
+    # the sweeper's reaper, not anything in this module, that closes it.
+
+    @grace_ms 5_000
+
+    test "a skeleton the mirror could not fill is reaped, not stranded" do
+      # Same stand-in for "Postgres is momentarily unavailable" as the
+      # case above — the queue owner is started, never allowed, and
+      # shared mode is off so it cannot borrow anybody's connection —
+      # with one difference forced by the sandbox: dropping shared mode
+      # checks every process in and rolls their transactions back, so a
+      # skeleton written BEFORE the drop is gone by the time it is
+      # read. The test process therefore becomes an owner in its own
+      # right first, and everything it writes, reads and sweeps below
+      # runs on that one connection. The queue owner is not allowed on
+      # it, which is the whole point.
+      Sandbox.mode(Repo, :manual)
+      :ok = Sandbox.checkout(Repo)
+
+      meeting = meeting!()
+      chunk_id = Ecto.UUID.generate()
+      skeleton = skeleton!(meeting, chunk_id)
+      acts_at = skeleton.acts_at
+      assert %DateTime{} = acts_at
+
+      # Started from a bare process rather than from this one:
+      # `QueueSupervisor.ensure_started/2` hands the owner its caller's
+      # `$callers`, and the sandbox honours that chain, so a queue
+      # started here would reach this test's connection through it.
+      test_pid = self()
+
+      spawn(fn ->
+        send(test_pid, {:queue_started, QueueSupervisor.ensure_started(meeting.id, [])})
+      end)
+
+      assert_receive {:queue_started, {:ok, _pid}}, 1_000
+
+      log =
+        capture_log(fn ->
+          assert {:ok, row} =
+                   IntentQueue.enqueue(meeting.id, attrs(%{transcript_chunk_id: chunk_id}))
+
+          assert row.status == :queued
+        end)
+
+      assert log =~ "candidate mirror failed"
+      assert log =~ meeting.id
+
+      # Stranded exactly as arrival left it: nobody filled it, nobody
+      # closed it, and the deadline it will never be eligible for is
+      # still set.
+      row = reload!(skeleton)
+      assert row.state == :heard
+      assert is_nil(row.classified_intent)
+      assert row.acts_at == acts_at
+      assert is_nil(row.task_id)
+
+      # The reaper, at the grace: closed on the record and nothing minted.
+      at = DateTime.add(acts_at, @grace_ms + 1_000, :millisecond)
+
+      assert %{fired: [], reaped: [reaped]} =
+               CandidateSweeper.sweep_all(now: at, grace_ms: @grace_ms)
+
+      assert reaped.id == skeleton.id
+
+      row = reload!(skeleton)
+      assert row.state == :closed
+      assert row.closed_reason == :unclassified
+      assert is_nil(row.task_id)
+      assert tasks_for(meeting.project_id) == []
+
+      # Hand the connection back, then restore shared mode for
+      # DataCase's connection-dependent teardown, as the case above does.
+      :ok = Sandbox.checkin(Repo)
+      restored = Sandbox.start_owner!(Repo, shared: true)
+      on_exit(fn -> Sandbox.stop_owner(restored) end)
+    end
+
+    test "with the connection intact the same skeleton is filled and fires" do
+      # Positive control for the case above, on the same posture and the
+      # same sequence with only the connection differing. Without it the
+      # reap could be read as "the mirror never fills skeletons".
+      meeting = meeting!()
+      chunk_id = Ecto.UUID.generate()
+      skeleton = skeleton!(meeting, chunk_id)
+      acts_at = skeleton.acts_at
+
+      start_queue!(meeting.id)
+
+      # A classification that reaches somebody: `reconcile/2` DISARMS a
+      # skeleton whose answer names no audience (`routable_attrs?/1`),
+      # and this file's default `attrs/1` is not routable.
+      routable = %{
+        transcript_chunk_id: chunk_id,
+        classified_intent: :action_items,
+        target_role: :meeting_scribe
+      }
+
+      log =
+        capture_log(fn ->
+          assert {:ok, row} = IntentQueue.enqueue(meeting.id, attrs(routable))
+          assert row.status == :queued
+        end)
+
+      refute log =~ "candidate mirror failed"
+
+      filled = reload!(skeleton)
+      assert filled.state == :heard
+      assert filled.classified_intent == "action_items"
+      assert filled.acts_at == acts_at
+
+      assert %{fired: [fired], reaped: []} =
+               CandidateSweeper.sweep_all(now: acts_at, grace_ms: @grace_ms)
+
+      assert fired.id == skeleton.id
+
+      row = reload!(skeleton)
+      assert row.state == :closed
+      assert row.closed_reason == :done
+      assert row.task_id
+      assert [task] = tasks_for(meeting.project_id)
+      assert task.id == row.task_id
+    end
+  end
+
+  # ── Fixtures for the skeleton route ────────────────────────────────────
+
+  # A real meeting under a real project: firing mints a task, and a task
+  # needs a project to land in. The setup's bare `meeting_id` is enough
+  # for the queue but not for the mint.
+  defp meeting! do
+    n = System.unique_integer([:positive])
+
+    {:ok, project} =
+      Platform.Tasks.create_project(%{
+        name: "Mirror Route Project #{n}",
+        org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id
+      })
+
+    {:ok, meeting} =
+      Platform.Meetings.create_meeting(%{
+        project_id: project.id,
+        name: "Mirror Route Meeting #{n}",
+        slug: "mirror-route-meeting-#{n}"
+      })
+
+    meeting
+  end
+
+  # The row `IntentClassifier` opens at arrival: heard 60s ago, so its
+  # 30s countdown is already overdue by the time the queue is asked, and
+  # a sweep at `acts_at` is a sweep in the past rather than a wait.
+  defp skeleton!(meeting, chunk_id) do
+    {:ok, skeleton} =
+      Candidates.record_heard(%{
+        meeting_id: meeting.id,
+        transcript_chunk_id: chunk_id,
+        evidence_quote: "we should file a task for the billing bug",
+        speaker: "alice",
+        heard_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        outcome_kind: :task
+      })
+
+    reload!(skeleton)
+  end
+
+  defp reload!(%MeetingCandidate{id: id}), do: Repo.get!(MeetingCandidate, id)
+
+  defp tasks_for(project_id) do
+    Repo.all(from(t in WorkTask, where: t.project_id == ^project_id))
   end
 end

@@ -1272,13 +1272,27 @@ defmodule Platform.Meetings.IntentQueue.Server do
     %{state | claim_timer: nil}
   end
 
+  # A `:queued` row with no `classified_intent` is not claimable. The
+  # one writer of such a row is `Platform.Meetings.PressCard.open/3`: a
+  # push-to-talk card that exists before anything has been said, with
+  # nothing to route. Handing it to the dispatcher fails it
+  # `:no_target_role` about 1ms after the press, and the mirror then
+  # closes the board card `:dismissed` — measured twice in a dev BEAM
+  # (task 01a06638 stage 5). The same rule `Candidates.claim_due/2`
+  # applies to the durable row applies here: unvetted rows wait. The
+  # card's lifetime is owned elsewhere — `PressWindow`'s grace closes an
+  # empty press, the classifier fills a spoken one — so the ETS row
+  # simply never holds the cursor.
   defp oldest_queued(state) do
     state.table
     |> :ets.tab2list()
     |> Enum.map(fn {_id, row} -> row end)
-    |> Enum.filter(&(&1.status == :queued))
+    |> Enum.filter(&claimable?/1)
     |> Enum.min_by(& &1.seq, fn -> nil end)
   end
+
+  defp claimable?(%{status: :queued, classified_intent: intent}), do: not is_nil(intent)
+  defp claimable?(_row), do: false
 
   # ── Ack ────────────────────────────────────────────────────────────────────
 
@@ -1597,6 +1611,16 @@ defmodule Platform.Meetings.IntentQueue.Server do
   # `meeting_candidates` rows (tasks 01a049f9 and 01a04a36-643d), which
   # is what a non-fatal recording act looks like from the outside: it
   # is indistinguishable from a working one.
+  #
+  # What the swallow costs is one row: `mirror_enqueue/3` is the ONLY
+  # reconciler for the skeleton `IntentClassifier` opened at arrival
+  # (`settle_skeleton/2` with `:inserted` returns without touching it),
+  # so a swallowed failure there strands an armed card with no
+  # `classified_intent` — never eligible to fire, never closed by this
+  # module. `Platform.Meetings.CandidateSweeper` reclaims it: past
+  # `acts_at + unclassified_grace_ms` the row is closed `:unclassified`
+  # (task 01a06638). "A skeleton the mirror could not fill is reaped, not
+  # stranded" in `server_persistence_test.exs` walks that exact route.
   #
   # ## Why app env rather than `Mix.env()`
   #

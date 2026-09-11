@@ -21,7 +21,7 @@ defmodule Platform.Meetings.MeetingCandidateEvent do
       was opened before it (`record_heard/1`'s row, reconciled).
     * `:advanced` — the lifecycle state moved forward.
     * `:disposition_recorded` — the measurement axis was written.
-    * `:closed` — the card closed, for one of the five reasons.
+    * `:closed` — the card closed, for one of the six reasons.
 
   Nothing derives an event from a state; an event exists because a write
   returned `{:ok, _}`. That is what makes "a candidate that closes early

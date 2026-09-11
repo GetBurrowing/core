@@ -603,6 +603,205 @@ defmodule Platform.Meetings.CandidateSweeperTest do
     end
   end
 
+  # ── The reaper ────────────────────────────────────────────────────────────
+
+  describe "an unclassified card is reaped, not graduated" do
+    # Task 01a06638 stage 2. The eligibility rule above has a tail: a
+    # card whose classification NEVER arrives stays armed and overdue
+    # forever, passed over on every tick. It must close — on the record,
+    # with a reason — once no genuine answer can still be coming, and
+    # not one second before.
+    #
+    # The grace here is deliberately tiny and injected through the seam;
+    # the shipped default is pinned against the providers separately.
+    @grace_ms 5_000
+
+    defp reaped_handler_id, do: {__MODULE__, :reaped, self()}
+
+    defp attach_reaped! do
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          reaped_handler_id(),
+          CandidateSweeper.reap_telemetry_event(),
+          fn _event, measurements, metadata, _config ->
+            send(test_pid, {:reaped, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(reaped_handler_id()) end)
+    end
+
+    test "is left alone one second inside the grace, and closed at it" do
+      attach_reaped!()
+      meeting = meeting!()
+      heard_at = DateTime.add(DateTime.utc_now(), -120, :second)
+      orphan = heard!(meeting, heard_at, classify: false, text: "an orphan nobody classified")
+      acts_at = reload!(orphan).acts_at
+      assert %DateTime{} = acts_at
+
+      # One second inside the grace: overdue, unclassified, and untouched.
+      early = DateTime.add(acts_at, @grace_ms - 1_000, :millisecond)
+      assert CandidateSweeper.sweep(now: early, grace_ms: @grace_ms) == []
+      row = reload!(orphan)
+      refute row.state == :closed
+      assert row.acts_at == acts_at
+      assert is_nil(row.classified_intent)
+      refute_received {:reaped, _, _}
+
+      # At the grace: closed, labelled, narrated, and nothing minted.
+      at = DateTime.add(acts_at, @grace_ms, :millisecond)
+
+      assert %{fired: [], reaped: [reaped]} =
+               CandidateSweeper.sweep_all(now: at, grace_ms: @grace_ms)
+
+      assert reaped.id == orphan.id
+
+      row = reload!(orphan)
+      assert row.state == :closed
+      assert row.closed_reason == :unclassified
+      assert row.disposition == :timed_out
+      assert row.closed_note =~ "no classification arrived"
+      assert is_nil(row.task_id)
+      assert tasks_for(meeting.project_id) == []
+
+      assert Enum.any?(CandidateEvents.list_for_candidate(orphan.id), fn event ->
+               event.kind == :closed and event.detail["reason"] == "unclassified"
+             end)
+
+      assert_received {:reaped, %{count: 1, age_ms: age_ms}, metadata}
+      assert age_ms >= @grace_ms
+      assert metadata.candidate_id == orphan.id
+      assert metadata.meeting_id == meeting.id
+    end
+
+    test "a classified card past the grace is fired, not reaped" do
+      # The positive control: the reaper's predicate is `classified_intent
+      # IS NULL`. A reaper that dropped it would close every overdue card.
+      attach_reaped!()
+      meeting = meeting!()
+      heard_at = DateTime.add(DateTime.utc_now(), -120, :second)
+      vetted = heard!(meeting, heard_at)
+      at = DateTime.add(reload!(vetted).acts_at, @grace_ms, :millisecond)
+
+      # The reaper on its own, BEFORE the sweep fires the card. Inside
+      # one sweep the fire runs first and nils `acts_at`, which would hide
+      # a reaper that had lost its `classified_intent IS NULL` predicate;
+      # a card in a muted meeting, or a reaper called by anything but the
+      # sweeper, has no such cover.
+      assert Candidates.reap_unclassified(at, grace_ms: @grace_ms) == []
+      refute reload!(vetted).state == :closed
+
+      assert %{fired: [fired], reaped: []} =
+               CandidateSweeper.sweep_all(now: at, grace_ms: @grace_ms)
+
+      assert fired.id == vetted.id
+      assert [task] = tasks_for(meeting.project_id)
+      assert task.id == reload!(vetted).task_id
+      refute reload!(vetted).closed_reason == :unclassified
+      refute_received {:reaped, _, _}
+    end
+
+    test "a late answer inside the grace still graduates the card" do
+      # The P1 this stage must not reintroduce: overdue-but-inside-grace is
+      # merely late. A reaper without the grace bound closes this card
+      # before its answer lands, and the answer then mints nothing.
+      meeting = meeting!()
+      heard_at = DateTime.add(DateTime.utc_now(), -120, :second)
+      text = "somebody should write up the migration runbook"
+      late = heard!(meeting, heard_at, classify: false, text: text)
+      acts_at = reload!(late).acts_at
+      inside = DateTime.add(acts_at, div(@grace_ms, 2), :millisecond)
+
+      assert %{fired: [], reaped: []} =
+               CandidateSweeper.sweep_all(now: inside, grace_ms: @grace_ms)
+
+      refute reload!(late).state == :closed
+
+      {:ok, _} =
+        Candidates.create_or_attach(%{
+          intent_id: Ecto.UUID.generate(),
+          meeting_id: meeting.id,
+          transcript_chunk_id: reload!(late).transcript_chunk_id,
+          transcript_chunk_ids: [reload!(late).transcript_chunk_id],
+          evidence_quote: text,
+          speaker: "alice",
+          classified_intent: "action_items",
+          target_role: "meeting_scribe",
+          state: :heard,
+          queue_status: "queued",
+          outcome_kind: :task,
+          heard_at: heard_at,
+          last_utterance_at: heard_at
+        })
+
+      assert [fired] = CandidateSweeper.sweep(now: inside, grace_ms: @grace_ms)
+      assert fired.id == late.id
+      assert [task] = tasks_for(meeting.project_id)
+      assert task.id == reload!(late).task_id
+    end
+
+    test "sweep/1 keeps returning only the fired list" do
+      meeting = meeting!()
+      heard_at = DateTime.add(DateTime.utc_now(), -120, :second)
+      orphan = heard!(meeting, heard_at, classify: false, text: "an orphan nobody classified")
+      at = DateTime.add(reload!(orphan).acts_at, @grace_ms, :millisecond)
+
+      assert CandidateSweeper.sweep(now: at, grace_ms: @grace_ms) == []
+      assert reload!(orphan).closed_reason == :unclassified
+    end
+
+    # The shipped grace must be at or above the receive timeout of EVERY
+    # provider the classifier can be configured with, or a genuine answer
+    # landing inside the provider's window finds its card already closed
+    # — the P1 regression in a new coat. Ollama (the default,
+    # `IntentClassifier.init/1`) allows 300_000 ms; the others 60_000.
+    # Ollama's number is runtime config, so this test is the pin, not a
+    # compile-time assertion. A new provider goes in this list.
+    @classifier_providers [
+      Platform.Agents.Providers.Ollama,
+      Platform.Agents.Providers.Anthropic,
+      Platform.Agents.Providers.OpenAI,
+      Platform.Agents.Providers.Codex
+    ]
+
+    test "the default grace is at or above every provider's receive timeout" do
+      grace = CandidateSweeper.default_unclassified_grace_ms()
+
+      # Every concrete provider module is accounted for, so a new adapter
+      # cannot ship without being pinned here.
+      concrete =
+        "../../../lib/platform/agents/providers/*.ex"
+        |> Path.expand(__DIR__)
+        |> Path.wildcard()
+        |> Enum.map(&Path.basename(&1, ".ex"))
+        |> Enum.reject(&(&1 == "provider"))
+        |> Enum.sort()
+
+      pinned =
+        @classifier_providers
+        |> Enum.map(&(&1 |> Module.split() |> List.last() |> String.downcase()))
+        |> Enum.sort()
+
+      assert concrete == pinned
+
+      for provider <- @classifier_providers do
+        Code.ensure_loaded!(provider)
+
+        assert function_exported?(provider, :receive_timeout_ms, 0),
+               "#{inspect(provider)} exposes no receive_timeout_ms/0 to pin against"
+
+        timeout = provider.receive_timeout_ms()
+
+        assert grace >= timeout,
+               "#{inspect(provider)} allows a #{timeout}ms model call but the reaper's grace " <>
+                 "is #{grace}ms — a genuine late answer would be reaped"
+      end
+    end
+  end
+
   # ── The GenServer ─────────────────────────────────────────────────────────
 
   describe "the sweeper process" do

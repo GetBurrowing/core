@@ -40,6 +40,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
+  alias PlatformWeb.Components.Meetings.CallRecap
   alias PlatformWeb.Components.Meetings.CandidateDisplay
 
   # ── Fixtures ──────────────────────────────────────────────────────────
@@ -307,6 +308,13 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
 
       assert CandidateDisplay.closed_reason_slug(:vetoed) != "vetoed"
       refute CandidateDisplay.closed_reason_label(:vetoed) =~ "vetoed"
+
+      # `:unclassified` is the reason an orphaned skeleton (or an empty
+      # press) closes with. The storage word never reaches the DOM.
+      assert CandidateDisplay.closed_reason_label(:unclassified) == "Not classified"
+      assert CandidateDisplay.closed_reason_slug(:unclassified) == "not-classified"
+      refute CandidateDisplay.closed_reason_label(:unclassified) =~ "unclassified"
+      assert CallRecap.closed_reason_line(%{closed_reason: :unclassified}) == "Not classified"
     end
   end
 
@@ -379,6 +387,26 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
 
       assert text_of(closed_card(html, closed), "[data-role='meeting-candidate-closed-reason']") =~
                "no, never mind"
+    end
+
+    test "an :unclassified close renders its display slug and the note-bearing reason line",
+         %{conn: conn, meeting: meeting} do
+      closed =
+        candidate!(meeting, %{
+          evidence_quote: "um",
+          state: :closed,
+          closed_reason: :unclassified,
+          closed_note: "nothing was heard during the press"
+        })
+
+      {_view, html} = mount_board(conn, meeting)
+
+      card = closed_card(html, closed)
+      assert LazyHTML.attribute(card, "data-closed-reason") == ["not-classified"]
+
+      reason = text_of(card, "[data-role='meeting-candidate-closed-reason']")
+      assert reason =~ "Not classified — nothing was heard during the press"
+      refute reason =~ "unclassified"
     end
   end
 

@@ -50,11 +50,45 @@ defmodule Platform.Meetings.CandidateSweeper do
   about. The cost is one indexed query per second against a partial
   index on the armed minority (`meeting_candidates_armed_acts_at_index`).
 
+  ## Reaping the orphan (task 01a06638)
+
+  `Candidates.claim_due/2` passes over a card nothing has classified, so
+  a slow answer is not graduated unvetted. The tail of that rule is a
+  card whose answer NEVER comes: it stays armed and overdue for the life
+  of the row, never firing and never closing. After the claim/fire
+  pipeline each sweep therefore calls `Candidates.reap_unclassified/2`,
+  which closes every armed unclassified card past `acts_at + grace`
+  with reason `:unclassified` and disposition `:timed_out`, and this
+  module logs one line and emits `reap_telemetry_event/0` per row.
+  Operator-visible only — no toast, no banner.
+
+  ### WHY 300s
+
+  The grace must exceed the slowest GENUINE answer, or the reaper is the
+  P1 regression in a new coat: a real classification arriving inside
+  the provider's timeout would find its card already closed. The
+  classifier's default provider is `Platform.Agents.Providers.Ollama`
+  (`Platform.Meetings.IntentClassifier.init/1`, and `Platform.Application`
+  starts it with no override), whose receive timeout is 300_000 ms — the
+  Anthropic, OpenAI and Codex adapters allow 60_000. The bound is
+  therefore pinned to the maximum provider timeout, 300_000 ms after
+  the deadline. The classifier holds a chunk at most `max_hold_ms`
+  (4 s) before the call and does not retry, so the latest genuine answer
+  lands well inside `acts_at + 300s`.
+
+  The pin is a TEST, not a compile-time assertion: Ollama's timeout is
+  read from `Application.get_env/3` at runtime, so it is not a constant
+  this module could compare against at compile time.
+  `CandidateSweeperTest` asserts `default_unclassified_grace_ms/0` is at
+  or above `receive_timeout_ms/0` for every provider module, so a new or
+  slower provider reds that test rather than silently reaping answers.
+
   ## Configuration
 
       config :platform, #{__MODULE__},
         tick_interval_ms: 1_000,
-        batch_size: 100
+        batch_size: 100,
+        unclassified_grace_ms: 300_000
 
   Boot gated on `:start_candidate_sweeper` (defaults to `true`; set to
   `false` in `config/test.exs` so DataCase-scoped tests start their own
@@ -65,7 +99,8 @@ defmodule Platform.Meetings.CandidateSweeper do
   Every `start_link/1` option is forwarded to `init/1`, so a test can
   pass `tick_interval_ms: 50` and a `:name`, and `sweep/1` is public and
   synchronous — the timing assertions call it directly rather than
-  sleeping past a cadence.
+  sleeping past a cadence. `sweep/1` also takes `:now` and `:grace_ms`
+  for the same reason.
   """
 
   use GenServer
@@ -76,8 +111,10 @@ defmodule Platform.Meetings.CandidateSweeper do
 
   @default_tick_interval_ms 1_000
   @default_batch_size 100
+  @default_unclassified_grace_ms 300_000
 
   @telemetry_event [:platform, :meetings, :candidate_countdown_fired]
+  @reap_telemetry_event [:platform, :meetings, :candidate_reaped]
 
   @doc """
   Start the sweeper. Options override the application config, and are
@@ -97,12 +134,37 @@ defmodule Platform.Meetings.CandidateSweeper do
   for the same reason: "fires at the deadline and not before" is a claim
   about a specific instant, and a test that has to wait 30 real seconds
   to make it is a test nobody runs.
+
+  Returns the FIRED candidates only. The reaped ones (see the moduledoc)
+  are closed and narrated as a side effect of the same sweep; use
+  `sweep_all/1` to see both.
   """
   @spec sweep(keyword()) :: [Platform.Meetings.MeetingCandidate.t()]
   def sweep(opts \\ []) do
+    sweep_all(opts).fired
+  end
+
+  @doc """
+  Run one sweep and return `%{fired: [...], reaped: [...]}`: the
+  candidates that graduated and the unclassified orphans that were
+  closed. `sweep/1` is this with only the first half.
+  """
+  @spec sweep_all(keyword()) :: %{
+          fired: [Platform.Meetings.MeetingCandidate.t()],
+          reaped: [Platform.Meetings.MeetingCandidate.t()]
+        }
+  def sweep_all(opts \\ []) do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
     batch_size = Keyword.get(opts, :batch_size, @default_batch_size)
+    grace_ms = Keyword.get(opts, :grace_ms, @default_unclassified_grace_ms)
 
+    fired = fire_due(now, batch_size)
+    reaped = reap_orphans(now, grace_ms, batch_size)
+
+    %{fired: fired, reaped: reaped}
+  end
+
+  defp fire_due(now, batch_size) do
     now
     |> Candidates.claim_due(limit: batch_size)
     |> Enum.flat_map(fn candidate ->
@@ -131,9 +193,48 @@ defmodule Platform.Meetings.CandidateSweeper do
     end)
   end
 
+  defp reap_orphans(now, grace_ms, batch_size) do
+    reaped = Candidates.reap_unclassified(now, grace_ms: grace_ms, limit: batch_size)
+
+    Enum.each(reaped, fn candidate ->
+      # `close/2` does not touch `acts_at`, so the closed row still
+      # carries the deadline it was reaped against.
+      age_ms = DateTime.diff(now, candidate.acts_at, :millisecond)
+
+      :telemetry.execute(
+        @reap_telemetry_event,
+        %{count: 1, age_ms: age_ms},
+        %{
+          meeting_id: candidate.meeting_id,
+          candidate_id: candidate.id,
+          outcome_kind: candidate.outcome_kind
+        }
+      )
+
+      Logger.info(
+        "[CandidateSweeper] reaped unclassified candidate id=#{candidate.id} " <>
+          "meeting_id=#{candidate.meeting_id} age_ms=#{age_ms} outcome_kind=#{candidate.outcome_kind}"
+      )
+    end)
+
+    reaped
+  end
+
   @doc "The telemetry event emitted once per candidate that fires."
   @spec telemetry_event() :: [atom()]
   def telemetry_event, do: @telemetry_event
+
+  @doc "The telemetry event emitted once per unclassified candidate that is reaped."
+  @spec reap_telemetry_event() :: [atom()]
+  def reap_telemetry_event, do: @reap_telemetry_event
+
+  @doc """
+  How long past its deadline an unclassified card is left alone before
+  it is reaped, in milliseconds. See "WHY 300s" in the moduledoc; the
+  sweeper's tests pin this at or above every provider's receive timeout.
+  """
+  @spec default_unclassified_grace_ms() :: pos_integer()
+  def default_unclassified_grace_ms, do: @default_unclassified_grace_ms
 
   @impl GenServer
   def init(opts) do
@@ -145,7 +246,10 @@ defmodule Platform.Meetings.CandidateSweeper do
           Keyword.get(config, :tick_interval_ms, @default_tick_interval_ms),
       batch_size:
         Keyword.get(opts, :batch_size) ||
-          Keyword.get(config, :batch_size, @default_batch_size)
+          Keyword.get(config, :batch_size, @default_batch_size),
+      unclassified_grace_ms:
+        Keyword.get(opts, :unclassified_grace_ms) ||
+          Keyword.get(config, :unclassified_grace_ms, @default_unclassified_grace_ms)
     }
 
     schedule_tick(state.tick_interval_ms)
@@ -160,7 +264,7 @@ defmodule Platform.Meetings.CandidateSweeper do
     # must not take down the countdown for every other meeting on the
     # node, and `restart: :permanent` would simply retry the same row.
     try do
-      sweep(batch_size: state.batch_size)
+      sweep_all(batch_size: state.batch_size, grace_ms: state.unclassified_grace_ms)
     rescue
       error ->
         Logger.error(

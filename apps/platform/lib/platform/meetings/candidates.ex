@@ -1339,6 +1339,25 @@ defmodule Platform.Meetings.Candidates do
   from `PlatformWeb.MeetingLive`'s `Go ahead` button, where a human has
   looked at the card and said yes; the rule here is about the rail that
   acts with nobody watching.
+
+  ## An unclassified card is reaped, not graduated (task 01a06638)
+
+  The eligibility rule above has a tail: a skeleton whose classification
+  NEVER arrives — the classifier crashed mid-call, the chunk was never
+  queued, the provider timed out and `close_skeleton/4` was not reached
+  — keeps its deadline forever. It is armed, overdue, unclassified, and
+  passed over on every tick for the life of the row: it never fires and
+  never closes. That orphan is what `reap_unclassified/2` closes.
+
+  The bound is `acts_at + grace`, and the grace is pinned to the SLOWEST
+  genuine answer the shipped classifier path can produce —
+  `Platform.Meetings.CandidateSweeper.default_unclassified_grace_ms/0`,
+  which the sweeper's tests hold at or above every provider's receive
+  timeout. Inside the grace the card is merely late and the rule above
+  applies untouched; past it there is no answer coming, and the card is
+  closed with reason `:unclassified` and disposition `:timed_out`, on
+  the record and through `close/2`, so the rail narrates it. Nothing is
+  minted and no classification is re-requested.
   """
   @spec claim_due(DateTime.t(), keyword()) :: [MeetingCandidate.t()]
   def claim_due(now \\ DateTime.utc_now(), opts \\ []) do
@@ -1414,6 +1433,60 @@ defmodule Platform.Meetings.Candidates do
   end
 
   defp stamp_acted_at(candidate, _now), do: candidate
+
+  @doc """
+  Close every armed, unclassified candidate whose deadline is more than
+  `:grace_ms` in the past. Returns the closed rows.
+
+  See "An unclassified card is reaped, not graduated" above. `:grace_ms`
+  is required — the number belongs to the sweeper, which pins it to the
+  slowest provider timeout — and `:limit` defaults to 100.
+
+  The ids are selected inside a transaction with `FOR UPDATE SKIP
+  LOCKED`, so a classification landing on the same row at the same
+  instant (`create_or_attach/1` → `reconcile/2`) waits on the lock or is
+  skipped by it, and cannot be closed over. Every row then goes through
+  `record_disposition/3` (`:timed_out`) and `close/2` (`:unclassified`),
+  the only setter of `closed_reason` and the emitter of the `:closed`
+  event, so a reap is never a silent drop. Deliberately does NOT look
+  at `intent_muted_at`: a muted meeting's orphan is still an orphan.
+  """
+  @spec reap_unclassified(DateTime.t(), keyword()) :: [MeetingCandidate.t()]
+  def reap_unclassified(now \\ DateTime.utc_now(), opts \\ []) do
+    grace_ms = Keyword.fetch!(opts, :grace_ms)
+    limit = Keyword.get(opts, :limit, 100)
+    cutoff = DateTime.add(now, -grace_ms, :millisecond)
+    note = "no classification arrived within #{div(grace_ms, 1000)}s of the deadline"
+
+    {:ok, reaped} =
+      Repo.transaction(fn ->
+        MeetingCandidate
+        |> where([c], not is_nil(c.acts_at))
+        |> where([c], c.acts_at <= ^cutoff)
+        |> where([c], c.state != :closed)
+        |> where([c], is_nil(c.classified_intent))
+        |> order_by([c], asc: c.acts_at)
+        |> limit(^limit)
+        |> lock("FOR UPDATE SKIP LOCKED")
+        |> select([c], c.id)
+        |> Repo.all()
+        |> Enum.flat_map(fn id ->
+          with {:ok, _} <- record_disposition(id, :timed_out),
+               {:ok, closed} <- close(id, {:unclassified, note}) do
+            [closed]
+          else
+            {:error, reason} ->
+              Logger.warning(
+                "[Candidates] could not reap unclassified candidate id=#{id}: #{inspect(reason)}"
+              )
+
+              []
+          end
+        end)
+      end)
+
+    reaped
+  end
 
   @doc """
   Fire one claimed candidate: mint its deliverable and narrate it.

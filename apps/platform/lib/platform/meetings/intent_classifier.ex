@@ -1126,6 +1126,16 @@ defmodule Platform.Meetings.IntentClassifier do
   # `mirror_enqueue/3` finds the row by `transcript_chunk_id` and fills
   # in the classified fields. Every other outcome wrote no queue row, so
   # nothing downstream can ever move this card again.
+  #
+  # The reconciler is NOT guaranteed to run. Outside test the mirror is
+  # non-fatal (`IntentQueue.Server.report_mirror_failure/3` warns and
+  # returns `:ok`), so a `mirror_enqueue/3` that cannot reach the Repo
+  # leaves this skeleton exactly as it is here: `:heard`, armed, with a
+  # nil `classified_intent` that the sweeper's eligibility rule passes
+  # over on every tick. That row is `CandidateSweeper`'s to close: it is
+  # reaped `:unclassified` once `acts_at + unclassified_grace_ms` has
+  # passed (task 01a06638). Nothing here has to — and nothing here can —
+  # tell the two cases apart.
   defp settle_skeleton(_skeleton, :inserted), do: :ok
 
   defp settle_skeleton(skeleton, :duplicate) do
