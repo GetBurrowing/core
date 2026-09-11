@@ -6613,6 +6613,60 @@ body, .font-fabrikam {
      (#f4f5f8), where raw --color-error is 3.57:1 — under AA for an
      11.5px label. 5.21:1 here, still unmistakably red. */
   --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, black);
+  /* ── The correction drawer (task 01a0740e stage 2) ──
+     The pencil in the countdown foot opens a panel INSIDE the armed
+     card, offering three corrections and a footnote saying the choice is
+     kept as an example. Four slots, and none of them is a new colour —
+     Saru's canvas 01a08322 names a SEMANTIC SLOT for each and this block
+     is that mapping, measured on this theme's grounds.
+
+     TWO SLOTS ARE DELIBERATELY UNSPENT, and the reason is that both are
+     already saying something else inside this same card:
+
+       --color-primary  is the ACTION slot on this screen. Three
+                        primary-filled buttons would read as "pick one of
+                        these three actions" when the message the panel
+                        exists to send is "any of these three is cheaper
+                        than stopping". The three are EQUALS; none is
+                        recommended and none is filled.
+       --color-warning  is the countdown's LAST FIVE SECONDS, eleven
+                        pixels above this panel (--cc-countdown-warn). A
+                        second amber inside one card would argue with the
+                        timer about which of them is the urgent thing.
+
+     TEXT CONTRAST HERE IS INDEPENDENT OF THE CARD, which is the one
+     property worth having: `--cc-correct-bg` is OPAQUE, so the two text
+     ratios below hold on a plain card and on the shaping and acting
+     GRADIENTS an armed card can also carry. Measured against the panel
+     ground, not against the card:
+
+       choices  --color-base-content  #000000  18.69:1  on #F2F2F2
+       note     --color-neutral       #5A5355   6.66:1  on #F2F2F2
+
+     Raw `--color-neutral` PASSES in light and is used untouched, the
+     same posture `--cc-countdown-rest` takes four lines above. The dark
+     block is where it needs the correction, and it is corrected there.
+
+     THE RULE IS LOAD-BEARING AND THE GROUND IS NOT, which is the reverse
+     of what a drawer usually wants. `--color-base-200` against this
+     theme's card grounds measures 1.12:1 on plain white, 1.08:1 on the
+     acting gradient's bottom stop and 1.07:1 on shaping's — a ground
+     change a reader cannot rely on. So the top edge is what separates
+     panel from card (1.29:1 to 1.44:1 against those same three), and it
+     is the ONLY rule: a box around the panel would make it a dialog
+     sitting on the card instead of a drawer belonging to it.
+
+     `--cc-border` and not `var(--color-base-300)` directly, although in
+     THIS theme they are the same colour: `--edge` is oklch(88% 0 0),
+     which is base-300's own value, so the light half IS the border slot
+     the canvas names. The dark half cannot be, for the reason
+     `--cc-outcome-bar` already records in the dark block below, and one
+     token that means "the card's edge" in both themes is better than two
+     that agree here and disagree there. */
+  --cc-correct-bg: var(--color-base-200);
+  --cc-correct-rule: var(--cc-border);
+  --cc-correct-fg: var(--color-base-content);
+  --cc-correct-note: var(--color-neutral);
   /* ── The spent row (task 01a0740e stage 5) ──
      A stop leaves a dimmed row in the slot its card held, carrying
      `Stopped` and `Undo`. "Dimmed" is a CONTRAST REDUCTION and it is
@@ -6711,6 +6765,45 @@ body, .font-fabrikam {
   /* Raw --color-error is 4.23:1 on --cc-btn-bg (#1a1f2b), under AA.
      5.36:1 here. */
   --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, white);
+  /* ── The correction drawer (task 01a0740e stage 2) ──
+     See the light block for the slot map and for the two slots left
+     unspent. The same measurement on this theme puts the corrections in
+     DIFFERENT places, which is why this is a second token set:
+
+       choices  --color-base-content  #EEEEEE  17.88:1  passes, untouched
+       note     --color-neutral       #4D4647   2.23:1  FAILS, and badly
+       note     --color-neutral @ 60%  #908B8A   6.14:1  used
+       rule     --color-base-300      #091821   1.15:1  not quiet, invisible
+       rule     --cc-border (--edge)  #232A38   1.44:1  used
+
+     The note repeats the failure this file has now measured three times
+     — raw `--color-neutral` resolves DARKER here (oklch 40% against 45%)
+     while every ground it lands on is darker still, so the token is very
+     nearly the ground itself. Lightened toward white by the SAME 60%
+     `--cc-countdown-rest`, `--cc-spent-fg` and `--cc-outcome-muted`
+     arrived at from the same token. It stays a fourth token rather than
+     an alias of any of them because it is a fourth claim, and a re-tune
+     of the countdown's muted grey must not silently move a footnote.
+
+     THE GROUND RESOLVES DARKER THAN THE CARD HERE, and that is correct
+     rather than a slot picked upside down. This theme's elevation runs
+     DOWNWARD: `--color-base-100` is the chat pane (#171b25), base-200 is
+     the sidebar (#000306) and base-300 the input bar (#091821), so the
+     surface slot a drawer takes is darker than the pane it sits in. At
+     1.19:1 against the card (1.17:1 on acting's bottom stop, 1.20:1 on
+     shaping's) it reads as an inset well in the card, which is what
+     "belongs to the card rather than floats over it" has to mean in a
+     theme with no lighter surface to move to. `--cc-bg-closed` is the
+     same move at half the depth.
+
+     The rule CANNOT be `--color-base-300`: it is darker than the card,
+     so it lands at 1.04:1 against it and vanishes exactly where the
+     boundary is. This is the ruling `--cc-outcome-bar` already records
+     eighty lines above, for the same slot on the same card. */
+  --cc-correct-bg: var(--color-base-200);
+  --cc-correct-rule: var(--cc-border);
+  --cc-correct-fg: var(--color-base-content);
+  --cc-correct-note: color-mix(in oklch, var(--color-neutral) 60%, white);
   /* Same measurement on this theme's spent-row ground (#12151c), and
      the mix is a DIFFERENT one because the ground is: raw
      --color-neutral is oklch(40% 0.01 0) and lands at 1.99:1 here.
@@ -6792,6 +6885,10 @@ body, .font-fabrikam {
     --cc-countdown-rest: color-mix(in oklch, var(--color-neutral) 60%, white);
     --cc-countdown-warn: var(--color-warning);
     --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, white);
+    --cc-correct-bg: var(--color-base-200);
+    --cc-correct-rule: var(--cc-border);
+    --cc-correct-fg: var(--color-base-content);
+    --cc-correct-note: color-mix(in oklch, var(--color-neutral) 60%, white);
     --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 60%, white);
     --cc-skeleton-a: #1d2230;
     --cc-skeleton-b: #2b3244;
@@ -7416,6 +7513,181 @@ body, .font-fabrikam {
 .candidate-drain--warning {
   background: var(--cc-countdown-warn);
   height: 3px;
+}
+
+/* THE RE-ARM SNAP (task 01a0740e remediation).
+   The easing above was written for a bar that only ever SHRINKS, and for
+   every second of a normal countdown that is still what it is for: the
+   0.9s ramp is what makes the drain read as continuous rather than as a
+   once-a-second staircase. Do not delete it to fix what follows.
+
+   `Candidates.rearm/2` is the first thing in this codebase that makes the
+   width GROW. A correction hands the card its full thirty seconds back,
+   the drain node is patched IN PLACE rather than replaced, so the
+   inherited rule eases the growth too and the bar sweeps left to right
+   for 0.9s. Measured, three trials, 228px -> 285px in ten samples. A bar
+   refilling reads as a bug on first sight; the numeral going 24 to 30
+   reads as a fact, and the two halves of the same event must not
+   disagree about which it is.
+
+   So the easing is suppressed for the one tick in which the width grows,
+   and only that tick. `CandidateClock` adds this class when the width it
+   is about to paint is WIDER than the width it last painted, and takes it
+   off again on the next tick that is narrower — which is the very next
+   second of the re-armed countdown. Shrinking never carries it.
+
+   `transition: none` rather than a zero duration, and placed after
+   `.candidate-drain` so equal specificity resolves on source order. This
+   is the same device `.candidate-drain--spent` below already uses for the
+   same reason: a width that arrives at its value by any route other than
+   draining must not be drawn as draining. */
+.candidate-drain--snap {
+  transition: none;
+}
+
+/* ── The correction drawer (task 01a0740e stage 2) ──
+   A pencil in the countdown foot opens a panel inside the armed card,
+   offering three corrections. Saru's canvas 01a08322 is the design
+   authority; the token block above carries the colour argument and the
+   measurements, and everything below is layout.
+
+   THE TRAILING PAIR. `ml-auto` sits on this wrapper and not on the two
+   buttons, because two flex siblings each carrying `margin-left: auto`
+   SPLIT the free space between them — the pencil would drift away from
+   Stop by half the slack, which grows with the rail. 6px rather than the
+   foot's 10px gap: the pencil and Stop are two answers to the same
+   question and belong together, while the countdown sentence to their
+   left is a different thing entirely. */
+.candidate-foot__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* The pencil is what gives way if the row ever runs out of room, never
+     Stop — so nothing here may shrink and the icon is `flex: 0 0 auto`
+     below. The SENTENCE is the flexible item in this row. */
+  flex: 0 0 auto;
+}
+
+/* THE PENCIL. Deliberately NOT the chrome of its sibling control at
+   `data-role="intent-edit"` in `intents_collapse.ex`, which is a
+   `btn btn-ghost btn-square min-h-11 min-w-11`: 44px is right on a
+   full-width producer strip and would be twice the height of the Stop
+   button beside it here. Same ICON, same vocabulary, card-sized.
+
+   No border and no ground at rest. A second bordered control beside Stop
+   would read as two buttons of equal weight, and Stop is the one that
+   has to stay findable — the ticket forbids weakening it to make room
+   for this. The pencil earns its box on hover and focus instead. */
+.candidate-correct-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Matches `.candidate-btn`'s box (6px/10px around an 11.5px label) so
+     the two sit on one baseline, minus the horizontal padding a
+     square icon does not need. */
+  padding: 6px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--cc-countdown-rest);
+}
+
+/* Plain `:hover, :focus-visible` and NOT Tailwind's `hover:` variant,
+   which compiles to a `(hover: hover)` media query and does nothing at
+   all on touch. The focus half is the keyboard's, and it is why this is
+   two selectors. Same posture as `.candidate-btn--stop` above. */
+.candidate-correct-btn:hover,
+.candidate-correct-btn:focus-visible {
+  color: var(--cc-correct-fg);
+  border-color: var(--cc-btn-border);
+  background: var(--cc-btn-bg);
+}
+
+/* THE PANEL. A sibling of the foot inside the card, so it pushes the
+   card TALLER and covers nothing — the timer the reader is deciding
+   against stays visible the whole time it is open.
+
+   FULL BLEED, and that is what the negative margins are for: the card
+   pads 13px/14px, and a drawer inset inside that padding would read as a
+   box sitting on the card. Pulled out to the card's own edges and given
+   its padding back, it reads as a compartment of the card. `--cc-bg` has
+   no radius to respect at the bottom because the card clips its own
+   overflow for the drain.
+
+   ONE RULE, on the top edge only. A box would make this a dialog. The
+   ground change alone cannot carry the boundary — 1.07:1 on a shaping
+   card in light, measured in the token block — so the rule is the
+   separator and not a refinement of it.
+
+   The BOTTOM margin is negative too, by the card's own 13px, so the
+   drawer reaches the card's bottom edge and gets the padding back as its
+   own. Stopped short of the edge it would leave a 13px strip of card
+   ground beneath it and read as a box floating in the card rather than
+   its bottom compartment. `.candidate-drain` is out of flow on that same
+   edge and lands ON the drawer, which is correct: the bar is the card's
+   remaining life and the drawer is part of the card. */
+.candidate-correction {
+  margin: 11px -14px -13px;
+  padding: 10px 14px 13px;
+  border-top: 1px solid var(--cc-correct-rule);
+  background: var(--cc-correct-bg);
+}
+
+/* A STACKED LIST OF SENTENCES, not a row of iconned buttons. The canvas
+   considered the icon row and dropped it: a row wraps into a mess when
+   this rail narrows to 312px while sentences truncate gracefully, and a
+   toolbar reads as chrome you skim past when the whole point is that the
+   reader should stop and pick one. */
+.candidate-correction__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* THE THREE ARE EQUALS. No fill, no border, no primary — see the token
+   block for why `--color-primary` is not spent here. They are sentences
+   you press, so they get the card's own text colour and the card's own
+   body size (11.5px, `.candidate-btn`'s), full width and left aligned,
+   with the tap target coming from padding rather than from a box.
+
+   `text-align: left` is not cosmetic: a `<button>` centres its content
+   by default, and a centred sentence that wraps to two lines reads as a
+   heading rather than as a choice. */
+.candidate-correction__choice {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--cc-correct-fg);
+}
+
+.candidate-correction__choice:hover,
+.candidate-correction__choice:focus-visible {
+  background: var(--cc-btn-bg);
+}
+
+/* THE FOOTNOTE. One size down and muted, under the choices, because it
+   is a REASON and not an instruction: it should read as a footnote the
+   first time and be ignorable the tenth. Measured at 6.66:1 in light and
+   6.14:1 in dark against this panel's own ground — raw --color-neutral
+   is 2.23:1 in dark and is corrected in the token block, which is the
+   failure the canvas warned about and this file has now measured on four
+   separate grounds. */
+.candidate-correction__note {
+  margin-top: 7px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--cc-correct-note);
 }
 
 /* ── Closed disclosure ──

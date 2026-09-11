@@ -2297,6 +2297,8 @@
               candidate_error={@candidate_error}
               candidate_order={@candidate_order}
               candidate_undo={@candidate_undo}
+              correction_agents={candidate_correction_agents(assigns[:participants] || [])}
+              correcting_candidate_id={@candidate_correcting_id}
               captions_available={@meetings_enabled}
             >
               <:canvas_extra>

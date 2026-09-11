@@ -88,6 +88,17 @@
  * belt and not the braces: a reload after the window has passed does not
  * draw the row at all.
  *
+ * ## What the FE-10 remediation added: the RE-ARM SNAP
+ *
+ * A correction re-arms the card, which is the first thing in the codebase
+ * that makes the drain's width GROW. `.candidate-drain` eases `width`, so
+ * the growth was drawn as a 0.9s sweep left to right — the numeral jumping
+ * and the bar refilling, one event drawn two contradictory ways. `_paint`
+ * now compares the width it is about to write against the width it last
+ * wrote and suppresses the easing for the growing tick only. See
+ * `_snapIfGrowing` for why the previous value lives on the node and why
+ * "equal" is not "did not grow".
+ *
  * `pointerenter` / `pointerleave` rather than `pointerover` / `pointerout`:
  * the over/out pair bubbles from every child, so moving between two cards
  * would fire a thaw and a freeze on each crossing and the rail would be
@@ -319,8 +330,65 @@ const CandidateClock = {
     // jumps. The REMAINING fraction, not the elapsed one — wired to the
     // other end the bar looks plausible and grows as the card runs out.
     const fraction = Math.min(remaining / total, 1)
-    drain.style.width = `${(fraction * 100).toFixed(2)}%`
+    const percent = Number((fraction * 100).toFixed(2))
+
+    this._snapIfGrowing(drain, percent)
+
+    drain.style.width = `${percent.toFixed(2)}%`
     drain.classList.toggle("candidate-drain--warning", warning)
+  },
+
+  // THE RE-ARM SNAP. `.candidate-drain` eases `width` over 0.9s, and that
+  // easing was written for a bar that only ever shrinks. A correction calls
+  // `Candidates.rearm/2` and hands the card its full window back, so the
+  // width GROWS — and because the drain node is patched in place rather
+  // than replaced, the inherited transition eases the growth into a visible
+  // left-to-right sweep. The numeral jumps and the bar refills: the two
+  // halves of one event disagreeing about whether it was an event.
+  //
+  // So the easing is turned off for the tick that grows, and back on for
+  // the next tick that shrinks. NOT turned off permanently: that would
+  // satisfy the re-arm and silently undo the drain on every normal second
+  // of every countdown, which is the whole of what the transition is for.
+  //
+  // ## Why the previous width is stamped on the NODE
+  //
+  // Not on `this`, for the reason `_paint`'s own comment gives: one ticker
+  // over N cards is exactly where a value cached on the hook becomes one
+  // card's deadline applied to all of them. A property on the drain is
+  // per-drain by construction.
+  //
+  // And not read back off `drain.style.width` either, which is the reading
+  // that looks obvious and is wrong. The growth is applied by the LiveView
+  // PATCH: morphdom writes the server's new inline width onto the node
+  // before this hook's `updated()` runs, so by the time we are asked, the
+  // style attribute already holds the NEW value and has forgotten the old
+  // one. An expando survives the in-place patch; the style attribute does
+  // not survive it unchanged. The ordering is what makes this work at all:
+  // `updated()` is dispatched in the same synchronous task as the patch, a
+  // transition only produces pixels at paint time, and there is no paint
+  // in between — so cancelling it here means no interpolated frame is ever
+  // drawn.
+  //
+  // ## Why `add`/`remove` on strict inequality, and not `toggle`
+  //
+  // The sheet handle's fill is also a `meeting-candidate-drain`, and when
+  // the Canvas tab is open BOTH `CandidateClock` and `SheetHandleClock`
+  // paint it, from two intervals that are not in step. The second one to
+  // arrive computes the same percent and would `toggle(..., false)` the
+  // class straight back off the node the first one just snapped. Equal is
+  // therefore "no opinion", and only a genuine narrowing restores the
+  // easing. A first paint has no previous width and states no opinion
+  // either: there is no growth to hide when the server has just rendered
+  // the bar at its correct width.
+  _snapIfGrowing(drain, percent) {
+    const previous = drain.__candidateDrainPercent
+    drain.__candidateDrainPercent = percent
+
+    if (previous === undefined || percent === previous) return
+
+    if (percent > previous) drain.classList.add("candidate-drain--snap")
+    else drain.classList.remove("candidate-drain--snap")
   },
 }
 

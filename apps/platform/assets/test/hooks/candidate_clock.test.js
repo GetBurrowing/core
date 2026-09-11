@@ -39,10 +39,16 @@ import CandidateClock, { SheetHandleClock } from "../../js/hooks/candidate_clock
 
 // ── Fakes ────────────────────────────────────────────────────────────────
 
-// A minimal `classList` that only knows `toggle`, which is all the hook
-// uses. Backed by a real Set so a class added twice is still one class and
-// `has()` is a genuine reading rather than a substring match on a string
-// somebody assembled.
+// A minimal `classList` that only knows `toggle`, `add` and `remove`,
+// which is all the hook uses. Backed by a real Set so a class added twice
+// is still one class and `has()` is a genuine reading rather than a
+// substring match on a string somebody assembled.
+//
+// `add` and `remove` are here as well as `toggle` because they are not the
+// same instrument: the re-arm snap must leave the class ALONE when the
+// width it is painting has not changed, and `toggle(name, false)` cannot
+// express "no opinion". A fake offering only `toggle` would make the
+// distinction untestable, which is the same as not having made it.
 function fakeClassList() {
   const set = new Set()
   return {
@@ -50,6 +56,12 @@ function fakeClassList() {
     toggle(name, on) {
       if (on) set.add(name)
       else set.delete(name)
+    },
+    add(name) {
+      set.add(name)
+    },
+    remove(name) {
+      set.delete(name)
     },
     contains(name) {
       return set.has(name)
@@ -214,15 +226,37 @@ function drainWarned(card) {
     .classList.contains("candidate-drain--warning")
 }
 
+// Is the drain's width easing SUPPRESSED for this paint? `.candidate-drain`
+// transitions `width` over 0.9s and `.candidate-drain--snap` turns that off,
+// so this reads "the bar will jump to its new width" and its absence reads
+// "the bar will ease to its new width".
+function drainSnapped(card) {
+  return card.node("meeting-candidate-drain").classList.contains("candidate-drain--snap")
+}
+
 // The BOTTOM-SHEET HANDLE (task 01a07410 stage 2). Built with the same
 // child roles as a card, deliberately: the handle is painted by the SAME
 // `_paint`, so it reports the same number the card does by construction
 // rather than by two implementations agreeing.
 //
-// Built WITHOUT a drain child, which is the shape the handle actually has
-// — `_paint` must still write the number before it gives up on the width.
-function fakeHandle({ actsAt, totalSeconds = 30, warningSeconds = 5 } = {}) {
+// Built WITHOUT a drain child by default, which is the shape the handle
+// actually has — `_paint` must still write the number before it gives up
+// on the width.
+//
+// `withDrain` exists for exactly one case: `call_rail_frame.ex` renders the
+// handle's `.sheet-handle__fill` with `data-role="meeting-candidate-drain"`,
+// so when the Canvas tab is open that ONE node is painted by two hooks off
+// two unsynchronised intervals. That is the only place in the tree where a
+// drain is painted twice per second, and it is where the snap class can be
+// taken back off by the second painter.
+function fakeHandle({
+  actsAt,
+  totalSeconds = 30,
+  warningSeconds = 5,
+  withDrain = false,
+} = {}) {
   const children = [fakeNode("meeting-candidate-remaining", { withDataset: true })]
+  if (withDrain) children.push(fakeNode("meeting-candidate-drain"))
 
   const dataset = { actsAt, totalSeconds: String(totalSeconds) }
   if (warningSeconds !== null) dataset.warningSeconds = String(warningSeconds)
@@ -713,6 +747,169 @@ describe("CandidateClock", () => {
   })
 
   // ── The pointer freeze (task 01a0740e stage 4) ─────────────────────────
+
+  // ── The window coming BACK is not a countdown ─────────────────────────
+  //
+  // `.candidate-drain` eases `width` over 0.9s, added by FE-9 (adef1917)
+  // for a bar that only ever shrinks. `Candidates.rearm/2` (FE-10) is the
+  // first thing in the codebase that makes the width GROW, and because the
+  // drain node is patched in place rather than replaced, the inherited rule
+  // eased the growth into a visible left-to-right sweep: measured in a real
+  // browser at 228px -> 285px over ten samples, reproduced in three trials.
+  // The numeral jumped and the bar refilled.
+  //
+  // The fix is a `transition: none` class for the tick that grows. Both
+  // halves of that sentence carry a test below, and the second is the
+  // important one: deleting the transition outright, or leaving the
+  // suppression on, would satisfy the first test and quietly undo FE-9 on
+  // every normal second of every countdown.
+  describe("the drain when the window comes BACK", () => {
+    // What a correction does, from this hook's side: the server re-armed
+    // the row, so the rail is patched with a later `data-acts-at` and
+    // LiveView calls `updated()` — in the SAME synchronous task as the
+    // patch, which is why suppressing the easing here is early enough that
+    // no interpolated frame is ever painted.
+    function rearm(card, seconds) {
+      card.dataset.actsAt = new Date(Date.now() + seconds * 1000).toISOString()
+    }
+
+    it("snaps the bar to full instead of sweeping it there", () => {
+      const card = fakeCard({ actsAt: new Date(T0 + 30_000).toISOString() })
+      const hook = mountHook(fakeRail([card]))
+
+      vi.advanceTimersByTime(24_000)
+
+      // The premise, measured rather than assumed: the bar really is
+      // part-drained, so what follows is a GROWTH and not a repaint of a
+      // width that was already full.
+      expect(shownNumber(card)).toBe("6")
+      expect(drainWidth(card)).toBe("20.00%")
+      expect(drainSnapped(card)).toBe(false)
+
+      rearm(card, 30)
+      hook.updated()
+
+      expect(shownNumber(card)).toBe("30")
+      expect(drainWidth(card)).toBe("100.00%")
+      expect(drainSnapped(card)).toBe(true)
+
+      hook.destroyed()
+    })
+
+    it("never snaps on the way DOWN — every normal second still eases", () => {
+      const card = fakeCard({ actsAt: new Date(T0 + 30_000).toISOString() })
+      const hook = mountHook(fakeRail([card]))
+
+      const widths = [drainWidth(card)]
+      expect(drainSnapped(card)).toBe(false)
+
+      for (let second = 0; second < 30; second++) {
+        vi.advanceTimersByTime(1000)
+        widths.push(drainWidth(card))
+        expect(drainSnapped(card)).toBe(false)
+      }
+
+      // Positive control for those thirty-one assertions: the bar was
+      // genuinely repainted to a NEW width on every one of those seconds.
+      // Without this, a hook that stopped painting the drain entirely would
+      // pass the loop above, and so would a fix that deleted the class.
+      expect(widths[0]).toBe("100.00%")
+      expect(widths[30]).toBe("0.00%")
+      expect(new Set(widths).size).toBe(31)
+
+      hook.destroyed()
+    })
+
+    it("takes the suppression back off on the very next second", () => {
+      const card = fakeCard({ actsAt: new Date(T0 + 30_000).toISOString() })
+      const hook = mountHook(fakeRail([card]))
+
+      vi.advanceTimersByTime(24_000)
+      rearm(card, 30)
+      hook.updated()
+      expect(drainSnapped(card)).toBe(true)
+
+      vi.advanceTimersByTime(1000)
+
+      // A re-armed card is an ordinary card one second later. A suppression
+      // that stayed on would leave this drain, and eventually every drain
+      // on a rail anyone has ever corrected, stepping once a second.
+      expect(shownNumber(card)).toBe("29")
+      expect(drainWidth(card)).toBe("96.67%")
+      expect(drainSnapped(card)).toBe(false)
+
+      hook.destroyed()
+    })
+
+    it("snaps ONLY the card that was re-armed, never the one beside it", () => {
+      const corrected = fakeCard({ actsAt: new Date(T0 + 30_000).toISOString() })
+      const neighbour = fakeCard({ actsAt: new Date(T0 + 30_000).toISOString() })
+      const hook = mountHook(fakeRail([corrected, neighbour]))
+
+      vi.advanceTimersByTime(24_000)
+      expect(drainWidth(corrected)).toBe("20.00%")
+      expect(drainWidth(neighbour)).toBe("20.00%")
+
+      rearm(corrected, 30)
+      hook.updated()
+
+      expect(drainWidth(corrected)).toBe("100.00%")
+      expect(drainSnapped(corrected)).toBe(true)
+
+      // The neighbour is still draining and must still ease. A previous
+      // width cached on the HOOK rather than on each drain node would apply
+      // the corrected card's growth to this one as well — the exact bug
+      // `_paint`'s own comment says one ticker over N cards invites.
+      expect(drainWidth(neighbour)).toBe("20.00%")
+      expect(drainSnapped(neighbour)).toBe(false)
+
+      hook.destroyed()
+    })
+
+    it("survives a SECOND ticker repainting the same node at the same width", () => {
+      // `call_rail_frame.ex` gives the sheet handle's fill
+      // `data-role="meeting-candidate-drain"`, so with the Canvas tab open
+      // that one node is painted by `CandidateClock` AND `SheetHandleClock`
+      // off two intervals that are not in step. It is the only node in the
+      // tree painted twice a second, and it is where a `toggle(.., grew)`
+      // silently loses the snap.
+      const handle = fakeHandle({
+        actsAt: new Date(T0 + 30_000).toISOString(),
+        withDrain: true,
+      })
+      const railHook = mountHook(fakeRailWithDocument([], [handle]))
+
+      handle.ownerDocument = queryable([handle])
+      const handleHook = Object.create(SheetHandleClock)
+      handleHook.el = handle
+      handleHook.pushEvent = vi.fn()
+      handleHook.mounted()
+
+      vi.advanceTimersByTime(24_000)
+      expect(drainWidth(handle)).toBe("20.00%")
+      expect(drainSnapped(handle)).toBe(false)
+
+      rearm(handle, 30)
+      railHook.updated()
+      expect(drainSnapped(handle)).toBe(true)
+
+      // The second painter computes the SAME width and must state no
+      // opinion. "Did not grow" is not "shrank", and only a shrink restores
+      // the easing.
+      handleHook.updated()
+      expect(drainWidth(handle)).toBe("100.00%")
+      expect(drainSnapped(handle)).toBe(true)
+
+      // And that second painter is not merely inert: one second on it
+      // computes a narrower width and restores the easing like any other.
+      vi.advanceTimersByTime(1000)
+      expect(drainWidth(handle)).toBe("96.67%")
+      expect(drainSnapped(handle)).toBe(false)
+
+      railHook.destroyed()
+      handleHook.destroyed()
+    })
+  })
 
   describe("the pointer freeze", () => {
     it("pushes a freeze on pointerenter and a thaw on pointerleave", () => {

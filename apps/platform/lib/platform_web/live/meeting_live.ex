@@ -835,6 +835,16 @@ defmodule PlatformWeb.MeetingLive do
     # who pressed the button, and everybody else correctly sees the card
     # move to Closed. See `apply_candidate_stop/2`.
     |> assign(:candidate_undo, nil)
+    # WHICH card has its correction panel open, or nil for none (task
+    # 01a0740e stage 2). One id and not a set, which is what makes "one
+    # panel at a time" structural rather than a rule somebody has to
+    # keep — the same shape `:intent_reason_picker_id` uses above.
+    #
+    # Per-socket, like the undo stash: the panel belongs to the
+    # participant who opened it. The RE-ARM it causes is server state
+    # and does reach everybody, which is correct — that is a fact about
+    # the card, not about one reader's screen.
+    |> assign(:candidate_correcting_id, nil)
   end
 
   @impl true
@@ -3631,6 +3641,96 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_event("undo_stop_candidate", _params, socket), do: {:noreply, socket}
 
+  # ── The correction panel (task 01a0740e stage 2) ────────────────────────
+  #
+  # Five handlers for the pencil on an armed card and the three choices
+  # it opens. All five are UNGATED, and all five for the same documented
+  # reason `stop_candidate` is: `with_intents_gate/2` resolves the
+  # `meeting_producer` role, a guest holds `"meeting:{id}"` and not
+  # `"meeting:{id}:intents"`, so gating these would deny correction to
+  # exactly the participants the board exists for. It would also invert
+  # the ticket's whole argument — correcting a card is meant to be
+  # EASIER than stopping one, and stop is ungated.
+  #
+  # Every one of them resolves the candidate against THIS socket's
+  # meeting through `with_own_candidate/3` before touching anything, and
+  # reads the actor's participant id off THIS socket rather than from
+  # the click payload, so a crafted `phx-value-` can neither reach
+  # another meeting's card nor attribute somebody else's correction.
+
+  # THE SIGNATURE MOVE: opening the panel re-arms the card.
+  #
+  # Without this, reading the three choices costs the reader the window
+  # they were reading them in, and the cheapest move stays "stop it" —
+  # which teaches the classifier nothing. `rearm/2` sets the FULL 30
+  # seconds, and the rail draws it as the number changing in place.
+  #
+  # It is server state, so every participant's rail moves, not just the
+  # one who opened the panel. A participant CAN therefore hold a card
+  # open by re-opening the panel; that is intended and is strictly
+  # weaker than the Stop control they already have.
+  def handle_event("candidate_correct_open", %{"candidate_id" => candidate_id}, socket)
+      when is_binary(candidate_id) do
+    {:noreply, with_own_candidate(socket, candidate_id, &open_candidate_correction/2)}
+  end
+
+  def handle_event("candidate_correct_open", _params, socket), do: {:noreply, socket}
+
+  # Closing writes nothing and does NOT take the re-arm back. The
+  # seconds were given for reading the card; a reader who decided the
+  # card was right has still done the reading.
+  def handle_event("candidate_correct_close", _params, socket) do
+    {:noreply, assign(socket, :candidate_correcting_id, nil)}
+  end
+
+  # `Hand to <agent>`. The agent id is the ONE thing here that legitimately
+  # arrives in the payload — it names a choice the participant made, not
+  # an identity they are claiming — and `Candidates.correct/3` refuses an
+  # id that is not a UUID (`:no_agent`), names no agent row
+  # (`:unknown_agent`), or names the agent already on the card
+  # (`:same_agent`), each before anything is written.
+  def handle_event(
+        "candidate_correct_reassign",
+        %{"candidate_id" => candidate_id, "agent_id" => agent_id},
+        socket
+      )
+      when is_binary(candidate_id) and is_binary(agent_id) do
+    {:noreply,
+     with_own_candidate(socket, candidate_id, fn socket, candidate ->
+       apply_candidate_correction(socket, candidate, :reassign, agent_id: agent_id)
+     end)}
+  end
+
+  def handle_event("candidate_correct_reassign", _params, socket), do: {:noreply, socket}
+
+  # `Make it a canvas instead` / `Make it a task instead`. Which of the
+  # two it is, is a fact about the card and not about the click, so the
+  # direction is not carried in the payload: `correct/3` flips whatever
+  # `outcome_kind` the row it re-reads is actually carrying.
+  def handle_event("candidate_correct_flip", %{"candidate_id" => candidate_id}, socket)
+      when is_binary(candidate_id) do
+    {:noreply,
+     with_own_candidate(socket, candidate_id, fn socket, candidate ->
+       apply_candidate_correction(socket, candidate, :flip_outcome, [])
+     end)}
+  end
+
+  def handle_event("candidate_correct_flip", _params, socket), do: {:noreply, socket}
+
+  # `Not an action`. The only one of the three that closes the card, and
+  # it closes it through the existing `stop/3` — same race against the
+  # sweeper, same `:dismissed` reason. The difference from pressing Stop
+  # is the corpus row, which is the entire point.
+  def handle_event("candidate_correct_none", %{"candidate_id" => candidate_id}, socket)
+      when is_binary(candidate_id) do
+    {:noreply,
+     with_own_candidate(socket, candidate_id, fn socket, candidate ->
+       apply_candidate_correction(socket, candidate, :not_an_action, [])
+     end)}
+  end
+
+  def handle_event("candidate_correct_none", _params, socket), do: {:noreply, socket}
+
   # The human gate on a card that is NOT counting down (task
   # 01a03f4e-78b1). `Go ahead` and `Not now` are the review half of the
   # ticket's two modes; the countdown above is the act half, and the two
@@ -5751,6 +5851,122 @@ defmodule PlatformWeb.MeetingLive do
 
   defp decline_note(name) when is_binary(name), do: "Not now — " <> name
   defp decline_note(_name), do: "Not now — a participant"
+
+  # ── Correction (task 01a0740e stage 2) ──────────────────────────────────
+
+  # Open the panel, and give the card its countdown back on the way.
+  #
+  # The re-arm happens on OPEN rather than only on a completed
+  # correction because the cost this ticket is removing is the cost of
+  # LOOKING. A panel that re-armed only once you had chosen would still
+  # charge you for reading the three choices, and the reader who decides
+  # the card was right after all would have paid the most.
+  #
+  # `{:error, :not_armed}` is not reported. It means the card was closed
+  # or disarmed between this participant's last paint and their click —
+  # the board refresh below is what tells them that, by removing the
+  # card, and a second sentence about a card that is no longer on screen
+  # would be noise.
+  defp open_candidate_correction(socket, candidate) do
+    socket =
+      case Candidates.rearm(candidate) do
+        {:ok, _rearmed} -> assign(socket, :candidate_error, nil)
+        {:error, :not_armed} -> socket
+        {:error, _reason} -> assign(socket, :candidate_error, "Could not reopen the window.")
+      end
+
+    socket
+    |> assign(:candidate_correcting_id, candidate.id)
+    |> assign_candidate_board(candidate.meeting_id)
+  end
+
+  # One of the three choices.
+  #
+  # The result is CHECKED. On `{:error, _}` the panel stays open and the
+  # message goes to `:candidate_error`, which the rail renders at
+  # `[data-role="meeting-candidate-error"]`: a correction that silently
+  # failed while the panel closed underneath it would leave the
+  # participant believing they had taught the classifier something, and
+  # a panel whose buttons write nothing passes every rendering test
+  # there is.
+  #
+  # `:candidate_correcting_id` is cleared ONLY on the success branch,
+  # and the error branch deliberately does not touch the countdown —
+  # `correct/3` re-arms as part of a write that succeeded, so a refused
+  # correction has moved nothing to draw.
+  defp apply_candidate_correction(socket, candidate, kind, opts) do
+    opts =
+      opts
+      |> Keyword.put(:actor_participant_id, participant_id(socket.assigns[:current_participant]))
+      |> Keyword.put(:actor_name, socket.assigns[:display_name])
+
+    case Candidates.correct(candidate, kind, opts) do
+      {:ok, _corrected} ->
+        socket
+        |> assign(:candidate_error, nil)
+        |> assign(:candidate_correcting_id, nil)
+        |> assign_candidate_board(candidate.meeting_id)
+
+      {:error, reason} ->
+        socket
+        |> assign(:candidate_error, correction_error(reason))
+        |> assign_candidate_board(candidate.meeting_id)
+    end
+  end
+
+  # Said out loud, never swallowed. Each sentence names what the reader
+  # can do about it; `Could not record this correction.` is the fallback
+  # for a changeset, which is a shape a participant cannot act on.
+  defp correction_error(:same_agent), do: "That is already the agent on this one."
+
+  defp correction_error(reason) when reason in [:no_agent, :unknown_agent],
+    do: "That agent is no longer in this meeting."
+
+  # The same sentence `stop_candidate` uses, because it is the same
+  # fact: the deliverable exists.
+  defp correction_error(:already_fired), do: "Too late — this one already went ahead."
+  defp correction_error(_reason), do: "Could not record this correction."
+
+  @doc """
+  THE AGENTS IN THIS ROOM, as `[%{id:, name:}]` — the re-target options
+  a card's correction panel offers (task 01a0740e stage 2).
+
+  Deliberately not every active agent. `intent_agent_options/0` offers
+  the global picker because on the producer's bar "wrong agent" usually
+  means an agent who is NOT here. On a meeting card the question is
+  narrower — the classifier handed a piece of work to the wrong one of
+  the agents in the room — so this reads the meeting's own roster.
+
+  `:participants` is LIVE PRESENCE (`build_meeting_participants/1`,
+  which reads `Meetings.active_participants_for_space/1`), NOT
+  `Chat.list_participants/1`; the moduledoc above still says the latter
+  and is stale. `:participant_id` on that view-model is the AGENT id and
+  not the presence row's id — see `meeting_participant_view_model/1` —
+  which is what makes it the value `Candidates.correct/3` can look up,
+  and getting that wrong would write exemplars pointing at rows that are
+  not agents. Public so that mapping is asserted directly rather than
+  only through a mounted LiveView, the same reason
+  `meeting_participant_view_model/1` is.
+
+  An agent whose identity did not resolve is dropped rather than
+  labelled: `resolve_identity/1` answers nil for an orphaned presence
+  row, and `Hand to <nothing>` is not a choice anybody can make.
+  `uniq_by/2` because a rejoin can leave two live rows for one agent.
+
+  The CURRENTLY ASSIGNED agent is not excluded here — that is per-card
+  and the rail does it, because one roster serves every card on it.
+  """
+  def candidate_correction_agents(participants) when is_list(participants) do
+    participants
+    |> Enum.filter(fn p ->
+      Map.get(p, :participant_type) == "agent" and is_binary(Map.get(p, :participant_id)) and
+        is_binary(Map.get(p, :display_name))
+    end)
+    |> Enum.map(&%{id: &1.participant_id, name: &1.display_name})
+    |> Enum.uniq_by(& &1.id)
+  end
+
+  def candidate_correction_agents(_participants), do: []
 
   # The board's own live/closed split, and it is NOT
   # `open_for_meeting/1`.

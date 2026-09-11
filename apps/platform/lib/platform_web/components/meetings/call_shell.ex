@@ -465,6 +465,28 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   # `stop_candidate` handler, so there is no stop of its own to undo.
   attr(:candidate_undo, :map, default: nil)
 
+  # THE CORRECTION ROSTER, or nil (task 01a0740e stage 2) — the agents a
+  # card's correction panel may offer to hand the work to, as
+  # `[%{id:, name:}]`.
+  #
+  # `nil` — the default — is what the in-chat quickmeet gets, and it is
+  # what keeps this from becoming a dead button there: `MeetingLive`
+  # carries the five `candidate_correct_*` handlers and `ChatLive` does
+  # not, so on nil `candidate_rail/1` renders no pencil and no panel and
+  # nothing on that surface can push an event it cannot handle. Same
+  # posture as `candidate_order` and `candidate_undo` above, for the same
+  # structural reason.
+  #
+  # `[]` is NOT the same as nil: it means "this surface can correct and
+  # there is no other agent in the room", which still renders the panel.
+  attr(:correction_agents, :list, default: nil)
+
+  # WHICH card has its correction panel open, or nil. Per-socket, like
+  # `candidate_undo` — the re-arm the press caused is server state and
+  # moves every rail, but the open drawer is local to the reader who
+  # opened it.
+  attr(:correcting_candidate_id, :string, default: nil)
+
   # ── Transcript pane ──────────────────────────────────────────────
   attr(:captions_available, :boolean,
     default: true,
@@ -677,6 +699,8 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               error={@candidate_error}
               order={@candidate_order}
               undo={@candidate_undo}
+              correction_agents={@correction_agents}
+              correcting_id={@correcting_candidate_id}
             />
             <%!-- Honest empty state (task 01a05b14 stage 5). `candidate_rail`
                  renders NOTHING when it has no open card, no closed card

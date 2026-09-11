@@ -67,6 +67,7 @@ defmodule Platform.Meetings.Candidates do
 
   require Logger
 
+  alias Platform.Agents.Agent
   alias Platform.Meetings.CandidateEvents
   alias Platform.Meetings.Countdown
   alias Platform.Meetings.IntentCorrections
@@ -1255,6 +1256,389 @@ defmodule Platform.Meetings.Candidates do
   end
 
   defp restored_state(_detail), do: nil
+
+  # ── correction (task 01a0740e stage 1) ────────────────────────────────────
+
+  # The three things a human can say an armed card got wrong.
+  @correction_kinds [:reassign, :flip_outcome, :not_an_action]
+
+  # What a correction on a card the classifier never answered for writes
+  # into the REQUIRED `meeting_intent_corrections.classified_intent`.
+  #
+  # A nil `classified_intent` is legitimate rather than a defect. A
+  # push-to-talk press released without speech opens exactly such a card
+  # (`Platform.Meetings.PressCard` sets `classified_intent: nil`), and a
+  # model call is allowed 60 seconds against a 30-second countdown (see
+  # `Countdown`'s `@provider_receive_timeout_ms` note), so a card can
+  # also be corrected while its answer is still in flight.
+  #
+  # A literal, and deliberately NOT `"off_topic"`. That is a real
+  # `IntentRouting.intents/0` member and a POSITIVE judgement the model
+  # made; this corpus is read straight back into the classifier's own
+  # prompt by `IntentCorrections.recent_exemplars/2`, so recording an
+  # absent answer as a judgement would teach the model a classification
+  # nothing ever produced.
+  #
+  # It is also NOT `to_string(intent || "")`, the shape
+  # `PlatformWeb.MeetingLive.write_intent_correction/3` carries: `""`
+  # fails `validate_required/2`, so that insert is rejected and the only
+  # trace is a `Logger.warning` nobody reads. A correction that silently
+  # writes nothing is the exact failure this stage exists to prevent.
+  @unclassified_intent "unclassified"
+
+  # `closed_note` for a `:not_an_action` correction. It replaces
+  # `stop_note/1`'s generic text so the closed row records WHY it closed
+  # — a card a human said was never an action, not a card somebody
+  # merely stopped. `closed_reason` stays `:dismissed`; the vocabulary
+  # in `MeetingCandidate.closed_reasons/0` is not this ticket's to
+  # extend.
+  @not_an_action_note "Corrected: not an action"
+
+  @doc "The corrections a human can make to a card."
+  @spec correction_kinds() :: [atom()]
+  def correction_kinds, do: @correction_kinds
+
+  @doc """
+  The `classified_intent` a correction records for a card the
+  classifier never answered for. See `@unclassified_intent`.
+  """
+  @spec unclassified_intent() :: String.t()
+  def unclassified_intent, do: @unclassified_intent
+
+  @doc """
+  Record that a human corrected this card, then give it its countdown
+  back (task 01a0740e stage 1).
+
+  `kind` is one of `correction_kinds/0`:
+
+    * `:reassign` — the intent was right, the agent was not. Writes a
+      `:corrected` / `:wrong_target` row naming `opts[:agent_id]`, then
+      moves `assigned_agent_id` **and** `assigned_agent_slug`.
+    * `:flip_outcome` — the deliverable was the wrong shape. Writes a
+      `:corrected` / `:wrong_intent` row naming the intent the flipped
+      kind implies, then flips `outcome_kind` between `:task` and
+      `:artifact`. This is the first human producer of `:artifact`.
+    * `:not_an_action` — it should not have been a card at all. Writes a
+      `:removed_no_action` / `:not_actionable` row, then closes the card
+      through the existing `stop/3`.
+
+  `opts`: `:agent_id` (`:reassign` only), `:actor_participant_id`,
+  `:actor_name`, and `:now` (defaults to `DateTime.utc_now()`).
+
+  ## The order is a requirement, not a style
+
+  The `meeting_intent_corrections` row is written FIRST, and on
+  `{:error, changeset}` this function returns that error having changed
+  NOTHING about the candidate — no reassign, no flip, no close, no
+  re-arm. That is what makes "the panel wrote nothing" structurally
+  impossible rather than merely tested for: there is no ordering in
+  which the card can move while the corpus stays silent.
+
+  Every refusal this function can raise ITSELF is therefore checked
+  before the write: `:same_agent`, `:no_agent`, `:unknown_agent` and a
+  candidate change that would not survive `MeetingCandidate.changeset/2`
+  all answer before the insert, so none of them can leave an orphan
+  exemplar claiming a correction that never happened.
+
+  ## The exception, measured rather than assumed
+
+  `:already_fired` is NOT one of those. It comes back from `stop/3`,
+  which `:not_an_action` runs AFTER the corpus row is written, so a
+  `:not_an_action` on a card that has graduated (`disposition ==
+  :accepted`) or that the sweeper has already claimed (`:acting` AND
+  disarmed) answers `{:error, :already_fired}` with the exemplar
+  already in the corpus. The card is untouched — that invariant holds —
+  but the corpus is not empty.
+
+  This is the cost of the write-first order rather than a bug in it, and
+  it is the direction that was chosen deliberately: a card that moves
+  while the classifier learns nothing is the failure this ticket exists
+  to prevent, and an exemplar for a correction the card could not accept
+  is the cheaper of the two. It is not free, though. The surviving row
+  carries a nil `dispatch_outcome`, which `IntentCorrection`'s moduledoc
+  defines as "it never left the queue", and for a graduated card that is
+  false — `IntentCorrections.recent_exemplars/2` feeds these rows to the
+  classifier as few-shot examples, so it is a wrong example and not just
+  a spare one. Closing it needs a transaction around the write and the
+  apply; a precheck cannot, because the sweeper can claim the row
+  between the check and the insert. Both reachable cases are pinned in
+  `candidate_correction_test.exs`, under "a refusal raised AFTER the
+  corpus write".
+
+  ## Why the re-arm is the point
+
+  A correction restores the FULL countdown. Without that, using the
+  review window costs you the review window, and the cheapest move
+  becomes stop-rather-than-correct — which is backwards, because a
+  stopped card teaches the classifier nothing and a corrected one is the
+  training loop. `:not_an_action` closes the card, so there is nothing
+  to re-arm.
+
+  A correction on a card that is closed or already disarmed is still
+  recorded and still applied; `rearm/2` simply has no countdown to give
+  back and this function returns `{:ok, candidate}` rather than
+  propagating `{:error, :not_armed}`. Minting thirty fresh seconds on a
+  card a human deliberately disarmed would invent a consent nobody gave
+  — the same reasoning `reopen/2` records for bringing a card back
+  disarmed.
+
+  Returns `{:ok, candidate}`, or `{:error, reason}` where reason is
+  `:same_agent`, `:no_agent`, `:unknown_agent`, `:unknown_correction`,
+  `:not_found`, `:already_fired` (from `stop/3`), or a changeset.
+  """
+  @spec correct(MeetingCandidate.t() | binary(), atom(), keyword()) ::
+          {:ok, MeetingCandidate.t()}
+          | {:error,
+             :same_agent
+             | :no_agent
+             | :unknown_agent
+             | :unknown_correction
+             | :not_found
+             | :already_fired
+             | Ecto.Changeset.t()}
+  def correct(candidate_or_id, kind, opts \\ [])
+
+  def correct(candidate_or_id, kind, opts) when kind in @correction_kinds and is_list(opts) do
+    now = Keyword.get(opts, :now) || DateTime.utc_now()
+
+    # RE-READ, never the struct handed in — the same discipline `stop/3`
+    # and `reopen/2` record, and for the same reason: the struct a
+    # correction click arrives with came out of a LiveView assign loaded
+    # when the participant's page rendered, so its `assigned_agent_id`
+    # and `outcome_kind` are exactly the fields a stale copy gets wrong.
+    with {:ok, %MeetingCandidate{id: id}} <- fetch(candidate_or_id),
+         {:ok, %MeetingCandidate{} = candidate} <- fetch(id),
+         {:ok, plan} <- plan_correction(candidate, kind, opts),
+         {:ok, _correction} <- IntentCorrections.create_correction(plan.correction) do
+      apply_correction(candidate, plan, opts, now)
+    end
+  end
+
+  def correct(_candidate_or_id, _kind, _opts), do: {:error, :unknown_correction}
+
+  @doc """
+  Give an armed card its full countdown back (task 01a0740e stage 1).
+
+  Sets `acts_at` to `Countdown.acts_at(now)` — the whole 30 seconds, not
+  the remainder. `correct/3` calls this after a successful `:reassign`
+  or `:flip_outcome`.
+
+  Answers `{:error, :not_armed}` for a `:closed` card or one whose
+  `acts_at` is already nil. A nil `acts_at` is the disarmed state: a
+  human pressed stop, or the meeting's automation is off. Arming it here
+  would be this module minting a deadline nobody asked for, which is the
+  concern `reopen/2`'s doc states at length — an undone stop comes back
+  DISARMED for exactly this reason, and re-arming from nil here would
+  route around that decision.
+  """
+  @spec rearm(MeetingCandidate.t() | binary(), DateTime.t()) ::
+          {:ok, MeetingCandidate.t()} | {:error, :not_armed | :not_found | Ecto.Changeset.t()}
+  def rearm(candidate_or_id, now \\ DateTime.utc_now())
+
+  def rearm(candidate_or_id, %DateTime{} = now) do
+    with {:ok, %MeetingCandidate{id: id}} <- fetch(candidate_or_id),
+         {:ok, %MeetingCandidate{} = candidate} <- fetch(id) do
+      cond do
+        candidate.state == :closed ->
+          {:error, :not_armed}
+
+        is_nil(candidate.acts_at) ->
+          {:error, :not_armed}
+
+        true ->
+          candidate
+          |> MeetingCandidate.changeset(%{acts_at: Countdown.acts_at(now)})
+          |> Repo.update()
+      end
+    end
+  end
+
+  # Every refusal lives here, BEFORE the corpus write. See `correct/3`.
+  defp plan_correction(candidate, :reassign, opts) do
+    agent_id = uuid_or_nil(Keyword.get(opts, :agent_id))
+
+    cond do
+      is_nil(agent_id) ->
+        {:error, :no_agent}
+
+      # Naming the agent already on the card is not a correction. It
+      # would write an exemplar whose `classified_target_agent_id` and
+      # `corrected_target_agent_id` are the same value — a row that
+      # teaches the classifier to keep doing what it did.
+      agent_id == candidate.assigned_agent_id ->
+        {:error, :same_agent}
+
+      true ->
+        case fetch_agent_slug(agent_id) do
+          :error ->
+            # An exemplar routing to an agent that does not exist would
+            # train the classifier on an unreachable target.
+            {:error, :unknown_agent}
+
+          {:ok, slug} ->
+            plan(
+              candidate,
+              %{
+                correction: :corrected,
+                reason: :wrong_target,
+                corrected_target_agent_id: agent_id
+              },
+              # The slug is denormalized onto the candidate and it is
+              # what the rail renders (`CandidateDisplay.assigned_agent/1`
+              # reads the slug, not the id), so it must move WITH the id
+              # or a reassigned card keeps showing the previous agent's
+              # name.
+              {:update, %{assigned_agent_id: agent_id, assigned_agent_slug: slug}},
+              opts
+            )
+        end
+    end
+  end
+
+  defp plan_correction(candidate, :flip_outcome, opts) do
+    flipped = flipped_kind(candidate.outcome_kind)
+
+    plan(
+      candidate,
+      %{
+        correction: :corrected,
+        reason: :wrong_intent,
+        corrected_intent: intent_for_kind(flipped)
+      },
+      {:update, %{outcome_kind: flipped}},
+      opts
+    )
+  end
+
+  defp plan_correction(candidate, :not_an_action, opts) do
+    plan(
+      candidate,
+      %{correction: :removed_no_action, reason: :not_actionable},
+      :close,
+      opts
+    )
+  end
+
+  # Builds the {corpus row, candidate change} pair, and REFUSES when the
+  # change would not survive `MeetingCandidate.changeset/2`.
+  #
+  # The precheck runs the real changeset rather than re-stating its
+  # rules. Flipping a candidate that already carries a `task_id` to
+  # `:artifact` is rejected by `validate_artifact_has_no_task/1`, and
+  # that rule belongs to the schema — a second copy here would be a
+  # second thing to keep in step. Running it before the corpus write is
+  # what makes the failure clean: no exemplar is written for a flip that
+  # cannot happen.
+  defp plan(candidate, correction, then_do, opts) do
+    plan = %{correction: correction_attrs(candidate, correction, opts), apply: then_do}
+
+    case then_do do
+      {:update, changes} ->
+        changeset = MeetingCandidate.changeset(candidate, changes)
+        if changeset.valid?, do: {:ok, plan}, else: {:error, changeset}
+
+      :close ->
+        {:ok, plan}
+    end
+  end
+
+  defp correction_attrs(candidate, attrs, opts) do
+    Map.merge(
+      %{
+        meeting_id: candidate.meeting_id,
+        # Denormalized for the reason `IntentCorrection`'s moduledoc
+        # gives: by the time anyone reads the corpus, the ETS row that
+        # carried the utterance is gone.
+        transcript_chunk_excerpt: candidate.evidence_quote,
+        classified_intent: candidate.classified_intent || @unclassified_intent,
+        classified_target_agent_id: candidate.assigned_agent_id,
+        actor_participant_id: uuid_or_nil(Keyword.get(opts, :actor_participant_id))
+        #
+        # `dispatch_outcome` is left NIL, and that is a claim rather than
+        # an omission. `IntentCorrection`'s moduledoc defines nil as "it
+        # never left the queue", and a card that is still counting down
+        # has not left it — the countdown gates GRADUATION, the queue
+        # cursor gates DISPATCH, and they are different rails (see
+        # `Countdown`'s "Why per-CARD and not per-cursor").
+        #
+        # `org_id` is absent for the same kind of reason:
+        # `IntentCorrections.create_correction/1` derives it from the
+        # meeting, and passing one from here would let a caller write a
+        # row invisible to the org-scoped exemplar query.
+      },
+      attrs
+    )
+  end
+
+  defp apply_correction(candidate, %{apply: {:update, changes}}, _opts, now) do
+    with {:ok, %MeetingCandidate{} = corrected} <-
+           candidate |> MeetingCandidate.changeset(changes) |> Repo.update() do
+      rearm_after_correction(corrected, now)
+    end
+  end
+
+  defp apply_correction(candidate, %{apply: :close}, opts, _now) do
+    # The EXISTING stop path, not a second closing write: `close/2` is
+    # still the only thing in this module that sets `closed_reason`, and
+    # `stop/3` is what races the sweeper's claim so a human who corrected
+    # a card does not watch it graduate anyway. The explicit `note:`
+    # replaces `stop_note/1`'s generic text.
+    stop(candidate.id, uuid_or_nil(Keyword.get(opts, :actor_participant_id)),
+      note: not_an_action_note(Keyword.get(opts, :actor_name)),
+      actor_name: Keyword.get(opts, :actor_name)
+    )
+  end
+
+  # A correction that lands on a card with no countdown to give back is
+  # still a correction: the corpus row is written and the candidate is
+  # updated. See `correct/3`'s doc.
+  defp rearm_after_correction(candidate, now) do
+    case rearm(candidate, now) do
+      {:error, :not_armed} -> {:ok, candidate}
+      other -> other
+    end
+  end
+
+  # The other member of `MeetingCandidate.outcome_kinds/0`. Written as
+  # the two clauses rather than as a list rotation so a third kind
+  # arriving one day is a FunctionClauseError here rather than a silent
+  # wrong answer.
+  defp flipped_kind(:task), do: :artifact
+  defp flipped_kind(:artifact), do: :task
+
+  # The intent a flip CLAIMS the classifier should have answered. Both
+  # are real `IntentRouting.intents/0` members with copy in
+  # `CandidateDisplay.intent_label/1`, and a non-nil value here is
+  # REQUIRED: `IntentCorrection.changeset/2` rejects a `:corrected` row
+  # naming neither an intent nor a target agent, and a flip names no
+  # target.
+  defp intent_for_kind(:artifact), do: "brief_worthy"
+  defp intent_for_kind(:task), do: "action_items"
+
+  defp not_an_action_note(name) when is_binary(name) do
+    case String.trim(name) do
+      "" -> @not_an_action_note
+      trimmed -> "#{@not_an_action_note}, by #{trimmed}"
+    end
+  end
+
+  defp not_an_action_note(_name), do: @not_an_action_note
+
+  # `Repo.one` with a where clause, not `Repo.get` — the id is already
+  # through `uuid_or_nil/1`, and the get-family is the one
+  # `Platform.RepoLookupBoundaryTest` classifies. Selects the id
+  # alongside the slug so "no such agent" cannot be confused with an
+  # agent whose slug is nil.
+  defp fetch_agent_slug(agent_id) do
+    Agent
+    |> where([a], a.id == ^agent_id)
+    |> select([a], {a.id, a.slug})
+    |> Repo.one()
+    |> case do
+      {_id, slug} -> {:ok, slug}
+      nil -> :error
+    end
+  end
 
   @doc """
   Atomically claim every candidate whose countdown is due, and return

@@ -1573,4 +1573,548 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
       static_bar?: present?(row, "[data-role='meeting-candidate-closed-bar']")
     }
   end
+
+  # ── The correction drawer (task 01a0740e stage 2) ─────────────────────
+
+  # THE RAIL WITH A CORRECTION ROSTER.
+  #
+  # Keyword opts rather than a fourth positional `rail/4`, because these
+  # two attrs are read INDEPENDENTLY of each other and every test below
+  # turns on one of them being set while the other is not:
+  # `correction_agents` decides whether the surface can correct at all,
+  # `correcting_id` decides which card has its drawer open. A positional
+  # arity would make "nil roster, open id" awkward to write, and that
+  # combination is exactly the quickmeet defect this stage has to refute.
+  #
+  # `correction_agents: :unset` is NOT `nil` — it means "do not pass the
+  # attr", so a test can exercise the component's own default rather than
+  # a nil this helper chose for it. The two must be distinguishable: the
+  # whole quickmeet guarantee is that the DEFAULT is the safe value.
+  defp correction_rail(candidates, opts) do
+    base = [candidates: candidates, closed: [], events: %{}, now: @now]
+
+    base =
+      case Keyword.get(opts, :correction_agents, :unset) do
+        :unset -> base
+        agents -> Keyword.put(base, :correction_agents, agents)
+      end
+
+    base =
+      case Keyword.get(opts, :correcting_id, :unset) do
+        :unset -> base
+        id -> Keyword.put(base, :correcting_id, id)
+      end
+
+    render_component(&CandidateRail.candidate_rail/1, base)
+  end
+
+  # An armed card, `secs` from firing, assigned to `agent_id`.
+  defp armed_for(agent_id, secs, attrs \\ %{}) do
+    candidate(
+      Map.merge(
+        %{
+          state: :acting,
+          acts_at: DateTime.add(@now, secs, :second),
+          assigned_agent_id: agent_id,
+          assigned_agent_slug: "octavius"
+        },
+        attrs
+      )
+    )
+  end
+
+  defp agent(name), do: %{id: Ecto.UUID.generate(), name: name}
+
+  defp panel(html, candidate) do
+    LazyHTML.query(node(html, candidate), "[data-role='meeting-candidate-correction-panel']")
+  end
+
+  defp pencil(html, candidate) do
+    LazyHTML.query(node(html, candidate), "[data-role='meeting-candidate-correct']")
+  end
+
+  # Every reassign option's `{visible sentence, phx-value-agent_id}` pair,
+  # in document order. The PAIR and not either half: an option that names
+  # the right agent while carrying the wrong id writes a correction
+  # pointing at somebody else, and an option carrying the right id under
+  # the wrong name asks the reader to make a choice they cannot see.
+  defp reassign_options(html, candidate) do
+    nodes =
+      html
+      |> node(candidate)
+      |> LazyHTML.query("[data-role='meeting-candidate-correction-reassign']")
+
+    labels = nodes |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
+    ids = LazyHTML.attribute(nodes, "data-agent-id")
+
+    Enum.zip(labels, ids)
+  end
+
+  describe "the pencil on an armed card" do
+    test "renders in the countdown foot beside Stop, as a collapsed toggle naming the card" do
+      a = agent("Octavius")
+      card = armed_for(a.id, 24, %{evidence_quote: "rotate the staging secrets"})
+
+      html = correction_rail([card], correction_agents: [a])
+
+      # IN THE FOOT, which is the armed-only element. Queried from the
+      # foot down rather than from the card, so a pencil that drifted out
+      # of the countdown row and into the card body fails here.
+      assert present?(foot(html, card), "[data-role='meeting-candidate-correct']"),
+             "the pencil belongs inside [data-role='meeting-candidate-countdown']. " <>
+               "#{LazyHTML.to_html(foot(html, card))}"
+
+      p = pencil(html, card)
+
+      assert attr(p, "phx-click") == "candidate_correct_open"
+      assert attr(p, "phx-value-candidate_id") == card.id
+      assert attr(p, "aria-expanded") == "false"
+      assert attr(p, "type") == "button"
+
+      # The label NAMES THE CARD. Five armed cards would otherwise give a
+      # screen reader five identical controls called "Correct".
+      assert attr(p, "aria-label") =~ "rotate the staging secrets"
+
+      # Same icon as the producer bar's correction control
+      # (`data-role="intent-edit"` in `intents_collapse.ex`), so the two
+      # read as one vocabulary rather than as two unrelated features.
+      assert present?(p, "span.hero-pencil-square")
+    end
+
+    test "STOP IS UNTOUCHED: same element, same classes, same label, still last in the foot" do
+      a = agent("Octavius")
+      card = armed_for(a.id, 24, %{evidence_quote: "rotate the staging secrets"})
+
+      with_pencil = correction_rail([card], correction_agents: [a])
+      without = correction_rail([card], [])
+
+      stop_of = fn html ->
+        html |> node(card) |> LazyHTML.query("[data-role='meeting-candidate-stop']")
+      end
+
+      # THE CONTROL FOR THIS WHOLE TEST: the two renders genuinely differ,
+      # so "Stop is identical" is a claim about Stop and not about two
+      # identical pages.
+      assert present?(pencil(with_pencil, card), "span")
+      refute Enum.any?(pencil(without, card))
+
+      for html <- [with_pencil, without] do
+        stop = stop_of.(html)
+
+        assert attr(stop, "class") == "candidate-btn candidate-btn--stop",
+               "Stop must not be restyled to make room for the pencil. " <>
+                 "got: #{inspect(attr(stop, "class"))}"
+
+        assert attr(stop, "phx-click") == "stop_candidate"
+        assert attr(stop, "aria-label") =~ "Stop"
+      end
+
+      # LAST IN THE FOOT, so the pencil went BEFORE it and not after.
+      foot_roles =
+        with_pencil
+        |> foot(card)
+        |> LazyHTML.query("[data-role]")
+        |> LazyHTML.attribute("data-role")
+
+      assert index_of(foot_roles, "meeting-candidate-correct") <
+               index_of(foot_roles, "meeting-candidate-stop"),
+             "the pencil renders immediately before Stop. roles: #{inspect(foot_roles)}"
+    end
+
+    test "an UNARMED card gets no pencil and no panel, whatever the roster says" do
+      a = agent("Octavius")
+      unarmed = candidate(%{state: :shaping, acts_at: nil, assigned_agent_id: a.id})
+
+      # `correcting_id` deliberately NAMES this card, so the refutes below
+      # are about the card being unarmed and not about the drawer being
+      # closed.
+      html = correction_rail([unarmed], correction_agents: [a], correcting_id: unarmed.id)
+
+      refute Enum.any?(pencil(html, unarmed))
+      refute Enum.any?(panel(html, unarmed))
+
+      # The control: the card IS on the rail and IS in review mode, so the
+      # two refutes are not about an empty render.
+      assert present?(node(html, unarmed), "[data-role='meeting-candidate-review']")
+    end
+  end
+
+  describe "the quickmeet rail cannot grow a dead button" do
+    # THE DEFECT THIS REFUTES. `candidate_rail/1` is rendered from
+    # `call_shell.ex` on two surfaces. `MeetingLive` carries the five
+    # `candidate_correct_*` handlers; `ChatLive` does not. A pencil on the
+    # quickmeet rail would push an event nothing on that surface can
+    # handle.
+    test "the DEFAULT roster renders no pencil and no panel, and a list renders both" do
+      a = agent("Octavius")
+      card = armed_for(a.id, 24)
+
+      # The attr is NOT PASSED AT ALL, which is the quickmeet's actual
+      # call: `call_shell.ex` defaults it to nil and this asserts the
+      # component's own default, not a nil this test chose.
+      absent = correction_rail([card], correcting_id: card.id)
+
+      refute Enum.any?(pencil(absent, card)),
+             "a rail rendered without `correction_agents` must have no " <>
+               "[data-role='meeting-candidate-correct']"
+
+      refute Enum.any?(panel(absent, card))
+
+      # An explicit nil is the same answer, because `call_shell.ex` passes
+      # nil rather than omitting the attr.
+      explicit_nil = correction_rail([card], correction_agents: nil, correcting_id: card.id)
+      refute Enum.any?(pencil(explicit_nil, card))
+      refute Enum.any?(panel(explicit_nil, card))
+
+      # THE POSITIVE CONTROL, on the same fixture: the two refutes above
+      # are about the roster and not about a card that can never show a
+      # pencil.
+      present = correction_rail([card], correction_agents: [a], correcting_id: card.id)
+      assert Enum.any?(pencil(present, card))
+      assert Enum.any?(panel(present, card))
+    end
+
+    test "no pencil means no event name anywhere in the rail's HTML" do
+      a = agent("Octavius")
+      card = armed_for(a.id, 24)
+
+      absent = correction_rail([card], [])
+
+      for event <- ~w(candidate_correct_open candidate_correct_close
+                      candidate_correct_reassign candidate_correct_flip
+                      candidate_correct_none) do
+        refute absent =~ event,
+               "#{event} must not reach the quickmeet rail's HTML at all"
+      end
+
+      # The control: `stop_candidate` IS there, so this is not a claim
+      # about an empty string.
+      assert absent =~ "stop_candidate"
+    end
+  end
+
+  describe "the drawer opens inside the card, below the timer" do
+    test "the panel is a SIBLING AFTER the countdown foot and the timer stays visible" do
+      a = agent("Octavius")
+      other = agent("Marina")
+      card = armed_for(a.id, 24)
+
+      html = correction_rail([card], correction_agents: [a, other], correcting_id: card.id)
+
+      # NOT A CHILD OF THE FOOT. The one `CandidateClock` interval
+      # re-queries `[data-role="meeting-candidate-countdown"]` every tick
+      # and rewrites what it finds inside; three buttons living in that
+      # subtree would be re-measured once a second for nothing.
+      refute present?(foot(html, card), "[data-role='meeting-candidate-correction-panel']"),
+             "the panel must not be inside the countdown foot"
+
+      assert Enum.any?(panel(html, card))
+
+      # AFTER the foot in document order, so the card grows DOWNWARD and
+      # nothing above the drawer moves when it opens.
+      r = roles(html, card)
+
+      assert index_of(r, "meeting-candidate-countdown") <
+               index_of(r, "meeting-candidate-correction-panel"),
+             "the panel renders after the countdown foot. roles: #{inspect(r)}"
+
+      # THE SIGNATURE ELEMENT: the timer is still there, still carrying
+      # its number. An overlay would have covered the one fact the reader
+      # is deciding against.
+      assert text_of(node(html, card), "[data-role='meeting-candidate-remaining']") == "24"
+    end
+
+    test "the pencil becomes the CLOSE control while its own card's drawer is open" do
+      a = agent("Octavius")
+      open_card = armed_for(a.id, 24)
+      other_card = armed_for(a.id, 18)
+
+      html =
+        correction_rail([open_card, other_card],
+          correction_agents: [a],
+          correcting_id: open_card.id
+        )
+
+      opened = pencil(html, open_card)
+      shut = pencil(html, other_card)
+
+      # `aria-expanded` is a PROMISE that pressing again collapses, so the
+      # press has to actually do that.
+      assert attr(opened, "aria-expanded") == "true"
+      assert attr(opened, "phx-click") == "candidate_correct_close"
+
+      assert attr(shut, "aria-expanded") == "false"
+      assert attr(shut, "phx-click") == "candidate_correct_open"
+
+      # ONE PANEL AT A TIME. The second card is armed and correctable and
+      # still has no drawer, which is the claim `:candidate_correcting_id`
+      # exists to make.
+      assert Enum.any?(panel(html, open_card))
+      refute Enum.any?(panel(html, other_card))
+    end
+  end
+
+  describe "THE WIRING: every choice carries the event and the values its handler matches on" do
+    # THE DEFECT THIS EXISTS FOR, stated plainly: a panel whose buttons
+    # write nothing passes every test that only asks whether the panel
+    # RENDERED. These assertions are the markup half of the contract the
+    # handlers in `meeting_live.ex` pattern-match on — the event name and
+    # the `phx-value-` keys — so a button that renders without its wiring
+    # reds here rather than shipping as a control that does nothing.
+    #
+    # The handler clauses are:
+    #   candidate_correct_reassign  %{"candidate_id" => _, "agent_id" => _}
+    #   candidate_correct_flip      %{"candidate_id" => _}
+    #   candidate_correct_none      %{"candidate_id" => _}
+    # and each has a catch-all second clause that SILENTLY IGNORES a
+    # payload missing those keys, which is why a missing `phx-value-` is
+    # invisible at runtime and has to be caught here.
+    test "reassign, flip and Not an action each push their own event with candidate_id" do
+      a = agent("Octavius")
+      other = agent("Marina")
+      card = armed_for(a.id, 24)
+
+      html = correction_rail([card], correction_agents: [a, other], correcting_id: card.id)
+      card_node = node(html, card)
+
+      expected = [
+        {"meeting-candidate-correction-reassign", "candidate_correct_reassign"},
+        {"meeting-candidate-correction-flip", "candidate_correct_flip"},
+        {"meeting-candidate-correction-none", "candidate_correct_none"}
+      ]
+
+      for {role, event} <- expected do
+        button = LazyHTML.query(card_node, "[data-role='#{role}']")
+
+        assert Enum.any?(button), "#{role} must render"
+        assert attr(button, "type") == "button", "#{role} is a button, not a link"
+
+        assert attr(button, "phx-click") == event,
+               "#{role} must push #{event}, got #{inspect(attr(button, "phx-click"))}"
+
+        assert attr(button, "phx-value-candidate_id") == card.id,
+               "#{role} must carry phx-value-candidate_id, or its handler's catch-all " <>
+                 "clause swallows the click and the button does nothing at all"
+      end
+
+      # Reassign carries a SECOND value, and it is the one key the payload
+      # legitimately supplies: the choice the participant made.
+      reassign = LazyHTML.query(card_node, "[data-role='meeting-candidate-correction-reassign']")
+      assert attr(reassign, "phx-value-agent_id") == other.id
+    end
+
+    test "NO phx-hook anywhere in the drawer" do
+      a = agent("Octavius")
+      other = agent("Marina")
+      card = armed_for(a.id, 24)
+
+      html = correction_rail([card], correction_agents: [a, other], correcting_id: card.id)
+
+      refute present?(panel(html, card), "[phx-hook]"),
+             "the rail runs ONE CandidateClock interval on its <section>; a per-panel " <>
+               "hook would undo that, and there is nothing for it to do"
+
+      # The control: the rail's own hook IS in the HTML, so the refute is
+      # about the panel and not about an attribute the query cannot see.
+      assert html =~ ~s(phx-hook="CandidateClock")
+    end
+  end
+
+  describe "which agents the drawer offers" do
+    test "one sentence per OTHER agent, each naming its agent, the assignee excluded" do
+      assigned = agent("Octavius")
+      marina = agent("Marina")
+      hugo = agent("Hugo")
+      card = armed_for(assigned.id, 24)
+
+      html =
+        correction_rail([card],
+          correction_agents: [assigned, marina, hugo],
+          correcting_id: card.id
+        )
+
+      options = reassign_options(html, card)
+
+      # THE ASSIGNEE IS NOT OFFERED: `Candidates.correct/3` refuses a
+      # same-agent reassign with {:error, :same_agent}, so the option
+      # could only ever produce an error message, and the reason it
+      # cannot work is the reason it is pointless — a correction naming
+      # the current assignee teaches the classifier nothing.
+      assert options == [{"Hand to Marina", marina.id}, {"Hand to Hugo", hugo.id}],
+             "expected the two other agents, named and carrying their own ids. " <>
+               "got: #{inspect(options)}"
+
+      # Stated as a refutation too, because the equality above would also
+      # hold if the component had rendered the assignee under a different
+      # label the zip happened not to reach.
+      refute assigned.id in Enum.map(options, &elem(&1, 1))
+      refute html =~ "Hand to Octavius"
+    end
+
+    test "a ONE-AGENT room offers no reassign and still offers the other two choices" do
+      assigned = agent("Octavius")
+      card = armed_for(assigned.id, 24)
+
+      # The roster is non-empty and contains ONLY the assigned agent, so
+      # the filtered option list is empty while the surface is fully
+      # correctable. This is the state a real one-agent meeting is in.
+      html = correction_rail([card], correction_agents: [assigned], correcting_id: card.id)
+
+      assert reassign_options(html, card) == []
+
+      # NO EMPTY OPTION AND NO BARE BULLET either — the comprehension must
+      # emit nothing, not an option with no name.
+      assert node(html, card)
+             |> LazyHTML.query("ul.candidate-correction__list li")
+             |> Enum.count() == 2
+
+      # The panel is STILL THERE and the two working choices with it. A
+      # drawer that vanished in a one-agent room would take the flip and
+      # `Not an action` away with the list that had nothing in it.
+      assert Enum.any?(panel(html, card))
+      assert present?(node(html, card), "[data-role='meeting-candidate-correction-flip']")
+      assert present?(node(html, card), "[data-role='meeting-candidate-correction-none']")
+
+      # An EMPTY roster is the same answer, and it is a different input:
+      # `candidate_correction_agents/1` returns [] for a room whose only
+      # presence rows are humans.
+      empty = correction_rail([card], correction_agents: [], correcting_id: card.id)
+      assert reassign_options(empty, card) == []
+      assert Enum.any?(panel(empty, card))
+      assert present?(node(empty, card), "[data-role='meeting-candidate-correction-none']")
+    end
+  end
+
+  describe "the drawer's copy" do
+    test ~s(the third choice reads exactly "Not an action") do
+      a = agent("Octavius")
+      card = armed_for(a.id, 24)
+
+      html = correction_rail([card], correction_agents: [a], correcting_id: card.id)
+
+      assert text_of(node(html, card), "[data-role='meeting-candidate-correction-none']") ==
+               "Not an action"
+    end
+
+    test "the flip names the DESTINATION, and it flips with outcome_kind" do
+      a = agent("Octavius")
+      task_card = armed_for(a.id, 24, %{outcome_kind: :task})
+      artifact_card = armed_for(a.id, 18, %{outcome_kind: :artifact})
+
+      task_html =
+        correction_rail([task_card], correction_agents: [a], correcting_id: task_card.id)
+
+      artifact_html =
+        correction_rail([artifact_card], correction_agents: [a], correcting_id: artifact_card.id)
+
+      flip = fn html, card ->
+        text_of(node(html, card), "[data-role='meeting-candidate-correction-flip']")
+      end
+
+      assert flip.(task_html, task_card) == "Make it a canvas instead"
+      assert flip.(artifact_html, artifact_card) == "Make it a task instead"
+
+      # THE PAIR IS NOT VACUOUS: the two expectations are literally
+      # different strings, and they are different in the direction the
+      # card's own `outcome_kind` predicts. A component that ignored
+      # `outcome_kind` would give one answer twice.
+      refute flip.(task_html, task_card) == flip.(artifact_html, artifact_card)
+    end
+
+    test "the training line says what happens to the choice, muted and under the choices" do
+      a = agent("Octavius")
+      card = armed_for(a.id, 24)
+
+      html = correction_rail([card], correction_agents: [a], correcting_id: card.id)
+      note = LazyHTML.query(node(html, card), "[data-role='meeting-candidate-correction-note']")
+
+      text = note |> LazyHTML.text() |> String.trim()
+
+      assert text =~ "example"
+      assert text =~ "classifier"
+
+      # NO EM DASHES in new copy.
+      refute text =~ "—"
+
+      # The MUTED slot, one size down — keyed on the class the stylesheet
+      # measures rather than on a colour, which a server render cannot
+      # see. The token's contrast is measured in app.css.
+      assert attr(note, "class") == "candidate-correction__note"
+
+      # UNDER the three choices, so it reads as a footnote about them
+      # rather than as an instruction before them.
+      r = roles(html, card)
+
+      assert index_of(r, "meeting-candidate-correction-none") <
+               index_of(r, "meeting-candidate-correction-note"),
+             "the note sits below the choices. roles: #{inspect(r)}"
+    end
+
+    test "the three choices are EQUALS: same class, no fill, no primary, no warning" do
+      a = agent("Octavius")
+      other = agent("Marina")
+      card = armed_for(a.id, 24)
+
+      html = correction_rail([card], correction_agents: [a, other], correcting_id: card.id)
+
+      choices =
+        html
+        |> node(card)
+        |> LazyHTML.query(
+          "[data-role='meeting-candidate-correction-reassign']," <>
+            "[data-role='meeting-candidate-correction-flip']," <>
+            "[data-role='meeting-candidate-correction-none']"
+        )
+
+      assert length(Enum.to_list(choices)) == 3
+
+      class_lists = LazyHTML.attribute(choices, "class")
+
+      assert Enum.uniq(class_lists) == ["candidate-correction__choice"],
+             "none of the three may be styled as the recommended one. got: " <>
+               inspect(class_lists)
+
+      # NEITHER RESERVED SLOT is spent in the drawer: primary is the
+      # ACTION colour on this screen and would read as "pick one of these
+      # three actions", and warning already carries this very countdown's
+      # last five seconds eleven pixels above.
+      drawer = panel(html, card) |> LazyHTML.to_html()
+
+      for forbidden <- ~w(btn-primary candidate-btn--go bg-primary text-warning
+                          candidate-count--warning candidate-btn--stop) do
+        refute drawer =~ forbidden, "#{forbidden} must not appear inside the drawer"
+      end
+    end
+  end
+
+  describe "the stored vocabulary never reaches the DOM, with the drawer OPEN" do
+    # The existing guard renders a closed drawer. This one opens it, since
+    # the drawer is new markup carrying new copy about a card being wrong
+    # — the exact place a stored word would be reached for.
+    test "not vetoed, not dismissed, not shaping, in text, class or data attribute" do
+      a = agent("Octavius")
+      other = agent("Marina")
+
+      card =
+        armed_for(a.id, 24, %{
+          state: :shaping,
+          evidence_quote: "we should rotate the staging secrets"
+        })
+
+      html = correction_rail([card], correction_agents: [a, other], correcting_id: card.id)
+
+      refute html =~ "vetoed"
+      refute html =~ "dismissed"
+      refute html =~ "shaping"
+
+      # THE CONTROLS, so each refute is about the spelling and not about
+      # an empty render: the drawer really is open, the card really is in
+      # the state whose stored word is `shaping`, and the display slug for
+      # it IS present.
+      assert Enum.any?(panel(html, card))
+      assert card.state == :shaping
+      assert html =~ "taking-shape"
+      assert html =~ "Not an action"
+    end
+  end
 end

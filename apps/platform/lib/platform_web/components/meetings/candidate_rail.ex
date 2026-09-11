@@ -192,6 +192,43 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   # has no stop handler of its own — keeps rendering exactly as before.
   attr(:undo, :map, default: nil)
 
+  # THE CORRECTION ROSTER — the agents this rail may offer to hand a card
+  # to, as `[%{id:, name:}]`, or `nil` for "this surface cannot correct"
+  # (task 01a0740e stage 2).
+  #
+  # `nil` IS THE DEFAULT AND IT IS LOAD-BEARING, exactly as it is for
+  # `order` and `undo` above. `candidate_rail/1` is rendered from
+  # `call_shell.ex` on TWO surfaces: the meeting route, whose
+  # `MeetingLive` carries the five `candidate_correct_*` handlers, and
+  # the chat quickmeet panel, whose `ChatLive` does not. On nil this
+  # module renders NO pencil and NO panel, so the quickmeet rail cannot
+  # grow a button whose event nothing on that surface can handle.
+  #
+  # `[]` IS NOT `nil` and the two must not be collapsed. An empty list is
+  # "this surface can correct, and there is no other agent in the room to
+  # hand the card to" — a real state in a one-agent meeting, in which the
+  # pencil and the panel still render and offer the flip and
+  # `Not an action`. A panel that vanished in a one-agent room would take
+  # the two working choices away with the one that had nothing to list.
+  #
+  # The CURRENTLY ASSIGNED agent is filtered out per card in
+  # `correction_panel/1`, not here: one roster serves every card on the
+  # rail, and `Candidates.correct/3` refuses a same-agent reassign
+  # anyway, so offering it would be offering a choice that cannot work.
+  attr(:correction_agents, :list, default: nil)
+
+  # WHICH card has its correction panel open, or nil for none — the
+  # `:candidate_correcting_id` assign, following the existing
+  # `:intent_reason_picker_id` pattern. One panel at a time, because two
+  # open panels on a 312px rail is two thirds of the rail spent on
+  # controls for cards the reader has stopped looking at.
+  #
+  # A PER-SOCKET affordance like `undo`, and for the same reason: the
+  # participant who pressed the pencil is the one reading the choices.
+  # The RE-ARM the press caused is server state and every rail moves;
+  # only the open drawer is local.
+  attr(:correcting_id, :string, default: nil)
+
   @doc """
   Render the board.
 
@@ -267,6 +304,8 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
             candidate={row}
             now={@now}
             events={@events}
+            correction_agents={@correction_agents}
+            correcting_id={@correcting_id}
           />
         <% end %>
       </div>
@@ -298,6 +337,8 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   attr(:candidate, :map, required: true)
   attr(:now, :any, required: true)
   attr(:events, :map, required: true)
+  attr(:correction_agents, :list, default: nil)
+  attr(:correcting_id, :string, default: nil)
 
   defp live_card(assigns) do
     ~H"""
@@ -398,7 +439,40 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
 
       <.review_row :if={review?(@candidate)} candidate={@candidate} />
 
-      <.countdown_foot :if={armed?(@candidate)} candidate={@candidate} now={@now} />
+      <.countdown_foot
+        :if={armed?(@candidate)}
+        candidate={@candidate}
+        now={@now}
+        correctable?={is_list(@correction_agents)}
+        correcting?={@correcting_id == @candidate.id}
+      />
+
+      <%!-- THE CORRECTION DRAWER (task 01a0740e stage 2), and it is a
+             SIBLING of the foot rather than a child of it — inside the
+             `<article>`, after the countdown, pushing the card taller.
+             Saru's canvas 01a08322 is the authority and the ruling is
+             that the timer stays visible the whole time the panel is
+             open: an overlay would cover the one number the reader is
+             deciding against, and a card that got shorter to make room
+             would move the Stop control they might still want.
+
+             It is out of the foot for a second, mechanical reason. The
+             one `CandidateClock` hook on the rail's `<section>`
+             re-queries `[data-role="meeting-candidate-countdown"]` every
+             tick and rewrites the count and the drain inside it. Three
+             buttons and a footnote living in that subtree would be
+             re-measured once a second for nothing, and any future tick
+             that touched more than the two nodes it owns would be
+             rewriting a control mid-press.
+
+             Gated on the SAME `is_list/1` as the pencil, so there is no
+             arrangement of assigns that renders a panel with no pencil
+             or a pencil with no panel. --%>
+      <.correction_panel
+        :if={armed?(@candidate) and is_list(@correction_agents) and @correcting_id == @candidate.id}
+        candidate={@candidate}
+        agents={@correction_agents}
+      />
     </article>
     """
   end
@@ -817,6 +891,14 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   attr(:candidate, :map, required: true)
   attr(:now, :any, required: true)
 
+  # Whether THIS surface can correct at all (task 01a0740e stage 2) —
+  # `is_list(@correction_agents)` resolved one level up, so the boolean
+  # rather than the roster crosses into this component: the foot offers
+  # the pencil and never lists an agent, and passing the list here would
+  # invite a future reader to render the options in the foot.
+  attr(:correctable?, :boolean, default: false)
+  attr(:correcting?, :boolean, default: false)
+
   defp countdown_foot(assigns) do
     remaining = Countdown.remaining_seconds(assigns.candidate.acts_at, assigns.now)
 
@@ -902,18 +984,72 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
         {@remaining}
       </time>
 
-      <button
-        type="button"
-        phx-click="stop_candidate"
-        phx-value-candidate_id={@candidate.id}
-        data-role="meeting-candidate-stop"
-        data-candidate-id={@candidate.id}
-        class="candidate-btn candidate-btn--stop ml-auto"
-        aria-label={"Stop — do not act on \"#{@candidate.evidence_quote}\""}
-        title="Stop — do not act on this"
-      >
-        Stop
-      </button>
+      <%!-- THE TRAILING CONTROLS, wrapped (task 01a0740e stage 2).
+           `ml-auto` moved from the Stop button onto this wrapper and
+           nothing else about Stop changed: same element, same classes,
+           same label, same right edge of the same row. The move is
+           mechanical, not cosmetic. Two flex items each carrying
+           `margin-left: auto` SPLIT the free space between them, so a
+           pencil that also claimed `ml-auto` would open a gap between
+           itself and Stop that grows with the rail — 18px at 312px and
+           far more on the full-width mobile rail. One auto margin on a
+           wrapper keeps the pair together and keeps Stop where it was.
+
+           This is deliberately NOT the "restyle Stop so the pencil looks
+           better" the ticket forbids. Stop keeps its size, its label,
+           its position and its hover-only red; the pencil is what gives
+           way if the row ever runs out of room. --%>
+      <div class="candidate-foot__actions ml-auto">
+        <%!-- THE PENCIL. Same `hero-pencil-square` as `data-role="intent-edit"`
+             in `intents_collapse.ex`, so the producer bar's correction
+             control and this one read as one vocabulary rather than as
+             two features that happen to both be about being wrong. Not
+             the same CHROME: that one is a `btn btn-ghost btn-square
+             min-h-11`, sized for a 44px row on a full-width strip, and an
+             11mm square here would be twice the height of the Stop
+             button beside it.
+
+             A TOGGLE, not an opener. `aria-expanded` is a promise that
+             pressing again collapses, so the press has to actually do
+             that — `candidate_correct_close` writes nothing and does not
+             take the re-arm back. The two events are chosen by
+             `@correcting?` rather than by JS, because the open panel is
+             an assign on the socket and the server is the only thing
+             that knows which card holds it.
+
+             The label NAMES THE CARD, matching the Stop and review
+             controls above (`aria-label={"Stop — do not act on ..."}`).
+             On a rail of five armed cards, five buttons all labelled
+             "Correct" are five identical stops on a screen reader's
+             control list. --%>
+        <button
+          :if={@correctable?}
+          type="button"
+          phx-click={if @correcting?, do: "candidate_correct_close", else: "candidate_correct_open"}
+          phx-value-candidate_id={@candidate.id}
+          data-role="meeting-candidate-correct"
+          data-candidate-id={@candidate.id}
+          class="candidate-correct-btn"
+          aria-expanded={to_string(@correcting?)}
+          aria-label={"Correct this card — \"#{@candidate.evidence_quote}\""}
+          title="Correct this card"
+        >
+          <span class="hero-pencil-square size-4" aria-hidden="true"></span>
+        </button>
+
+        <button
+          type="button"
+          phx-click="stop_candidate"
+          phx-value-candidate_id={@candidate.id}
+          data-role="meeting-candidate-stop"
+          data-candidate-id={@candidate.id}
+          class="candidate-btn candidate-btn--stop"
+          aria-label={"Stop — do not act on \"#{@candidate.evidence_quote}\""}
+          title="Stop — do not act on this"
+        >
+          Stop
+        </button>
+      </div>
 
       <%!-- THE DRAIN. Written INSIDE the foot so the one ticker finds it
            with the same query it uses for the count, and positioned
@@ -944,6 +1080,161 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
     </div>
     """
   end
+
+  # ── Correction (task 01a0740e stage 2) ────────────────────────────────
+
+  # THREE SENTENCES AND A FOOTNOTE. Saru's canvas 01a08322 ("FE-10
+  # direction: correction is the primary path") is the design authority
+  # here — advisory per ADR-0046 — and four of its rulings are visible in
+  # this markup rather than derivable from it:
+  #
+  #   * A STACKED LIST of sentences, not a row of iconned buttons. The
+  #     icon row was considered there and dropped: a row wraps into a
+  #     mess when the rail narrows to 312px while a list of sentences
+  #     truncates gracefully, and a toolbar reads as chrome you skim past
+  #     when the whole point is that a reader should stop and pick one.
+  #   * The three are EQUALS. None is filled, none is primary, none is
+  #     "recommended". The message is not "pick one of these three
+  #     actions", it is "any of these three is cheaper than stopping".
+  #   * `Not an action` VERBATIM, and this is the one string in the file
+  #     that is a settled argument rather than a label. `candidate_display.ex`
+  #     flags that somebody should choose between the two stored words
+  #     deliberately; Saru chose NEITHER. Both judge, and in opposite
+  #     directions: one says a colleague's proposal was overruled, the
+  #     other says it was beneath consideration. What the person pressing
+  #     this button is reporting is narrower than either — the classifier
+  #     heard something that was not a piece of work. Do not substitute a
+  #     synonym and do not add a subtitle. The STORED value is untouched
+  #     and stays `:dismissed`.
+  #   * The training line sits UNDER the choices, one size down, muted.
+  #     It is a REASON and not an instruction, so it reads as a footnote
+  #     the first time and is ignorable the tenth.
+  #
+  # THE ASSIGNED AGENT IS FILTERED OUT HERE, per card, and the roster
+  # arrives whole from the rail because one roster serves every card on
+  # it. `Candidates.correct/3` refuses a same-agent reassign with
+  # `{:error, :same_agent}` before it writes anything, so an option
+  # naming the agent already on the card is an option that cannot work —
+  # and the reason it cannot is the reason the option is pointless: a
+  # correction that names the current assignee teaches the classifier
+  # nothing.
+  #
+  # AN EMPTY LIST RENDERS NO REASSIGN OPTIONS AND STILL RENDERS THE PANEL.
+  # A one-agent room is a real room, and taking the flip and
+  # `Not an action` away with the list that had nothing in it would break
+  # the panel in exactly the meeting most likely to have a miscast card.
+  # `<ul>` with an `:if`-ed `<li>` comprehension, so nothing renders an
+  # empty option or a bare bullet.
+  #
+  # NO `phx-hook` ANYWHERE IN HERE. The rail runs ONE `CandidateClock`
+  # interval on its `<section>`; a per-panel hook would undo that, and
+  # there is nothing for it to do — every value in this panel is server
+  # state, and the number that moves lives in the foot above.
+  attr(:candidate, :map, required: true)
+  attr(:agents, :list, required: true)
+
+  defp correction_panel(assigns) do
+    assigned = Map.get(assigns.candidate, :assigned_agent_id)
+
+    assigns =
+      assigns
+      |> assign(:options, Enum.reject(assigns.agents, &(&1.id == assigned)))
+      |> assign(:flip_label, flip_label(assigns.candidate))
+
+    ~H"""
+    <div
+      class="candidate-correction"
+      data-role="meeting-candidate-correction-panel"
+      data-candidate-id={@candidate.id}
+    >
+      <ul class="candidate-correction__list">
+        <%!-- `Hand to Octavius`, never `Hand to another agent`. The
+             canvas asks each option to NAME its agent, and the reason is
+             the same one the assignment line is built on: a card is
+             handed to somebody, and a control that says "another agent"
+             makes the reader open a second thing to find out who. One
+             `<li>` per agent, so a three-agent room is three sentences
+             and a one-agent room is none. --%>
+        <li :for={agent <- @options}>
+          <button
+            type="button"
+            phx-click="candidate_correct_reassign"
+            phx-value-candidate_id={@candidate.id}
+            phx-value-agent_id={agent.id}
+            class="candidate-correction__choice"
+            data-role="meeting-candidate-correction-reassign"
+            data-candidate-id={@candidate.id}
+            data-agent-id={agent.id}
+          >
+            Hand to {agent.name}
+          </button>
+        </li>
+
+        <%!-- WHICH DIRECTION THE FLIP GOES is a fact about the card, so
+             the label is read off `outcome_kind` and the payload carries
+             no direction at all: `correct/3` flips whatever the row it
+             re-reads is holding. A `phx-value-to="artifact"` would be a
+             second copy of the same fact, able to disagree with the first
+             after a broadcast repainted the card under the reader. --%>
+        <li>
+          <button
+            type="button"
+            phx-click="candidate_correct_flip"
+            phx-value-candidate_id={@candidate.id}
+            class="candidate-correction__choice"
+            data-role="meeting-candidate-correction-flip"
+            data-candidate-id={@candidate.id}
+          >
+            {@flip_label}
+          </button>
+        </li>
+
+        <li>
+          <button
+            type="button"
+            phx-click="candidate_correct_none"
+            phx-value-candidate_id={@candidate.id}
+            class="candidate-correction__choice"
+            data-role="meeting-candidate-correction-none"
+            data-candidate-id={@candidate.id}
+          >
+            Not an action
+          </button>
+        </li>
+      </ul>
+
+      <%!-- WHY IT IS WORTH PRESSING. One sentence, and a reason rather
+           than an instruction: "Tell us what it should have been" would
+           be a task handed to somebody who is in a meeting. This says
+           what happens to the answer, which is the whole argument of the
+           ticket — a correction is training data, and
+           `IntentCorrections.recent_exemplars/2` really does read these
+           rows back into the `meetings.intent_classify.v1` prompt. No em
+           dashes. --%>
+      <p class="candidate-correction__note" data-role="meeting-candidate-correction-note">
+        Your choice is kept as an example, and the classifier reads it back next time.
+      </p>
+    </div>
+    """
+  end
+
+  # `Make it a canvas instead` / `Make it a task instead`.
+  #
+  # Phrased as the DESTINATION and never as the current value, because
+  # the reader is choosing where the card should go and not confirming
+  # where it is. The nouns are `CandidateDisplay.armed_outcome_label/1`'s
+  # — "task" and "canvas", the same two words the countdown sentence
+  # directly above says — so the flip reads as the same vocabulary
+  # answering back rather than as a second naming of the same two kinds.
+  #
+  # An `:artifact` card offers the task; anything else offers the canvas.
+  # The catch-all rather than a match on `:task` is deliberate: a row
+  # carrying a nil `outcome_kind` can still be corrected, and
+  # `MeetingCandidate`'s own default for the column is `:task`, so "not
+  # an artifact" and "a task" are the same set on every row this can
+  # reach.
+  defp flip_label(%{outcome_kind: :artifact}), do: "Make it a task instead"
+  defp flip_label(_candidate), do: "Make it a canvas instead"
 
   # ── Derivations ────────────────────────────────────────────────────────
 

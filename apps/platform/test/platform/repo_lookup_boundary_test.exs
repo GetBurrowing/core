@@ -910,7 +910,21 @@ defmodule Platform.RepoLookupBoundaryTest do
     # candidates.ex). So the value pinned here is a uuid Postgres itself
     # returned on a row it selected, never a `phx-value-` payload, and no
     # `Ecto.Query.CastError` is reachable. No further guard applies.
-    "platform/meetings/candidates.ex" => 1,
+    #
+    # 1 → 2 for task 01a0740e stage 1's `fetch_agent_slug/1`, the slug read
+    # behind `correct/3`'s `:reassign`. Triaged by hand: the `where:` clause
+    # DOES pin an id (`a.id == ^agent_id`) and that id is boundary-reachable —
+    # it arrives as `opts[:agent_id]` from the correction panel's
+    # `phx-value-` payload, which is the same provenance as the candidate id
+    # in the entry above. It is therefore passed through `uuid_or_nil/1`
+    # (`Platform.UUID.valid?/1`, one of the seven guard sites already recorded
+    # for this file) BEFORE the query, and a value that fails it is refused as
+    # `{:error, :no_agent}` rather than reaching a `:binary_id` WHERE. The
+    # lookup is deliberately `Repo.one` over a `where` rather than a
+    # `Repo.get`: an agent id naming no row must answer `{:error,
+    # :unknown_agent}` so the correction corpus cannot record an exemplar
+    # routing to an agent that does not exist.
+    "platform/meetings/candidates.ex" => 2,
     "platform/meetings/intent_corrections.ex" => 1,
     # Task 019fb955 stage 2 — `SenderSeed.get/0`. Triaged by hand as this map
     # asks: the `where:` clause is `a.slug == ^@slug and is_nil(a.workspace_id)`,
