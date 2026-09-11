@@ -50,14 +50,27 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   | L2 | accent-content (black) on the accent fill, light          | (a)   | 11.7483   |
   | L3 | primary fill vs base-100, light                           | (b)   | 1.7875    |
   | L4 | --color-interactive #087f93 as text on base-100           | (a)   | 4.7007    |
-  | L5 | .chip-primary label on the 12% .chip-soft fill, light      | (c)   | 4.4073    |
-  | L6 | focus ring, primary vs base-100, light                    | (c)   | 1.7875    |
+  | L5 | .chip-primary label on the 6% .chip-soft fill, light       | (a)   | 4.5524    |
+  | L6 | offset focus ring vs base-100, light                      | (a)   | 4.7007    |
+  | L7 | no-offset focus ring vs base-100, light                   | (a)   | 4.7007    |
+  | L8 | no-offset ring vs the input border it abuts, light        | (a)   | 4.4674    |
   | D1 | primary-content (black) on the primary fill, dark         | (a)   | 11.7483   |
   | D2 | accent-content (black) on the accent fill, dark           | (a)   | 11.7483   |
   | D3 | primary fill vs base-100 #171b25, dark                    | (a)   | 9.6304    |
   | D4 | --color-interactive #4dd7e8 as text on #171b25            | (a)   | 10.0015   |
   | D5 | .chip-primary label on the 16% .chip-soft fill, dark       | (a)   | 7.4558    |
-  | D6 | focus ring, primary vs #171b25, dark                      | (a)   | 9.6304    |
+  | D6 | offset focus ring vs #171b25, dark                        | (a)   | 9.6304    |
+  | D7 | no-offset focus ring vs #171b25, dark                     | (a)   | 9.6304    |
+  | D8 | no-offset ring vs the input border it abuts, dark         | (c)   | 1.5447    |
+
+  Both chip percentages are `--chip-tint-pct`, resolved per tone per theme from the
+  stylesheet rather than read as a literal out of the shared formula.
+
+  F1 to F4 are classified as well, in the table under "The cyan-on-light findings"
+  below, because their class only reads correctly beside the ground each one sits on:
+  F1 (a), F2 (c), F3 (c), F4 (c). Stage 4 of the ticket below re-read all twenty ids
+  against the clauses that carry them. Every id named (a) calls `assert_threshold`;
+  every id named (b) or (c) does not, and states its reason at the assertion.
 
   * **(a)** a real WCAG obligation: 4.5:1 for text, 3:1 for a boundary that is the
     only cue. Asserted as a threshold, and pinned as well wherever the pin adds
@@ -67,46 +80,203 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   * **(c)** already missed its threshold before this change. Pinned; the threshold is
     deliberately *not* asserted, and the shortfall is recorded below.
 
-  ### L3 and L6 are the same measurement with different duties
+  ### L3 and L6 stopped being the same measurement
 
-  Both are `--color-primary` against light `--color-base-100`, 1.7875:1. L3 is the
-  primary button's fill edge and owes nothing: the button carries a 1px
-  `--color-primary` border of its own, its label is black at 11.75:1, and the brand
-  rule already forbids cyan as text on white, so nothing about identifying that
-  button rests on the fill/ground boundary. L6 is the focus indicator, which does owe
-  3:1 under WCAG 2.2 SC 1.4.11 and misses. Same number, one classified (b) and one
-  (c), because the classification is about the duty and not about the arithmetic.
+  Until stage 3 of the ticket below, both were `--color-primary` against light
+  `--color-base-100` and this module computed 1.7875 twice. That is why L6 could
+  never have caught its own regression: it evaluated `W.contrast(l.primary,
+  l.base_100)`, the identical expression F1 evaluated, so reverting the ring alone
+  moved neither clause and F1 covered for it. L6 now reads the band's token out of
+  the ring rule's own `box-shadow` and looks it up, which is what makes reverting the
+  ring red the ring's own clauses instead of nothing.
 
-  ## Findings recorded here, deliberately NOT fixed
+  Stage 4 measured that revert and it reds **four** clauses, not one: L6, L7, L8 and
+  the structural guard on the two rules. That is not a shared assertion. It is one
+  site with three different adjacent surfaces (the page ground for the offset variant,
+  the page ground for the no-offset outer band, the input's own border for the inner
+  band) plus a structural pin on the rule that draws them. All four name the focus
+  ring and no clause about any other site moves.
 
-  Filed as Suite task `01a0785c-bf6f-7001-824d-dd99bcb7db89` (high priority). Harper
-  waived the approval gate for a token change, not for re-colouring shipped surfaces;
-  each of these is a visible change to a live component and needs its own gate.
+  L3 is unchanged, still (b), still pinned at 1.7875 with its threshold deliberately
+  not asserted. It is the primary button's fill edge and owes nothing: the button
+  carries a 1px `--color-primary` border of its own, its label is black at 11.75:1,
+  and the brand rule already forbids cyan as text on white, so nothing about
+  identifying that button rests on the fill/ground boundary.
 
-  Four light-theme sites render `--color-primary` as text or as a lone indicator on a
-  near-white surface, against both the brand rule and the `--color-interactive`
-  comment that records it. All four are pre-existing. This ticket improves each by
-  about 0.11 and resolves none:
+  ## The cyan-on-light findings, and what happened to them
 
-  | site                          | ground                      | before  | after   |
-  |-------------------------------|-----------------------------|---------|---------|
-  | L6 focus ring                 | --color-base-100 (#FFFFFF)  | 1.6759  | 1.7875  |
-  | F1 `.wikilink`                | --color-base-100 (#FFFFFF)  | 1.6759  | 1.7875  |
-  | F2 `.code-block-expand`       | --color-base-200 (#F2F2F2)  | 1.4919  | 1.5913  |
-  | F3 `.bottom-nav-tab--active`  | light `.bottom-nav` surface | 1.5857  | 1.6913  |
+  Filed as Suite task `01a0785c-bf6f-7001-824d-dd99bcb7db89` (high priority) after
+  FE-18 found them. Harper waived the approval gate for FE-18's token change, not for
+  re-colouring shipped surfaces, so each of these went through a gate of its own.
+  Stage 1 of that ticket pointed the three text sites at `--color-interactive`, the
+  slot the brand rule already names for cyan-as-text. Three generations of the same
+  measurement, with the class each pairing now carries:
 
-  The "before" column is `oklch(82% 0.12 207)`, the light primary this task replaced.
-  It cannot be recomputed from the file any more, so it is recorded here and guarded
-  as a record rather than asserted as a measurement.
+  | site                          | ground                      | FE-18 before | FE-18 after | now     | class |
+  |-------------------------------|-----------------------------|--------------|-------------|---------|-------|
+  | L6 focus ring                 | --color-base-100 (#FFFFFF)  | 1.6759       | 1.7875      | 4.7007  | (a)   |
+  | F1 `.wikilink`                | --color-base-100 (#FFFFFF)  | 1.6759       | 1.7875      | 4.7007  | (a)   |
+  | F2 `.code-block-expand`       | --color-base-200 (#F2F2F2)  | 1.4919       | 1.5913      | 4.1847  | (c)   |
+  | F3 `.bottom-nav-tab--active`  | light `.bottom-nav` #F9F9F9 | 1.5857       | 1.6913      | 4.4478  | (c)   |
+  | F4 the same tab, default nav  | near-black #0C0C0C on light | N/A          | 10.9561     | 4.1661  | (c)   |
 
-  **L5 is a fifth miss and a different one.** The `.chip-primary` label
-  (`--color-interactive`, #087f93) on the 12% `.chip-soft` fill is 4.4073:1, under the
-  4.5:1 AA floor for text. This ticket does not move it by even a rounding step: the
-  light `--chip-tint` was already the hardcoded literal `#06d5ed` before stage 1
-  pointed it at `var(--color-primary)`, which is the same colour. It is pre-existing,
-  it is out of scope here, and it is not in the ticket above because the ticket was
-  filed against the four cyan-on-near-white sites. Reported to the execution space so
-  it gets filed rather than absorbed.
+  The "FE-18 before" column is `oklch(82% 0.12 207)`, the light primary FE-18
+  replaced. It cannot be recomputed from the file any more, so it is recorded here
+  and guarded as a record rather than asserted. "FE-18 after" is `#06D5ED`, which
+  improved each pairing by about 0.11 and resolved none. L6's "now" column is stage
+  3's, not stage 1's.
+
+  ### Only F1 clears, and that is the finding stage 1 reports
+
+  `--color-interactive` (#087f93) was derived against pure white, where it measures
+  4.7007:1. Two of the three text sites do not sit on white, and on their real
+  grounds the slot lands under the floor: 4.1847 on `--color-base-200` and 4.4478 on
+  the near-white nav. Both are large improvements (2.6x and 2.6x) and neither is AA.
+  Closing them means darkening the slot itself, which repaints every link in the
+  product; `#077384` would give 5.5343 / 5.2365 / 4.9268 on the three light grounds.
+  That is a palette change with its own census and its own gate, and it is filed as a
+  follow-up rather than smuggled into a stage scoped to three declarations.
+
+  ### F3 and F4 are mutually exclusive, which makes the nav the defect
+
+  `.bottom-nav` declares its light background under `[data-theme="light"]` and has no
+  `prefers-color-scheme: light` twin, so the same tab has two light-theme grounds:
+  #F9F9F9 when the attribute is present, near-black #0C0C0C when it is not. A viewer
+  reaches the second only by choosing the "system" theme, which is what removes the
+  attribute; `root.html.heex:174` writes `data-theme="dark"` whenever it is absent
+  and nothing is stored, so this is not the unset default.
+
+  The two grounds cannot both be satisfied. Clearing 4.5:1 on #F9F9F9 needs a text
+  luminance of at most 0.170779; clearing it on #0C0C0C needs at least 0.191270. No
+  value of any token sits in both, so F3 and F4 are pinned without thresholds and the
+  missing nav variant is filed as the real defect. Stage 1 optimised for the
+  `[data-theme="light"]` nav, which is what an explicit-light viewer paints, and F4
+  regressed from 10.9561 to 4.1661 as a result. What improved is the worst case
+  across both grounds, 1.6913 to 4.1661.
+
+  The `.bottom-nav-tab--active::before` bar moved with the label. It is a non-text
+  cue owing 3:1, it measured 1.6913 on the near-white nav as `--color-primary`, and
+  as `--color-interactive` it clears on all three nav grounds (4.4478 / 4.1661 /
+  12.0046). Unlike the label, it is (a).
+
+  Dark regressed nowhere: 9.6304 to 10.0015 for the wikilink, 11.5762 to 12.0222 for
+  the expander, 11.5593 to 12.0046 for the nav tab.
+
+  ### L5 was a fifth miss, and stage 2 closed it by moving the ground
+
+  The `.chip-primary` label (`--color-interactive`, #087f93) on the 12% `.chip-soft`
+  fill measured **4.4073:1**, under the 4.5:1 AA floor for text. Stage 1 did not move
+  it by a rounding step: the light `--chip-tint` was already the hardcoded literal
+  `#06d5ed` before stage 1 pointed it at `var(--color-primary)`, the same colour.
+
+  Stage 2 lowered the tint rather than darkening the label, which is what the design
+  canvas attached to the ticket decided. A chip-only darker label would be a second
+  action colour with no rule saying when each applies; the tint is decoration and the
+  label is information. The percentage became `--chip-tint-pct`, a custom property read
+  by the one `background: color-mix(...)` declaration the component has, with
+  `.chip-primary` setting 6% in the light theme. **4.5524:1**, now (a).
+
+  The canvas offered 10% as the obvious first try and it does not clear. The measured
+  ladder is 4.4073 at 12%, 4.4553 at 10%, 4.4795 at 9%, 4.5037 at 8% and 4.5524 at 6%.
+  8% is the first integer that clears and it clears by 0.004, narrower than the
+  disagreement between the two quantization conventions this module documents above, so
+  an AA claim at 8% would rest on which convention was picked. Chrome, painting the
+  `color-mix` and reading the pixel back, gives 4.3930 / 4.4517 / 4.4904 / 4.5062 /
+  4.5583 for the same rungs and agrees on which of them clear. 6% clears under both.
+
+  Dark was never in question. D5 keeps the shared 16% and stays at 7.4558:1; the dark
+  `.chip-primary` rules declare that percentage outright rather than inheriting it by
+  selector weight, and `chip_soft_contrast_test.exs` reds if the two drift apart.
+
+  The cost is recorded in `app.css` as well as here: lowering the tint takes the primary
+  fill further from the card surface (1.0666 to 1.0326) and its border composited over
+  that fill from 1.2461 to 1.2176. Neither owes 3:1, for the reason the `.chip-soft`
+  verdict comment gives, so this closed a real text obligation at the price of a
+  boundary that was already weak and owes nothing.
+
+  ### L6 was the one keyboard failure on the ticket, and stage 3 closed it
+
+  The other four misses were text a person could still read badly. This one was a
+  keyboard user unable to see where they were, on the theme people use in daylight:
+  the ring drew `--color-primary` at **1.7875:1** on light `--color-base-100`, under
+  the 3:1 floor WCAG 2.2 SC 1.4.11 sets for a non-text indicator.
+
+  The design canvas attached to the ticket decided the ring does not need one hue:
+  darkened action-cyan on light, bright brand cyan on dark. **Its stated reason for
+  the split was wrong by the time it was implemented.** The canvas justified it by
+  saying `--color-primary` already holds a different value per theme; FE-18 unified
+  it to `#06D5ED` in both, and the canvas's own dark mock still draws `#00D1DA`, the
+  pre-unification cyan, which dates the figure. The direction survives because a
+  theme-split MECHANISM exists — `--color-interactive` is declared in a bare `:root`
+  and overridden in both dark selectors — and stage 3 implemented that mechanism
+  rather than the premise.
+
+  `--color-focus-ring` is an **alias**, not a sixth cyan: the `@theme inline` mapping
+  of `--focus-ring`, which each daisyui-theme block declares outright as
+  `var(--color-interactive)` in light and `var(--color-primary)` in dark, so no
+  surface gets its ring colour by cascade order. Both rules read the slot; neither
+  names a hex. Stage 3 originally declared `--color-focus-ring` itself in `:root`
+  and both dark selectors; task 01a0833d (#990) landed first with the `--focus-ring`
+  slot and the same two values, and the duplicate was collapsed onto it at merge so
+  there is exactly one backing value per theme.
+
+  | variant                        | theme | adjacent surface        | before  | after   |
+  |--------------------------------|-------|-------------------------|---------|---------|
+  | offset (L6/D6)                 | light | `--color-base-100`      | 1.7875  | 4.7007  |
+  | offset (L6/D6)                 | dark  | `--color-base-100`      | 9.6304  | 9.6304  |
+  | no-offset (L7/D7)              | light | `--color-base-100`      | 1.7875  | 4.7007  |
+  | no-offset (L7/D7)              | dark  | `--color-base-100`      | 9.6304  | 9.6304  |
+  | no-offset inner (L8/D8)        | light | the input's own border  | 11.7483 | 4.4674  |
+  | no-offset inner (L8/D8)        | dark  | the input's own border  | 1.5447  | 1.5447  |
+
+  The single hue the canvas rejected was measured rather than taken on trust:
+  `#087f93` reads **3.6620:1** on the dark panel, which clears the floor. It was
+  rejected on quality, in the canvas's words, as "legal and weak. A focus indicator
+  is the one element where the floor is not the target." A third option exists and
+  is not what shipped: aliasing to `var(--color-interactive)` in BOTH themes needs no
+  dark override at all and reads 10.0015 on the dark panel, marginally better than
+  the 9.6304 the brand cyan gives. The canvas asked for the brand cyan on dark and
+  that is what the human gate approved.
+
+  ### D8 is the one measurement on this ticket left missing
+
+  A focused `.input` paints its border `--color-base-content` — `#000000` light,
+  `#EEEEEE` dark — and the no-offset ring is drawn immediately outside it, so that
+  border is the ring's inner neighbour. Light clears at 4.4674. Dark reads 1.5447 and
+  cannot be closed: the ring would have to clear 3:1 against a near-white 1px edge AND
+  against the near-black page ground, and `#EEEEEE` is 15.5:1 from `#171b25`, so no
+  colour sits in both windows. It measured the same 1.5447 before this stage. The
+  indicator is identified against the page ground, D7 at 9.6304, and the near-white
+  edge is the input's own outline rather than a surface the ring must be found
+  against. Pinned without a threshold, the way L6 was until this stage promoted it.
+
+  ### Two findings on the focus ring that stage 3 reported and did not fix
+
+  **`.input:focus { border-color: … }` does not render, and never did.** app.css
+  declares it in the `components` layer; the vendored daisyUI sets
+  `--input-color: var(--color-base-content)` on `&:focus, &:focus-within` and
+  `border-color: var(--input-color)` in the `utilities` layer, which is ordered after
+  it, so layer order beats specificity and daisyUI wins whatever app.css says. Read
+  off a keyboard-focused input in headless Chrome. The declaration was repointed at
+  the ring's slot anyway — a dead line naming the wrong token is how the next reader
+  concludes the focused input border is cyan — and its comment now records that it
+  paints nothing. Making it live repaints every focused field in the product and is a
+  follow-up with its own census.
+
+  **37 call sites still rang in `--color-primary` when stage 3 shipped.** The
+  `.focus-visible-ring` class is one of two focus-ring implementations: 58 sites use
+  the class this stage fixed, and 37 carried the raw Tailwind utilities (`ring-2`
+  plus the `ring-primary` focus modifier), mostly at `/60` opacity, which
+  resolved to the brand cyan at 1.7875:1 on white. Converting them was a 37-file
+  change with no `ring-focus-ring` utility to convert them to, since a bare `:root`
+  property mints nothing and Tailwind v4 only mints utilities from `@theme`. Filed as
+  Suite task `01a0833d-ce16-7001-8e9a-73e2240344c2` rather than smuggled into a
+  stage scoped to two rules. That task landed as #990 before this branch: it added
+  the `--focus-ring` slot to both theme blocks, the `@theme inline` mapping that
+  mints `ring-focus-ring`, converted all 37 sites, and pins them in
+  `focus_ring_census_test.exs` and `focus_ring_slot_test.exs`. Nothing HERE measures
+  those 37 sites; this module measures the class, and a green run of it is a claim
+  about the class only.
 
   **A sixth, smaller drift, reported not fixed.** `--color-base-200` in the light
   theme is declared `oklch(96% 0 0)`, which renders `#F2F2F2`, while its own trailing
@@ -132,12 +302,51 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
     exercised at all. Added rather than reported, because the gap was one run to close.
   * **C1**, one declaration's comment falsified with its value left correct: exactly
     one failure, naming that declaration.
+
+  Those five runs are FE-18's and they are kept as run. Three of their predictions no
+  longer hold, because the ticket below repointed the sites they name: L5, L6, F1, F2
+  and F3 no longer read `--color-primary` at all, so moving that token leaves them
+  where they are. Re-run against today's clauses, M1 and M2 exercise L1/L2/L3/D1/D2/D3
+  and the dark ring, and they no longer reach the four text sites or the chip. That is
+  the point of the matrix below: after this ticket, the five fixed sites are reached by
+  reverting each site, not by moving the brand token.
+
+  ## Mutation results (task 01a0785c-bf6f-7001-824d-dd99bcb7db89 stage 4, 2026-09-08)
+
+  One revert at a time against `mix test apps/platform/test/platform/design/`, 2
+  doctests and 187 tests, each restored before the next. The question is attribution,
+  not count: does every red clause name the site that was reverted?
+
+  | revert | red | the clauses, and the site each names |
+  |--------|-----|--------------------------------------|
+  | `.wikilink` to `--color-primary`            | 1 | F1 — `.wikilink` |
+  | `.code-block-expand` to `--color-primary`   | 1 | F2 — `.code-block-expand` |
+  | `.bottom-nav-tab--active` to `--color-primary` | 2 | F3, F4 — the same tab on its two light grounds |
+  | the `::before` bar to `--color-primary`     | 1 | the active-tab bar |
+  | `.chip-primary` `--chip-tint-pct` 6% to 12% | 2 | L5 and the chip test's declaration pin — both `.chip-primary` |
+  | the focus ring to `--color-primary`         | 4 | L6, L7, L8 and the structural guard — all the ring |
+
+  No revert reds a clause about a different site. The two multi-red rows are one site
+  measured against more than one adjacent surface, which the single-red `.wikilink`
+  row is the control for: it shares `--color-base-100` with L6/L7 and stays green when
+  the ring is reverted, and the ring clauses stay green when it is.
+
+  Two of the six are caught by a **pin moving upward**, not by a threshold: reverting
+  the nav label sends F4 from 4.1661 to 10.9561 on the near-black ground, and reverting
+  the ring sends L8 from 4.4674 to 11.7483 against the input's black light border. The
+  brand cyan is genuinely better on those two surfaces. A suite that asserted only
+  floors would have called both reverts an improvement and stayed green.
+
+  Not every clause in this file is reachable by reverting a site. D8 is pinned at
+  1.5447 as a recorded miss and does not move, because dark reverts the ring to the
+  colour it already had. L3 is pinned at 1.7875 and is not a site this ticket touched.
   """
   use ExUnit.Case, async: true
 
   alias Platform.Design.WcagContrast, as: W
 
   @css_path Path.expand("../../../assets/css/app.css", __DIR__)
+  @daisyui_path Path.expand("../../../assets/vendor/daisyui.js", __DIR__)
 
   # Pins are stated to 4 decimals. The tolerance absorbs float noise only: every
   # pinned pair here resolves deterministically from the stylesheet, so a real
@@ -157,6 +366,7 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
     light = theme_block!(css, "light")
     dark = theme_block!(css, "dark")
     {interactive_light, interactive_dark} = interactive_values!(css)
+    {focus_ring_light, focus_ring_dark} = focus_ring_aliases(css)
 
     {:ok,
      css: css,
@@ -168,6 +378,8 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
        base_100: color!(light, "--color-base-100"),
        base_200: color!(light, "--color-base-200"),
        interactive: interactive_light,
+       base_content: color!(light, "--color-base-content"),
+       tokens: token_map(light, interactive_light, focus_ring_light),
        block: light
      },
      dark: %{
@@ -176,9 +388,41 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
        primary_content: color!(dark, "--color-primary-content"),
        accent_content: color!(dark, "--color-accent-content"),
        base_100: color!(dark, "--color-base-100"),
+       base_200: color!(dark, "--color-base-200"),
        interactive: interactive_dark,
+       base_content: color!(dark, "--color-base-content"),
+       tokens: token_map(dark, interactive_dark, focus_ring_dark),
        block: dark
      }}
+  end
+
+  # Every token a rule in this file might name, resolved for one theme. Clauses
+  # below read the token OUT OF THE RULE and look it up here, rather than
+  # choosing one at the call site: a clause that picked its own token would keep
+  # passing after the rule it claims to measure was reverted.
+  defp token_map(block, interactive, focus_ring_token) do
+    base = %{
+      "--color-primary" => color!(block, "--color-primary"),
+      "--color-accent" => color!(block, "--color-accent"),
+      "--color-base-100" => color!(block, "--color-base-100"),
+      "--color-base-200" => color!(block, "--color-base-200"),
+      "--color-base-content" => color!(block, "--color-base-content"),
+      "--color-interactive" => interactive
+    }
+
+    # `--color-focus-ring` is an alias, so it is resolved here rather than read
+    # as a value: whichever slot it names for this theme IS its value, and a
+    # clause reading it out of a rule gets that resolved colour.
+    case Map.fetch(base, focus_ring_token) do
+      {:ok, color} ->
+        Map.put(base, "--color-focus-ring", color)
+
+      :error ->
+        flunk(
+          "--color-focus-ring aliases var(#{focus_ring_token}), which this module " <>
+            "does not resolve. Add it above before measuring the ring against anything."
+        )
+    end
   end
 
   # ══════════════════════════════════════════════════════════════════════════
@@ -362,53 +606,172 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       assert_ratio("L4", ratio, 4.7007)
     end
 
-    test "L5 (c): the light .chip-primary label misses AA, pre-existing", %{
+    test "L5 (a): the light .chip-primary label clears AA on its own fill", %{
       css: css,
       light: l
     } do
-      fill = chip_fill!(css, l.primary, l.base_100, ".chip-soft")
+      # Promoted from (c) to (a) by stage 2 of ticket #{@followup_ticket}. Both
+      # halves of the pairing are resolved from the stylesheet: the label through
+      # --color-interactive, which the structural clause below pins to this
+      # rule, and the fill through the shared color-mix formula at the percentage
+      # `.chip-primary` itself declares. Neither is a token chosen here, so
+      # putting the tint back reds this clause rather than leaving it green on a
+      # colour that is no longer painted.
+      fill = chip_fill!(css, l.primary, l.base_100, ".chip-primary")
       ratio = W.contrast(l.interactive, fill)
 
-      # (c), so the 4.5:1 threshold is deliberately NOT asserted. The shortfall
-      # predates this task and this task does not move it: the light --chip-tint
-      # was already the literal #06d5ed before stage 1 pointed it at
-      # var(--color-primary), which is the same colour.
-      assert_ratio("L5", ratio, 4.4073)
-
-      assert ratio < @aa_text,
-             "L5 now clears 4.5:1 (#{Float.round(ratio, 4)}) on fill " <>
-               "#{W.to_hex(fill)}. If that is deliberate, promote this clause from a " <>
-               "(c) pin to an (a) threshold and close the finding in the moduledoc — " <>
-               "do not leave a resolved miss recorded as open."
+      assert_threshold("L5", "the light chip-primary label on its own fill", ratio, @aa_text)
+      assert_ratio("L5", ratio, 4.5524)
     end
 
-    test "L6 (c): the focus ring misses the 3:1 indicator floor, pre-existing", %{light: l} do
-      # WCAG 2.2 SC 1.4.11 asks 3:1 of a focus indicator against the adjacent
-      # surface. `.focus-visible-ring:focus-visible` draws 2px of
-      # --color-base-100 then 2px of --color-primary, so the outer band's
-      # neighbours are base-100 on both sides. 1.7875:1, up from 1.6759:1 before
-      # this task. The improvement is real and it does not resolve the miss, so
-      # the threshold is not asserted; the number is pinned and the finding is in
-      # the moduledoc and in ticket #{@followup_ticket}.
-      ratio = W.contrast(l.primary, l.base_100)
-
-      assert_ratio("L6", ratio, 1.7875)
-
-      assert ratio < @non_text,
-             "L6 now clears the 3:1 focus-indicator floor (#{Float.round(ratio, 4)}). " <>
-               "Promote this to a threshold assertion and close the finding rather " <>
-               "than leaving a fixed miss recorded as open."
-    end
-
-    test "the focus ring still draws its outer band from --color-primary", %{css: css} do
-      # L6 measures a pairing this rule creates. If the rule stops using the
-      # token, L6 is measuring a colour that no longer renders.
+    test "L6 (a): the light offset focus ring clears the 3:1 indicator floor", %{
+      css: css,
+      light: l
+    } do
+      # Promoted from (c) to (a) by stage 3 of ticket #{@followup_ticket}. WCAG
+      # 2.2 SC 1.4.11 asks 3:1 of a focus indicator against the surface next to
+      # it. `.focus-visible-ring:focus-visible` draws 2px of --color-base-100
+      # then 2px of the ring colour, so the outer band's neighbours are base-100
+      # on BOTH sides; the structural clause below is what holds the spacer to
+      # the ground colour, and this clause depends on it.
+      #
+      # The band's colour is READ OUT OF THE RULE. Until stage 3 this clause
+      # computed `W.contrast(l.primary, l.base_100)`, the identical expression
+      # F1 computes, so reverting the ring alone moved neither of them. Now that
+      # the ring and `.wikilink` can hold different colours, a token-level read
+      # would have left L6 green on a colour the rule no longer names.
       body = rule_body!(css, ".focus-visible-ring:focus-visible")
+      ratio = W.contrast(shadow_band_color!(body, "4px", l.tokens), l.base_100)
 
-      assert squish(body) =~ "0 0 0 4px var(--color-primary)",
+      assert_threshold("L6", "the light offset focus ring against base-100", ratio, @non_text)
+      assert_ratio("L6", ratio, 4.7007)
+    end
+
+    test "L7 (a): the light no-offset focus ring clears 3:1 against the page ground", %{
+      css: css,
+      light: l
+    } do
+      # The `.input` / `.textarea` / `.select` variant, drawn at the element edge
+      # with no spacer. Its OUTER neighbour is the page ground, which is the
+      # surface a keyboard user has to find the ring against; its inner
+      # neighbour is the control's own border and is L8.
+      #
+      # Same number as L6 and a different rule. Each resolves its colour from its
+      # own body, so reverting one variant reds one clause.
+      body = grouped_rule_body!(css, ".input.focus-visible-ring:focus-visible")
+      ratio = W.contrast(shadow_band_color!(body, "2px", l.tokens), l.base_100)
+
+      assert_threshold("L7", "the light no-offset focus ring against base-100", ratio, @non_text)
+      assert_ratio("L7", ratio, 4.7007)
+    end
+
+    test "L8 (a): the light no-offset ring separates from the border the input paints", %{
+      css: css,
+      light: l
+    } do
+      # The no-offset ring's INNER neighbour. Not `.input:focus`'s declared
+      # border-color: that declaration does not render, for the layer-order
+      # reason recorded beside it in app.css and read back out of the vendored
+      # plugin by focused_input_border_token!/0 below. What paints is
+      # --color-base-content, #000000 in light.
+      #
+      # This one got WORSE and still clears: #06D5ED against black was 11.7483,
+      # #087f93 against black is 4.4674. The trade is deliberate — L7, the
+      # boundary against the page ground, went 1.7875 to 4.7007 — and it is
+      # recorded rather than buried.
+      body = grouped_rule_body!(css, ".input.focus-visible-ring:focus-visible")
+      border = Map.fetch!(l.tokens, focused_input_border_token!())
+      ratio = W.contrast(shadow_band_color!(body, "2px", l.tokens), border)
+
+      assert_threshold(
+        "L8",
+        "the light no-offset ring against the input border",
+        ratio,
+        @non_text
+      )
+
+      assert_ratio("L8", ratio, 4.4674)
+    end
+
+    test "both focus-ring rules draw their band from --color-focus-ring at 2px", %{css: css} do
+      # L6/L7/L8 and D6/D7/D8 measure pairings these two rules create. If either
+      # rule stops naming the slot, or is quietly widened instead of recoloured,
+      # those clauses are measuring something that does not ship.
+      offset = rule_body!(css, ".focus-visible-ring:focus-visible")
+
+      assert shadow_band_token!(offset, "4px") == "--color-focus-ring",
              "`.focus-visible-ring:focus-visible` no longer draws its outer 4px band " <>
-               "from var(--color-primary). L6 above measures that pairing and is now " <>
-               "measuring something that does not ship. Rule body:\n#{body}"
+               "from var(--color-focus-ring). Rule body:\n#{offset}"
+
+      assert shadow_band_token!(offset, "2px") == "--color-base-100",
+             "the offset ring's 2px spacer is no longer --color-base-100. L6 and D6 " <>
+               "measure the outer band against base-100 ON BOTH SIDES, and that claim " <>
+               "holds only because the spacer is drawn in the ground colour. Rule " <>
+               "body:\n#{offset}"
+
+      no_offset = grouped_rule_body!(css, ".input.focus-visible-ring:focus-visible")
+
+      assert shadow_band_token!(no_offset, "2px") == "--color-focus-ring",
+             "the no-offset focus ring no longer draws its band from " <>
+               "var(--color-focus-ring). Rule body:\n#{no_offset}"
+
+      assert Regex.match?(
+               ~r/\.input\.focus-visible-ring:focus-visible,\s*\.textarea\.focus-visible-ring:focus-visible,\s*\.select\.focus-visible-ring:focus-visible\s*\{/,
+               css
+             ),
+             "the no-offset ring is no longer one rule over .input, .textarea and " <>
+               ".select. L7/L8/D7/D8 measure one rule body and would stop covering " <>
+               "whichever selector was split off."
+
+      # Geometry, pinned. The design canvas names the ring at 2px with a 2px
+      # offset as the signature element, the offset being what stops it reading
+      # as a border on the control. Widening the ring is the way to make an
+      # indicator visible WITHOUT fixing its colour, and nothing else in this
+      # file would notice.
+      assert squish(offset) =~ "box-shadow: 0 0 0 2px var(--color-base-100), 0 0 0 4px",
+             "the offset ring is no longer a 2px spacer plus a band ending at 4px, " <>
+               "i.e. 2px wide at a 2px offset. Rule body:\n#{offset}"
+
+      assert squish(no_offset) =~ "box-shadow: 0 0 0 2px",
+             "the no-offset ring is no longer 2px wide. Rule body:\n#{no_offset}"
+    end
+
+    test "--focus-ring is theme-split, aliased, and mapped to --color-focus-ring exactly once",
+         %{css: css} do
+      # focus_ring_aliases!/1 carries the guards: a --focus-ring declaration in
+      # BOTH theme blocks, light differing from dark, each one an alias naming
+      # another slot rather than a sixth cyan, and exactly ONE
+      # --color-focus-ring declaration in the file (the @theme inline mapping)
+      # so the rules measured above have a single backing value per theme.
+      # Called here so the failure names this clause rather than taking every
+      # test in the module down with the setup.
+      {light_token, dark_token} = focus_ring_aliases!(css)
+
+      assert light_token == "--color-interactive",
+             "light --focus-ring aliases var(#{light_token}). The action-cyan " <>
+               "slot is the one the brand rule already names for interactive colour; " <>
+               "if the ring is meant to move off it, L6/L7/L8 need re-deriving first."
+
+      assert dark_token == "--color-primary",
+             "dark --focus-ring aliases var(#{dark_token}). The design canvas " <>
+               "asked for the brand cyan on dark; var(--color-interactive) also " <>
+               "clears there (10.0015 against 9.6304) and is a different decision."
+    end
+
+    test ".input:focus names the ring's slot too, even though it does not render", %{css: css} do
+      # A dead declaration: this rule is in the `components` layer and daisyUI's
+      # `.input` rules are in `utilities`, ordered after it, so daisyUI's
+      # `--input-color: var(--color-base-content)` wins on focus whatever this
+      # says. Pinned anyway, because a dead declaration naming the WRONG token is
+      # how the next reader concludes the focused input border is cyan. It is
+      # not: it paints #000000 light, #EEEEEE dark, which is what L8 and D8
+      # measure the no-offset ring against.
+      body = grouped_rule_body!(css, ".input:focus")
+
+      assert squish(body) =~ "border-color: var(--color-focus-ring)",
+             "`.input:focus` no longer names var(--color-focus-ring). It renders " <>
+               "nothing either way, and that is exactly why the token it names has to " <>
+               "stay honest. Rule body:\n#{body}"
     end
   end
 
@@ -449,21 +812,72 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       css: css,
       dark: d
     } do
-      fill = chip_fill!(css, d.primary, d.base_100, ~s([data-theme="dark"] .chip-soft))
+      fill = chip_fill!(css, d.primary, d.base_100, ~s([data-theme="dark"] .chip-primary))
       ratio = W.contrast(d.interactive, fill)
 
       # Measured, then classified (a): unlike its light counterpart this one
       # clears. It did move — the dark --chip-tint was #00bcd4 before stage 1 and
-      # read 7.7729 — so it is pinned as well as thresholded.
+      # read 7.7729 — so it is pinned as well as thresholded. Stage 2 left the
+      # dark percentage alone, and this clause is what notices if a light-only
+      # change leaks into dark.
       assert_threshold("D5", "the dark chip-primary label on its own fill", ratio, @aa_text)
       assert_ratio("D5", ratio, 7.4558)
     end
 
-    test "D6 (a): the focus ring clears 3:1 against the dark base-100", %{dark: d} do
-      ratio = W.contrast(d.primary, d.base_100)
+    test "D6 (a): the dark offset focus ring clears 3:1 against base-100", %{
+      css: css,
+      dark: d
+    } do
+      # Confirmed rather than assumed by stage 3 of ticket #{@followup_ticket}:
+      # dark keeps the brand cyan, so the figure is unchanged at 9.6304. It is
+      # now resolved through the rule the way L6 is, so pointing the ring
+      # elsewhere reds this clause instead of leaving it measuring a token.
+      body = rule_body!(css, ".focus-visible-ring:focus-visible")
+      ratio = W.contrast(shadow_band_color!(body, "4px", d.tokens), d.base_100)
 
-      assert_threshold("D6", "the dark focus ring against #171b25", ratio, @non_text)
+      assert_threshold("D6", "the dark offset focus ring against #171b25", ratio, @non_text)
       assert_ratio("D6", ratio, 9.6304)
+    end
+
+    test "D7 (a): the dark no-offset focus ring clears 3:1 against the page ground", %{
+      css: css,
+      dark: d
+    } do
+      body = grouped_rule_body!(css, ".input.focus-visible-ring:focus-visible")
+      ratio = W.contrast(shadow_band_color!(body, "2px", d.tokens), d.base_100)
+
+      assert_threshold("D7", "the dark no-offset focus ring against #171b25", ratio, @non_text)
+      assert_ratio("D7", ratio, 9.6304)
+    end
+
+    test "D8 (c): the dark no-offset ring does not separate from the input's own border", %{
+      css: css,
+      dark: d
+    } do
+      # The one measurement on this ticket that misses its floor and is left
+      # missing. The focused input's border paints --color-base-content, #EEEEEE
+      # in dark, and the ring's #06D5ED reads 1.5447:1 against it.
+      #
+      # Unchanged by stage 3: it measured the same 1.5447 before, because dark
+      # kept the brand cyan. No candidate closes it either — the ring would have
+      # to clear 3:1 against a near-white 1px edge AND against the near-black
+      # page ground, and #EEEEEE is 15.5:1 from #171b25, so nothing sits in both
+      # windows. The indicator is identified against the page ground, which is
+      # D7 at 9.6304, and the near-white border is the input's own edge rather
+      # than a surface the ring has to be found against.
+      #
+      # Pinned without a threshold and recorded, exactly as L6 was before this
+      # stage promoted it. If a later change closes it, promote this.
+      body = grouped_rule_body!(css, ".input.focus-visible-ring:focus-visible")
+      border = Map.fetch!(d.tokens, focused_input_border_token!())
+      ratio = W.contrast(shadow_band_color!(body, "2px", d.tokens), border)
+
+      assert_ratio("D8", ratio, 1.5447)
+
+      assert ratio < @non_text,
+             "D8 now clears the 3:1 floor against the focused input's own border " <>
+               "(#{Float.round(ratio, 4)}). Promote this to a threshold assertion and " <>
+               "close the finding rather than leaving a fixed miss recorded as open."
     end
 
     test ".chip-primary in both themes still takes its tint from --color-primary", %{css: css} do
@@ -492,96 +906,250 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   # 4. The known findings: measured, pinned, deliberately not fixed.
   # ══════════════════════════════════════════════════════════════════════════
 
-  describe "pre-existing light-theme misses (ticket #{@followup_ticket})" do
-    test "F1: .wikilink renders primary as text on base-100", %{css: css, light: l} do
+  describe "the cyan-on-light findings (ticket #{@followup_ticket})" do
+    test "F1 (a): .wikilink is AA text on base-100 in both themes", %{
+      css: css,
+      light: l,
+      dark: d
+    } do
       body = rule_body!(css, ".wikilink")
 
-      assert squish(body) =~ "color: var(--color-primary)",
-             "`.wikilink` no longer colours from var(--color-primary). If it was " <>
-               "moved to --color-interactive this finding is FIXED — close it in the " <>
-               "moduledoc and in ticket #{@followup_ticket} rather than deleting the " <>
-               "clause. Body:\n#{body}"
+      assert squish(body) =~ "color: var(--color-interactive)",
+             "`.wikilink` no longer colours from var(--color-interactive). Ticket " <>
+               "#{@followup_ticket} stage 1 moved it there because the fill-only brand " <>
+               "cyan measured 1.7875:1 as text on white. If it has been moved again, " <>
+               "re-derive F1 against whatever it now names. Body:\n#{body}"
 
-      ratio = W.contrast(l.primary, l.base_100)
-      assert_ratio("F1 (.wikilink on --color-base-100)", ratio, 1.7875)
+      ratio = W.contrast(declared_color!(body, "color", l.tokens), l.base_100)
 
-      assert ratio < @aa_text,
-             "F1 now clears AA. Close the finding rather than leaving it recorded."
+      assert_threshold("F1", ".wikilink as text on light --color-base-100", ratio, @aa_text)
+      assert_ratio("F1 (.wikilink on light --color-base-100)", ratio, 4.7007)
+
+      # The slot is theme-redefined, so one declaration covers both themes. Dark
+      # is asserted rather than assumed: a light-only fix that dark inherits is
+      # exactly the shape of regression this pairing could hide.
+      dark_ratio = W.contrast(declared_color!(body, "color", d.tokens), d.base_100)
+
+      assert_threshold("F1 dark", ".wikilink as text on #171b25", dark_ratio, @aa_text)
+      assert_ratio("F1 dark (.wikilink on dark --color-base-100)", dark_ratio, 10.0015)
     end
 
-    test "F2: .code-block-expand renders primary as text on base-200", %{css: css, light: l} do
+    test "F2 (c): .code-block-expand improved 2.6x and still misses AA on base-200", %{
+      css: css,
+      light: l,
+      dark: d
+    } do
       body = rule_body!(css, ".code-block-expand")
 
       assert squish(body) =~ "background: var(--color-base-200)",
              "`.code-block-expand` no longer sits on --color-base-200; the ground " <>
                "this finding is measured against has changed. Body:\n#{body}"
 
-      assert squish(body) =~ "color: var(--color-primary)",
-             "`.code-block-expand` no longer colours from var(--color-primary). " <>
+      assert squish(body) =~ "color: var(--color-interactive)",
+             "`.code-block-expand` no longer colours from var(--color-interactive). " <>
                "Body:\n#{body}"
 
-      ratio = W.contrast(l.primary, l.base_200)
+      ratio = W.contrast(declared_color!(body, "color", l.tokens), l.base_200)
 
       # Measured against what --color-base-200 actually renders, oklch(96% 0 0)
       # = #F2F2F2. Its own trailing comment claims #F5F5F5, which would give
-      # 1.6396. That comment drift is itself reported, not fixed here.
-      assert_ratio("F2 (.code-block-expand on --color-base-200)", ratio, 1.5913)
+      # 4.2941. That comment drift is reported, not fixed here.
+      assert_ratio("F2 (.code-block-expand on light --color-base-200)", ratio, 4.1847)
 
+      # Still (c). --color-interactive was derived against pure WHITE, where it
+      # measures 4.7007; this is the one site of the three that sits on base-200
+      # instead, and 0.32 of the difference is the whole shortfall. Clearing it
+      # means darkening the slot itself (#077384 would give 4.9268 here), which
+      # repaints every link in the product and needs its own gate. The threshold
+      # is deliberately NOT asserted, and the floor is deliberately NOT lowered.
       assert ratio < @aa_text,
-             "F2 now clears AA. Close the finding rather than leaving it recorded."
+             "F2 now clears 4.5:1 (#{Float.round(ratio, 4)}). If the action-cyan slot " <>
+               "was darkened, promote this clause from a (c) pin to an (a) threshold " <>
+               "and close the finding in the moduledoc rather than leaving a resolved " <>
+               "miss recorded as open."
+
+      dark_ratio = W.contrast(declared_color!(body, "color", d.tokens), d.base_200)
+
+      assert_threshold("F2 dark", ".code-block-expand on #000306", dark_ratio, @aa_text)
+      assert_ratio("F2 dark (.code-block-expand on dark --color-base-200)", dark_ratio, 12.0222)
     end
 
-    test "F3: .bottom-nav-tab--active renders primary on the light nav surface", %{
+    test "F3 (c): .bottom-nav-tab--active on the [data-theme=light] nav surface", %{
       css: css,
       light: l
     } do
       body = rule_body!(css, ".bottom-nav-tab--active")
 
-      assert squish(body) =~ "color: var(--color-primary)",
-             "`.bottom-nav-tab--active` no longer colours from var(--color-primary). " <>
+      assert squish(body) =~ "color: var(--color-interactive)",
+             "`.bottom-nav-tab--active` no longer colours from var(--color-interactive). " <>
                "Body:\n#{body}"
 
-      nav = rule_body!(css, ~s([data-theme="light"] .bottom-nav))
+      surface = nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100)
+      ratio = W.contrast(declared_color!(body, "color", l.tokens), surface)
 
-      surface =
-        case Regex.run(
-               ~r/background:\s*oklch\(([\d.]+)%\s+([\d.]+)\s+([\d.]+)\s*\/\s*([\d.]+)\)/,
-               squish(nav),
-               capture: :all_but_first
-             ) do
-          [lum, chroma, hue, alpha] ->
-            W.composite(
-              W.oklch(to_f(lum) / 100, to_f(chroma), to_f(hue)),
-              to_f(alpha),
-              l.base_100
-            )
+      assert_ratio("F3 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 4.4478)
 
-          nil ->
-            flunk(
-              "the light `.bottom-nav` background is no longer a translucent oklch() " <>
-                "over the page ground, so F3's surface cannot be computed. " <>
-                "Body:\n#{nav}"
-            )
-        end
+      # Still (c), by 0.05. See F4 and the clause below it: this is not a value
+      # that was tuned badly, it is a pairing that cannot be satisfied at the
+      # same time as F4's. The threshold is not asserted and @aa_text is not moved.
+      assert ratio < @aa_text,
+             "F3 now clears 4.5:1 (#{Float.round(ratio, 4)}) on the near-white nav. " <>
+               "Check F4 before promoting it: the two nav grounds are mutually " <>
+               "exclusive, so clearing this one may have pushed the other further under."
+    end
 
-      ratio = W.contrast(l.primary, surface)
-      assert_ratio("F3 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 1.6913)
+    test "F4 (c): the same tab on the default near-black nav under light tokens", %{
+      css: css,
+      light: l
+    } do
+      # The ground the sweep did not measure before this ticket. `.bottom-nav`
+      # declares its light background under [data-theme="light"] only, with no
+      # `prefers-color-scheme: light` twin, so a viewer who selects the "system"
+      # theme (root.html.heex:174 removes the attribute for that choice, and
+      # otherwise defaults to dark) paints a near-black nav under light tokens.
+      #
+      # This clause is the one place that number lives. It got WORSE with the
+      # stage-1 swap, from 10.9561 to 4.1661, because the brand cyan was already
+      # legible on near-black. That is recorded rather than hidden: the worst
+      # case ACROSS both nav grounds is what improved, 1.6913 to 4.1661.
+      body = rule_body!(css, ".bottom-nav-tab--active")
+      surface = nav_surface!(css, ".bottom-nav", l.base_100)
+      ratio = W.contrast(declared_color!(body, "color", l.tokens), surface)
+
+      assert_ratio("F4 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 4.1661)
 
       assert ratio < @aa_text,
-             "F3 now clears AA. Close the finding rather than leaving it recorded."
+             "F4 now clears 4.5:1 (#{Float.round(ratio, 4)}). Check F3 before " <>
+               "promoting it, and if `.bottom-nav` gained a " <>
+               "`prefers-color-scheme: light` background this ground no longer exists " <>
+               "and the clause should be retired rather than re-pinned."
+    end
+
+    test "no colour clears AA on both nav grounds, so F3 and F4 cannot both be fixed", %{
+      css: css,
+      light: l
+    } do
+      # The reason F3 and F4 are (c) rather than under-tuned. WCAG's ratio is
+      # monotonic in the text colour's luminance, so each ground imposes a bound:
+      # the near-white nav a ceiling, the near-black one a floor. They cross. No
+      # value of any token satisfies both, which makes the missing
+      # `prefers-color-scheme: light` nav background the defect, not the colour.
+      near_white = nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100)
+      near_black = nav_surface!(css, ".bottom-nav", l.base_100)
+
+      ceiling = (W.luminance(near_white) + 0.05) / @aa_text - 0.05
+      floor = @aa_text * (W.luminance(near_black) + 0.05) - 0.05
+
+      assert ceiling < floor,
+             "the two nav grounds are no longer mutually exclusive: a text colour of " <>
+               "luminance between #{Float.round(floor, 6)} and " <>
+               "#{Float.round(ceiling, 6)} would clear 4.5:1 on both " <>
+               "#{W.to_hex(near_white)} and #{W.to_hex(near_black)}. F3 and F4 can now " <>
+               "be fixed together; re-open them rather than leaving both recorded as " <>
+               "unsatisfiable."
+
+      assert abs(ceiling - 0.170779) < 0.0001 and abs(floor - 0.191270) < 0.0001,
+             "the nav-ground bounds moved: ceiling #{Float.round(ceiling, 6)} " <>
+               "(recorded 0.170779), floor #{Float.round(floor, 6)} (recorded " <>
+               "0.191270). Those two figures are quoted in the comment above " <>
+               "`.bottom-nav-tab--active` in app.css; update both together."
+    end
+
+    test "the active tab's ::before bar clears the 3:1 indicator floor on every ground", %{
+      css: css,
+      light: l,
+      dark: d
+    } do
+      # A 28x3px non-text active cue, so SC 1.4.11's 3:1 is the obligation rather
+      # than 4.5:1. It moved to --color-interactive with the label deliberately:
+      # as --color-primary it measured 1.6913 on the near-white nav, an indicator
+      # invisible on the ground the label is optimised for. Unlike the label, the
+      # bar CLEARS its floor on all three grounds, so this one is (a).
+      body = rule_body!(css, ".bottom-nav-tab--active::before")
+
+      assert squish(body) =~ "background: var(--color-interactive)",
+             "the `.bottom-nav-tab--active::before` bar no longer draws from " <>
+               "var(--color-interactive). Body:\n#{body}"
+
+      bar_light = declared_color!(body, "background", l.tokens)
+
+      for {label, surface, expected} <- [
+            {"near-white nav",
+             nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100), 4.4478},
+            {"near-black nav under light tokens", nav_surface!(css, ".bottom-nav", l.base_100),
+             4.1661}
+          ] do
+        ratio = W.contrast(bar_light, surface)
+
+        assert_threshold("::before on the #{label}", "the active-tab bar", ratio, @non_text)
+        assert_ratio("::before on the #{label} (#{W.to_hex(surface)})", ratio, expected)
+      end
+
+      dark_surface = nav_surface!(css, ".bottom-nav", d.base_100)
+      dark_ratio = W.contrast(declared_color!(body, "background", d.tokens), dark_surface)
+
+      assert_threshold(
+        "::before dark",
+        "the active-tab bar on the dark nav",
+        dark_ratio,
+        @non_text
+      )
+
+      assert_ratio("::before dark (#{W.to_hex(dark_surface)})", dark_ratio, 12.0046)
+    end
+
+    test "no fixed site reached AA by growing or emboldening its text", %{css: css} do
+      # The move the design canvas named as gaming: WCAG's 3:1 large-text
+      # allowance is real, and reaching for it here would ship the failing colour
+      # unchanged while moving the threshold. Weight and size are PINNED to what
+      # each rule declared before this ticket rather than forbidden outright,
+      # because two of these rules legitimately declare type: `.code-block-expand`
+      # shrinks to 0.8em, which puts it further from the allowance rather than
+      # nearer, and `.bottom-nav-label` is where the nav tab's type actually
+      # lives, so a guard on `.bottom-nav-tab--active` alone would miss an
+      # enlargement made one selector away.
+      for {selector, expected} <- [
+            {".wikilink", %{}},
+            {".code-block-expand", %{"font-size" => "0.8em"}},
+            {".bottom-nav-tab--active", %{}},
+            {".bottom-nav-label", %{"font-size" => "10px", "font-weight" => "600"}},
+            # Stage 2's site. The chip's type lives on `.chip-soft`, one selector
+            # away from the `.chip-primary` rule the fix touched, so pinning only
+            # the tone rule would miss a chip made bold to clear 4.5:1.
+            {".chip-soft", %{"font-size" => "0.75rem", "font-weight" => "500"}},
+            {".chip-primary", %{}}
+          ] do
+        body = squish(rule_body!(css, selector))
+
+        for property <- ["font-size", "font-weight"] do
+          declared =
+            case Regex.run(~r/(?:^|;)\s*#{property}:\s*([^;]+)/, body, capture: :all_but_first) do
+              [value] -> String.trim(value)
+              nil -> nil
+            end
+
+          assert declared == Map.get(expected, property),
+                 "`#{selector}` declares #{property}: #{inspect(declared)}, and this " <>
+                   "clause recorded #{inspect(Map.get(expected, property))} before " <>
+                   "ticket #{@followup_ticket} touched these rules. If the change is a " <>
+                   "contrast fix it is the wrong one: weight is not a contrast fix, and " <>
+                   "enlarging text to reach the 3:1 large-text allowance moves the " <>
+                   "threshold instead of the colour. If it is a genuine type change, " <>
+                   "re-pin it here and say so. Body:\n#{body}"
+        end
+      end
     end
 
     test "the moduledoc still carries the findings record", %{} do
       # A record guard, not a measurement: the numbers above prove themselves,
-      # but the fact that four misses were found, classified pre-existing and
-      # deliberately left alone lives only in prose. Deleting that prose while
-      # keeping the tests would leave a green suite that has forgotten why half
-      # its clauses refuse to assert a threshold.
+      # but the history lives only in prose. The pre-change figures cannot be
+      # recomputed from app.css at all, and the post-change ones would be
+      # recomputed against whatever ships rather than against what was decided.
       doc = squish(@moduledoc)
 
       assert doc =~ @followup_ticket,
-             "the moduledoc no longer names the follow-up ticket for the four " <>
-               "pre-existing light-theme misses."
+             "the moduledoc no longer names the ticket that closed the four " <>
+               "cyan-on-light findings."
 
       for marker <- [
             ".wikilink",
@@ -597,8 +1165,83 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       end
 
       assert doc =~ "4.4073",
-             "the moduledoc no longer records L5's measured value, the fifth " <>
-               "pre-existing miss and the one that is not on the ticket."
+             "the moduledoc no longer records L5's pre-change value, the fifth " <>
+               "miss. It cannot be recomputed from app.css once the tint has moved, " <>
+               "so this prose is the only copy."
+
+      for marker <- ["4.5524", "4.5037", "4.4553"] do
+        assert doc =~ marker,
+               "the moduledoc no longer records `#{marker}`. Those are the rungs of " <>
+                 "stage 2's tint ladder: 4.4553 is the 10% the design canvas offered " <>
+                 "as a first try and which does NOT clear, 4.5037 is the 8% that " <>
+                 "clears by 0.004, and 4.5524 is the 6% that shipped. Without them " <>
+                 "the shipped percentage reads as a guess and the next reader has no " <>
+                 "way to see that the obvious value was tried and rejected."
+      end
+
+      assert doc =~ "3.6620",
+             "the moduledoc no longer records the single-hue alternative's dark " <>
+               "figure. #087f93 on #171b25 is the option the design canvas rejected " <>
+               "on quality while it cleared the floor, and once the ring ships the " <>
+               "split there is nothing in app.css to recompute it from. Without the " <>
+               "number the rejection reads as taste rather than a measured call."
+
+      assert doc =~ "37 call sites",
+             "the moduledoc no longer records that 37 sites still ring in " <>
+               "--color-primary through the raw Tailwind utilities. That count comes " <>
+               "from a grep of lib/ and assets/, not from app.css, and it is the only " <>
+               "note saying this stage fixed one of the two focus-ring " <>
+               "implementations."
+
+      for marker <- ["4.7007", "4.1847", "4.4478", "4.1661", "10.9561"] do
+        assert doc =~ marker,
+               "the moduledoc no longer records `#{marker}`, one of the figures stage 1 " <>
+                 "of #{@followup_ticket} measured. Two of the four sites still miss AA " <>
+                 "and one regressed on its second ground; deleting the record leaves a " <>
+                 "green suite that has forgotten which of its clauses refuse a threshold."
+      end
+    end
+
+    test "the moduledoc still carries both mutation matrices and the open follow-ups" do
+      # The matrices are the only record that these clauses were exercised. Nothing
+      # in a green run distinguishes an assertion that would catch its own site's
+      # regression from one that has never been made to fail, so deleting the matrix
+      # deletes the evidence and leaves the suite looking exactly as trustworthy.
+      #
+      # Mutating a record guard: edit the moduledoc line ONLY. Every assertion below
+      # embeds the exact string it looks for, so a find-and-replace across the whole
+      # file rewrites the prose and the assertion together and stays green — the
+      # instrument moves with the subject. Stage 4 ran that mutation unscoped first,
+      # read the green, and had to redo it line-scoped before the red appeared.
+      doc = squish(@moduledoc)
+
+      assert doc =~ "Mutation results (run by hand, 2026-09-06",
+             "the moduledoc no longer carries FE-18's mutation runs. They were made " <>
+               "against a different clause set and stage 4 of #{@followup_ticket} " <>
+               "added its own beneath rather than overwriting them; keep both."
+
+      assert doc =~ "Mutation results (task #{@followup_ticket} stage 4, 2026-09-08)",
+             "the moduledoc no longer carries this ticket's mutation matrix. Six " <>
+               "reverts, one site at a time, are what proves the five fixed sites are " <>
+               "individually pinned. The runs cannot be recovered from the file."
+
+      assert doc =~ "No revert reds a clause about a different site.",
+             "the moduledoc no longer states the matrix's actual result. Count is " <>
+               "not the test — two of the six reverts red more than one clause, both " <>
+               "times because one site is measured against more than one adjacent " <>
+               "surface. Attribution is the test, and this sentence is the finding."
+
+      assert doc =~ "01a0833d-ce16-7001-8e9a-73e2240344c2",
+             "the moduledoc no longer names the follow-up holding the 37 raw " <>
+               "ring-primary focus-utility sites. Without the ticket id, the note " <>
+               "that this file measures one focus-ring implementation of two reads " <>
+               "as an observation nobody acted on."
+
+      assert doc =~ "--color-base-200",
+             "the moduledoc no longer records the --color-base-200 " <>
+               "declaration-versus-comment drift. It is deliberately NOT fixed by " <>
+               "#{@followup_ticket} and carried as a separate follow-up; this prose " <>
+               "is where it stays open."
     end
   end
 
@@ -656,6 +1299,251 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   end
 
   defp color!(block, token), do: block |> decl!(token) |> Map.fetch!(:value) |> W.parse!()
+
+  # The colour a RULE declares for `property`, resolved through the theme's
+  # tokens. The token name is read out of the rule body, never chosen here: a
+  # clause that named its own token would keep passing after the rule it claims
+  # to measure was pointed somewhere else, which is the failure mode that let
+  # four of these sites ship below AA in the first place.
+  defp declared_color!(body, property, tokens) do
+    re = ~r/(?:^|;)\s*#{Regex.escape(property)}:\s*var\((--color-[a-z0-9-]+)\)/
+
+    case Regex.run(re, squish(body), capture: :all_but_first) do
+      [token] ->
+        Map.get(tokens, token) ||
+          flunk(
+            "the rule declares `#{property}: var(#{token})`, which this module does " <>
+              "not resolve. Add it to token_map/2 before measuring against it."
+          )
+
+      nil ->
+        flunk(
+          "no `#{property}: var(--color-…)` declaration in the rule body, so the " <>
+            "colour it renders cannot be resolved from the stylesheet:\n#{body}"
+        )
+    end
+  end
+
+  # A `.bottom-nav` background composited over the page ground. Both nav rules
+  # paint a translucent oklch(), and which one wins depends on whether the
+  # document carries a data-theme attribute, so the same tab has two grounds in
+  # the light theme. Parsed rather than hardcoded: retuning either alpha moves
+  # F3 and F4 instead of quietly invalidating them.
+  defp nav_surface!(css, selector, base) do
+    nav = rule_body!(css, selector)
+
+    case Regex.run(
+           ~r/background:\s*oklch\(([\d.]+)%\s+([\d.]+)\s+([\d.]+)\s*\/\s*([\d.]+)\)/,
+           squish(nav),
+           capture: :all_but_first
+         ) do
+      [lum, chroma, hue, alpha] ->
+        W.composite(
+          W.oklch(to_f(lum) / 100, to_f(chroma), to_f(hue)),
+          to_f(alpha),
+          base
+        )
+
+      nil ->
+        flunk(
+          "the `#{selector}` background is no longer a translucent oklch() over the " <>
+            "page ground, so the nav surface cannot be computed. Body:\n#{nav}"
+        )
+    end
+  end
+
+  # The body of the rule whose SELECTOR LIST starts with `selector`. rule_body!/2
+  # only matches a selector sitting immediately before its `{`, and both the
+  # no-offset focus ring and `.input:focus` are declared over three or four
+  # selectors at once.
+  defp grouped_rule_body!(css, selector) do
+    re = ~r/^[^\S\n]*#{Regex.escape(selector)}[^{}]*\{([^}]*)\}/m
+
+    case Regex.run(re, css, capture: :all_but_first) do
+      [body] ->
+        body
+
+      nil ->
+        flunk(
+          "no rule whose selector list starts a line with `#{selector}` in " <>
+            "#{@css_path}. The pairing measured against it no longer exists, so the " <>
+            "clause is measuring nothing."
+        )
+    end
+  end
+
+  # The token a `box-shadow` band of a given spread names, READ OUT OF the rule
+  # body. Never chosen at the call site. This is the vacuity L6 carried until
+  # stage 3 of ticket #{@followup_ticket}: it computed the identical expression
+  # F1 computed, so reverting the ring alone left it green while F1 covered for
+  # it. A band is one `0 0 0 <spread> var(--color-…)` term.
+  defp shadow_band_token!(body, spread) do
+    re = ~r/0 0 0 #{Regex.escape(spread)} var\((--color-[a-z0-9-]+)\)/
+
+    case Regex.run(re, squish(body), capture: :all_but_first) do
+      [token] ->
+        token
+
+      nil ->
+        flunk(
+          "no `0 0 0 #{spread} var(--color-…)` band in this rule, so the colour it " <>
+            "paints at that offset cannot be resolved from the stylesheet. A " <>
+            "box-shadow the browser rejects drops the whole declaration and the ring " <>
+            "disappears, which looks exactly like a control that was never focused. " <>
+            "Rule body:\n#{body}"
+        )
+    end
+  end
+
+  defp shadow_band_color!(body, spread, tokens) do
+    token = shadow_band_token!(body, spread)
+
+    Map.get(tokens, token) ||
+      flunk(
+        "the rule draws its #{spread} band from var(#{token}), which this module " <>
+          "does not resolve. Add it to token_map/3 before measuring against it."
+      )
+  end
+
+  # The token a FOCUSED `.input` paints its border from. Read out of the
+  # vendored daisyUI source, because app.css cannot answer it: app.css's own
+  # `.input:focus { border-color: ... }` sits in the `components` layer and
+  # daisyUI's `.input` rules sit in `utilities`, which is ordered after it, so
+  # daisyUI wins whatever app.css declares. Confirmed in headless Chrome for
+  # ticket #{@followup_ticket} stage 3: a keyboard-focused `.input` paints
+  # #000000 in light and #EEEEEE in dark, neither of which is any cyan.
+  #
+  # L8 and D8 measure the no-offset ring against this. Reading it off the
+  # stylesheet instead would measure a declaration that is never painted.
+  defp focused_input_border_token!() do
+    js = File.read!(@daisyui_path)
+
+    tokens =
+      Regex.scan(
+        ~r/"&:focus, &:focus-within":\s*\{\s*"--input-color":\s*"var\((--color-[a-z0-9-]+)\)"/,
+        js,
+        capture: :all_but_first
+      )
+      |> List.flatten()
+
+    assert tokens != [],
+           "the vendored daisyUI no longer sets --input-color on `&:focus, " <>
+             "&:focus-within`, so the colour a focused input's border paints cannot " <>
+             "be resolved. L8 and D8 measure the ring against it."
+
+    assert Enum.uniq(tokens) |> length() == 1,
+           "the vendored daisyUI sets more than one --input-color on focus " <>
+             "(#{inspect(Enum.uniq(tokens))}); which one reaches `.input` is no " <>
+             "longer decidable from the source."
+
+    hd(tokens)
+  end
+
+  # The `--focus-ring` declaration in each daisyui-theme block, light then
+  # dark, with no judgement applied. Split out from the guard below so that a
+  # malformed slot reds the one clause that judges it and the ring clauses that
+  # measure it, instead of killing setup_all and reporting every test in the
+  # module as invalid — which is loud and names nothing.
+  #
+  # History: stage 3 of this ticket declared `--color-focus-ring` itself, in a
+  # bare `:root` and in both dark selectors. Task 01a0833d landed first with
+  # the bare `--focus-ring` slot in the theme blocks and an `@theme inline`
+  # mapping `--color-focus-ring: var(--focus-ring)`, which is what mints the
+  # `ring-focus-ring` utility. The two mechanisms agreed on every value and
+  # were collapsed onto 01a0833d's when this branch merged, so the rules
+  # measured here still read `var(--color-focus-ring)` and there is exactly ONE
+  # backing value per theme.
+  defp focus_ring_declarations(css) do
+    for name <- ["light", "dark"] do
+      block = theme_block!(css, name)
+
+      case Regex.run(~r/^[^\S\n]*--focus-ring:[^\S\n]*([^;\n]+);/m, block,
+             capture: :all_but_first
+           ) do
+        [value] -> String.trim(value)
+        nil -> ""
+      end
+    end
+  end
+
+  # Best-effort resolution for setup_all: the token each theme's alias names, or
+  # `--color-primary` when the declaration cannot be read at all. The fallback is
+  # deliberately the value the ring had BEFORE this ticket, so a slot that stops
+  # parsing measures the failing colour and reds L6/L7 rather than silently
+  # measuring the fixed one.
+  defp focus_ring_aliases(css) do
+    [light, dark] =
+      css
+      |> focus_ring_declarations()
+      |> Enum.map(fn value ->
+        case Regex.run(~r/^var\((--color-[a-z0-9-]+)\)$/, value, capture: :all_but_first) do
+          [token] -> token
+          nil -> "--color-primary"
+        end
+      end)
+
+    {light, dark}
+  end
+
+  # `--focus-ring` is declared once per daisyui-theme block (the dark block's
+  # `prefersdark: true` is what emits the prefers-color-scheme copy, so both
+  # dark selectors carry the same declaration by construction), and
+  # `--color-focus-ring` exists ONLY as the `@theme inline` mapping of it. Every
+  # declaration is an ALIAS naming another slot, never a hex, so this returns
+  # the token NAME per theme and the value is resolved in that theme's token
+  # map. The ring mints no sixth cyan; it routes to two that already ship.
+  defp focus_ring_aliases!(css) do
+    values = focus_ring_declarations(css)
+
+    refute "" in values,
+           "expected a --focus-ring declaration in BOTH daisyui-theme blocks " <>
+             "(light, dark); read #{inspect(values)}. A theme without one gets its " <>
+             "ring colour by cascade order, which is the drift this guard exists to " <>
+             "refuse."
+
+    [light, dark] = values
+
+    assert light != dark,
+           "light and dark --focus-ring now hold the same value (#{light}). " <>
+             "The slot exists because no single cyan is both AA-legible on white and " <>
+             "strong on #171b25; if collapsing it is intended, re-derive L6 and D6 " <>
+             "first."
+
+    [light_token, dark_token] =
+      Enum.map(values, fn value ->
+        case Regex.run(~r/^var\((--color-[a-z0-9-]+)\)$/, value, capture: :all_but_first) do
+          [token] ->
+            token
+
+          nil ->
+            flunk(
+              "--focus-ring is declared as `#{value}`, not as an alias of " <>
+                "another slot. The ring routes to colours that already ship; a " <>
+                "literal here is a sixth cyan with nothing holding it to the palette."
+            )
+        end
+      end)
+
+    # Exactly one --color-focus-ring declaration in the whole file, and it is
+    # the @theme inline mapping. A second one (a bare :root alias, say — which
+    # is what this ticket's stage 3 shipped before the collapse) would be a
+    # second backing value that the rules below could paint instead of the
+    # slot, and no reader could tell which without running the cascade.
+    mappings =
+      Regex.scan(~r/^[^\S\n]*--color-focus-ring:[^\S\n]*([^;\n]+);/m, css,
+        capture: :all_but_first
+      )
+      |> List.flatten()
+      |> Enum.map(&String.trim/1)
+
+    assert mappings == ["var(--focus-ring)"],
+           "expected exactly one --color-focus-ring declaration, the @theme inline " <>
+             "mapping `var(--focus-ring)`; found #{inspect(mappings)}. Two backing " <>
+             "values for one ring is the duplication task 01a0833d and this ticket " <>
+             "were collapsed to avoid."
+
+    {light_token, dark_token}
+  end
 
   defp rule_body!(css, selector) do
     re = ~r/^[^\S\n]*#{Regex.escape(selector)}\s*\{([^}]*)\}/m
@@ -716,26 +1604,41 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
     {W.parse!(light), W.parse!(dark_a)}
   end
 
-  # The computed `.chip-soft` fill for the primary tone: the tint mixed into the
-  # theme's base-100 at the percentage the rule declares. The percentage is read
-  # from the stylesheet rather than hardcoded, so re-tuning 12% or 16% moves L5
-  # and D5 instead of quietly invalidating them.
-  defp chip_fill!(css, tint, base, selector) do
+  # The computed `.chip-soft` fill for one tone in one theme. Two reads, both out
+  # of the stylesheet and neither chosen here.
+  #
+  # The formula lives in exactly one place since ticket #{@followup_ticket} stage
+  # 2 replaced the literal percentage with `--chip-tint-pct`; a fork of it flunks
+  # rather than letting L5 or D5 measure a colour that is not painted. The
+  # percentage comes from the rule named by `pct_selector`, which is the tone's
+  # own rule for that theme, so re-tuning it moves the ratio instead of quietly
+  # invalidating it.
+  defp chip_fill!(css, tint, base, pct_selector) do
+    body = rule_body!(css, ".chip-soft")
+
+    assert squish(body) =~
+             "background: color-mix(in oklab, var(--chip-tint) var(--chip-tint-pct), " <>
+               "var(--color-base-100))",
+           "`.chip-soft` no longer computes its background as color-mix(in oklab, " <>
+             "var(--chip-tint) var(--chip-tint-pct), var(--color-base-100)). L5 and " <>
+             "D5 measure that formula. Body:\n#{body}"
+
+    W.mix_oklab(tint, tint_pct!(css, pct_selector), base)
+  end
+
+  # The integer `--chip-tint-pct` a named rule declares.
+  defp tint_pct!(css, selector) do
     body = rule_body!(css, selector)
 
-    case Regex.run(
-           ~r/color-mix\(in oklab, var\(--chip-tint\) (\d+)%, var\(--color-base-100\)\)/,
-           squish(body),
-           capture: :all_but_first
-         ) do
+    case Regex.run(~r/--chip-tint-pct:\s*(\d+)%/, squish(body), capture: :all_but_first) do
       [pct] ->
-        W.mix_oklab(tint, String.to_integer(pct), base)
+        String.to_integer(pct)
 
       nil ->
         flunk(
-          "`#{selector}` no longer computes its background as " <>
-            "color-mix(in oklab, var(--chip-tint) N%, var(--color-base-100)). L5/D5 " <>
-            "measure that formula. Body:\n#{body}"
+          "`#{selector}` declares no integer --chip-tint-pct, so the percentage the " <>
+            "chip actually renders at cannot be resolved from the stylesheet. " <>
+            "Body:\n#{body}"
         )
     end
   end

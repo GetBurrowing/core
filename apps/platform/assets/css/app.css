@@ -304,11 +304,22 @@
    Anchored to audit 1B-A11Y-1 (no custom focus-visible rules; chat/activity/shell had 0).
    ────────────────────────────────────────────────────── */
 @layer utilities {
+  /* The coloured band reads --color-focus-ring, the @theme inline mapping of
+     the theme-split --focus-ring slot each daisyui-theme block declares (task
+     01a0833d), NOT --color-primary. The brand cyan is a
+     fill colour: at 1.7875:1 on light base-100 the ring was under the 3:1 floor
+     SC 1.4.11 sets, which is a keyboard user losing their place rather than a
+     shade being slightly off. 4.7007:1 light, 9.6304:1 dark.
+
+     The 2px spacer stays --color-base-100 on purpose: it makes the outer band's
+     neighbours the page ground on BOTH sides, so one measurement covers the
+     indicator, and it is the 2px offset that stops the ring reading as a border
+     on the control. Width and offset are unchanged by that task. */
   .focus-visible-ring:focus-visible {
     outline: none;
     box-shadow:
       0 0 0 2px var(--color-base-100),
-      0 0 0 4px var(--color-primary);
+      0 0 0 4px var(--color-focus-ring);
     border-radius: inherit;
   }
 
@@ -316,7 +327,7 @@
   .input.focus-visible-ring:focus-visible,
   .textarea.focus-visible-ring:focus-visible,
   .select.focus-visible-ring:focus-visible {
-    box-shadow: 0 0 0 2px var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-focus-ring);
   }
 }
 
@@ -827,6 +838,18 @@ html {
   overflow: hidden;
 }
 
+/* Action-cyan, not the fill-only brand cyan (task 01a0785c-bf6f-7001-824d-dd99bcb7db89
+   stage 1). --color-primary here measured 1.5913:1 against what --color-base-200
+   actually renders (#F2F2F2); --color-interactive measures 4.1847:1 light and
+   12.0222:1 dark.
+
+   The light figure is still under the 4.5:1 AA floor, by 0.32, and that shortfall
+   is recorded rather than papered over: --color-interactive was derived against
+   pure white (4.7007:1 there) and this button is the one site that sits on
+   base-200 instead. Clearing AA here needs the slot itself darkened (#077384
+   gives 4.9268:1 on this ground), which repaints every link in the app and is a
+   palette change with its own census and its own gate. Filed as a follow-up.
+   Measured in primary_contrast_sweep_test.exs clause F2. */
 .code-block-expand {
   display: block;
   width: 100%;
@@ -834,7 +857,7 @@ html {
   background: var(--color-base-200);
   border: none;
   border-radius: 0 0 0.5rem 0.5rem;
-  color: var(--color-primary);
+  color: var(--color-interactive);
   font-size: 0.8em;
   cursor: pointer;
   text-align: center;
@@ -950,6 +973,15 @@ body, .font-fabrikam {
      #06D5ED fails contrast as text on white (~1.6:1), so links/active labels
      use this AA-safe darkened cyan. Fill-cyan stays #06D5ED with black on it. */
   --color-interactive: #087f93;
+  /* The focus indicator has NO declaration here. Task 01a0785c stage 3 first
+     declared a --color-focus-ring alias in this :root and in both dark
+     selectors below; task 01a0833d landed first with the bare --focus-ring
+     slot inside each daisyui-theme block plus the @theme inline mapping, and
+     the two were collapsed onto that single mechanism when 01a0785c merged, so
+     exactly one backing value per theme exists. Ratios and the rejected
+     single-hue alternative (3.6620:1 on the dark panel) are recorded in
+     primary_contrast_sweep_test.exs, which measures the .focus-visible-ring
+     class, and focus_ring_slot_test.exs, which measures the slot itself. */
   --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 55%, transparent),
     0 2px 8px color-mix(in srgb, var(--color-primary) 30%, transparent),
     0 0 16px color-mix(in srgb, var(--color-primary) 18%, transparent);
@@ -4082,8 +4114,33 @@ body, .font-fabrikam {
   transform: scale(0.97);
 }
 
+/* Action-cyan, not the fill-only brand cyan (task 01a0785c-bf6f-7001-824d-dd99bcb7db89
+   stage 1). This tab has TWO light grounds and they pull in opposite directions:
+
+     [data-theme="light"] .bottom-nav   #F9F9F9   primary 1.6913  ->  interactive 4.4478
+     unqualified .bottom-nav on light   #0C0C0C   primary 10.9561 ->  interactive 4.1661
+     dark theme .bottom-nav             #030303   primary 11.5593 ->  interactive 12.0046
+
+   Neither light figure reaches 4.5:1 and NO colour can reach both: clearing AA on
+   the near-white nav needs a relative luminance of at most 0.170779, clearing it
+   on the near-black nav needs at least 0.191270. The second ground exists only
+   because `.bottom-nav` declares its light background under [data-theme="light"]
+   with no `prefers-color-scheme: light` twin, so a viewer who picks the "system"
+   theme gets a near-black nav under light tokens. That missing variant is the
+   real defect and is filed as a follow-up; it is not this stage's to fix.
+
+   Optimised for the [data-theme="light"] nav, which is what an explicit-light
+   viewer paints. The worst case across all three grounds improves from 1.6913:1
+   to 4.1661:1. Measured in primary_contrast_sweep_test.exs clauses F3 and F4.
+
+   The ::before bar moves with the label, deliberately. It is a non-text indicator
+   owing 3:1 under SC 1.4.11, and as --color-primary it measured 1.6913:1 on the
+   near-white nav, i.e. an active cue nobody can see on that ground. As
+   --color-interactive it clears 3:1 on all three grounds (4.4478 / 4.1661 /
+   12.0046), and the two active cues stay one hue. Weight and size of the label
+   are unchanged; the large-text allowance is not a contrast fix. */
 .bottom-nav-tab--active {
-  color: var(--color-primary);
+  color: var(--color-interactive);
 }
 
 .bottom-nav-tab--active::before {
@@ -4094,7 +4151,7 @@ body, .font-fabrikam {
   transform: translateX(-50%);
   width: 28px;
   height: 3px;
-  background: var(--color-primary);
+  background: var(--color-interactive);
   border-radius: 0 0 3px 3px;
 }
 
@@ -5764,8 +5821,14 @@ body, .font-fabrikam {
    Resolved wikilinks render as <a class="wikilink">; targets with no
    matching page or alias render as <span class="wikilink-dangling">. */
 @layer components {
+  /* Action-cyan, not the fill-only brand cyan (task 01a0785c-bf6f-7001-824d-dd99bcb7db89
+     stage 1). --color-primary as link text on --color-base-100 measured 1.7875:1,
+     far under the 4.5:1 AA floor; --color-interactive measures 4.7007:1 light and
+     10.0015:1 dark. The slot is redefined per theme, so this one edit covers both.
+     Weight and size are deliberately unchanged: WCAG's 3:1 large-text allowance
+     would have moved the threshold instead of fixing the colour. */
   .wikilink {
-    color: var(--color-primary);
+    color: var(--color-interactive);
     text-decoration: underline;
   }
 
@@ -5829,16 +5892,40 @@ body, .font-fabrikam {
     box-shadow: var(--shadow-modal);
   }
 
-  /* Inputs: cyan focus border (ring comes from .focus-visible-ring). */
+  /* Inputs: cyan focus border (ring comes from .focus-visible-ring).
+
+     THIS DECLARATION DOES NOT RENDER, and it did not render before task
+     01a0785c-bf6f-7001-824d-dd99bcb7db89 stage 3 repointed it either. Read off
+     a keyboard-focused .input in headless Chrome, the border paints
+     --color-base-content: #000000 in light, #EEEEEE in dark. This rule sits in
+     the `components` layer; daisyUI's own `.input` rules sit in `utilities`,
+     which is ordered after it, and they set `--input-color:
+     var(--color-base-content)` on `&:focus, &:focus-within` and then
+     `border-color: var(--input-color)`. Layer order beats selector
+     specificity, so `utilities` wins whatever this rule says.
+
+     Repointed at the ring's slot anyway, because a dead declaration naming the
+     WRONG token is how the next reader concludes the focused input border is
+     cyan. It is not, and the comment above claiming a "cyan focus border" is
+     what has to change with it. Making it live is an app-wide repaint of every
+     focused field and is filed as a follow-up, not smuggled in here.
+
+     What that border actually is matters to the no-offset ring drawn just
+     outside it: the ring's inner neighbour is #000000 in light (4.4674:1
+     against the #087f93 band) and #EEEEEE in dark (1.5447:1 against the
+     #06D5ED band, unchanged by this task, which measured the same 1.5447
+     before it). Both variants are identified against the page ground, which is
+     what L6/L7 and D6/D7 assert in primary_contrast_sweep_test.exs. */
   .input:focus,
   .input:focus-within,
   .textarea:focus,
   .select:focus {
-    border-color: var(--color-primary);
+    border-color: var(--color-focus-ring);
   }
 
   /* Soft-tint chip — the one formula, any hue (approved palette).
-     bg: tint @ 12% (dark 16%) · border: tint @ 25% · label: AA-tuned.
+     bg: tint @ var(--chip-tint-pct), 12% light / 16% dark, primary 6% light ·
+     border: tint @ 25% · label: AA-tuned.
 
      VERDICT: the border is LOAD-BEARING. Measured task 01a01b22 (the formula
      itself is older than that task and older than 01a01a4a, which only
@@ -5864,28 +5951,48 @@ body, .font-fabrikam {
        | success | 1.1335                  | 1.2176                 |
        | warning | 1.0891                  | 1.2973                 |
        | error   | 1.1550                  | 1.1948                 |
-       | primary | 1.0666                  | 1.2867                 |
+       | primary | 1.0326                  | 1.3414                 |
 
      Worst pair is `primary` at 1.0666:1 light and `error` at 1.1948:1 dark —
      NOT `warning`, which is the second-worst light tone and the BEST dark one,
-     so measuring on warning would have mis-ranked the component. No tone in
-     either theme reaches the 3:1 non-text floor on fill alone, so the fill does
-     not identify the chip and every boundary the chip has is the border. That
+     so measuring on warning would have mis-ranked the component. Both primary
+     cells have since moved and the movements are recorded rather than quietly
+     swapped in: light primary read 1.0666 while its tint was the shared 12%
+     and reads 1.0326 at the 6% shipped under LABEL OBLIGATION below, and dark
+     primary read 1.2867 while the dark --chip-tint was a literal of its own,
+     reading 1.3414 since task 01a07435 pointed it at --color-primary. The
+     ranking is unchanged: primary is the worst light tone at either figure.
+
+     Not reproduced, filed rather than rewritten: the `success` cells recompute
+     as 1.1297 light and 1.2239 dark under this file's float-through
+     convention, against the 1.1335 / 1.2176 recorded above. No cause was
+     identified and this task did not touch that tone, so the recorded figures
+     stand and the disagreement is the follow-up.
+
+     No tone in either theme reaches the 3:1 non-text floor on fill alone, so
+     the fill does not identify the chip and every boundary the chip has is the
+     border. That
      is what "load-bearing" means here, and it is why the border MUST NOT be
      removed or dropped below its current strength as decoration.
 
      The border is load-bearing and still short: composited over its own fill it
-     reads 1.2461–1.6241 vs the card surface light, 1.5816–2.0770 dark. Any
-     change lands on all six tones at once — they share this one formula —
-     never on a single tone.
+     reads 1.2176–1.6241 vs the card surface light, 1.5816–2.3040 dark. The
+     light floor is primary at its 6% tint (1.2461 at 12%) and the dark ceiling
+     is primary since task 01a07435 repointed the dark tint (2.0770 before it).
+     The border is ONE declaration at 25% of the tint, shared by all six tones
+     with no per-tone knob, so any change to it lands on all six at once.
 
      DISPOSITION (settled 2026-08-31, task 01a01b22 stages 2-4): NOT fixed.
      Neither arm of the fork was taken; the sub-3:1 border is deliberate and
      documented, on the `--color-pipeline-human` precedent near the top of this
      file. It holds for all six tones — neutral, info, success, warning, error,
      primary — because they share this formula; a per-tone override is wrong by
-     construction. The shortfall is pre-existing: task 01a01a4a stage 4 only
-     measured it, and the formula predates that task.
+     construction. Read that as scoped to the BORDER, which is what this whole
+     paragraph is about: its 25% alpha is one declaration and there is no
+     per-tone knob for it. The tint PERCENTAGE did become a per-tone knob, for
+     a different duty, under LABEL OBLIGATION below. The shortfall is
+     pre-existing: task 01a01a4a stage 4 only measured it, and the formula
+     predates that task.
 
      Why no obligation attaches: `chip/1` (core_components.ex) emits a bare
      non-interactive <span> at every call site — no phx-click, href, role or
@@ -5917,11 +6024,59 @@ body, .font-fabrikam {
 
      Mis-picked pair, reported honestly: the 1.12:1 / 2.12:1 figures first
      attached to this border were taken against `--color-base-300`, which the
-     chip never abuts, and are superseded by the table above. */
+     chip never abuts, and are superseded by the table above.
+
+     LABEL OBLIGATION (task 01a0785c-bf6f-7001-824d-dd99bcb7db89 stage 2). A
+     different duty on the same component. Everything above is the BORDER and
+     its 3:1 non-text floor. The chip LABEL owes 4.5:1 as text, and exactly one
+     tone missed it: `.chip-primary`'s label on its own fill measured 4.4073:1
+     light. The design canvas attached to that task decided the direction,
+     lower the ground and do not darken the label, on the reasoning that a
+     chip-only darker label invents a second action colour with no rule saying
+     when each applies. Decoration yields to information.
+
+     What shipped: a `--chip-tint-pct` knob read by the ONE background
+     declaration, with `.chip-primary` setting 6% for the light theme. The
+     percentage is the per-tone thing now; the formula is not. There is exactly
+     one `background: color-mix(...)` in this component where the light rule and
+     the two dark rules previously wrote the same expression three times, so
+     "they share this one formula" is more literally true after this change than
+     before it.
+
+     Why 6% and not the 10% the canvas offered as a first try: measured, twice,
+     in two implementations that agree. Light label on its own fill reads 4.4073
+     at 12%, 4.4553 at 10%, 4.4795 at 9%, 4.5037 at 8% and 4.5524 at 6% under
+     this file's float-through convention; Chrome, painting the color-mix and
+     reading the pixel back, gives 4.3930 / 4.4517 / 4.4904 / 4.5062 / 4.5583.
+     10% does not clear. 8% is the first integer that does and clears by 0.004,
+     which is narrower than the gap between the two quantization conventions
+     documented at the top of Platform.Design.WcagContrast, so an AA claim at 8%
+     would rest on which convention you picked. 6% clears by 0.05 under both.
+     Dark was never in question at 7.4558 and keeps the shared 16%, declared
+     explicitly on the dark `.chip-primary` rules rather than left to cascade
+     order.
+
+     The cost, stated because it is a real trade and not a free win: lowering
+     the tint moves the primary fill further from the card surface, 1.0666 to
+     1.0326, and its border composited over that fill from 1.2461 to 1.2176.
+     Both were already far under 3:1 and neither owes 3:1, for the reason the
+     "Why no obligation attaches" paragraph above gives. A text miss that IS an
+     obligation was closed at the price of a boundary that is weaker and owes
+     nothing.
+
+     - MUST NOT reach 4.5:1 by bolding or enlarging the label. WCAG's 3:1
+       large-text allowance is a real clause and using it here would ship the
+       failing pairing unchanged while moving the threshold. Weight is not a
+       contrast fix. The font-size and font-weight pins in
+       primary_contrast_sweep_test.exs red if anyone tries. */
   .chip-soft {
     /* Fallbacks: an unrecognized tone renders neutral, never transparent. */
     --chip-tint: oklch(55% 0.01 0);
     --chip-label: var(--color-base-content);
+    /* Tint strength. The ONE place a percentage is written for this
+       component in the light theme; the dark block below re-points it and
+       .chip-primary lowers it for the reason recorded above. */
+    --chip-tint-pct: 12%;
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
@@ -5930,7 +6085,7 @@ body, .font-fabrikam {
     font-size: 0.75rem;
     font-weight: 500;
     line-height: 1;
-    background: color-mix(in oklab, var(--chip-tint) 12%, var(--color-base-100));
+    background: color-mix(in oklab, var(--chip-tint) var(--chip-tint-pct), var(--color-base-100));
     border: 1px solid color-mix(in oklab, var(--chip-tint) 25%, transparent);
     color: var(--chip-label);
   }
@@ -5940,7 +6095,10 @@ body, .font-fabrikam {
   .chip-success { --chip-tint: oklch(62% 0.17 162); --chip-label: oklch(51% 0.15 162); }
   .chip-warning { --chip-tint: oklch(76% 0.17 70); --chip-label: oklch(53% 0.14 70); }
   .chip-error   { --chip-tint: oklch(63% 0.22 25); --chip-label: oklch(52% 0.19 25); }
-  .chip-primary { --chip-tint: var(--color-primary); --chip-label: var(--color-interactive); }
+  /* primary is the one tone whose label owes 4.5:1 and missed it. Its
+     --chip-tint-pct is 6%, not the shared 12%: see the LABEL OBLIGATION note
+     in the block comment above. Dark is untouched at 16% and always cleared. */
+  .chip-primary { --chip-tint: var(--color-primary); --chip-label: var(--color-interactive); --chip-tint-pct: 6%; }
 
   /* Agent-owned marker: the chat .msg-agent accent edge, reusable on any
      container (agent-assigned task cards adopt it in the Tasks pilot).
@@ -5976,7 +6134,7 @@ body, .font-fabrikam {
    lift to the L≈70 values; dropdowns get a surface step-up because shadow
    alone won't separate them on dark. Dual-selector per file convention. */
 [data-theme="dark"] .chip-soft {
-  background: color-mix(in oklab, var(--chip-tint) 16%, var(--color-base-100));
+  --chip-tint-pct: 16%;
 }
 
 [data-theme="dark"] .chip-neutral { --chip-tint: oklch(65% 0.01 0); --chip-label: oklch(75% 0.01 0); }
@@ -5984,12 +6142,12 @@ body, .font-fabrikam {
 [data-theme="dark"] .chip-success { --chip-label: oklch(70% 0.15 162); }
 [data-theme="dark"] .chip-warning { --chip-label: oklch(80% 0.15 75); }
 [data-theme="dark"] .chip-error   { --chip-label: oklch(72% 0.17 25); }
-[data-theme="dark"] .chip-primary { --chip-tint: var(--color-primary); }
+[data-theme="dark"] .chip-primary { --chip-tint: var(--color-primary); --chip-tint-pct: 16%; }
 [data-theme="dark"] .dropdown-content { background: var(--color-base-300); }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .chip-soft {
-    background: color-mix(in oklab, var(--chip-tint) 16%, var(--color-base-100));
+    --chip-tint-pct: 16%;
   }
 
   :root:not([data-theme="light"]) .chip-neutral { --chip-tint: oklch(65% 0.01 0); --chip-label: oklch(75% 0.01 0); }
@@ -5997,7 +6155,7 @@ body, .font-fabrikam {
   :root:not([data-theme="light"]) .chip-success { --chip-label: oklch(70% 0.15 162); }
   :root:not([data-theme="light"]) .chip-warning { --chip-label: oklch(80% 0.15 75); }
   :root:not([data-theme="light"]) .chip-error   { --chip-label: oklch(72% 0.17 25); }
-  :root:not([data-theme="light"]) .chip-primary { --chip-tint: var(--color-primary); }
+  :root:not([data-theme="light"]) .chip-primary { --chip-tint: var(--color-primary); --chip-tint-pct: 16%; }
   :root:not([data-theme="light"]) .dropdown-content { background: var(--color-base-300); }
 }
 

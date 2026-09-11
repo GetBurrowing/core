@@ -28,7 +28,7 @@ defmodule Platform.Design.ChipSoftContrastTest do
 
   Verdict: **LOAD-BEARING**. The chip fill against the card surface it abuts
   (`--color-base-100` on both sides of the pair) reaches at most 1.1741:1 light
-  and 1.2973:1 dark across the six tones, so no tone clears the 3:1 non-text
+  and 1.3414:1 dark across the six tones, so no tone clears the 3:1 non-text
   floor on fill alone and the border is the chip's only boundary.
 
   Two corrections carried by the comment and asserted here:
@@ -55,6 +55,25 @@ defmodule Platform.Design.ChipSoftContrastTest do
   WCAG 1.4.11 does not apply. The tests below pin each of those as a line-start
   token on the raw comment so the record cannot be flipped, narrowed to one
   tone, or deleted without this file going red.
+
+  ## The label obligation, and why a per-tone knob is not a per-tone formula
+
+  Task `01a0785c-bf6f-7001-824d-dd99bcb7db89` stage 2 lowered `.chip-primary`'s
+  tint from the shared 12% to 6% in the light theme, because the chip LABEL owes
+  4.5:1 as text and measured 4.4073:1 on its own fill. That is a different duty
+  from everything above, which is about the BORDER and its 3:1 non-text floor.
+
+  The mechanism matters more than the number, and it is what the tests below
+  pin. The tint percentage became a custom property, `--chip-tint-pct`, read by
+  the ONE `background: color-mix(...)` declaration the component has. Before the
+  change that expression was written three times, once in `.chip-soft` and once
+  in each of the two dark selectors; after it there is exactly one, and this
+  file asserts that count. So "they share this one formula" is more literally
+  true than it was, while the percentage inside the formula is per-tone.
+
+  The disposition paragraph's "a per-tone override is wrong by construction" is
+  therefore kept and scoped in the comment rather than deleted: it is a claim
+  about the border's 25% alpha, which is still one declaration with no knob.
   """
   use ExUnit.Case, async: true
 
@@ -76,9 +95,16 @@ defmodule Platform.Design.ChipSoftContrastTest do
                "in this file describes a formula that no longer exists."
 
       assert squish(body) =~
-               "background: color-mix(in oklab, var(--chip-tint) 12%, var(--color-base-100))",
-             "the 12% light fill is gone from .chip-soft — re-measure before " <>
+               "background: color-mix(in oklab, var(--chip-tint) var(--chip-tint-pct), " <>
+                 "var(--color-base-100))",
+             "the .chip-soft fill is no longer computed from --chip-tint mixed " <>
+               "into --color-base-100 at var(--chip-tint-pct) — re-measure before " <>
                "editing the verdict comment. Body was:\n#{body}"
+
+      assert squish(body) =~ "--chip-tint-pct: 12%",
+             ".chip-soft no longer declares the shared 12% light tint strength. " <>
+               "Five of the six tones render at that percentage and the pinned " <>
+               "fill table above was measured on it. Body was:\n#{body}"
 
       assert squish(body) =~
                "border: 1px solid color-mix(in oklab, var(--chip-tint) 25%, transparent)",
@@ -192,6 +218,32 @@ defmodule Platform.Design.ChipSoftContrastTest do
                "`info` fill computed with the LIGHT --color-info token. Use the " <>
                "dark theme's --color-info (1.2715:1). Comment reads:\n#{comment}"
     end
+
+    # Both primary cells moved after the table was first written, for two
+    # unrelated reasons, and the comment must carry the shipped figure as well
+    # as the historic one. Pinning only the historic figure would let the table
+    # describe a chip that has not rendered since task 01a07435.
+    test "records the SHIPPED primary figures beside the historic ones", %{comment: comment} do
+      flat = squish(comment)
+
+      assert flat =~ "1.0326",
+             "the comment does not carry 1.0326, the light `primary` fill against " <>
+               "--color-base-100 at the 6% tint that ships. 1.0666 is the figure " <>
+               "from before task 01a0785c-bf6f-7001-824d-dd99bcb7db89 lowered it " <>
+               "and is kept as history, not as a description of the code. " <>
+               "Comment reads:\n#{comment}"
+
+      assert flat =~ "1.3414",
+             "the comment does not carry 1.3414, the dark `primary` fill since " <>
+               "task 01a07435 pointed the dark --chip-tint at --color-primary. " <>
+               "The superseded 1.2867 was measured against a literal that no " <>
+               "longer exists. Comment reads:\n#{comment}"
+
+      assert flat =~ "1.0666",
+             "the historic light `primary` figure was dropped when the shipped " <>
+               "one was written in. Both belong: 1.0666 cannot be recomputed " <>
+               "from app.css any more. Comment reads:\n#{comment}"
+    end
   end
 
   # Stage 4 of task 01a01b22. The verdict was settled as "document, do not
@@ -294,6 +346,118 @@ defmodule Platform.Design.ChipSoftContrastTest do
     end
   end
 
+  # Task 01a0785c-bf6f-7001-824d-dd99bcb7db89 stage 2. The border record above
+  # is untouched by this block; the subject here is the LABEL's 4.5:1 text duty
+  # and the mechanism that closed it for one tone.
+  #
+  # What is worth guarding is NOT the number 6% on its own — the ratio that
+  # number produces is measured from the stylesheet in
+  # primary_contrast_sweep_test.exs, and a percentage asserted here would pass
+  # whether or not it clears anything. What is guarded here is the structural
+  # claim the comment makes: that lowering one tone did not fork the shared
+  # formula. That claim is falsifiable by counting declarations.
+  describe "the label obligation and the --chip-tint-pct knob" do
+    test "the component computes its fill in exactly ONE place", %{css: css} do
+      matches =
+        Regex.scan(~r/background: color-mix\(in oklab, var\(--chip-tint\)/, squish(css))
+
+      assert length(matches) == 1,
+             "expected exactly one `background: color-mix(in oklab, var(--chip-tint) " <>
+               "...)` declaration in app.css; found #{length(matches)}. The verdict " <>
+               "comment claims the six tones share ONE formula and that the " <>
+               "--chip-tint-pct knob is what varies. A second copy of the expression " <>
+               "makes that sentence false and is the fork the disposition rules out."
+    end
+
+    test ".chip-primary lowers the percentage and nothing else", %{css: css} do
+      body = rule_body!(css, ".chip-primary")
+      flat = squish(body)
+
+      assert flat =~ "--chip-tint-pct: 6%",
+             "the base `.chip-primary` rule no longer sets --chip-tint-pct: 6%. Its " <>
+               "label measured 4.4073:1 on the shared 12% fill, under the 4.5:1 AA " <>
+               "text floor. Body:\n#{body}"
+
+      refute flat =~ "background:",
+             "`.chip-primary` now declares its own background. That is the per-tone " <>
+               "override the disposition comment rules out, and it puts a second " <>
+               "copy of the fill expression in the file. Set the knob instead. " <>
+               "Body:\n#{body}"
+
+      assert flat =~ "--chip-label: var(--color-interactive)",
+             "`.chip-primary` no longer takes its label from --color-interactive. " <>
+               "The design canvas for task 01a0785c-bf6f-7001-824d-dd99bcb7db89 " <>
+               "decided to move the chip's GROUND and leave the label alone, because " <>
+               "a chip-only darker label would be a second action colour. Darkening " <>
+               "it here is the answer that was explicitly rejected. Body:\n#{body}"
+    end
+
+    test "dark keeps the shared percentage, stated rather than left to cascade order", %{
+      css: css
+    } do
+      # Dark never missed (7.4558:1) so it keeps 16%. Relying on the dark
+      # .chip-soft rule out-specifying .chip-primary would make that a fact
+      # about selector weight that no reader can see; it is declared instead.
+      # This clause is the drift guard on that duplication: change the dark
+      # default without changing primary's copy and it reds.
+      for {soft, primary} <- [
+            {~s([data-theme="dark"] .chip-soft), ~s([data-theme="dark"] .chip-primary)},
+            {~s|:root:not([data-theme="light"]) .chip-soft|,
+             ~s|:root:not([data-theme="light"]) .chip-primary|}
+          ] do
+        shared = tint_pct!(css, soft)
+        tone = tint_pct!(css, primary)
+
+        assert shared == tone,
+               "`#{primary}` sets --chip-tint-pct: #{tone} while `#{soft}` sets " <>
+                 "#{shared}. Dark clears AA on the shared percentage and this task " <>
+                 "deliberately left it alone; the two must move together or the dark " <>
+                 "primary chip renders at a percentage nothing measured."
+      end
+    end
+
+    test "the comment records the obligation, the rejected direction and the ladder", %{
+      comment: comment
+    } do
+      flat = squish(comment)
+
+      assert Regex.match?(~r/^\s*LABEL OBLIGATION \(task [0-9a-f-]+ stage 2\)\./m, comment),
+             "no line-start `LABEL OBLIGATION (task ... stage 2).` record in the " <>
+               "comment. The border verdict and the label duty are different " <>
+               "obligations on one component and a reader must find both stated. " <>
+               "Comment reads:\n#{comment}"
+
+      assert flat =~ "lower the ground and do not darken the label",
+             "the comment no longer records WHICH direction was taken. Darkening " <>
+               "the chip label is the smaller diff and was rejected on the record; " <>
+               "without the reason the next person re-opens it. Comment reads:\n#{comment}"
+
+      assert flat =~ "4.4073",
+             "the comment no longer carries the pre-change label ratio (4.4073:1), " <>
+               "which cannot be recomputed from app.css once the tint has moved."
+
+      for figure <- ["4.4553", "4.5037", "4.5524"] do
+        assert flat =~ figure,
+               "the comment no longer carries #{figure}, one rung of the measured " <>
+                 "ladder that decided the percentage. Without the ladder the 6% " <>
+                 "reads as a guess, and the canvas's guess of 10% did not clear."
+      end
+    end
+
+    test "the comment forbids reaching AA by bolding or enlarging the label", %{
+      comment: comment
+    } do
+      assert Regex.match?(
+               ~r/^\s*- MUST NOT reach 4\.5:1 by bolding or enlarging the label\./m,
+               comment
+             ),
+             "no line-start `- MUST NOT reach 4.5:1 by bolding or enlarging the " <>
+               "label.` bullet. WCAG's large-text allowance would let a future " <>
+               "editor green the sweep by moving the threshold instead of the " <>
+               "colour. Comment reads:\n#{comment}"
+    end
+  end
+
   # ── helpers ───────────────────────────────────────────────────────────────
 
   # Collapse every whitespace run to one space. A formatter rewrap moves line
@@ -326,6 +490,33 @@ defmodule Platform.Design.ChipSoftContrastTest do
         preamble
         |> binary_part(start, byte_size(preamble) - start)
         |> String.trim()
+    end
+  end
+
+  # The `--chip-tint-pct` a named rule declares. Parsed rather than assumed:
+  # a clause that chose the percentage itself would keep passing after the rule
+  # stopped declaring one.
+  defp tint_pct!(css, selector) do
+    body = rule_body!(css, selector)
+
+    case Regex.run(~r/--chip-tint-pct:\s*([^;\s]+)/, squish(body), capture: :all_but_first) do
+      [pct] ->
+        pct
+
+      nil ->
+        flunk("`#{selector}` declares no --chip-tint-pct. Body:\n#{body}")
+    end
+  end
+
+  # A rule chosen by a selector that starts its own line, so a longer selector
+  # ending in the same text (the theme-prefixed overrides) is not mistaken for
+  # the base rule.
+  defp rule_body!(css, selector) do
+    re = ~r/^[^\S\n]*#{Regex.escape(selector)}\s*\{([^}]*)\}/m
+
+    case Regex.run(re, css, capture: :all_but_first) do
+      [body] -> body
+      nil -> flunk("no `#{selector} { ... }` rule starting a line in #{@css_path}.")
     end
   end
 

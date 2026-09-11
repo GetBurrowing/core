@@ -18,7 +18,7 @@ Every interactive element (`<button>`, `<a>`, `<input>`, `<textarea>`, `<select>
 
 | Property         | Value                                                                                |
 |------------------|--------------------------------------------------------------------------------------|
-| Color            | `var(--color-focus-ring)` — theme-split, NOT one cyan (see 1.2.1)                    |
+| Color            | `var(--color-focus-ring)` — theme-split alias, `#087f93` light / `#06D5ED` dark (see 1.2.1) |
 | Width            | 2px                                                                                   |
 | Offset           | 2px outside the element (so the ring doesn't overlap the element's own border)        |
 | Style            | Solid                                                                                  |
@@ -53,40 +53,52 @@ Every ratio in this section was computed from `app.css`'s own declarations by
 `test/platform/design/focus_ring_slot_test.exs`. None is transcribed from
 another document.
 
-### 1.2.2 Known live miss: the `.focus-visible-ring` class
+### 1.2.2 The `.focus-visible-ring` class reads the same slot
 
 `app.css` also carries a `.focus-visible-ring` **class** (and an
-`.input`/`.textarea`/`.select` no-offset variant). As of this writing those
-still draw their band from `var(--color-primary)`, so they paint **1.7875:1** on
-light `base-100` and **do not** meet SC 1.4.11. That is a real, shipped miss,
-not a documentation lag, and it is owned by task
-`01a0785c-bf6f-7001-824d-dd99bcb7db89`, whose fix is written but **not merged**.
-`test/platform/design/primary_contrast_sweep_test.exs` deliberately pins the
-current behaviour, so this section describes what the stylesheet does today
-rather than what that branch will do. Do not copy the class for new work — use
-the utilities in 1.3.
+`.input`/`.textarea`/`.select` no-offset variant). Both draw their coloured
+band from `var(--color-focus-ring)`, the `@theme inline` mapping of the same
+`--focus-ring` the utilities read, so there is exactly ONE backing value per
+theme and the class and the utilities cannot drift apart. Task
+`01a0785c-bf6f-7001-824d-dd99bcb7db89` stage 3 moved the class off
+`var(--color-primary)` (1.7875:1 on light `base-100`) and originally declared
+its own `--color-focus-ring` in a bare `:root`; task `01a0833d` landed first
+with the `--focus-ring` slot, and the two were collapsed onto it when
+`01a0785c` merged. `test/platform/design/primary_contrast_sweep_test.exs`
+clauses L6/L7/L8 and D6/D7/D8 measure the class: 4.7007:1 light and 9.6304:1
+dark against the page ground for both variants.
 
 ### 1.3 Tailwind utility shorthand
 
-Use this exact set on every interactive element (Phase 4 components apply globally):
+### 1.3 How to apply it
+
+Use the `focus-visible-ring` utility class (`app.css:284`):
 
 ```
-focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2
+class="focus-visible-ring"
 ```
 
-`outline-none` removes the browser default (which is inconsistent across browsers), and the `ring-*` utilities provide the consistent replacement.
+It sets `outline: none` (the browser default is inconsistent across browsers) and draws the 2px ring at a 2px offset from `var(--color-focus-ring)`, inheriting the element's `border-radius`.
+
+**Never `ring-primary` for focus.** The set this section used to prescribe
+(`focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2`)
+paints `--color-primary`, which is the value that failed; the 37 call sites
+that carried it were converted to `ring-focus-ring` by task `01a0833d`, and
+`test/platform/design/focus_ring_census_test.exs` refuses any new one.
 
 **`ring-focus-ring`, with no alpha modifier and no substitute.** The utility exists only because `--color-focus-ring` is registered in the `@theme inline` block of `app.css`; the vendored daisyUI theme plugin registers nothing with Tailwind on its own. Hand-rolling a `box-shadow` instead looks correct in a screenshot while leaving the utility unminted, so a later reader cannot tell the ring from a styling opinion. See 1.2.1 for the measured ratios.
 
 ### 1.4 The exception
 
-Inputs use the ring AT the element edge (not offset), because input borders are themselves visually offset from surrounding content. Apply:
+Inputs use the ring AT the element edge (not offset), because input borders are themselves visually offset from surrounding content. The same `focus-visible-ring` class covers it: `app.css:293-297` drops the offset for `.input`, `.textarea` and `.select`, and the colour is the same slot.
 
 ```
 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-0
 ```
 
 (or equivalently `focus-visible:ring-offset-0` to override the default).
+
+Its inner neighbour is the control's own border, which a focused input paints `--color-base-content` (`#000000` light, `#EEEEEE` dark) — daisyUI's `utilities`-layer rules win over app.css's `.input:focus` declaration, which does not render. Light measures 4.4674:1 against that border and clears; dark measures 1.5447:1 and is recorded as clause D8 rather than fixed. A colour that clears 3:1 against both the `#EEEEEE` edge and the `#171b25` page ground DOES exist (any relative luminance in [0.132988, 0.252458], e.g. `#797979` at 3.7520:1 and 3.9544:1), so the miss is closable; it was refused on quality, because such a mid-grey ring is the "legal and weak" dark-on-dark indicator the design canvas rejected and drops identification against the page ground from 9.6304:1 to 3.9544:1. A geometric fix (giving the dark no-offset variant a spacer) is the uncosted alternative.
 
 ### 1.5 Migration
 
