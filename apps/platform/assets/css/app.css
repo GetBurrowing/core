@@ -4537,12 +4537,181 @@ body, .font-fabrikam {
     transform: translateY(0);
   }
 
+  /* FE-17 stage 5. The hold-to-talk target. A long press on a phone
+     otherwise raises the OS text-selection / callout menu instead of
+     holding, and the browser claims the touch for scrolling before the
+     hook's pointer capture can. One named rule, greppable, applied by
+     class on the button — not three inline styles scattered per site.
+
+     `!important` is measured, not habit: the button is a daisyUI `.btn`,
+     and daisyUI 5 emits `.btn { touch-action: manipulation }` in the
+     UTILITIES layer, which beats anything in @layer components whatever
+     its specificity. On the dev BEAM the computed value stayed
+     `manipulation` without this. Important declarations invert layer
+     order, and no other touch-action declaration is important. */
+  .meeting-hold-target {
+    touch-action: none !important;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
   .sheet-handle {
     width: 36px;
     height: 4px;
     background: var(--color-base-300);
     border-radius: 999px;
     margin: 0.5rem auto 0;
+  }
+
+  /* Handle-as-countdown (FE-17). On a phone the 30s candidate window is only
+     visible on the SHUT sheet, so the handle carries the deadline instead of
+     just affording a drag. Layout only here — the plain `.sheet-handle` rule
+     above is unchanged so the twelve existing call sites keep their bar.
+     The `@media (min-width: 768px)` rule that hides `.sheet-bottom
+     .sheet-handle` is the width gate for this whole feature; nothing here
+     may weaken it. */
+  .sheet-handle--status {
+    /* Full-bleed, not the 36px centred bar: `.sheet-handle`'s auto margins
+       would otherwise shrink this row to its content and float it in the
+       middle of the panel's top edge (measured at 390px). */
+    width: 100%;
+    margin: 0;
+    height: auto;
+    background: none;
+    border-radius: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem 0;
+    /* `border-edge` the Tailwind utility resolves to `var(--edge)` — there is
+       no `--border-edge` custom property anywhere in this file, and naming one
+       here would silently fall back to currentColor. */
+    border-top: 1px solid var(--edge);
+    background-color: var(--color-base-200);
+  }
+
+  .sheet-handle__track {
+    position: relative;
+    width: 36px;
+    height: 4px;
+    flex: 1 1 auto;
+    max-width: 8rem;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--color-base-content) 30%, transparent);
+    overflow: hidden;
+  }
+
+  .sheet-handle__fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--color-info);
+    /* Width ONLY. The bar must never pulse: a pulsing deadline reads as an
+       alarm and this one is routine until the warning threshold. */
+    transition: width 1s linear;
+  }
+
+  /* Amber is reserved for the final threshold window. Tinting the whole
+     thirty seconds would flatten a distinction that is load-bearing here. */
+  .sheet-handle__track[data-threshold="warning"] .sheet-handle__fill {
+    background: var(--color-warning);
+  }
+
+  .sheet-handle__numeral {
+    font-family: var(--font-mono, "JetBrains Mono", monospace);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--color-base-content);
+  }
+
+  /* FE-17 stage 3. The handle's content is ONE button (tap opens the
+     cards), laid out as label / track / numeral. The threshold classes are
+     the CARD's — `candidate_clock.js` toggles `candidate-drain--warning`
+     and `candidate-count--warning` on whatever node it paints, so the
+     handle keys on the same two names rather than a third spelling that
+     the hook would never set. */
+  .sheet-handle__countdown {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-height: 2.25rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .sheet-handle__label {
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+  }
+
+  .sheet-handle__fill.candidate-drain--warning {
+    background: var(--color-warning);
+  }
+
+  .sheet-handle__numeral.candidate-count--warning {
+    color: var(--color-warning);
+  }
+
+  /* THE PEEK (FE-17 stage 3). `.sheet` is `visibility: hidden` when shut,
+     which is right for every other bottom sheet and wrong for one whose
+     shut handle IS the countdown. `sheet-peek` — set by the caller only
+     while a deadline is live — keeps the panel visible and translated so
+     exactly the handle row shows above the bottom edge; the backdrop is
+     gone and nothing but that row takes pointer events, so the call
+     controls under it stay tappable.
+
+     Gated to the same width the handle itself is: above 768px the panel is
+     a centred card with no handle, and a peeking card would be a strip of
+     nothing. The offset clears the iOS home indicator AND the shell's
+     bottom nav; `--bottom-nav-height` is 0px wherever the nav is absent
+     (the guest surface, and every viewport at `lg`), so one rule serves
+     both surfaces. */
+  @media (max-width: 767.98px) {
+    .sheet.sheet-peek {
+      visibility: visible;
+    }
+    .sheet.sheet-peek:not(.sheet-open) {
+      pointer-events: none;
+    }
+    .sheet.sheet-peek:not(.sheet-open) .sheet-backdrop {
+      display: none;
+    }
+    .sheet.sheet-peek:not(.sheet-open) .sheet-panel {
+      pointer-events: auto;
+      bottom: calc(env(safe-area-inset-bottom) + var(--bottom-nav-height, 0px));
+      /* 0.5rem handle padding + 2.25rem button = the handle row. */
+      transform: translateY(calc(100% - 2.75rem));
+      /* ONLY the handle row is on screen while peeking. The panel's own
+         ground and shadow go, and the header/body are hidden, because the
+         panel sits at z-100 above the shell's bottom nav: measured at
+         390x844, a peeking panel with its ground painted the sheet HEADER
+         through the 56px band the nav occupies, i.e. a second title bar
+         under the handle. The handle row carries its own `base-200`
+         ground and top rule, so nothing visible is lost. */
+      background: transparent;
+      box-shadow: none;
+    }
+    .sheet.sheet-peek:not(.sheet-open) .sheet-header,
+    .sheet.sheet-peek:not(.sheet-open) .sheet-body,
+    .sheet.sheet-peek:not(.sheet-open) .sheet-actions {
+      visibility: hidden;
+    }
+    .sheet.sheet-peek:not(.sheet-open) .sheet-handle--status {
+      border-radius: var(--radius-box) var(--radius-box) 0 0;
+    }
   }
 
   .sheet-header {
@@ -4610,6 +4779,13 @@ body, .font-fabrikam {
   .sheet-panel,
   .sheet-backdrop {
     transition: none !important;
+  }
+
+  /* The countdown fill is NOT decoration — here the motion IS the
+     information, so it is not removed under reduced-motion. It steps once
+     per second instead of sweeping continuously. */
+  .sheet-handle__fill {
+    transition: width 1s steps(1, end) !important;
   }
 }
 

@@ -1,6 +1,6 @@
 import AppBadge from "./app_badge"
 import ButtonLoading from "./button_loading"
-import CandidateClock from "./candidate_clock"
+import CandidateClock, { SheetHandleClock } from "./candidate_clock"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
 import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
@@ -26,6 +26,7 @@ import MeetingBar from "./meeting_bar"
 import MessageLift from "./message_lift"
 import MeetingCaptions, { MeetingCaptionsPersist } from "./meeting_captions"
 import MeetingClient from "./meeting_client"
+import MeetingLobbyPreview from "./meeting_lobby_preview"
 import MeetingPushToTalk from "./meeting_push_to_talk"
 import MeetingRoom from "./meeting_room"
 import MeetingScreenShare from "./meeting_screen_share"
@@ -52,6 +53,7 @@ import SidebarCollapse from "./sidebar_collapse"
 import TasksStatusFilter from "./tasks_status_filter"
 import ThemeToggle from "./theme_toggle"
 import UploadButton from "./upload_button"
+import ViewportBreakpoint from "./viewport_breakpoint"
 
 export default {
   AppBadge,
@@ -82,6 +84,7 @@ export default {
   MeetingCaptions,
   MeetingCaptionsPersist,
   MeetingClient,
+  MeetingLobbyPreview,
   MeetingPushToTalk,
   MeetingRoom,
   MeetingScreenShare,
@@ -105,8 +108,10 @@ export default {
   SectionReorder,
   SectionReorderTouch,
   Sheet,
+  SheetHandleClock,
   SidebarCollapse,
   TasksStatusFilter,
   ThemeToggle,
   UploadButton,
+  ViewportBreakpoint,
 }

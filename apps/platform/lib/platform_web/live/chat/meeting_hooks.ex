@@ -208,8 +208,16 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     socket
     |> assign(:in_meeting, false)
     |> assign(:meetings_enabled, Meetings.enabled?())
-    |> assign(:mic_enabled, true)
-    |> assign(:camera_enabled, true)
+    # `assign_new`, NOT `assign` (task 01a07410 / FE-17 stage 4). This
+    # runs twice on the guest surface: once at mount, and again from
+    # `enter_meeting_as_guest/3` on the `:name_entry -> :in_meeting`
+    # transition. The lobby's mic and camera toggles write these two
+    # assigns while the guest is still in `:name_entry`; a plain `assign`
+    # here reset both to `true` on the transition, so a guest who muted in
+    # the lobby entered the room live. First seed is `true` (the pre-lobby
+    # default); every later pass keeps whatever the toggles chose.
+    |> assign_new(:mic_enabled, fn -> true end)
+    |> assign_new(:camera_enabled, fn -> true end)
     |> assign(:screen_share_enabled, false)
     |> assign(:meeting_counts, %{})
     |> assign(:meeting_participants, [])
@@ -1510,7 +1518,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
           token: token,
           url: Meetings.livekit_url(),
           room_name: room.livekit_room_name,
-          space_slug: space.slug
+          space_slug: space.slug,
+          # The state to ENTER the room with (task 01a07410 stage 4): the
+          # same assigns the top-bar toggles flip, read at push time, so a
+          # mic muted before Join stays muted through the connect.
+          mic_enabled: socket.assigns.mic_enabled,
+          camera_enabled: socket.assigns.camera_enabled
         })
 
       # ONE lookup, two consumers. The mini-bar's Return-to-call deep
@@ -1707,6 +1720,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign_new(:agents_by_id, fn -> %{} end)
     |> assign_new(:meeting_candidates, fn -> [] end)
     |> assign_new(:meeting_candidates_closed, fn -> [] end)
+    # Seeded HERE and not only in `MeetingLive` (task 01a07410 stage 2).
+    # The quickmeet renders the same `CallShell.call_rail/1` from this
+    # socket, so a `:soonest_candidate` that only existed on `/meetings`
+    # would be a missing assign on the chat surface the moment anything
+    # reads it. `assign_candidate_board/2` re-derives it on join.
+    |> assign_new(:soonest_candidate, fn -> nil end)
     |> assign_new(:meeting_candidate_events, fn -> %{} end)
     |> assign_new(:candidate_error, fn -> nil end)
     |> assign_new(:candidate_order, fn -> nil end)
@@ -1792,6 +1811,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         |> assign(:agents_by_id, %{})
         |> assign(:meeting_candidates, [])
         |> assign(:meeting_candidates_closed, [])
+        |> assign(:soonest_candidate, nil)
         |> assign(:meeting_candidate_events, %{})
 
       _ ->

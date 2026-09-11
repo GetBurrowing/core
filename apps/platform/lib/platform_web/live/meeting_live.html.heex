@@ -37,7 +37,8 @@
       chosen by `@unavailable_kind` (task 01a04353): `:permanent` promises
       no retry and points at the invite sender, `:unknown` keeps the
       try-again-shortly wording.
-    * `@chrome_mode == :none and @state == :name_entry` — guest name-entry card.
+    * `@chrome_mode == :none and @state == :name_entry` — guest pre-join lobby
+      (name entry plus mic/camera toggles and a self-preview; FE-17 stage 4).
     * `@meeting != nil` — full meeting shell (both `chrome_mode == :shell` and
       guest `:in_meeting`; shell-only regions gated with `@shell?` below).
     * Fallthrough — `:index` action (grouped meetings list + Start-meeting FAB).
@@ -142,42 +143,167 @@
       </div>
     </div>
   <% @chrome_mode == :none and @state == :name_entry -> %>
-    <div class="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4">
-      <div class="card w-full bg-base-200 shadow-lg">
-        <div class="card-body">
-          <div class="flex items-center gap-2">
-            <span class="hero-video-camera size-6 text-primary" aria-hidden="true"></span>
-            <h1 class="card-title text-lg">Join {@meeting.name}</h1>
-          </div>
-          <p class="text-sm text-base-content/70">
-            Enter the name others in the meeting will see.
-          </p>
-          <form phx-submit="submit_name" class="mt-2 flex flex-col gap-3">
-            <label class="form-control w-full">
-              <span class="label-text mb-1 text-sm">Your name</span>
-              <input
-                type="text"
-                name="guest[name]"
-                value={@name_value}
-                autofocus
-                required
-                maxlength="80"
-                placeholder="Jane Doe"
-                class={[
-                  "input input-bordered w-full",
-                  @name_error && "input-error"
-                ]}
-              />
-              <span :if={@name_error} class="mt-1 text-xs text-error">
-                {@name_error}
-              </span>
-            </label>
-            <button type="submit" class="btn btn-primary w-full">
-              Join meeting
-            </button>
-          </form>
+    <%!-- Pre-join LOBBY (task 01a07410 / FE-17 stage 4). This is the guest
+       name-entry card grown into a lobby, not a screen beside it: same
+       `:name_entry` state, same `submit_name` event, same assigns. The
+       mic and camera toggles fire the SAME `meeting_toggle_mic` /
+       `meeting_toggle_camera` events the in-call controls use, handled by
+       `MeetingHooks.attach_guest/1`'s hook (installed at mount by
+       `seed_guest_shell_tree_assigns/2`), so they write the one
+       `:mic_enabled` / `:camera_enabled` pair the join payload then
+       carries into the room. `MeetingLobbyPreview` only mirrors
+       `data-camera-enabled` into a local getUserMedia preview.
+
+       Mobile-first: a single column that fills the viewport, the preview
+       and toggles in the scrolling middle, and the Join action pinned to
+       the bottom with `pb-[env(safe-area-inset-bottom)]` — the guest
+       surface has no shell chrome, so no `--bottom-nav-height` term
+       (meeting_live_test's chrome-escape test refutes it here).
+
+       Mic-off keeps the `hero-microphone` glyph and says "Mic off" in
+       words: `hero-microphone-slash` compiles to nothing (see
+       `video_tile.ex`'s moduledoc; FE-19 owns the vendored glyph), and a
+       label that states the state does not depend on it. --%>
+    <div
+      class="mx-auto flex min-h-full w-full max-w-md flex-1 flex-col px-4 pt-4"
+      data-role="meeting-lobby"
+    >
+      <header class="flex flex-col gap-1">
+        <div class="flex items-center gap-2">
+          <span class="hero-video-camera size-6 text-primary" aria-hidden="true"></span>
+          <h1 class="text-lg font-semibold">{@meeting.name}</h1>
+        </div>
+        <p class="text-sm text-base-content/60" data-role="meeting-lobby-roster">
+          {lobby_roster_line(@participants)}
+        </p>
+      </header>
+
+      <div
+        id="meeting-lobby-preview"
+        phx-hook="MeetingLobbyPreview"
+        data-role="meeting-lobby-preview"
+        data-camera-enabled={to_string(@camera_enabled)}
+        data-preview="off"
+        class="group relative mt-4 aspect-[3/4] w-full overflow-hidden rounded-box border border-edge bg-base-300 sm:aspect-video"
+      >
+        <video
+          autoplay
+          muted
+          playsinline
+          class="size-full object-cover [transform:scaleX(-1)] group-data-[preview=live]:block hidden"
+          aria-hidden="true"
+        >
+        </video>
+        <div
+          class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-base-content/60 group-data-[preview=live]:hidden"
+          data-role="meeting-lobby-preview-placeholder"
+        >
+          <span class="hero-user-circle size-16" aria-hidden="true"></span>
+          <span :if={not @camera_enabled} class="text-sm">Your camera is off</span>
+          <span :if={@camera_enabled} class="text-sm group-data-[preview=unavailable]:hidden">
+            Starting your camera
+          </span>
+          <span
+            :if={@camera_enabled}
+            class="hidden text-sm group-data-[preview=unavailable]:inline"
+          >
+            Camera preview unavailable
+          </span>
+        </div>
+        <div class="absolute inset-x-0 bottom-0 flex justify-center gap-3 p-3">
+          <button
+            type="button"
+            phx-click="meeting_toggle_mic"
+            data-role="meeting-lobby-mic"
+            data-on={to_string(@mic_enabled)}
+            aria-pressed={to_string(@mic_enabled)}
+            aria-label={
+              if @mic_enabled, do: "Join with microphone off", else: "Join with microphone on"
+            }
+            class={[
+              "btn min-h-11 gap-2 rounded-field border-edge font-normal",
+              if(@mic_enabled,
+                do: "bg-base-200 text-base-content",
+                else: "bg-base-content/10 text-base-content/60"
+              )
+            ]}
+          >
+            <span class="hero-microphone size-5" aria-hidden="true"></span>
+            <span>{if @mic_enabled, do: "Mic on", else: "Mic off"}</span>
+          </button>
+          <button
+            type="button"
+            phx-click="meeting_toggle_camera"
+            data-role="meeting-lobby-camera"
+            data-on={to_string(@camera_enabled)}
+            aria-pressed={to_string(@camera_enabled)}
+            aria-label={
+              if @camera_enabled, do: "Join with camera off", else: "Join with camera on"
+            }
+            class={[
+              "btn min-h-11 gap-2 rounded-field border-edge font-normal",
+              if(@camera_enabled,
+                do: "bg-base-200 text-base-content",
+                else: "bg-base-content/10 text-base-content/60"
+              )
+            ]}
+          >
+            <span
+              class={[
+                "size-5",
+                if(@camera_enabled, do: "hero-video-camera", else: "hero-video-camera-slash")
+              ]}
+              aria-hidden="true"
+            >
+            </span>
+            <span>{if @camera_enabled, do: "Camera on", else: "Camera off"}</span>
+          </button>
         </div>
       </div>
+
+      <%!-- `phx-change` keeps `:name_value` current so a toggle click, which
+         re-renders `value={@name_value}`, does not wipe a half-typed name
+         (morphdom preserves only the FOCUSED input's value). --%>
+      <form
+        phx-submit="submit_name"
+        phx-change="lobby_name_change"
+        class="mt-4 flex flex-1 flex-col gap-3"
+        data-role="meeting-lobby-join-form"
+      >
+        <label class="form-control w-full">
+          <span class="label-text mb-1 text-sm">Your name</span>
+          <input
+            type="text"
+            name="guest[name]"
+            value={@name_value}
+            autofocus
+            required
+            maxlength="80"
+            placeholder="Jane Doe"
+            class={[
+              "input input-bordered w-full",
+              @name_error && "input-error"
+            ]}
+          />
+          <span :if={@name_error} class="mt-1 text-xs text-error">
+            {@name_error}
+          </span>
+        </label>
+        <p class="text-xs text-base-content/60" data-role="meeting-lobby-summary">
+          You will join with your microphone {if @mic_enabled, do: "on", else: "off"} and your camera {if @camera_enabled,
+            do: "on",
+            else: "off"}.
+        </p>
+        <div class="sticky bottom-0 mt-auto bg-base-100 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <button
+            type="submit"
+            data-role="meeting-lobby-join"
+            class="btn btn-primary min-h-12 w-full text-primary-content"
+          >
+            Join meeting
+          </button>
+        </div>
+      </form>
     </div>
   <% @meeting != nil -> %>
     <div class="flex h-full flex-col bg-base-100 text-base-content">
@@ -254,6 +380,19 @@
         id="meeting-captions-persist-host"
         phx-hook="MeetingCaptionsPersist"
         data-persist-key="suite.meeting.captions_visible"
+        class="hidden"
+      >
+      </div>
+
+      <%!-- Viewport side-of-`lg` report (task 01a07410 stage 3). NOT
+         `@shell?`-gated: a guest on a phone needs the rail in its sheet
+         just as a member does. See `CallRailFrame` for why the server,
+         not CSS, chooses the rail's wrapper. --%>
+      <div
+        id="meeting-viewport-host"
+        phx-hook="ViewportBreakpoint"
+        data-breakpoint="1024"
+        data-event="meeting_viewport"
         class="hidden"
       >
       </div>
@@ -1688,10 +1827,12 @@
                 data-pressed="false"
                 class={[
                   "btn btn-sm btn-ghost min-h-11 gap-2 px-2",
+                  "meeting-hold-target",
                   "text-base-content/70",
                   "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
                   "data-[rejected=no-microphone]:text-error",
-                  "data-[rejected=microphone-muted]:text-error"
+                  "data-[rejected=microphone-muted]:text-error",
+                  "data-[rejected=pointer-lost]:text-error"
                 ]}
               >
                 <span class="hero-signal size-4" aria-hidden="true"></span>
@@ -1718,6 +1859,22 @@
               </button>
             </:before_leave>
           </CallShell.call_controls>
+
+          <%!-- THE PEEK SPACER (task 01a07410 stage 3). While a countdown
+             is live below `lg`, the shut rail sheet's handle peeks 2.75rem
+             above the bottom nav — exactly where the control bar sits.
+             Measured at 390x844: without this the handle painted over
+             Mute / Camera / Share. So the stage column reserves the
+             handle's height, under the same condition the sheet earns
+             `sheet-peek`, and the controls move up out from under it.
+             `lg:hidden`: at `lg` there is no sheet and nothing to clear. --%>
+          <div
+            :if={@mobile_viewport? and @soonest_candidate}
+            class="h-11 shrink-0 lg:hidden"
+            data-role="meeting-sheet-peek-spacer"
+            aria-hidden="true"
+          >
+          </div>
         </main>
 
         <%!-- The "right pane: embedded chat panel" block that described
@@ -1761,11 +1918,12 @@
            Canvas and Transcript did not render at all below `lg` —
            stage 5 measured `[data-component="call-rail"]` at `width: 0`
            on a 390px viewport and could not screenshot it. Below `lg`
-           it is a right-hand slide-in drawer with the same geometry as
-           the discussion drawer beside it (top-12, safe-area-aware
-           bottom edge, z-40 over the z-30 backdrop); at `lg` it reverts
-           to the in-flow 312px column, byte-for-byte the shipped
-           desktop layout.
+           it WAS a right-hand slide-in drawer (top-12, safe-area-aware
+           bottom edge, z-40 over a z-30 backdrop); task 01a07410 stage 3
+           replaced that with a bottom sheet — see `<.rail_frame>` below
+           and `CallRailFrame` — so the phone has one overlay grammar.
+           At `lg` it is the in-flow 312px column, byte-for-byte the
+           shipped desktop layout.
 
            ONE DOM node, not two. A `<lg` copy and an `lg:` copy would
            put two `#meeting-call-rail`s, two transcript hooks and two
@@ -1811,57 +1969,41 @@
            stays a DESKTOP-ONLY concern (see the paragraph above): below
            `lg` the expanded branch is the `toggle_call_rail` drawer
            whatever the desktop collapse preference says. --%>
-        <div
-          id="meeting-call-rail-pane"
-          class={
-            [
-              "flex flex-col",
-              "fixed top-12 right-0 z-40 w-[85vw] max-w-sm shadow-xl transition-transform duration-200 ease-out",
-              # The bottom-nav clearance is SHELL-ONLY. `--bottom-nav-height`
-              # is a shell variable and the guest layout deliberately carries
-              # no shell chrome: `meeting_live_test.exs`'s chrome-escape test
-              # refutes the literal `bottom-nav` anywhere in a guest
-              # document, and it caught this. A guest clears the safe-area
-              # inset and nothing else, because there is nothing else there.
-              if(@shell?,
-                do: "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]",
-                else: "bottom-[env(safe-area-inset-bottom)]"
-              ),
-              if(@call_rail_open, do: "translate-x-0", else: "translate-x-full"),
-              "lg:static lg:bottom-auto lg:z-auto lg:max-w-none",
-              "lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none lg:overflow-hidden",
-              # THE ANIMATED QUANTITY. `lg:` only: below `lg` the rail is a
-              # fixed-width drawer that slides, and `transition-transform`
-              # above is what animates there. `lg:overflow-hidden` above is
-              # half of this — expanding reveals a 312px branch inside a box
-              # that is still 44px wide, and without the clip the rail would
-              # paint over the stage at full width on frame 1 instead of
-              # being uncovered. `prefers-reduced-motion: reduce` drops BOTH
-              # transitions: a reader who asked for no motion gets the
-              # collapse as an instant state change, which is the honest
-              # single-frame version of what this stage exists to remove.
-              #
-              # MOTION ASYMMETRY (task 01a0740d, PRESERVED through this
-              # stage's one-node fold). The transition class is present ONLY
-              # when the viewer moved the rail themselves — `:call_rail_animate`
-              # is `false` at both mounts and on every mode-driven reassert,
-              # so switching to screen share SNAPS the width instead of
-              # sliding a slab of the screen at someone whose attention is
-              # already committed to the stage. Motion should say "you",
-              # never "it". 01a0740d put this gate on the sibling strip it
-              # shipped; folding the two nodes into one moved the gate onto
-              # the node that now owns the width, which is the only element
-              # that can interpolate it.
-              if(@call_rail_animate,
-                do:
-                  "lg:transition-[width] lg:duration-200 lg:ease-out motion-reduce:transition-none"
-              ),
-              if(@chat_panel_collapsed, do: "lg:w-11", else: "lg:w-[312px]")
-            ]
-          }
-          data-pane="call-rail"
-          data-collapsed={to_string(@chat_panel_collapsed)}
-          data-call-rail-open={to_string(@call_rail_open)}
+        <%!-- THE RECAP (task 01a07410 / FE-17 stage 6). Rendered only once
+           the viewer has LEFT the call and only below `lg` — the same
+           server-side width gate the sheet frame uses, so the desktop
+           document is unchanged. Markup lives in `CallRecap`. --%>
+        <CallRecap.call_recap
+          :if={@mobile_viewport? and @call_recap}
+          meeting={@meeting}
+          recap={@call_recap}
+          shell?={@chrome_mode != :none}
+        />
+        <%!-- THE FRAME (task 01a07410 / FE-17 stage 3). `CallRailFrame`
+           renders the rail's contents — this slot body — in exactly ONE
+           wrapper: the in-flow `lg` column (`hidden` below `lg`), or a
+           `PlatformWeb.Components.Sheet` bottom sheet once the
+           `ViewportBreakpoint` hook reports the viewport is below `lg`.
+           The right slide-in drawer that used to be the `<lg`
+           presentation is retired with its backdrop and its close bar:
+           the phone has ONE overlay grammar now, and the sheet brings its
+           own backdrop, close and Escape.
+
+           The slot body is what 01a084bf stage 2 folded into one node —
+           the collapsed strip and the expanded branch — and is unchanged
+           except for the drawer-only close bar it no longer needs. The
+           frame keeps `id="meeting-call-rail-pane"`, `data-pane="call-rail"`,
+           `data-collapsed` and `data-call-rail-open` on whichever wrapper
+           it renders, so the one-node guard in `meeting_live_test.exs`
+           holds in both frames. --%>
+        <.rail_frame
+          mobile?={@mobile_viewport?}
+          open={@call_rail_open}
+          collapsed={@chat_panel_collapsed}
+          animate={@call_rail_animate}
+          active_tab={@active_meeting_tab}
+          soonest_candidate={@soonest_candidate}
+          now={assigns[:agent_activity_now]}
         >
           <%!-- THE COLLAPSED BRANCH — a real 44px icon strip (task 019e40f2,
              re-pointed by 01a05b14 stage 3, rebuilt as an icon strip by
@@ -2070,22 +2212,11 @@
             ]}
             data-role="call-rail-expanded"
           >
-            <%!-- Mobile-only close affordance. The toggle in the top bar is
-             behind the backdrop once the drawer is open, so without this
-             the only dismissal is a backdrop tap — which is not
-             discoverable and is unreachable when the drawer is wide. --%>
-            <div class="flex flex-shrink-0 justify-end border-b border-l border-edge bg-base-200/40 px-2 py-1 lg:hidden">
-              <button
-                type="button"
-                phx-click="toggle_call_rail"
-                aria-label="Close call panel"
-                title="Close"
-                class="btn btn-ghost btn-xs btn-square text-base-content/60"
-                data-role="call-rail-close"
-              >
-                <span class="hero-x-mark size-4"></span>
-              </button>
-            </div>
+            <%!-- The drawer's mobile-only close bar (`data-role="call-rail-close"`)
+             was here. Retired with the drawer (task 01a07410 stage 3): the
+             sheet the rail now lives in below `lg` carries its own close
+             button, backdrop and Escape, and a second close inside the
+             pane would be two ways to do one thing. --%>
             <%!-- Shell-only, like every other pane-collapse affordance here:
              a guest has no persisted pane state to collapse against. --%>
             <div
@@ -2307,7 +2438,7 @@
               </:chat>
             </CallShell.call_rail>
           </div>
-        </div>
+        </.rail_frame>
 
         <%!-- The CHAT drawer's backdrop was here (`data-role="chat-panel-backdrop"`),
            dismissing to `toggle_chat_panel`. It went with the drawer in task
@@ -2315,21 +2446,11 @@
            it is reached through the call-rail drawer and dismissed by the
            call-rail backdrop below. Two backdrops for one drawer would be one
            too many. --%>
-        <%!-- Backdrop for the call-rail drawer (task 01a05b14 stage 6).
-           A SEPARATE element from the chat one above rather than a
-           widened `:if`, because the two dismiss to different handlers
-           and the chat backdrop is `@shell?`-gated while this one is
-           not. The two drawers are mutually exclusive (see
-           `toggle_call_rail`), so at most one backdrop is ever in the
-           DOM. --%>
-        <div
-          :if={@call_rail_open}
-          phx-click="toggle_call_rail"
-          aria-hidden="true"
-          class="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm lg:hidden"
-          data-role="call-rail-backdrop"
-        >
-        </div>
+        <%!-- The call-rail drawer's backdrop (`data-role="call-rail-backdrop"`,
+           task 01a05b14 stage 6) was here. Retired with the drawer (task
+           01a07410 stage 3): the rail's `<lg` presentation is a
+           `PlatformWeb.Components.Sheet`, whose own `.sheet-backdrop`
+           dismisses to `close_call_rail`. --%>
 
         <%!-- `<aside id="meeting-chat-drawer">` WAS HERE and is deleted
            (task 01a084bf stage 3). It held the one
@@ -3618,6 +3739,73 @@
                 )
               )}
             </span>
+          </div>
+
+          <%!-- ── Mobile card list (task 01a07410 / FE-17 stage 7) ────────
+           One card per meeting on the selected day, tappable straight to
+           the meeting page (the lobby for a guest, the join surface for
+           a member) — the same `/meetings/<slug>` the detail surface's
+           "Open meeting" action navigates to, so the phone has a
+           one-tap path from the index into the call without first
+           opening the sheet. The hour column below it stays: it is the
+           WHEN, this is the WHAT, and a card carries the state and the
+           time in words a 44px block cannot fit.
+
+           `lg:hidden` on this element itself, like the strip and the day
+           view, so the desktop week grid is the only surface at `lg`
+           and a test pinning the class pins something real. Same list
+           as the heading's count and the column's blocks, read through
+           `calendar_day_meetings/4`, so the three cannot disagree. --%>
+          <% day_cards =
+            calendar_day_meetings(
+              @calendar_week_meetings,
+              @calendar_selected_date,
+              @calendar_time_zone,
+              @calendar_hour_window
+            ) %>
+          <div
+            :if={day_cards != []}
+            class="flex flex-col divide-y divide-edge border-x border-b border-edge bg-base-100 lg:hidden"
+            data-role="meeting-card-list"
+            data-date={Date.to_iso8601(@calendar_selected_date)}
+          >
+            <.link
+              :for={meeting <- day_cards}
+              navigate={~p"/meetings/#{meeting.slug}"}
+              class="flex min-h-14 items-center gap-3 px-3 py-2.5 hover:bg-base-200/60 active:bg-base-200"
+              data-role="meeting-card"
+              data-meeting-id={meeting.id}
+              data-meeting-status={meeting.status}
+              data-live={meeting.status == "live" && "true"}
+            >
+              <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span class="truncate text-sm font-medium text-base-content">
+                  {meeting.name}
+                </span>
+                <span
+                  class="font-mono text-[11px] text-base-content/60"
+                  data-role="meeting-card-time"
+                >
+                  {calendar_event_time(meeting, @calendar_time_zone)}
+                </span>
+              </span>
+              <span
+                class={[
+                  "inline-flex flex-shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                  calendar_card_status_class(meeting.status)
+                ]}
+                data-role="meeting-card-status"
+              >
+                <span
+                  :if={meeting.status == "live"}
+                  class="size-1.5 flex-shrink-0 rounded-full bg-success animate-pulse"
+                  aria-hidden="true"
+                >
+                </span>
+                {calendar_card_status_label(meeting.status)}
+              </span>
+              <span class="hero-chevron-right size-4 flex-shrink-0 text-base-content/40"></span>
+            </.link>
           </div>
 
           <%!-- One day, one column, its own 44px gutter. The hour rows

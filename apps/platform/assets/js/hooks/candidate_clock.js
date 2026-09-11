@@ -148,14 +148,55 @@ const CandidateClock = {
     }
   },
 
+  // Every node this ticker paints a deadline onto, in ONE list, so the loop
+  // above stays one loop and the "exactly one interval" property is
+  // untouched (task 01a07410 stage 2).
+  //
+  // ## Why the handle is queried from a WIDER root
+  //
+  // The cards are descendants of the rail `<section>` this hook is mounted
+  // on, so `this.el` reaches them. The bottom-sheet HANDLE is not: it is
+  // the sheet's grab bar, a sibling subtree above the rail, and on a phone
+  // the rail is inside a drawer that is translated off screen. A
+  // `this.el`-scoped query can never see it. So the root widens for that
+  // selector and only that one.
+  //
+  // This does NOT start a second clock, which is the property the moduledoc
+  // above argues for and the one worth protecting: it is the same interval,
+  // the same `Date.now()` reading, and the same `_paint`, so the handle and
+  // the card three inches away cannot show different numbers or step to
+  // amber a second apart. The alternative — a hook on the sheet — is a
+  // second interval started at a different moment, which is exactly the
+  // drift the rail was consolidated to remove.
+  //
+  // Painting a handle twice (two rails on one page) is harmless BECAUSE
+  // `_paint` reads everything off the node it is handed and nothing off
+  // `this`: both tickers compute the same number from the same
+  // `data-acts-at`. That is a property of `_paint`, not an accident, and it
+  // is why the wider root is safe here and would not be if `_paint` cached.
+  //
+  // `ownerDocument` falls back to `this.el` rather than to `document`: the
+  // global is not reachable in the hook's test environment, and a hard
+  // reference to it would make this untestable without asserting anything
+  // extra.
+  _countdownNodes() {
+    const cards = [
+      ...this.el.querySelectorAll("[data-role='meeting-candidate-countdown']"),
+    ]
+
+    const root = this.el.ownerDocument || this.el
+
+    return cards.concat([
+      ...root.querySelectorAll("[data-role='meeting-sheet-handle-countdown']"),
+    ])
+  },
+
   // One wall-clock reading for the whole rail, so two cards rendered in the
   // same tick can never disagree about what time it is.
   _tick() {
     const now = Date.now()
 
-    for (const card of this.el.querySelectorAll(
-      "[data-role='meeting-candidate-countdown']"
-    )) {
+    for (const card of this._countdownNodes()) {
       this._paint(card, now)
     }
 
@@ -184,6 +225,46 @@ const CandidateClock = {
     if (isNaN(deadline)) return
 
     if (now >= deadline) row.hidden = true
+  },
+
+  // The ACCESSIBLE NAME, in words (task 01a07410 stage 3). A node that
+  // carries `data-label-template` ("%{n} second%{s} until a task is
+  // created") names a target — `data-label-target`, the sheet handle's
+  // `role="status"` row, or itself when absent — whose `aria-label` is
+  // rewritten every tick. The visible digit is `aria-hidden` on the
+  // handle, so this string is the whole of what a screen reader gets,
+  // and a name that said "30 seconds" for the entire window would be a
+  // lie told only to the people least able to recover from it.
+  //
+  // The template is the SERVER's, from `CallRailFrame.label_template/1`;
+  // the same string renders the initial name, so the first tick is a
+  // number change and never a wording change.
+  //
+  // Cards carry no template and are untouched: their `<time>` is the
+  // accessible content there, and a card's foot is not a live region.
+  _paintLabel(card, remaining) {
+    const template = card.dataset.labelTemplate
+    if (!template) return
+
+    const target = this._labelTarget(card)
+    if (!target) return
+
+    target.setAttribute(
+      "aria-label",
+      template
+        .replace("%{n}", String(remaining))
+        .replace("%{s}", remaining === 1 ? "" : "s")
+    )
+  },
+
+  _labelTarget(card) {
+    const id = card.dataset.labelTarget
+    if (!id) return card
+
+    const root = this.el.ownerDocument
+    return root && typeof root.getElementById === "function"
+      ? root.getElementById(id)
+      : null
   },
 
   // Everything below reads from the CARD, never from `this`. A value cached
@@ -223,6 +304,8 @@ const CandidateClock = {
       el.classList.toggle("candidate-count--warning", warning)
     }
 
+    this._paintLabel(card, remaining)
+
     // Queried from the card's own subtree, never from the rail: the drain
     // is written inside `.candidate-foot` (and positioned out of it) so
     // that this lookup cannot reach a NEIGHBOUR's bar. A rail-level query
@@ -238,6 +321,40 @@ const CandidateClock = {
     const fraction = Math.min(remaining / total, 1)
     drain.style.width = `${(fraction * 100).toFixed(2)}%`
     drain.classList.toggle("candidate-drain--warning", warning)
+  },
+}
+
+/**
+ * SheetHandleClock — the bottom-sheet handle's OWN heartbeat (task
+ * 01a07410 stage 3).
+ *
+ * Stage 2 widened `_countdownNodes` so the rail's ticker reaches the
+ * handle, on the premise that the rail's ticker is always running. It is
+ * not: `CandidateClock` mounts on the candidate rail `<section>`, which
+ * `call_rail/1` renders only inside the CANVAS tab's branch. On People,
+ * Chat or Transcript there is no ticker, and a shut sheet whose handle
+ * shows the server's number frozen is the lying window this whole
+ * feature exists to remove.
+ *
+ * So the handle mounts this. It is `CandidateClock` minus the pointer
+ * freeze — a thumb on the handle must not push `candidate_rail_freeze`
+ * at a rail it is not touching — and it is the SAME `_tick` and `_paint`:
+ * `this.el` is the handle, so the card query finds nothing, and the
+ * document query finds the handle itself. When the Canvas tab is open
+ * both hooks paint this node from the same `data-acts-at` with the same
+ * arithmetic, which the rail's moduledoc already argues is harmless
+ * because `_paint` reads nothing off `this`. Neither starts a
+ * client-side countdown; both are renderings of the server's deadline.
+ */
+export const SheetHandleClock = {
+  ...CandidateClock,
+
+  mounted() {
+    this._start()
+  },
+
+  destroyed() {
+    this._stop()
   },
 }
 

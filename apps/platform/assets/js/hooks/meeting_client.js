@@ -704,7 +704,15 @@ const MeetingClient = {
     this._roomListeners = []
   },
 
-  async _join({ token, url, room_name }) {
+  async _join({ token, url, room_name, mic_enabled, camera_enabled }) {
+    // The lobby's choice (task 01a07410 / FE-17 stage 4). `mic_enabled` /
+    // `camera_enabled` are the server's `:mic_enabled` / `:camera_enabled`
+    // assigns at the moment of the join push — the same pair the in-call
+    // toggles flip and the `#meeting-client` dataset mirrors. Resolved ONCE
+    // here, before any await, so a toggle that lands mid-connect cannot
+    // change what "initial" meant.
+    const desired = this._desiredInitialMedia({ mic_enabled, camera_enabled })
+
     // Adopt instead of disconnect-then-reconnect when we already hold a
     // connected room (task 019e4b3e stage 1) — avoids the
     // publish->disconnect->republish thrash seen in Rowan's console.
@@ -785,10 +793,23 @@ const MeetingClient = {
     document.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
     this._emitState("connected", room)
 
+    // Enter the room in the state the lobby chose — NOT unconditionally
+    // live. This used to be `setMicrophoneEnabled(true)`, which made joining
+    // muted impossible: whatever the user had set before Join, the connect
+    // path switched the mic on. `desired` is the lobby's/server's value, so
+    // a guest who muted in the lobby is muted from the first packet, and
+    // `_reconcileLocalMedia` below only ever turns things ON from the same
+    // server intent, so the two cannot disagree.
     try {
-      await room.localParticipant.setMicrophoneEnabled(true)
+      await room.localParticipant.setMicrophoneEnabled(desired.mic)
     } catch (err) {
-      console.warn("[MeetingClient] could not enable mic:", err)
+      console.warn("[MeetingClient] could not set initial mic state:", err)
+    }
+
+    try {
+      await room.localParticipant.setCameraEnabled(desired.camera)
+    } catch (err) {
+      console.warn("[MeetingClient] could not set initial camera state:", err)
     }
 
     this._ensureTile(room.localParticipant)
@@ -828,8 +849,11 @@ const MeetingClient = {
     // The resulting LocalTrackPublished fires _attachLocalVideo via
     // _bindRoomEvents, which parks the <video> into the [data-role=
     // "local-self-view"] slot (stage 2 change B adds one to the quick-meet
-    // panel) and docks it.
-    this._reconcileLocalMedia(room)
+    // panel) and docks it. On the INITIAL join the intent is `desired` —
+    // the join payload — not the dataset: the two come from the same
+    // server assigns, but the payload is the value at the moment of Join
+    // and is the one the lobby test pins.
+    this._reconcileLocalMedia(room, desired)
   },
 
   async _leave() {
@@ -897,19 +921,45 @@ const MeetingClient = {
     document.dispatchEvent(new CustomEvent("livekit:state", { detail }))
   },
 
+  // Which mic/camera state to ENTER the room with (task 01a07410 stage 4).
+  // The join payload wins; it is the server's `:mic_enabled` /
+  // `:camera_enabled` at push time. A payload that omits the pair (an older
+  // server, or a test that only hands over token+url) falls back to the
+  // `#meeting-client` dataset, which mirrors the same assigns, and finally
+  // to `true` — the pre-lobby behaviour, so nothing that never rendered a
+  // lobby joins silently muted.
+  _desiredInitialMedia({ mic_enabled, camera_enabled } = {}) {
+    const ds = (this.el && this.el.dataset) || {}
+    const pick = (fromPayload, fromDataset) => {
+      if (typeof fromPayload === "boolean") return fromPayload
+      if (fromDataset === "true") return true
+      if (fromDataset === "false") return false
+      return true
+    }
+    return {
+      mic: pick(mic_enabled, ds.micEnabled),
+      camera: pick(camera_enabled, ds.cameraEnabled),
+    }
+  },
+
   // Reconcile the local camera/mic against committed server intent after a
   // reconnect or remount-adopt (stage 3). Intent lives on the
   // `#meeting-client` dataset (data-camera-enabled / data-mic-enabled),
   // which the server controls — reading it is reconnect-safe and does not
   // depend on a fresh LV push (Rowan's exact error was "unable to push hook
   // event. LiveView not connected").
-  _reconcileLocalMedia(room) {
+  //
+  // `intent` (optional, task 01a07410 stage 4) overrides the dataset read:
+  // `_join` passes the resolved join-payload pair so the initial join and
+  // the reconnect re-engage share ONE reconcile without the payload being
+  // second-guessed by a dataset the LiveView may not have patched yet.
+  _reconcileLocalMedia(room, intent) {
     const lp = room && room.localParticipant
     if (!lp) return
     const ds = (this.el && this.el.dataset) || {}
 
-    const wantCamera = ds.cameraEnabled === "true"
-    const wantMic = ds.micEnabled === "true"
+    const wantCamera = intent ? intent.camera === true : ds.cameraEnabled === "true"
+    const wantMic = intent ? intent.mic === true : ds.micEnabled === "true"
 
     if (wantCamera && lp.isCameraEnabled === false) {
       Promise.resolve(lp.setCameraEnabled(true)).catch((err) =>

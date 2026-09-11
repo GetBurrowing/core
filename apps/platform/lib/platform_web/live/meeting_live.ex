@@ -109,8 +109,13 @@ defmodule PlatformWeb.MeetingLive do
 
     * `>=lg` — an in-flow right column, 312px expanded, collapsing to a
       44px icon strip under `:chat_panel_collapsed`.
-    * `<lg` — the `toggle_call_rail` slide-in drawer, latched by
-      `:call_rail_open`, with the call-rail backdrop.
+    * `<lg` — a bottom sheet (`PlatformWeb.Components.Sheet`, framed by
+      `PlatformWeb.Components.Meetings.CallRailFrame`), latched by
+      `:call_rail_open`, whose SHUT handle carries `:soonest_candidate`'s
+      countdown (task 01a07410 stage 3). The right slide-in drawer this
+      used to be, and its backdrop, are retired. Which frame renders is
+      decided by `:mobile_viewport?`, reported by the `ViewportBreakpoint`
+      hook.
 
   `"toggle_chat_panel"` survives as the event the top bar pushes, but it
   now OPENS that rail on the Chat tab rather than toggling a drawer.
@@ -232,8 +237,12 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
 
+  alias PlatformWeb.Components.Meetings.CallRecap
   alias PlatformWeb.Components.Meetings.CallShell
+  alias PlatformWeb.Components.Meetings.CallRailFrame
   alias PlatformWeb.Components.Meetings.CandidateRail
+
+  import PlatformWeb.Components.Meetings.CallRailFrame, only: [rail_frame: 1]
 
   import PlatformWeb.Components.Meetings.IntentsCollapse,
     only: [intents_collapse: 1, intents_overlays: 1]
@@ -423,6 +432,13 @@ defmodule PlatformWeb.MeetingLive do
       # simply did not exist on a phone, on either surface. A target that
       # only exists above `lg:` is not the target that was approved.
       |> assign(:call_rail_open, false)
+      # Which side of `lg` the viewport is on, per the `ViewportBreakpoint`
+      # hook (task 01a07410 stage 3). `false` — the desktop wrapper —
+      # until the client reports; see `CallRailFrame`.
+      |> assign(:mobile_viewport?, false)
+      # The after-call recap (task 01a07410 stage 6). `nil` until the
+      # viewer LEAVES a call; see `attach_call_recap_hook/1`.
+      |> assign(:call_recap, nil)
       |> assign(:chat_panel_collapsed, false)
       # Rail width animation + unread flag (task 01a0740d). See the
       # matching pair in the general `mount/3` below for the reasoning;
@@ -564,6 +580,13 @@ defmodule PlatformWeb.MeetingLive do
      # surface. A target that only exists above `lg:` is not the target
      # that was approved.
      |> assign(:call_rail_open, false)
+     # Seeded at BOTH mounts, like `:call_rail_open`: the wrapper the rail
+     # renders in is decided from this on every render (task 01a07410
+     # stage 3, `CallRailFrame`).
+     |> assign(:mobile_viewport?, false)
+     # Seeded at both mounts like `:mobile_viewport?` (task 01a07410
+     # stage 6): the recap renders off this on every render.
+     |> assign(:call_recap, nil)
      # Right-rail tab (task 01a05b14 stage 3). `CallShell.call_rail`
      # holds no state of its own so each surface owns its own assign;
      # `"people"` is the default because humans and agents are what the
@@ -791,6 +814,14 @@ defmodule PlatformWeb.MeetingLive do
     # yet. `handle_params/3` loads the real list.
     |> assign(:meeting_candidates, [])
     |> assign(:meeting_candidates_closed, [])
+    # DERIVED from the line above and seeded in the SAME pipe (task
+    # 01a07410 stage 2). `nil` here is not a placeholder awaiting
+    # `handle_params/3` — it is `soonest_candidate/1` of an empty list,
+    # which is the only answer an empty board has. Every other write of
+    # `:meeting_candidates` in this module goes through
+    # `assign_candidate_board/2`, which re-derives this in its own pipe,
+    # so the two assigns cannot get out of step.
+    |> assign(:soonest_candidate, nil)
     |> assign(:meeting_candidate_events, %{})
     |> assign(:candidate_error, nil)
     |> assign(:candidate_order, nil)
@@ -1086,6 +1117,12 @@ defmodule PlatformWeb.MeetingLive do
           # were already counting down must be able to stop them on
           # first paint, not only after the next utterance.
           |> assign_candidate_board(meeting.id)
+          # BEFORE `MeetingHooks.attach/2`, deliberately: hooks run in
+          # attach order and the leave clauses there `:halt`, so this
+          # is the only seat from which MeetingLive can see a leave at
+          # all — and it must read the roster before `stamp_local_left/1`
+          # removes the viewer from it (task 01a07410 stage 6).
+          |> attach_call_recap_hook()
           |> MeetingHooks.attach(List.wrap(meeting.chat_space_id))
 
         # THE `/meetings` HALF OF THE TWO-SURFACE AGENT-ACTIVITY TICK (task
@@ -1688,6 +1725,54 @@ defmodule PlatformWeb.MeetingLive do
 
   def calendar_day_count_label(count) when is_integer(count) and count > 1,
     do: "#{count} meetings"
+
+  @doc """
+  The meetings of ONE day as a flat list, for the mobile card list
+  (task 01a07410 / FE-17 stage 7).
+
+  Derived from `calendar_day_events/5` and nothing else, so the cards,
+  the hour blocks under them and the count in the heading are the same
+  list read three times: a meeting that the placement maths skips
+  (cancelled, unscheduled, outside the drawn window) is absent from all
+  three rather than counted in one and missing from another.
+  """
+  @spec calendar_day_meetings(
+          [Meeting.t()],
+          Date.t(),
+          String.t() | nil,
+          {integer(), integer()}
+        ) :: [Meeting.t()]
+  def calendar_day_meetings(meetings, %Date{} = date, time_zone, window) do
+    meetings
+    |> calendar_day_events(date, time_zone, window, :day)
+    |> Enum.map(fn {meeting, _placement} -> meeting end)
+  end
+
+  @doc """
+  The state chip on a mobile meeting card — a word, never only a colour,
+  so the state survives a monochrome reading. The four values are exactly
+  `Meeting.statuses/0`; an unknown status falls through to its raw string
+  rather than to a silent blank.
+  """
+  @spec calendar_card_status_label(String.t()) :: String.t()
+  def calendar_card_status_label("live"), do: "Live"
+  def calendar_card_status_label("scheduled"), do: "Scheduled"
+  def calendar_card_status_label("ended"), do: "Ended"
+  def calendar_card_status_label("cancelled"), do: "Cancelled"
+  def calendar_card_status_label(other) when is_binary(other), do: other
+
+  @doc """
+  Semantic token slots for the card's state chip. `success` for live
+  mirrors the calendar blocks' live accent; `primary` for scheduled
+  mirrors their default accent; ended and cancelled are muted, since
+  neither is something the reader can still join.
+  """
+  @spec calendar_card_status_class(String.t()) :: String.t()
+  def calendar_card_status_class("live"), do: "border-success/40 bg-success/15 text-success"
+  def calendar_card_status_class("scheduled"), do: "border-primary/40 bg-primary/15 text-primary"
+
+  def calendar_card_status_class(_other),
+    do: "border-edge bg-base-200 text-base-content/60"
 
   @doc """
   How many meetings the rendered WEEK actually draws.
@@ -2469,6 +2554,49 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, assign(socket, :call_rail_open, !socket.assigns.call_rail_open)}
   end
 
+  # The sheet's `on_close` (task 01a07410 stage 3). CLOSES, never toggles:
+  # the `Sheet` hook pushes this on Escape and the backdrop and the close
+  # button push it on click, and any of those arriving twice must leave
+  # the sheet shut rather than reopening it.
+  def handle_event("close_call_rail", _params, socket) do
+    {:noreply, assign(socket, :call_rail_open, false)}
+  end
+
+  # A named mobile sheet (task 01a07410 stage 3): `"cards"`, `"chat"` or
+  # `"invite"` — the three surfaces the ticket names — as STATES of the one
+  # rail sheet, so the launcher says which pane it wants and the sheet
+  # opens already pointed at it. The shut sheet's countdown handle pushes
+  # `"cards"`. Chat clears the unread dot for the same reason
+  # `meeting_tab_select` does: the messages are about to be on screen.
+  def handle_event("open_mobile_sheet", %{"sheet" => sheet}, socket) do
+    tab = CallRailFrame.tab_for_sheet(sheet)
+
+    socket =
+      socket
+      |> assign(:active_meeting_tab, tab)
+      |> assign(:call_rail_open, true)
+
+    socket = if tab == "chat", do: assign(socket, :call_rail_unread, false), else: socket
+
+    {:noreply, socket}
+  end
+
+  # The `ViewportBreakpoint` hook's report (task 01a07410 stage 3). `below`
+  # is the only fact the server needs — which wrapper the rail renders in.
+  # Anything but a literal boolean is ignored rather than coerced: a
+  # malformed payload must not flip the rail into the wrong frame.
+  def handle_event("meeting_viewport", %{"below" => below}, socket) when is_boolean(below) do
+    {:noreply, assign(socket, :mobile_viewport?, below)}
+  end
+
+  def handle_event("meeting_viewport", _params, socket), do: {:noreply, socket}
+
+  # The recap's own close control (task 01a07410 stage 6). Rejoining
+  # clears it too, through `attach_call_recap_hook/1`.
+  def handle_event("dismiss_call_recap", _params, socket) do
+    {:noreply, assign(socket, :call_recap, nil)}
+  end
+
   # Right-rail tab select (task 01a05b14 stage 3). An unrecognised tab
   # is normalised by `CallShell.call_rail/1` itself rather than being
   # rejected here, so a stale value costs the tab, not the pane.
@@ -3012,6 +3140,17 @@ defmodule PlatformWeb.MeetingLive do
   def handle_event("submit_name", _params, socket) do
     {:noreply, assign(socket, :name_error, "Please enter your name.")}
   end
+
+  # Lobby name field (task 01a07410 / FE-17 stage 4). Tracks what the guest
+  # has typed so the mic/camera toggles, which re-render the form, do not
+  # reset `value={@name_value}` to "". No validation here — `submit_name`
+  # owns that, and an error shown while typing would be noise.
+  def handle_event("lobby_name_change", %{"guest" => %{"name" => name}}, socket)
+      when is_binary(name) do
+    {:noreply, assign(socket, :name_value, name)}
+  end
+
+  def handle_event("lobby_name_change", _params, socket), do: {:noreply, socket}
 
   # ── Calendar navigation (`:index` action only, task 019fb954-8ead) ───────
   #
@@ -4518,24 +4657,63 @@ defmodule PlatformWeb.MeetingLive do
         # no DOM element to mount onto — the failing V1/V5 e2e symptom.
         maybe_upsert_guest_presence(socket, meeting, bundle, display_name)
 
-        socket
-        |> seed_guest_shell_tree_assigns(meeting)
-        |> assign(:state, :in_meeting)
-        |> assign(:page_title, meeting.name)
-        |> assign(:display_name, display_name)
-        |> assign(:token, bundle.token)
-        |> assign(:identity, bundle.identity)
-        |> assign(:room_name, bundle.room_name)
-        |> assign(:livekit_url, bundle.livekit_url)
-        # attach_guest (from seed_guest_shell_tree_assigns) seeds
-        # :in_meeting = false to mirror attach/2; flip to true because we
-        # push the join event immediately below.
-        |> assign(:in_meeting, true)
-        |> push_event("join-meeting", Meetings.guest_join_event_payload(bundle, meeting))
+        socket =
+          socket
+          |> seed_guest_shell_tree_assigns(meeting)
+          |> assign(:state, :in_meeting)
+          |> assign(:page_title, meeting.name)
+          |> assign(:display_name, display_name)
+          |> assign(:token, bundle.token)
+          |> assign(:identity, bundle.identity)
+          |> assign(:room_name, bundle.room_name)
+          |> assign(:livekit_url, bundle.livekit_url)
+          # attach_guest (from seed_guest_shell_tree_assigns) seeds
+          # :in_meeting = false to mirror attach/2; flip to true because we
+          # push the join event immediately below.
+          |> assign(:in_meeting, true)
+
+        push_event(socket, "join-meeting", guest_join_payload(bundle, meeting, socket))
 
       {:error, reason} ->
         guest_mint_failure(socket, meeting, reason)
     end
+  end
+
+  # The lobby's "who is already in" line (task 01a07410 / FE-17 stage 4),
+  # from the same `@participants` the in-call roster reads. A presence row
+  # whose name did not resolve (`resolve_identity/1` returns nil for an
+  # orphaned or unsuffixed row) is still a person in the call, so it is
+  # counted as "Someone" rather than dropped or rendered blank.
+  @doc false
+  def lobby_roster_line([]), do: "Nobody is in the call yet."
+
+  def lobby_roster_line([only]), do: "#{lobby_name(only)} is already in the call."
+
+  def lobby_roster_line([first, second]) do
+    "#{lobby_name(first)} and #{lobby_name(second)} are already in the call."
+  end
+
+  def lobby_roster_line([first | rest]) do
+    "#{lobby_name(first)} and #{length(rest)} others are already in the call."
+  end
+
+  defp lobby_name(%{display_name: name}) when is_binary(name) and name != "", do: name
+  defp lobby_name(_), do: "Someone"
+
+  # The join payload PLUS the lobby's choice (task 01a07410 / FE-17 stage 4).
+  # `:mic_enabled` / `:camera_enabled` are read off the socket AFTER
+  # `seed_guest_shell_tree_assigns/2` has run above, which is the point:
+  # `MeetingHooks.attach_guest/1` used to reset both to `true` on this
+  # transition, and this is the value `meeting_client.js` enters the room
+  # with. Read here, not in `Meetings.guest_join_event_payload/2`, because
+  # the context has no socket and the pair is LiveView state.
+  defp guest_join_payload(bundle, meeting, socket) do
+    bundle
+    |> Meetings.guest_join_event_payload(meeting)
+    |> Map.merge(%{
+      mic_enabled: socket.assigns.mic_enabled,
+      camera_enabled: socket.assigns.camera_enabled
+    })
   end
 
   # ── Mint-failure presentation for the guest surface (019f9cb7 stage 2) ──
@@ -5581,6 +5759,57 @@ defmodule PlatformWeb.MeetingLive do
   # rather than per card: a rail of twenty cards would otherwise issue
   # twenty queries on every broadcast, and candidate broadcasts arrive
   # at transcript speed.
+  # ── After-call recap (task 01a07410 / FE-17 stage 6) ──────────────────
+  #
+  # `ChatLive.MeetingHooks` owns the leave lifecycle and its `meeting_leave`
+  # / `meeting_left` clauses `:halt`, so MeetingLive never sees either
+  # event in `handle_event/3`. This hook is attached FIRST (see the mount
+  # pipeline) and `:cont`s, so it observes the leave without changing it.
+  #
+  # Built once per leave: `meeting_leave` (the button) is followed by
+  # `meeting_left` (RoomEvent.Disconnected from the client), and by then
+  # `stamp_local_left/1` has removed the viewer from the roster. The
+  # `is_nil` guard keeps the first snapshot, the one that still lists the
+  # person who is reading it.
+  #
+  # Idempotent on purpose: room -> room is a live patch on ONE pid, so
+  # `handle_params/3` re-enters this pipeline and `attach_hook/4` raises on
+  # a name already attached. `meeting_live_space_topic_holders_test.exs`
+  # pins that the crash on that path is `MeetingHooks`' `:meeting_events`
+  # attach and nothing else; this hook must not get there first.
+  defp attach_call_recap_hook(%{assigns: %{call_recap_hooked?: true}} = socket), do: socket
+
+  defp attach_call_recap_hook(socket) do
+    socket
+    |> assign(:call_recap_hooked?, true)
+    |> attach_hook(:call_recap, :handle_event, fn
+      leave, _params, %{assigns: %{call_recap: nil}} = socket
+      when leave in ["meeting_leave", "meeting_left"] ->
+        {:cont, assign(socket, :call_recap, build_call_recap(socket))}
+
+      "meeting_join", _params, socket ->
+        {:cont, assign(socket, :call_recap, nil)}
+
+      _event, _params, socket ->
+        {:cont, socket}
+    end)
+  end
+
+  # The snapshot the recap renders from. Candidates are re-read rather
+  # than taken from the board assigns because the board splits them and
+  # the recap wants the whole narrative, oldest first (`list_for_meeting/1`).
+  defp build_call_recap(%{assigns: %{meeting: %{id: meeting_id}} = assigns}) do
+    %{
+      left_at: DateTime.utc_now(),
+      participants:
+        assigns
+        |> Map.get(:participants, [])
+        |> Enum.map(& &1.display_name)
+        |> Enum.reject(&is_nil/1),
+      candidates: Candidates.list_for_meeting(meeting_id)
+    }
+  end
+
   @doc """
   Assign the Canvas tab's candidate board for `meeting_id`.
 
@@ -5603,6 +5832,7 @@ defmodule PlatformWeb.MeetingLive do
     socket
     |> assign(:meeting_candidates, live)
     |> assign(:meeting_candidates_closed, closed)
+    |> assign(:soonest_candidate, soonest_candidate(live))
     |> assign(
       :meeting_candidate_events,
       meeting_id |> CandidateEvents.list_for_meeting() |> Enum.group_by(& &1.candidate_id)
@@ -5610,6 +5840,46 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def assign_candidate_board(socket, _meeting_id), do: socket
+
+  @doc """
+  The open candidate whose deadline lands FIRST, or `nil`.
+
+  Derived rather than stored, and derived from the same `live` list the
+  rail is handed, so the two cannot disagree about which card is next.
+  It exists because the countdown that matters on a phone is not on the
+  rail: `CallShell.call_rail/1` renders `candidate_rail/1` only inside
+  the Canvas tab, and below `lg` that rail is a shut drawer, so the
+  30-second window is two taps deep. The bottom-sheet handle needs ONE
+  deadline, and this is which one.
+
+  ## The `acts_at` filter is not defensive
+
+  `meeting_candidates.acts_at` is nullable — a candidate is ARMED by
+  `Countdown` writing a deadline onto it, and an unarmed open card has
+  none. `Enum.min_by/4` over a list containing a `nil` would either
+  crash on `DateTime.compare/2` or, worse under a plain `&<=/2`, sort
+  `nil` below every DateTime and elect an unarmed card as "soonest",
+  which paints a handle that never counts down. So unarmed cards are
+  rejected before the comparison rather than handled inside it.
+
+  `DateTime` is passed as the SORTER. The default `&<=/2` is Erlang
+  term order, which on two `%DateTime{}` structs compares struct fields
+  alphabetically — `:calendar` before `:day` before `:hour` — and is
+  simply not chronology. It agrees with chronology often enough on
+  same-day timestamps to pass a careless test.
+
+  Returns the whole candidate, not its `acts_at`: the handle needs the
+  id to be the thing a tap acts on, and a bare timestamp would make
+  that a second lookup that could resolve to a different card.
+  """
+  @spec soonest_candidate([map()]) :: map() | nil
+  def soonest_candidate(candidates) when is_list(candidates) do
+    candidates
+    |> Enum.reject(&is_nil(&1.acts_at))
+    |> Enum.min_by(& &1.acts_at, DateTime, fn -> nil end)
+  end
+
+  def soonest_candidate(_candidates), do: nil
 
   defp candidate_closed?(%{state: :closed}), do: true
   defp candidate_closed?(%{closed_reason: reason}) when not is_nil(reason), do: true

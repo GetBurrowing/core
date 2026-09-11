@@ -863,6 +863,168 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
 
   # ── The rail's order, on the real route (task 01a0740e stage 4) ───────
 
+  # ── The soonest deadline, as a first-class assign ────────────────────
+
+  describe ":soonest_candidate" do
+    # Read from the MOUNTED socket rather than from the rendered rail,
+    # because the whole point of this assign is to serve a surface the
+    # rail is not on: below `lg` the rail is a shut drawer inside a tab
+    # you must first select, and the handle that will carry this
+    # deadline renders OUTSIDE it. Asserting on rail HTML would be
+    # asserting on the surface this assign exists to bypass.
+    defp assigns(view), do: :sys.get_state(view.pid).socket.assigns
+
+    defp soonest_id(view) do
+      case assigns(view)[:soonest_candidate] do
+        nil -> nil
+        candidate -> candidate.id
+      end
+    end
+
+    test "of three open candidates it is the one with the EARLIEST acts_at",
+         %{conn: conn, meeting: meeting} do
+      now = DateTime.utc_now()
+
+      # Created middle-first so insertion order, id order and deadline
+      # order all disagree. "The first row wins" and "the last row wins"
+      # are both satisfiable by a fixture that only has two, and by a
+      # three-card fixture whose soonest happens to be created first —
+      # so the soonest is created SECOND here.
+      _middle =
+        candidate!(meeting, %{
+          evidence_quote: "book the offsite venue",
+          acts_at: DateTime.add(now, 20, :second)
+        })
+
+      near =
+        candidate!(meeting, %{
+          evidence_quote: "rotate the staging secrets",
+          acts_at: DateTime.add(now, 8, :second)
+        })
+
+      _far =
+        candidate!(meeting, %{
+          evidence_quote: "write the postmortem",
+          acts_at: DateTime.add(now, 27, :second)
+        })
+
+      {view, _html} = mount_board(conn, meeting)
+
+      assert soonest_id(view) == near.id
+    end
+
+    test "when the soonest closes the assign MOVES TO THE NEXT rather than going nil",
+         %{conn: conn, meeting: meeting} do
+      now = DateTime.utc_now()
+
+      near =
+        candidate!(meeting, %{
+          evidence_quote: "rotate the staging secrets",
+          acts_at: DateTime.add(now, 8, :second)
+        })
+
+      next =
+        candidate!(meeting, %{
+          evidence_quote: "book the offsite venue",
+          acts_at: DateTime.add(now, 20, :second)
+        })
+
+      {view, _html} = mount_board(conn, meeting)
+
+      # CONTROL: without this the test below passes on a socket where
+      # the assign was never populated at all, since `nil -> next.id`
+      # and `near.id -> next.id` are indistinguishable from the end
+      # state alone.
+      assert soonest_id(view) == near.id
+
+      {:ok, _closed} = Candidates.close(near, :duplicate)
+
+      # `close/2` broadcasts; `render/1` flushes the LiveView's mailbox
+      # so the assign under test is the one the handler wrote.
+      _ = render(view)
+
+      # NOT `refute soonest == near.id` — that passes on nil, which is
+      # the specific regression this test exists for: a derivation that
+      # runs on the seed and on mount but not on the refresh leaves the
+      # handle blank the instant a card closes, with a live card still
+      # counting down three inches away.
+      assert soonest_id(view) == next.id
+    end
+
+    test "zero open candidates is nil, and a CLOSED card does not make it non-nil",
+         %{conn: conn, meeting: meeting} do
+      # A closed card carrying a real `acts_at` — the fixture that
+      # distinguishes "derived from the open list" from "derived from
+      # the whole board". A derivation over `list_for_meeting/1` would
+      # elect this one and still pass an empty-board test.
+      _closed =
+        candidate!(meeting, %{
+          evidence_quote: "already handled",
+          state: :closed,
+          closed_reason: :duplicate,
+          acts_at: DateTime.add(DateTime.utc_now(), 5, :second)
+        })
+
+      {view, _html} = mount_board(conn, meeting)
+
+      assert soonest_id(view) == nil
+    end
+
+    test "orders by CHRONOLOGY and not by Erlang term order across a month boundary",
+         %{conn: conn, meeting: meeting} do
+      # This test exists because the obvious version of it does not
+      # work. Deadlines built as `DateTime.add(now, 8|20|27, :second)`
+      # share a `now`, so their `:microsecond` fields are identical and
+      # `:second` — which term order does reach, alphabetically, after
+      # `:minute` — decides, and decides CORRECTLY. Dropping the
+      # `DateTime` sorter from `soonest_candidate/1` left every other
+      # test in this describe block green across three runs. That
+      # mutation SURVIVED, so those tests do not pin the sorter.
+      #
+      # Term order on two `%DateTime{}` structs compares fields in
+      # alphabetical key order, and `:day` comes before `:hour` and
+      # `:month` and `:year`. So across a month boundary the earlier
+      # instant carries the LARGER `:day`, and term order elects the
+      # wrong card while every same-minute fixture keeps agreeing.
+      earlier = ~U[2026-08-31 23:59:30.000000Z]
+      later = ~U[2026-09-01 00:00:10.000000Z]
+
+      assert DateTime.compare(earlier, later) == :lt
+      # The instrument, on the record: term order says the opposite, so
+      # a green assertion below is a reading of the sorter and not of a
+      # comparison that happens to agree with it either way.
+      refute earlier < later
+
+      soonest =
+        candidate!(meeting, %{evidence_quote: "rotate the staging secrets", acts_at: earlier})
+
+      _other = candidate!(meeting, %{evidence_quote: "book the offsite venue", acts_at: later})
+
+      {view, _html} = mount_board(conn, meeting)
+
+      assert soonest_id(view) == soonest.id
+    end
+
+    test "an UNARMED open card is never elected, even when it is the only one",
+         %{conn: conn, meeting: meeting} do
+      # `acts_at` is nullable: an open card that has not been armed has
+      # no deadline. Under Erlang term order `nil` sorts below every
+      # `%DateTime{}`, so a `min_by` without the reject would elect this
+      # card and paint a handle that counts down from nothing.
+      _unarmed = candidate!(meeting, %{evidence_quote: "no deadline yet", acts_at: nil})
+
+      armed =
+        candidate!(meeting, %{
+          evidence_quote: "rotate the staging secrets",
+          acts_at: DateTime.add(DateTime.utc_now(), 12, :second)
+        })
+
+      {view, _html} = mount_board(conn, meeting)
+
+      assert soonest_id(view) == armed.id
+    end
+  end
+
   describe "rail order and the pointer freeze" do
     defp rail_order(html) do
       html |> cards() |> LazyHTML.attribute("data-candidate-id")

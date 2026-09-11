@@ -28,6 +28,21 @@ import { Track } from "livekit-client"
  * pushed event, never the button's own appearance. Asserting that the
  * control "looks active" is precisely the assertion that passes in the
  * failure case this hook exists to prevent.
+ *
+ * ## Touch (task 01a07410 stage 5)
+ *
+ * On a phone a finger that drifts a few pixels off the 44px target used
+ * to fire `pointerleave`, which cancelled the utterance mid-sentence with
+ * no feedback. So `pointerdown` now takes POINTER CAPTURE: while it holds,
+ * move/up keep flowing to this element wherever the finger goes, and the
+ * `pointerleave` cancel is suppressed. `setPointerCapture` throws when
+ * the pointer is no longer active — it ended before we got here and no
+ * `pointerup` / `pointercancel` will ever arrive for it (the same case
+ * `lib/long_press_drag.js` tears down on). Left uncaught, that would be
+ * SILENCE: a button that reads as pressed while nothing is listening. On
+ * throw the press is torn down and refused with reason `pointer-lost`,
+ * which the template renders through the same `data-rejected` slot as
+ * every other refusal.
  */
 
 const SILENCE = 128 // getByteTimeDomainData's zero point
@@ -38,6 +53,7 @@ const MeetingPushToTalk = {
     this._levels = []
     this._rejection = null
     this._pressed = false
+    this._captured = null
     this._bars = this._buildBars()
 
     this._onPointerDown = (event) => {
@@ -46,9 +62,20 @@ const MeetingPushToTalk = {
       if (event && typeof event.button === "number" && event.button !== 0) return
       if (event && typeof event.preventDefault === "function") event.preventDefault()
       this.beginPress()
+      if (this._pressed) this._capture(event)
     }
 
-    this._onPointerUp = () => this.endPress()
+    this._onPointerUp = () => {
+      this._releaseCapture()
+      this.endPress()
+    }
+
+    // With capture held, leaving the hit box is not a release — that is
+    // the whole point of taking it. Without capture (no pointerId, or an
+    // element that cannot capture) the old behaviour stands.
+    this._onPointerLeave = () => {
+      if (this._captured === null) this._onCancel()
+    }
 
     // Space and Enter, matching a native button. `repeat` is ignored: a
     // held key fires keydown continuously and each one would otherwise
@@ -69,6 +96,7 @@ const MeetingPushToTalk = {
     // must still end the press — otherwise the window stays open and the
     // rest of the meeting is attributed to it.
     this._onCancel = () => {
+      this._releaseCapture()
       if (this._pressed) this.endPress()
     }
 
@@ -140,6 +168,46 @@ const MeetingPushToTalk = {
     this._teardownAnalyser()
     this._paintBars(0)
     this.pushEvent("push_to_talk_release", {})
+  },
+
+  // ── Pointer capture ────────────────────────────────────────────────────
+
+  /**
+   * Hold the pointer so drift off the target does not end the press.
+   * Mirrors `lib/long_press_drag.js`: `setPointerCapture` throws when the
+   * pointer already ended, and then nothing will ever release us — so the
+   * press is torn down here and marked refused rather than left armed and
+   * deaf.
+   */
+  _capture(event) {
+    const el = this.el
+    if (!event || typeof event.pointerId !== "number") return
+    if (!el || typeof el.setPointerCapture !== "function") return
+
+    try {
+      el.setPointerCapture(event.pointerId)
+      this._captured = event.pointerId
+    } catch (_err) {
+      // Pointer no longer active — it ended before capture was taken and
+      // no pointerup/cancel will ever arrive for it. Abort the phantom
+      // press: tear down, clear data-pressed, and say so.
+      this._captured = null
+      this.endPress()
+      this._reject("pointer-lost")
+    }
+  },
+
+  _releaseCapture() {
+    if (this._captured === null) return
+    const id = this._captured
+    this._captured = null
+    const el = this.el
+    if (!el || typeof el.releasePointerCapture !== "function") return
+    try {
+      el.releasePointerCapture(id)
+    } catch (_err) {
+      // No capture held — nothing to release.
+    }
   },
 
   // ── Rejection ──────────────────────────────────────────────────────────
@@ -317,7 +385,7 @@ const MeetingPushToTalk = {
     el.addEventListener("pointerdown", this._onPointerDown)
     el.addEventListener("pointerup", this._onPointerUp)
     el.addEventListener("pointercancel", this._onCancel)
-    el.addEventListener("pointerleave", this._onCancel)
+    el.addEventListener("pointerleave", this._onPointerLeave)
     el.addEventListener("keydown", this._onKeyDown)
     el.addEventListener("keyup", this._onKeyUp)
     if (typeof window !== "undefined" && window.addEventListener) {
@@ -331,7 +399,7 @@ const MeetingPushToTalk = {
     el.removeEventListener("pointerdown", this._onPointerDown)
     el.removeEventListener("pointerup", this._onPointerUp)
     el.removeEventListener("pointercancel", this._onCancel)
-    el.removeEventListener("pointerleave", this._onCancel)
+    el.removeEventListener("pointerleave", this._onPointerLeave)
     el.removeEventListener("keydown", this._onKeyDown)
     el.removeEventListener("keyup", this._onKeyUp)
     if (typeof window !== "undefined" && window.removeEventListener) {

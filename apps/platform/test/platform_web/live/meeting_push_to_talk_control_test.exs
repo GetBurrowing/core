@@ -121,6 +121,44 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
     assert is_binary(label) and label != ""
   end
 
+  # Task 01a07410 stage 5. On a phone a long press on the bare button raises
+  # the OS text-selection / callout menu instead of holding, and the browser
+  # claims the touch for scrolling before the hook can capture it. The fix
+  # is one named utility in app.css (`touch-action: none`,
+  # `-webkit-touch-callout: none`, `user-select: none`); the button must
+  # wear it, or the hook's pointer capture is arming a control the OS has
+  # already taken.
+  test "the hold target carries the touch-action utility and a 44px short axis",
+       %{html: html} do
+    nodes = control(html)
+    classes = nodes |> LazyHTML.attribute("class") |> List.first() |> String.split()
+
+    assert "meeting-hold-target" in classes,
+           "push-to-talk button is missing the meeting-hold-target utility; classes: " <>
+             inspect(classes)
+
+    # 44px minimum on the short axis (min-h-11 = 2.75rem = 44px).
+    assert "min-h-11" in classes
+
+    # The refused state the hook surfaces when pointer capture throws must
+    # have a slot to render into, on the error token like every other
+    # refusal.
+    assert "data-[rejected=pointer-lost]:text-error" in classes
+  end
+
+  # The utility must exist in the stylesheet, not just be named in the
+  # markup — a class with no rule behind it is the silent version of the
+  # bug this test exists to catch.
+  test "the touch-action utility is defined in app.css with all three declarations" do
+    css = File.read!(Path.join([File.cwd!(), "assets", "css", "app.css"]))
+
+    [rule] = Regex.run(~r/\.meeting-hold-target\s*\{[^}]*\}/, css)
+
+    assert rule =~ ~r/touch-action:\s*none/
+    assert rule =~ ~r/-webkit-touch-callout:\s*none/
+    assert rule =~ ~r/(?<!-webkit-)user-select:\s*none/
+  end
+
   test "its colour comes from semantic token slots, not raw hex or fixed palette",
        %{html: html} do
     markup = control(html) |> LazyHTML.to_html()

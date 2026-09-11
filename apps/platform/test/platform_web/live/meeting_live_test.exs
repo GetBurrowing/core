@@ -836,43 +836,52 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute opened =~ ~s(data-role="chat-panel-backdrop")
     end
 
-    test "below lg the CALL-RAIL backdrop is what dismisses chat now", %{
+    test "below lg the rail SHEET's backdrop is what dismisses chat now", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       # WAS: "backdrop click also toggles the drawer closed", driven through
-      # `data-role="chat-panel-backdrop"`. Chat rides the rail's drawer now,
-      # so the rail's own backdrop is the dismissal — there is exactly one
-      # backdrop for one drawer, which is the point.
+      # `data-role="chat-panel-backdrop"`, then re-pointed at the rail
+      # drawer's `call-rail-backdrop`. Task 01a07410 stage 3 retired that
+      # drawer: below `lg` the rail lives in a `PlatformWeb.Components.Sheet`
+      # (see `meeting_live_mobile_sheets_test.exs`), so the ONE backdrop is
+      # the sheet's own, and it dismisses to `close_call_rail`.
+      _ = render_hook(view, "meeting_viewport", %{"below" => true})
       opened = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
 
       refute opened =~ ~s(data-role="chat-panel-backdrop")
-      assert count(opened, ~s([data-role="call-rail-backdrop"])) == 1
+      refute opened =~ ~s(data-role="call-rail-backdrop")
+      assert count(opened, "#meeting-rail-sheet .sheet-backdrop") == 1
+      assert count(opened, ~s(#meeting-rail-sheet[data-open="true"])) == 1
 
-      closed =
-        view |> element(~s([data-role="call-rail-backdrop"])) |> render_click()
+      closed = view |> element("#meeting-rail-sheet .sheet-backdrop") |> render_click()
 
       [rail_attrs] = call_rail_panes(closed)
       assert rail_attrs["data-call-rail-open"] == "false"
-      refute closed =~ ~s(data-role="call-rail-backdrop")
+      assert count(closed, ~s(#meeting-rail-sheet[data-open="false"])) == 1
     end
 
-    test "the rail's own close button replaces the in-drawer close", %{
+    test "the sheet's own close button replaces the in-drawer close", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # WAS: `data-role="chat-panel-close"` inside the drawer header. Both
-      # the header and the button went with the aside; the rail already had
-      # its own `<lg` close affordance, so no second one was invented.
+      # WAS: `data-role="chat-panel-close"` inside the drawer header, then
+      # the rail drawer's `call-rail-close` bar. Both are gone (task
+      # 01a07410 stage 3): the sheet carries the close, and a second close
+      # inside the pane would be two ways to do one thing.
+      _ = render_hook(view, "meeting_viewport", %{"below" => true})
       opened = view |> element(~s([data-role="chat-panel-toggle"])) |> render_click()
       refute opened =~ ~s(data-role="chat-panel-close")
-      assert count(opened, ~s([data-role="call-rail-close"])) == 1
+      refute opened =~ ~s(data-role="call-rail-close")
 
-      closed = view |> element(~s([data-role="call-rail-close"])) |> render_click()
+      closed =
+        view
+        |> element(~s(#meeting-rail-sheet .sheet-header button[aria-label="Close"]))
+        |> render_click()
 
       [rail_attrs] = call_rail_panes(closed)
       assert rail_attrs["data-call-rail-open"] == "false"
@@ -927,20 +936,28 @@ defmodule PlatformWeb.MeetingLiveTest do
       end
     end
 
-    test "the rail carries the safe-area + bottom-nav bottom offset the drawer used to", %{
-      conn: conn,
-      meeting: meeting
-    } do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+    test "the in-flow rail carries NO viewport-anchored geometry — the `<lg` surface is the sheet",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # WAS: asserted against the chat drawer. The offset is a property of
-      # whichever element is the `<lg` slide-in whose bottom edge must clear
-      # the iOS home indicator and the bottom nav — that is the rail now.
+      # WAS: asserted the drawer's safe-area + bottom-nav bottom offset on
+      # the rail. Task 01a07410 stage 3 retired the drawer; below `lg` the
+      # rail is inside `PlatformWeb.Components.Sheet`, whose panel geometry
+      # (and the shut sheet's peek offset above the bottom nav) lives in
+      # app.css. The column frame is in-flow at `lg` and `hidden` below it,
+      # and must carry none of the old fixed geometry.
       [rail_class] =
         html |> within(~s([data-pane="call-rail"])) |> LazyHTML.attribute("class")
 
-      assert rail_class =~
-               "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
+      tokens = String.split(rail_class)
+      assert "hidden" in tokens
+      assert "lg:flex" in tokens
+      refute "fixed" in tokens
+      refute Enum.any?(tokens, &String.starts_with?(&1, "bottom-["))
+      refute Enum.any?(tokens, &String.starts_with?(&1, "translate-x"))
+
+      below = render_hook(view, "meeting_viewport", %{"below" => true})
+      assert count(below, "#meeting-rail-sheet #meeting-call-rail") == 1
     end
 
     test "chat is reachable at EVERY width — nothing hides it at lg", %{
@@ -961,8 +978,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       rail_classes = String.split(rail_class)
 
       refute "lg:!hidden" in rail_classes
-      assert "translate-x-0" in rail_classes
-      assert "lg:static" in rail_classes
+      # The column frame is flex AT `lg` (task 01a07410 stage 3 replaced the
+      # drawer's `translate-x-0` / `lg:static` pair with `hidden lg:flex`;
+      # below `lg` chat is reached through the rail sheet instead).
+      assert "lg:flex" in rail_classes
 
       # No ancestor of the chat body may be display:none at lg. The wrap is
       # `hidden`-flipped by tab only, and Chat is the active tab here.
@@ -2883,7 +2902,14 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ ~s(data-section="upcoming")
       refute html =~ ~s(data-section="ended")
       refute html =~ ~s(data-role="meeting-status-pill")
-      refute html =~ ~s(href="/meetings/#{live_meeting.slug}")
+      refute html =~ ~s(data-role="meeting-row")
+
+      # The slug link is back — but on FE-17 stage 7's mobile CARD (task
+      # 01a07410), never on a grouped row. Pinned by where it lives, not by
+      # its absence: `meeting_live_index_mobile_cards_test.exs` owns the
+      # card's own contract.
+      assert attrs_of(html, ~s([data-role="meeting-card"]), "href") ==
+               ["/meetings/#{live_meeting.slug}", "/meetings/#{upcoming.slug}"]
 
       # And both meetings are on the day view instead, carrying their own
       # statuses rather than a section's.
@@ -7172,7 +7198,7 @@ defmodule PlatformWeb.MeetingLiveTest do
              |> LazyHTML.query(~s([data-role="call-rail-expanded"] #meeting-call-rail))
              |> Enum.count() == 1
 
-      # Open the `<lg` drawer WHILE collapsed.
+      # Open the `<lg` surface WHILE collapsed.
       opened = view |> element(~s([data-role="call-rail-toggle"])) |> render_click()
 
       [opened_attrs] = call_rail_panes(opened)
@@ -7181,12 +7207,9 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       classes = String.split(opened_attrs["class"])
 
-      # The drawer's visibility is the BASE layer (`translate-x-0`, no
-      # prefix); the desktop collapse width is `lg:`-prefixed. Tokenised
-      # rather than matched as a substring: `=~ "translate-x-0"` is also
-      # true of `lg:translate-x-0`, which is present unconditionally and
-      # would make this pass with the mobile path broken.
-      assert "translate-x-0" in classes
+      # The desktop collapse width is `lg:`-prefixed. (The drawer's
+      # base-layer `translate-x-0` went with the drawer in task 01a07410
+      # stage 3; the `<lg` open-state is asserted on the sheet below.)
 
       # 44px, not 48px. Task 01a0740d shipped and MEASURED the collapsed
       # strip at exactly 44.000 and derives the 268px stage delta
@@ -7222,6 +7245,19 @@ defmodule PlatformWeb.MeetingLiveTest do
       expanded_classes = String.split(expanded_class)
       assert "lg:hidden" in expanded_classes
       refute "hidden" in expanded_classes
+
+      # And on a phone the same collapsed preference does not stop the
+      # sheet: the rail renders inside it, open, with the expanded branch
+      # still `lg:`-hidden only.
+      below = render_hook(view, "meeting_viewport", %{"below" => true})
+      assert count(below, ~s(#meeting-rail-sheet[data-open="true"])) == 1
+
+      assert below
+             |> frag()
+             |> LazyHTML.query(
+               ~s(#meeting-rail-sheet [data-role="call-rail-expanded"] #meeting-call-rail)
+             )
+             |> Enum.count() == 1
     end
 
     # Attribute maps for every `[data-pane="call-rail"]` in a document, one

@@ -361,3 +361,126 @@ describe("press bookkeeping", () => {
     expect(hook.levels().length).toBe(during)
   })
 })
+
+// ── Touch: pointer capture (task 01a07410 stage 5) ───────────────────────
+//
+// Two behaviours, and the order matters. The happy path (capture holds,
+// drift does not cancel) says NOTHING about the failure the stage fixes,
+// which is silence: `setPointerCapture` throwing for a pointer that
+// already ended, leaving a button that reads as pressed while no handler
+// is listening. So the throw is exercised directly and every assertion is
+// on state the page and the server can see.
+
+function capturingEl(el, { throws = false } = {}) {
+  el.captured = []
+  el.released = []
+  el.setPointerCapture = (id) => {
+    if (throws) {
+      // What a browser raises for a pointerId that is no longer active.
+      throw new Error("InvalidStateError: pointer is not active")
+    }
+    el.captured.push(id)
+  }
+  el.releasePointerCapture = (id) => el.released.push(id)
+  return el
+}
+
+describe("pointer capture on touch", () => {
+  it("takes capture on pointerdown and releases it on pointerup", () => {
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+    capturingEl(el)
+
+    el.fire("pointerdown", { button: 0, pointerId: 7 })
+    expect(el.captured).toEqual([7])
+    expect(hook.pressed()).toBe(true)
+
+    el.fire("pointerup", {})
+    expect(el.released).toEqual([7])
+    expect(hook.pressed()).toBe(false)
+  })
+
+  it("a pointer that drifts off the target while captured does NOT end the press", () => {
+    const { hook, el, pushed } = mountHook(roomWith([micPublication()]))
+    capturingEl(el)
+
+    el.fire("pointerdown", { button: 0, pointerId: 3 })
+    // The finger slid off the 44px box. With capture held the browser
+    // still routes the pointer to us; the leave must be a no-op.
+    el.fire("pointerleave", {})
+
+    expect(hook.pressed()).toBe(true)
+    expect(el.dataset.pressed).toBe("true")
+    expect(pushed.map(([name]) => name)).toEqual(["push_to_talk_press"])
+
+    // Sampling still runs: the utterance was not cut mid-sentence.
+    hook.sample()
+    expect(hook.peakLevel()).toBeGreaterThan(0)
+
+    el.fire("pointerup", {})
+    expect(pushed.map(([name]) => name)).toEqual([
+      "push_to_talk_press",
+      "push_to_talk_release",
+    ])
+  })
+
+  it("when setPointerCapture THROWS the press is torn down and refused, not left armed", () => {
+    const { hook, el, pushed } = mountHook(roomWith([micPublication()]))
+    capturingEl(el, { throws: true })
+
+    // If the throw escaped the handler this line would throw and the test
+    // would fail here — the mutation that deletes the try/catch detonates
+    // on this call, before any assertion.
+    el.fire("pointerdown", { button: 0, pointerId: 9 })
+
+    // Torn down: not pressed, data-pressed cleared, refused and named.
+    expect(hook.pressed()).toBe(false)
+    expect(el.dataset.pressed).toBe("false")
+    expect(hook.lastRejection()).toBe("pointer-lost")
+    expect(el.dataset.rejected).toBe("pointer-lost")
+
+    // The refusal is announced, exactly like every other refusal.
+    expect(dispatched.map((e) => e.type)).toContain("meeting:push-to-talk-rejected")
+    expect(dispatched[dispatched.length - 1].detail).toEqual({ reason: "pointer-lost" })
+
+    // Nothing is captured after the throw — no dangling id to release.
+    expect(el.captured).toEqual([])
+
+    // The server saw the press closed, never a press left open. Sampling
+    // after the throw measures nothing: the analyser is gone.
+    expect(pushed.map(([name]) => name)).toEqual([
+      "push_to_talk_press",
+      "push_to_talk_release",
+    ])
+    hook.sample()
+    expect(hook.levels()).toEqual([])
+  })
+
+  it("a throw on one press does not poison the next one", () => {
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+    capturingEl(el, { throws: true })
+
+    el.fire("pointerdown", { button: 0, pointerId: 9 })
+    expect(hook.lastRejection()).toBe("pointer-lost")
+
+    // Capture works again (the pointer is live this time).
+    capturingEl(el)
+    el.fire("pointerdown", { button: 0, pointerId: 10 })
+
+    expect(hook.pressed()).toBe(true)
+    expect(hook.lastRejection()).toBe(null)
+    expect(el.captured).toEqual([10])
+  })
+
+  it("without a pointerId there is no capture, and leaving still releases", () => {
+    // Mouse events without pointer semantics, or a fake element that cannot
+    // capture: the pre-stage behaviour is preserved, not silently lost.
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+    capturingEl(el)
+
+    el.fire("pointerdown", { button: 0 })
+    expect(el.captured).toEqual([])
+
+    el.fire("pointerleave", {})
+    expect(hook.pressed()).toBe(false)
+  })
+})

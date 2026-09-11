@@ -39,11 +39,30 @@ defmodule PlatformWeb.Components.Sheet do
     doc:
       "Extra classes appended to the root element. Use for visibility modifiers like `lg:hidden` or per-instance overrides."
 
+  attr :handle_label, :string,
+    default: nil,
+    doc:
+      "Accessible name for the handle row. Only consulted when the `:handle` slot is filled — the plain decorative bar stays `aria-hidden`."
+
+  attr :rest, :global,
+    doc:
+      "Spread onto the root element. Lets a caller stamp `data-*` state on the sheet without the component learning what it means (FE-17: `data-sheet`)."
+
   slot :title
   slot :inner_block, required: true
   slot :actions, doc: "Bottom action bar. Typically Cancel + primary CTA."
 
+  slot :handle,
+    doc:
+      "Optional content rendered INSIDE the bottom-sheet handle row, replacing the plain grab bar. On a phone the shut sheet is the only place a live countdown is visible, so the handle stops being a pure affordance and carries status. When this slot is empty the handle markup is byte-identical to the decorative bar and stays `aria-hidden=\"true\"`."
+
   def sheet(assigns) do
+    # Twelve existing call sites pass no `:handle`. They must keep rendering the
+    # decorative grab bar byte-for-byte, so the bare branch is a single flag and
+    # its markup is untouched from before the slot existed.
+    assigns =
+      assign(assigns, :bare_handle?, assigns.placement == :bottom and assigns.handle == [])
+
     ~H"""
     <div
       id={@id}
@@ -60,10 +79,20 @@ defmodule PlatformWeb.Components.Sheet do
       data-open={to_string(@open)}
       data-on-close={@on_close}
       data-on-close-target={close_target_selector(@on_close_target, @id)}
+      {@rest}
     >
       <div class="sheet-backdrop" phx-click={@on_close} phx-target={@on_close_target}></div>
       <div class="sheet-panel">
-        <div :if={@placement == :bottom} class="sheet-handle" aria-hidden="true"></div>
+        <div :if={@bare_handle?} class="sheet-handle" aria-hidden="true"></div>
+        <div
+          :if={@placement == :bottom and @handle != []}
+          id={"#{@id}-handle"}
+          class="sheet-handle sheet-handle--status"
+          role="status"
+          aria-label={@handle_label}
+        >
+          {render_slot(@handle)}
+        </div>
 
         <header class="sheet-header">
           <h2 id={"#{@id}-title"} class="sheet-title">

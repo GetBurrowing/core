@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import CandidateClock from "../../js/hooks/candidate_clock.js"
+import CandidateClock, { SheetHandleClock } from "../../js/hooks/candidate_clock.js"
 
 /**
  * Tests for the `CandidateClock` hook (task 01a03f4e-78b1, retimed by
@@ -212,6 +212,41 @@ function drainWarned(card) {
   return card
     .node("meeting-candidate-drain")
     .classList.contains("candidate-drain--warning")
+}
+
+// The BOTTOM-SHEET HANDLE (task 01a07410 stage 2). Built with the same
+// child roles as a card, deliberately: the handle is painted by the SAME
+// `_paint`, so it reports the same number the card does by construction
+// rather than by two implementations agreeing.
+//
+// Built WITHOUT a drain child, which is the shape the handle actually has
+// — `_paint` must still write the number before it gives up on the width.
+function fakeHandle({ actsAt, totalSeconds = 30, warningSeconds = 5 } = {}) {
+  const children = [fakeNode("meeting-candidate-remaining", { withDataset: true })]
+
+  const dataset = { actsAt, totalSeconds: String(totalSeconds) }
+  if (warningSeconds !== null) dataset.warningSeconds = String(warningSeconds)
+
+  return {
+    role: "meeting-sheet-handle-countdown",
+    dataset,
+    children,
+    ...queryable(children),
+    node(role) {
+      return children.find((n) => n.role === role)
+    },
+  }
+}
+
+// A rail that knows about nodes OUTSIDE itself. The handle is not a
+// descendant of the rail `<section>` — it is the sheet's grab bar, and
+// below `lg` the rail is inside a drawer translated off screen — so a
+// fake whose handle sat in `rail.cards` would be testing a DOM that
+// cannot exist and would pass on a hook that never widened its root.
+function fakeRailWithDocument(cards, outside) {
+  const rail = fakeRail(cards)
+  rail.ownerDocument = queryable(outside)
+  return rail
 }
 
 // ── Suite ────────────────────────────────────────────────────────────────
@@ -826,6 +861,186 @@ describe("CandidateClock", () => {
 
       expect(shownNumber(card)).toBe("14")
       expect(row.hidden).toBe(true)
+
+      hook.destroyed()
+    })
+  })
+
+  // ── The handle's OWN heartbeat ─────────────────────────────────────────
+  //
+  // `CandidateClock` mounts on the candidate rail `<section>`, which the
+  // call rail renders only inside the Canvas tab. On every other tab there
+  // is no rail ticker, so the shut sheet's handle mounts `SheetHandleClock`:
+  // the same `_tick`/`_paint`, no pointer freeze.
+  describe("SheetHandleClock", () => {
+    it("ticks the handle from ONE interval of its own, with no card in sight", () => {
+      const spy = vi.spyOn(globalThis, "setInterval")
+
+      const handle = fakeHandle({ actsAt: new Date(T0 + 20_000).toISOString() })
+      // The hook's `el` IS the handle; the document query finds it again.
+      handle.ownerDocument = queryable([handle])
+
+      const hook = Object.create(SheetHandleClock)
+      hook.el = handle
+      hook.pushEvent = vi.fn()
+      hook.mounted()
+
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(shownNumber(handle)).toBe("20")
+
+      vi.advanceTimersByTime(6000)
+      expect(shownNumber(handle)).toBe("14")
+
+      hook.destroyed()
+      vi.advanceTimersByTime(6000)
+      // Stopped: nothing paints after `destroyed()`.
+      expect(shownNumber(handle)).toBe("14")
+    })
+
+    it("never binds the rail's pointer freeze — a thumb on the handle freezes nothing", () => {
+      const handle = fakeHandle({ actsAt: new Date(T0 + 20_000).toISOString() })
+      handle.ownerDocument = queryable([handle])
+      const listeners = []
+      handle.addEventListener = (name) => listeners.push(name)
+
+      const hook = Object.create(SheetHandleClock)
+      hook.el = handle
+      hook.pushEvent = vi.fn()
+      hook.mounted()
+
+      expect(listeners).toEqual([])
+      expect(hook.pushEvent).not.toHaveBeenCalled()
+
+      hook.destroyed()
+    })
+  })
+
+  // ── The handle and the cards, driven by ONE tick ──────────────────────
+
+  describe("the bottom-sheet handle countdown", () => {
+    it("paints the handle and the cards from a SINGLE interval and a single tick", () => {
+      const spy = vi.spyOn(globalThis, "setInterval")
+
+      const card = fakeCard({ actsAt: new Date(T0 + 20_000).toISOString() })
+      const handle = fakeHandle({ actsAt: new Date(T0 + 20_000).toISOString() })
+      const hook = mountHook(fakeRailWithDocument([card], [handle]))
+
+      // ONE interval, not two. This is the load-bearing assertion: a
+      // second hook mounted on the sheet would paint the same numbers
+      // and pass every value assertion below while drifting away from
+      // the sweeper, which is the failure the rail was consolidated to
+      // remove. Only a COUNT can tell the two designs apart.
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      expect(shownNumber(card)).toBe("20")
+      expect(shownNumber(handle)).toBe("20")
+
+      vi.advanceTimersByTime(6000)
+
+      // Both MOVED, and moved together. Equal-and-changed, not merely
+      // equal: two frozen nodes are also equal.
+      expect(shownNumber(card)).toBe("14")
+      expect(shownNumber(handle)).toBe("14")
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      hook.destroyed()
+    })
+
+    it("steps the handle to amber at the SERVER's threshold, and not before", () => {
+      // Two-sided, for the reason the card threshold tests are: "amber
+      // appears at 5" passes just as well on a handle that is amber at
+      // every value.
+      const handle = fakeHandle({
+        actsAt: new Date(T0 + 8000).toISOString(),
+        warningSeconds: 5,
+      })
+      const hook = mountHook(fakeRailWithDocument([], [handle]))
+
+      expect(shownNumber(handle)).toBe("8")
+      expect(countWarned(handle)).toBe(false)
+
+      vi.advanceTimersByTime(3000)
+
+      expect(shownNumber(handle)).toBe("5")
+      expect(countWarned(handle)).toBe(true)
+
+      hook.destroyed()
+    })
+
+    it("paints a handle with no drain child rather than throwing", () => {
+      // `_paint` returns early when the drain lookup misses. That early
+      // return sits AFTER the number is written, and the handle is the
+      // first node in the tree that exercises it — a card always has a
+      // drain, so nothing before this stage could have caught a return
+      // that moved above the text node.
+      const handle = fakeHandle({ actsAt: new Date(T0 + 12_000).toISOString() })
+      const hook = mountHook(fakeRailWithDocument([], [handle]))
+
+      expect(shownNumber(handle)).toBe("12")
+
+      hook.destroyed()
+    })
+
+    it("rewrites the status row's accessible name from the SERVER's template, every tick", () => {
+      // The digit on the handle is `aria-hidden`; this string is the whole
+      // of what a screen reader gets. A name that said "20 seconds" for the
+      // entire window would be a lie told only to the people least able
+      // to recover from a missed window.
+      const row = fakeNode("sheet-handle-row")
+      const handle = fakeHandle({ actsAt: new Date(T0 + 20_000).toISOString() })
+      handle.dataset.labelTemplate = "%{n} second%{s} until a task is created"
+      handle.dataset.labelTarget = "meeting-rail-sheet-handle"
+
+      const rail = fakeRailWithDocument([], [handle])
+      rail.ownerDocument.getElementById = (id) =>
+        id === "meeting-rail-sheet-handle" ? row : null
+
+      const hook = mountHook(rail)
+
+      expect(row.attrs["aria-label"]).toBe("20 seconds until a task is created")
+
+      vi.advanceTimersByTime(19_000)
+
+      // Singular at one: "1 seconds" is the kind of sloppiness a template
+      // with one placeholder produces, and it is exactly what a
+      // screen-reader user would hear at the moment it matters most.
+      expect(row.attrs["aria-label"]).toBe("1 second until a task is created")
+
+      hook.destroyed()
+    })
+
+    it("names the node ITSELF when no target is given, and leaves cards alone", () => {
+      const handle = fakeHandle({ actsAt: new Date(T0 + 7_000).toISOString() })
+      handle.dataset.labelTemplate = "%{n} second%{s} left"
+      handle.attrs = {}
+      handle.setAttribute = function (name, value) {
+        this.attrs[name] = value
+      }
+
+      const card = fakeCard({ actsAt: new Date(T0 + 7_000).toISOString() })
+      card.attrs = {}
+      card.setAttribute = function (name, value) {
+        this.attrs[name] = value
+      }
+
+      const hook = mountHook(fakeRailWithDocument([card], [handle]))
+
+      expect(handle.attrs["aria-label"]).toBe("7 seconds left")
+      // A card has no template and is not a live region: untouched.
+      expect(card.attrs["aria-label"]).toBeUndefined()
+
+      hook.destroyed()
+    })
+
+    it("still paints the cards when there is no wider root at all", () => {
+      // `fakeRail` has no `ownerDocument`, i.e. a detached rail. The
+      // fallback must not take the card loop down with it.
+      const card = fakeCard({ actsAt: new Date(T0 + 20_000).toISOString() })
+      const hook = mountHook(fakeRail([card]))
+
+      vi.advanceTimersByTime(6000)
+
+      expect(shownNumber(card)).toBe("14")
 
       hook.destroyed()
     })
