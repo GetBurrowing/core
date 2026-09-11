@@ -2,6 +2,17 @@ name: CI
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Test-count floor for the MAIN `mix test --include slow` pass in `Run tests`
+  # (task 01a08e20). It is a CRASH DETECTOR, not a coverage gate: on PR #997
+  # attempt 1 the BEAM aborted mid-suite (`[asmjit] Assertion failed`), ExUnit
+  # printed no summary line, and the job still concluded success having run
+  # 9 tests. The step fails if the first pass prints no `N tests, M failures`
+  # summary or N is below this floor. The suite is ~16.8k tests today; the
+  # floor is deliberately far below that so it only fires on a run that did
+  # not reach the end. Raise it here when the suite grows well past it; it is
+  # never a reason to delete tests. `Platform.CiCrashGuardTest` pins the
+  # variable and its use.
+  MIN_TEST_COUNT: 15000
 
 on:
   push:
@@ -245,6 +256,34 @@ jobs:
           set -o pipefail
           first_pass_log="${RUNNER_TEMP:-.}/mix-test-first-pass.log"
 
+          # Test-count floor on the main pass (task 01a08e20; the floor value
+          # and its rationale are at the workflow `env:` block). Reads the
+          # first pass's own ExUnit summary line and fails the step if there
+          # is none or the count is below MIN_TEST_COUNT. Scoped to
+          # $first_pass_log only, so the small partitions below
+          # (`--only isolated_beam`, the boot-telemetry pair) never trip it.
+          assert_test_count_floor() {
+            local summary count
+            # `|| true`: under pipefail a no-match grep would otherwise abort
+            # the `bash -e` step before the ::error:: below is printed.
+            summary=$(grep -oE '[0-9]+ tests?, [0-9]+ failures?' "$first_pass_log" | tail -n1 || true)
+            # The bare `echo` first: a dead first pass leaves ExUnit's progress
+            # dots mid-line, and GitHub only reads `::error::` at column 0
+            # (measured on control run 34552027555: red step, no annotation).
+            if [ -z "$summary" ]; then
+              echo
+              echo "::error::main mix test pass printed no ExUnit summary line (N tests, M failures) — the suite did not run to completion"
+              exit 1
+            fi
+            count=${summary%% *}
+            if [ "$count" -lt "$MIN_TEST_COUNT" ]; then
+              echo
+              echo "::error::main mix test pass ran $count tests, below MIN_TEST_COUNT=$MIN_TEST_COUNT — the suite did not run to completion (raise the floor in ci.yml env: if the suite legitimately shrank)"
+              exit 1
+            fi
+            echo "main mix test pass ran $count tests (floor MIN_TEST_COUNT=$MIN_TEST_COUNT)"
+          }
+
           # `retry_fired` is THIS run's outcome — did the serial retry fire —
           # written to $GITHUB_OUTPUT so the `first-run-green` job can read it
           # without grepping a log. It is written exactly once per exit path:
@@ -268,9 +307,26 @@ jobs:
                 }
               ' "$first_pass_log" | sort -u
             )
+            # Nameless-retry refusal (task 01a08e20). A first pass that exits
+            # non-zero WITHOUT any ExUnit failure block is a crash, not a flake:
+            # on PR #997 attempt 1 the BEAM aborted (`[asmjit] Assertion
+            # failed`, core dumped), the harvest above found nothing,
+            # `mix test --failed` ran an empty manifest, printed `There are no
+            # tests to run`, exited 0, and the job concluded success. There is
+            # nothing to retry, so refuse before the retry command runs and
+            # before `retry_fired` is written. This check MUST stay above the
+            # `mix test --failed` line below. It writes NOTHING to
+            # $GITHUB_OUTPUT: the retry never ran, so `retry_fired=true` would
+            # be false; `first-run-green`'s `*)` arm already handles the
+            # missing output. The bare `echo` first: the crash leaves ExUnit's
+            # progress dots mid-line and GitHub only reads `::error::` at
+            # column 0 (measured on control run 34552027555).
             if [ -z "$failed_tests" ]; then
-              failed_tests="(no test names harvested from the first-pass log — the failure was probably not an ExUnit assertion)"
+              echo
+              echo "::error::initial mix test failed with no ExUnit failures harvested (crash, not flake)"
+              exit 1
             fi
+            assert_test_count_floor
 
             # Annotations are single-line; %0A is GitHub's newline escape.
             echo "::warning::initial mix test failed; retrying failed tests serially. First pass failed these tests:%0A$(echo "$failed_tests" | sed 's/$/%0A/' | tr -d '\n')"
@@ -292,6 +348,7 @@ jobs:
               exit 1
             fi
           fi
+          assert_test_count_floor
           echo "retry_fired=false" >> "$GITHUB_OUTPUT"
 
       # Task 01a08d5d (carved out of 01a08b49). QUEUED-BEYOND-DRAIN in
