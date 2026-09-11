@@ -1217,6 +1217,14 @@ defmodule Platform.Orchestration.PromptTemplates do
         (`Platform.Federation.ToolSurface.execute/3` for MCP tools) against a private dev database.
         Record in the evidence which build was exercised and at which sha.
 
+        Before recording ANY verdict on a case driven through a browser, print the final URL and the page
+        title of the tab you measured, and put both in the evidence map (`final_url`, `page_title`). A final
+        URL on the identity provider, or a title such as "Sign in", means you measured the login screen and
+        not the feature: that case is `could_not_evaluate` with the reason "no authenticated session", never a
+        pass and never a plain fail. Neither agent-reachable headless Chrome (rock, hive) holds a production
+        session, and production runs `main` rather than this branch in any case, so an authenticated browser
+        case is measured only against the worktree dev server after you log in there (ticket 01a0918b-dc68).
+
         A parameter is proven read only when its value flips an outcome. An `expected` clause of the form
         "the call also succeeds" is satisfied by an implementation that ignores the parameter, so add the
         discriminating half (a stale or invalid value that must be refused) and report both.
@@ -1267,7 +1275,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         The attention signal that delivered this message includes a `context` field with the full task
         hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id.
 
-        {{federation_preamble}}\
+        {{federation_preamble}}
         """
       },
       %{

@@ -40,9 +40,23 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                          "priv/repo/migrations/20260731000000_refresh_deploying_template_branch_recovery.exs"
                                        ])
 
+  # Task-adjacent to 01a0918b-dc68. Required for the same reason as the two
+  # above: `mix ecto.migrate` only loads PENDING files, so after this migration
+  # has been applied to the test DB its module is undefined in the VM and
+  # `up/0` raises on the SECOND run.
+  @browser_session_migration Path.join([
+                               __ENV__.file
+                               |> Path.dirname()
+                               |> Path.dirname()
+                               |> Path.dirname()
+                               |> Path.dirname(),
+                               "priv/repo/migrations/20260911180000_force_update_review_e2e_template_browser_session_check.exs"
+                             ])
+
   setup_all do
     Code.require_file(@intent_classify_corrections_migration)
     Code.require_file(@deploying_branch_recovery_migration)
+    Code.require_file(@browser_session_migration)
     :ok
   end
 
@@ -623,6 +637,71 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~ "validation_evaluate"
       assert content =~ "passed"
       assert content =~ "failed"
+    end
+
+    test "the force-update migration actually rewrites a STALE row" do
+      # The fresh-DB path proves nothing about this migration: `seed_defaults/0`
+      # already inserts the current descriptor, so `up/0` rewrites a row that
+      # is already correct and would pass even if it were a no-op. The rig
+      # prepares the very state whose absence is under test.
+      #
+      # So put the row into the state this migration exists for — an install
+      # carrying the PRE-change body — and assert it is repaired.
+      stale = "STALE BODY — no browser-session instruction here"
+
+      template = PromptTemplates.get_template_by_slug("dispatch.review_e2e")
+      assert template, "dispatch.review_e2e row must exist for this test to mean anything"
+
+      {:ok, _} = PromptTemplates.update_template(template, %{content: stale})
+
+      assert PromptTemplates.get_template_by_slug("dispatch.review_e2e").content == stale,
+             "precondition failed: the row was not actually made stale"
+
+      :ok = Platform.Repo.Migrations.ForceUpdateReviewE2eTemplateBrowserSessionCheck.up()
+
+      repaired = PromptTemplates.get_template_by_slug("dispatch.review_e2e").content
+
+      refute repaired == stale, "the migration left the stale body in place"
+
+      assert repaired == PromptTemplates.default_content_for_slug("dispatch.review_e2e"),
+             "the migration must write the descriptor body verbatim"
+
+      assert repaired =~ "no authenticated session"
+    end
+
+    test "makes the reviewer prove it measured the feature, not a login screen" do
+      # Added 2026-09-11 with
+      # `20260911180000_force_update_review_e2e_template_browser_session_check`.
+      # Neither agent-reachable headless Chrome holds a production session, so
+      # a browser-driven case can silently measure the IdP sign-in page: it
+      # renders fine, `readyState` reaches complete, and a screenshot looks
+      # plausible. Nothing announces that it is the wrong document.
+      #
+      # This is a CONTENT assertion by necessity. A row-vs-descriptor pin is
+      # vacuous for this slug — the force-update migration reads the descriptor,
+      # so a fresh test DB makes the two equal by construction. See that
+      # migration's moduledoc.
+      content = PromptTemplates.default_content_for_slug("dispatch.review_e2e")
+
+      # The evidence keys, so the instruction is machine-checkable downstream
+      # rather than only prose.
+      assert content =~ "final_url"
+      assert content =~ "page_title"
+
+      # The verdict it must produce. `could_not_evaluate` already appears
+      # elsewhere in this body, so assert the BINDING — that it is tied to the
+      # missing session — rather than the bare token, which would pass on the
+      # pre-2026-09-11 body too.
+      assert content =~ "no authenticated session",
+             "the template must name the reason string the reviewer records"
+
+      assert Regex.match?(~r/could_not_evaluate.{0,200}no authenticated session/s, content),
+             "the no-session case must be bound to could_not_evaluate, not left as loose prose"
+
+      # And that it is neither of the two verdicts it would otherwise collapse
+      # into — a plain fail burns a review round on a feature that was never
+      # measured.
+      assert content =~ "never a" or content =~ "not a pass"
     end
 
     test "forbids self-bouncing the task status" do
