@@ -1862,7 +1862,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_update",
         description:
-          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042). Flat assignee_id + assignee_type writes are auto-routed to the task's current-phase slot in phase_assignees (survives phase transitions per ADR 0044); with auto_approve_plan true and an agent-typed flat assignee, task_update also fills the absent phase slots (judged against the task's persisted phase_assignees overlaid with this call's routed slots) from the flat agent, while explicit phase_assignees entries win and present slots are never overwritten. User-typed or missing flat assignees still need explicit agent-typed phase_assignees for auto-approve. Pass phase_assignees directly to set multiple phase slots in one call — when both are supplied, phase_assignees wins.",
+          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042). Flat assignee_id + assignee_type writes are auto-routed to the task's current-phase slot in phase_assignees (survives phase transitions per ADR 0044); with auto_approve_plan true and an agent-typed flat assignee, task_update also fills the absent phase slots (judged against the task's persisted phase_assignees overlaid with this call's routed slots) from the flat agent, while explicit phase_assignees entries win and present slots are never overwritten. User-typed or missing flat assignees still need explicit agent-typed phase_assignees for auto-approve. Pass phase_assignees directly to set multiple phase slots in one call — when both are supplied, phase_assignees wins. This tool is LAST-WRITE-WINS by default: pass base_updated_at (the `updated_at` you read the task at) to be REFUSED with a recoverable stale_base error instead of silently overwriting a concurrent writer.",
         parameters: %{
           task_id: %{
             type: "string",
@@ -1904,11 +1904,19 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Granular per-phase assignees keyed by phase (\"planning\" | \"execution\" | \"review\") with values %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\" | \"user\"}. Canonical writer per ADR 0044 — only the slots supplied are written; other slots stay untouched. Wins over flat assignee_id + assignee_type when both are supplied in the same call."
+          },
+          base_updated_at: %{
+            type: "string",
+            required: false,
+            aliases: ["if_unmodified_since"],
+            description:
+              "Optional compare-and-set token: the ISO8601 `updated_at` your edit was composed against (take it from the task_get / task_update response you read). When supplied and the row has advanced since, the write is REFUSED with a recoverable error naming the current updated_at, instead of silently overwriting the other writer. Omit it to keep the pre-existing last-write-wins behaviour."
           }
         },
-        returns: "The updated task object (includes sponsor: nil | %{id, name, email}).",
+        returns:
+          "The updated task object (includes sponsor: nil | %{id, name, email}), plus `previous_updated_at` — the `updated_at` the row held BEFORE this call, i.e. the revision this write displaced. Compare it against the `updated_at` you last read: if it is newer than yours, you overwrote a concurrent writer's edit. It is disclosure after the fact, not prevention — nothing warns the writer you displaced. Pass `base_updated_at` to be refused instead. This key is on the task_update envelope ONLY; task_get and task_list do not carry it, because a read displaces nothing.",
         limitations:
-          "Status transitions are validated; not all transitions are allowed. sponsor_user_id must reference an existing user; passing an unknown UUID returns a recoverable FK error.",
+          "Status transitions are validated; not all transitions are allowed. sponsor_user_id must reference an existing user; passing an unknown UUID returns a recoverable FK error. WITHOUT `base_updated_at` THIS TOOL IS LAST-WRITE-WINS: a concurrent writer's edit is overwritten silently and nothing tells either party. Supplying `base_updated_at` (alias `if_unmodified_since`) turns that into a recoverable `stale_base` refusal naming the current updated_at. The guard covers the FIELD write only — it is NOT extended to the status transition, which is a separate statement, so a call that changes both fields and status can have its guarded field write refused while an accompanying transition would not have been guarded. An unparseable base is rejected before any write.",
         when_to_use: "When you need to update a task's details or move it between columns"
       },
       %{
@@ -4725,231 +4733,12 @@ defmodule Platform.Federation.ToolSurface do
     task_id = Map.get(args, "task_id") || Map.get(args, "id")
     actor = actor_from_mcp_context(context)
 
-    case Tasks.get_task_record(task_id) do
-      nil ->
-        {:error,
-         %{
-           error: "Task not found: #{task_id}",
-           recoverable: false,
-           suggestion: "Use task_list to find available tasks"
-         }}
-
-      task ->
-        with {:ok, flat_attrs, phase_attrs} <-
-               TaskAttrs.build_task_attrs(args, :update,
-                 auto_route_flat_assignee_current_phase: true,
-                 current_phase: Tasks.current_phase(task),
-                 # The :update auto-approve fill (ADR 0044 §5, task
-                 # 01a0589b) is keyed off the task's persisted slots
-                 # overlaid by this call's routed slots, so a present
-                 # slot is never overwritten by the flat pair.
-                 existing_phase_assignees: task.phase_assignees || %{}
-               ) do
-          # Status transitions still route through
-          # `Tasks.transition_task_status/2` (validates the edge), while
-          # everything else flows through `Tasks.update_task/2`. Split
-          # so the two writers don't step on each other.
-          status_change = Map.get(flat_attrs, :status)
-          non_status_flat = Map.delete(flat_attrs, :status)
-
-          # If `auto_approve_plan` will be `true` after this update (in
-          # this call or already-true on the task with phase_assignees
-          # being rewritten), hard-reject when the execution and/or
-          # review phases don't resolve to a live agent. Silent
-          # auto-approve without a valid downstream agent is the bug
-          # this guards against — the plan flips to approved but no
-          # planner picks it up. See task 019f42fd session note
-          # 2026-07-08 (initial guard) and 019f5145 (hardened per ADR
-          # 0044). Gate lives inside `TaskAttrs.check_auto_approve_preconditions/4`.
-          auto_check =
-            TaskAttrs.check_auto_approve_preconditions(flat_attrs, phase_attrs, task)
-
-          # Order: flat_attrs → phase_attrs → status_change. Phase-attrs
-          # writer (`Tasks.set_phase_assignees/2`) uses the task's
-          # CURRENT status to derive the flat pointer, so we apply it
-          # before any status transition — otherwise a same-call
-          # phase-slot write for the target phase would still see the
-          # old phase's derivation. The plan-approval gate runs AFTER
-          # phase_attrs so a same-call `phase_assignees.execution =
-          # <user>` rewrite is visible to `sponsor_bypasses_plan_gate?/2`
-          # (the predicate reads phase-resolved assignees, not the
-          # pre-update snapshot).
-          with :ok <- auto_check,
-               {:ok, updated} <- maybe_update_task(task, non_status_flat, actor),
-               {:ok, updated} <- maybe_apply_phase_assignees(updated, phase_attrs),
-               :ok <- maybe_check_plan_gate(updated, status_change, actor),
-               {:ok, updated} <- maybe_transition_status(updated, status_change, actor) do
-            # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
-            # return the un-preloaded struct. Refresh sponsor so
-            # `serialize_task` can emit the current shape — otherwise a
-            # caller that just cleared the sponsor via `sponsor_user_id:
-            # nil` would still see the pre-update Sponsor%User in the
-            # response envelope.
-            updated = Repo.preload(updated, :sponsor, force: true)
-            Tasks.broadcast_board({:task_updated, updated})
-            {:ok, serialize_task(updated)}
-          else
-            {:error, :invalid_transition} ->
-              # Task 01a05394 stage 3: name the legal exits, derived from
-              # `Tasks.valid_task_transitions/0` (never a second copy of the
-              # table). An empty exit list says so in words rather than
-              # rendering a dangling enumeration.
-              exits = Map.get(Tasks.valid_task_transitions(), task.status, [])
-
-              exits_sentence =
-                case exits do
-                  [] ->
-                    "'#{task.status}' has no valid outbound transitions."
-
-                  _ ->
-                    "Valid next statuses from '#{task.status}': #{Enum.join(exits, ", ")}."
-                end
-
-              {:error,
-               %{
-                 error:
-                   "Invalid status transition from '#{task.status}' to '#{status_change}'. " <>
-                     exits_sentence,
-                 recoverable: true,
-                 submitted_args: args,
-                 suggestion:
-                   exits_sentence <>
-                     " 'cancelled' is TERMINAL \u2014 it has no outbound edges and it means the " <>
-                     "work was ABANDONED. Use it only to retire work that was genuinely " <>
-                     "abandoned or superseded, never to close work that actually shipped. " <>
-                     "Delivered-but-unplanned work is recorded by a Fabrikam admin via " <>
-                     "Platform.Tasks.close_as_delivered/3; a task already cancelled by " <>
-                     "mistake is corrected via Platform.Tasks.reinstate_cancelled_task/3."
-               }}
-
-            {:error, :no_approved_plan} ->
-              # Task 019f6380 stage 2: agent MCP calls that try to
-              # transition into an execution phase without an approved
-              # plan get the same friendly envelope shape as the
-              # `:invalid_transition` case. Sponsor-bypass does NOT fire
-              # for agent actors — that's the whole point of the actor
-              # check in `sponsor_bypasses_plan_gate?/2`.
-              {:error,
-               %{
-                 error:
-                   "Cannot transition to '#{status_change}': task has no approved plan and is not a sponsor-bypass candidate",
-                 recoverable: true,
-                 submitted_args: args,
-                 suggestion:
-                   "Create a plan (plan_create) and approve it (plan_approve) before transitioning to an execution phase. " <>
-                     "The sponsor-bypass exemption only applies to human-initiated moves on sponsor-only tasks with no agent involvement."
-               }}
-
-            {:error, :no_deploy_target_resolved} ->
-              # `Tasks.transition_task_status/2` refuses `:deploying` when
-              # neither the task nor the project supplies a target. The
-              # atom would otherwise fall through to the changeset
-              # catch-all below, where `inspect_errors/1` calls
-              # `Ecto.Changeset.traverse_errors/2` on an atom and crashes.
-              # Mirror the `:invalid_transition` friendly envelope shape.
-              {:error,
-               %{
-                 error: "unresolved_deploy_target",
-                 recoverable: true,
-                 submitted_args: args,
-                 suggestion:
-                   "Set task.deploy_target explicitly (e.g. task_update(deploy_target: \"production\")) " <>
-                     "or configure a project-level default via " <>
-                     "project_update(deploy_config: %{\"default_deploy_target\" => ...}) " <>
-                     "before transitioning to deploying."
-               }}
-
-            {:error, %Ecto.Changeset{} = changeset} ->
-              {:error,
-               %{
-                 error: "Failed to update task: #{inspect_errors(changeset)}",
-                 recoverable: true,
-                 submitted_args: args,
-                 suggestion: "Check that the provided values are valid"
-               }}
-
-            {:error,
-             {:auto_approve_precondition_missing,
-              %{missing_phases: phases, merged_phase_assignees: merged}}} ->
-              corrected = TaskAttrs.auto_approve_corrected_args(args, merged, phases)
-
-              {:error, auto_approve_precondition_envelope(phases, args, corrected, :update)}
-
-            # The commencement gate's 3-tuple. Without this clause the
-            # `with` has no matching `else` branch (every other clause is
-            # a 2-tuple) and raises `WithClauseError` → 500.
-            {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
-              # Recoverable refusal → echo the submitted arguments in the
-              # response envelope only (task 01a05877 stage 2). The
-              # delegating `waiting_on == []` envelope's recoverable flag
-              # depends on the observed stack status, so the echo is
-              # added only when the envelope is actually recoverable.
-              gate_envelope = stack_plans_pending_envelope(stack_id, waiting_on)
-
-              {:error,
-               if(Map.get(gate_envelope, :recoverable),
-                 do: Map.put(gate_envelope, :submitted_args, args),
-                 else: gate_envelope
-               )}
-
-            # ADR 0045 decision 7 (task 01a05393 stage 3): a member of a
-            # stack that already SHIPPED through its rollup cannot re-enter
-            # an execution status. Not recoverable on this task — the
-            # message itself says where the work goes instead.
-            {:error, :stack_already_shipped, %{message: message}} ->
-              {:error,
-               %{
-                 error: message,
-                 recoverable: false,
-                 suggestion:
-                   "Create a new individual task (task_create) for the post-ship change. " <>
-                     "This task may still be cancelled."
-               }}
-
-            # Task 01a05393 stage 6 (defect D): `stack_pending` is the
-            # parked-behind-a-stack status. A task with no `stack_id`
-            # moved there is invisible to the dispatcher, to the promote
-            # sweep AND to the board's drag-out — nothing can move it
-            # again. `Tasks.require_stack_commencement_for/2` refuses the
-            # write; this arm keeps the refusal from falling into the
-            # changeset catch-all (a 3-tuple → `WithClauseError` → 500).
-            {:error, :stack_pending_requires_stack, _} ->
-              {:error,
-               %{
-                 error:
-                   "Cannot transition to 'stack_pending': task #{task.id} is not in a stack. " <>
-                     "'stack_pending' means \"parked until the stack's dependencies land\" and is " <>
-                     "unreachable by the dispatcher, the promote sweep and the board once set on a stackless task.",
-                 recoverable: true,
-                 suggestion:
-                   "Put the task in a stack first with stack_add(stack_id, task_id) — a started stack " <>
-                     "parks the newcomer at 'stack_pending' itself. To simply pause a stackless task, " <>
-                     "use 'blocked' instead.",
-                 submitted_args: args
-               }}
-          end
-        else
-          # Recoverable refusals echo the submitted arguments in the
-          # response envelope only (task 01a05877 stage 2).
-          {:error, {:invalid_phase_keys, keys}} ->
-            {:error,
-             %{
-               error: "Invalid phase_assignees keys: #{Enum.join(keys, ", ")}",
-               recoverable: true,
-               suggestion: "Use 'planning', 'execution', or 'review'",
-               submitted_args: args
-             }}
-
-          {:error, {:invalid_phase_assignees_shape, _}} ->
-            {:error,
-             %{
-               error: "phase_assignees must be a map keyed by phase name",
-               recoverable: true,
-               suggestion:
-                 "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}",
-               submitted_args: args
-             }}
-        end
+    # Parsed FIRST, before the row is even read, so an unparseable token can
+    # never reach a writer. `nil` (the overwhelmingly common case — every
+    # pre-existing agent caller omits it) flows through as nil and the whole
+    # path below behaves exactly as it did before this parameter existed.
+    with {:ok, base_updated_at} <- parse_base_updated_at(args) do
+      task_update_with_base(task_id, args, actor, base_updated_at)
     end
   end
 
@@ -7153,6 +6942,314 @@ defmodule Platform.Federation.ToolSurface do
      }}
   end
 
+  # `base_updated_at` (alias `if_unmodified_since`) is the caller's
+  # compare-and-set token. Absent → `{:ok, nil}` → last-write-wins, unchanged.
+  # Present but unparseable → a recoverable rejection, never a write.
+  defp parse_base_updated_at(args) do
+    case Map.get(args, "base_updated_at") || Map.get(args, "if_unmodified_since") do
+      nil ->
+        {:ok, nil}
+
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(value) do
+          {:ok, dt, _utc_offset} -> {:ok, dt}
+          {:error, _reason} -> {:error, base_updated_at_error(value)}
+        end
+
+      other ->
+        {:error, base_updated_at_error(other)}
+    end
+  end
+
+  defp base_updated_at_error(value) do
+    %{
+      error:
+        "task_update: `base_updated_at` must be an ISO8601 timestamp, got #{inspect(value)}. No write was attempted.",
+      recoverable: true,
+      suggestion:
+        "Pass the `updated_at` value verbatim from the task_get / task_update response you composed your edit against, e.g. \"2026-09-10T19:33:15.879562Z\". Omit the parameter entirely to keep the pre-existing last-write-wins behaviour."
+    }
+  end
+
+  defp task_update_with_base(task_id, args, actor, base_updated_at) do
+    case Tasks.get_task_record(task_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Task not found: #{task_id}",
+           recoverable: false,
+           suggestion: "Use task_list to find available tasks"
+         }}
+
+      task ->
+        with {:ok, flat_attrs, phase_attrs} <-
+               TaskAttrs.build_task_attrs(args, :update,
+                 auto_route_flat_assignee_current_phase: true,
+                 current_phase: Tasks.current_phase(task),
+                 # The :update auto-approve fill (ADR 0044 §5, task
+                 # 01a0589b) is keyed off the task's persisted slots
+                 # overlaid by this call's routed slots, so a present
+                 # slot is never overwritten by the flat pair.
+                 existing_phase_assignees: task.phase_assignees || %{}
+               ) do
+          # Status transitions still route through
+          # `Tasks.transition_task_status/2` (validates the edge), while
+          # everything else flows through `Tasks.update_task/2`. Split
+          # so the two writers don't step on each other.
+          status_change = Map.get(flat_attrs, :status)
+          non_status_flat = Map.delete(flat_attrs, :status)
+
+          # If `auto_approve_plan` will be `true` after this update (in
+          # this call or already-true on the task with phase_assignees
+          # being rewritten), hard-reject when the execution and/or
+          # review phases don't resolve to a live agent. Silent
+          # auto-approve without a valid downstream agent is the bug
+          # this guards against — the plan flips to approved but no
+          # planner picks it up. See task 019f42fd session note
+          # 2026-07-08 (initial guard) and 019f5145 (hardened per ADR
+          # 0044). Gate lives inside `TaskAttrs.check_auto_approve_preconditions/4`.
+          auto_check =
+            TaskAttrs.check_auto_approve_preconditions(flat_attrs, phase_attrs, task)
+
+          # Order: flat_attrs → phase_attrs → status_change. Phase-attrs
+          # writer (`Tasks.set_phase_assignees/2`) uses the task's
+          # CURRENT status to derive the flat pointer, so we apply it
+          # before any status transition — otherwise a same-call
+          # phase-slot write for the target phase would still see the
+          # old phase's derivation. The plan-approval gate runs AFTER
+          # phase_attrs so a same-call `phase_assignees.execution =
+          # <user>` rewrite is visible to `sponsor_bypasses_plan_gate?/2`
+          # (the predicate reads phase-resolved assignees, not the
+          # pre-update snapshot).
+          # SCOPE OF THE COMPARE-AND-SET GUARD — a PARTIAL guarantee, stated
+          # deliberately. `base_updated_at` guards the FIELD write below and
+          # nothing else. `maybe_transition_status/3` is a SEPARATE statement
+          # with its own WHERE clause and is NOT covered by the CAS filter, so
+          # a call supplying a base alongside a status change gets: field write
+          # guarded (refused if the row moved), transition unguarded (applied
+          # on whatever the row is by then). Ordering is what makes that safe
+          # to reason about — the guarded write runs FIRST, so a stale base
+          # short-circuits the `with` and the transition never runs at all.
+          # The residual exposure is the reverse window only: a row that
+          # advances BETWEEN the two statements. Making the transition atomic
+          # with the field write is deliberately out of scope for this stage;
+          # do not silently widen it here without saying so in the tool's
+          # `limitations` prose, which currently documents exactly this.
+          with :ok <- auto_check,
+               {:ok, updated} <-
+                 maybe_update_task(task, non_status_flat, actor, base_updated_at),
+               {:ok, updated} <- maybe_apply_phase_assignees(updated, phase_attrs),
+               :ok <- maybe_check_plan_gate(updated, status_change, actor),
+               {:ok, updated} <- maybe_transition_status(updated, status_change, actor) do
+            # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
+            # return the un-preloaded struct. Refresh sponsor so
+            # `serialize_task` can emit the current shape — otherwise a
+            # caller that just cleared the sponsor via `sponsor_user_id:
+            # nil` would still see the pre-update Sponsor%User in the
+            # response envelope.
+            updated = Repo.preload(updated, :sponsor, force: true)
+            Tasks.broadcast_board({:task_updated, updated})
+
+            # DISPLACEMENT DISCLOSURE (task 01a08a80 stage 3). `updated_at` in
+            # the envelope is the NEW stamp, which says nothing about what this
+            # write displaced. `task` is the PRE-update struct read at the top
+            # of this function, so `task.updated_at` is the revision this call
+            # overwrote. A caller who passed no `base_updated_at` can compare it
+            # against the `updated_at` it last saw and discover after the fact
+            # that it clobbered someone.
+            #
+            # Deliberately added HERE and not inside `serialize_task/1`:
+            # `task_get`, `task_list` and every other consumer share that
+            # serializer and have no meaningful "previous", so widening it
+            # would put a nil key on every task read. This is an audit trail,
+            # not an alarm — nothing makes a losing writer notice it. Prevention
+            # is `base_updated_at` (stage 2).
+            #
+            # Note the key is present but EQUAL to `updated_at` on a no-op call
+            # (empty attrs short-circuit in `maybe_update_task/4`), because
+            # nothing was displaced. Strict inequality holds for real writes.
+            {:ok, Map.put(serialize_task(updated), :previous_updated_at, task.updated_at)}
+          else
+            {:error, {:stale_base, %{current_updated_at: ts, base_updated_at: supplied}}} ->
+              # A retryable CONFLICT, not a fatal error — `recoverable: true`
+              # is what tells the caller to re-read and come back rather than
+              # give up. Naming both timestamps is the point: the caller can
+              # see how far behind it was without a second round trip.
+              {:error,
+               %{
+                 error:
+                   "stale_base: task was modified at #{stale_base_stamp(ts)}, after the base you supplied (#{stale_base_stamp(supplied)}). Your write was REFUSED and nothing was changed.",
+                 recoverable: true,
+                 submitted_args: args,
+                 suggestion:
+                   "Re-read the task with task_get, re-compose your edit against the current description, and retry with base_updated_at set to the updated_at you just read. " <>
+                     "Do NOT simply retry the same body with the new timestamp — that reintroduces the overwrite the refusal just prevented."
+               }}
+
+            {:error, :invalid_transition} ->
+              # Task 01a05394 stage 3: name the legal exits, derived from
+              # `Tasks.valid_task_transitions/0` (never a second copy of the
+              # table). An empty exit list says so in words rather than
+              # rendering a dangling enumeration.
+              exits = Map.get(Tasks.valid_task_transitions(), task.status, [])
+
+              exits_sentence =
+                case exits do
+                  [] ->
+                    "'#{task.status}' has no valid outbound transitions."
+
+                  _ ->
+                    "Valid next statuses from '#{task.status}': #{Enum.join(exits, ", ")}."
+                end
+
+              {:error,
+               %{
+                 error:
+                   "Invalid status transition from '#{task.status}' to '#{status_change}'. " <>
+                     exits_sentence,
+                 recoverable: true,
+                 submitted_args: args,
+                 suggestion:
+                   exits_sentence <>
+                     " 'cancelled' is TERMINAL \u2014 it has no outbound edges and it means the " <>
+                     "work was ABANDONED. Use it only to retire work that was genuinely " <>
+                     "abandoned or superseded, never to close work that actually shipped. " <>
+                     "Delivered-but-unplanned work is recorded by a Fabrikam admin via " <>
+                     "Platform.Tasks.close_as_delivered/3; a task already cancelled by " <>
+                     "mistake is corrected via Platform.Tasks.reinstate_cancelled_task/3."
+               }}
+
+            {:error, :no_approved_plan} ->
+              # Task 019f6380 stage 2: agent MCP calls that try to
+              # transition into an execution phase without an approved
+              # plan get the same friendly envelope shape as the
+              # `:invalid_transition` case. Sponsor-bypass does NOT fire
+              # for agent actors — that's the whole point of the actor
+              # check in `sponsor_bypasses_plan_gate?/2`.
+              {:error,
+               %{
+                 error:
+                   "Cannot transition to '#{status_change}': task has no approved plan and is not a sponsor-bypass candidate",
+                 recoverable: true,
+                 submitted_args: args,
+                 suggestion:
+                   "Create a plan (plan_create) and approve it (plan_approve) before transitioning to an execution phase. " <>
+                     "The sponsor-bypass exemption only applies to human-initiated moves on sponsor-only tasks with no agent involvement."
+               }}
+
+            {:error, :no_deploy_target_resolved} ->
+              # `Tasks.transition_task_status/2` refuses `:deploying` when
+              # neither the task nor the project supplies a target. The
+              # atom would otherwise fall through to the changeset
+              # catch-all below, where `inspect_errors/1` calls
+              # `Ecto.Changeset.traverse_errors/2` on an atom and crashes.
+              # Mirror the `:invalid_transition` friendly envelope shape.
+              {:error,
+               %{
+                 error: "unresolved_deploy_target",
+                 recoverable: true,
+                 submitted_args: args,
+                 suggestion:
+                   "Set task.deploy_target explicitly (e.g. task_update(deploy_target: \"production\")) " <>
+                     "or configure a project-level default via " <>
+                     "project_update(deploy_config: %{\"default_deploy_target\" => ...}) " <>
+                     "before transitioning to deploying."
+               }}
+
+            {:error, %Ecto.Changeset{} = changeset} ->
+              {:error,
+               %{
+                 error: "Failed to update task: #{inspect_errors(changeset)}",
+                 recoverable: true,
+                 submitted_args: args,
+                 suggestion: "Check that the provided values are valid"
+               }}
+
+            {:error,
+             {:auto_approve_precondition_missing,
+              %{missing_phases: phases, merged_phase_assignees: merged}}} ->
+              corrected = TaskAttrs.auto_approve_corrected_args(args, merged, phases)
+
+              {:error, auto_approve_precondition_envelope(phases, args, corrected, :update)}
+
+            # The commencement gate's 3-tuple. Without this clause the
+            # `with` has no matching `else` branch (every other clause is
+            # a 2-tuple) and raises `WithClauseError` → 500.
+            {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
+              # Recoverable refusal → echo the submitted arguments in the
+              # response envelope only (task 01a05877 stage 2). The
+              # delegating `waiting_on == []` envelope's recoverable flag
+              # depends on the observed stack status, so the echo is
+              # added only when the envelope is actually recoverable.
+              gate_envelope = stack_plans_pending_envelope(stack_id, waiting_on)
+
+              {:error,
+               if(Map.get(gate_envelope, :recoverable),
+                 do: Map.put(gate_envelope, :submitted_args, args),
+                 else: gate_envelope
+               )}
+
+            # ADR 0045 decision 7 (task 01a05393 stage 3): a member of a
+            # stack that already SHIPPED through its rollup cannot re-enter
+            # an execution status. Not recoverable on this task — the
+            # message itself says where the work goes instead.
+            {:error, :stack_already_shipped, %{message: message}} ->
+              {:error,
+               %{
+                 error: message,
+                 recoverable: false,
+                 suggestion:
+                   "Create a new individual task (task_create) for the post-ship change. " <>
+                     "This task may still be cancelled."
+               }}
+
+            # Task 01a05393 stage 6 (defect D): `stack_pending` is the
+            # parked-behind-a-stack status. A task with no `stack_id`
+            # moved there is invisible to the dispatcher, to the promote
+            # sweep AND to the board's drag-out — nothing can move it
+            # again. `Tasks.require_stack_commencement_for/2` refuses the
+            # write; this arm keeps the refusal from falling into the
+            # changeset catch-all (a 3-tuple → `WithClauseError` → 500).
+            {:error, :stack_pending_requires_stack, _} ->
+              {:error,
+               %{
+                 error:
+                   "Cannot transition to 'stack_pending': task #{task.id} is not in a stack. " <>
+                     "'stack_pending' means \"parked until the stack's dependencies land\" and is " <>
+                     "unreachable by the dispatcher, the promote sweep and the board once set on a stackless task.",
+                 recoverable: true,
+                 suggestion:
+                   "Put the task in a stack first with stack_add(stack_id, task_id) — a started stack " <>
+                     "parks the newcomer at 'stack_pending' itself. To simply pause a stackless task, " <>
+                     "use 'blocked' instead.",
+                 submitted_args: args
+               }}
+          end
+        else
+          # Recoverable refusals echo the submitted arguments in the
+          # response envelope only (task 01a05877 stage 2).
+          {:error, {:invalid_phase_keys, keys}} ->
+            {:error,
+             %{
+               error: "Invalid phase_assignees keys: #{Enum.join(keys, ", ")}",
+               recoverable: true,
+               suggestion: "Use 'planning', 'execution', or 'review'",
+               submitted_args: args
+             }}
+
+          {:error, {:invalid_phase_assignees_shape, _}} ->
+            {:error,
+             %{
+               error: "phase_assignees must be a map keyed by phase name",
+               recoverable: true,
+               suggestion:
+                 "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}",
+               submitted_args: args
+             }}
+        end
+    end
+  end
+
   # Task 01a05b32 stage 1 — the audit trail for the planner-rejected draft.
   # Emitted through telemetry so Platform.Audit.TelemetryHandler bridges it
   # into the append-only audit stream (the handler's documented preferred
@@ -7926,8 +8023,30 @@ defmodule Platform.Federation.ToolSurface do
     |> String.trim()
   end
 
-  defp maybe_update_task(task, attrs, _actor) when map_size(attrs) == 0, do: {:ok, task}
-  defp maybe_update_task(task, attrs, actor), do: Tasks.update_task(task, attrs, actor: actor)
+  # `Tasks.update_task_if_unmodified/4` re-reads the row to report the current
+  # stamp, and that re-read returns nil if the task was DELETED between the
+  # refused write and the re-read. Rendering "nil" into the message would be
+  # worse than saying so, hence the explicit clause rather than a bare
+  # `DateTime.to_iso8601/1` that would raise.
+  defp stale_base_stamp(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp stale_base_stamp(nil), do: "unknown (the task could not be re-read)"
+
+  defp maybe_update_task(task, attrs, _actor, _base) when map_size(attrs) == 0, do: {:ok, task}
+
+  # No base supplied: the pre-existing writer, untouched. This is the path
+  # every current agent caller takes and it must stay byte-identical in
+  # behaviour — routing it through the compare-and-set writer with an implicit
+  # base would wedge every caller that reads a task and edits it later.
+  defp maybe_update_task(task, attrs, actor, nil),
+    do: Tasks.update_task(task, attrs, actor: actor)
+
+  # Base supplied: the guard goes in the WHERE clause of the write. `base` is
+  # the CALLER'S token from `args`, never `task.updated_at` — the struct here
+  # was reloaded moments ago and is current by construction, so seeding the
+  # filter from it would make the guard a no-op that still passes any test
+  # built on a stale struct.
+  defp maybe_update_task(task, attrs, actor, %DateTime{} = base),
+    do: Tasks.update_task_if_unmodified(task, attrs, base, actor: actor)
 
   defp maybe_transition_status(task, nil, _actor), do: {:ok, task}
 

@@ -617,20 +617,123 @@ defmodule Platform.Tasks do
     |> Repo.update()
     |> case do
       {:ok, updated} ->
-        preloaded = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
-        broadcast_board({:task_updated, preloaded})
-        maybe_sweep_stack_after_update(task, updated)
-        maybe_refresh_references(task, updated)
-        maybe_reingest_task(task, updated)
-        # M4 (019f9251): sponsor-assigned inbox + push. `task` is the
-        # before struct, `updated` the after — emit only on a genuine
-        # change to a NEW user. Side-effect only — {:ok, updated} preserved.
-        _ = maybe_emit_sponsor_assigned(task.sponsor_user_id, updated, opts)
-        {:ok, updated}
+        after_task_update(task, updated, opts)
 
       error ->
         error
     end
+  end
+
+  @doc """
+  Compare-and-set variant of `update_task/3`: apply `attrs` only if the row
+  has not moved since the caller read it.
+
+  `base_updated_at` is the `updated_at` the caller's edit was composed
+  against. The guard is a single statement — the base is forced into the
+  UPDATE's WHERE clause via `Ecto.Changeset.optimistic_lock/3`, so the
+  emitted SQL is:
+
+      UPDATE "tasks" SET "description" = $1, "updated_at" = $2
+       WHERE "id" = $3 AND "updated_at" = $4
+
+  (Quoted exactly as Ecto emits it. Keep the identifiers quoted:
+  `status_writer_guard_test.exs` scans this file for raw-SQL writers and does
+  not exempt docstrings, so the bare form reads to it as one.)
+
+  This is deliberately NOT a read-then-compare-then-write. A pre-check would
+  itself be a read-modify-write and would carry the identical lost-update race
+  one layer down — the exact defect this function exists to close. The
+  comparison must happen in the database, inside the same statement as the
+  write.
+
+  `tasks.updated_at` is `:utc_datetime_usec`, so an ISO8601 round-trip of the
+  base compares exactly; do not truncate it.
+
+  On a match the write and every side effect of `update_task/3`
+  (`broadcast_board/1`, stack sweep, reference refresh, reingest,
+  sponsor-assigned emit) fire exactly once — both functions share one
+  post-update path.
+
+  Returns:
+
+    * `{:ok, %Task{}}`
+    * `{:error, {:stale_base, %{current_updated_at: DateTime.t() | nil,
+      base_updated_at: DateTime.t()}}}` — the row advanced; nothing was
+      written. `current_updated_at` is `nil` if the row has since been deleted.
+    * `{:error, %Ecto.Changeset{}}`
+
+  Note on the version token: `updated_at` is used rather than a dedicated
+  `lock_version` column so that no migration is needed for an opt-in guard.
+  That is sound here because every writer of a `tasks` row goes through a
+  changeset and `Repo.update/2` — there is no `Repo.update_all/2` over the
+  `tasks` table — so `updated_at` advances on every content change. If this
+  guard ever needs to be mandatory, or to cover a bulk writer added later,
+  `lock_version` is the shape to move to (migration plus backfill).
+  """
+  @spec update_task_if_unmodified(Task.t(), map(), DateTime.t(), keyword()) ::
+          {:ok, Task.t()}
+          | {:error,
+             {:stale_base,
+              %{current_updated_at: DateTime.t() | nil, base_updated_at: DateTime.t()}}}
+          | {:error, Ecto.Changeset.t()}
+  def update_task_if_unmodified(%Task{} = task, attrs, %DateTime{} = base_updated_at, opts \\ []) do
+    task
+    |> Task.changeset(attrs)
+    |> Ecto.Changeset.optimistic_lock(:updated_at, fn _old ->
+      DateTime.truncate(DateTime.utc_now(), :microsecond)
+    end)
+    |> force_updated_at_filter(base_updated_at)
+    |> guarded_update()
+    |> case do
+      {:ok, updated} ->
+        after_task_update(task, updated, opts)
+
+      {:error, :stale_entry} ->
+        fresh = get_task_record(task.id)
+
+        {:error,
+         {:stale_base,
+          %{
+            current_updated_at: fresh && fresh.updated_at,
+            base_updated_at: base_updated_at
+          }}}
+
+      error ->
+        error
+    end
+  end
+
+  # `optimistic_lock/3` seeds the filter from the struct we were handed, which
+  # may already be newer or older than what the caller composed against.
+  # Overwrite it with the caller's base so the WHERE clause pins exactly the
+  # revision the edit was built on.
+  defp force_updated_at_filter(%Ecto.Changeset{} = changeset, %DateTime{} = base) do
+    %{changeset | filters: Map.put(changeset.filters, :updated_at, base)}
+  end
+
+  # Narrow rescue: only the write itself. Keeping this out of the caller means
+  # an Ecto.StaleEntryError raised by a *side effect* is never mis-reported as
+  # a stale base.
+  defp guarded_update(%Ecto.Changeset{} = changeset) do
+    Repo.update(changeset)
+  rescue
+    Ecto.StaleEntryError -> {:error, :stale_entry}
+  end
+
+  # Single post-update path shared by `update_task/3` and
+  # `update_task_if_unmodified/4` — each side effect fires exactly once per
+  # successful write, whichever entry point performed it.
+  defp after_task_update(%Task{} = task, %Task{} = updated, opts) do
+    preloaded = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
+    broadcast_board({:task_updated, preloaded})
+    maybe_sweep_stack_after_update(task, updated)
+    maybe_refresh_references(task, updated)
+    maybe_reingest_task(task, updated)
+    # M4 (019f9251): sponsor-assigned inbox + push. `task` is the
+    # before struct, `updated` the after — emit only on a genuine
+    # change to a NEW user. Side-effect only — {:ok, updated} preserved.
+    _ = maybe_emit_sponsor_assigned(task.sponsor_user_id, updated, opts)
+    {:ok, updated}
   end
 
   # ── ADR-0046 planning sub-phase writers (member 4, stage 2) ─────────────

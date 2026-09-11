@@ -285,20 +285,39 @@ defmodule Platform.Federation.ToolArgumentsTest do
         |> Enum.uniq()
 
       # Pinned exactly, not as a floor: if the regex stops matching the source
-      # this guard would silently pass on an empty list. Five call sites
-      # collapse to three distinct pairs — `task_id || id` recurs in task_get,
+      # this guard would silently pass on an empty list. Six call sites
+      # collapse to four distinct pairs — `task_id || id` recurs in task_get,
       # task_update and plan_get.
       assert Enum.sort(fallbacks) == [
+               {"base_updated_at", "if_unmodified_since"},
                {"document", "initial_state"},
                {"stage_id", "id"},
                {"task_id", "id"}
              ],
              "the arg-to-arg fallback scan drifted; found #{inspect(fallbacks)}"
 
+      # The allow-list is every alias declared ANYWHERE on the surface, not
+      # just those on `required: true` parameters. Task 01a08a80 stage 2 is
+      # the first case that distinguishes the two: `task_update`'s
+      # `base_updated_at` is OPTIONAL and declares
+      # `aliases: ["if_unmodified_since"]`, and the handler reads both keys.
+      # Sourcing this list from `all_required_params/0` — which filters to
+      # `required: true` — would have reported a correctly-declared optional
+      # alias as undeclared. That is a false positive in the guard, not a
+      # defect in the handler, and a guard that fires on correct code is a
+      # guard someone eventually deletes.
+      #
+      # This does not soften what is being checked. The property is still
+      # "every fallback the handler reads is declared as an alias in
+      # `tool_surface.ex`"; only the survey of declarations is now complete.
+      # An UNDECLARED fallback is still caught, and the exact pin above still
+      # catches a fallback that is added without anyone noticing.
       declared =
-        for {_tool, param} <- ToolArguments.all_required_params(),
-            alias_key <- param.aliases,
-            do: {param.key, alias_key}
+        for tool <- ToolSurface.tool_definitions(),
+            {key, spec} <- Map.get(tool, :parameters, %{}),
+            is_map(spec),
+            alias_key <- Map.get(spec, :aliases, []),
+            do: {to_string(key), to_string(alias_key)}
 
       undeclared =
         for {primary, alias_key} <- fallbacks,
