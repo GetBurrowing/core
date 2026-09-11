@@ -809,12 +809,16 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
 
     test "off is carried by the well and the accessible label, not by the glyph alone" do
-      # FE-19 (01a07486-7985-7001-87ce-277681791f52): `hero-microphone-slash`
-      # generates NO CSS — Heroicons ships no `microphone-slash.svg`, and
-      # `assets/vendor/heroicons.js` emits one class per file it finds. The
-      # class is in the markup and this assertion would pass on a blank
-      # circle, so the two channels that DO reach a viewer today are
-      # asserted alongside it: the red well and the words.
+      # FE-19 (01a07486-7985-7001-87ce-277681791f52) added
+      # `assets/icons/24/outline/microphone-slash.svg` and taught
+      # `assets/vendor/heroicons.js` to read that repo-owned root alongside
+      # the vendored Heroicons set, so `hero-microphone-slash` now generates
+      # CSS and the slashed glyph draws for real. It is still one channel of
+      # three, and this assertion cannot tell you the mask resolved: the
+      # class string sits in the markup whether or not any CSS exists for
+      # it. So the two channels that do not depend on the icon set, the red
+      # well and the words, stay asserted beside it. Whether the mask
+      # resolves is a browser question, checked by computed `mask-image`.
       row = row_for(media_rail([human("Mariah", "u-1")], muted: ["user:u-1"]), "user:u-1")
       mic = slot(row, "mic-indicator")
 
@@ -824,10 +828,14 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert row =~ "Mariah, muted, camera on"
     end
 
-    test "the camera's slashed glyph is real, unlike the mic's" do
-      # `video-camera-slash.svg` DOES ship, in all four Heroicons sizes,
-      # so the camera-off state gets all three channels for real. Asserted
-      # separately from the mic so the two are not assumed to share a fate.
+    test "the camera's slashed glyph is asserted separately from the mic's" do
+      # `video-camera-slash.svg` ships in all four Heroicons sizes, so the
+      # camera-off state has always had all three channels. The mic's glyph
+      # now draws too, from `assets/icons/24/outline/microphone-slash.svg`
+      # (FE-19, 01a07486-7985-7001-87ce-277681791f52), but the two resolve
+      # through DIFFERENT roots: the camera through `deps/heroicons`, the
+      # mic through our own `assets/icons`. So they are still asserted
+      # separately rather than assumed to share a fate.
       row = row_for(media_rail([human("Mariah", "u-1")], camera_off: ["user:u-1"]), "user:u-1")
       cam = slot(row, "camera-indicator")
 

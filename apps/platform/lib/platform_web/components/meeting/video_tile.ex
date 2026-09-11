@@ -116,17 +116,18 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   `--color-error` is `oklch(63% 0.22 25)` in both themes and keeps its
   semantic token unchanged.
 
-  ### The mic glyph is currently blank, deliberately
+  ### The mic glyph draws, as of FE-19
 
-  `hero-microphone-slash` generates NO CSS: `assets/vendor/heroicons.js`
-  emits one class per file in `deps/heroicons/optimized`, and Heroicons
-  ships `microphone.svg` with no `microphone-slash.svg` at any size. So a
-  muted mic currently paints its red well around an empty centre. The class
-  is kept, not swapped, so FE-19
-  (`01a07486-7985-7001-87ce-277681791f52`) fixes every call site at once
-  with one vendored file. `hero-video-camera-slash` DOES ship and compile,
-  so camera-off draws its slash for real. Two independent causes made the
-  same indicator invisible; fixing either alone leaves it invisible.
+  `hero-microphone-slash` did not ship in Heroicons, so until FE-19
+  (`01a07486-7985-7001-87ce-277681791f52`) the class generated NO CSS and
+  a muted mic painted its red well around an empty centre. FE-19 vendored
+  `assets/icons/24/outline/microphone-slash.svg` and taught
+  `assets/vendor/heroicons.js` to read that second root, so the class now
+  resolves at every call site with no call-site change. The class here was
+  kept, not swapped, for exactly that reason. `hero-video-camera-slash`
+  ships upstream and always compiled. The guard in
+  `test/platform_web/hero_icon_resolution_guard_test.exs` fails if either
+  stops resolving.
   """
 
   use Phoenix.Component
@@ -350,12 +351,12 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   defp glyph_tone(:off), do: "text-error"
   defp glyph_tone(_state), do: "text-white/45"
 
-  # `hero-microphone-slash` COMPILES TO NOTHING — see the moduledoc. Kept
-  # unchanged so FE-19 fixes every call site with one vendored file.
+  # `hero-microphone-slash` resolves and paints as of FE-19 — see the
+  # moduledoc. It is our vendored glyph, not an upstream Heroicon.
   defp mic_glyph(:off), do: "hero-microphone-slash"
   defp mic_glyph(_state), do: "hero-microphone"
 
-  # `hero-video-camera-slash` DOES compile, in all four Heroicons sizes.
+  # `hero-video-camera-slash` ships upstream, in all four Heroicons sizes.
   defp camera_glyph(_state), do: "hero-video-camera-slash"
 
   defp mic_label(:off), do: "Microphone muted"

@@ -53,19 +53,34 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   hue shift alone, because a mic that changes only its tint is how
   somebody joins a call believing they are muted when they are not.
 
-  ONE OF THE THREE IS CURRENTLY BLANK, and this is deliberate rather
-  than unnoticed. `hero-microphone-slash` generates NO CSS:
-  `assets/vendor/heroicons.js` emits one class per file in
-  `deps/heroicons/optimized`, and the Heroicons set ships
+  ALL THREE NOW DRAW. They did not always. `hero-microphone-slash`
+  generated NO CSS for as long as this indicator existed, because
+  `assets/vendor/heroicons.js` emitted one class per file in
+  `deps/heroicons/optimized` and the Heroicons set ships
   `microphone.svg` with no `microphone-slash.svg` at any of the four
-  sizes. So the muted mic well currently paints its tint around an
-  empty centre. The class is kept, not swapped, so that FE-19
-  (`01a07486-7985-7001-87ce-277681791f52`) — which owns the icon
-  decision and is also the ticket for the identical hole in
-  `video_tile.ex`, `call_shell.ex` and `meeting_bar_live.ex` — fixes
-  every call site at once. The CAMERA does not share the mic's fate:
-  `video-camera-slash.svg` ships in all four sizes, so the camera-off
-  slot draws its slash for real.
+  sizes, so the muted mic well painted its error tint around an empty
+  centre. FE-19 (`01a07486-7985-7001-87ce-277681791f52`) closed that:
+  the glyph is vendored at
+  `apps/platform/assets/icons/24/outline/microphone-slash.svg`, and the
+  Tailwind plugin now reads TWO roots, the Heroicons set first and
+  `assets/icons` second, so a same-named local file wins. It is
+  `assets/icons` and not `deps/heroicons/optimized` because
+  `apps/platform/.gitignore` excludes `/deps/`: a file dropped there is
+  untracked, survives neither `mix deps.get` nor a cached Docker layer,
+  and fails silently (green locally, blank in the container).
+
+  Two checks hold that fix in place.
+  `test/platform_web/hero_icon_resolution_guard_test.exs` asserts every
+  `hero-*` class used under `lib` resolves against those same two
+  roots, so a call site that invents a class the icon set has no file
+  for is red at `mix test` instead of blank in production.
+  `e2e/tests/meeting_mute_glyph.spec.ts` reads
+  `getComputedStyle(el).maskImage` on the rendered muted-mic element in
+  a browser, because a class-attribute, `display` or `opacity` check
+  passes perfectly on the blank version of this indicator.
+
+  The CAMERA never shared the mic's fate: `video-camera-slash.svg`
+  ships in all four sizes and always drew its slash for real.
 
   ### Tokens
 
@@ -576,8 +591,11 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   defp glyph_tone(:unavailable), do: "text-base-content/25"
   defp glyph_tone(_state), do: "text-base-content/60"
 
-  # `hero-microphone-slash` COMPILES TO NOTHING: see the moduledoc. Kept
-  # so FE-19 fixes every call site with one vendored file.
+  # `hero-microphone-slash` resolves and paints, as of FE-19
+  # (`01a07486-7985-7001-87ce-277681791f52`), against the vendored
+  # `assets/icons/24/outline/microphone-slash.svg`. It emitted no CSS at all
+  # before that: see the moduledoc for why the file lives under
+  # `assets/icons` rather than in `deps/`.
   defp mic_glyph(:off), do: "hero-microphone-slash"
   defp mic_glyph(_state), do: "hero-microphone"
 

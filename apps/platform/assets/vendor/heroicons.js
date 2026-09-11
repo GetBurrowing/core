@@ -3,7 +3,30 @@ const fs = require("fs")
 const path = require("path")
 
 module.exports = plugin(function({matchComponents, theme}) {
-  let iconsDir = path.join(__dirname, "../../deps/heroicons/optimized")
+  // TWO ROOTS: the vendored Heroicons set first, then our own `assets/icons`,
+  // so a same-named local file overwrites the vendored entry.
+  //
+  // Added by FE-19 (01a07486-7985-7001-87ce-277681791f52). Heroicons ships no
+  // `microphone-slash.svg` at any size, so `hero-microphone-slash` generated
+  // no CSS at all and every mute indicator in meetings painted an empty
+  // centre. The obvious place to drop the missing file, straight into
+  // `deps/heroicons/optimized`, is not a fix: `apps/platform/.gitignore`
+  // excludes `/deps/`, so nothing under it is tracked. A file there does not
+  // survive `git clone`, `mix deps.get`, `mix deps.update heroicons`,
+  // `mix deps.clean`, or a cached Docker layer, and it fails silently: green
+  // locally, blank in the container, with nothing in the diff to explain it.
+  //
+  // `assets/icons/` rather than `assets/vendor/icons/` because
+  // `assets/vendor/` and `assets/THIRD_PARTY_NOTICES.md` are for third-party
+  // code and this glyph is ours.
+  //
+  // EXIT CONDITION: if upstream Heroicons ever ships `microphone-slash.svg`,
+  // delete `assets/icons/24/outline/microphone-slash.svg` and let the
+  // vendored file win again, rather than carrying the fork indefinitely.
+  let roots = [
+    path.join(__dirname, "../../deps/heroicons/optimized"),
+    path.join(__dirname, "../icons")
+  ]
   let values = {}
   let icons = [
     ["", "/24/outline"],
@@ -11,10 +34,22 @@ module.exports = plugin(function({matchComponents, theme}) {
     ["-mini", "/20/solid"],
     ["-micro", "/16/solid"]
   ]
-  icons.forEach(([suffix, dir]) => {
-    fs.readdirSync(path.join(iconsDir, dir)).forEach(file => {
-      let name = path.basename(file, ".svg") + suffix
-      values[name] = {name, fullPath: path.join(iconsDir, dir, file)}
+  roots.forEach(iconsDir => {
+    icons.forEach(([suffix, dir]) => {
+      let subdir = path.join(iconsDir, dir)
+      // Only `24/outline` exists under the local root, and `readdirSync`
+      // throws on a missing directory. The cost of this guard: a wholly
+      // absent root now yields no icons instead of raising, which swaps a
+      // loud failure for a quiet one. What closes that gap is
+      // `test/platform_web/hero_icon_resolution_guard_test.exs`, which
+      // asserts every `hero-*` class used in `lib` resolves against these
+      // same two roots. It mirrors the roots and the suffix map below; if
+      // either changes here, change it there in the same commit.
+      if (!fs.existsSync(subdir)) { return }
+      fs.readdirSync(subdir).forEach(file => {
+        let name = path.basename(file, ".svg") + suffix
+        values[name] = {name, fullPath: path.join(subdir, file)}
+      })
     })
   })
   matchComponents({
