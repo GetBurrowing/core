@@ -65,7 +65,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   alias PlatformWeb.Tasks.BoardData
 
   import PlatformWeb.Tasks.StackStyles,
-    only: [member_node_class: 1, stack_member_action_label: 1]
+    only: [member_node_class: 1, member_parked_reason: 2, stack_member_action_label: 1]
 
   import PlatformWeb.Tasks.StatusLabels, only: [status_label: 1]
 
@@ -459,6 +459,16 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                       >
                         <%= for member <- Enum.sort_by(board_data.members, & &1.stack_position) do %>
                           <% member_dep_text = dep_annotation_text(member, board_data.members) %>
+                          <%!-- Task 01a06df3 stage 3. Derived from data already in
+                             hand — `member.status` plus the dep annotation computed
+                             on the line above — so this adds no query and no preload.
+                             Mutually exclusive with the dep annotation by
+                             construction: `member_parked_reason/2` returns nil
+                             whenever `member_dep_text` is non-nil, so a member with
+                             real in-stack predecessors still renders the dep line and
+                             only that. --%>
+                          <% member_parked_text =
+                            member_parked_reason(member.status, member_dep_text) %>
                           <%!-- Badges-for-tasks-that-need-feedback (task
                              019e2c25 stage 4): mobile stack-member rows
                              mirror the desktop stack-detail badge from
@@ -547,6 +557,26 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                             >
                               <span class="text-violet-400" aria-hidden="true">↑</span>
                               {member_dep_text}
+                            </div>
+                            <%!-- Task 01a06df3 stage 3, mobile half. Shares ONE
+                               `data-role` with the desktop row below, matching the
+                               `dep-annotation` sibling directly above it rather than
+                               the planning-step marker's split-role convention: that
+                               component emits no `id`, whereas these rows do
+                               (`stack-member-mobile-<id>` vs `stack-member-<id>`), so a
+                               test can pin a surface through the row id and the two
+                               boards sharing one DOM costs nothing here.
+                               It is a `<div>` holding a `<span>`, never a `<button>`:
+                               this row IS a `<button>` on mobile, and a nested button
+                               is invalid HTML that browsers reparent. --%>
+                            <div
+                              :if={member_parked_text}
+                              data-role="stack-member-parked-reason"
+                              class="mt-1 text-[10px] text-base-content/50"
+                            >
+                              <span class="hero-clock size-2.5 align-[-1px]" aria-hidden="true">
+                              </span>
+                              {member_parked_text}
                             </div>
                           </button>
                         <% end %>
@@ -989,6 +1019,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           ) %>
                         <% dep_text =
                           dep_annotation_text(member, board_data.members) %>
+                        <%!-- Task 01a06df3 stage 3, desktop half. Same derivation as
+                           the mobile row: status + the dep annotation already computed
+                           on the line above, no extra query. --%>
+                        <% parked_text = member_parked_reason(member.status, dep_text) %>
                         <div
                           id={"stack-member-#{member.id}"}
                           data-stack-member="true"
@@ -1040,6 +1074,16 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                             class="mt-1 text-[10px] text-base-content/50"
                           >
                             <span class="text-violet-400" aria-hidden="true">↑</span> {dep_text}
+                          </div>
+                          <%!-- Task 01a06df3 stage 3, desktop half. See the mobile
+                             row for why the `data-role` is shared across surfaces. --%>
+                          <div
+                            :if={parked_text}
+                            data-role="stack-member-parked-reason"
+                            class="mt-1 text-[10px] text-base-content/50"
+                          >
+                            <span class="hero-clock size-2.5 align-[-1px]" aria-hidden="true"></span>
+                            {parked_text}
                           </div>
                         </div>
                       <% end %>

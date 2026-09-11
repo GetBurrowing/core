@@ -190,14 +190,70 @@ defmodule PlatformWeb.Tasks.BoardData do
     end)
   end
 
-  def stack_matches_search?(_stack, ""), do: true
+  @doc """
+  A stack matches when the query hits the stack's own `id`/`name` **or any
+  member's `id`/`title`** (task 01a06df3 stage 1).
 
-  def stack_matches_search?(%Stack{} = stack, q) do
-    [stack.id, stack.name]
-    |> Enum.any?(fn value ->
-      is_binary(value) and String.contains?(String.downcase(value), q)
-    end)
+  Member-aware by construction: a stacked task is suppressed from the flat
+  column list (`group_board_items/2` drops `stack_id != nil`) and a
+  `stack_pending` member has no desktop/mobile column to land in at all, so
+  the parent stack card is the *only* place a member can render. Matching on
+  `stack.id`/`stack.name` alone therefore hid a real member from a query on
+  its own title — the ticket's observed failure, twice, by two people.
+
+  `board_data` is one value of the `:stack_board_data` assign
+  (`Stacks.build_board_data/1`'s shape). A missing or nil `:members` key
+  reads as `[]` rather than raising: the call site defaults an unknown stack
+  id to `%{}`, so a stack whose board data has not been built yet must still
+  match on its own fields.
+  """
+  def stack_matches_search?(_stack, _board_data, ""), do: true
+
+  def stack_matches_search?(%Stack{} = stack, board_data, q) do
+    Enum.any?([stack.id, stack.name], &contains_query?(&1, q)) or
+      stack_member_matches_search?(board_data, q)
   end
+
+  @doc """
+  True when the query hits **a member's** `id`/`title` specifically — the
+  member half of `stack_matches_search?/3`, split out so there is exactly one
+  definition of "this stack was found because of one of its members".
+
+  `BoardHooks.rebuild_board_shapes/1` needs that distinction and not just the
+  boolean from `stack_matches_search?/3`: a stack found via a member must be
+  auto-expanded so the member is visible without a further click (task
+  01a06df3 stage 2), while a stack found by its own name has nothing hidden
+  and is left as the user left it. Duplicating the member walk in the hook
+  would let the two answers drift the moment a field is added here.
+
+  Always false for an empty query — `stack_matches_search?/3`'s `""` fast path
+  means "no query narrows nothing", which is not a member match.
+  """
+  def stack_member_matches_search?(_board_data, ""), do: false
+
+  def stack_member_matches_search?(board_data, q) when is_binary(q) do
+    board_data
+    |> member_search_values()
+    |> Enum.any?(&contains_query?(&1, q))
+  end
+
+  defp contains_query?(value, q),
+    do: is_binary(value) and String.contains?(String.downcase(value), q)
+
+  defp member_search_values(board_data) when is_map(board_data) do
+    case Map.get(board_data, :members) do
+      members when is_list(members) ->
+        Enum.flat_map(members, fn
+          %Task{id: id, title: title} -> [id, title]
+          _ -> []
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp member_search_values(_board_data), do: []
 
   defp sponsor_search_name(%Task{sponsor: %{name: name, email: email}}), do: name || email
   defp sponsor_search_name(_task), do: nil

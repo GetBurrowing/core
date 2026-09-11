@@ -192,6 +192,39 @@ defmodule PlatformWeb.Tasks.StackStyles do
     do: {status_label(other), "bg-base-300 text-base-content/70"}
 
   @doc """
+  Reason line for a stack member parked behind the stack's CLOSED
+  COMMENCEMENT GATE — the one case where "waiting" has no predecessor to
+  point at.
+
+  Task 01a06df3 stage 3. A member at `stack_pending` with no in-stack
+  predecessors renders a status badge and nothing else, so the reader who
+  finally finds the ticket by search (stages 1–2) clicks it, tries to work
+  it, and hits the gate with no explanation. The gap is the same one the
+  ticket names on `stack_get`: `executable_now: []` reads as a dependency
+  problem when it is actually the gate.
+
+  Takes the member's status and the ALREADY-COMPUTED dep annotation
+  (`Platform.Tasks.StackGraph.dep_annotation_text/2`) — no query, no
+  preload, and no second traversal of the member list. Returns `nil` unless
+  BOTH hold:
+
+    * the member is at `stack_pending` — the only status the commencement
+      gate parks at; `backlog` is deliberately excluded because a backlog
+      member is not gate-parked, and
+    * `dep_text` is `nil` — i.e. the member has no in-stack predecessor to
+      blame, so the gate is the whole explanation.
+
+  When `dep_text` is present the dep annotation is the truthful line and
+  this returns `nil`, so the two never both render and the dep annotation is
+  never replaced.
+  """
+  @spec member_parked_reason(term(), String.t() | nil) :: String.t() | nil
+  def member_parked_reason("stack_pending", nil),
+    do: "parked until the stack starts — not waiting on another member"
+
+  def member_parked_reason(_status, _dep_text), do: nil
+
+  @doc """
   Maps the `Tasks.needs_human_action_reason/2` atom to a
   `{label, data-action-reason-string}` tuple used by the stack-detail
   member-row badge (stage 2 of task 019e2c25).

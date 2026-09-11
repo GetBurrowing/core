@@ -187,10 +187,17 @@ defmodule PlatformWeb.Tasks.BoardHooks do
           )
       end
 
+    # Pair each stack with its board data BEFORE narrowing: the matcher is
+    # member-aware (task 01a06df3), and a member's title is only reachable
+    # through `:stack_board_data`. Filtering the bare `%Stack{}` list first
+    # would drop a stack whose only match is one of its members' titles —
+    # and a stacked member has no column of its own to render in.
     stack_entries =
       socket.assigns.stacks
-      |> Enum.filter(&BoardData.stack_matches_search?(&1, q))
       |> Enum.map(&{&1, Map.get(socket.assigns.stack_board_data, &1.id, %{})})
+      |> Enum.filter(fn {stack, board_data} ->
+        BoardData.stack_matches_search?(stack, board_data, q)
+      end)
 
     # Marlowe 2026-07-12 ("narrow everything"): while a query is active every
     # on-screen count — columns, scope-rail chips, header total — describes
@@ -212,6 +219,37 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     |> assign(:board_items, BoardData.group_board_items(tasks, stack_entries))
     |> assign(:scope_counts, scope_counts)
     |> assign(:visible_task_count, length(tasks))
+    |> expand_member_matched_stacks(stack_entries, q)
+  end
+
+  # Task 01a06df3 stage 2: a member the search FOUND must be visible without a
+  # further click. Matching the parent stack (stage 1) only gets its card onto
+  # the board — `BoardComponent` renders the member rows behind
+  # `MapSet.member?(@expanded_stacks, item.id)`, and `refresh_board/1` resets
+  # `:expanded_stacks` to an empty MapSet immediately before calling
+  # `maybe_reapply_search/1`. Without this the found task is still invisible,
+  # which is the ticket's original complaint moved one click along.
+  #
+  # UNION, not replace: a stack the user opened by hand stays open, and only
+  # member-matched stacks are added — a stack matched on its own name is
+  # hiding nothing, so forcing it open would be unasked-for motion.
+  #
+  # Gated on a non-empty query. With no query there is nothing to reveal and
+  # the user's manual expansion state is the only truth, so this must never
+  # write then. `""` is the only value `normalize_search/1` yields for a blank
+  # or whitespace query, so the first clause is that whole case.
+  defp expand_member_matched_stacks(socket, _stack_entries, ""), do: socket
+
+  defp expand_member_matched_stacks(socket, stack_entries, q) do
+    matched =
+      for {stack, board_data} <- stack_entries,
+          BoardData.stack_member_matches_search?(board_data, q),
+          into: MapSet.new(),
+          do: stack.id
+
+    expanded = socket.assigns[:expanded_stacks] || MapSet.new()
+
+    assign(socket, :expanded_stacks, MapSet.union(expanded, matched))
   end
 
   @doc """
