@@ -1921,7 +1921,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp ci_instruction(_entry) do
-    "3. Wait for CI to go green on the PR (GitHub branch protection / auto-merge waits for CI before allowing the merge — you do not need to push a separate `ci_passed` validation)."
+    "3. Wait for CI to go green on the PR in the foreground (`gh run watch <id> --exit-status`; never pipe to tail). Branch protection blocks the merge until the required checks pass — you do not need to push a separate `ci_passed` validation — but a green required check may be a retry green: read the run's annotations for the retry sentinel (`initial mix test failed`) before treating it as first-run green."
   end
 
   defp merge_instruction(%{ci: "none"}, _auto_merge) do
@@ -1929,11 +1929,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp merge_instruction(_entry, true) do
-    "4. Merge the PR via GitHub (auto-merge is enabled — it will merge automatically once CI is green). The `pr_merged` validation for THIS repository auto-passes when GitHub fires the `pull_request.closed` webhook."
+    "4. Strategy config declares auto_merge: true. That is a declaration, not an armed state — nothing arms GitHub auto-merge except an explicit `gh pr merge --auto`. Check `gh pr view <n> --json autoMergeRequest`: if it is null, do NOT arm it; wait for CI in the foreground, read the annotations for the retry sentinel, merge by hand with the configured merge method, and verify `mergedAt`. If it is already armed, report that in the execution space rather than merging while the required checks cannot distinguish a first-run green from a retry green (first-run-green is advisory, ticket 01a08d81). The `pr_merged` validation for THIS repository auto-passes when GitHub fires the `pull_request.closed` webhook."
   end
 
   defp merge_instruction(_entry, false) do
-    "4. Merge the PR in GitHub once CI is green (the human or agent with merge rights clicks the merge button). The `pr_merged` validation for THIS repository auto-passes when GitHub fires the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`."
+    "4. Strategy config declares auto_merge: false. Merge the PR by hand in GitHub once CI is green and the annotations show no retry sentinel (the human or agent with merge rights clicks the merge button); verify `mergedAt`. The `pr_merged` validation for THIS repository auto-passes when GitHub fires the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`."
   end
 
   # Hardcoded fallback for `nudge_prompt/2` — mirrors the seeded `"nudge"`

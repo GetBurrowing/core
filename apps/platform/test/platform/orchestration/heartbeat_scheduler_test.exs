@@ -483,7 +483,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       # (e.g. "do NOT create a suite_review_request_create"), so assert on
       # the prohibition rather than on absence of the bare token.
       assert prompt =~ "pull_request.closed` webhook"
-      assert prompt =~ "Merge the PR in GitHub"
+      assert prompt =~ "Merge the PR by hand in GitHub once CI is green"
+      refute prompt =~ "it will merge automatically"
       assert prompt =~ "Do NOT create a `suite_review_request_create`"
       # No pr_merge stage should ever surface the legacy manual_approval
       # validation since the builder no longer emits it.
@@ -3162,8 +3163,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       # Auto-merge is declared true at strategy level. The required-CI repo
       # honours it; the zero-CI repo must not, because there is no check for
       # auto-merge to wait on.
-      assert core_block =~ "auto-merge is enabled"
-      refute channel_block =~ "auto-merge is enabled"
+      assert core_block =~ "Strategy config declares auto_merge: true"
+      refute channel_block =~ "Strategy config declares auto_merge: true"
+      # 01a08d81: the declaration must not be rendered as an armed state.
+      assert core_block =~ "gh pr view <n> --json autoMergeRequest"
+      refute prompt =~ "it will merge automatically"
+      refute prompt =~ "auto-merge is enabled"
 
       assert prompt =~ "`pr_merged` gate PER repository and does NOT complete"
       assert prompt =~ "Do not read one passing gate as a finished deploy"
@@ -3193,7 +3198,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       # And it still resolves the project repo through the same resolver.
       assert prompt =~ "### #{@core_url}"
-      assert prompt =~ "Merge the PR in GitHub once CI is green"
+      assert prompt =~ "Merge the PR by hand in GitHub once CI is green"
     end
 
     test "declaring no repos renders the byte-identical Git Workflow section" do

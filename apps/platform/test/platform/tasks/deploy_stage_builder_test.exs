@@ -71,7 +71,9 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert result.validations == [%{kind: "pr_merged"}]
       assert result.description =~ "PR merge flow"
       assert result.description =~ "pr_merged validation"
-      assert result.description =~ "Auto-merge is disabled"
+      assert result.description =~ "Strategy config declares auto_merge: false"
+      assert result.description =~ "merges the PR by hand via GitHub"
+      refute result.description =~ "will be merged automatically"
       refute result.description =~ "manual_approval"
       refute result.description =~ "ci_passed"
     end
@@ -85,8 +87,16 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
       assert result.validations == [%{kind: "pr_merged"}]
-      assert result.description =~ "Auto-merge is enabled"
+      assert result.description =~ "Strategy config declares auto_merge: true"
       assert result.description =~ "merge method: squash"
+      # 01a08d81: `auto_merge: true` is a declaration, not an armed state. The
+      # description must send a distrusting reader to the check whose safe
+      # branch is the hand-merge, never assert the merge will happen by itself.
+      assert result.description =~ "That is a declaration, not an armed state"
+      assert result.description =~ "gh pr view <n> --json autoMergeRequest"
+      assert result.description =~ "merge by hand and verify `mergedAt`"
+      refute result.description =~ "will be merged automatically"
+      refute result.description =~ "Auto-merge is enabled"
       refute result.description =~ "ci_check"
       refute result.description =~ "manual_approval"
     end
@@ -565,7 +575,9 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert result.position == 4
       assert result.description =~ "PR merge flow"
       assert result.description =~ "pr_merged"
-      assert result.description =~ "Auto-merge is disabled — a human merges the PR via GitHub"
+      assert result.description =~ "Strategy config declares auto_merge: false"
+      assert result.description =~ "merges the PR by hand via GitHub"
+      refute result.description =~ "will be merged automatically"
       refute result.description =~ "manual_approval"
       refute result.description =~ "ci_passed"
 

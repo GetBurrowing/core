@@ -630,14 +630,36 @@ defmodule Platform.Tasks.DeployStageBuilder do
       "look at it."
   end
 
+  # `auto_merge: true` in the strategy config is a DECLARATION, not an armed
+  # state. Nothing arms GitHub auto-merge except an explicit `gh pr merge
+  # --auto`, and on a repo whose required checks cannot tell a first-run
+  # green from a retry green the deployer must not arm it (ticket 01a08d81).
+  # The sentence therefore sends a trusting reader to a check whose safe
+  # branch is the hand-merge — a wrong trust here merges to main silently.
   defp repo_sentence(%{auto_merge: true} = gate) do
-    "#{repo_label(gate)}: CI is required and enforced by branch protection; auto-merge " <>
-      "is enabled (merge method: #{gate.merge_method})."
+    "#{repo_label(gate)}: CI is required and enforced by branch protection; strategy " <>
+      "config declares auto_merge: true (merge method: #{gate.merge_method}). " <>
+      auto_merge_declaration_caveat()
   end
 
   defp repo_sentence(gate) do
-    "#{repo_label(gate)}: CI is required and enforced by branch protection; auto-merge " <>
-      "is disabled — a human merges the PR via GitHub."
+    "#{repo_label(gate)}: CI is required and enforced by branch protection; strategy " <>
+      "config declares auto_merge: false (merge method: #{gate.merge_method}). " <>
+      "A human or the deployer merges the PR by hand via GitHub once CI is green and " <>
+      "verifies `mergedAt`."
+  end
+
+  # Shared by the single-repo and per-repo renderers so the two cannot drift
+  # back into asserting an armed state.
+  defp auto_merge_declaration_caveat do
+    "That is a declaration, not an armed state: auto-merge may or may not be armed on " <>
+      "this PR, and nothing arms it except an explicit `gh pr merge --auto`. Check " <>
+      "`gh pr view <n> --json autoMergeRequest` before relying on it; if it is null, " <>
+      "merge by hand and verify `mergedAt`. Do not assume it is armed on the strength " <>
+      "of this sentence. The deployer must not arm it while the required checks cannot " <>
+      "distinguish a first-run green from a retry green: wait for CI in the foreground, " <>
+      "read the run's annotations for the retry sentinel, and merge by hand once green. " <>
+      "`pr_merged` is passed by the pull_request.closed webhook."
   end
 
   defp pr_merge_description(config) do
@@ -658,9 +680,12 @@ defmodule Platform.Tasks.DeployStageBuilder do
       ),
       if(auto_merge,
         do:
-          "Auto-merge is enabled — PR will be merged automatically when CI passes " <>
-            "(merge method: #{merge_method}).",
-        else: "Auto-merge is disabled — a human merges the PR via GitHub."
+          "Strategy config declares auto_merge: true (merge method: #{merge_method}). " <>
+            auto_merge_declaration_caveat(),
+        else:
+          "Strategy config declares auto_merge: false (merge method: #{merge_method}). " <>
+            "A human or the deployer merges the PR by hand via GitHub once CI is green " <>
+            "and verifies `mergedAt`."
       )
     ]
 
