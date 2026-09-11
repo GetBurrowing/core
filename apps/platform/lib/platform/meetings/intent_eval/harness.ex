@@ -45,6 +45,14 @@ defmodule Platform.Meetings.IntentEval.Harness do
   so the column read zero on every run ever published while the
   `binary_actionable` cassette demoted 93 of its 174 rows.
 
+  `addressee_nulled` is a third axis, and it is not a demotion. Since task
+  `01a08fde` (ruling 2026-09-11) the addressee gate no longer downgrades a
+  routable answer whose addressed name is off the roster: the row keeps the
+  model's intent and quote, `target_role` is rewritten to the `"null"`
+  sentinel, and `addressee_nulled_from` records the role that was
+  overwritten. Such a row is NOT `off_topic`, NOT `demoted` and NOT an
+  error; `routes_to_role?/1` is the question it answers `false` to.
+
   ## Record and replay
 
   `--record` calls the live endpoint and appends every response to
@@ -60,6 +68,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
   alias Platform.Meetings.IntentEval
   alias Platform.Meetings.IntentEval.Cassette
   alias Platform.Meetings.IntentEval.CassetteProvider
+  alias Platform.Meetings.IntentRouting
   alias Platform.Orchestration.PromptTemplates
 
   @error_classes ~w(parse_error empty_output model_error)
@@ -808,6 +817,11 @@ defmodule Platform.Meetings.IntentEval.Harness do
       # JSON, and the number this stage exists to move cannot be
       # attributed to the gate that moved it.
       "demotion_reason" => demotion_reason(outcome),
+      # The addressee gate does not demote (task 01a08fde ruling): it
+      # keeps the intent and nulls the role, and this is the marker that
+      # says it did. Minimum exposure for the delegation probe; the
+      # summary count and report line are stage 3 of that task.
+      "addressee_nulled_from" => addressee_nulled_from(outcome),
       "target_role" => target_role(outcome),
       # Carried onto the row because "routable" is not the whole acceptance
       # bar for a positive — a fired row with an empty citation is a row the
@@ -831,10 +845,12 @@ defmodule Platform.Meetings.IntentEval.Harness do
 
   defp json_object?(_), do: false
 
-  # Non-nil ONLY for a row the evidence gate downgraded. It is read from
-  # the `{:ok, _}` outcome, not from an error shape: demotion is not an
-  # error, and the `{:error, {:demoted, _}}` clause that used to sit in
-  # `classify/2` could never match `decide/1`'s atom-only error reasons.
+  # Non-nil ONLY for a row the evidence or frame gate downgraded. The
+  # addressee gate does not demote (task 01a08fde): it keeps the intent and
+  # nulls the role, recorded under `addressee_nulled_from` instead. It is
+  # read from the `{:ok, _}` outcome, not from an error shape: demotion is
+  # not an error, and the `{:error, {:demoted, _}}` clause that used to sit
+  # in `classify/2` could never match `decide/1`'s atom-only error reasons.
   defp demoted_from({:ok, %{demoted_from: intent}}) when is_binary(intent), do: intent
   defp demoted_from(_), do: nil
 
@@ -842,6 +858,11 @@ defmodule Platform.Meetings.IntentEval.Harness do
     do: to_string(reason)
 
   defp demotion_reason(_), do: nil
+
+  defp addressee_nulled_from({:ok, %{addressee_nulled_from: role}}) when is_binary(role),
+    do: role
+
+  defp addressee_nulled_from(_), do: nil
 
   defp target_role({:ok, %{target_role: role}}), do: role
   defp target_role(_), do: nil
@@ -884,6 +905,11 @@ defmodule Platform.Meetings.IntentEval.Harness do
       # Demotions split by GATE. `demoted` alone cannot say whether a
       # change moved the citation gate or the addressee gate.
       "demotion_reasons" => demotion_reason_counts(scored),
+      # A third OUTCOME count, outside `demoted` and outside
+      # `error_classes`: the addressee gate keeps the intent and nulls the
+      # role (task 01a08fde), so such a row is neither a demotion nor an
+      # error and none of the three taxonomies share a bucket.
+      "addressee_nulled" => Enum.count(scored, & &1["addressee_nulled_from"]),
       "parseable_bodies" => Enum.count(scored, & &1["response_parseable"]),
       "per_class" => Map.new(labels, &{&1, class_metrics(scored, &1)}),
       "confusion" => confusion(scored),
@@ -969,6 +995,19 @@ defmodule Platform.Meetings.IntentEval.Harness do
   """
   def fired?(row) do
     is_nil(row["error_class"]) and row["predicted"] not in [nil, "off_topic"]
+  end
+
+  @doc """
+  Would this row resolve a RUNTIME AGENT? `fired?/1` and a routable
+  `target_role`. Since the addressee gate stopped demoting (task
+  `01a08fde`, 2026-09-11 ruling), an off-roster ask keeps its intent with
+  `target_role: "null"`: it fires, and it routes to nobody. This is the
+  property the delegation probe's "off-roster false fires" number was
+  protecting all along — an off-roster ask must never dispatch to a real
+  agent — and `fired?/1` no longer expresses it.
+  """
+  def routes_to_role?(row) do
+    fired?(row) and IntentRouting.routable_role?(row["target_role"])
   end
 
   defp latency_percentiles(scored) do
@@ -1099,6 +1138,9 @@ defmodule Platform.Meetings.IntentEval.Harness do
       # it: a demoted row is a successful `off_topic` decision and is
       # already counted as one. See the moduledoc on task 01a04379.
       "  demoted       : #{summary["demoted"]} positives downgraded to off_topic (counted as off_topic, not as errors) #{inspect(summary["demotion_reasons"] || %{})}",
+      # Also NOT an error and NOT a demotion: the addressee gate keeps the
+      # model's intent and rewrites only the role (task 01a08fde).
+      "  addressee_nulled: #{summary["addressee_nulled"]} routable answers had target_role rewritten to null (intent kept)",
       # Separates \"the model declines everything in valid JSON\" from \"the
       # model never emits JSON at all\" — identical parse_error counts.
       "  JSON bodies   : #{summary["parseable_bodies"]} of #{summary["total"]} responses parsed as a JSON object",

@@ -30,15 +30,27 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
   stopped editing the prompt.
 
   **Stage 5 closed it in CODE.** `Platform.Meetings.IntentAddressee` is a
-  post-model gate: a routable answer whose ADDRESSED NAME is absent from the
-  roster the model was shown is demoted to `off_topic` with
-  `demotion_reason: :off_roster_addressee`. The same cassette, unchanged, now
-  scores 0 off-roster false fires on this slice instead of 5, with both
-  on-roster positives still firing and still cited. The block below is
-  written from BOTH sides — the model's own answer is still asserted to be
-  the wrong one, and the gate is asserted to be what corrects it — so a
-  future prompt revision that genuinely teaches the model the roster shows up
-  as a change here rather than hiding behind the gate.
+  post-model gate over a routable answer whose ADDRESSED NAME is absent from
+  the roster the model was shown. As first shipped it demoted that answer to
+  `off_topic`; task `01a08fde` (ruling 2026-09-11, Rowan: gate) aligned it
+  with migration `20260902140000` instead — the model's intent and quote are
+  KEPT, `target_role` is rewritten to the `"null"` sentinel, and the row is
+  marked `addressee_nulled_from: <the role overwritten>`. The same cassette,
+  unchanged, scores 0 off-roster rows that ROUTE TO A ROLE
+  (`Harness.routes_to_role?/1`) instead of 5, with both on-roster positives
+  still routing and still cited. The five off-roster rows still `fired?/1`
+  — they carry the model's intent — which is why the number below is stated
+  on `routes_to_role?/1`, the property the probe was always protecting: an
+  off-roster ask must never dispatch to a real agent. The block is written
+  from BOTH sides — the model's own answer is still asserted to be the
+  wrong one, and the gate is asserted to be what corrects it — so a future
+  prompt revision that genuinely teaches the model the roster shows up as a
+  change here rather than hiding behind the gate.
+
+  The slice labels for those five rows are still `off_topic` (the 08-31
+  person=off_topic rule, frozen as a measurement); their `predicted` now
+  differs from `label` by design. Cassette bytes and slice labels are not
+  touched by the re-authoring.
 
   ## Every claim here is shown going red
 
@@ -83,13 +95,16 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
   end
 
   setup_all do
+    agent_roster = run_slice("agent_roster_20260831")
+
     %{
-      agent_roster: rows_by_text("agent_roster_20260831"),
+      agent_roster: rows_by_text(agent_roster),
+      agent_roster_summary: agent_roster["summary"],
       baseline: rows_by_text("off_topic_default")
     }
   end
 
-  defp rows_by_text(config) do
+  defp run_slice(config) do
     {:ok, result} =
       Harness.run(config,
         root: IntentEval.root(),
@@ -100,8 +115,11 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
         write: false
       )
 
-    Map.new(result["rows"], &{&1["text"], &1})
+    result
   end
+
+  defp rows_by_text(config) when is_binary(config), do: config |> run_slice() |> rows_by_text()
+  defp rows_by_text(result), do: Map.new(result["rows"], &{&1["text"], &1})
 
   describe "the reproduction" do
     test "landed off_topic on the shipped prompt — the defect, from its own cassette", %{
@@ -153,62 +171,81 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
   end
 
   describe "the model still does not discriminate — the GATE does (task 01a05997 stage 5)" do
-    test "the off-roster twin is turned down by the gate, not by the model", %{
+    # RULING (task 01a08fde, 2026-09-11, Rowan: gate): the addressee gate
+    # keeps the intent and nulls the role; it no longer demotes. These
+    # assertions are re-authored onto that contract. Cassette bytes and
+    # slice labels are untouched.
+
+    test "the off-roster twin is routed to nobody by the gate, not by the model", %{
       agent_roster: rows
     } do
       roster = rows[@reproduction]
       off_roster = rows[@off_roster_twin]
 
       # The two utterances differ only in the addressed name.
-      assert Harness.fired?(roster)
+      assert Harness.routes_to_role?(roster)
+      assert roster["addressee_nulled_from"] == nil
       assert roster["demotion_reason"] == nil
 
-      refute Harness.fired?(off_roster),
-             "the off-roster twin fired — the addressee gate is not running"
+      refute Harness.routes_to_role?(off_roster),
+             "the off-roster twin routed to a role — the addressee gate is not running"
 
       # And this is the part that stops the assertion above from being read
       # as "the prompt learned the roster". The MODEL still answers a
-      # routable intent on this row; what changed is that the answer is now
-      # rejected after the fact. If a later revision genuinely teaches the
-      # model, `demoted_from` goes nil here and this goes red — which is the
-      # correct outcome to have to argue for.
-      assert off_roster["demoted_from"] == "open_question"
-      assert off_roster["demotion_reason"] == "off_roster_addressee"
-      assert off_roster["predicted"] == "off_topic"
+      # routable intent on this row, and that answer is KEPT; what the gate
+      # changed is the role. The raw role is read from the cassette row for
+      # this utterance (`open_question` / `triage_officer`). If a later
+      # revision genuinely teaches the model, `addressee_nulled_from` goes
+      # nil here and this goes red — which is the correct outcome to have
+      # to argue for.
+      assert off_roster["predicted"] == "open_question"
+      assert off_roster["target_role"] == "null"
+      assert off_roster["addressee_nulled_from"] == "triage_officer"
+      assert off_roster["demoted_from"] == nil
+      assert off_roster["demotion_reason"] == nil
+      assert is_binary(off_roster["evidence_quote"]) and off_roster["evidence_quote"] != ""
+      # The 08-31 label is frozen; predicted now differs from it by design.
       assert off_roster["label"] == "off_topic"
     end
 
-    test "off-roster false fires: 4 shipped, 5 roster-prompt, 0 with the gate", %{
+    test "off-roster rows routing to a role: 4 shipped, 5 roster-prompt, 0 with the gate", %{
       agent_roster: rows,
       baseline: baseline
     } do
-      false_fires = fn rows ->
-        rows
-        |> Map.values()
-        |> Enum.filter(&(&1["label"] == "off_topic"))
-        |> Enum.count(&Harness.fired?/1)
+      off_topic_rows = fn rows ->
+        rows |> Map.values() |> Enum.filter(&(&1["label"] == "off_topic"))
       end
+
+      routes = fn rows -> rows |> off_topic_rows.() |> Enum.count(&Harness.routes_to_role?/1) end
 
       # The shipped prompt, and the roster prompt as stage 4 measured it,
       # are both still scored from their own cassettes. `off_topic_default`
       # pins no `agent_roster` in its config, so the gate is inert there by
       # construction and its 4 stays 4 — the stage-4 finding is preserved,
       # not overwritten.
-      assert false_fires.(baseline) == 4
-      assert false_fires.(rows) == 0
+      assert routes.(baseline) == 4
+      assert routes.(rows) == 0
+
+      # The discriminating half: the zero is produced by the null sentinel,
+      # not by suppression. All five off-roster rows still FIRE with the
+      # model's intent, and every one of them carries the sentinel role.
+      fired = rows |> off_topic_rows.() |> Enum.filter(&Harness.fired?/1)
+      assert length(fired) == 5
+      assert Enum.all?(fired, &(&1["target_role"] == "null"))
     end
 
-    test "and the gate is what did it — all 5 are gate demotions, none are model declines", %{
-      agent_roster: rows
-    } do
+    test "and the gate is what did it — all 5 are gate rewrites, none are model nulls or declines",
+         %{
+           agent_roster: rows
+         } do
       # Anti-vacuity for the zero above: a zero produced by the model
-      # declining, by a parse error, or by the citation gate would read
-      # identically in `false_fires`. Naming the reason is what ties the
-      # number to this stage.
+      # declining, by the model answering null itself, by a parse error, or
+      # by the citation gate would read identically in `routes_to_role?`.
+      # Naming the marker is what ties the number to the addressee gate.
       gated =
         rows
         |> Map.values()
-        |> Enum.filter(&(&1["demotion_reason"] == "off_roster_addressee"))
+        |> Enum.filter(&(&1["addressee_nulled_from"] != nil))
         |> Enum.map(& &1["text"])
         |> Enum.sort()
 
@@ -219,6 +256,36 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
                @off_roster_twin,
                "Sam, open a task to track the flaky deploy, would you?"
              ]
+
+      # None of the five was demoted by any gate.
+      for row <- Map.values(rows), row["addressee_nulled_from"] != nil do
+        assert row["demoted_from"] == nil, "#{inspect(row["text"])} was demoted"
+      end
+    end
+
+    test "the arm's per-slice `correct` is 2 of 9 — stated, not widened", %{
+      agent_roster_summary: summary
+    } do
+      # The slice labels encode the 08-31 person=off_topic rule: an ask
+      # addressed to a non-roster name was labelled `off_topic`. Migration
+      # `20260902140000` and task `01a08fde` reversed that rule — the ask
+      # keeps its intent and routes to nobody — so `predicted` now differs
+      # from `label` on exactly the five gate-rewritten rows and the arm's
+      # `correct` drops by 5, from 7 (measured on origin/main from the same
+      # cassette) to 2. The 2 are the no-vocative controls; the two
+      # on-roster positives were already label-mismatched before this task
+      # (labelled `open_question`, the cassette answers `action_items`) and
+      # are unchanged by it. The labels are NOT relabelled: they are a
+      # frozen measurement of the old rule, and this number is what the
+      # reversal costs against it.
+      slice = summary["per_slice"]["delegation_probe"]
+      assert slice["rows"] == 9
+      assert slice["correct"] == 2
+      assert slice["fired"] == 7
+      assert slice["off_topic"] == 2
+      assert slice["demoted"] == 0
+      assert summary["addressee_nulled"] == 5
+      assert summary["demoted"] == 0
     end
 
     test "the two on-roster positives survive the gate, routable and cited", %{
@@ -234,6 +301,8 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
         row = rows[text]
 
         assert Harness.fired?(row), "#{inspect(text)} was suppressed by the gate"
+        assert Harness.routes_to_role?(row), "#{inspect(text)} was routed to nobody by the gate"
+        assert row["addressee_nulled_from"] == nil
         assert row["demotion_reason"] == nil
         assert is_binary(row["evidence_quote"]) and row["evidence_quote"] != ""
       end

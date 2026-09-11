@@ -1277,7 +1277,8 @@ defmodule Platform.Meetings.IntentClassifier do
        parsed
        |> Map.put_new(:evidence_quote, nil)
        |> Map.put_new(:demoted_from, nil)
-       |> Map.put_new(:demotion_reason, nil)}
+       |> Map.put_new(:demotion_reason, nil)
+       |> Map.put_new(:addressee_nulled_from, nil)}
     end
   end
 
@@ -1853,6 +1854,39 @@ defmodule Platform.Meetings.IntentClassifier do
                    evidence_quote: quote_text
                  }}
 
+              {:null_role, :off_roster_addressee} ->
+                emit_addressee_nulled(room_id, intent, target_role)
+
+                # RULING (task 01a08fde, 2026-09-11, Rowan: gate). An ask
+                # aimed at someone who is not on the roster is still that
+                # ask: migration 20260902140000 (body lines 128-135, 218)
+                # tells the model to KEEP the intent and answer
+                # `target_role: null`, and the gate now does the same
+                # thing to an answer the model got wrong. Intent, quote
+                # and confidence are the model's own; ONLY the role is
+                # rewritten, to the same `@no_target_role` string that
+                # `normalise_target_role/1` writes for the model's own
+                # JSON null, so the queue keeps one spelling of nobody.
+                # Nothing was demoted: `demoted_from` / `demotion_reason`
+                # stay nil so the eval harness's demotion counts do not
+                # absorb a row that was not downgraded.
+                #
+                # `addressee_nulled_from` is the ONE key that separates
+                # this row from a model that said null itself: non-nil
+                # iff the gate rewrote the role, carrying the role it
+                # overwrote. Persisting it to `meeting_candidates` /
+                # `IntentQueue.Server.@writable_fields` is out of scope
+                # here (no column exists; ticket 01a0910f-ab00 owns the
+                # "null"-string persistence question).
+                {:ok,
+                 %{
+                   intent: intent,
+                   target_role: @no_target_role,
+                   confidence: confidence,
+                   evidence_quote: quote_text,
+                   addressee_nulled_from: target_role
+                 }}
+
               {:demote, reason} ->
                 emit_demotion(room_id, intent, reason)
 
@@ -1943,7 +1977,7 @@ defmodule Platform.Meetings.IntentClassifier do
   defp addressee_verdict(_intent, quote_text, chunk_text, roster) do
     case IntentAddressee.verdict(chunk_text, quote_text, roster) do
       :ok -> :ok
-      {:off_roster, _name} -> {:demote, :off_roster_addressee}
+      {:off_roster, _name} -> {:null_role, :off_roster_addressee}
     end
   end
 
@@ -1995,34 +2029,48 @@ defmodule Platform.Meetings.IntentClassifier do
   # is how the token-budget bug hid for weeks. Logged at :info because
   # an uncited positive is now an expected, common outcome, not an
   # incident.
-  # A gate-rejected row is DISTINGUISHABLE from a row the model itself
-  # called off_topic, and from a row the OTHER gate turned down, on
-  # three surfaces:
+  # The two gates no longer land in the same place. The CITATION gate
+  # demotes: an uncited positive becomes `off_topic` with
+  # `demoted_from` / `demotion_reason` set. The ADDRESSEE gate does not
+  # demote (task 01a08fde ruling, 2026-09-11): the intent and quote are
+  # kept and only `target_role` is rewritten to the null sentinel, with
+  # `addressee_nulled_from` carrying the role that was overwritten.
   #
-  #   * a distinct telemetry event
-  #     (`:off_roster_addressee` vs `:evidence_missing`) carrying the
-  #     rejected intent — the model's own off_topic emits neither;
+  # Each is still DISTINGUISHABLE from the model's own answer, and from
+  # the other gate, on three surfaces:
+  #
+  #   * a distinct telemetry event (`:off_roster_addressee` vs
+  #     `:evidence_missing`), each carrying the model's intent — the
+  #     model's own off_topic / own null emits neither;
   #   * a distinct log line;
-  #   * `:demotion_reason` on `decide/1`'s return, which the offline
-  #     eval harness records onto every scored row.
+  #   * a distinct key on `decide/1`'s return (`:addressee_nulled_from`
+  #     vs `:demotion_reason`), which the offline eval harness records
+  #     onto every scored row.
   #
-  # It is NOT yet distinguishable in `meeting_candidates`: that table
-  # has no column for it, and neither does the queue row, so BOTH
-  # demotion kinds land there as a plain `classified_intent =
-  # "off_topic"` exactly as they did before this stage. Persisting it
-  # would need a new nullable `demotion_reason` column on
-  # `meeting_candidates` (and a matching `@writable_fields` entry on
-  # `IntentQueue.Server`); that schema is not invented here.
-  defp emit_demotion(room_id, intent, :off_roster_addressee = reason) do
+  # Neither is yet distinguishable in `meeting_candidates`: that table
+  # has no column for either marker and neither does the queue row, so
+  # a gate-nulled row lands there as a plain routable
+  # `classified_intent` with `target_role = "null"`, exactly as a
+  # model-null row does. Persisting `addressee_nulled_from` would need
+  # a new nullable column on `meeting_candidates` (and a matching
+  # `@writable_fields` entry on `IntentQueue.Server`); that schema is
+  # not invented here, and ticket 01a0910f-ab00 owns the "null"-string
+  # persistence question.
+  defp emit_addressee_nulled(room_id, intent, raw_target_role) do
     Logger.info(
-      "[IntentClassifier] off-roster addressee demoted to off_topic room=#{inspect(room_id)} " <>
-        "intent=#{inspect(intent)} reason=#{inspect(reason)}"
+      "[IntentClassifier] off-roster addressee: target_role nulled room=#{inspect(room_id)} " <>
+        "intent=#{inspect(intent)} raw_target_role=#{inspect(raw_target_role)}"
     )
 
     :telemetry.execute(
       [:platform, :meetings, :intent_classifier, :off_roster_addressee],
       %{count: 1},
-      %{room_id: room_id, intent: intent, reason: reason}
+      %{
+        room_id: room_id,
+        intent: intent,
+        raw_target_role: raw_target_role,
+        reason: :off_roster_addressee
+      }
     )
   end
 

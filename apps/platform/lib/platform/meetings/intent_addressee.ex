@@ -31,7 +31,8 @@ defmodule Platform.Meetings.IntentAddressee do
 
   ## The rule
 
-  A routable answer is rejected iff:
+  A routable answer has its `target_role` rewritten to the null sentinel
+  iff:
 
     1. an **addressed name** can be located in the utterance (or in the
        leading vocative of the model's own `evidence_quote`), AND
@@ -40,7 +41,7 @@ defmodule Platform.Meetings.IntentAddressee do
        SLUG, ROLE KEY, and the tokens of a snake_cased role key.
 
   Both halves matter. An utterance with **no vocative at all** is never
-  rejected: `unaddressed_probe_12` is twelve agent-directed asks that
+  touched: `unaddressed_probe_12` is twelve agent-directed asks that
   name nobody (`"Record the decision: we're shipping Tuesday."`), every
   one a legitimate positive. Over-suppression is the obvious way this
   gate goes wrong, so the vocative detector is deliberately narrow and
@@ -88,12 +89,25 @@ defmodule Platform.Meetings.IntentAddressee do
   of plan here.` are the only four negatives matching the bare shapes,
   and all four are pronouns.
 
+  ## What the gate does to a hit
+
+  It does NOT demote (ruling: task `01a08fde`, 2026-09-11, Rowan: gate).
+  Migration `20260902140000` instructs the model that an ask aimed at a
+  person KEEPS its intent and takes `target_role: null`; the gate applies
+  the same rule to an answer the model got wrong. `IntentClassifier`
+  keeps the intent, confidence and verbatim `evidence_quote`, rewrites
+  `target_role` to `IntentClassifier.no_target_role/0` (the string
+  `"null"`, the one spelling of nobody), and marks the row with
+  `addressee_nulled_from: <the role it overwrote>`. `demoted_from` and
+  `demotion_reason` stay nil. `verdict/3`'s own return shape is
+  unchanged: `:ok | {:off_roster, name}`.
+
   ## What this does not reach
 
   A vocative buried mid-utterance with no comma (`"so then Harper file a
   ticket"`) is not detected. That is the conservative direction: a
-  missed detection leaves today's behaviour, a false detection silences
-  a legitimate ask. This module is not a named-entity recogniser and
+  missed detection leaves today's behaviour, a false detection strips a
+  legitimate ask of its addressee. This module is not a named-entity recogniser and
   should not grow into one — if the vocative surface needs to widen,
   widen it against `unaddressed_probe_12` and `control_60` first.
   """

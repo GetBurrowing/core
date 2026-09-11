@@ -246,9 +246,40 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     end
   end
 
-  defp decide(chunk_text, roster) do
+  defmodule ModelNullProvider do
+    @moduledoc false
+    # The answer 20260902140000 instructs for an ask aimed at nobody in
+    # particular: a routable intent, a real citation, and the JSON
+    # literal `null` for the role. This is the row the gate's output
+    # must be indistinguishable from (bar the marker).
+    def chat(_c, _m, _o) do
+      {:ok,
+       %{
+         content:
+           ~s({"intent": "action_items", "target_role": null, ) <>
+             ~s("confidence": 0.9, "evidence_quote": "write that up"})
+       }}
+    end
+  end
+
+  defmodule UncitedProvider do
+    @moduledoc false
+    # A routable answer with a BLANK citation: the citation gate's
+    # demotion path, used as the anti-vacuity partner for "the addressee
+    # gate no longer demotes".
+    def chat(_c, _m, _o) do
+      {:ok,
+       %{
+         content:
+           ~s({"intent": "action_items", "target_role": "meeting_scribe", ) <>
+             ~s("confidence": 0.9, "evidence_quote": ""})
+       }}
+    end
+  end
+
+  defp decide(chunk_text, roster, provider \\ OffRosterProvider) do
     IntentClassifier.decide(%{
-      provider_module: OffRosterProvider,
+      provider_module: provider,
       agent: %{base_url: "http://stub", model: "classifier", vault_key: nil},
       prompt: "unused — the provider is a stub",
       chunk_text: chunk_text,
@@ -257,49 +288,89 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     })
   end
 
+  @off_roster_event [:platform, :meetings, :intent_classifier, :off_roster_addressee]
+  @room_id "addressee-test"
+
+  defp attach_off_roster_telemetry! do
+    parent = self()
+    handler_id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        @off_roster_event,
+        # Telemetry handlers are global and this file is async: only
+        # forward events from THIS file's room, or a concurrent harness
+        # test's off-roster row (room "intent-eval") lands in the
+        # refute_receive below.
+        fn _event, measurements, %{room_id: @room_id} = meta, _config ->
+          send(parent, {:off_roster_addressee, measurements, meta})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
   describe "decide/1 wiring" do
-    test "an off-roster routable answer degrades to off_topic through the close path" do
+    # RULING (task 01a08fde, 2026-09-11, Rowan: gate). Migration
+    # 20260902140000 says an ask aimed at a person KEEPS its intent and
+    # takes `target_role: null`; the gate now applies that rule instead
+    # of demoting to off_topic. Every test in this block pins one half
+    # of that contract.
+
+    test "an off-roster routable answer keeps its intent and quote and routes to nobody" do
       # NOT a raise, NOT an {:error, _}: the classifier's failure
       # contract is a closed skeleton, and a new crash path here would
       # take the transcript subscription down.
       assert {:ok, decision} = decide("Harper, can you write that up?", @roster)
 
-      assert decision.intent == "off_topic"
-      assert decision.evidence_quote == ""
-      assert decision.demoted_from == "action_items"
-      assert decision.demotion_reason == :off_roster_addressee
+      # The model's own answer survives ...
+      assert decision.intent == "action_items"
+      assert decision.evidence_quote == "write that up"
+      assert decision.confidence == 0.9
+      # ... only the role is rewritten, and the marker says which one was.
+      assert decision.target_role == "null"
+      assert decision.addressee_nulled_from == "meeting_scribe"
+      # Nothing was demoted.
+      assert is_nil(decision.demoted_from)
+      assert is_nil(decision.demotion_reason)
     end
 
     test "target_role is the pinned sentinel, not nil" do
       # `@no_target_role` is the string "null" and is hashed into
       # build_dedupe_key/3. A real nil here forks every historical
       # dedupe key. Commit d432067 pins it; this asserts the gate's
-      # demotion path honours the same pin.
+      # null path honours the same pin.
       assert {:ok, %{target_role: "null"}} = decide("Harper, can you write that up?", @roster)
     end
 
-    test "a gate-rejected row is distinguishable from a model off_topic" do
-      # Both predict off_topic. The ONLY thing telling them apart is
-      # the demotion metadata — which is the point of recording it.
+    test "a gate-nulled row is distinguishable from the model's own null" do
+      # Both are action_items routed to nobody. The ONLY thing telling
+      # them apart is `addressee_nulled_from` — which is the point of
+      # recording it, and the strongest claim this stage makes: the
+      # gate's output differs from the model-null answer by exactly
+      # that key.
       {:ok, gated} = decide("Harper, can you write that up?", @roster)
+      {:ok, model_null} = decide("Can somebody write that up?", @roster, ModelNullProvider)
 
-      assert gated.demoted_from == "action_items"
-      assert gated.demotion_reason == :off_roster_addressee
+      assert gated.intent == "action_items"
+      assert model_null.intent == "action_items"
+      assert gated.target_role == "null"
+      assert model_null.target_role == "null"
 
-      # A genuine model decline carries neither.
-      assert {:ok, declined} =
-               IntentClassifier.decide(%{
-                 provider_module: DeclineProvider,
-                 agent: %{base_url: "http://stub", model: "classifier", vault_key: nil},
-                 prompt: "unused",
-                 chunk_text: "Is anything happening?",
-                 room_id: "addressee-test",
-                 roster: @roster
-               })
+      assert gated.addressee_nulled_from == "meeting_scribe"
+      assert is_nil(model_null.addressee_nulled_from)
 
-      assert declined.intent == "off_topic"
-      assert is_nil(declined.demoted_from)
-      assert is_nil(declined.demotion_reason)
+      # Key-set and value diff: same keys, one differing value.
+      assert Map.keys(gated) |> Enum.sort() == Map.keys(model_null) |> Enum.sort()
+
+      differing =
+        gated
+        |> Map.keys()
+        |> Enum.filter(&(Map.fetch!(gated, &1) != Map.fetch!(model_null, &1)))
+
+      assert differing == [:addressee_nulled_from]
     end
 
     test "an on-roster routable answer is untouched" do
@@ -309,17 +380,18 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       assert decision.intent == "action_items"
       assert decision.target_role == "meeting_scribe"
       assert decision.evidence_quote == "write that up"
+      assert is_nil(decision.addressee_nulled_from)
       assert is_nil(decision.demotion_reason)
     end
 
     test "an unaddressed routable answer is untouched" do
-      assert {:ok, %{intent: "action_items", demotion_reason: nil}} =
+      assert {:ok, %{intent: "action_items", demotion_reason: nil, addressee_nulled_from: nil}} =
                decide("Can somebody write that up?", @roster)
     end
 
     test "a caller that passes no roster at all is unaffected" do
       # Backwards compatibility for every existing decide/1 call site.
-      assert {:ok, %{intent: "action_items"}} =
+      assert {:ok, %{intent: "action_items", target_role: "meeting_scribe"}} =
                IntentClassifier.decide(%{
                  provider_module: OffRosterProvider,
                  agent: %{base_url: "http://stub", model: "classifier", vault_key: nil},
@@ -327,6 +399,49 @@ defmodule Platform.Meetings.IntentAddresseeTest do
                  chunk_text: "Harper, can you write that up?",
                  room_id: "addressee-test"
                })
+    end
+
+    test "the off_roster_addressee telemetry still fires, carrying the model's intent and the overwritten role" do
+      # The production-side half of the distinction: an operator
+      # counting off-roster asks still gets one event per rewrite, and
+      # the event names the role the gate threw away.
+      attach_off_roster_telemetry!()
+
+      assert {:ok, _} = decide("Harper, can you write that up?", @roster)
+
+      assert_receive {:off_roster_addressee, %{count: 1}, meta}
+      assert meta.intent == "action_items"
+      assert meta.raw_target_role == "meeting_scribe"
+      assert meta.reason == :off_roster_addressee
+      assert meta.room_id == "addressee-test"
+      # Exactly one.
+      refute_receive {:off_roster_addressee, _, _}, 50
+    end
+
+    test "the on-roster twin fires no off_roster_addressee event" do
+      # Anti-vacuity partner: a gate that nulled every addressed ask
+      # would pass the Harper case and fail here.
+      attach_off_roster_telemetry!()
+
+      assert {:ok, %{target_role: "meeting_scribe"}} =
+               decide("Dalton, can you write that up?", @roster)
+
+      refute_receive {:off_roster_addressee, _, _}, 50
+    end
+
+    test "the demotion path no longer fires for an off-roster addressee" do
+      assert {:ok, decision} = decide("Harper, can you write that up?", @roster)
+      assert is_nil(decision.demoted_from)
+      assert is_nil(decision.demotion_reason)
+
+      # Anti-vacuity: an uncited positive on the SAME call path still
+      # comes back demoted, so this cannot pass because demotion is
+      # broken globally.
+      assert {:ok, demoted} = decide("Harper, can you write that up?", @roster, UncitedProvider)
+      assert demoted.intent == "off_topic"
+      assert demoted.demoted_from == "action_items"
+      assert demoted.demotion_reason == :blank
+      assert is_nil(demoted.addressee_nulled_from)
     end
   end
 end

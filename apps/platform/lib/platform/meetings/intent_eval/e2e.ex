@@ -162,7 +162,10 @@ defmodule Platform.Meetings.IntentEval.E2E do
 
     * `"task_id"` — the id of the `tasks` row it minted, or `nil`
     * `"queue_status"` / `"candidate_state"` — where it stopped
-    * `"demoted_from"` — set when the evidence/frame gate downgraded it
+    * `"demoted_from"` — set when the evidence/frame gate downgraded it.
+      The addressee gate does not demote (task 01a08fde): an off-roster
+      ask keeps its intent with `target_role: "null"`, so it is never
+      counted here
     * `"frame_verdict"` — `"ok"` or the cancelling class
 
   `correct` is the two-sided verdict: a positive that minted a task, or
