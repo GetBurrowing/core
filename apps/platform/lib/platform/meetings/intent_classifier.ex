@@ -220,6 +220,7 @@ defmodule Platform.Meetings.IntentClassifier do
 
   alias Platform.Meetings
   alias Platform.Meetings.Candidates
+  alias Platform.Meetings.IntentAddressee
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentFrames
   alias Platform.Meetings.IntentQueue
@@ -234,9 +235,28 @@ defmodule Platform.Meetings.IntentClassifier do
   @prompt_slug "meetings.intent_classify.v1"
 
   # The one spelling of "this intent reaches nobody" that the queue
-  # carries. `target_role` is hashed into the dedupe key and stored on
-  # the row, so it must be a binary; a second spelling would split the
-  # dedupe key for identical utterances.
+  # carries. It is the STRING "null", not `nil`, and that is deliberate
+  # — three separate things depend on it being a binary:
+  #
+  #   1. The prompt's `target_role` enum is CLOSED and its last member
+  #      is the literal token `null`, so "nobody" is a value the model
+  #      is instructed to emit, not an absence.
+  #   2. `normalise_target_role/1` guards on `is_binary(role)`. A JSON
+  #      `null` and the string `"null"` both land here, and folding
+  #      them onto one binary is the only reason a nil-answering model
+  #      and a "null"-answering model dedupe TOGETHER instead of
+  #      forking the dedupe space.
+  #   3. `build_dedupe_key/3` hashes it via `:crypto.hash/2`, which
+  #      raises on a nil element. A real NULL would crash the classify
+  #      path outright.
+  #
+  # Consequently: DO NOT "fix" this to a real SQL NULL. Changing the
+  # representation silently re-keys every historical dedupe key and
+  # splits identical utterances into distinct candidates. Downstream,
+  # `IntentRouting` already lands this string as `:no_target_role`, and
+  # any display defect (e.g. an intents rail rendering the word "null")
+  # must be fixed in the COMPONENT, not by nilling the sentinel.
+  # Pinned by `intent_classifier_test.exs` — "target_role sentinel".
   @no_target_role "null"
   @default_context_window_size 3
 
@@ -312,6 +332,12 @@ defmodule Platform.Meetings.IntentClassifier do
     - "Promote to prod. Yeah, I know, me too. Okay, so let's go."
     - "Anyway, how was the long weekend?"
     - "Yeah. Right. Mm-hm, exactly."
+
+  # Agents available in this org
+
+  These are the ONLY agents that can be addressed. If the utterance names one of them (by name or by slug), the `target_role` is that agent's role key. If you cannot name the agent role being asked, there is no intent to report.
+
+  {{agent_roster}}
 
   Respond ONLY with a JSON object matching this schema:
   {"intent": "<string>", "target_role": "<string>", "confidence": <float 0-1>, "evidence_quote": "<verbatim substring or empty string>"}
@@ -995,7 +1021,12 @@ defmodule Platform.Meetings.IntentClassifier do
         press_card_intent_id: Map.get(payload, :press_window_card_intent_id)
       })
 
-    prompt =
+    # `resolve_prompt/6` hands back the roster it rendered ALONGSIDE the
+    # prompt so the addressee gate judges the answer against the block
+    # the model was actually shown. One read, one source of truth — a
+    # second `Roles.assigned_agents/0` call here could return a roster
+    # the prompt never carried.
+    {prompt, roster} =
       resolve_prompt(
         payload,
         segment,
@@ -1011,7 +1042,8 @@ defmodule Platform.Meetings.IntentClassifier do
         agent: agent,
         prompt: prompt,
         chunk_text: chunk_text,
-        room_id: room_id
+        room_id: room_id,
+        roster: roster
       })
 
     case decision do
@@ -1039,6 +1071,14 @@ defmodule Platform.Meetings.IntentClassifier do
             demoted_from: demoted_from,
             chunk_id: chunk_id,
             chunk_text: chunk_text,
+            # WHICH model answered. `call_provider/5` already reads
+            # `agent.model` to address the provider; threading the same
+            # read here is what makes `meeting_candidates.classifier_model`
+            # non-nil. Before task 01a05997 stage 2 the queue's
+            # `model_used` defaulted to nil and nothing ever overwrote
+            # it, so every historical row attributes to nobody and the
+            # corpus cannot be sliced by model.
+            model: Map.get(agent, :model),
             # SAME call the prompt renders `{{speaker}}` from, a few
             # lines up — one derivation, so the attribution the model
             # was shown is the attribution the row records. Task
@@ -1199,22 +1239,35 @@ defmodule Platform.Meetings.IntentClassifier do
   can count `:parse_error` separately from a genuine decline.
   """
   @spec decide(map()) :: {:ok, map()} | {:error, decide_error()}
-  def decide(%{
-        provider_module: provider_module,
-        agent: agent,
-        prompt: prompt,
-        chunk_text: chunk_text,
-        room_id: room_id
-      }) do
+  def decide(
+        %{
+          provider_module: provider_module,
+          agent: agent,
+          prompt: prompt,
+          chunk_text: chunk_text,
+          room_id: room_id
+        } = args
+      ) do
+    # The roster the model WAS SHOWN, threaded from the same read that
+    # rendered `{{agent_roster}}` into `prompt` — not re-queried here.
+    # A second lookup could disagree with the block in the prompt (a
+    # role reassigned between render and answer), and a gate judging an
+    # answer against a roster the model never saw is a gate nobody can
+    # reason about. Absent key => `nil` => the gate is inert; see
+    # `IntentAddressee.verdict/3`.
+    roster = Map.get(args, :roster)
+
     with {:ok, content} <- call_provider(provider_module, agent, prompt, chunk_text, room_id),
          # SINGLE call site for `parse_content`. Task 01a03f57 widened it
          # to /3, threading `chunk_text` through so the evidence gate can
          # check the model's citation against the chunk it classified.
-         {:ok, parsed} <- parse_content(content, room_id, chunk_text) do
+         # Task 01a05997 stage 5 widened it to /4 for the addressee gate.
+         {:ok, parsed} <- parse_content(content, room_id, chunk_text, roster) do
       {:ok,
        parsed
        |> Map.put_new(:evidence_quote, nil)
-       |> Map.put_new(:demoted_from, nil)}
+       |> Map.put_new(:demoted_from, nil)
+       |> Map.put_new(:demotion_reason, nil)}
     end
   end
 
@@ -1257,6 +1310,7 @@ defmodule Platform.Meetings.IntentClassifier do
         target_agent_id: agent_id,
         target_agent_slug: agent_slug,
         confidence: args.confidence,
+        model_used: Map.get(args, :model),
         transcript_chunk_id: args.chunk_id,
         chunk_excerpt: excerpt(args.chunk_text),
         speaker: args.speaker,
@@ -1389,6 +1443,8 @@ defmodule Platform.Meetings.IntentClassifier do
   # ── Prompt resolution ─────────────────────────────────────────────────────
 
   defp resolve_prompt(payload, segment, chunk_text, room_id, prior_chunks, correction_exemplars) do
+    roster = agent_roster_entries()
+
     assigns = %{
       # Stage 2: DB template uses `{{meeting_transcript_chunk}}`; keep
       # the legacy `{{transcript_chunk}}` marker rendering the same
@@ -1400,12 +1456,13 @@ defmodule Platform.Meetings.IntentClassifier do
       room_id: room_id,
       context_lines: format_context_lines(prior_chunks),
       context_present: prior_chunks != [],
-      correction_exemplars: correction_exemplars
+      correction_exemplars: correction_exemplars,
+      agent_roster: format_agent_roster(roster)
     }
 
     case PromptTemplates.render_template(@prompt_slug, assigns) do
       {:ok, rendered} ->
-        rendered
+        {rendered, roster}
 
       {:error, :not_found} ->
         log_fallback_once(room_id)
@@ -1416,7 +1473,7 @@ defmodule Platform.Meetings.IntentClassifier do
           %{room_id: room_id, slug: @prompt_slug}
         )
 
-        substitute(@fallback_intent_prompt, assigns)
+        {substitute(@fallback_intent_prompt, assigns), roster}
     end
   end
 
@@ -1467,6 +1524,64 @@ defmodule Platform.Meetings.IntentClassifier do
       )
 
       format_correction_exemplars([])
+  end
+
+  # ── Agent roster (task 01a05997 stage 1) ──────────────────────────────────
+
+  # The classifier's one missing fact: which named entities are AGENTS.
+  # Keyed by ROLE, not by meeting participants, because the dispatcher
+  # resolves `target_role` through `Roles.agent_id_for_role/1` — a
+  # roster keyed by anything else can name an agent the router cannot
+  # route to.
+  #
+  # A DB failure degrades to the empty-roster literal rather than
+  # crashing: the classifier must not gain a new crash path because the
+  # roster was briefly unreadable.
+  #
+  # Returns the ENTRY LIST rather than the rendered block, because the
+  # addressee gate (task 01a05997 stage 5) needs the same roster the
+  # prompt was rendered from. `format_agent_roster/1` turns it into the
+  # block; both callers derive from this one read so they cannot drift.
+  #
+  # A lookup failure yields `[]`, which renders the empty-roster
+  # sentinel — "nobody can be addressed, so every utterance is
+  # off_topic" — exactly as before. Note that `[]` is a KNOWN empty
+  # roster and gates normally; only a `nil` roster is inert, and this
+  # function never returns one.
+  defp agent_roster_entries do
+    Roles.assigned_agents()
+  rescue
+    error ->
+      Logger.warning(
+        "[IntentClassifier] agent roster lookup failed — classifying without it " <>
+          "error=#{Exception.message(error)}"
+      )
+
+      []
+  end
+
+  @doc """
+  Render a roster of `%{role_key:, agent_slug:, agent_name:}` entries into the
+  `{{agent_roster}}` block of the classifier prompt.
+
+  Public because the offline eval harness renders the SAME block from a roster
+  pinned in its config. A harness with its own copy of this formatting would be
+  scoring a prompt production never sends — and the empty-roster sentinel below
+  is not incidental text, it is the sentence that tells the model there is
+  nobody to address.
+  """
+  @spec format_agent_roster([
+          %{role_key: String.t(), agent_slug: String.t(), agent_name: String.t()}
+        ]) ::
+          String.t()
+  def format_agent_roster([]) do
+    "(no agents are assigned to roles in this org — no agent can be addressed, so every utterance is off_topic)"
+  end
+
+  def format_agent_roster(roster) when is_list(roster) do
+    Enum.map_join(roster, "\n", fn entry ->
+      "- \"#{entry.agent_name}\" (slug `#{entry.agent_slug}`) serves the `#{entry.role_key}` role"
+    end)
   end
 
   # Rendered oldest-first, mirroring `format_context_lines/1`, so the
@@ -1702,7 +1817,7 @@ defmodule Platform.Meetings.IntentClassifier do
   # `Platform.Meetings.IntentFrames`. Same demotion, distinct
   # `:frame_*` reasons, so the telemetry stream tells "never cited"
   # apart from "cited a mention".
-  defp parse_content(content, room_id, chunk_text) do
+  defp parse_content(content, room_id, chunk_text, roster) do
     case Jason.decode(content) do
       {:ok, %{"intent" => intent, "confidence" => confidence} = decoded}
       when is_binary(intent) and is_number(confidence) ->
@@ -1711,12 +1826,25 @@ defmodule Platform.Meetings.IntentClassifier do
             confidence = confidence * 1.0
             quote_text = Map.get(decoded, "evidence_quote", "")
 
-            case evidence_verdict(intent, quote_text, chunk_text) do
+            case gate_verdict(intent, quote_text, chunk_text, roster) do
               :ok ->
-                {:ok, %{intent: intent, target_role: target_role, confidence: confidence}}
+                # The quote is CARRIED, not just judged. `decide/1` already
+                # advertises an `:evidence_quote` key (put_new below), and it
+                # read nil on every accepted row because this clause dropped
+                # it — so "routable" and "routable WITH a citation" were the
+                # same observation from outside. The eval harness needs them
+                # apart: a fired row whose citation is empty is a row the
+                # dispatcher acts on with nothing to show a human.
+                {:ok,
+                 %{
+                   intent: intent,
+                   target_role: target_role,
+                   confidence: confidence,
+                   evidence_quote: quote_text
+                 }}
 
               {:demote, reason} ->
-                emit_evidence_missing(room_id, intent, reason)
+                emit_demotion(room_id, intent, reason)
 
                 # `demoted_from` carries the intent that WAS downgraded.
                 # Without it the returned map is byte-identical to a genuine
@@ -1729,7 +1857,21 @@ defmodule Platform.Meetings.IntentClassifier do
                    intent: "off_topic",
                    target_role: @no_target_role,
                    confidence: confidence,
-                   demoted_from: intent
+                   # A demoted row DECLINED: its prediction is off_topic, and
+                   # off_topic's contract is an empty citation. Carrying the
+                   # rejected quote here would make the demotion look like a
+                   # cited answer to anything reading the field.
+                   evidence_quote: "",
+                   demoted_from: intent,
+                   # WHICH gate turned this row down. `demoted_from`
+                   # alone says only "something demoted it", so an
+                   # addressee rejection and an uncited positive were
+                   # the same row from outside — and the whole point of
+                   # this gate is that a person measuring it afterwards
+                   # can tell it apart from the model's own off_topic.
+                   # See `emit_demotion/3` for the production-side
+                   # (telemetry + log) half of the same distinction.
+                   demotion_reason: reason
                  }}
             end
 
@@ -1771,6 +1913,27 @@ defmodule Platform.Meetings.IntentClassifier do
       {:ok, role} when is_binary(role) -> {:ok, role}
       {:ok, nil} -> {:ok, @no_target_role}
       _ -> :invalid
+    end
+  end
+
+  # The two post-model gates, asked in order. The citation gate runs
+  # FIRST because the addressee gate reads the `evidence_quote`'s
+  # leading vocative, and a quote that is blank or fabricated is not a
+  # span of anything — reading a vocative out of it would be reading a
+  # vocative out of the model's imagination.
+  defp gate_verdict(intent, quote_text, chunk_text, roster) do
+    with :ok <- evidence_verdict(intent, quote_text, chunk_text) do
+      addressee_verdict(intent, quote_text, chunk_text, roster)
+    end
+  end
+
+  # A decline addresses nobody by definition; there is nothing to gate.
+  defp addressee_verdict("off_topic", _quote_text, _chunk_text, _roster), do: :ok
+
+  defp addressee_verdict(_intent, quote_text, chunk_text, roster) do
+    case IntentAddressee.verdict(chunk_text, quote_text, roster) do
+      :ok -> :ok
+      {:off_roster, _name} -> {:demote, :off_roster_addressee}
     end
   end
 
@@ -1822,7 +1985,38 @@ defmodule Platform.Meetings.IntentClassifier do
   # is how the token-budget bug hid for weeks. Logged at :info because
   # an uncited positive is now an expected, common outcome, not an
   # incident.
-  defp emit_evidence_missing(room_id, intent, reason) do
+  # A gate-rejected row is DISTINGUISHABLE from a row the model itself
+  # called off_topic, and from a row the OTHER gate turned down, on
+  # three surfaces:
+  #
+  #   * a distinct telemetry event
+  #     (`:off_roster_addressee` vs `:evidence_missing`) carrying the
+  #     rejected intent — the model's own off_topic emits neither;
+  #   * a distinct log line;
+  #   * `:demotion_reason` on `decide/1`'s return, which the offline
+  #     eval harness records onto every scored row.
+  #
+  # It is NOT yet distinguishable in `meeting_candidates`: that table
+  # has no column for it, and neither does the queue row, so BOTH
+  # demotion kinds land there as a plain `classified_intent =
+  # "off_topic"` exactly as they did before this stage. Persisting it
+  # would need a new nullable `demotion_reason` column on
+  # `meeting_candidates` (and a matching `@writable_fields` entry on
+  # `IntentQueue.Server`); that schema is not invented here.
+  defp emit_demotion(room_id, intent, :off_roster_addressee = reason) do
+    Logger.info(
+      "[IntentClassifier] off-roster addressee demoted to off_topic room=#{inspect(room_id)} " <>
+        "intent=#{inspect(intent)} reason=#{inspect(reason)}"
+    )
+
+    :telemetry.execute(
+      [:platform, :meetings, :intent_classifier, :off_roster_addressee],
+      %{count: 1},
+      %{room_id: room_id, intent: intent, reason: reason}
+    )
+  end
+
+  defp emit_demotion(room_id, intent, reason) do
     Logger.info(
       "[IntentClassifier] uncited positive demoted to off_topic room=#{inspect(room_id)} " <>
         "intent=#{inspect(intent)} reason=#{inspect(reason)}"

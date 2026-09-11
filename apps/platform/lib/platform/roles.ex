@@ -294,6 +294,35 @@ defmodule Platform.Roles do
   end
 
   @doc """
+  Return the roster of roles that currently HAVE an agent assigned,
+  ordered by `:key`. Each entry carries the role key plus the assigned
+  agent's slug and display name.
+
+  An unassigned role is deliberately absent: consumers (the meeting
+  intent classifier) use this to tell a model which named entities can
+  actually be addressed, and a role nobody answers is not addressable.
+
+  ## Examples
+
+      iex> Platform.Roles.assigned_agents() |> is_list()
+      true
+  """
+  @spec assigned_agents() :: [
+          %{role_key: String.t(), agent_slug: String.t(), agent_name: String.t()}
+        ]
+  def assigned_agents do
+    from(r in Role,
+      join: ra in RoleAssignment,
+      on: ra.role_key == r.key,
+      join: a in Agent,
+      on: a.id == ra.agent_id,
+      order_by: [asc: r.key],
+      select: %{role_key: r.key, agent_slug: a.slug, agent_name: a.name}
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Return the responsibility-key bundle for a role with optional
   filtering.
 

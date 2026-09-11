@@ -649,7 +649,13 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
 
       report = Harness.report(demote_run(root))
 
-      assert report =~ ~r/demoted\s+: 1 uncited positives/
+      assert report =~ ~r/demoted\s+: 1 positives downgraded to off_topic/
+
+      # The gate that did it is named on the same line. Two gates now
+      # demote (citation and addressee) and a bare count cannot say which
+      # one a change moved.
+      assert report =~ ~s(%{"not_in_chunk" => 1})
+
       # It must not reappear as an error class row, which is where a
       # permanently-zero column sat for the life of the harness.
       refute report =~ ~r/^\s+demoted\s+: \d+$/m
@@ -671,7 +677,10 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
                  ),
                "#{config} did not replay cleanly"
 
-        assert result["summary"]["total"] == 174
+        # 174 seed rows + the 9-row `delegation_probe` added by task
+        # 01a05997 stage 4. Both cassettes were re-recorded over the new
+        # rows in that stage, so "no misses" still means the whole set.
+        assert result["summary"]["total"] == 183
       end
     end
 
@@ -785,8 +794,21 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
           write: false
         )
 
-      assert result["summary"]["demoted"] == 93
+      # Counted over the three SEED slices, which is the population the
+      # 93 was measured on. Stating it as a filter rather than re-baselining
+      # to 100 keeps the original measurement intact and legible; the
+      # delegation rows are asserted separately below so nothing hides.
+      seed_demoted =
+        result["rows"]
+        |> Enum.reject(&(&1["slice"] == "delegation_probe"))
+        |> Enum.count(& &1["demoted_from"])
+
+      assert seed_demoted == 93
       assert result["summary"]["errors_total"] == 0
+
+      # Task 01a05997 stage 4: this arm demotes 7 of the 9 delegation rows,
+      # so its total is 100. Pinned so the added rows cannot drift unnoticed.
+      assert result["summary"]["demoted"] == 100
     end
   end
 

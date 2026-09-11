@@ -130,6 +130,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
   import PlatformWeb.CoreComponents, only: [chip: 1]
 
   alias Platform.Meetings.IntentCorrection
+  alias PlatformWeb.Components.Meetings.CandidateDisplay
 
   # status -> {chip tone, heroicon CLASS, mono label, reading group, hint}
   #
@@ -562,13 +563,13 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           data-role="intent-label"
           title={@intent.chunk_excerpt}
         >
-          {@intent.classified_intent || "—"}
+          {CandidateDisplay.intent_label(@intent.classified_intent)}
         </span>
         <span
           class="flex-shrink-0 truncate rounded-full border border-edge bg-base-200/60 px-2 py-0.5 text-[10px] text-base-content/70"
           data-role="intent-target"
         >
-          @{@intent.target_agent_slug || @intent.target_role || "unassigned"}
+          {CandidateDisplay.target_label(@intent.target_agent_slug, @intent.target_role)}
         </span>
       </div>
 
@@ -751,7 +752,9 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
                 data-intent-id={intent.id}
                 data-intent-status={intent.status}
               >
-                <td class="max-w-40 truncate">{intent.classified_intent || "—"}</td>
+                <td class="max-w-40 truncate">
+                  {CandidateDisplay.intent_label(intent.classified_intent)}
+                </td>
                 <td>
                   <.chip
                     tone={status_tone(intent.status)}
@@ -762,7 +765,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
                   </.chip>
                 </td>
                 <td class="max-w-32 truncate" data-role="intents-expanded-target">
-                  {intent.target_agent_slug || intent.target_role || "—"}
+                  {CandidateDisplay.target_label(intent.target_agent_slug, intent.target_role)}
                 </td>
                 <td class="max-w-32 truncate" data-role="intents-expanded-subagent">
                   {intent.subagent_id || "—"}

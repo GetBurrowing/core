@@ -2746,6 +2746,134 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
   end
 
+  # ── Agent roster in the prompt (task 01a05997 stage 1) ────────────────────
+  #
+  # The classifier has never been told which named entities are AGENTS,
+  # so an utterance naming one by its proper noun ("Octavius") was
+  # unresolvable. These cases assert the roster reaches the rendered
+  # prompt, and that an EMPTY roster renders the explicit no-agents
+  # literal rather than a blank section — a blank leaves the model's
+  # "if you cannot name the agent role being asked" instruction
+  # operating on an empty page, which is exactly today's defect.
+  describe "classify_and_enqueue — agent roster in the prompt" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-roster"})
+      assign_intent_role!(agent)
+      force_fallback_prompt!()
+      %{agent: agent}
+    end
+
+    defp capture_roster_prompt!(room_id) do
+      {pid, _name} = start_classifier!()
+      plant_stub_fun(pid, capture_prompt_stub(self()))
+
+      {prompt, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          _ =
+            broadcast_chunk(room_id,
+              segment: %{
+                id: "seg-roster-#{System.unique_integer([:positive])}",
+                text: "Octavius can you take the brand pass",
+                speaker_name: "alice",
+                timestamp_ms: 1_000
+              }
+            )
+
+          assert_receive {:captured_prompt, messages}, 1_000
+
+          messages
+          |> Enum.find(fn %{role: role} -> role == "system" end)
+          |> Map.fetch!(:content)
+        end)
+
+      prompt
+    end
+
+    test "an assigned agent's display name, slug, and role key reach the prompt" do
+      roster_agent = create_agent!(%{slug: "octavius", name: "Octavius"})
+      {:ok, _} = Roles.assign_role("designer", roster_agent.id)
+
+      prompt = capture_roster_prompt!("room-roster")
+
+      assert prompt =~ "- \"Octavius\" (slug `octavius`) serves the `designer` role"
+      assert prompt =~ "Octavius"
+      assert prompt =~ "designer"
+
+      refute prompt =~ "no agents are assigned to roles in this org",
+             "the sentinel must be replaced once a role is assigned"
+    end
+
+    test "an empty roster renders the explicit no-agents literal, not a blank line" do
+      prompt = capture_roster_prompt!("room-roster-empty")
+
+      assert prompt =~
+               "(no agents are assigned to roles in this org — no agent can be addressed, so every utterance is off_topic)"
+
+      refute prompt =~ "# Agents available in this org\n\n\n"
+    end
+  end
+
+  # ── Roster reaches the MIGRATED template (task 01a05997 stage 3) ─────────
+  #
+  # The cases above call `force_fallback_prompt!/0`, so they prove the
+  # roster reaches the INLINE fallback and say nothing about what
+  # production renders. Production renders the `prompt_templates` row,
+  # and the row only carries `{{agent_roster}}` once a force-update
+  # migration puts it there.
+  #
+  # EXCLUDED, not deleted, and the exclusion is the point. Task
+  # 01a05997's migration (`20260831120000_force_update_intent_classify_
+  # prompt_agent_roster`) was NOT shipped with this code, for two
+  # reasons found on rebase: `main` later gained
+  # `20260902140000_force_update_intent_classify_prompt_unmerge_intent_
+  # and_target` (task 01a06575), which rewrites the same row and
+  # deliberately REVERSES the merged-question framing this body depends
+  # on; and the live row was hand-edited by a human on 2026-09-03, so an
+  # unconditional overwrite authored against the 08-31 content would
+  # silently revert it. Migration versions are not renumbered by a
+  # rebase, so the 08-31 file would land as a pending LOWER version and
+  # clobber the 09-02 revision on every already-migrated deployment.
+  #
+  # This block is the acceptance test for that migration. Drop the
+  # `:pending_fix` tag in the same change that ships it — a green suite
+  # here without the tag is the signal the row actually carries the
+  # marker.
+  describe "classify_and_enqueue — agent roster in the MIGRATED template" do
+    @describetag :pending_fix
+
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-roster-db"})
+      assign_intent_role!(agent)
+      %{agent: agent}
+    end
+
+    test "the roster renders from the DB row, not only from the inline fallback" do
+      # Prove the row — not the fallback — is what is being rendered.
+      assert %{content: content} =
+               Platform.Orchestration.PromptTemplates.get_template_by_slug(
+                 "meetings.intent_classify.v1"
+               )
+
+      assert content =~ "{{agent_roster}}"
+
+      roster_agent = create_agent!(%{slug: "orion-db", name: "Orion"})
+      {:ok, _} = Roles.assign_role("designer", roster_agent.id)
+
+      prompt = capture_roster_prompt!("room-roster-db")
+
+      assert prompt =~ "- \"Orion\" (slug `orion-db`) serves the `designer` role",
+             "the roster line must appear in the prompt rendered from the migrated row"
+
+      # Anchors unique to the shipped body — absent from the inline
+      # fallback — so this cannot pass by silently falling back.
+      assert prompt =~ "THE DEFAULT ANSWER IS `off_topic`"
+      assert prompt =~ "NAME OR SLUG ON THE ROSTER ABOVE"
+
+      refute prompt =~ "{{agent_roster}}",
+             "the marker must be interpolated, not rendered literally"
+    end
+  end
+
   # ── Per-meeting mute (task 019fbaac stage 2) ───────────────────────────────
   #
   # Every case here assigns the responsibility first. Without an
@@ -3450,6 +3578,166 @@ defmodule Platform.Meetings.IntentClassifierTest do
       assert [entry] = IntentQueue.list(meeting_id)
       assert entry.classified_intent == "off_topic"
       assert entry.confidence == 0.42
+    end
+  end
+
+  # ── Task 01a05997 stage 2 ────────────────────────────────────────────────
+
+  # `classifier_model` was nil on EVERY row: the queue's `default_row/0`
+  # initialised `model_used: nil` and the classifier never wrote it, so
+  # the corpus could not be sliced by model. These cases assert the
+  # value ORIGINATES from `agent.model` — the same read `call_provider/5`
+  # uses to address the provider — rather than from any constant.
+  describe "classify_and_enqueue — classifier_model attribution" do
+    setup do
+      model = "origination-model-#{System.unique_integer([:positive])}"
+
+      agent =
+        create_agent!(%{
+          slug: "intent-agent-model-attr",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "http://localhost:11434/v1",
+          model: model
+        })
+
+      assign_intent_role!(agent)
+      drop_queue_for_room("room-model-attr")
+      %{agent: agent, model: model}
+    end
+
+    test "the queue row and the mirrored candidate both record agent.model", %{model: model} do
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _c, messages, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "brief_worthy",
+               "target_role" => "meeting_scribe",
+               "confidence" => 0.81,
+               "evidence_quote" => echo_quote(messages)
+             })
+         }}
+      end)
+
+      _ = broadcast_chunk("room-model-attr")
+
+      assert_eventually(fn -> queued_for_room("room-model-attr") != [] end)
+      assert [row] = queued_for_room("room-model-attr")
+
+      # The model string is generated per-run, so no constant in the
+      # source could satisfy this — it can only have come from the
+      # agent record the classifier resolved.
+      assert row.model_used == model
+
+      candidate = Candidates.get_by_intent_id(row.id)
+      assert candidate.classifier_model == model
+    end
+  end
+
+  # ── Task 01a05997 stage 2 — the `null` sentinel is load bearing ──────────
+
+  # `@no_target_role` is the STRING "null", not `nil`, and these cases
+  # pin that. See the comment on the attribute in `intent_classifier.ex`
+  # for the three reasons. The property that matters operationally: a
+  # model answering JSON `null` and a model answering the string "null"
+  # must produce the SAME dedupe key for the same utterance, so the two
+  # spellings collapse to one candidate instead of forking the dedupe
+  # space. If anybody ever refactors the sentinel to a real SQL NULL,
+  # this describe block is what stops it silently.
+  describe "classify_and_enqueue — target_role sentinel" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-sentinel"})
+      assign_intent_role!(agent)
+      drop_queue_for_room("room-sentinel")
+      %{agent: agent}
+    end
+
+    test "JSON null and the string \"null\" normalise to one sentinel and one dedupe key" do
+      _ = attach_terminal_recorder!(:classified)
+      {pid, _name} = start_classifier!()
+
+      utterance = "anyway the weather has been unbelievable this week"
+
+      # First answer spells nobody as JSON `null`.
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "off_topic",
+               "target_role" => nil,
+               "confidence" => 0.9
+             })
+         }}
+      end)
+
+      :ok =
+        MeetingsPubSub.broadcast_transcript_chunk("room-sentinel", %{
+          room_id: "room-sentinel",
+          transcript_id: "t-sentinel-1",
+          meeting_id: meeting_id_for("room-sentinel"),
+          segment: %{id: "seg-sentinel-1", text: utterance, speaker_name: "alice"}
+        })
+
+      assert_receive {:classified, _m,
+                      %{
+                        dedupe_key_hit_or_new: :inserted,
+                        dedupe_key: key_from_nil,
+                        target_role: role_from_nil
+                      }},
+                     500
+
+      assert role_from_nil == "null"
+
+      # Second answer spells nobody as the literal string, same utterance.
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "off_topic",
+               "target_role" => "null",
+               "confidence" => 0.9
+             })
+         }}
+      end)
+
+      :ok =
+        MeetingsPubSub.broadcast_transcript_chunk("room-sentinel", %{
+          room_id: "room-sentinel",
+          transcript_id: "t-sentinel-2",
+          meeting_id: meeting_id_for("room-sentinel"),
+          segment: %{id: "seg-sentinel-2", text: utterance, speaker_name: "alice"}
+        })
+
+      assert_receive {:classified, _m,
+                      %{
+                        dedupe_key_hit_or_new: outcome,
+                        dedupe_key: key_from_string,
+                        target_role: role_from_string
+                      }},
+                     500
+
+      assert role_from_string == "null"
+
+      assert key_from_nil == key_from_string,
+             "the sentinel is the reason a nil-answering and a \"null\"-answering model " <>
+               "dedupe together; a real NULL here would fork the dedupe space"
+
+      assert outcome == :duplicate
+
+      # One row, not two.
+      assert [row] = queued_for_room("room-sentinel")
+
+      # PERSISTED as the string. A future refactor to a real SQL NULL
+      # trips here rather than silently re-keying every historical row.
+      assert row.target_role == "null"
+
+      candidate = Candidates.get_by_intent_id(row.id)
+      assert candidate.target_role == "null"
     end
   end
 end

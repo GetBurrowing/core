@@ -14,6 +14,14 @@ defmodule Mix.Tasks.Platform.IntentEval.Run do
     * `--record` — call the live endpoint named by the config and append
       every response to that cassette.
 
+  `--base-url <url>` moves only the network target of a `--record` run — the
+  config, prompt and cassette keys are unchanged, so the recording replays
+  identically for everyone. Needed on moon, where the classifier runs on the
+  host network and the dev container reaches it as
+  `http://host.containers.internal:8085/v1` rather than the LAN address the
+  config names. The run manifest records the host contacted and flags the
+  override.
+
   Without access to the classifier endpoint you can still `--replay` any
   committed cassette and reproduce every published number. You cannot
   produce fresh numbers for a config that has no cassette; see
@@ -43,6 +51,7 @@ defmodule Mix.Tasks.Platform.IntentEval.Run do
     replay: :boolean,
     root: :string,
     repo_root: :string,
+    base_url: :string,
     write: :boolean
   ]
 
@@ -61,6 +70,7 @@ defmodule Mix.Tasks.Platform.IntentEval.Run do
         mode: mode(parsed),
         slice: parsed[:slice],
         repo_root: parsed[:repo_root] || File.cwd!(),
+        base_url: parsed[:base_url],
         write: Keyword.get(parsed, :write, true)
       ]
 

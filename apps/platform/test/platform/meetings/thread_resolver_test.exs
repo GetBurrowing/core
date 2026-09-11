@@ -641,11 +641,11 @@ defmodule Platform.Meetings.ThreadResolverTest do
     #
     # The corpus carries no speaker and no timestamp — verified: the row
     # schema is id/label/origin/prior/slice/source_file/text, and `prior`
-    # is [] on all 174 rows. So this is not a replay of recorded
-    # threading; it is a SYNTHESISED worst case. All 72 positive rows are
+    # is [] on all 183 rows. So this is not a replay of recorded
+    # threading; it is a SYNTHESISED worst case. All 74 positive rows are
     # given the SAME speaker at the SAME instant, which holds the speaker
     # gate and the time gate permanently open and leaves the relatedness
-    # floor as the only thing standing between 72 candidates and 1.
+    # floor as the only thing standing between 74 candidates and 1.
     #
     # MEASURED 2026-08-28 on this implementation: 60 distinct candidates
     # from 72 positives, ratio 0.8333, all 12 collapses via
@@ -654,6 +654,15 @@ defmodule Platform.Meetings.ThreadResolverTest do
     # to 0.50 yields 56/72 = 0.7778 and turns this red, and the mandated
     # `{:thread, hd(open_candidates), :always}` mutation yields 1/72 =
     # 0.0139.
+    #
+    # RE-MEASURED 2026-08-31 (task 01a05997 stage 4) after the 9-row
+    # `delegation_probe` added 2 positives: 61 distinct from 74, ratio
+    # 0.8243 — measured by raising the floor to 0.999 and reading the
+    # failure message, not inferred. The floor stays 0.80: the ratio fell
+    # 0.8333 -> 0.8243 (one of the two added rows threads onto an
+    # existing candidate) and is still above it. Lowering the floor to
+    # accommodate the new rows would have been tuning the guard to the
+    # data; it was not needed and was not done.
     @recall_floor 0.80
 
     test "the resolver produces at least #{@recall_floor} of the corpus's distinct candidates" do
@@ -662,8 +671,8 @@ defmodule Platform.Meetings.ThreadResolverTest do
       # Positive control on the corpus load itself. An empty or tiny list
       # would sail through the ratio assertion below by having nothing to
       # collapse.
-      assert length(positives) == 72,
-             "the #{@recall_floor} floor was measured against 72 positive rows; the corpus " <>
+      assert length(positives) == 74,
+             "the #{@recall_floor} floor was measured against 74 positive rows; the corpus " <>
                "now has #{length(positives)}, so re-measure the floor rather than moving this"
 
       assert Enum.all?(positives, &(is_binary(&1) and &1 != ""))
@@ -720,7 +729,9 @@ defmodule Platform.Meetings.ThreadResolverTest do
     ]
 
     # MEASURED 2026-08-28 on this implementation: 14 of the 288
-    # (row, fragment) pairs attach, i.e. 4.86%. The bound below is a
+    # (row, fragment) pairs attach, i.e. 4.86%. Re-measured 2026-08-31
+    # over the 74-positive corpus: 16 of 296, i.e. 5.41% — the two added
+    # rows attract one attachment each, still half the 10% bound. The bound below is a
     # round 10%. It is above the measurement rather than on it, and the
     # failure mode it guards — the shared-token floor removed, which is
     # the state this file was written to catch — measures 288/288, so
@@ -729,7 +740,7 @@ defmodule Platform.Meetings.ThreadResolverTest do
 
     test "the corpus provably cannot reach the anaphoric path" do
       positives = corpus_positives()
-      assert length(positives) == 72
+      assert length(positives) == 74
 
       counts = Enum.map(positives, &length(tokens(&1)))
       assert Enum.min(counts) == 6
@@ -747,7 +758,7 @@ defmodule Platform.Meetings.ThreadResolverTest do
       # most one candidate open — collapses nothing, at any bound. So
       # no arrangement of this corpus exercises the path.
       for keep <- [1, 2, 3, 5] do
-        assert bounded_replay(positives, keep) == 72,
+        assert bounded_replay(positives, keep) == 74,
                "bounded-open replay at keep=#{keep} collapsed the corpus, which would mean " <>
                  "the corpus does reach this path"
       end
@@ -767,8 +778,8 @@ defmodule Platform.Meetings.ThreadResolverTest do
           match?({:thread, _, %{rule: :anaphoric_fragment}}, result)
         end)
 
-      assert threaded == 72,
-             "only #{threaded}/72 synthesised leaning fragments threaded, so this guard is " <>
+      assert threaded == 74,
+             "only #{threaded}/74 synthesised leaning fragments threaded, so this guard is " <>
                "not exercising :anaphoric_fragment across the corpus"
 
       # Every synthesised fragment is something the classifier would
@@ -793,7 +804,7 @@ defmodule Platform.Meetings.ThreadResolverTest do
       positives = corpus_positives()
 
       pairs = for text <- positives, fragment <- @synthetic_unrelated, do: {text, fragment}
-      assert length(pairs) == 288
+      assert length(pairs) == 296
 
       attached =
         Enum.filter(pairs, fn {text, fragment} ->
@@ -812,22 +823,22 @@ defmodule Platform.Meetings.ThreadResolverTest do
       # The load-bearing half: not one attachment happened on zero
       # evidence. Every fragment that did attach shares a real word with
       # the row it attached to. Zero-evidence attachment is the defect
-      # this whole block exists for, and it is asserted here over 288
+      # this whole block exists for, and it is asserted here over 296
       # real pairs rather than over three hand-picked strings.
       for {text, fragment} <- attached do
         assert ThreadResolver.shared_lexical(fragment, text) != [],
                "#{inspect(fragment)} attached to #{inspect(text)} sharing NOTHING"
       end
 
-      # RANGE. The same 288 pairs under the degenerate rule this floor
+      # RANGE. The same 296 pairs under the degenerate rule this floor
       # replaced — a short deictic fragment attaches to the single open
       # candidate, full stop — attach every time. So the bound above is
       # not satisfied by an implementation that never threads either:
-      # the previous test threads on all 72 leaning fragments.
+      # the previous test threads on all 74 leaning fragments.
       degenerate =
         Enum.count(pairs, fn {_text, fragment} -> anaphoric_eligible?(fragment) end)
 
-      assert degenerate == 288
+      assert degenerate == 296
       assert degenerate / length(pairs) > @synthetic_attach_bound
     end
   end

@@ -19,6 +19,34 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapseTest do
   alias Platform.Meetings.IntentQueue
   alias PlatformWeb.Components.Meetings.IntentsCollapse, as: Bar
 
+  import Phoenix.LiveViewTest
+
+  defp intent_fixture(overrides) do
+    Map.merge(
+      %{
+        id: "intent-1",
+        status: :queued,
+        classified_intent: "action_items",
+        target_agent_slug: nil,
+        target_role: "null",
+        chunk_excerpt: "somebody said a thing",
+        confidence: 0.91,
+        subagent_id: nil,
+        dispatch_failure_reason: nil,
+        model_used: "test",
+        elapsed_ms: 12
+      },
+      overrides
+    )
+  end
+
+  defp text_of(html, role) do
+    html
+    |> Floki.parse_fragment!()
+    |> Floki.find(~s([data-role="#{role}"]))
+    |> Floki.text()
+  end
+
   describe "status presentation" do
     test "covers every status the queue can produce — no silent fallback" do
       # A status the bar doesn't know would render as `:queued`, which is
@@ -404,5 +432,67 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapseTest do
       target_role: nil,
       confidence: 0.91
     }
+  end
+
+  describe "the target chip and intent label never leak a stored value (task 01a05997)" do
+    # `IntentClassifier` stores the SENTINEL STRING "null" for an
+    # unrouted intent, and a non-empty binary is truthy, so the old
+    # `slug || role || "unassigned"` chain rendered `@null` at a meeting
+    # participant. These render the real markup so the wiring is
+    # asserted, not just the mapping.
+
+    test "a collapsed row for an unrouted intent says unassigned, not @null" do
+      html =
+        render_component(&Bar.intents_collapse/1,
+          intents: [intent_fixture(%{})],
+          open: true,
+          pending_cancels: MapSet.new()
+        )
+
+      target = text_of(html, "intent-target")
+
+      assert target =~ "unassigned"
+      refute target =~ "null"
+      refute target =~ "@"
+
+      label = text_of(html, "intent-label")
+      assert label =~ "Action items"
+      refute label =~ "action_items"
+    end
+
+    test "a collapsed row for an agent-routed intent keeps the @slug" do
+      html =
+        render_component(&Bar.intents_collapse/1,
+          intents: [intent_fixture(%{target_agent_slug: "octavius"})],
+          open: true,
+          pending_cancels: MapSet.new()
+        )
+
+      assert text_of(html, "intent-target") =~ "@octavius"
+    end
+
+    test "the expanded table's target cell says unassigned, not null" do
+      html =
+        render_component(&Bar.intents_overlays/1,
+          intents: [intent_fixture(%{})],
+          expanded: true
+        )
+
+      target = text_of(html, "intents-expanded-target")
+
+      assert target =~ "unassigned"
+      refute target =~ "null"
+    end
+
+    test "the expanded table's intent cell reads as copy, not a column value" do
+      html =
+        render_component(&Bar.intents_overlays/1,
+          intents: [intent_fixture(%{classified_intent: "brief_worthy"})],
+          expanded: true
+        )
+
+      assert html =~ "Brief-worthy"
+      refute html =~ "brief_worthy"
+    end
   end
 end

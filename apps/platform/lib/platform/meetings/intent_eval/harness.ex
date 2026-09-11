@@ -389,7 +389,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
   own `resolve_prompt/6` so the harness renders the same variables
   production renders.
   """
-  def assigns_for(row, exemplars \\ @sentinel_exemplars) do
+  def assigns_for(row, exemplars \\ @sentinel_exemplars, roster_text \\ nil) do
     prior = row["prior"] || []
 
     %{
@@ -399,8 +399,76 @@ defmodule Platform.Meetings.IntentEval.Harness do
       room_id: "intent-eval",
       context_lines: context_lines(prior),
       context_present: prior != [],
-      correction_exemplars: exemplars
+      correction_exemplars: exemplars,
+      agent_roster: roster_text || ""
     }
+  end
+
+  @doc """
+  Render a config's pinned `agent_roster` through the classifier's OWN
+  formatter.
+
+  The roster is committed DATA in the config rather than read from the
+  database, because the harness must reproduce a number on a checkout with no
+  org in it. A live lookup would make the same cassette score differently on
+  two boxes — the exact unattributability this harness exists to end.
+
+  A prompt carrying `{{agent_roster}}` with no roster in its config RAISES.
+  `interpolate/2` substitutes an unknown key with the empty string, so the
+  silent path here is a roster-grounded prompt scored against a blank roster:
+  a run that reads as "the roster fix does not work" while never having shown
+  the model a roster at all.
+  """
+  def roster_text!(config, template) do
+    case {config["agent_roster"], String.contains?(template, "{{agent_roster}}")} do
+      {nil, true} ->
+        raise ArgumentError,
+              "config #{inspect(config["name"])} renders {{agent_roster}} but pins no " <>
+                "\"agent_roster\" — refusing to score a roster-grounded prompt against an " <>
+                "empty roster, which would read as the roster failing rather than as it " <>
+                "never having been supplied"
+
+      {nil, false} ->
+        nil
+
+      {roster, _} when is_list(roster) ->
+        roster
+        |> roster_entries()
+        |> IntentClassifier.format_agent_roster()
+
+      {other, _} ->
+        raise ArgumentError,
+              "config agent_roster must be a list of {role_key, agent_slug, agent_name} " <>
+                "objects, got #{inspect(other)}"
+    end
+  end
+
+  @doc """
+  A config's pinned `agent_roster` as classifier-shaped ENTRY MAPS.
+
+  The scored gate needs the roster as data, not as rendered text: the
+  addressee gate (`Platform.Meetings.IntentAddressee`) runs on the entry
+  list, and the harness must hand `decide/1` the SAME roster it rendered
+  into the prompt or it is scoring a gate production does not run.
+
+  `nil` for a config that pins no roster — which is inert at the gate,
+  deliberately. A config with no roster has not been shown one, and a
+  gate that suppressed every addressed row on a config that never
+  carried a roster would report the addressee fix "working" on prompts
+  it was never part of.
+  """
+  @spec roster_entries(map() | list() | nil) :: [map()] | nil
+  def roster_entries(%{} = config), do: roster_entries(config["agent_roster"])
+  def roster_entries(nil), do: nil
+
+  def roster_entries(roster) when is_list(roster) do
+    Enum.map(roster, fn entry ->
+      %{
+        role_key: entry["role_key"],
+        agent_slug: entry["agent_slug"],
+        agent_name: entry["agent_name"]
+      }
+    end)
   end
 
   defp context_lines([]), do: "(no prior context)"
@@ -422,9 +490,9 @@ defmodule Platform.Meetings.IntentEval.Harness do
   different prompts and must not share a sha. `fingerprint/1` keeps the
   sentinel, so every previously published fingerprint still reproduces.
   """
-  def fingerprint(template, exemplars \\ @sentinel_exemplars) do
+  def fingerprint(template, exemplars \\ @sentinel_exemplars, roster_text \\ nil) do
     template
-    |> interpolate(assigns_for(%{"text" => "", "prior" => []}, exemplars))
+    |> interpolate(assigns_for(%{"text" => "", "prior" => []}, exemplars, roster_text))
     |> sha256()
   end
 
@@ -601,9 +669,11 @@ defmodule Platform.Meetings.IntentEval.Harness do
     cassette = Cassette.load(cassette_path)
     mode = resolve_mode(Keyword.get(opts, :mode, :auto), cassette)
 
+    roster_text = roster_text!(config, template)
+
     prepared =
       Enum.map(rows, fn row ->
-        prompt = interpolate(template, assigns_for(row, exemplars))
+        prompt = interpolate(template, assigns_for(row, exemplars, roster_text))
         Map.merge(row, %{"prompt" => prompt, "key" => Cassette.key(prompt, row["text"])})
       end)
 
@@ -617,13 +687,26 @@ defmodule Platform.Meetings.IntentEval.Harness do
         opts_override: opts_override(config)
       })
 
+      # `--base-url` moves the NETWORK TARGET only; the config, the prompt and
+      # the cassette keys are untouched, so a recording made through an
+      # override replays byte-identically for everyone. It exists because the
+      # classifier is served on moon's host network and the dev container
+      # reaches the same llama-server as `host.containers.internal:8085`
+      # rather than as the LAN address the config names. The manifest records
+      # the host actually contacted AND the fact of the override, so a run is
+      # never quietly attributed to an endpoint it did not call.
+      base_url = Keyword.get(opts, :base_url) || config["base_url"]
+
       agent = %{
-        base_url: config["base_url"],
+        base_url: base_url,
         model: config["model"],
         vault_key: nil
       }
 
-      scored = Enum.map(prepared, &classify(&1, agent))
+      # Same roster the prompt was rendered from, one line above.
+      roster = roster_entries(config)
+
+      scored = Enum.map(prepared, &classify(&1, agent, roster))
 
       if mode == :record do
         Cassette.append!(cassette_path, CassetteProvider.recorded())
@@ -636,9 +719,11 @@ defmodule Platform.Meetings.IntentEval.Harness do
           config,
           {source, template},
           {exemplar_source, exemplars},
+          roster_text,
           root,
           slice_filter,
           mode,
+          base_url,
           started_at,
           finished_at
         )
@@ -694,14 +779,15 @@ defmodule Platform.Meetings.IntentEval.Harness do
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end
 
-  defp classify(row, agent) do
+  defp classify(row, agent, roster) do
     outcome =
       IntentClassifier.decide(%{
         provider_module: CassetteProvider,
         agent: agent,
         prompt: row["prompt"],
         chunk_text: row["text"],
-        room_id: "intent-eval"
+        room_id: "intent-eval",
+        roster: roster
       })
 
     latency = CassetteProvider.last_latency_ms()
@@ -717,7 +803,18 @@ defmodule Platform.Meetings.IntentEval.Harness do
       "predicted" => predicted,
       "error_class" => error_class,
       "demoted_from" => demoted_from(outcome),
+      # WHICH gate demoted it. Without this column an addressee
+      # rejection and an uncited positive are the same row in the run
+      # JSON, and the number this stage exists to move cannot be
+      # attributed to the gate that moved it.
+      "demotion_reason" => demotion_reason(outcome),
       "target_role" => target_role(outcome),
+      # Carried onto the row because "routable" is not the whole acceptance
+      # bar for a positive — a fired row with an empty citation is a row the
+      # dispatcher can act on with nothing to show the human. Recorded from
+      # `decide/1`'s own field rather than re-derived, so it is the quote the
+      # evidence gate actually judged.
+      "evidence_quote" => evidence_quote(outcome),
       "confidence" => confidence(outcome),
       "response_parseable" => json_object?(content),
       "latency_ms" => latency
@@ -741,8 +838,15 @@ defmodule Platform.Meetings.IntentEval.Harness do
   defp demoted_from({:ok, %{demoted_from: intent}}) when is_binary(intent), do: intent
   defp demoted_from(_), do: nil
 
+  defp demotion_reason({:ok, %{demotion_reason: reason}}) when not is_nil(reason),
+    do: to_string(reason)
+
+  defp demotion_reason(_), do: nil
+
   defp target_role({:ok, %{target_role: role}}), do: role
   defp target_role(_), do: nil
+  defp evidence_quote({:ok, %{evidence_quote: quote_text}}), do: quote_text
+  defp evidence_quote(_), do: nil
   defp confidence({:ok, %{confidence: confidence}}), do: confidence
   defp confidence(_), do: nil
 
@@ -777,6 +881,9 @@ defmodule Platform.Meetings.IntentEval.Harness do
       # already counted under `off_topic` and must not be added to
       # `errors_total`. The two taxonomies do not share a bucket.
       "demoted" => demoted_count(scored),
+      # Demotions split by GATE. `demoted` alone cannot say whether a
+      # change moved the citation gate or the addressee gate.
+      "demotion_reasons" => demotion_reason_counts(scored),
       "parseable_bodies" => Enum.count(scored, & &1["response_parseable"]),
       "per_class" => Map.new(labels, &{&1, class_metrics(scored, &1)}),
       "confusion" => confusion(scored),
@@ -786,6 +893,13 @@ defmodule Platform.Meetings.IntentEval.Harness do
   end
 
   defp demoted_count(scored), do: Enum.count(scored, & &1["demoted_from"])
+
+  defp demotion_reason_counts(scored) do
+    scored
+    |> Enum.map(& &1["demotion_reason"])
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
+  end
 
   defp error_counts(scored) do
     Map.new(@error_classes, fn class ->
@@ -880,9 +994,11 @@ defmodule Platform.Meetings.IntentEval.Harness do
          config,
          {source, template},
          {exemplar_source, exemplars},
+         roster_text,
          root,
          slice_filter,
          mode,
+         base_url,
          started_at,
          finished_at
        ) do
@@ -894,7 +1010,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
       },
       "prompt" => %{
         "source" => source,
-        "rendered_sha256" => fingerprint(template, exemplars),
+        "rendered_sha256" => fingerprint(template, exemplars, roster_text),
         "template_sha256" => sha256(template),
         "bytes" => byte_size(template)
       },
@@ -906,9 +1022,11 @@ defmodule Platform.Meetings.IntentEval.Harness do
         "bytes" => byte_size(exemplars),
         "sha256" => sha256(exemplars)
       },
+      "agent_roster" => roster_text,
       "excluded_slices" => excluded_slices(root, slice_filter),
       "model" => config["model"],
-      "base_url_host" => base_url_host(config["base_url"]),
+      "base_url_host" => base_url_host(base_url),
+      "base_url_overridden" => base_url != config["base_url"],
       "temperature" => config["temperature"],
       "max_tokens" => config["max_tokens"],
       "chat_template_kwargs" => config["chat_template_kwargs"],
@@ -980,7 +1098,7 @@ defmodule Platform.Meetings.IntentEval.Harness do
       # NOT an error, so it is printed above the error list rather than in
       # it: a demoted row is a successful `off_topic` decision and is
       # already counted as one. See the moduledoc on task 01a04379.
-      "  demoted       : #{summary["demoted"]} uncited positives downgraded to off_topic (counted as off_topic, not as errors)",
+      "  demoted       : #{summary["demoted"]} positives downgraded to off_topic (counted as off_topic, not as errors) #{inspect(summary["demotion_reasons"] || %{})}",
       # Separates \"the model declines everything in valid JSON\" from \"the
       # model never emits JSON at all\" — identical parse_error counts.
       "  JSON bodies   : #{summary["parseable_bodies"]} of #{summary["total"]} responses parsed as a JSON object",

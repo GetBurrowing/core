@@ -442,4 +442,32 @@ defmodule Platform.RolesTest do
       assert Roles.assignee_for("brand_review") == nil
     end
   end
+
+  describe "assigned_agents/0" do
+    test "returns role_key + agent slug + name for an assigned role" do
+      seed_role!("designer")
+      agent = insert_agent!(%{slug: "octavius", name: "Octavius"})
+
+      {:ok, _} = Roles.assign_role("designer", agent.id)
+
+      assert [%{role_key: "designer", agent_slug: "octavius", agent_name: "Octavius"}] =
+               Roles.assigned_agents()
+    end
+
+    test "omits a role that has no assignment" do
+      seed_role!("designer")
+      seed_role!("historian")
+      agent = insert_agent!(%{slug: "octavius-2", name: "Octavius Two"})
+
+      {:ok, _} = Roles.assign_role("designer", agent.id)
+
+      assert Roles.assigned_agents() |> Enum.map(& &1.role_key) == ["designer"]
+    end
+
+    test "returns an empty list when nobody holds a role" do
+      seed_role!("designer")
+
+      assert Roles.assigned_agents() == []
+    end
+  end
 end

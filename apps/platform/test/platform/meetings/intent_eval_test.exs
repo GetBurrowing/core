@@ -40,12 +40,13 @@ defmodule Platform.Meetings.IntentEvalTest do
       assert :ok = IntentEval.verify_slices(root)
     end
 
-    test "the three seed slices are present, normalised, and carry their provenance" do
+    test "the seed slices and the delegation probe are present, normalised, and carry their provenance" do
       root = IntentEval.root()
       manifest = IntentEval.read_manifest!(root)
 
       assert [
                "control_60",
+               "delegation_probe",
                "negatives_102",
                "unaddressed_meeting_speech_48",
                "unaddressed_probe_12"
@@ -58,6 +59,10 @@ defmodule Platform.Meetings.IntentEvalTest do
       assert length(by_slice["control_60"]) == 60
       assert length(by_slice["unaddressed_probe_12"]) == 12
       assert length(by_slice["unaddressed_meeting_speech_48"]) == 48
+
+      # Task 01a05997 stage 4. Not a seed slice and not normalised from a
+      # fixture: authored to show the roster-grounded prompt discriminating.
+      assert length(by_slice["delegation_probe"]) == 9
 
       # Every negative is the same label — they are recorded
       # `removed_no_action` corrections, i.e. things the classifier should
@@ -74,6 +79,14 @@ defmodule Platform.Meetings.IntentEvalTest do
       # Control and probe carry real intents, not the negative label.
       refute Enum.any?(by_slice["control_60"], &(&1["label"] == "off_topic"))
       refute Enum.any?(by_slice["unaddressed_probe_12"], &(&1["label"] == "off_topic"))
+
+      # `delegation_probe` is the one slice that carries BOTH labels on
+      # purpose: its positives and its negatives are minimal pairs that
+      # differ only in whether the addressed name is on the roster, so a
+      # slice of one label could not measure the distinction at all.
+      assert by_slice["delegation_probe"]
+             |> Enum.map(& &1["label"])
+             |> Enum.frequencies() == %{"off_topic" => 7, "open_question" => 2}
 
       # Common schema across all three, so scoring never branches on slice.
       for row <- Map.values(rows) do

@@ -214,9 +214,9 @@ defmodule Platform.Mix.Tasks.IntentEvalDiscriminationTest do
     end
 
     # The two broken arms fail in completely different ways:
-    # `broken_always_off_topic` emits 174 syntactically perfect JSON
-    # objects that decline every row, and `broken_malformed_schema` emits
-    # 174 things that are not JSON at all.
+    # `broken_always_off_topic` emits a syntactically perfect JSON object
+    # that declines every row, and `broken_malformed_schema` emits
+    # something that is not JSON at all for every row.
     #
     # Before the `target_role: null` fix, the outcome CLASS could not tell
     # them apart — both scored 174 parse_errors — and only the recorded
@@ -230,8 +230,14 @@ defmodule Platform.Mix.Tasks.IntentEvalDiscriminationTest do
       always_errors = runs[@always]["summary"]["error_classes"]["parse_error"]
       malformed_errors = runs[@malformed]["summary"]["error_classes"]["parse_error"]
 
-      # Observed 2026-08-27, after the fix: always 0, malformed 174.
-      assert malformed_errors == 174
+      # Observed 2026-08-27, after the fix: always 0, malformed 174 (the set
+      # was 174 rows then). Task 01a05997 stage 4 added the 9-row
+      # `delegation_probe` and re-recorded both arms over it, so the whole
+      # set is 183 and the arm still errors on every row of it. Asserted
+      # against `total` rather than a literal, so the next slice addition
+      # does not silently narrow what "every row" means.
+      assert malformed_errors == runs[@malformed]["summary"]["total"]
+      assert malformed_errors == 183
 
       assert always_errors == 0,
              "broken_always_off_topic scored #{always_errors} parse_errors — its answers are " <>
@@ -240,7 +246,7 @@ defmodule Platform.Mix.Tasks.IntentEvalDiscriminationTest do
 
       # Valid-JSON-but-wrong versus not-JSON-at-all, independent of how
       # either is scored.
-      assert json_object_count(@always) == 174
+      assert json_object_count(@always) == 183
       assert json_object_count(@malformed) == 0
     end
   end

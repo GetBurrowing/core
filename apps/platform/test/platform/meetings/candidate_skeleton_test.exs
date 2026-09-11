@@ -342,12 +342,15 @@ defmodule Platform.Meetings.CandidateSkeletonTest do
       assert reconciled.intent_id == intent.id
       assert reconciled.queue_status == "queued"
 
-      # PRE-EXISTING HOLE, recorded rather than glossed. `classifier_model`
-      # mirrors the queue row's `model_used`, and NOTHING in the
-      # classifier ever writes that field — it is nil on `main` too. So
-      # "all six classified fields" is really five plus this. Asserted
-      # against the queue row so the day somebody starts populating it,
-      # this line keeps telling the truth instead of going stale.
+      # HOLE CLOSED by task 01a05997 stage 2: the classifier now threads
+      # `agent.model` through to the queue's `model_used`, which the
+      # mirror lands as `classifier_model`. It is still nil HERE because
+      # this suite's `create_agent!/1` builds a native agent, which may
+      # not carry a `:model` (see `Agent.validate_external_fields/1`) —
+      # so this pair asserts the MIRRORING, not the population. The
+      # origination guard lives in `intent_classifier_test.exs`
+      # ("classifier_model attribution"). Asserted against the queue row
+      # so the two never drift apart.
       assert reconciled.classifier_model == intent.model_used
       refute intent.model_used
 
