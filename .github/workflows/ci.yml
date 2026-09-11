@@ -279,6 +279,28 @@ jobs:
             fi
           fi
 
+      # Task 01a08d5d (carved out of 01a08b49). QUEUED-BEYOND-DRAIN in
+      # test/platform_web/conn_case_supervised_orphan_beyond_drain_test.exs
+      # detaches the audit telemetry handler VM-WIDE on purpose — the guardian
+      # repairing that detach is the case's whole deliverable — and its orphan
+      # exits asynchronously after its own teardown, so the detach lands inside
+      # a sibling module's `handler_attached?()` positive control (measured in
+      # CI run 34529749646). `async: false` was measured and refuted: it flips
+      # the sandbox to shared mode, changes the teardown branch and turns
+      # `@tag sandbox_drain_timeout:` into a silent no-op, so the case stops
+      # reproducing the defect while still reading as a passing test. The only
+      # isolation that holds is the BEAM boundary: `Platform.IsolatedBeamTests`
+      # excludes the `:isolated_beam` tag from the run above and this step runs
+      # it in its own OS process. `Platform.IsolatedBeamTestsTest` asserts this
+      # exact invocation is still spelled here.
+      #
+      # Do NOT add `--include slow` here: `--only X` expands to
+      # `--include X --exclude test`, so a second `--include` is another way IN
+      # (measured: 3 tests became 9). No `||` retry either — a retry-green on a
+      # 3-test partition is exactly the signal this step exists to surface.
+      - name: Beyond-drain orphan + guardian repair (isolated BEAM)
+        run: mix test --only isolated_beam
+
       # Task 019f9d80. `Platform.Audit.HistorianLatencyTest` used to detach the
       # VM-global `Platform.Audit.TelemetryHandler` and never put it back, which
       # silenced the audit bridge for every later test in the same BEAM. The

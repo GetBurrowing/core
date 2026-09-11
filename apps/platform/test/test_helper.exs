@@ -9,6 +9,15 @@
 # and mislabelling it `:intermittent` to borrow excludability is exactly the
 # confusion `TestQuarantine`'s moduledoc exists to end. Both lists are DERIVED;
 # neither may become a literal, which `Platform.TestQuarantineTest` asserts.
+# The fourth list is `Platform.IsolatedBeamTests` (task 01a08b49 stage 4): green,
+# trustworthy, fast tests that MUTATE VM-GLOBAL STATE on purpose, so their
+# correct behaviour corrupts a sibling module's reading of that same global.
+# Its own registry for the same reason as the two below — "cannot share a BEAM"
+# is not "untrustworthy", "known-red" or "slow", and borrowing any of those
+# labels to gain excludability is the lie all three moduledocs forbid. ci.yml
+# runs them in a SECOND `mix test --only isolated_beam` invocation, i.e. a
+# separate OS process and therefore a separate BEAM, which is the property they
+# need and which `--include` could never provide.
 # The third list is `Platform.SlowTests` (task 01a0826f stage 5): green,
 # trustworthy tests whose only cost is real wall-clock sleep. Its own registry
 # for the same reason `PendingFix` has one — "slow" is not "untrustworthy" and
@@ -18,7 +27,8 @@
 ExUnit.start(
   exclude:
     Platform.TestQuarantine.excluded_tags() ++
-      Platform.PendingFix.excluded_tags() ++ Platform.SlowTests.excluded_tags()
+      Platform.PendingFix.excluded_tags() ++
+      Platform.SlowTests.excluded_tags() ++ Platform.IsolatedBeamTests.excluded_tags()
 )
 
 # ONE lifecycle step registry for the whole run, under the default name,

@@ -61,6 +61,18 @@
 # count — it is the mechanism check that stops the right outcome being reached
 # for the wrong reason.
 #
+# ## WHERE QUEUED-BEYOND-DRAIN AND LATE WENT
+#
+# Task 01a08b49 stage 4 moved both to
+# `test/platform_web/conn_case_supervised_orphan_beyond_drain_test.exs`, tagged
+# `:isolated_beam` and run by their own `mix test` invocation in ci.yml — a
+# separate BEAM. BEYOND-DRAIN detaches the VM-global audit handler on purpose and
+# its orphans exit asynchronously after its own teardown, so its detach was
+# landing inside THIS file's `handler_attached?()` positive control (CI run
+# 34529749646). The sections below still describe all three shapes, because the
+# characterisation is one piece of work; only the two cases moved. That file's
+# header records why `async: false` is NOT an alternative.
+#
 # ## Why this file now forces the drain to TIME OUT
 #
 # Task 01a08b49 stage 2 added `Platform.SandboxHelpers.await_own_supervised_writes/2`
@@ -246,20 +258,6 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
     action: "supervised_orphan_probe"
   }
 
-  # Long enough that the blocker is still holding the connection when ConnCase
-  # tears the owner down (teardown lands within milliseconds of the body
-  # returning), so the orphan is queued rather than served.
-  @blocker_hold_ms 3_000
-
-  # Past the queued orphan's detach-and-restore, so the LATE shape's own `before`
-  # reading (the handler is attached when it runs) is a clean measurement. It is
-  # NOT a race guard for the restore counter: CI observed the queued orphan's
-  # detach 558 ms after the drain gave up, i.e. inside this window, which is one
-  # of the reasons the counter is no longer asserted anywhere in this file. Do
-  # not widen this to chase a delta — see the LATE case's comment.
-  @late_delay_ms 500
-
-  @queue_deadline_ms 2_000
   @report_deadline_ms 10_000
 
   # THE RESIDENCY BUDGET, and it is the constant stage 3's DRAINED case was
@@ -304,12 +302,6 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   # against a 100 ms residency budget.
   @arrival_deadline_ms 2_000
 
-  # Small enough that ConnCase's scoped drain gives up while the blocker is
-  # still holding the connection, which is what keeps the orphans in flight at
-  # `stop_owner/1`. Not zero: the drain should be seen to RUN and report, not be
-  # switched off.
-  @drain_timeout_ms 50
-
   # QUEUED-DRAINED's deadline, comfortably above the time its blocker holds the
   # connection (which is milliseconds — it is released by message as soon as the
   # orphans are parked, not after a sleep). Deliberately a real number rather
@@ -324,60 +316,6 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   @blocker_safety_ms 10_000
 
   @observation_key {:conn_case_supervised_orphan, :observation}
-
-  # Forces ConnCase's `async: true` scoped drain to time out — see the header
-  # section "Why this file now forces the drain to TIME OUT". Removing this tag
-  # does not make the test stricter, it dismantles the construction.
-  @tag sandbox_drain_timeout: @drain_timeout_ms
-  test "QUEUED-BEYOND-DRAIN: an orphan in flight when the drain gives up detaches the handler",
-       %{conn: conn} do
-    assert %Plug.Conn{} = conn
-
-    # Positive control 1 — if the handler were already detached, every
-    # `list_handlers` reading below would be meaningless.
-    assert handler_attached?(),
-           "#{@handler_id} must be attached before this test can measure anything"
-
-    put_observation(:late, :never_ran)
-    put_observation(:late_class, :never_ran)
-    put_observation(:queued, :never_ran)
-    put_observation(:queued_class, :never_ran)
-
-    # ── LATE shape: sleeps past the end of the test, then writes ──
-    spawn_emitter(:late, @late_delay_ms, nil)
-    spawn_classifier(:late_class, @late_delay_ms)
-
-    # Positive control 2 — a supervised child reaches the sandbox connection
-    # through `$callers` while the test is alive. Without this, an orphan that
-    # fails for want of ownership it never had would look identical to one
-    # whose owner died underneath it. Deliberately a bare `SELECT 1` liveness
-    # probe and not an audit-row count.
-    parent = self()
-
-    {:ok, _control} =
-      Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
-        send(parent, {:control, Platform.Repo.query("SELECT 1")})
-      end)
-
-    assert_receive {:control, {:ok, %{rows: [[1]]}}}, 5_000
-
-    # ── QUEUED shape: in flight when the owner goes away ──
-    blocker = start_blocker(@blocker_hold_ms)
-    assert Process.alive?(blocker)
-
-    emitter = spawn_emitter(:queued, 0, self())
-    classifier = spawn_classifier(:queued_class, 0)
-
-    assert_receive {:about_to_emit, ^emitter}, 5_000
-
-    # Positive control 3 — the construction is a construction. Both orphans
-    # are PARKED inside DBConnection, waiting for the connection the blocker
-    # holds, at the moment this body returns. If this ever degrades to
-    # `{:gave_up, _}` the file has stopped building the defect and is
-    # measuring nothing, which is a finding and not something to loosen.
-    assert await_queued(emitter) == :queued
-    assert await_queued(classifier) == :queued
-  end
 
   # The same construction as above with ONE variable changed: the drain is given
   # longer than the blocker holds the connection, so
@@ -517,9 +455,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
       # Runs after EVERY per-test teardown in this module, including
       # ConnCase's `stop_owner/1` — so the detach has already happened by the
       # time this runs, unlike a per-test `on_exit`.
-      await_report(:queued, @report_deadline_ms)
       await_report(:drained, @report_deadline_ms)
-      await_report(:late, @report_deadline_ms)
 
       assert :ok = TelemetryHandler.attach()
 
@@ -590,7 +526,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   # the failure arriving at the audit write is named rather than inferred. A
   # raise is rescued by `persist_or_skip/4`; an exit is not, and only an exit
   # can reach `:telemetry` and detach the handler.
-  defp spawn_classifier(key, delay_ms, notify \\ nil) do
+  defp spawn_classifier(key, delay_ms, notify) do
     {:ok, pid} =
       Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
         if delay_ms > 0, do: Process.sleep(delay_ms)
@@ -612,23 +548,6 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
       end)
 
     pid
-  end
-
-  # Holds the single sandbox connection from a supervised child, so anything
-  # else that wants it queues. Rendezvous from INSIDE the transaction, so the
-  # connection is provably held before the caller continues.
-  defp start_blocker(hold_ms) do
-    parent = self()
-
-    {:ok, pid} =
-      Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
-        Platform.Repo.transaction(fn ->
-          send(parent, {:holding, self()})
-          Process.sleep(hold_ms)
-        end)
-      end)
-
-    await_holding(pid)
   end
 
   # As `start_blocker/1`, but it holds the connection until it has SEEN the pids
@@ -712,10 +631,6 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
     end
 
     pid
-  end
-
-  defp await_queued(pid, deadline_ms \\ @queue_deadline_ms) do
-    do_await_queued(pid, System.monotonic_time(:millisecond) + deadline_ms)
   end
 
   defp do_await_queued(pid, deadline) do
@@ -810,96 +725,12 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanObservationTest do
     # a false accusation rather than a failure.
     on_exit(fn ->
       Enum.each(
-        [:late, :late_class, :queued, :queued_class, :drained, :drained_class],
+        [:drained, :drained_class],
         &:persistent_term.erase({@observation_key, &1})
       )
     end)
 
     :ok
-  end
-
-  test "a LATE supervised orphan raises OwnershipError and leaves the handler attached" do
-    class = await(:late_class)
-    reading = await(:late)
-
-    assert {:raise, DBConnection.OwnershipError, message} = class,
-           """
-           Expected a late orphan's audit write to RAISE DBConnection.OwnershipError.
-           Got: #{inspect(class, limit: 8)}
-
-           A raise is what `persist_or_skip/4` rescues. If this became an exit the
-           late shape would detach the handler too, and the characterisation in this
-           file's header would be wrong.
-           """
-
-    assert message =~ "cannot find ownership process"
-
-    assert reading.before == true,
-           "the handler was already detached when the late orphan ran — the queued " <>
-             "orphan's restore did not land, which is the poisoning failure this " <>
-             "file exists to prevent"
-
-    assert reading.after == true,
-           """
-           A late orphan DETACHED #{@handler_id}. That contradicts the measured
-           characterisation: a write that starts after the owner is gone raises
-           OwnershipError, which is rescued. Re-derive the header before trusting it.
-           """
-
-    # WHY THERE IS NO `restores_after == restores_before` ASSERTION HERE.
-    #
-    # There was one. It was this file's THIRD attempt to make the guardian's
-    # restore counter answer a per-case question, and CI falsified it the same
-    # way stage 3 falsified the DRAINED one — see "WHY THERE IS NO
-    # `restores_after == restores_before` ASSERTION HERE" in the QUEUED-DRAINED
-    # case below, which reached this conclusion first and is the argument this
-    # comment is consistent with.
-    #
-    # `HandlerGuardian.restore_count/1` reads ONE `:counters` array published in
-    # `:persistent_term`, one index per handler id, for the whole BEAM (see the
-    # guardian's own note on `@counters_key`). It carries no emission scope and
-    # no caller scope. This suite runs `async: true` modules CONCURRENTLY, so a
-    # delta sampled around one process's `:telemetry.execute/3` can be moved by a
-    # detach in a module this test has never heard of. A BEAM-GLOBAL COUNTER
-    # CANNOT ANSWER A PER-CASE QUESTION IN A CONCURRENT SUITE. That is a property
-    # of the instrument, not of the seed, and no amount of ordering fixes it.
-    #
-    # MEASURED, in CI, not reasoned: `@late_delay_ms` is 500 and
-    # `@drain_timeout_ms` is 50, and the queued orphan's detach was observed
-    # arriving 558 ms AFTER the drain gave up — i.e. inside the window this case
-    # samples across. The delta LATE read belonged to the QUEUED orphan. The
-    # deleted assertion's own failure message therefore made a FALSE ATTRIBUTION:
-    # it printed "the handler DID fail and was merely repaired ... never reaching
-    # `:telemetry`'s catch at all" while, in the same run and the same test,
-    # `class` read `{:raise, DBConnection.OwnershipError, _}`. Both cannot be
-    # true — a raise is rescued by `persist_or_skip/4` and never reaches
-    # `:telemetry`'s catch, so no detach and no restore can be attributed to this
-    # emission at all. `class` is process-local and right; the counter was global
-    # and wrong. The header's old claim that `@late_delay_ms` puts this emission
-    # safely after the beyond-drain detach is what CI refuted; the 500 ms is kept
-    # for the `before` reading, and is NOT a race guard.
-    #
-    # WHAT REMAINS IS THE INSTRUMENT. The `class` assertion above is process-local
-    # and genuinely discriminating: it is what separates "the handler RAISED"
-    # (rescued inside `persist_or_skip/4`, nothing detaches) from "the handler
-    # EXITED" (`{:shutdown, %DBConnection.ConnectionError{}}`, which escapes the
-    # rescue and makes `:telemetry` detach the handler VM-wide — the actual
-    # defect). It is the same reading, in its LATE-specific form, that decides the
-    # other two cases. Do not weaken it, and do not widen `@late_delay_ms` to dodge
-    # the confound: that tunes a race instead of fixing a measurement, and CI has
-    # already shown the timing is not under this test's control.
-    #
-    # TO RESTORE PER-CASE ATTRIBUTION HONESTLY you need emission-scoped
-    # attribution — a guardian API that reports restores of a given handler id
-    # CAUSED BY THE CALLING PROCESS'S EMISSION (e.g. a per-`execute/3` token, or a
-    # counter keyed by the failing handler's caller). No such API exists, no stage
-    # owns building one, and inventing it here is out of scope.
-    #
-    # This is a deliberate departure from what stage 3 authored — this file's
-    # header argued in writing for keeping the delta — and it is NOT stripping a
-    # check to make a red test green. The delta was an instrument pointed at
-    # another process; removing it removes a false reading, and the reading that
-    # decides this case is untouched. Do not re-add it without the API above.
   end
 
   test "QUEUED-DRAINED: the write completes and the handler never fails at all" do
@@ -964,111 +795,6 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanObservationTest do
     # row survives), and it goes red under mutation M1. The delta remains the
     # right instrument for the BEYOND-DRAIN case below, where the detach IS this
     # module's own and no sibling contributes one.
-
-    assert reading.restored == true, "the orphan did not restore #{@handler_id}"
-
-    assert handler_attached?(),
-           "#{@handler_id} is not attached now — the restore chain failed and every " <>
-             "later test would record no audit events"
-  end
-
-  test "QUEUED-BEYOND-DRAIN: the orphan exits, the handler detaches, the guardian repairs it" do
-    class = await(:queued_class)
-    reading = await(:queued)
-
-    assert {:exit, reason} = class,
-           """
-           Expected a queued orphan's in-flight audit write to arrive as a process EXIT.
-           Got: #{inspect(class, limit: 8)}
-
-           Only an exit escapes `persist_or_skip/4` — its `rescue` clauses catch every
-           raise, and its refusal to `catch :exit` is deliberate and documented. If
-           this is no longer an exit, the detach mechanism has changed.
-           """
-
-    assert reason =~ "owner", "the exit reason must name the owner: #{reason}"
-    assert reason =~ "exited", "the exit reason must name the owner's exit: #{reason}"
-
-    assert reading.before == true,
-           "#{@handler_id} was not attached when the queued orphan ran, so its " <>
-             "`after` reading measures nothing"
-
-    # THE measurement, and it changed instrument in task 01a08b49 stage 1 without
-    # the underlying residual changing.
-    #
-    # What this pins CHANGED in task 01a08b49 stage 2. It used to pin an open
-    # residual — "nothing waits for an `async: true` orphan". Something does
-    # now: `SandboxHelpers.await_own_supervised_writes/2`, called from
-    # ConnCase's async teardown, waits for this test's own supervised children.
-    # So what is pinned here is narrower and still worth pinning: that the
-    # defect is exactly what the drain is load-bearing FOR. The producer tags
-    # itself `sandbox_drain_timeout: 50` to force the drain's timeout branch, and
-    # under that forcing the readings are byte-for-byte what they were before the
-    # drain existed. Delete the tag and this assertion goes red, which is the
-    # only reason to trust that the drain is doing the work.
-    #
-    # `drain_or_warn/1` remains shared-mode-only by design; it is the SCOPED
-    # drain, not the unconditional one, that covers async. The audit row is still
-    # lost in THIS construction, because this construction is the un-drained
-    # case on purpose.
-    #
-    # What changed: `Platform.Telemetry.HandlerGuardian` re-attaches the handler
-    # from inside `:telemetry`'s failure event, which fires after the detach and
-    # before `execute/3` returns. So `after` now reads `true` — and it reads
-    # `true` whether the handler failed or never failed, which is why `after`
-    # alone is a LIVENESS guard here and the `class` assertion above is the
-    # discriminator: `{:exit, _}` is process-local, and only an exit escapes
-    # `persist_or_skip/4` and makes `:telemetry` detach. The pair
-    # `class == {:exit, _}` AND `after == true` is what says "detached, and
-    # repaired before `execute/3` returned"; neither reading can drift in from
-    # another module.
-    #
-    # This is the update the previous version of this comment asked for, with
-    # its premise corrected. It said "if this assertion ever fails, the async
-    # hole has CLOSED". The assertion did start failing, and the hole is NOT
-    # closed — the write is still destroyed. Only the blast radius shrank.
-    assert reading.after == true,
-           """
-           #{@handler_id} was still DETACHED when `:telemetry.execute/3` returned to
-           the queued orphan.
-
-           The guardian is attached at boot and re-attaches from inside the
-           `[:telemetry, :handler, :failure]` event, which `:telemetry` emits after
-           the detach and before `execute/3` returns. Reading `false` here means the
-           guardian did not run, ran too late, or has been driven past its bound
-           (#{HandlerGuardian.restore_bound()} restores per handler id) earlier in
-           this run.
-           """
-
-    # WHY THERE IS NO `restores_after == restores_before + 1` ASSERTION HERE.
-    #
-    # Same reason as the DRAINED case above and the LATE case above: the delta is
-    # read off ONE BEAM-global `:counters` array in `:persistent_term`, keyed by
-    # handler id and nothing else, while `async: true` modules run concurrently.
-    # A BEAM-global counter cannot answer a per-case question in a concurrent
-    # suite — and this direction of the assertion is confounded BOTH ways: an
-    # unrelated module's detach inflates it past 1, and this case's own orphans
-    # exit ASYNCHRONOUSLY (`Sandbox.stop_owner/1` returns before the
-    # `{:shutdown, %DBConnection.ConnectionError{}}` exits propagate), so its own
-    # detach can land outside its own sampling window and read 0. The header's
-    # old defence — "confound-free because this is the ONLY case in this module
-    # that detaches" — was scoped to this MODULE and the suite is not this
-    # module.
-    #
-    # Stage 3 reached this for DRAINED and fixed one of the three sites; CI then
-    # falsified LATE's. All three are the same measurement problem, so all three
-    # are now decided on the process-local `class` reading. Here that is
-    # `{:exit, reason}` above, with `reason` naming the owner's exit: it is the
-    # only class that escapes `persist_or_skip/4`, so it is exactly the condition
-    # under which `:telemetry` detaches — and `after == true` plus `restored ==
-    # true` below then say the repair landed. That chain is entirely
-    # process-local.
-    #
-    # Restoring the count as a check needs emission-scoped attribution from the
-    # guardian (restores of a handler id CAUSED BY THIS PROCESS'S emission). That
-    # API does not exist and no stage owns it. This removal is the orchestrator's
-    # call on task 01a08b49, made against stage 3's authored intent, and it
-    # deletes an instrument that was measuring another process — not a check.
 
     assert reading.restored == true, "the orphan did not restore #{@handler_id}"
 

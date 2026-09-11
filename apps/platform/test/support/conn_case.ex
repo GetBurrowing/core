@@ -142,7 +142,13 @@ defmodule PlatformWeb.ConnCase do
       Sandbox.stop_owner(owner)
     end)
 
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+    # `sandbox_owner` is the pid the test's writes resolve ownership through,
+    # exposed so a test that constructs a supervised orphan on purpose
+    # (`conn_case_supervised_orphan_beyond_drain_test.exs`) can assert it is
+    # alive as a positive control. Task 01a08d5d measured that its `:DOWN` is
+    # NOT the moment ownership is gone (the ownership proxy outlives it), so do
+    # not gate anything on this pid's exit.
+    {:ok, conn: Phoenix.ConnTest.build_conn(), sandbox_owner: owner}
   end
 
   @doc """
