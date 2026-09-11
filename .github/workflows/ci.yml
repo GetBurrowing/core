@@ -63,6 +63,12 @@ jobs:
       PGHOST: postgres
       PGUSER: postgres
       PGPASSWORD: postgres
+    # Read by the `first-run-green` job below. Task 01a08d81: this job's
+    # CONCLUSION is `success` for both first-run-green and failed-then-
+    # retry-green, so branch protection requiring "Test" cannot tell them
+    # apart. The output is the per-run OUTCOME the retry path records.
+    outputs:
+      retry_fired: ${{ steps.run-tests.outputs.retry_fired }}
     defaults:
       run:
         working-directory: apps/platform
@@ -222,6 +228,7 @@ jobs:
           mix ecto.migrate
 
       - name: Run tests
+        id: run-tests
         run: |
           # `--include slow` is load-bearing, not decoration: `Platform.SlowTests`
           # excludes the `:slow` tag from the DEFAULT run, and this flag is the
@@ -238,6 +245,12 @@ jobs:
           set -o pipefail
           first_pass_log="${RUNNER_TEMP:-.}/mix-test-first-pass.log"
 
+          # `retry_fired` is THIS run's outcome — did the serial retry fire —
+          # written to $GITHUB_OUTPUT so the `first-run-green` job can read it
+          # without grepping a log. It is written exactly once per exit path:
+          # `false` below the retry block on a green first pass, `true` inside
+          # the retry-green branch. A retry-red path exits 1 and writes nothing;
+          # the job is red, and `first-run-green` is skipped behind `needs`.
           if ! mix test --include slow 2>&1 | tee "$first_pass_log"; then
             # Harvest the failed test names from the FIRST pass's ExUnit failure
             # blocks. Not the `--failed` manifest: that file
@@ -272,12 +285,14 @@ jobs:
                   echo "$failed_tests" | sed 's/^/- /'
                 } >> "$GITHUB_STEP_SUMMARY"
               fi
+              echo "retry_fired=true" >> "$GITHUB_OUTPUT"
               exit 0
             else
               echo "::error::initial mix test failed and the serial retry did NOT fix it. See the failures above."
               exit 1
             fi
           fi
+          echo "retry_fired=false" >> "$GITHUB_OUTPUT"
 
       # Task 01a08d5d (carved out of 01a08b49). QUEUED-BEYOND-DRAIN in
       # test/platform_web/conn_case_supervised_orphan_beyond_drain_test.exs
@@ -357,6 +372,46 @@ jobs:
       - name: Hand the workspace back to the runner
         if: always()
         run: chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
+
+  # Task 01a08d81. Branch protection can only require a NAMED check, and it is
+  # satisfied by that job's conclusion. `Test` concludes `success` for both a
+  # first-run-green suite and a failed-then-serially-retried one (the `||`
+  # retry in `Run tests` above), so requiring `Test` does not gate retry-green.
+  # This job is the distinct check protection can require instead: it is keyed
+  # to an OUTCOME — did the retry fire on THIS run — never to a rate. (A rate
+  # rule at the measured 13/40 – 21/40 retry base rate would block a third of
+  # merges and be switched off within a week; see
+  # apps/platform/notes/2026-09-10-ci-retry-census.md §6 and §11.)
+  #
+  # It reads the `retry_fired` job output the `Run tests` step wrote, and
+  # nothing else: no checkout, no container, no `mix test`, no `--include slow`,
+  # and no `||` retry of its own. `Test`'s semantics are unchanged — it stays
+  # green on retry-green, so nothing merging today is blocked by this job
+  # until protection is told to require `first-run-green`.
+  # `Platform.CiFirstRunGreenTest` pins this job's presence and the literals
+  # it depends on.
+  first-run-green:
+    name: first-run-green
+    needs: test
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - name: Fail iff the Test job's serial retry fired on this run
+        env:
+          RETRY_FIRED: ${{ needs.test.outputs.retry_fired }}
+        run: |
+          case "$RETRY_FIRED" in
+            false)
+              echo "first-run green: the Test job's serial retry did not fire on this run."
+              ;;
+            true)
+              echo "::error::first-run-green: the Test job went green only after its serial retry (see the Test job's 'Retry-greened tests' summary for the names). The build is retry-green, not first-run-green."
+              exit 1
+              ;;
+            *)
+              echo "::error::first-run-green: Test job output retry_fired is '${RETRY_FIRED}', expected 'true' or 'false'. The Run tests step no longer writes it; see Platform.CiFirstRunGreenTest."
+              exit 1
+              ;;
+          esac
 
   build-and-push:
     name: Build and push image

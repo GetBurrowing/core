@@ -222,3 +222,51 @@ Stated plainly rather than left for a reader to notice:
   executes `.github/workflows/ci.yml`.
 * The census covers one calendar day. A 32.5% retry rate over 40 runs on 2026-09-10 is
   not a claim about last week.
+
+## 11. Addendum (task 01a08d81) — the `first-run-green` check, and why it is keyed to an outcome, never a rate
+
+**Window-attached rates.** A rate is a claim with a window; two were measured on
+2026-09-10 and they do not agree, which is itself the finding:
+
+| window (UTC, created_at) | runs | retry-greened | rate |
+|---|---|---|---|
+| 02:22Z – 18:06Z (§2–§3 above, oldest `34429193716`, newest `34512290365`) | 40 | 13 | 32.5% |
+| 12:37Z – 22:32Z (later census, same annotation matcher as §5) | 40 | 21 | 52.5% |
+
+The two windows overlap for ~5.5 hours and still differ by twenty points, because the
+later one is dominated by the evening's PR traffic. Any threshold rule — "fail after N
+retries in M runs", "fail when the rate exceeds X%" — would therefore have fired or not
+fired on the same code depending on what else was merging that afternoon. That is not a
+property of the code under test, and a check whose verdict depends on the neighbours'
+traffic is one that gets switched off (§6).
+
+**Design rule: keyed to an outcome, never a rate.** The `Test` job's *conclusion* is
+`success` for both first-run-green and failed-then-retry-green, and branch protection can
+only require a named check by its conclusion (`GET /repos/…/branches/main` reports
+`required_status_checks.contexts: ["Test"]`; the ticket's own pair `34476791446` red-retry
+and `34478336271` clean both conclude `success`). So the retry census can never become a
+gate through `Test`. What can is a **separate check whose conclusion IS the per-run
+outcome**:
+
+* `Run tests` now carries `id: run-tests` and writes `retry_fired=true` to
+  `$GITHUB_OUTPUT` inside the retry-green branch, `retry_fired=false` after a green first
+  pass (a retry-red path exits 1 and writes nothing; `Test` is red, which protection
+  already blocks). The `test` job exposes it as `outputs.retry_fired`.
+* A new job **`first-run-green`** (`needs: test`, same runner class, no container, no
+  checkout) reads `needs.test.outputs.retry_fired` and exits 1 iff it is `true`. It runs
+  no tests, so it has no flakes of its own, and it has no `||` retry.
+* `Test`'s semantics are **unchanged**: it is still green on retry-green. Nothing merging
+  today is blocked by the new job until protection is told to require it — until then it
+  is advisory, a red "first-run-green" check on a green PR.
+* `Platform.CiFirstRunGreenTest` is the drift alarm on all of the above (text only, like
+  every other guard on this file).
+
+**Positive control.** A check must be shown to produce both outcomes before it is
+required; the reference pair above predates the job and cannot exercise it. The PR that
+added the job carries its own pair: a throwaway commit with a test that fails once (marker
+file) and passes on the serial retry — `first-run-green` red on that run — then the
+revert — `first-run-green` green. Both run ids are in the PR body.
+
+**Rowan's click.** Settings → Branches → protection rule for `main` → required status
+checks: keep `Test`, add `first-run-green`. From that moment a retry-green PR cannot merge
+until it is re-run first-run-green (or its flake is fixed), which is the point.
