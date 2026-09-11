@@ -86,6 +86,103 @@ defmodule Platform.Meetings.StateTest do
     end
   end
 
+  describe "committed media intent on the row (task 01a08d5a stage 3)" do
+    test "broadcast_media_state/2 caches the pair on an existing row, written before the broadcast" do
+      :ok = MeetingState.subscribe("test-user-1")
+      :ok = MeetingState.broadcast_joined("test-user-1", "space-123", "Eng", "eng", "standup")
+      assert_receive {:meeting_joined, _}
+      assert MeetingState.media_intent("test-user-1") == nil
+
+      :ok =
+        MeetingState.broadcast_media_state("test-user-1", %{
+          mic_enabled: false,
+          camera_enabled: true
+        })
+
+      assert_receive {:meeting_media_state, %{mic_enabled: false, camera_enabled: true}}
+
+      assert MeetingState.media_intent("test-user-1") == %{
+               mic_enabled: false,
+               camera_enabled: true
+             }
+
+      # The identity fields are untouched by the merge.
+      assert %{space_id: "space-123", space_slug: "eng", started_at: %DateTime{}} =
+               MeetingState.get_for_user("test-user-1")
+    end
+
+    test "broadcast_media_state/2 with no row broadcasts but caches nothing (no phantom meeting)" do
+      :ok = MeetingState.subscribe("test-user-1")
+
+      :ok =
+        MeetingState.broadcast_media_state("test-user-1", %{
+          mic_enabled: false,
+          camera_enabled: false
+        })
+
+      assert_receive {:meeting_media_state, %{mic_enabled: false}}
+      assert MeetingState.get_for_user("test-user-1") == nil
+      assert MeetingState.media_intent("test-user-1") == nil
+    end
+
+    test "broadcast_joined/5 keeps a pair the previous row carried (restore-on-reconnect re-join)" do
+      :ok = MeetingState.broadcast_joined("test-user-1", "space-123", "Eng", "eng", "standup")
+
+      :ok =
+        MeetingState.broadcast_media_state("test-user-1", %{
+          mic_enabled: false,
+          camera_enabled: false
+        })
+
+      :ok = MeetingState.broadcast_joined("test-user-1", "space-123", "Eng", "eng", "standup")
+
+      assert MeetingState.media_intent("test-user-1") == %{
+               mic_enabled: false,
+               camera_enabled: false
+             }
+    end
+
+    test "broadcast_left/1 drops the pair with the row" do
+      :ok = MeetingState.broadcast_joined("test-user-1", "space-123", "Eng", "eng", "standup")
+
+      :ok =
+        MeetingState.broadcast_media_state("test-user-1", %{
+          mic_enabled: false,
+          camera_enabled: false
+        })
+
+      :ok = MeetingState.broadcast_left("test-user-1")
+      assert MeetingState.media_intent("test-user-1") == nil
+    end
+
+    test "media_intent/1 tolerates nil and non-binary keys" do
+      assert MeetingState.media_intent(nil) == nil
+      assert MeetingState.media_intent(123) == nil
+    end
+
+    test "guest pair: put / get / clear under a token-derived key that never contains the token" do
+      key = MeetingState.guest_intent_key("guest-invite-token-xyz")
+      assert is_binary(key)
+      refute key =~ "guest-invite-token-xyz"
+      assert key == MeetingState.guest_intent_key("guest-invite-token-xyz")
+      refute key == MeetingState.guest_intent_key("guest-invite-token-abc")
+      assert MeetingState.guest_intent_key(nil) == nil
+      assert MeetingState.guest_intent_key("") == nil
+
+      assert MeetingState.guest_media_intent(key) == nil
+      assert MeetingState.guest_media_intent(nil) == nil
+
+      :ok = MeetingState.put_guest_media_intent(key, %{mic_enabled: false, camera_enabled: true})
+      assert MeetingState.guest_media_intent(key) == %{mic_enabled: false, camera_enabled: true}
+      # A nil key is a no-op, never a crash (a socket that never assigned one).
+      :ok = MeetingState.put_guest_media_intent(nil, %{mic_enabled: false, camera_enabled: true})
+
+      :ok = MeetingState.clear_guest_media_intent(key)
+      assert MeetingState.guest_media_intent(key) == nil
+      :ok = MeetingState.clear_guest_media_intent(nil)
+    end
+  end
+
   describe "broadcast_joined/5" do
     test "broadcast payload contains all six fields" do
       :ok = MeetingState.subscribe("test-user-1")

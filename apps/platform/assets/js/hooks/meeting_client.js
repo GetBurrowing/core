@@ -953,6 +953,33 @@ const MeetingClient = {
   // `_join` passes the resolved join-payload pair so the initial join and
   // the reconnect re-engage share ONE reconcile without the payload being
   // second-guessed by a dataset the LiveView may not have patched yet.
+  //
+  // DELIBERATELY ENABLE-ONLY (task 01a08d5a stage 2 — decision recorded,
+  // branch NOT added). There is no `!wantMic && isMicrophoneEnabled` mute
+  // branch on EITHER the dataset path or the `intent` override path, and
+  // there must not be one without on-screen attribution:
+  //
+  //   * Design constraint (Saru, execution space 01a08e9d-f99e-7001-bcc5-
+  //     06dbac269fc3, message 01a08e9e-b23a-7001-8772-f91033d49d65): a
+  //     bidirectional reconciler can mute a live mic mid-sentence after a
+  //     SILENT reconnect with nothing on screen attributing the cause.
+  //     `_join` enters the room in the `_desiredInitialMedia` state (FE-17
+  //     stage 4, c1b076bc), so a hot mic is no longer reachable from a
+  //     fresh join; the mute branch would be defence in depth only, and
+  //     its failure mode is worse than the gap it closes.
+  //   * Intent and the SDK flag can drift with nobody wrong: `_toggleMic`
+  //     may fail `setMicrophoneEnabled` after `toggle_mic/1` already
+  //     flipped the assign optimistically, and a morphdom repatch can
+  //     briefly serve a stale dataset. This runs from `reconnected()`,
+  //     `_adoptRoom`, the LiveKit `Reconnected` event and the tail of
+  //     `_join`, so any 1006 blip would fire it. Muting silently on drift
+  //     is Saru's case. (A LiveView socket reconnect used to re-seed
+  //     `:mic_enabled` to `true` on remount; task 01a08d5a stage 3 keeps
+  //     the committed pair across the remount instead.)
+  //
+  // Pinned by "reconciler is enable-only" tests in
+  // test/hooks/meeting_client.test.js; a future bidirectional change must
+  // fail those tests and re-read this comment.
   _reconcileLocalMedia(room, intent) {
     const lp = room && room.localParticipant
     if (!lp) return

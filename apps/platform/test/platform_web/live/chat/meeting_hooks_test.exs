@@ -1322,6 +1322,156 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
 
   # ── attach_guest/1 — media-state seeding (task 019f498d stage 3) ──────────
 
+  # ── Committed media intent survives attach + restore (task 01a08d5a stage 3) ──
+  #
+  # The LiveView-level twin (`meeting_hooks_reconnect_intent_test.exs`)
+  # cannot raise `:meeting_reconnect?` because `Phoenix.LiveViewTest`
+  # pins `_mounts` to 0; this is where the restore branch is pinned. The
+  # sequence is the real one: `attach/2` on a fresh socket (the reconnect
+  # mount) → `maybe_restore_on_reconnect/2` → `do_join/1`, with the ETS row
+  # carrying the pair the previous process committed before it died.
+
+  describe "committed media intent survives attach + restore (task 01a08d5a stage 3)" do
+    setup [:put_livekit_env]
+
+    # `attach_hook/4` reads `private.lifecycle`; `push_event/3` (the
+    # restore join) reads `private.live_temp` — keep the struct's defaults.
+    defp lifecycle_socket(assigns) do
+      socket = %Phoenix.LiveView.Socket{assigns: Map.put(assigns, :__changed__, %{})}
+      %{socket | private: Map.put(socket.private, :lifecycle, %Phoenix.LiveView.Lifecycle{})}
+    end
+
+    # The previous LV process: joined (row written), then committed a
+    # toggle (pair cached on the row), then died without leaving.
+    defp commit_before_drop(space, user, mic, camera) do
+      _room = seed_live_meeting(space, user)
+      Platform.Meetings.State.broadcast_joined(user.id, space.id, space.name, space.slug, nil)
+
+      Platform.Meetings.State.broadcast_media_state(user.id, %{
+        mic_enabled: mic,
+        camera_enabled: camera
+      })
+
+      on_exit(fn -> Platform.Meetings.State.broadcast_left(user.id) end)
+    end
+
+    test "attach/2 seeds :mic_enabled/:camera_enabled from the committed pair, and the restore join keeps them" do
+      space = create_space()
+      user = create_user("Ada Lovelace")
+      commit_before_drop(space, user, false, false)
+      Platform.Meetings.State.subscribe(user.id)
+
+      attached = MeetingHooks.attach(lifecycle_socket(%{user_id: user.id}), [])
+      assert attached.assigns.mic_enabled == false
+      assert attached.assigns.camera_enabled == false
+
+      restored =
+        attached
+        |> Phoenix.Component.assign(:active_space, space)
+        |> Phoenix.Component.assign(:current_participant, nil)
+        |> Phoenix.Component.assign(:meeting_reconnect?, true)
+        |> MeetingHooks.maybe_restore_on_reconnect(space)
+
+      assert restored.assigns.in_meeting == true
+      assert restored.assigns.mic_enabled == false
+      assert restored.assigns.camera_enabled == false
+
+      # The restore join's `join-meeting` push carries the committed pair.
+      # Since FE-17 stage 4 (c1b076bc) the JS `_join` reads the payload
+      # FIRST (`_desiredInitialMedia`) and only falls back to the dataset,
+      # so the seeded assigns have to reach the payload, not just the DOM.
+      push_events = restored.private[:live_temp][:push_events] || []
+
+      assert [%{mic_enabled: false, camera_enabled: false}] =
+               for(["join-meeting", payload] <- push_events, do: payload)
+
+      # The restore join re-broadcasts the COMMITTED pair, not the
+      # first-join defaults, and the row still carries it afterwards
+      # (`broadcast_joined/5` rewrote the row; the pair must survive that).
+      user_id = user.id
+      assert_receive {:meeting_joined, %{user_id: ^user_id}}, 500
+
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: false, camera_enabled: false}},
+                     500
+
+      assert Platform.Meetings.State.media_intent(user.id) ==
+               %{mic_enabled: false, camera_enabled: false}
+    end
+
+    test "only the toggled half is carried: mic off, camera on" do
+      space = create_space()
+      user = create_user("Ada Lovelace")
+      commit_before_drop(space, user, false, true)
+
+      attached = MeetingHooks.attach(lifecycle_socket(%{user_id: user.id}), [])
+      assert attached.assigns.mic_enabled == false
+      assert attached.assigns.camera_enabled == true
+    end
+
+    # POSITIVE CONTROL for the seed: a row with the pair both true, and no
+    # row at all, both leave the literal seeds in place.
+    test "a committed pair of {true, true} and no row at all both seed the first-join defaults" do
+      space = create_space()
+      user = create_user("Ada Lovelace")
+      commit_before_drop(space, user, true, true)
+
+      attached = MeetingHooks.attach(lifecycle_socket(%{user_id: user.id}), [])
+      assert attached.assigns.mic_enabled == true
+      assert attached.assigns.camera_enabled == true
+
+      no_row = MeetingHooks.attach(lifecycle_socket(%{user_id: Ecto.UUID.generate()}), [])
+      assert no_row.assigns.mic_enabled == true
+      assert no_row.assigns.camera_enabled == true
+
+      anonymous = MeetingHooks.attach(lifecycle_socket(%{user_id: nil}), [])
+      assert anonymous.assigns.mic_enabled == true
+      assert anonymous.assigns.camera_enabled == true
+    end
+
+    test "a genuine leave resets: reset_state/1 re-seeds true and the row (with its pair) is gone" do
+      space = create_space()
+      user = create_user("Ada Lovelace")
+      commit_before_drop(space, user, false, false)
+
+      attached = MeetingHooks.attach(lifecycle_socket(%{user_id: user.id}), [])
+      assert attached.assigns.mic_enabled == false
+
+      Platform.Meetings.State.broadcast_left(user.id)
+      reset = MeetingHooks.reset_state(attached)
+      assert reset.assigns.mic_enabled == true
+      assert reset.assigns.camera_enabled == true
+      assert Platform.Meetings.State.media_intent(user.id) == nil
+
+      fresh = MeetingHooks.attach(lifecycle_socket(%{user_id: user.id}), [])
+      assert fresh.assigns.mic_enabled == true
+    end
+
+    test "attach_guest/1 seeds from the guest pair keyed by :guest_intent_key, and only then" do
+      key = Platform.Meetings.State.guest_intent_key("invite-token-#{System.unique_integer()}")
+      on_exit(fn -> Platform.Meetings.State.clear_guest_media_intent(key) end)
+
+      Platform.Meetings.State.put_guest_media_intent(key, %{
+        mic_enabled: false,
+        camera_enabled: true
+      })
+
+      seeded = MeetingHooks.attach_guest(lifecycle_socket(%{user_id: nil, guest_intent_key: key}))
+      assert seeded.assigns.mic_enabled == false
+      assert seeded.assigns.camera_enabled == true
+
+      other = Platform.Meetings.State.guest_intent_key("some-other-token")
+
+      unrelated =
+        MeetingHooks.attach_guest(lifecycle_socket(%{user_id: nil, guest_intent_key: other}))
+
+      assert unrelated.assigns.mic_enabled == true
+
+      keyless = MeetingHooks.attach_guest(lifecycle_socket(%{user_id: nil}))
+      assert keyless.assigns.mic_enabled == true
+    end
+  end
+
   describe "attach_guest/1" do
     test "seeds the same media-state assigns attach/2 seeds" do
       # Build a socket with the `:lifecycle` slot the `attach_hook/4` call

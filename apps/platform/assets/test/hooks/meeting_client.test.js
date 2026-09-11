@@ -912,6 +912,55 @@ describe("MeetingClient — reconnect survival + signal (stages 1-4)", () => {
     expect(room.localParticipant.setCameraCalls).toEqual([])
   })
 
+  // 4b. Pin on a DECISION (task 01a08d5a stage 2): the reconciler is
+  // enable-only. Intent off + SDK on is left alone — no
+  // setMicrophoneEnabled(false) / setCameraEnabled(false). These tests PASS
+  // on main today; they are not discriminators for a bug fix. Their job is
+  // to make a future bidirectional reconciler fail loudly and re-read the
+  // comment above `_reconcileLocalMedia` (Saru's silent-mute-mid-sentence
+  // constraint, message 01a08e9e-b23a-7001-8772-f91033d49d65). Verified to
+  // fire: with a mute branch added locally both fail with
+  // `expected [ false ] to deeply equal []`.
+  it("reconciler is enable-only: intent-off + mic-on does NOT mute the mic", () => {
+    const room = fakeRoom({ state: "connected", mic: true })
+    const el = fakeHookEl({ cameraEnabled: "false", micEnabled: "false" })
+    const hook = buildReconnectHook(el)
+
+    hook._reconcileLocalMedia(room)
+
+    expect(room.localParticipant.setMicCalls).toEqual([])
+    expect(room.localParticipant.isMicrophoneEnabled).toBe(true)
+  })
+
+  it("reconciler is enable-only: intent-off + camera-on does NOT disable the camera", () => {
+    const room = fakeRoom({ state: "connected", camera: true })
+    const el = fakeHookEl({ cameraEnabled: "false", micEnabled: "false" })
+    const hook = buildReconnectHook(el)
+
+    hook._reconcileLocalMedia(room)
+
+    expect(room.localParticipant.setCameraCalls).toEqual([])
+    expect(room.localParticipant.isCameraEnabled).toBe(true)
+  })
+
+  // 4c. Same pin on the `intent` OVERRIDE path (FE-17 stage 4, c1b076bc:
+  // `_join` passes the resolved payload pair instead of the dataset). An
+  // explicit `{ mic: false, camera: false }` with both SDK flags on must
+  // make no `set*Enabled(false)` call either — the override changes WHERE
+  // intent is read from, not the enable-only shape.
+  it("reconciler is enable-only on the intent override path too: intent-off + both-on makes no call", () => {
+    const room = fakeRoom({ state: "connected", mic: true, camera: true })
+    const el = fakeHookEl({ cameraEnabled: "true", micEnabled: "true" })
+    const hook = buildReconnectHook(el)
+
+    hook._reconcileLocalMedia(room, { mic: false, camera: false })
+
+    expect(room.localParticipant.setMicCalls).toEqual([])
+    expect(room.localParticipant.setCameraCalls).toEqual([])
+    expect(room.localParticipant.isMicrophoneEnabled).toBe(true)
+    expect(room.localParticipant.isCameraEnabled).toBe(true)
+  })
+
   // 5. Each transition sets dataset.roomState + dispatches livekit:state.
   it("_emitState sets dataset.roomState and dispatches livekit:state", () => {
     const room = fakeRoom({ state: "connected", camera: true, mic: false })
@@ -1001,10 +1050,12 @@ describe("MeetingClient — quick-meet camera publish + dock (v4 stage 2)", () =
   })
 
   // 1. _join drives _reconcileLocalMedia so the camera engages from the
-  //    committed dataset intent (not just reconnect). The fresh-connect path
-  //    constructs a real `new Room()` (un-mockable here), so we exercise the
+  //    committed dataset intent (not just reconnect). This exercises the
   //    /chat-realistic adopt branch: a connected room left on window by a
   //    prior hook instance. _join → _adoptRoom → _reconcileLocalMedia.
+  //    (The fresh-connect path is ALSO mockable since 01a06925: `Room` is
+  //    swapped by the vi.mock at the top of this file; see the 01a08d5a
+  //    block for fresh-connect coverage.)
   it("_join engages the camera from dataset intent via the adopt branch", async () => {
     const room = fakeRoom({ state: "connected", camera: false, mic: false })
     globalThis.document = buildSignalDocument()
@@ -1100,6 +1151,121 @@ describe("MeetingClient — quick-meet camera publish + dock (v4 stage 2)", () =
     // _currentStageMode() returns "gallery" (no center-stage), so it docks
     // into the quick-meet gallery dock.
     expect(hook._localVideoEl.parentElement).toBe(galleryDesktop)
+  })
+})
+
+
+// ── _join honours committed mic intent (task 01a08d5a stage 1) ─────────────
+// `_join` used to `await setMicrophoneEnabled(true)` unconditionally on the
+// fresh-connect path, so a socket-drop re-join with a committed
+// `data-mic-enabled="false"` published a hot mic. Two tasks fixed that line
+// the same night: this task's stage 1 made no SDK call when intent was off;
+// FE-17 stage 4 (task 01a07410, squash c1b076bc) landed first and enters
+// the room with `setMicrophoneEnabled(desired.mic)`, `desired` resolved by
+// `_desiredInitialMedia` (join payload, then the dataset, then `true`).
+// On rebase this task adopted FE-17's shape, so the assertions below are
+// retargeted: intent off → `[false]`, not `[]`. T1 was the discriminator
+// against pre-FE-17 main (which yielded `[true]` on this input and is now
+// gone); today its job is to pin that the dataset fallback honours a
+// committed mute when the payload omits the pair (the restore-on-reconnect
+// join carries the pair from the assigns stage 3 seeds, so in production
+// the payload path is the one that fires). T2 is the positive control.
+// These go through FRESH CONNECT (the adopt branch returns before the
+// publish site): `vi.mock("livekit-client")` swaps `Room` for a recording
+// fake.
+describe("MeetingClient — _join honours committed mic intent (01a08d5a)", () => {
+  let priorWindow
+
+  beforeEach(() => {
+    globalThis.console = globalThis.console || { warn() {}, error() {}, info() {} }
+    if (!globalThis.console.info) globalThis.console.info = () => {}
+    globalThis.document = buildSignalDocument()
+    priorWindow = globalThis.window
+    globalThis.window = {
+      __livekit_room: null,
+      __livekitRoom: null,
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return true
+      },
+      matchMedia() {
+        return { matches: true, addEventListener() {}, removeEventListener() {} }
+      },
+    }
+    globalThis.CustomEvent =
+      globalThis.CustomEvent ||
+      class CustomEvent {
+        constructor(type, init = {}) {
+          this.type = type
+          this.detail = init.detail
+        }
+      }
+    livekitFake.created.length = 0
+    livekitFake.connectedName = "space-room"
+  })
+
+  afterEach(() => {
+    delete globalThis.document
+    delete globalThis.CustomEvent
+    globalThis.window = priorWindow
+  })
+
+  const payload = { token: "tok", url: "wss://livekit.test", room_name: "space-room" }
+
+  // T1. Intent off (dataset "false", payload omits the pair) → fresh _join
+  // enters the room muted: exactly one `setMicrophoneEnabled(false)`. Still
+  // discriminates against the pre-FE-17 `[true]`; `[]` (this task's
+  // original stage 1 shape) is no longer the shipped behaviour.
+  it("T1: fresh _join with data-mic-enabled='false' enters the room with the mic off", async () => {
+    const hook = buildReconnectHook(fakeHookEl({ cameraEnabled: "false", micEnabled: "false" }))
+
+    await hook._join(payload)
+
+    expect(livekitFake.created).toHaveLength(1)
+    const lp = livekitFake.created[0].localParticipant
+    expect(lp.setMicCalls).toEqual([false])
+    expect(lp.isMicrophoneEnabled).toBe(false)
+  })
+
+  // T2 (positive control). Intent on → exactly one publish: the awaited
+  // call in _join. The trailing _reconcileLocalMedia sees
+  // isMicrophoneEnabled === true and must not publish a second time.
+  it("T2: fresh _join with data-mic-enabled='true' calls setMicrophoneEnabled exactly once", async () => {
+    const hook = buildReconnectHook(fakeHookEl({ cameraEnabled: "false", micEnabled: "true" }))
+
+    await hook._join(payload)
+
+    expect(livekitFake.created).toHaveLength(1)
+    const lp = livekitFake.created[0].localParticipant
+    expect(lp.setMicCalls).toEqual([true])
+    expect(lp.isMicrophoneEnabled).toBe(true)
+  })
+
+  // T3. Camera intent still drives the camera on fresh join (v4 stage 2
+  // regression guard) independently of mic intent: camera on, mic off.
+  it("T3: fresh _join with camera on / mic off publishes the camera and mutes the mic", async () => {
+    const hook = buildReconnectHook(fakeHookEl({ cameraEnabled: "true", micEnabled: "false" }))
+
+    await hook._join(payload)
+
+    expect(livekitFake.created).toHaveLength(1)
+    const lp = livekitFake.created[0].localParticipant
+    expect(lp.setCameraCalls).toEqual([true])
+    expect(lp.setMicCalls).toEqual([false])
+    expect(lp.isMicrophoneEnabled).toBe(false)
+  })
+
+  // T4. The reconciler reads the same intent: mic intent on + SDK mic off
+  // → re-engage. (The camera side is covered by the stage 1-4 block.)
+  it("T4: _reconcileLocalMedia re-engages the mic when intent is on but the track dropped", () => {
+    const room = fakeRoom({ state: "connected", mic: false })
+    const hook = buildReconnectHook(fakeHookEl({ cameraEnabled: "false", micEnabled: "true" }))
+
+    hook._reconcileLocalMedia(room)
+
+    expect(room.localParticipant.setMicCalls).toEqual([true])
+    expect(room.localParticipant.setCameraCalls).toEqual([])
   })
 })
 

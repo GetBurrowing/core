@@ -111,6 +111,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       |> assign(:meetings_enabled, Meetings.enabled?())
       |> assign(:mic_enabled, true)
       |> assign(:camera_enabled, true)
+      # Task 01a08d5a stage 3: the two literal seeds above are the
+      # FIRST-JOIN defaults, and this overlay is what keeps a committed
+      # mute alive across a socket drop. See `seed_media_intent/1`.
+      |> seed_media_intent()
       |> assign(:screen_share_enabled, false)
       |> assign(:meeting_counts, %{})
       |> assign(:meeting_participants, [])
@@ -179,6 +183,99 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       end
   end
 
+  # Task 01a08d5a stage 3: committed mic/camera intent survives a remount.
+  #
+  # THE DEFECT. A LiveView socket drop (Rowan's 1006) tears the LV process
+  # down; the reconnect mount runs `attach/2` again, which re-seeded
+  # `:mic_enabled` / `:camera_enabled` to the literal `true`. The
+  # `#meeting-client` dataset rendered from those assigns is what the JS
+  # hook reads — on `reconnected()` / `_adoptRoom` to re-engage tracks,
+  # and in `_join` when `maybe_restore_on_reconnect/2` re-pushes
+  # `join-meeting` — so a mic the user had muted came back LIVE. The
+  # reviewer's control (dataset held "false", direct `_join`: audio pubs
+  # 0) showed the JS honours the dataset; the dataset was the thing that
+  # did not survive the mount.
+  #
+  # THE SOURCE OF TRUTH. `Platform.Meetings.State` already keeps one ETS
+  # row per user for exactly this lifetime — written by `do_join/1` via
+  # `broadcast_joined/5`, deleted by `broadcast_left/1`, read by
+  # `ShellLive` to hydrate the mini-bar on a fresh mount. Every producer
+  # of a committed toggle (`toggle_mic/1`, `toggle_camera/1`, the shell
+  # bar's `shell_meeting_toggle/2`) already funnels through
+  # `broadcast_media_state/2`, which now also caches the pair onto that
+  # row. So the overlay below is a lock-free ETS read with no new
+  # storage, no new handshake, and it converges every producer.
+  #
+  # WHY NOT the alternatives:
+  #   * Reading the client dataset after the mount — that IS the value
+  #     being clobbered; the server renders the dataset, not the client.
+  #   * A client push of intent before the restore join — the restore
+  #     `do_join` runs inside `handle_params` on the mount, before any
+  #     hook `pushEvent` can land (the hook mounts after first render),
+  #     and the reviewer showed the dataset must be right BEFORE `_join`.
+  #   * The LiveKit participant's published state — Suite keeps no
+  #     server-side mirror of track mute state; `media_states` pushes are
+  #     the viewer's observation of OTHER participants and are never
+  #     persisted (see `apply_media_states/2`).
+  #   * Widening `maybe_restore_on_reconnect/2` only — the enable-only
+  #     `_reconcileLocalMedia` runs on `reconnected()` too, with no
+  #     restore join at all (the reviewer's socket-drop case), so the
+  #     seed has to be right at `attach/2`, not at the join.
+  #
+  # FIRST-JOIN DEFAULTS ARE UNCHANGED: a user with no meeting in progress
+  # has no row, `media_intent/1` is nil, and the literal seeds stand.
+  # `reset_meeting_state/1` still re-seeds `true` when a meeting genuinely
+  # ends — and `broadcast_left/1` deletes the row on that path, so the
+  # next join starts clean. This overlay is deliberately not gated on
+  # `reconnect_mount?/1`: a `live_navigate` remount (`_mounts == 0`)
+  # adopts the surviving Room through the same dataset-reading path and
+  # must not un-mute either; the row's existence is the gate.
+  defp seed_media_intent(socket) do
+    case MeetingState.media_intent(socket.assigns[:user_id]) do
+      %{mic_enabled: mic, camera_enabled: camera} ->
+        socket
+        |> assign(:mic_enabled, mic)
+        |> assign(:camera_enabled, camera)
+
+      nil ->
+        socket
+    end
+  end
+
+  # Guest twin. A guest has no user_id and no row; the pair is cached
+  # under a hash of the invite token (`MeetingState.guest_intent_key/1`)
+  # that `MeetingLive`'s guest mount assigns as `:guest_intent_key`
+  # before `attach_guest/1` runs. A pre-provisioned-name token lands the
+  # reconnect mount straight back in `:in_meeting` with a fresh
+  # `join-meeting`, so the same dataset window exists for guests.
+  defp seed_guest_media_intent(socket) do
+    case MeetingState.guest_media_intent(socket.assigns[:guest_intent_key]) do
+      %{mic_enabled: mic, camera_enabled: camera} ->
+        socket
+        |> assign(:mic_enabled, mic)
+        |> assign(:camera_enabled, camera)
+
+      nil ->
+        socket
+    end
+  end
+
+  # Guest toggles do not broadcast (no per-user topic); persist the pair
+  # directly so `seed_guest_media_intent/1` finds it on the next mount.
+  defp persist_guest_media_intent(socket) do
+    MeetingState.put_guest_media_intent(socket.assigns[:guest_intent_key], %{
+      mic_enabled: socket.assigns.mic_enabled,
+      camera_enabled: socket.assigns.camera_enabled
+    })
+
+    socket
+  end
+
+  defp clear_guest_media_intent(socket) do
+    MeetingState.clear_guest_media_intent(socket.assigns[:guest_intent_key])
+    socket
+  end
+
   @doc """
   Attach a guest-flavored variant of the meeting event hook for the
   guest ingress path in `PlatformWeb.MeetingLive` (task 019f498d
@@ -218,6 +315,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # default); every later pass keeps whatever the toggles chose.
     |> assign_new(:mic_enabled, fn -> true end)
     |> assign_new(:camera_enabled, fn -> true end)
+    # Task 01a08d5a stage 3 — a reconnect MOUNT is a fresh socket, so
+    # `assign_new` seeds `true` again there; the ETS overlay restores the
+    # committed pair. See `seed_media_intent/1` for the reasoning.
+    |> seed_guest_media_intent()
     |> assign(:screen_share_enabled, false)
     |> assign(:meeting_counts, %{})
     |> assign(:meeting_participants, [])
@@ -624,6 +725,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt,
      socket
      |> assign(:mic_enabled, new_mic)
+     |> persist_guest_media_intent()
      |> push_event("toggle-mic", %{})}
   end
 
@@ -633,6 +735,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt,
      socket
      |> assign(:camera_enabled, new_camera)
+     |> persist_guest_media_intent()
      |> push_event("toggle-camera", %{})}
   end
 
@@ -661,6 +764,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt,
      socket
      |> release_guest_topics()
+     |> clear_guest_media_intent()
      |> reset_meeting_state()
      |> push_event("leave-meeting", %{})}
   end
@@ -672,7 +776,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # reached WITHOUT `"meeting_leave"` having run. `release_guest_topics/1` is
   # idempotent, so the button path running both is fine.
   defp handle_guest_event("meeting_left", _params, socket) do
-    {:halt, socket |> release_guest_topics() |> reset_meeting_state()}
+    {:halt,
+     socket |> release_guest_topics() |> clear_guest_media_intent() |> reset_meeting_state()}
   end
 
   defp handle_guest_event("active_speakers", params, socket) do
@@ -1547,7 +1652,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
       # A fresh bar mount that just adopted us on `:meeting_joined` has no
       # mic/camera signal yet — emit the initial truth (both enabled per
-      # `reset_meeting_state/1`) so consumers don't render a stale snapshot.
+      # `reset_meeting_state/1` on a first join; the committed pair
+      # `seed_media_intent/1` restored on a reconnect join) so consumers
+      # don't render a stale snapshot. This also re-caches the pair onto
+      # the row `broadcast_joined/5` just rewrote.
       # `:meeting_left` on leave already drives consumers to reset, so we
       # do NOT emit a media_state event from `reset_meeting_state/1`.
       MeetingState.broadcast_media_state(user_id, %{

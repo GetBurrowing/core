@@ -455,6 +455,11 @@ defmodule PlatformWeb.MeetingLive do
       |> seed_calendar_now()
       |> assign(:meeting_slug, slug)
       |> assign(:token, token)
+      # Task 01a08d5a stage 3: the key `MeetingHooks.attach_guest/1` seeds
+      # committed mic/camera intent from across a reconnect mount. Derived
+      # from the INVITE token (the URL, which is what a reconnect arrives
+      # with) — `:token` is overwritten with the LiveKit token on entry.
+      |> assign(:guest_intent_key, Platform.Meetings.State.guest_intent_key(token))
 
     case Meetings.resolve_guest_invite(slug, token) do
       {:error, :expired} ->
