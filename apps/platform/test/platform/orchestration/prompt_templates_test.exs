@@ -44,6 +44,17 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
   # above: `mix ecto.migrate` only loads PENDING files, so after this migration
   # has been applied to the test DB its module is undefined in the VM and
   # `up/0` raises on the SECOND run.
+  # Same requirement as the others: `mix ecto.migrate` loads only PENDING
+  # files, so `up/0` is undefined in the VM on the SECOND run without this.
+  @auto_merge_conditional_migration Path.join([
+                                      __ENV__.file
+                                      |> Path.dirname()
+                                      |> Path.dirname()
+                                      |> Path.dirname()
+                                      |> Path.dirname(),
+                                      "priv/repo/migrations/20260911181500_force_update_deploying_template_auto_merge_conditional.exs"
+                                    ])
+
   @browser_session_migration Path.join([
                                __ENV__.file
                                |> Path.dirname()
@@ -57,6 +68,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     Code.require_file(@intent_classify_corrections_migration)
     Code.require_file(@deploying_branch_recovery_migration)
     Code.require_file(@browser_session_migration)
+    Code.require_file(@auto_merge_conditional_migration)
     :ok
   end
 
@@ -590,6 +602,94 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       refute rendered =~ "{{migration_slot_section}}"
       refute rendered =~ "## Reserved migration timestamp"
+    end
+  end
+
+  describe "default_content_for_slug/1 — dispatch.deploying" do
+    test "arming auto-merge is CONDITIONAL on the required contexts, not forbidden" do
+      # Until 2026-09-11 this template said arming was unsafe outright, because
+      # `main` required only `Test` — whose conclusion is `success` for a
+      # failed-then-retried run (01a08d81). `first-run-green` became required,
+      # which inverted the instruction, and a deployer following the served
+      # prompt had to be overridden by brief.
+      content = PromptTemplates.default_content_for_slug("dispatch.deploying")
+
+      # The absolute must be gone...
+      refute content =~ "you must NOT arm it yet",
+             "the template still forbids arming outright"
+
+      # ...but NOT replaced by the opposite absolute, which would be wrong
+      # again the next time branch protection changes. Assert the CONDITION is
+      # named, and that both required contexts are named with it — asserting
+      # only "first-run-green" would pass against the old body too, which
+      # mentions it three times while forbidding arming.
+      assert content =~ "first-run-green"
+      assert content =~ "Test"
+
+      assert Regex.match?(~r/required status checks.{0,200}first-run-green/is, content) or
+               Regex.match?(~r/required contexts.{0,200}first-run-green/is, content),
+             "arming must be tied to verifying main's required checks, not stated as a bare permission"
+    end
+
+    test "keeps the checks that survived the rewrite" do
+      # The section was rewritten in place rather than appended to, so these
+      # are the rules that could have been dropped silently.
+      content = PromptTemplates.default_content_for_slug("dispatch.deploying")
+
+      assert content =~ "ANNOTATIONS", "the retry-sentinel rule was lost"
+      assert content =~ "initial mix test failed"
+      assert content =~ "ProofOfLifeTest", "the known-flake list was lost"
+      assert content =~ "mergedAt", "the verify-the-field rule was lost"
+
+      # Added by the rewrite: a merged `--delete-branch` from a worktree skips
+      # the REMOTE delete (found on #1012).
+      # The remote-branch check is NOT asserted here on purpose. It is
+      # per-REPOSITORY — a two-repo deploy must check two remotes — so it
+      # lives in `merge_instruction/2` alongside the merge step, not in the
+      # body. Asserting it here would re-create the divergence task 019fa63a
+      # removed, and the existing `@recovery_marker` guard catches it.
+      refute content =~ "ls-remote",
+             "per-repository strategy prose must not be pasted into the body"
+    end
+
+    test "the descriptor still INTERPOLATES the ack preamble rather than freezing it" do
+      # This slug's descriptor contains `\#{task_ack_preamble}`. Replacing the
+      # descriptor wholesale with a live row — safe for review_e2e, which has
+      # no interpolation — would freeze an expanded preamble into a literal and
+      # detach this template from the shared ack text. The rendered body must
+      # therefore still carry the preamble's content, not the literal token.
+      content = PromptTemplates.default_content_for_slug("dispatch.deploying")
+
+      refute content =~ "\#{task_ack_preamble}",
+             "the interpolation leaked through as a literal — the descriptor was frozen"
+
+      assert content =~ "suite_task_ack",
+             "the ack preamble did not expand into the body"
+    end
+
+    test "the force-update migration actually rewrites a STALE row" do
+      # As with the review_e2e sibling: a fresh DB seeds the current descriptor,
+      # so `up/0` rewrites an already-correct row and would pass against a no-op.
+      stale = "STALE BODY — still says you must NOT arm it yet"
+
+      template = PromptTemplates.get_template_by_slug("dispatch.deploying")
+      assert template, "dispatch.deploying row must exist for this test to mean anything"
+
+      {:ok, _} = PromptTemplates.update_template(template, %{content: stale})
+
+      assert PromptTemplates.get_template_by_slug("dispatch.deploying").content == stale,
+             "precondition failed: the row was not actually made stale"
+
+      :ok = Platform.Repo.Migrations.ForceUpdateDeployingTemplateAutoMergeConditional.up()
+
+      repaired = PromptTemplates.get_template_by_slug("dispatch.deploying").content
+
+      refute repaired == stale, "the migration left the stale body in place"
+
+      assert repaired == PromptTemplates.default_content_for_slug("dispatch.deploying"),
+             "the migration must write the descriptor body verbatim"
+
+      refute repaired =~ "must NOT arm it yet"
     end
   end
 

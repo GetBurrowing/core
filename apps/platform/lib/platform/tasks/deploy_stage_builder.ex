@@ -656,9 +656,12 @@ defmodule Platform.Tasks.DeployStageBuilder do
       "this PR, and nothing arms it except an explicit `gh pr merge --auto`. Check " <>
       "`gh pr view <n> --json autoMergeRequest` before relying on it; if it is null, " <>
       "merge by hand and verify `mergedAt`. Do not assume it is armed on the strength " <>
-      "of this sentence. The deployer must not arm it while the required checks cannot " <>
-      "distinguish a first-run green from a retry green: wait for CI in the foreground, " <>
-      "read the run's annotations for the retry sentinel, and merge by hand once green. " <>
+      "of this sentence. Arming is safe ONLY while the default branch's required status " <>
+      "checks include BOTH `Test` and `first-run-green` — the latter is what makes a " <>
+      "failed-then-retried `Test` run block the merge (ticket 01a08d81). Verify that " <>
+      "rather than assume it; it is branch configuration and can change. If it does not " <>
+      "hold, wait for CI in the foreground, read the run's annotations for the retry " <>
+      "sentinel, and merge by hand once green. " <>
       "`pr_merged` is passed by the pull_request.closed webhook."
   end
 
