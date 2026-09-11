@@ -508,6 +508,10 @@ jobs:
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Task 01a089d5: the Dockerfile writes GIT_SHA to priv/build_commit, which
+          # /health reports. On a push event github.sha is the commit being built.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             docker.io/example/suite-core:latest
             docker.io/example/suite-core:${{ github.sha }}
@@ -522,6 +526,10 @@ jobs:
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Task 01a089d5: the Dockerfile writes GIT_SHA to priv/build_commit, which
+          # /health reports. On a push event github.sha is the commit being built.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             docker.io/example/suite-core:${{ steps.vars.outputs.branch_tag }}
             docker.io/example/suite-core:${{ github.sha }}

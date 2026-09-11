@@ -13,6 +13,13 @@ RUN mix local.hex --force && mix local.rebar --force
 
 ENV MIX_ENV=prod
 
+# Build identity (task 01a089d5). CI passes the commit it is building from;
+# a local `podman build` without the arg gets "unknown". The value ships as a
+# FILE inside the release (see below), never as a runtime env var, so it
+# cannot be overridden by an EnvironmentFile and does not appear in
+# `podman inspect .Config.Env` next to the secrets.
+ARG GIT_SHA
+
 COPY apps/platform/mix.exs apps/platform/mix.lock ./
 RUN mix deps.get --only $MIX_ENV
 RUN mix deps.compile
@@ -28,8 +35,12 @@ COPY apps/platform/lib lib
 # unreachable and the drift check silently reports "no decisions".
 #
 # This COPY must stay ABOVE `mix release` — the release snapshots `priv/` as
-# it runs, so a copy landing afterwards ships nothing.
+# it runs, so a copy landing afterwards ships nothing. The same holds for the
+# `priv/build_commit` write below: it is what `Platform.BuildInfo.commit/0`
+# reads and `/health` reports, and it has to be in `priv/` before the release
+# snapshots it. `Platform.BuildInfoTest` guards the ordering.
 COPY docs/decisions priv/adr_decisions
+RUN printf '%s' "${GIT_SHA:-unknown}" > priv/build_commit
 
 RUN cd assets && npm ci
 RUN mix assets.deploy
@@ -38,6 +49,13 @@ RUN mix release
 
 # ── Stage 2: Runtime ──────────────────────────────────────────
 FROM elixir:1.19.5-otp-28-slim AS app
+
+# Same build arg re-declared for this stage (ARGs do not cross stages) so the
+# image carries its commit as an OCI label:
+#   podman inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+# answers without dumping the environment.
+ARG GIT_SHA
+LABEL org.opencontainers.image.revision="${GIT_SHA:-unknown}"
 
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \
