@@ -1616,12 +1616,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     #{strategy_instructions}
 
     ### Deploy boundaries
-    - Do NOT modify code — if CI fails, report a blocker so the task returns to in_progress
+    - If CI fails on the deploy branch, there is ONE rule. Read the failing job log first. If the failure is inside this task's own diff, or it is a flaky test with a documented retry (an existing retry step, a known-flake note in org memory, or an identical pass on re-run), fix forward on the same task branch: make the smallest change that turns it green, push, and wait for CI to go green, then continue the merge. Do not touch code outside the task's diff. Only if the failure needs a plan change (the fix would add scope, change a design decision, or touch files no stage in the plan owns) call `task_update` with status `in_progress` and a comment naming the failing job and why a plan change is needed; that is what returns the task to the implementer. Do NOT file `report_blocker` for a red CI: a blocker does not move the task out of `deploying`, and the task stays wedged.
     - Do NOT re-run tests or lint locally — CI handles that
     - The branch is already pushed from execution; your job is to get it merged and deployed
 
     Push evidence using validation_pass as you complete each deploy step.
-    Use report_blocker if you are stuck or the deploy fails.
+    Use report_blocker only when the deploy itself cannot proceed for a reason outside your reach (a missing repository, a protected branch you cannot merge, a webhook that never fires), and follow the blocker discipline in the preamble.
 
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
 

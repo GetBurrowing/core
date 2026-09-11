@@ -39,6 +39,13 @@ defmodule Platform.Repo.Migrations.ForceUpdateReviewE2eTemplateCouldNotEvaluateT
                     "priv/repo/migrations/20260812230100_force_update_review_e2e_template_could_not_evaluate.exs"
                   ])
 
+  @superseding_module Platform.Repo.Migrations.ForceUpdatePromptTemplatesSyncLiveRows20260910
+
+  @superseding_path Path.join([
+                      Path.dirname(@migration_path),
+                      "20260911003000_force_update_prompt_templates_sync_live_rows_2026_09_10.exs"
+                    ])
+
   @stale_content "STALE E2E BODY {{pending_e2e_validations_json}} — two verdicts only."
 
   setup do
@@ -81,14 +88,32 @@ defmodule Platform.Repo.Migrations.ForceUpdateReviewE2eTemplateCouldNotEvaluateT
       refute reloaded.content == @stale_content
     end
 
-    test "writes exactly the shipped descriptor body" do
+    # The 2026-08-12 literal is frozen forever; the 2026-09-11 sync migration
+    # (`20260911003000_force_update_prompt_templates_sync_live_rows_2026_09_10`)
+    # supersedes it. So the descriptor is pinned to the SUPERSEDING migration's
+    # output, not to this one's literal — the literal is asserted only as the
+    # before-state the superseding migration must visibly change.
+    test "writes the frozen 2026-08-12 body, which the 2026-09-11 sync migration supersedes to the shipped descriptor" do
+      unless Code.ensure_loaded?(@superseding_module) do
+        Code.require_file(@superseding_path)
+      end
+
       stale_the_row!()
       assert :ok = @migration_module.up()
+      frozen = PromptTemplates.get_template_by_slug(@slug).content
+
+      assert frozen =~ ReviewDisposition.marker()
+
+      refute frozen == PromptTemplates.default_content_for_slug(@slug),
+             "the frozen 2026-08-12 literal now equals the descriptor — the supersession " <>
+               "below is no longer exercising anything; re-pin this test to the newest migration"
+
+      assert :ok = @superseding_module.up()
 
       assert PromptTemplates.get_template_by_slug(@slug).content ==
                PromptTemplates.default_content_for_slug(@slug),
-             "the frozen literal in the migration has drifted from the descriptor — " <>
-               "the suite pins these equal, so one of the two was edited alone"
+             "the superseding migration must write exactly the descriptor body — " <>
+               "one of the two was edited alone"
     end
 
     test "is idempotent" do

@@ -242,7 +242,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                "3. **Reference the resolved brand identity in implementation stage descriptions** — name the semantic token slots the coder must use (primary/on-primary, accent, surface, muted, border, destructive), not raw hex and not \"match the brand\". If the project is in exploring mode, say so in the stage description instead."
 
       assert content =~
-               "4. Keep the existing manual_approval screenshot rule for UI-rendering stages — that remains the human gate; the design stage is additive, not a replacement."
+               "4. Keep the screenshot-canvas evidence instruction on UI-rendering stages (no `manual_approval` — planners never create one); the design stage is additive, not a replacement."
     end
 
     test "the live dispatch.planning row serves the retargeted section, not just the code default (task 019f9b29-5ecd stage 6)" do

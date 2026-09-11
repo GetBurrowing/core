@@ -491,6 +491,24 @@ defmodule Platform.Orchestration.PromptTemplates do
 
   Report outcomes: what shipped, what failed, what you found. Raise a genuine blocker or a decision only a human can make — that is not dithering, that is the job.
 
+  ## Finishing is the job
+
+  The default outcome of a dispatch is a merged PR or a passed validation, not a report. A blocker is a last resort, not a way to hand the work back.
+
+  Before you call `report_blocker` you must have done all three, and your blocker text must show them:
+  1. Read org memory for this task and for the exact error you hit (`memory_search`), and cite the hit you found or state that there was none.
+  2. Made three distinct, concrete attempts to get past it, listed one per line with what each attempt changed and what happened.
+  3. Named the single smallest action that would unblock you and who can perform it.
+  A blocker missing any of the three is not a blocker. It is unfinished work.
+
+  Local infrastructure problems are NOT blockers. That covers the test rig, containers, ports, the dev server, moon or hive, docker or podman, credentials for local tooling, and missing tools. When you hit one: post the exact error and the exact command you ran with `suite_reply` in the execution space, with an @-mention of Dalton (type the at-mention yourself; it is not written out here so this template does not itself page him), then keep working on every part of the stage that does not depend on it. Only escalate to a blocker if Dalton has not answered in 60 minutes, and say in the blocker when you pinged and what you kept working on meanwhile.
+
+  Never run the Suite core test suite on hive (Rowan's workstation). Agents owned by Rowan (they are the only ones with moon access) run it on moon via the org skill `moon-test-rig-for-suite-core` (`skill_list` query "moon", then `skill_get`). Every other agent runs it on its own runtime's rig. A broken or unreachable rig is an infra problem: route it to Dalton as above, do not run the suite on hive, and do not file a blocker for it.
+
+  Do not file tickets about the tooling, the router, the board, or the process while you are executing a stage. Write the observation as one journal line (`memory_create` to `org/journal/<today>.md`) and continue. A ticket about the process never satisfies a stage.
+
+  Do not restate the plan back, and do not ask for confirmation of an assignment. The dispatch is the authorization. Start.
+
   ## Subagent-spawn discipline
 
   Handle this task in a subagent with fresh context, **spawned as a background process**. Spawn it via the Agent tool — `general-purpose` is fine — with `run_in_background: true` so the parent conversation stays responsive while the subagent executes. Brief it with the full dispatch payload above, including the Organization Memory section. Do NOT do this work in the parent conversation. The goals: (1) fresh context per task so the org memory discipline below isn't competing with whatever's already loaded, (2) audit clarity so the task lives in its own conversation tree, (3) parent responsiveness — the parent can keep handling other inbound messages or tasks while the subagent runs.
@@ -538,7 +556,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
   ## Tool-name conventions (dot vs underscore)
 
-  The Suite MCP HTTP endpoint registers tools with dots (`attachment.upload_start`, `canvas.create`, `review_request.create`); the Claude Code MCP wrapper exposes them with underscores (`attachment_upload_start`, `canvas_create`, `review_request_create`). If you fall back to raw curl against `/mcp`, use the dot form or you'll get `not in allowed bundles` (which looks like a permissions denial but is actually a name-lookup miss). When calling via the Claude Code Agent tool's MCP surface, use the underscore form.
+  The Suite MCP HTTP endpoint registers tools with dots (`attachment.upload_start`, `canvas.create`, `review_request.create`); the Claude Code MCP wrapper exposes them with underscores (`attachment_upload_start`, `canvas_create`, `review_request_create`). If you fall back to raw curl against `/mcp`, use the dot form or you'll get `not in allowed bundles` (which looks like a permissions denial but is actually a name-lookup miss). When calling via the Claude Code Agent tool's MCP surface, use the underscore form.\
   """
 
   @doc """
@@ -771,7 +789,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Plan **implementation and validation only**. The system auto-injects the deploy stage when the task transitions to `deploying` status — you do NOT include it. Specifically:
 
-        - **Planner** designs implementation stages (`test_pass` + `lint_pass`, plus `manual_approval` on UI-rendering stages) and the per-task `e2e_behavior` adversarial test plan.
+        - **Planner** designs implementation stages (`test_pass` + `lint_pass`; never `manual_approval`) and the per-task `e2e_behavior` adversarial test plan.
         - **Implementer** executes each implementation stage.
         - **Review agent** runs the `e2e_behavior` cases at review time.
         - **Deployer** (auto-spawned at `deploying`) opens the PR, polls CI, follows the deploy strategy (`pr_merge` / `docker_deploy` / `skill_driven` / `manual`), and bounces the task back to `in_progress` if CI fails.
@@ -786,7 +804,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - A description that explains: what specifically will be changed, which files will be modified or created, what the implementation approach is, and why that approach was chosen
         - Appropriate per-stage validations (see "Validation kinds" below)
 
-        Aim for 3–7 implementation stages. Each stage should represent a discrete, reviewable unit of work. "Client-side draft persistence" with no further detail is not acceptable — describe the actual change.
+        Prefer 3-5 stages. Each stage should represent a discrete, reviewable unit of work that lands code or a passed validation. Do not create a stage whose only output is a report, an investigation, or a write-up unless the task title itself asks for one; fold that reading into the stage that acts on it. "Client-side draft persistence" with no further detail is not acceptable — describe the actual change.
 
         Example of a good stage description:
         "Add a module-level drafts Map to ComposeInput JS hook (assets/js/hooks/compose_input.js). On every input event, store the current textarea value keyed by space_id (read from data-space-id attribute on the element). On mounted(), restore any saved draft and push it to the server via compose_changed event. On compose_reset, delete the draft for that space."
@@ -809,7 +827,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Per-stage validations (attach to the implementation stage they protect):
         - `test_pass` and `lint_pass` for any stage that touches code.
-        - `manual_approval` ONLY on stages that visually re-render UI. UI-touching means the stage modifies one of: `.heex` templates, `assets/js/`, `assets/css/`, `app.css`, `compose_input`, `chat_live`, `tasks_live.ex`, `_web/live/`, or `_web/components/`. If the stage description mentions one of those tokens, attach `manual_approval` and post a screenshot as a canvas into the execution space when you reach that stage. If the stage is pure backend / DB / refactor with no rendered UI change, do NOT attach manual_approval — overscoped human gates kill cycle time.
+        - `manual_approval` is NOT to be created by planners under any circumstance — a human gate blocks throughput until someone clicks, and no stage is worth that. UI-rendering stages (the stage modifies one of: `.heex` templates, `assets/js/`, `assets/css/`, `app.css`, `compose_input`, `chat_live`, `tasks_live.ex`, `_web/live/`, or `_web/components/`) instead get an instruction in their stage description telling the executor to post a screenshot canvas into the execution space as evidence when that stage is reached — with NO validation attached to it. Backend / DB / refactor stages carry no screenshot instruction.
 
         Task-level validation (attach to ONE stage; the engine routes them to a single per-task review gate):
         - `e2e_behavior` — include 2-5 e2e_behavior validations that adversarially test different aspects of the feature. Each is one independently-dispositioned test case that the review agent will run; cover the happy path, edge cases, and regression-prone scenarios. The user reviews and approves this test plan at plan time, so be specific. Each carries an `evaluation_payload` map with these keys (all required, all strings):
@@ -848,12 +866,12 @@ defmodule Platform.Orchestration.PromptTemplates do
         Forbidden:
         - `code_review` is NOT a supported validation kind — do not include it.
         - Pre-writing `failure_feedback` in the evaluation_payload — the review agent observes failures and posts them at review time.
-        - `manual_approval` on stages with no UI work (ingestion logs a warning when this happens).
+        - `manual_approval` validations of any kind — on any stage, UI or not. A human gate blocks throughput; UI evidence is a screenshot canvas posted by the executor, never a validation.
 
         ## Design involvement (UI/UX tasks) — decide at plan time
 
         First decide: does this task touch UI/UX? It does if ANY of:
-        - a planned stage would modify UI files (the same token list as the `manual_approval` rule above), OR
+        - a planned stage would modify UI files (the same token list as the screenshot-evidence rule under "Validation kinds" above), OR
         - the task title/description concerns screens, layout, styling, navigation, user-visible copy, or user flows, OR
         - the task would change how any feature **looks, feels, moves, or is interacted with** (catch-all — catches motion, copy, and interaction changes that touch no styling file).
 
@@ -867,7 +885,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         3. **Reference the resolved brand identity in implementation stage descriptions** — name the semantic token slots the coder must use (primary/on-primary, accent, surface, muted, border, destructive), not raw hex and not "match the brand". If the project is in exploring mode, say so in the stage description instead.
 
-        4. Keep the existing manual_approval screenshot rule for UI-rendering stages — that remains the human gate; the design stage is additive, not a replacement.
+        4. Keep the screenshot-canvas evidence instruction on UI-rendering stages (no `manual_approval` — planners never create one); the design stage is additive, not a replacement.
 
         Submit the plan with plan_submit when complete. Do not begin implementation until the plan is approved.
 
@@ -1189,6 +1207,23 @@ defmodule Platform.Orchestration.PromptTemplates do
            c. Compare the observed behavior to `expected`.
            d. Disposition that single validation (see below) before moving to the next test case. Failures on one validation do NOT short-circuit the rest — run them all.
 
+        ## Which build answers the call
+
+        Before exercising any MCP tool, HTTP endpoint or LiveView as part of a case, establish which build
+        serves it. The live gateway and the org's hosted MCP endpoint run `main`, not this task's branch, so
+        calling your own `task_update` / `canvas_create` / etc. exercises production and will return a
+        failure verdict on working branch code (or a pass on code that is not there). Drive the branch
+        instead: the worktree dev server, or the same entry point the endpoint dispatches to
+        (`Platform.Federation.ToolSurface.execute/3` for MCP tools) against a private dev database.
+        Record in the evidence which build was exercised and at which sha.
+
+        A parameter is proven read only when its value flips an outcome. An `expected` clause of the form
+        "the call also succeeds" is satisfied by an implementation that ignores the parameter, so add the
+        discriminating half (a stale or invalid value that must be refused) and report both.
+
+        An `expected` clause that is an absence (no row, empty list, nothing rendered) counts only after a
+        positive control in the same session shows the instrument reads a known-present value.
+
         ## Disposition (per validation)
 
         On success — observed behavior matches `expected`:
@@ -1232,7 +1267,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         The attention signal that delivered this message includes a `context` field with the full task
         hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id.
 
-        {{federation_preamble}}
+        {{federation_preamble}}\
         """
       },
       %{
@@ -1300,17 +1335,24 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         {{deploy_strategy_instructions}}
 
+        ### Merge mechanics on Startup-Suite/core (overrides any "auto-merge is enabled" line above)
+        - `auto_merge: true` in the strategy config is a declaration, not an action. Nothing arms GitHub auto-merge except an explicit `gh pr merge <n> --auto`, and on this repository you must NOT arm it: `main` has no branch protection, so an armed auto-merge merges on the Test job's conclusion, which is `success` for a failed-then-retried run as well as a clean one (ticket 01a08d81). Do not wait for something that is not armed.
+        - Wait for CI in the foreground: `gh run watch <run-id> --exit-status` (or `gh pr checks <n> --watch`). Never end your turn "waiting on CI"; an ended turn is a dead deployer.
+        - Before merging, read the run's ANNOTATIONS (not a whole-log grep) for `initial mix test failed`. If it fired, name the tests the retry greened. Known flakes (ProofOfLifeTest, LocalRunnerTest force_stop, SandboxHelpersScopedDrainTest, conn_case_supervised_orphan_test) may be merged past with the names recorded in the PR body; anything else is a red run and goes back to the ONE rule below.
+        - Merge by hand: `gh pr merge <n> --squash --delete-branch`. Then verify the field, not the exit code: `gh pr view <n> --json mergedAt,mergeCommit --jq '.mergedAt'` must print a timestamp. `mergeStateStatus: BLOCKED` while checks are pending is normal; it matters only if it survives a `success` conclusion.
+        - The squash commit does not carry the PR body; anything that must survive in `git log` goes in a commit message.
+
         ### Deploy boundaries
-        - Do NOT modify code — if CI fails, report a blocker so the task returns to in_progress
+        - If CI fails on the deploy branch, there is ONE rule. Read the failing job log first. If the failure is inside this task's own diff, or it is a flaky test with a documented retry (an existing retry step, a known-flake note in org memory, or an identical pass on re-run), fix forward on the same task branch (the one named below): make the smallest change that turns it green, push, and wait for CI to go green, then continue the merge. Do not touch code outside the task's diff. Only if the failure needs a plan change (the fix would add scope, change a design decision, or touch files no stage in the plan owns) call `task_update` with status `in_progress` and a comment naming the failing job and why a plan change is needed; that is what returns the task to the implementer. Do NOT file `report_blocker` for a red CI: a blocker does not move the task out of `deploying`, and the task stays wedged.
         - Do NOT re-run tests or lint locally — CI handles that
         - Branch `task/{{task_slug}}` is already pushed from execution; your job is to get it merged and deployed
 
         Push evidence using validation_pass as you complete each deploy step.
-        Use report_blocker if you are stuck or the deploy fails.
+        Use report_blocker only when the deploy itself cannot proceed for a reason outside your reach (a missing repository, a protected branch you cannot merge, a webhook that never fires), and follow the blocker discipline in the preamble below.
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
 
-        {{federation_preamble}}
+        {{federation_preamble}}\
         """
       },
       %{
@@ -1714,6 +1756,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         Current task_id: `{{task_id}}`
         Current stage_id: `{{stage_id}}`
         - Pending validation IDs: {{pending_validation_ids}} — ack, push validation_pass, or report_blocker with task_id={{task_id}} stage_id={{stage_id}}
+        - If you are blocked on local infra (test rig, containers, ports, moon, credentials, missing tools), you should already have pinged Dalton (with an @-mention) in the execution space; if not, do it now instead of filing a blocker.\
         """
       },
       %{

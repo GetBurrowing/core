@@ -492,8 +492,11 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       # blocker instruction specific to deploy
       assert prompt =~ "do NOT attempt code fixes"
 
-      # Deploy boundaries — no code modification, no local test re-runs
-      assert prompt =~ "Do NOT modify code"
+      # Deploy boundaries — fix-forward inside the task's diff only, no local
+      # test re-runs (the "Do NOT modify code" line was replaced by the ONE
+      # rule on 2026-09-10; task_update to in_progress is the plan-change path)
+      assert prompt =~ "Do not touch code outside the task's diff"
+      assert prompt =~ "call `task_update` with status `in_progress`"
       assert prompt =~ "Do NOT re-run tests or lint locally"
       assert prompt =~ "branch is already pushed from execution"
     end
