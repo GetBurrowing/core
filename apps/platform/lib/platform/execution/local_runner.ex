@@ -51,7 +51,27 @@ defmodule Platform.Execution.LocalRunner do
              args: args,
              env: env_overrides
            ) do
-      {:ok, LocalProcessWrapper.provider_ref(wrapper)}
+      case LocalProcessWrapper.provider_ref(wrapper) do
+        {:ok, ref} ->
+          {:ok, ref}
+
+        # The child exited before we could ask the wrapper about it, so the
+        # wrapper is already gone. Everything the ref carries is data we still
+        # hold here, except `os_pid` — and that child is already reaped, so
+        # `nil` is the honest value rather than a loss. `request_stop/2`,
+        # `force_stop/2` and `describe_run/2` all already handle a wrapper that
+        # has exited.
+        {:error, :wrapper_exited} ->
+          {:ok,
+           %{
+             provider: :local,
+             run_id: run.id,
+             workspace_root: workspace.root,
+             workspace_path: workspace.path,
+             wrapper_pid: wrapper,
+             os_pid: nil
+           }}
+      end
     end
   end
 

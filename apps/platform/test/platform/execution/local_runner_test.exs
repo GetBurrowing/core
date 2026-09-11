@@ -125,6 +125,88 @@ defmodule Platform.Execution.LocalRunnerTest do
 
       _ = ref
     end
+
+    # ------------------------------------------------------------------------
+    # Regression: a wrapper that has ALREADY exited normally.
+    #
+    # The wrapper stops with `:normal` as soon as the child's exit_status
+    # arrives, so a fast command can kill it inside the window between
+    # `start_link/1` and the `:provider_ref` call. Before the fix, that window
+    # surfaced as `** (exit) exited in: GenServer.call(..., :provider_ref,
+    # 5000) ** (EXIT) normal` raised out of `LocalRunner.spawn_run/2`.
+    # ------------------------------------------------------------------------
+
+    test "provider_ref/1 returns {:error, :wrapper_exited} for a wrapper that already exited" do
+      run_id = unique_run_id()
+      root = temp_dir("already-exited-root")
+      ready_file = Path.join(root, "#{run_id}.ready")
+      state_file = Path.join(root, "#{run_id}.state")
+      workspace = Path.join(Path.expand(root), run_id)
+      File.mkdir_p!(workspace)
+
+      {:ok, wrapper} =
+        LocalProcessWrapper.start_link(
+          run_id: run_id,
+          run_server: self(),
+          workspace_root: Path.expand(root),
+          workspace_path: workspace,
+          command: "/bin/sh",
+          args: [@helper_script, "exit0", ready_file, state_file],
+          env: []
+        )
+
+      # Await the death rather than racing it: once this passes, the exit has
+      # ALREADY happened, so the assertion below is deterministic.
+      assert_eventually(fn -> !Process.alive?(wrapper) end, 2_000)
+
+      assert LocalProcessWrapper.provider_ref(wrapper) == {:error, :wrapper_exited}
+    end
+
+    test "provider_ref/1 converts a :normal exit (the in-window race) to {:error, :wrapper_exited}" do
+      # The two catch clauses are reached by DIFFERENT signatures and only one
+      # of them is the one from the ticket. The test above awaits the wrapper's
+      # death, so its call finds no process at all and exits `{:noproc, _}`.
+      # The reported production failure is the other one: the wrapper is still
+      # alive when `GenServer.call` installs its monitor and dies `:normal`
+      # before replying, which exits `{:normal, _}` — the literal
+      # `** (EXIT) normal` in the trace at local_runner.ex:54.
+      #
+      # This stands up that exact ordering deterministically, with no sleep and
+      # no production seam: a bare process that waits for the `:provider_ref`
+      # call to arrive and then exits normally without replying. It is a stub
+      # server rather than a real wrapper, so what it proves is scoped
+      # accordingly — that `provider_ref/1` absorbs a `:normal` exit — not
+      # anything about wrapper internals.
+      test_pid = self()
+
+      server =
+        spawn(fn ->
+          receive do
+            {:"$gen_call", _from, :provider_ref} ->
+              send(test_pid, :call_received)
+              :ok
+          end
+        end)
+
+      assert LocalProcessWrapper.provider_ref(server) == {:error, :wrapper_exited}
+      assert_received :call_received
+    end
+
+    test "provider_ref/1 does NOT swallow an abnormal wrapper crash" do
+      # The mirror of the two tests above, and the reason the catch is written
+      # with two explicit clauses instead of a catch-all: a wrapper that dies
+      # for a real reason is a genuine spawn failure, and converting it to
+      # {:error, :wrapper_exited} would turn a bug into a silent success.
+      server =
+        spawn(fn ->
+          receive do
+            {:"$gen_call", _from, :provider_ref} -> exit(:boom)
+          end
+        end)
+
+      assert catch_exit(LocalProcessWrapper.provider_ref(server)) ==
+               {:boom, {GenServer, :call, [server, :provider_ref, 5000]}}
+    end
   end
 
   # ---------------------------------------------------------------------------

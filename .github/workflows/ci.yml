@@ -229,7 +229,55 @@ jobs:
           # reproductions of the provider timeout bug from task 01a0826f.
           # Removing it silently shrinks the suite. `Platform.SlowTestsTest`
           # asserts this flag is still spelled here.
-          mix test --include slow || (echo "::warning::initial mix test failed; retrying failed tests serially" && mix test --failed --max-cases 1 --include slow)
+          # Exit-status capture, and it is load-bearing: `mix test | tee log`
+          # reports TEE's status, not mix's, so a naive `|| retry` would never
+          # fire and every first-pass failure would look green. `set -o pipefail`
+          # inside an `if !` is what makes the pipeline report mix's status
+          # (the `if` context also suspends the default `bash -e` errexit, so a
+          # red first pass reaches the retry instead of aborting the step).
+          set -o pipefail
+          first_pass_log="${RUNNER_TEMP:-.}/mix-test-first-pass.log"
+
+          if ! mix test --include slow 2>&1 | tee "$first_pass_log"; then
+            # Harvest the failed test names from the FIRST pass's ExUnit failure
+            # blocks. Not the `--failed` manifest: that file
+            # (`_build/test/lib/platform/.mix/.mix_test_failures`) is an Erlang
+            # external-term-format binary, it is not shell-readable, and it
+            # carries module + test name + file but NO line number.
+            failed_tests=$(
+              awk '
+                /^[[:space:]]*[0-9]+\) (test|doctest) /{
+                  hdr=$0; sub(/^[[:space:]]*[0-9]+\) /,"",hdr); want=1; next
+                }
+                want && /\.exs:[0-9]+[[:space:]]*$/{
+                  loc=$0; sub(/^[[:space:]]*/,"",loc); sub(/[[:space:]]*$/,"",loc)
+                  print loc " — " hdr; want=0
+                }
+              ' "$first_pass_log" | sort -u
+            )
+            if [ -z "$failed_tests" ]; then
+              failed_tests="(no test names harvested from the first-pass log — the failure was probably not an ExUnit assertion)"
+            fi
+
+            # Annotations are single-line; %0A is GitHub's newline escape.
+            echo "::warning::initial mix test failed; retrying failed tests serially. First pass failed these tests:%0A$(echo "$failed_tests" | sed 's/$/%0A/' | tr -d '\n')"
+
+            if mix test --failed --max-cases 1 --include slow; then
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                {
+                  echo "### Retry-greened tests"
+                  echo
+                  echo "These tests failed on the first \`mix test --include slow\` pass and passed on the serial retry. The build is green, but each one is a flake that would otherwise be invisible."
+                  echo
+                  echo "$failed_tests" | sed 's/^/- /'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              exit 0
+            else
+              echo "::error::initial mix test failed and the serial retry did NOT fix it. See the failures above."
+              exit 1
+            fi
+          fi
 
       # Task 019f9d80. `Platform.Audit.HistorianLatencyTest` used to detach the
       # VM-global `Platform.Audit.TelemetryHandler` and never put it back, which

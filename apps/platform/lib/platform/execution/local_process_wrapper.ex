@@ -53,8 +53,29 @@ defmodule Platform.Execution.LocalProcessWrapper do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @spec provider_ref(pid()) :: provider_ref()
-  def provider_ref(server), do: GenServer.call(server, :provider_ref)
+  @doc """
+  Fetch the provider ref from a wrapper.
+
+  A wrapper whose child command exits terminates with `{:stop, :normal, state}`
+  (see `handle_info({port, {:exit_status, _}}, state)`), so a short-lived
+  command can leave the wrapper dead in the window between `start_link/1`
+  returning and this call being issued. `GenServer.call/2` against a process
+  that dies with `:normal` after the monitor is installed exits `{:normal, _}`,
+  and against an already-dead process exits `{:noproc, _}`. Both mean the same
+  thing to a caller: the run finished before we could ask about it.
+
+  Those two exits — and ONLY those two — are converted to
+  `{:error, :wrapper_exited}`. An abnormal wrapper crash still propagates,
+  because that is a genuine spawn failure and swallowing it would turn a real
+  bug into a silent success.
+  """
+  @spec provider_ref(pid()) :: {:ok, provider_ref()} | {:error, :wrapper_exited}
+  def provider_ref(server) do
+    {:ok, GenServer.call(server, :provider_ref)}
+  catch
+    :exit, {:normal, _} -> {:error, :wrapper_exited}
+    :exit, {:noproc, _} -> {:error, :wrapper_exited}
+  end
 
   @spec describe(pid()) :: {:ok, map()} | {:error, term()}
   def describe(server), do: GenServer.call(server, :describe)
