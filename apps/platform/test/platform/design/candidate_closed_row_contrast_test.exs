@@ -72,7 +72,12 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
 
   use ExUnit.Case, async: true
 
+  import Phoenix.LiveViewTest
+
+  alias Platform.Design.CssRules
   alias Platform.Design.WcagContrast, as: W
+  alias Platform.Meetings.MeetingCandidate
+  alias PlatformWeb.Components.Meetings.CandidateRail
 
   @css_path "assets/css/app.css"
   @rail_path "lib/platform_web/components/meetings/candidate_rail.ex"
@@ -146,20 +151,46 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
     {".candidate-card__reason", "color", "the closed row's reason line (11px/400)"}
   ]
 
+  # The light-theme figures `app.css` records for the two slots above, quoted
+  # in failure text only. The pins themselves are the AA clauses below, which
+  # recompute; these strings exist so a red names what a slot-level fade
+  # would silently drop.
+  @pinned %{
+    ".candidate-card__title--dead" => "6.2274:1",
+    ".candidate-card__reason" => "4.9127:1"
+  }
+
+  @now ~U[2026-09-01 12:00:00.000000Z]
+
   setup_all do
     css = File.read!(@css_path)
 
     light = theme_tokens(css, :light)
     dark = theme_tokens(css, :dark)
 
+    # The closed row and its two text slots, RENDERED rather than typed here,
+    # so the rule matcher below is judged against the markup the browser gets
+    # (real ancestors included) and a drift in `closed_card/1` reds at the
+    # `query!` rather than being quietly matched against nothing.
+    html = closed_row_html()
+    article = query!(html, "[data-role='meeting-candidate-closed-card']")
+
+    slots =
+      Map.new(@card_slots, fn {selector, _property, _label} ->
+        {selector, element(query!(article, selector))}
+      end)
+
     {:ok,
      css: css,
+     rules: CssRules.rules(css),
      tokens: %{light: light, dark: dark},
      ground: %{
        light: ground(light),
        dark: ground(dark)
      },
-     closed_rule: rule_body!(css, ".candidate-card--closed")}
+     closed_rule: rule_body!(css, ".candidate-card--closed"),
+     closed_element: element(article),
+     slots: slots}
   end
 
   # ── 1. the converter, before anything below is trusted ────────────────────
@@ -234,6 +265,27 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
                "does, not by fading it."
     end
 
+    test "no rule matching the closed row or its text slots declares opacity", ctx do
+      # The clause above reads ONE rule body by name. A fade can also arrive
+      # on a rule that merely APPLIES to the row — `.candidate-card`, a
+      # `@media` override, a `:hover` — or on the text slots themselves:
+      # `.candidate-card__reason { opacity: .7 }` drops the reason line's
+      # pinned 4.9127:1 without touching `.candidate-card--closed`, and the
+      # clause above cannot see it. So this one asks the browser's question
+      # over the rendered elements: which rules match, and does any declare
+      # `opacity`? Each match set is asserted non-empty first — an empty set
+      # is a broken matcher, not a clean row.
+      assert_no_fade(ctx.rules, ctx.closed_element, "the closed row (`.candidate-card--closed`)")
+
+      for {selector, _property, label} <- @card_slots do
+        assert_no_fade(
+          ctx.rules,
+          Map.fetch!(ctx.slots, selector),
+          "#{label} via `#{selector}`, pinned at #{Map.fetch!(@pinned, selector)} in light"
+        )
+      end
+    end
+
     test "the rule still declares the ground and border that carry the recession", %{
       closed_rule: rule
     } do
@@ -281,6 +333,24 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
              "card_alpha/1 must read the declared opacity. If it cannot, the AA clauses " <>
                "are measuring the declared colour rather than the painted one and they " <>
                "prove nothing about this ticket."
+
+      # `.7` is how app.css spells a fade; a reader that only takes `0.7`
+      # would raise instead of measuring, and print no ratio for a red.
+      assert card_alpha("opacity: .7;") == 0.7
+
+      # The slot half. A fade declared on a SLOT's own rule, not on the card,
+      # must reach the composite too: with the card at 1.0 and a synthetic
+      # slot rule at 0.72, the slot composites at 0.72.
+      slot = CssRules.element("p", [{"class", "candidate-card__reason"}])
+      slot_rules = CssRules.rules(".candidate-card__reason { color: red; opacity: 0.72; }")
+      assert slot_alpha(slot_rules, slot) == 0.72
+      assert composite_alpha("background: red;", slot_rules, slot) == 0.72
+
+      assert composite_alpha(
+               "background: red;",
+               CssRules.rules(".unrelated { opacity: 0.1; }"),
+               slot
+             ) == 1.0
     end
   end
 
@@ -352,24 +422,50 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
   # ── assertions ────────────────────────────────────────────────────────────
 
   defp assert_card_slots(ctx, theme) do
-    alpha = card_alpha(ctx.closed_rule)
+    card_alpha = card_alpha(ctx.closed_rule)
     ground = Map.fetch!(ctx.ground, theme)
     tokens = Map.fetch!(ctx.tokens, theme)
 
-    row_bg = painted(W.composite(resolve!(tokens, "--cc-bg-closed"), alpha, ground))
+    row_bg = painted(W.composite(resolve!(tokens, "--cc-bg-closed"), card_alpha, ground))
 
     for {selector, property, description} <- @card_slots do
       token = property_token!(ctx.css, selector, property)
+
+      # The alpha a slot is painted through is the card's AND its own: a fade
+      # declared on the slot's rules (read through the matcher, so `:hover`
+      # and `@media` variants count) reaches the text just as the card's
+      # does. `min` rather than a product: the lower of the two is the bound
+      # this file measures against, and a fade on BOTH already reds twice.
+      alpha = composite_alpha(ctx.closed_rule, ctx.rules, Map.fetch!(ctx.slots, selector))
       painted = painted(W.composite(resolve!(tokens, token), alpha, ground))
       got = W.contrast(painted, row_bg)
 
       assert got >= @aa_text,
              "#{theme}: #{description} via #{selector} -> #{token} measures #{fmt(got)} " <>
                "against a #{@aa_text} floor. Painted #{W.to_hex(painted)} on " <>
-               "#{W.to_hex(row_bg)}, composited at alpha #{alpha} over a ground of " <>
-               "#{W.to_hex(ground)}. If alpha is not 1.0, an `opacity` has come back onto " <>
-               "`.candidate-card--closed` and no token choice can fix this row from inside."
+               "#{W.to_hex(row_bg)}, composited at alpha #{alpha} (card #{card_alpha}) " <>
+               "over a ground of #{W.to_hex(ground)}. If alpha is not 1.0, an `opacity` " <>
+               "has come back onto `.candidate-card--closed` or onto a rule matching " <>
+               "`#{selector}`, and no token choice can fix this row from inside."
     end
+  end
+
+  # The matched rules for `element` that declare `opacity`, asserted empty.
+  # Non-empty match set first: a matcher that matches nothing proves nothing.
+  defp assert_no_fade(rules, element, what) do
+    matched = Enum.filter(rules, &CssRules.matches?(&1.selector, element))
+
+    assert matched != [],
+           "no rule in #{@css_path} matches #{what}; the matcher or the rendered " <>
+             "markup has drifted and this clause is not looking at the row"
+
+    offenders = Enum.filter(matched, &CssRules.declares?(&1.body, "opacity"))
+
+    assert offenders == [],
+           "these rules match #{what} and declare `opacity`: " <>
+             Enum.map_join(offenders, "; ", &"`#{&1.selector}` { #{String.trim(&1.body)} }") <>
+             ". `opacity` composites the colour AFTER it resolves, so the pinned figure " <>
+             "drops and no token can restore it from inside. Dim with a measured token."
   end
 
   defp assert_summary(ctx, theme) do
@@ -672,8 +768,94 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
 
   defp card_alpha(rule) do
     case Regex.run(~r/(?:^|;)\s*opacity\s*:\s*([\d.]+)/, rule, capture: :all_but_first) do
-      [value] -> String.to_float(if String.contains?(value, "."), do: value, else: value <> ".0")
+      [value] -> parse_alpha(value)
       nil -> 1.0
+    end
+  end
+
+  # `1`, `0.72` and `.7` are all how a stylesheet spells an alpha.
+  defp parse_alpha("." <> _ = value), do: parse_alpha("0" <> value)
+
+  defp parse_alpha(value) when is_binary(value) do
+    String.to_float(if String.contains?(value, "."), do: value, else: value <> ".0")
+  end
+
+  # The lowest `opacity` declared by any rule matching `element`, 1.0 when
+  # none does. Read through `CssRules` so a `:hover`, a `@media` block or a
+  # descendant selector counts, exactly as the fade clause above counts them.
+  defp slot_alpha(rules, element) do
+    rules
+    |> Enum.filter(&CssRules.matches?(&1.selector, element))
+    |> Enum.map(&card_alpha(&1.body))
+    |> Enum.min(fn -> 1.0 end)
+  end
+
+  defp composite_alpha(closed_rule, rules, slot),
+    do: min(card_alpha(closed_rule), slot_alpha(rules, slot))
+
+  # ── the rendered closed row ───────────────────────────────────────────────
+
+  # One NON-accepted closed row, which is the branch of `closed_card/1` that
+  # renders both slots in `@card_slots`: the dead title (no outcome link) and
+  # the reason line. Mirrors `candidate_rail_test.exs`'s `closed_rejected/1`.
+  defp closed_row_html do
+    candidate =
+      %MeetingCandidate{
+        id: Ecto.UUID.generate(),
+        evidence_quote: "let us buy the expensive one",
+        state: :closed,
+        disposition: :rejected,
+        disposition_at: @now,
+        closed_at: @now,
+        closed_reason: :vetoed,
+        classified_intent: "action_item",
+        transcript_chunk_ids: [Ecto.UUID.generate()],
+        acts_at: nil,
+        inserted_at: @now
+      }
+
+    render_component(&CandidateRail.candidate_rail/1,
+      candidates: [],
+      closed: [candidate],
+      events: %{},
+      now: @now
+    )
+    |> LazyHTML.from_fragment()
+  end
+
+  defp query!(html, selector) do
+    node = LazyHTML.query(html, selector)
+
+    case LazyHTML.tag(node) do
+      [_] ->
+        node
+
+      tags ->
+        flunk(
+          "expected exactly one #{inspect(selector)} in the rendered closed row, got #{length(tags)}"
+        )
+    end
+  end
+
+  # A `CssRules` element for a LazyHTML node with its real ancestors, as
+  # `candidate_spent_row_opacity_guard_test.exs` builds them.
+  defp element(node) do
+    [tag] = LazyHTML.tag(node)
+    [attrs] = LazyHTML.attributes(node)
+    CssRules.element(tag, attrs, ancestors(node))
+  end
+
+  defp ancestors(node) do
+    parent = LazyHTML.parent_node(node)
+
+    case LazyHTML.tag(parent) do
+      [tag] ->
+        [attrs] = LazyHTML.attributes(parent)
+        above = ancestors(parent)
+        [CssRules.element(tag, attrs, above) | above]
+
+      [] ->
+        []
     end
   end
 
