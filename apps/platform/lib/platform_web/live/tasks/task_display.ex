@@ -370,11 +370,11 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   entry for (an org with no projects, or one this viewer cannot see) fall
   through to the bare `Workspace` prefix — fail-closed, per `rail_label/2`.
   """
-  @spec scope_pill_label(map(), boolean(), atom()) :: binary() | nil
+  @spec scope_pill_label(map(), boolean(), atom() | binary()) :: binary() | nil
   def scope_pill_label(_mask_labels, false, _scope), do: nil
 
-  def scope_pill_label(mask_labels, true, scope) when is_map(mask_labels) and is_atom(scope),
-    do: rail_label(mask_labels, {:org, Atom.to_string(scope)})
+  def scope_pill_label(mask_labels, true, scope) when is_map(mask_labels),
+    do: rail_label(mask_labels, {:org, scope_slug_string(scope)})
 
   @doc """
   The scope rail's `data-scope-chip` value — the same leak class as the rail's
@@ -393,11 +393,18 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   `real_org_slug/2` before filtering, so the chip still filters to the org it
   names while the raw slug never reaches the DOM at all.
   """
-  @spec scope_pill_slug(map(), boolean(), atom()) :: binary()
-  def scope_pill_slug(_mask_labels, false, scope) when is_atom(scope), do: Atom.to_string(scope)
+  @spec scope_pill_slug(map(), boolean(), atom() | binary()) :: binary()
+  def scope_pill_slug(_mask_labels, false, scope), do: scope_slug_string(scope)
 
-  def scope_pill_slug(mask_labels, true, scope) when is_map(mask_labels) and is_atom(scope),
-    do: rail_org_slug(mask_labels, Atom.to_string(scope))
+  def scope_pill_slug(mask_labels, true, scope) when is_map(mask_labels),
+    do: rail_org_slug(mask_labels, scope_slug_string(scope))
+
+  # The rail feeds these binaries since task 01a09287 stage 2 removed the
+  # scope allowlist; the atom clause stays for the pre-existing callers that
+  # still hold `Tasks.scope_keys/0` atoms. Deliberately `to_string/1`, never
+  # `String.to_existing_atom/1` in the other direction.
+  defp scope_slug_string(scope) when is_binary(scope), do: scope
+  defp scope_slug_string(scope) when is_atom(scope), do: Atom.to_string(scope)
 
   @doc """
   The value for the rail's `data-org-slug` attribute.

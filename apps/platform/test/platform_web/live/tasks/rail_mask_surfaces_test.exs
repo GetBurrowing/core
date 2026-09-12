@@ -393,7 +393,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
   defp refute_everywhere(html, name) do
     haystack =
       ~w(class href)
-      |> Enum.reduce(html, fn attr, acc ->
+      |> Enum.reduce(strip_scope_color_styles(html), fn attr, acc ->
         Regex.replace(~r/\s#{Regex.escape(attr)}="[^"]*"/, acc, " ")
       end)
       |> String.downcase()
@@ -404,6 +404,33 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
     end
 
     :ok
+  end
+
+  # Third exclusion, added with the runtime scope-colour block (task 01a09287
+  # stage 3): the ONE `<style data-role="org-scope-colors">` element, content
+  # and all. It carries `[data-scope="soylent"]{…}` rules for the viewer's
+  # orgs.
+  #
+  # This is the same concession the `class` exclusion above already makes,
+  # narrowed: the slug-named scope-colour utilities could not be regenerated
+  # per session, and neither can a stylesheet — CSS is global, and a rule
+  # keyed on a per-session placeholder would have to be re-derived for a
+  # value the stylesheet does not know. Nothing here is ever DISPLAYED: a
+  # <style> body renders no text, and in a masked session the rail's chips
+  # carry the PLACEHOLDER slug, so a `[data-scope="soylent"]` rule matches
+  # no element at all.
+  #
+  # The exclusion is deliberately keyed on `data-role` and asserted to strike
+  # EXACTLY ONE element, so it cannot silently widen to cover a second style
+  # block somebody adds later, and cannot quietly become a no-op if the block
+  # is renamed — either way this assertion goes red and a reader has to look.
+  defp strip_scope_color_styles(html) do
+    pattern = ~r/<style[^>]*data-role="org-scope-colors"[^>]*>.*?<\/style>/s
+
+    assert length(Regex.scan(pattern, html)) == 1,
+           "expected exactly one <style data-role=\"org-scope-colors\"> element to exclude"
+
+    Regex.replace(pattern, html, " ")
   end
 
   defp seed_epic(project, name) do

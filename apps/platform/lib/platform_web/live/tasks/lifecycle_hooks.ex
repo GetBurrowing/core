@@ -243,7 +243,7 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
     |> assign(:projects, projects)
     |> assign(:projects_by_org, Platform.Projects.group_by_org(projects))
     |> assign(:project_sections, project_sections(projects, socket.assigns[:current_user_record]))
-    |> assign(:active_scope_keys, active_scope_keys(socket.assigns[:current_user_record]))
+    |> assign(:active_scopes, active_scope_keys(socket.assigns[:current_user_record]))
     |> PlatformWeb.Tasks.MaskHooks.assign_mask_labels()
   end
 
@@ -267,8 +267,10 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
 
   @doc """
   Scope-rail source (task 019f4eaa stage 6; hardened by task 019fa209;
-  viewer-scoped since): the scope atoms whose org is currently non-archived
-  AND VISIBLE TO THIS VIEWER, in canonical tenant-priority order.
+  viewer-scoped since; de-allowlisted by task 01a09287 stage 2): one ENTRY
+  per active org the VIEWER BELONGS TO, in canonical tenant-priority order.
+
+      [%{slug: "fabrikam", label: "Fabrikam", hue: 264, chroma: 0.17}, ...]
 
   The tenant read is `Tenancy.list_active_tenants_for_user/1` — the
   viewer-scoped sibling of `list_active_tenants_unscoped/0`, which leaked
@@ -277,39 +279,36 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
   Never re-add a `/0` shim, and never filter an unscoped tenant list at a
   call site — scope belongs in the viewer-taking context read.
 
-  The allowlist-first construction below is UNCHANGED and must stay:
-  `Tasks.scope_keys/0` filtered by active slugs, compared as STRINGS, never
-  `String.to_atom/1` (nor `String.to_existing_atom/1`). That shape closes
-  the two crash modes covered by the task-019fa209 regression tests;
-  reverting to atom conversion re-opens a /tasks outage for every user.
+  ## An org outside the old six now gets a chip
 
-  Org slugs are EXTERNALLY SUPPLIED — `Org.changeset/2` accepts any
-  `^[a-z][a-z0-9_-]*$` and the tenant reads filter only on `archived_at`
-  (plus membership), so an active tenant's slug may never have been compiled
-  as an atom. Iterating the canonical allowlist and keeping the ones that
-  are active creates no atom (`String.to_atom/1` would grow the never-GC'd
-  atom table from user input) and looks none up (`String.to_existing_atom/1`
-  raises `ArgumentError`, which 500'd /tasks for every user in the
-  deployment — this runs in `mount/3`).
+  It used to not. `Tasks.scope_keys/0` was intersected here, so standing up
+  a tenant needed a deploy to appear on the rail. That intersection is gone
+  and the entries come straight from the rows.
 
-  Filtering rather than converting also closes a SECOND crash: a slug that
-  happens to already exist as an atom but is not a scope (e.g. "name" ->
-  `:name`, an Ecto field on `Org`) sails through `to_existing_atom/1` and
-  reaches `<.scope_pill>`, whose `scope_label/1` and `slug/1` clauses are
-  non-total -> `FunctionClauseError` at render. Both failures are why a
-  `rescue ArgumentError` would be the wrong fix; starting from the allowlist
-  makes every element a valid `<.scope_pill>` value by construction.
+  ## The rule that replaced the allowlist
 
-  An org outside the enum gets no chip. That is the only behavior the rest
-  of the system supports: the enum is hardcoded in `ScopePill` (`@scopes` +
-  `slug/1` + `scope_label/1`), `Tasks.@scope_keys`,
-  `Tenancy.@scope_classes`/`@scope_labels`, and the `bg-<slug>` /
-  `border-<slug>` / `text-<slug>-label` / `bg-<slug>-dot` utilities in
-  assets/css/app.css.
+  > #### Strings end to end. Never `String.to_existing_atom/1`. {: .error}
+  >
+  > The allowlist was never the point — making atom conversion SAFE was.
+  > Org slugs are EXTERNALLY SUPPLIED (`Org.changeset/2` accepts any
+  > `^[a-z][a-z0-9_-]*$`, and the tenant reads filter only on `archived_at`
+  > plus membership), so an active tenant's slug may never have been
+  > compiled as an atom. `String.to_atom/1` grows the never-GC'd atom table
+  > from user input; `String.to_existing_atom/1` raises `ArgumentError`,
+  > which 500'd `/tasks` for every user in the deployment (task 019fa209)
+  > because this runs in `mount/3`.
+  >
+  > That bug is invisible against a seeded database: the atom exists for
+  > every org that shipped with the code and does not exist for the one an
+  > admin just created. `tasks_live_new_tenant_rail_test.exs` inserts an org
+  > whose slug was never compiled as an atom precisely to hold this line.
+
+  Carrying the LABEL on the entry closes the second crash the allowlist was
+  covering. A slug that happens to exist as an atom but is not a scope (e.g.
+  `"name"` -> `:name`, an Ecto field on `Org`) used to reach `<.scope_pill>`,
+  whose `slug/1` and `scope_label/1` clauses were non-total ->
+  `FunctionClauseError` at render. Those clauses now have total fallbacks and
+  the rail passes the entry's own label, so there is nothing left to look up.
   """
-  def active_scope_keys(viewer) do
-    active = MapSet.new(Tenancy.list_active_tenants_for_user(viewer), & &1.slug)
-
-    Enum.filter(Tasks.scope_keys(), &MapSet.member?(active, Atom.to_string(&1)))
-  end
+  def active_scope_keys(viewer), do: Tenancy.scope_slug_entries(viewer)
 end

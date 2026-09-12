@@ -357,6 +357,48 @@
    `Platform.Tenancy.scope_color/1` for the slug → class mapping.
    ────────────────────────────────────────────────────── */
 @layer utilities {
+  /* ── Runtime scope colours (var-driven) ───────────────────────────────
+     These six rules are slug-AGNOSTIC: they read custom properties that
+     `PlatformWeb.Components.ScopeColorStyles` emits into a server-rendered
+     <style> block, one declaration set per active org. That is the whole
+     point — a Tailwind utility is a literal rule baked at BUILD time, so
+     `.text-<slug>` for an org created after the last deploy does not exist
+     and cannot be made to exist without rebuilding the CSS. A custom
+     property is resolved at RENDER time, so a brand-new org is coloured on
+     its next page load. (Task 01a09287 stage 3.)
+
+     An org with no colour set emits no declarations, so `--scope-fill` and
+     `--scope-label` are unset and these rules fall through to the call
+     site's existing `text-muted` behaviour. */
+  .scope-text { color: var(--scope-label); }
+  .scope-fill { background-color: var(--scope-fill); }
+  .scope-tint { background-color: color-mix(in oklch, var(--scope-fill) 12%, transparent); }
+  .scope-tint-hover:hover { background-color: color-mix(in oklch, var(--scope-fill) 22%, transparent); }
+  .scope-border { border-color: color-mix(in oklch, var(--scope-fill) 30%, transparent); }
+  .scope-dot { background-color: var(--scope-fill); }
+  .scope-active { background-color: var(--scope-fill); color: var(--scope-active-content); box-shadow: 0 0 0 2px color-mix(in oklch, var(--scope-fill) 30%, transparent); }
+
+  /* The alphas above are 12% / 22% / 30% because that is what the six
+     hand-authored blocks below use, and `Platform.Tenancy.ScopeColor.cells/1`
+     names the same 12% / 22% as the two states it solves the label against.
+     Three places, one set of numbers: if you change one, change all three or
+     the picker prints a figure the browser does not paint. */
+
+  /* ── LEGACY, deploy-bound: the per-slug blocks below ───────────────────
+     Everything from here to the end of this layer is the build-time path
+     the rules above replace. Each `.text-<slug>` / `.bg-<slug>` block only
+     exists for a slug that was hand-written into this file, which is
+     exactly the deploy dependency this task removes. They are kept for
+     this stage because the call sites still reference them. Stage 5 wired
+     `scope_pill.ex` to the `.scope-*` rules above for every slug EXCEPT
+     these six, which is why they are still here rather than deleted: their
+     labels were solved against one cell of four (see `ScopeColor`'s
+     moduledoc) and re-solving them moves every shipped org's colour on
+     every install. That is a brand call, filed as task 01a09333-d374, and
+     until it is taken the six render byte-identically to what they render
+     today. Do NOT add a seventh slug here — set the org's `color_hue`
+     instead, and `ScopePill` will route it to the var path automatically. */
+
   /* ─ fabrikam ─ orange ─ */
   .text-fabrikam { color: oklch(72% 0.16 50); }
   .bg-fabrikam { background-color: oklch(72% 0.16 50 / 12%); }
@@ -424,7 +466,24 @@
      Measured contrast (label text vs composited 12% tint over base-100):
        LIGHT (over #FFFFFF):  fabrikam 4.61 · soylent 4.66 · wayne-tech 4.66 · sxi 4.56 · paragon 4.65 · cyberdyne 4.61
        DARK  (over #171b25):  fabrikam 5.51 · soylent 4.56 · wayne-tech 5.11 · sxi 5.71 · paragon 7.31 · cyberdyne 4.62
-     All twelve ≥ 4.5:1. (Recomputed via OKLCH→sRGB→WCAG; cyberdyne added 2026-08-14.)
+     All twelve ≥ 4.5:1, and the light row above is CONFIRMED, not stale.
+     (Recomputed via OKLCH→sRGB→WCAG; cyberdyne added 2026-08-14.)
+
+     Re-verified 2026-09-11 (task 01a09287 stage 3) against Chrome 152 itself:
+     `oklch(51% 0.15 162)` has a NEGATIVE linear-sRGB red channel (-0.041996),
+     i.e. it is outside the sRGB gamut, and Chrome resolves it by CLIPPING
+     that channel to 0, painting rgb(0,127,74). Clip-then-encode reproduces
+     Chrome byte-for-byte on all four sxi probes, and gives sxi light 4.56 —
+     the figure recorded above.
+
+     NOTE FOR ANYONE RECOMPUTING THESE: recompute with
+     `Platform.Tenancy.ScopeColor` and you will get the table above. Its
+     private `encode/1` used to apply the sRGB transfer function to `abs(x)`,
+     so a negative channel came back POSITIVE (0.2266 here, not 0) and its
+     `max(0.0)` clamp never fired; that reported sxi light as 4.37 and read
+     as an AA failure that does not exist. Roughly half of the hue circle is
+     out of gamut at these chromas, so that was not a corner case — task
+     01a09287 stage 4 changed it to clip, and 4.37 is withdrawn.
      cyberdyne uses half-percent L (55.5% / 67.5%) because whole-percent
      steps at hue 340 overshoot the 4.56–4.66 band in light. */
   .text-fabrikam-label     { color: oklch(55% 0.16 50); }

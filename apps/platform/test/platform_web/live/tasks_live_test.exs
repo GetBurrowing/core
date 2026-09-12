@@ -687,7 +687,7 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "Paragon"
     end
 
-    test "today-state: all tasks count under :fabrikam, others under 0", %{conn: conn} do
+    test ~s(today-state: all tasks count under "fabrikam", others under 0), %{conn: conn} do
       project = create_project()
       # Clean DB for this test: count what we put in.
       _t1 = create_task(project, %{title: "A", status: "backlog"})
@@ -699,13 +699,17 @@ defmodule PlatformWeb.TasksLiveTest do
 
       counts = :sys.get_state(view.pid).socket.assigns.scope_counts
 
-      # Today-state contract: every task lives under :fabrikam until org_id
+      # Today-state contract: every task lives under "fabrikam" until org_id
       # ships. The rail rendering reads from this map.
-      assert counts.fabrikam >= 3
-      assert counts.soylent == 0
-      assert counts.wayne_tech == 0
-      assert counts.sxi == 0
-      assert counts.paragon == 0
+      #
+      # STRING keys since task 01a09287 stage 2 re-keyed `count_by_scope/0`
+      # on the org rows — an org slug is user input and has no safe atom
+      # conversion, so an atom key here is that bug returning.
+      assert counts["fabrikam"] >= 3
+      assert counts["soylent"] == 0
+      assert counts["wayne_tech"] == 0
+      assert counts["sxi"] == 0
+      assert counts["paragon"] == 0
     end
 
     test "default scope_filter is :all on mount", %{conn: conn} do
@@ -736,11 +740,16 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Drive the fabrikam chip via the inbound scope_filter event the same way
-      # ScopePill emits it (phx-value-scope is the atom serialized as
-      # string).
+      # ScopePill emits it (`phx-value-scope` is the org SLUG).
       _ = render_click(filters(view), "filter_scope", %{"scope" => "fabrikam"})
       html = after_filter(view)
-      assert :sys.get_state(view.pid).socket.assigns.scope_filter == :fabrikam
+
+      # The slug STAYS a string — task 01a09287 stage 2 removed the
+      # allowlist that made converting it to an atom safe, so `parse_scope/2`
+      # is a membership test now and `:all` is the one atom left. Asserting
+      # the string is what holds that line: `:fabrikam` passing here again would
+      # mean something re-introduced the conversion.
+      assert :sys.get_state(view.pid).socket.assigns.scope_filter == "fabrikam"
       # The fabrikam chip is now marked active.
       assert html =~ ~s(data-scope-chip="fabrikam" data-active="true")
       # And the All chip is no longer marked active.

@@ -23,7 +23,16 @@ defmodule PlatformWeb.Components.ScopePillTest do
           # :default size, false at :compact). Tests that care pass it explicitly.
           clickable: nil,
           active: false,
-          size: :default
+          size: :default,
+          # The `phx-value-scope` / `data-scope` PAYLOAD, separable from
+          # `:scope` since task 01a00cf1 so a masked rail can emit a
+          # per-session placeholder. nil = "caller didn't say", which is
+          # every test but the masking one.
+          value: nil,
+          # Overrides the visible text AND the aria-label together. nil =
+          # "caller didn't say"; the chat surfaces pass `@mask_names? && …`,
+          # so `false` is a real value here and is not the same as nil.
+          label: nil
         },
         assigns
       )
@@ -35,6 +44,8 @@ defmodule PlatformWeb.Components.ScopePillTest do
       clickable={@clickable}
       active={@active}
       size={@size}
+      value={@value}
+      label={@label}
     />
     """)
   end
@@ -132,6 +143,170 @@ defmodule PlatformWeb.Components.ScopePillTest do
       html = render_pill(%{scope: :fabrikam})
       assert html =~ "rounded-full"
       assert html =~ ~s(aria-hidden="true")
+    end
+  end
+
+  describe "the runtime var path — a slug with no hand-authored CSS (task 01a09287 stage 5)" do
+    # THE defect this stage fixes. Stage 3 shipped a server-rendered
+    # `<style id="org-scope-colors">` block emitting
+    # `[data-scope="<slug>"]{--scope-fill:…;--scope-label:…}` for every org,
+    # and app.css shipped slug-agnostic `.scope-*` rules that read those
+    # properties. Neither was wired to anything: a live probe of /tasks found
+    # `document.querySelectorAll('[data-scope]').length === 0`, so a new org
+    # fell through to inherited grey while the machinery to colour it sat
+    # complete and inert one layer away.
+    #
+    # A CSS rebuild cannot fix that — the per-slug blocks are hand-authored
+    # and there is no generator for an arbitrary slug, which is precisely
+    # what app.css says the runtime vars were introduced to solve.
+
+    test "a new org's chip carries data-scope, so the emitted rules can match it" do
+      html = render_pill(%{scope: "hueless_co"})
+
+      assert html =~ ~s(data-scope="hueless_co")
+    end
+
+    test "a new org takes the slug-agnostic utilities and NO build-time class" do
+      html = render_pill(%{scope: "hueless_co"})
+
+      assert html =~ "scope-tint"
+      assert html =~ "scope-text"
+      assert html =~ "scope-border"
+      assert html =~ "scope-dot"
+
+      # The build-time classes would not exist in the compiled stylesheet for
+      # this slug, so emitting them is what produced the grey chip.
+      refute html =~ "bg-hueless-co"
+      refute html =~ "text-hueless-co-label"
+      refute html =~ "border-hueless-co"
+    end
+
+    test "the new org's active and hover states reach the var path too" do
+      active = render_pill(%{scope: "hueless_co", active: true})
+      assert active =~ "scope-active"
+      refute active =~ "bg-hueless-co-active"
+
+      resting = render_pill(%{scope: "hueless_co", clickable: true})
+      assert resting =~ "scope-tint-hover"
+      refute resting =~ "hover:bg-hueless-co/22"
+    end
+
+    test "compact drops the border on the var path, exactly as it does on the legacy one" do
+      html = render_pill(%{scope: "hueless_co", size: :compact})
+
+      assert html =~ "scope-tint"
+      assert html =~ "scope-text"
+      refute html =~ "scope-border"
+    end
+
+    test "the six shipped orgs are NOT moved onto the var path" do
+      # The other half, and without it the tests above pass for a change that
+      # migrated everything — which would re-solve all six shipped labels
+      # darker on every install. That is a brand call filed as task
+      # 01a09333-d374, not a side effect of wiring a call site.
+      for scope <- scopes() do
+        html = render_pill(%{scope: scope})
+
+        refute html =~ "scope-tint", "#{scope} was moved onto the var path"
+        refute html =~ "scope-text", "#{scope} was moved onto the var path"
+      end
+    end
+
+    test "the shipped six still carry data-scope, so the probe is not slug-specific" do
+      # data-scope is emitted for EVERY chip, legacy or not. It costs nothing
+      # on the legacy path (the per-slug rules win because they are the only
+      # classes present) and it means `[data-scope]` is a usable handle on
+      # any surface rather than one that only appears once a seventh org
+      # exists.
+      assert render_pill(%{scope: :fabrikam}) =~ ~s(data-scope="fabrikam")
+      assert render_pill(%{scope: :wayne_tech}) =~ ~s(data-scope="wayne_tech")
+    end
+
+    test "data-scope is the STORED slug, not the kebab-cased class fragment" do
+      # `:wayne_tech` is the class fragment `wayne-tech` and the org row
+      # `wayne_tech`. `ScopeColorStyles` keys its rules on `orgs.slug`, so
+      # emitting the class fragment here would produce a `data-scope` that
+      # matches no emitted rule — a silent miss, on the one org whose two
+      # spellings differ.
+      html = render_pill(%{scope: :wayne_tech})
+
+      assert html =~ ~s(data-scope="wayne_tech")
+      refute html =~ ~s(data-scope="wayne-tech")
+    end
+
+    test "a chip whose LABEL is overridden with no value emits NO data-scope" do
+      # The leak `ChatLiveMaskMobileTest` caught on the first cut of this
+      # work, reproduced here at the component so it is legible as a
+      # component contract rather than as two chat-surface failures.
+      #
+      # The chat header and the hidden-channels drawer mask by overriding the
+      # visible label and handing over the REAL scope atom from
+      # `sub_org_scope_atom/1` — no `value`. Falling back to `@scope` there
+      # wrote `data-scope="wayne_tech"` into a masked session: the underscore
+      # spelling, which `refute html =~ "Wayne-Tech"` does not catch, in an
+      # attribute, which renders as no text at all and is perfectly legible
+      # in a DOM inspector.
+      html = render_pill(%{scope: :wayne_tech, label: "Workspace B", clickable: false})
+
+      assert html =~ ">Workspace B</span>"
+      refute html =~ "data-scope="
+
+      # The UNDERSCORE spelling is the one that matters and the one that
+      # leaked: it appears nowhere else in this chip. The hyphen spelling is
+      # still in the per-slug class names, which the mask sweep strips
+      # `class` to accommodate — refuting it here would assert a tighter mask
+      # than the system has and would go red for a reason unrelated to this
+      # attribute.
+      refute html =~ "wayne_tech"
+      refute html =~ ">Wayne-Tech</span>"
+      refute html =~ ~s(aria-label="Wayne-Tech scope")
+    end
+
+    test "a label override does NOT suppress data-scope when masking is off" do
+      # The other half, and the reason the guard is `is_binary/1` rather than
+      # a nil check. Chat call sites write `label={@mask_names? && …}`, which
+      # is the atom `false` when masking is off — if `false` suppressed the
+      # attribute, every unmasked chat pill would lose its colour and the
+      # test above would still pass.
+      html = render_pill(%{scope: :wayne_tech, label: false, clickable: false})
+
+      assert html =~ ~s(data-scope="wayne_tech")
+    end
+
+    test "an explicit value beats a label override — the tasks rail keeps its colour" do
+      # The tasks rail masks by passing BOTH, and must keep emitting the
+      # placeholder rather than nothing: `value` is the payload that is safe
+      # to spell, so there is no reason to suppress it. Without this the
+      # suppression above would silently take the tasks rail's colour with it.
+      html = render_pill(%{scope: "soylent", label: "Workspace B", value: "workspace-b"})
+
+      assert html =~ ~s(data-scope="workspace-b")
+      assert html =~ ~s(phx-value-scope="workspace-b")
+      assert html =~ ">Workspace B</span>"
+
+      # NOT `refute html =~ "soylent"`. The six shipped orgs still carry
+      # per-slug CLASS names, which is the concession `rail_mask_surfaces_test`
+      # already strips `class` to accommodate; asserting it here would be
+      # asserting the mask is tighter than it is. What must hold is that the
+      # two attributes a reader can see unstyled carry the placeholder.
+      refute html =~ ~s(data-scope="soylent")
+      refute html =~ ">Soylent</span>"
+    end
+
+    test "a masked chip emits the PLACEHOLDER slug in data-scope, not the real one" do
+      # `data-scope` is fed `@value || @scope`, the same expression as
+      # `phx-value-scope`, because it is the same leak class: an attribute
+      # value survives `refute html =~ "Soylent"` untouched and is legible
+      # in the DOM inspector a screen share is likely to have open.
+      #
+      # The cost is real and is the right trade: a `[data-scope="soylent"]`
+      # rule then matches no element, so a masked chip loses its colour. That
+      # is the concession `rail_mask_surfaces_test.exs` already documents for
+      # the style block itself.
+      html = render_pill(%{scope: "soylent", value: "workspace-b"})
+
+      assert html =~ ~s(data-scope="workspace-b")
+      refute html =~ ~s(data-scope="soylent")
     end
   end
 

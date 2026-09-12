@@ -202,15 +202,21 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # Marlowe 2026-07-12 ("narrow everything"): while a query is active every
     # on-screen count — columns, scope-rail chips, header total — describes
     # the filtered board. Chips mirror Tasks.count_by_scope/0's current stub
-    # semantics (everything under :fabrikam); when that becomes a real per-org
+    # semantics (everything under "fabrikam"); when that becomes a real per-org
     # GROUP BY this branch needs the matching in-memory group-by over `tasks`.
+    #
+    # The key is the STRING "fabrikam" since task 01a09287 stage 2 re-keyed
+    # `count_by_scope/0` on the org rows. As `:fabrikam` it would have added a
+    # SEVENTH entry beside the real one rather than overwriting it — the
+    # header total is `Map.values |> Enum.sum`, so the searched board's total
+    # would have double-counted instead of failing.
     scope_counts =
       if q == "" do
         socket.assigns.scope_counts_db
       else
         socket.assigns.scope_counts_db
         |> Map.new(fn {key, _} -> {key, 0} end)
-        |> Map.put(:fabrikam, length(tasks))
+        |> Map.put("fabrikam", length(tasks))
       end
 
     socket

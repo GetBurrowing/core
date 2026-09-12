@@ -27,19 +27,6 @@
 
   <div class="flex-1 min-h-0 overflow-y-auto p-4">
     <div class="mx-auto max-w-3xl space-y-4">
-      <%!-- The honest state of the system after this task: the form removes
-           the MIGRATION, not the DEPLOY. Stated on the list too, not only in
-           the create sheet, so it is still true for someone arriving after
-           the org was made and wondering where it went. --%>
-      <div
-        class="rounded-lg border border-edge bg-base-200 p-3 text-xs text-base-content/60"
-        data-role="scope-rail-notice"
-      >
-        Creating an org registers the tenant. It does not give the org a scope colour or
-        a chip on the Tasks scope rail — those are hand-authored code, so a new org stays
-        invisible on the rail until a follow-up code change ships.
-      </div>
-
       <div :if={@orgs == []} class="text-sm text-base-content/40">
         No orgs yet.
       </div>
@@ -56,26 +43,67 @@
           </thead>
           <tbody>
             <tr :for={org <- @orgs} data-role="org-row" data-org-slug={org.slug}>
-              <td class="font-medium text-base-content">{org.name}</td>
+              <%!-- Swatch `shrink-0`, name `min-w-0 truncate`: a marker must
+                   never win space from the title it annotates, and at a long
+                   org name in a narrow admin table that is exactly what it
+                   will try to do. The swatch is rendered from the org's own
+                   hue, not from a class, because a class for a runtime org
+                   is the defect this task exists to kill. --%>
+              <td class="font-medium text-base-content">
+                <div class="flex min-w-0 items-center gap-2">
+                  <span
+                    :if={is_integer(org.color_hue)}
+                    class="size-3 shrink-0 rounded-full"
+                    style={"background-color:#{org_fill(org)}"}
+                    data-role="org-swatch"
+                    data-org-hue={org.color_hue}
+                    title={"Hue #{org.color_hue}"}
+                  >
+                  </span>
+                  <span
+                    :if={is_nil(org.color_hue)}
+                    class="size-3 shrink-0 rounded-full border border-dashed border-edge"
+                    data-role="org-swatch-empty"
+                    title="No colour set"
+                  >
+                  </span>
+                  <span class="min-w-0 truncate">{org.name}</span>
+                </div>
+              </td>
               <td class="font-mono text-xs text-base-content/60">{org.slug}</td>
               <td class="text-xs text-base-content/60">
                 {if root_org?(org), do: "Root", else: "Tenant"}
               </td>
               <td>
                 <span
-                  :if={on_scope_rail?(org.slug)}
+                  :if={on_scope_rail?(org)}
                   class="badge badge-ghost badge-sm"
                   data-role="scope-rail-yes"
                 >
-                  Registered
+                  On rail
                 </span>
+                <%!-- `scope-rail-no` used to mean "not on the rail, needs a
+                     follow-up code ship". Stage 2 made the first half false
+                     and this stage makes the second half false, so the badge
+                     now carries the one warning that survives: an org with no
+                     hue is on the rail but renders unstyled. The ARCHIVED
+                     state is a different fact and keeps its own badge rather
+                     than being folded into this one. --%>
                 <span
-                  :if={not on_scope_rail?(org.slug)}
+                  :if={is_nil(org.color_hue)}
                   class="badge badge-warning badge-sm badge-outline"
                   data-role="scope-rail-no"
-                  title="Needs a follow-up code change: scope colour ramp + scope-key registration."
+                  title="No hue set, so this org's rail chip renders unstyled. Set one and it is live on the next page load."
                 >
-                  Not on rail
+                  No colour
+                </span>
+                <span
+                  :if={not on_scope_rail?(org)}
+                  class="badge badge-ghost badge-sm badge-outline"
+                  data-role="scope-rail-archived"
+                  title="Archived orgs are excluded from the scope rail."
+                >
+                  Archived
                 </span>
               </td>
             </tr>
@@ -161,23 +189,248 @@
         </p>
       </div>
 
+      <%!-- COLOUR. A hue RING, not a hex field. A hex field cannot say
+           "that yellow is invisible on white" and cannot say "that blue is
+           Wayne-Tech's"; both failures are silent and both are found by
+           someone else, later, on the scope rail.
+
+           The ring is 72 server-rendered stops. The number input beside it
+           is the real form field and carries the value, so the control is
+           operable from a keyboard — a ring of click targets on its own is
+           not. --%>
+      <div>
+        <label class="label label-text text-xs font-medium" for="org_color_hue">Colour</label>
+
+        <div class="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
+          <svg
+            viewBox="0 0 200 200"
+            class="size-44 shrink-0"
+            role="group"
+            aria-label="Org hue ring"
+            data-role="org-hue-ring"
+          >
+            <path
+              :for={stop <- ring_stops()}
+              d={stop.path}
+              stroke={stop.color}
+              stroke-width="17"
+              fill="none"
+              class="cursor-pointer"
+              phx-click="pick_hue"
+              phx-value-hue={stop.hue}
+              data-role="hue-stop"
+              data-hue={stop.hue}
+            >
+              <title>Hue {stop.hue}</title>
+            </path>
+
+            <%!-- Notches sit OUTSIDE the band, at the hues already in use.
+                 Read from the orgs list, never a hardcoded table: the whole
+                 point of this task is that the set of orgs is data. --%>
+            <path
+              :for={org <- @orgs}
+              :if={is_integer(org.color_hue)}
+              d={ring_notch(org.color_hue)}
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              class="text-base-content/50"
+              data-role="hue-notch"
+              data-org-slug={org.slug}
+              data-hue={org.color_hue}
+            >
+              <title>{org.name} — hue {org.color_hue}</title>
+            </path>
+
+            <g :if={@picked_hue}>
+              <circle
+                cx={elem(ring_handle(@picked_hue), 0)}
+                cy={elem(ring_handle(@picked_hue), 1)}
+                r="11"
+                fill={@preview.ramp.fill}
+                stroke="currentColor"
+                stroke-width="2.5"
+                class="text-base-100"
+                data-role="hue-handle"
+                data-hue={@picked_hue}
+              />
+            </g>
+          </svg>
+
+          <div class="min-w-0 flex-1 space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                type="number"
+                id="org_color_hue"
+                name="org[color_hue]"
+                value={@org_form[:color_hue].value}
+                min="0"
+                max="359"
+                inputmode="numeric"
+                placeholder="none"
+                class="input input-bordered w-28 font-mono"
+                data-role="org-color-hue-input"
+              />
+              <span class="text-xs text-base-content/60">degrees, 0–359</span>
+              <button
+                :if={@picked_hue}
+                type="button"
+                phx-click="clear_hue"
+                class="btn btn-ghost btn-xs"
+                data-role="clear-hue"
+              >
+                Clear
+              </button>
+            </div>
+
+            <p
+              :for={msg <- Enum.map(@org_form[:color_hue].errors, &translate_error/1)}
+              class="text-xs text-error"
+              data-role="org-color-hue-error"
+            >
+              {msg}
+            </p>
+
+            <p :if={is_nil(@picked_hue)} class="text-xs text-base-content/60">
+              Optional. With no colour the org still gets a scope-rail chip — it just
+              renders unstyled until a hue is set.
+            </p>
+
+            <%!-- WARNS, never blocks. Two orgs may legitimately want adjacent
+                 colours, and a control that refuses would be wrong more often
+                 than the operator is. --%>
+            <div
+              :if={@hue_conflicts != []}
+              class="rounded-lg border border-warning/40 bg-warning/10 p-2 text-xs text-base-content"
+              data-role="hue-proximity-warning"
+            >
+              <p class="flex items-center gap-1.5 font-medium">
+                <span class="hero-exclamation-triangle size-4 text-warning"></span>
+                Close to a colour already in use
+              </p>
+              <p :for={conflict <- @hue_conflicts} class="mt-1 text-base-content/70">
+                {conflict.org.name} is at hue {conflict.org.color_hue},
+                <span class="font-mono">{conflict.distance}°</span>
+                away. You can still create this org.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- PREVIEW. TWO grounds, and that is the whole point of it.
+           `--color-base-100` is `oklch(100% 0 0)` in light and `#171b25` in
+           dark, which are 17.21:1 apart, while clearing AA (4.5:1) as text
+           on BOTH would need the grounds to be at least 4.5² = 20.25 apart.
+           17.21 < 20.25, so no single colour value can do it — the answer is
+           a PAIR, and a one-ground preview lets an operator approve, on a
+           dark screen, a colour nobody working in light can read.
+
+           Every figure is computed server-side in `validate_org` by
+           `ScopeColor.derive/2`, never in JS, and every figure is printed
+           with the ground it was measured against. That is not pedantry:
+           the sxi label reads 5.10 against bare white and 4.56 against its
+           own 12% tint over white, and only the second is the surface the
+           text actually sits on. A bare number here is not interpretable. --%>
+      <div :if={@preview} class="space-y-2" data-role="org-color-preview">
+        <p class="text-xs font-medium text-base-content/60">Preview</p>
+
+        <div class="grid gap-2 sm:grid-cols-2">
+          <div
+            :for={ground <- @preview.grounds}
+            class="rounded-lg border border-edge p-3"
+            style={ground.panel_style}
+            data-role="preview-ground"
+            data-ground={ground.key}
+          >
+            <div
+              class="inline-flex items-center gap-2 rounded-full px-2.5 py-1"
+              style={"background-color:color-mix(in oklch, #{@preview.ramp.fill} 12%, transparent)"}
+            >
+              <span
+                class="size-2 rounded-full"
+                style={"background-color:#{@preview.ramp.fill}"}
+              >
+              </span>
+              <span
+                class="text-xs font-medium"
+                style={"color:#{ground.chip_text}"}
+                data-role="preview-chip-label"
+              >
+                {if @org_form[:name].value in [nil, ""],
+                  do: "New org",
+                  else: @org_form[:name].value}
+              </span>
+            </div>
+
+            <%!-- The WORST cell, named. A chip label sits on the fill
+                 composited over a surface and BOTH vary — rest 12% or
+                 hovered 22%, over base-100 or base-200 — so there are four
+                 cells per theme and only the first was ever tuned. Printing
+                 the best one, or printing four, both invite an operator to
+                 read the number they like. --%>
+            <p class="mt-2 font-mono text-[11px]" style={"color:#{ground.chip_text}"}>
+              <span data-role="preview-contrast" data-ground={ground.key}>
+                {format_contrast(ground.worst.contrast)}:1
+              </span>
+              <span class="opacity-70">on the {ground.worst.cell}</span>
+            </p>
+            <p class="font-mono text-[11px]" style={"color:#{ground.chip_text}"}>
+              <span :if={ground.worst.contrast >= 4.5} class="opacity-70">
+                {ground.name} · worst cell clears AA 4.5:1
+              </span>
+              <span
+                :if={ground.worst.contrast < 4.5}
+                class="font-semibold"
+                data-role="preview-aa-fail"
+                data-ground={ground.key}
+              >
+                {ground.name} · below AA 4.5:1 here
+              </span>
+            </p>
+          </div>
+        </div>
+
+        <%!-- This copy used to tell the operator that a figure under 4.5 was
+             expected, because the solver targeted the rest-over-base-100 cell
+             while this panel printed the worst of four. Task 01a09287 stage 5
+             pointed the solver at the same four cells the panel reads
+             (`ScopeColor.cells/1` is now the one enumeration), so every hue
+             on the circle clears 4.5 in both themes and the apology is no
+             longer true. Leaving it would have taught an operator to accept a
+             failing figure as normal — worse than no copy at all.
+
+             The six shipped orgs are NOT solved through this path: they keep
+             their hand-authored `app.css` tokens, all six of which are below
+             4.5 at their worst cell. Re-solving them moves every existing
+             org's label on every install — a brand call, filed as
+             01a09333-d374. --%>
+        <p class="text-[11px] text-base-content/60" data-role="preview-worst-cell-note">
+          Figures are the worst of four cells per theme — chip at rest (12%) or hovered
+          (22%), over base-100 or base-200 — and the solver targets that worst cell, with
+          margin for a one-byte rounding difference. Every hue clears 4.5 in both themes;
+          if one does not, that is a bug in the solver and not a reason to pick again.
+        </p>
+
+        <%!-- The three values that actually get written into the runtime
+             `<style>` block, in mono because they are machine values an
+             operator may paste into a bug report. --%>
+        <div
+          class="rounded-lg bg-base-200 p-3 font-mono text-[11px] leading-relaxed text-base-content/60"
+          data-role="org-color-derived"
+        >
+          <div>fill {@preview.ramp.fill}</div>
+          <div>label light {@preview.ramp.label_light}</div>
+          <div>label dark {@preview.ramp.label_dark}</div>
+        </div>
+      </div>
+
       <%!-- Parentage is derived, not asked for — see the moduledoc. Say so,
            so its absence reads as a decision rather than a missing field. --%>
       <p class="text-xs text-base-content/60" data-role="org-parent-note">
         New orgs are created as tenants of Fabrikam. There is exactly one root org and it
         already exists, so there is nothing to choose here.
       </p>
-
-      <%!-- The surface must not pretend the form finishes the job. --%>
-      <div
-        class="rounded-lg border border-edge bg-base-200 p-3 text-xs text-base-content/60"
-        data-role="create-org-followup-note"
-      >
-        Creating an org registers the tenant. Its scope colour and its chip on the Tasks
-        scope rail require a follow-up code change — the colour ramp is hand-authored CSS
-        with contrast-checked label values, so it cannot be picked in this form. Until
-        that ships, the org exists and is selectable but will not appear on the scope rail.
-      </div>
     </.form>
 
     <:actions>

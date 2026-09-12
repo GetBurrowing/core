@@ -434,16 +434,24 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     # `archived_at`, so a single runtime-created org 500'd the board for
     # every user in the deployment.
     #
-    # Two DISTINCT failure modes, which is why the fix must be
-    # allowlist-shaped rather than a rescue:
+    # Two DISTINCT failure modes, which is why the fix could not be a rescue:
     #
     #   * slug never compiled as an atom -> `ArgumentError` in
     #     `active_scope_keys/0` (a rescue would suppress this one);
     #   * slug that IS an existing atom but is not one of the five scopes ->
     #     `to_existing_atom/1` SUCCEEDS and the atom reaches
-    #     `<.scope_pill>`, whose `scope_label/1` and `slug/1` clauses are
+    #     `<.scope_pill>`, whose `scope_label/1` and `slug/1` clauses were
     #     non-total -> `FunctionClauseError` at render (a rescue would leave
     #     this one live).
+    #
+    # The fix WAS allowlist-shaped until task 01a09287 stage 2, which removed
+    # the allowlist and made the pipeline strings end to end instead. These
+    # cases therefore still assert /tasks MOUNTS with a runtime-created org
+    # present — the outage — but the org now gets a chip rather than being
+    # dropped. `ScopePill.slug/1` and `scope_label/1` are total from that
+    # stage on, which is what makes the second mode safe without an
+    # allowlist. The chip's PRESENCE is covered in
+    # `tasks/tasks_live_new_tenant_rail_test.exs`.
 
     defp insert_tenant_org(slug, name) do
       %Org{}
@@ -481,9 +489,9 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
       # Renders at all (pre-fix: ArgumentError in mount/3 -> 500) …
       assert has_element?(view, "[data-scope-chip='fabrikam']")
-      # … and the out-of-enum org gets no chip: the rail's colors/labels are
-      # hardcoded to the five scopes, so a chip for it could not be rendered.
-      refute has_element?(view, "[data-scope-chip='e2e-target-323']")
+      # … and since task 01a09287 stage 2 the runtime-created org is a chip
+      # like any other, rather than being filtered out by an allowlist.
+      assert has_element?(view, "[data-scope-chip='e2e-target-323']")
     end
 
     test "mount /tasks succeeds with an active tenant whose slug IS an existing atom but not a scope",
@@ -502,18 +510,23 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
       # Pre-fix this raises FunctionClauseError in
       # PlatformWeb.Components.ScopePill.slug/1 at render — NOT ArgumentError.
-      # This is the case a rescue-only fix would leave broken.
+      # This is the case a rescue-only fix would leave broken, and the one
+      # that stopped being about an allowlist when `slug/1` and
+      # `scope_label/1` became total (task 01a09287 stage 2): the render is
+      # now safe for an arbitrary slug, so the chip is allowed through.
       assert has_element?(view, "[data-scope-chip='fabrikam']")
-      refute has_element?(view, "[data-scope-chip='name']")
+      assert has_element?(view, "[data-scope-chip='name']")
     end
 
     test "the seeded scope rail is unchanged", %{conn: conn} do
       {conn, _user} = fabrikam_admin_conn(conn)
 
+      # Every active tenant, not the `tenant_priority/0` subset: since task
+      # 01a09287 stage 2 the rail is the tenant rows, and `tenant_priority/0`
+      # is a curation list for ORDER, never a registration requirement.
       expected =
         Tenancy.list_active_tenants_unscoped()
         |> Enum.map(& &1.slug)
-        |> Enum.filter(&(&1 in Tenancy.tenant_priority()))
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -548,8 +561,12 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # `active_scope_keys/0` — a mount-only fix would still crash the socket
       # here.
       refute has_element?(view, "[data-scope-chip='soylent']")
-      refute has_element?(view, "[data-scope-chip='e2e-target-323']")
       assert has_element?(view, "[data-scope-chip='fabrikam']")
+
+      # The org inserted mid-session appears on the re-read, which is the
+      # positive half of the same claim: `refresh_containers/1` re-runs the
+      # rail source, so it must pick up BOTH the archive and the insert.
+      assert has_element?(view, "[data-scope-chip='e2e-target-323']")
     end
   end
 
@@ -615,11 +632,11 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
       # Same expectation the "the seeded scope rail is unchanged" test uses:
       # admins bypass the membership filter, so the unscoped list is correct
-      # for them.
+      # for them. No `tenant_priority/0` filter since task 01a09287 stage 2 —
+      # every active tenant is on the rail.
       expected =
         Tenancy.list_active_tenants_unscoped()
         |> Enum.map(& &1.slug)
-        |> Enum.filter(&(&1 in Tenancy.tenant_priority()))
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 

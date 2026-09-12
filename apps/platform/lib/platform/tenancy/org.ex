@@ -31,6 +31,12 @@ defmodule Platform.Tenancy.Org do
 
     belongs_to(:parent_org, __MODULE__, foreign_key: :parent_org_id)
 
+    # OKLCH hue (degrees, 0..359) and chroma for this org's scope colour.
+    # Both NULL means "no colour set" — see task 01a09287 and
+    # `Platform.Tenancy.ScopeColor`, which solves the label pair from them.
+    field(:color_hue, :integer)
+    field(:color_chroma, :float)
+
     field(:archived_at, :utc_datetime_usec)
     field(:deletion_scheduled_at, :utc_datetime_usec)
 
@@ -40,18 +46,35 @@ defmodule Platform.Tenancy.Org do
   @doc """
   Validates `name` and `slug` presence + slug format.
 
+  `color_hue` is bounded to 0..359 here AND by the `orgs_color_hue_range`
+  CHECK constraint; the two are separate guards, and only the constraint
+  survives a raw insert that bypasses this changeset.
+
   Slugs are lowercase, must start with a letter, and may contain letters,
   digits, hyphens, and underscores. Matches the convention used by
   `task_stacks` and similar resources.
   """
   def changeset(org, attrs) do
     org
-    |> cast(attrs, [:name, :slug, :parent_org_id, :archived_at, :deletion_scheduled_at])
+    |> cast(attrs, [
+      :name,
+      :slug,
+      :parent_org_id,
+      :color_hue,
+      :color_chroma,
+      :archived_at,
+      :deletion_scheduled_at
+    ])
     |> validate_required([:name, :slug])
     |> validate_format(:slug, @slug_format,
       message: "must start with a lowercase letter and contain only [a-z0-9_-]"
     )
+    |> validate_number(:color_hue, greater_than_or_equal_to: 0, less_than: 360)
     |> unique_constraint(:slug)
+    |> check_constraint(:color_hue,
+      name: :orgs_color_hue_range,
+      message: "must be between 0 and 359"
+    )
     |> foreign_key_constraint(:parent_org_id)
   end
 end

@@ -65,7 +65,6 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   """
   use PlatformWeb, :live_component
 
-  alias Platform.Tasks
   alias Platform.Tenancy
   alias PlatformWeb.Tasks.TaskDisplay
 
@@ -139,7 +138,8 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
       </div>
 
       <%!-- Scope-filter rail (desktop, Stage 3 of Tasks v2 — 2026-05-19).
-           Five sub-org chips + an "All" reset. Mobile keeps the 5-pill status
+           One chip per active org the viewer belongs to (task 01a09287
+           stage 2 — no longer a fixed six), plus an "All" reset. Mobile keeps the 5-pill status
            nav — the rail is `hidden lg:flex` only, per the responsive-scope
            contract.
 
@@ -149,7 +149,8 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
 
            Click semantics: the "All" chip dispatches `filter_scope` with
            `phx-value-scope="all"`; sub-org chips dispatch it with their scope
-           atom serialized to a string (`"fabrikam"`, `"soylent"`, etc). The
+           SLUG, a plain string (`"fabrikam"`, `"soylent"`, etc) that stays a
+           string all the way through `parse_scope/2` into `@scope_filter`. The
            shell narrows the kanban render via
            `desktop_column_items_for_scope/4` once it mirrors the value. --%>
       <nav
@@ -186,9 +187,9 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
           </span>
         </button>
         <span
-          :for={scope <- @active_scope_keys}
-          data-scope-chip={TaskDisplay.scope_pill_slug(@mask_labels, @mask_names?, scope)}
-          data-active={to_string(@scope_filter == scope)}
+          :for={entry <- @active_scopes}
+          data-scope-chip={TaskDisplay.scope_pill_slug(@mask_labels, @mask_names?, entry.slug)}
+          data-active={to_string(@scope_filter == entry.slug)}
           class="inline-flex items-center gap-1"
         >
           <%!-- event/target are NOT optional decoration: `scope_pill/1`
@@ -205,22 +206,38 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
                the page header, inches above the masked rail, at desktop width.
                Passing `nil` while unmasked leaves the pill computing its own
                label exactly as before — see `TaskDisplay.scope_pill_label/3`. --%>
+          <%!-- `scope` is the org's SLUG AS A STRING and `label` is its own
+               `Org.name`, since task 01a09287 stage 2 removed the
+               `Tasks.scope_keys/0` allowlist this rail used to intersect.
+               Never convert the slug to an atom on the way in or out — the
+               atom exists for the six orgs that shipped with the code and
+               does not exist for one an admin created this morning, which
+               is exactly the shape that passes local testing and 500s
+               `/tasks` in production (task 019fa209).
+
+               Passing `label` unconditionally also means the pill never
+               needs to look a slug up: while masking is on
+               `scope_pill_label/3` returns the placeholder, and while it is
+               off this hands over the real org name rather than leaving the
+               pill to guess from a six-entry map. --%>
           <.scope_pill
-            scope={scope}
-            active={@scope_filter == scope}
+            scope={entry.slug}
+            active={@scope_filter == entry.slug}
             event="filter_scope"
             target={@myself}
-            label={TaskDisplay.scope_pill_label(@mask_labels, @mask_names?, scope)}
-            value={TaskDisplay.scope_pill_slug(@mask_labels, @mask_names?, scope)}
+            label={
+              TaskDisplay.scope_pill_label(@mask_labels, @mask_names?, entry.slug) || entry.label
+            }
+            value={TaskDisplay.scope_pill_slug(@mask_labels, @mask_names?, entry.slug)}
           />
           <span class={[
             "inline-flex items-center justify-center min-w-[18px] h-[18px] -ml-0.5 rounded-full text-[10px] font-bold tabular-nums",
-            if(@scope_filter == scope,
+            if(@scope_filter == entry.slug,
               do: "bg-base-content/15 text-base-content",
               else: "bg-base-200 text-base-content/60"
             )
           ]}>
-            {Map.get(@scope_counts, scope, 0)}
+            {Map.get(@scope_counts, entry.slug, 0)}
           </span>
         </span>
 
@@ -354,13 +371,22 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
     assign(socket, changes)
   end
 
-  # Allowlist first, never convert: `String.to_existing_atom/1` on user
-  # input is a crash waiting for a scope that was never rendered.
-  defp parse_scope(_socket, scope) when is_binary(scope) do
-    Enum.find(Tasks.scope_keys(), &(Atom.to_string(&1) == scope))
-    |> case do
-      nil -> if scope == "all", do: {:ok, :all}, else: :error
-      parsed -> {:ok, parsed}
+  # Membership test against the chips this viewer was actually rendered,
+  # never a conversion. `String.to_existing_atom/1` on user input is a crash
+  # waiting for a scope that was never compiled, and `String.to_atom/1` is
+  # unbounded atom-table growth from a `phx-value-` payload. The filter value
+  # STAYS A STRING from here on; `:all` is the one atom, and it is ours.
+  #
+  # Scoping to `@active_scopes` rather than to every org is deliberate: a
+  # replayed or hand-crafted payload naming an org the viewer has no
+  # membership in is ignored, exactly as an unknown slug is.
+  defp parse_scope(_socket, "all"), do: {:ok, :all}
+
+  defp parse_scope(socket, scope) when is_binary(scope) do
+    if Enum.any?(socket.assigns[:active_scopes] || [], &(&1.slug == scope)) do
+      {:ok, scope}
+    else
+      :error
     end
   end
 

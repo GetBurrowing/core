@@ -84,7 +84,10 @@ defmodule PlatformWeb.TasksLiveStage6ExtractionTest do
       |> render_click()
 
       _ = :sys.get_state(view.pid)
-      assert :sys.get_state(view.pid).socket.assigns.scope_filter == :fabrikam
+      # The org SLUG, a string — task 01a09287 stage 2 removed the allowlist
+      # that made converting it to an atom safe, so `:all` is the only atom
+      # `@scope_filter` still holds.
+      assert :sys.get_state(view.pid).socket.assigns.scope_filter == "fabrikam"
 
       view
       |> element(~s(button[data-scope-chip="all"]))

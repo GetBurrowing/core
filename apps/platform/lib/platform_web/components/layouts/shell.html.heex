@@ -38,6 +38,13 @@
   class="app-shell-root flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
   style={"--meeting-bar-height: " <> (if @meeting_active, do: "3rem", else: "0px")}
 >
+  <%!-- Per-org scope colours as CSS custom properties. Rendered here, once,
+       because every surface that shows a scope chip renders this shell.
+       Deliberately NOT phx-update="ignore": an admin recolouring an org has
+       to reach the next render, and an ignored subtree would swallow it.
+       See PlatformWeb.Components.ScopeColorStyles for why this is a style
+       element and not a Tailwind utility. --%>
+  <.scope_color_styles viewer={assigns[:current_user_record]} />
   <%!-- Sidebar collapse persistence hook (localStorage) --%>
   <div
     id="sidebar-collapse-hook"

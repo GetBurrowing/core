@@ -1227,8 +1227,63 @@ defmodule Platform.Tenancy do
     cyberdyne: "Cyberdyne"
   }
 
+  # NOT a literal. `Platform.Tenancy.ScopeColor` is where the colour
+  # constants live and this is the third of three readers; it used to be a
+  # `0.15` here, a `0.15` in `ScopeColorStyles`, a `0.15` in
+  # `AdminOrgsLive` — and a `0.16` as the `orgs.color_chroma` column
+  # default, which is the one that won. Task 01a09287 stage 5.
+  @default_chroma Platform.Tenancy.ScopeColor.default_chroma()
+
+  @doc """
+  The scope rail's source rows: one entry per ACTIVE org the viewer belongs
+  to, in canonical tenant-priority order.
+
+  Replaces the `Tasks.scope_keys/0` allowlist intersection that used to feed
+  the rail (task 01a09287 stage 2). The allowlist existed to make atom
+  conversion safe; entries are STRINGS end to end, so no conversion — and no
+  allowlist — is needed. Adding a tenant is a row, not a deploy.
+
+      [%{slug: "fabrikam", label: "Fabrikam", hue: 264, chroma: 0.17}, ...]
+
+  `label` is the org's own `name`, NOT `@scope_labels`: a map keyed on six
+  compiled atoms cannot name a seventh org, and the row already carries the
+  name an admin typed. `hue` is `nil` when the org has no colour set (the
+  caller decides the fallback); `chroma` falls back to #{@default_chroma},
+  the mid-range value `Platform.Tenancy.ScopeColor` is tuned around.
+
+  > #### Never convert a slug to an atom {: .error}
+  >
+  > `String.to_existing_atom/1` on an org slug 500'd `/tasks` for every
+  > user (task 019fa209) — it runs in `mount/3`, and the atom exists for the
+  > six compiled orgs and does not for the seventh. That failure is
+  > invisible against a seeded database. Keep this pipeline on binaries.
+  """
+  @spec scope_slug_entries(map() | nil) :: [
+          %{slug: String.t(), label: String.t(), hue: integer() | nil, chroma: float()}
+        ]
+  def scope_slug_entries(viewer) do
+    viewer
+    |> list_active_tenants_for_user()
+    |> Enum.map(fn %Org{} = org ->
+      %{
+        slug: org.slug,
+        label: org.name,
+        hue: org.color_hue,
+        chroma: org.color_chroma || @default_chroma
+      }
+    end)
+  end
+
   @doc """
   Tailwind text-color class for a scope slug.
+
+  > #### Deprecated {: .warning}
+  >
+  > Keyed on the six compiled scope atoms, so it returns `"text-muted"` for
+  > any org added after this module was written. New callers want
+  > `scope_slug_entries/1` plus `Platform.Tenancy.ScopeColor.derive/2`.
+  > Retained because existing callers (`files_live`, `inheritance_pill`,
+  > `recovery_live`) still read it.
 
   Returns the fallback `"text-muted"` for unknown slugs (including unknown
   binaries that would otherwise blow up `String.to_existing_atom/1`).
@@ -1240,6 +1295,12 @@ defmodule Platform.Tenancy do
 
   @doc """
   Human-readable label for a scope slug.
+
+  > #### Deprecated {: .warning}
+  >
+  > Same limitation as `scope_color/1`: a seventh org falls through to a
+  > capitalised echo of its slug rather than the name its admin typed. Use
+  > `scope_slug_entries/1`, whose `label` is `Org.name`.
 
   Unknown slugs fall back to a capitalised echo of the input so UIs
   don't render an empty string. (`String.capitalize/1` doesn't know

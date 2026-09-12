@@ -1550,25 +1550,49 @@ defmodule Platform.Tasks.TasksContextTest do
   describe "count_by_scope/0 — sub-org scope counts (Tasks v2 stage 3)" do
     # Stage 3 of task 019e389c-1f65-7018-bb54-e256ba29fd59 (2026-05-19): the
     # desktop scope-filter rail pulls counts from `count_by_scope/0`. The
-    # today-state contract is to fold every non-deleted task under :fabrikam and
-    # return 0 for the other four sub-orgs, because `tasks` has no `org_id`
+    # today-state contract is to fold every non-deleted task under "fabrikam" and
+    # return 0 for every other org, because `tasks` has no `org_id`
     # column yet — once MT/RBAC lands the body of the helper becomes a real
     # GROUP BY org_id but the public API stays unchanged.
+    #
+    # Keys are ORG SLUGS AS STRINGS, one per active org, since task 01a09287
+    # stage 2. They were the six `@scope_keys` ATOMS before that, which meant
+    # a seventh org's bucket could never exist and its chip read 0 forever.
 
     setup do
       {:ok, project} = Tasks.create_project(%{name: "Scope Project"})
       %{project: project}
     end
 
-    test "returns the six sub-org keys with non-negative integer counts", %{project: project} do
+    test "keys on the ACTIVE ORG ROWS as strings, with non-negative counts", %{project: project} do
       _t1 = Tasks.create_task(%{project_id: project.id, title: "Some task"})
+
+      # An org created at runtime, whose slug was never compiled as an atom —
+      # the shape the old `@scope_keys`-keyed implementation could not
+      # produce a bucket for at all.
+      # Parented under fabrikam: `orgs_single_root` refuses a second parentless
+      # org, and that constraint error reads nothing like this test.
+      runtime_org =
+        %Platform.Tenancy.Org{}
+        |> Platform.Tenancy.Org.changeset(%{
+          name: "Counted Runtime Org",
+          slug: "counted-runtime-org",
+          parent_org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id
+        })
+        |> Repo.insert!()
 
       counts = Tasks.count_by_scope()
 
-      assert Map.keys(counts) |> Enum.sort() ==
-               Enum.sort([:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne])
+      expected =
+        Platform.Tenancy.list_active_tenants_unscoped() |> Enum.map(& &1.slug) |> Enum.sort()
 
-      for {_key, value} <- counts do
+      assert Map.keys(counts) |> Enum.sort() == expected
+      assert runtime_org.slug in Map.keys(counts)
+
+      # Every key is a BINARY, not an atom: an org slug is user input and has
+      # no safe conversion, so a single atom key here is the bug returning.
+      for {key, value} <- counts do
+        assert is_binary(key)
         assert is_integer(value) and value >= 0
       end
     end
@@ -1579,7 +1603,7 @@ defmodule Platform.Tasks.TasksContextTest do
       assert Tasks.scope_keys() == PlatformWeb.Components.ScopePill.scopes()
     end
 
-    test "today-state: all tasks fold under :fabrikam, other sub-orgs are 0", %{project: project} do
+    test ~s(today-state: all tasks fold under "fabrikam", other sub-orgs are 0), %{project: project} do
       # Seed three tasks across different statuses. Since `tasks.org_id`
       # doesn't exist yet, every one of them must land under :fabrikam.
       {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "B", status: "backlog"})
@@ -1588,25 +1612,25 @@ defmodule Platform.Tasks.TasksContextTest do
 
       counts = Tasks.count_by_scope()
 
-      assert counts.fabrikam >= 3
-      assert counts.soylent == 0
-      assert counts.wayne_tech == 0
-      assert counts.sxi == 0
-      assert counts.paragon == 0
+      assert counts["fabrikam"] >= 3
+      assert counts["soylent"] == 0
+      assert counts["wayne_tech"] == 0
+      assert counts["sxi"] == 0
+      assert counts["paragon"] == 0
     end
 
-    test "soft-deleted tasks are excluded from the fabrikam count", %{project: project} do
+    test ~s(soft-deleted tasks are excluded from the "fabrikam" count), %{project: project} do
       {:ok, task} =
         Tasks.create_task(%{project_id: project.id, title: "To delete", status: "backlog"})
 
-      before_count = Tasks.count_by_scope().fabrikam
+      before_count = Tasks.count_by_scope()["fabrikam"]
 
       # Soft-delete via the same deleted_at column the rest of the board reads.
       task
       |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
       |> Repo.update!()
 
-      after_count = Tasks.count_by_scope().fabrikam
+      after_count = Tasks.count_by_scope()["fabrikam"]
 
       assert after_count == before_count - 1
     end

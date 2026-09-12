@@ -11,6 +11,11 @@ defmodule PlatformWeb.Layouts do
   import PlatformWeb.Components.IconRail
   import PlatformWeb.Components.MoreSheet
 
+  # Server-rendered <style> block carrying each active org's scope colour as
+  # CSS custom properties — the runtime replacement for the build-time
+  # `.text-<slug>` utilities. Rendered once from shell.html.heex.
+  import PlatformWeb.Components.ScopeColorStyles
+
   # Embed all files in layouts/* within this module.
   # The default root.html.heex file contains the HTML
   # skeleton of your application, namely HTML headers

@@ -90,6 +90,49 @@ defmodule PlatformWeb.Components.ScopePill do
   classes; Stage 2 of Working surfaces plan v4 retired that pattern in
   favor of the named utilities. The public `:scope` attr API is unchanged.
 
+  ### Two colour paths, and which slug gets which (task 01a09287 stage 5)
+
+  Everything above describes the BUILD-TIME path, and it now applies to
+  exactly six slugs. A Tailwind utility is a literal rule compiled into the
+  stylesheet, so `.bg-<slug>` exists only for a slug somebody hand-wrote
+  into `app.css` — which meant standing up a tenant needed a CSS rebuild and
+  a deploy, and an org created at runtime rendered grey.
+
+  So there are two paths:
+
+    * **legacy / build-time** — the six slugs in `@legacy_css_slugs`, which
+      keep the `bg-<slug>` / `text-<slug>-label` / `border-<slug>` /
+      `bg-<slug>-active` / `bg-<slug>-dot` utilities described above. They
+      stay because their labels were solved against one contrast cell of
+      four and re-solving them moves every shipped org's colour on every
+      install — a brand call, filed as task 01a09333-d374.
+    * **runtime / var-driven** — every other slug takes the slug-agnostic
+      `.scope-tint` / `.scope-text` / `.scope-border` / `.scope-dot` /
+      `.scope-active` / `.scope-tint-hover` rules, which read custom
+      properties that `PlatformWeb.Components.ScopeColorStyles` emits into a
+      server-rendered `<style>` block, one declaration set per org with a
+      `color_hue`. A custom property resolves at RENDER time, so a
+      brand-new org is coloured on its next page load with no deploy.
+
+  The split is an explicit branch and not a reliance on the cascade: a chip
+  carrying both class sets would match both rules at equal specificity and
+  the winner would be a function of their ORDER in `app.css`, which is not a
+  decision anybody would have made on purpose.
+
+  ### `data-scope` is a leak surface
+
+  Every chip carries `data-scope`, which is what the emitted rules match on,
+  and its value is the org's SLUG AS STORED — not `slug/1`'s kebab-cased
+  Tailwind fragment, since `:wayne_tech` is the class fragment `wayne-tech` and
+  the database row `wayne_tech`.
+
+  It is the same leak class as `phx-value-scope` and is resolved the same
+  way. An explicit `:value` wins; failing that, a caller who passed a
+  `:label` has RENAMED this chip for a masked session, and spelling its true
+  slug one attribute over contradicts the rename, so nothing is emitted. See
+  `data_scope/1` — the reasoning there is longer than the code because the
+  first version of it leaked `wayne_tech` into a masked chat header.
+
   ## Examples
 
       <.scope_pill scope={:fabrikam} />
@@ -113,10 +156,20 @@ defmodule PlatformWeb.Components.ScopePill do
   """
   def scopes, do: @scopes
 
-  attr(:scope, :atom,
+  attr(:scope, :any,
     required: true,
-    values: @scopes,
-    doc: "The primary scope this pill represents."
+    doc: """
+    The primary scope this pill represents: one of the `scopes/0` atoms, or
+    an org SLUG AS A STRING.
+
+    Was `:atom` with `values: @scopes` until task 01a09287 stage 2. That
+    `values:` list made the pill undrawable for any org created after the
+    module was written, which is the whole thing that stage removed — the
+    rail now feeds it slugs straight off the `orgs` rows. Callers passing a
+    string should pass `label` too: `scope_label/1`'s fallback can only
+    title-case the slug, and an org's `name` is not always its slug
+    title-cased.
+    """
   )
 
   attr(:propagated_to, :atom,
@@ -285,6 +338,7 @@ defmodule PlatformWeb.Components.ScopePill do
         phx-target={@target}
         phx-value-scope={@value || @scope}
         phx-value-propagated-to={@propagated_to}
+        data-scope={data_scope(assigns)}
         title={@title}
         class={[
           chip_base_classes(@size),
@@ -300,6 +354,7 @@ defmodule PlatformWeb.Components.ScopePill do
       </button>
     <% else %>
       <span
+        data-scope={data_scope(assigns)}
         title={@title}
         class={[
           chip_base_classes(@size),
@@ -354,36 +409,124 @@ defmodule PlatformWeb.Components.ScopePill do
   # border. Active chip uses the full-saturation `bg-<slug>-active` (which
   # also bakes in the contrast-safe text and shadow ring).
 
+  # The six slugs that HAVE hand-authored blocks in app.css. Everything else
+  # takes the slug-agnostic `.scope-*` utilities, which read the custom
+  # properties `PlatformWeb.Components.ScopeColorStyles` emits at render
+  # time.
+  #
+  # This is a fallback list, not an allowlist: a slug that is missing from it
+  # is coloured, not crashed. The split exists so the six shipped orgs render
+  # byte-identically to what they render today — their app.css labels were
+  # solved against one cell of four and moving them is a brand call filed as
+  # task 01a09333-d374, not a thing to do by accident while wiring a call
+  # site. It is deliberately NOT expressed as "whichever rule the cascade
+  # happens to pick": both `.scope-tint` and `.bg-fabrikam` would match a fabrikam
+  # chip carrying both class sets, and which one won would then be a
+  # function of their order in app.css. Choosing here makes it a decision.
+  @legacy_css_slugs ~w(fabrikam soylent wayne-tech sxi paragon cyberdyne)
+
+  defp legacy_css?(scope), do: slug(scope) in @legacy_css_slugs
+
   defp chip_color_classes(scope, false, :compact) do
     # Compact drops the border — bg fill + dot carry the signal.
     # Label text uses the AA-tuned `text-<slug>-label` token (darker than
-    # `scope_color/1`'s `text-<slug>`) so it clears WCAG 1.4.3 on the 12% tint.
-    [
-      "bg-#{slug(scope)}",
-      "text-#{slug(scope)}-label"
-    ]
+    # `scope_color/1`'s `text-<slug>`) so it clears WCAG 1.4.3 on the tint.
+    if legacy_css?(scope) do
+      [
+        "bg-#{slug(scope)}",
+        "text-#{slug(scope)}-label"
+      ]
+    else
+      ["scope-tint", "scope-text"]
+    end
   end
 
   defp chip_color_classes(scope, false, _default) do
     # See the :compact clause above — `text-<slug>-label` is the AA-safe
     # label color on the 12% `bg-<slug>` tint (vs scope_color/1's full-sat
     # `text-<slug>`, which is reserved for the dot / active fill).
-    [
-      "bg-#{slug(scope)}",
-      "text-#{slug(scope)}-label",
-      "border-#{slug(scope)}"
-    ]
+    #
+    # `.scope-border` is not optional on the var path: a scope chip's FILL
+    # carries only 1.067-1.143 contrast against the surface behind it, so
+    # the chip's edge comes from the border and the label, not the fill.
+    if legacy_css?(scope) do
+      [
+        "bg-#{slug(scope)}",
+        "text-#{slug(scope)}-label",
+        "border-#{slug(scope)}"
+      ]
+    else
+      ["scope-tint", "scope-text", "scope-border"]
+    end
   end
 
   defp chip_color_classes(scope, true, _size) do
-    "bg-#{slug(scope)}-active"
+    if legacy_css?(scope),
+      do: "bg-#{slug(scope)}-active",
+      else: "scope-active"
   end
 
   # Hover state — bump default 12% bg to 22% color-mix on the button variant only.
-  defp chip_hover_classes(scope), do: "hover:bg-#{slug(scope)}/22"
+  defp chip_hover_classes(scope) do
+    if legacy_css?(scope),
+      do: "hover:bg-#{slug(scope)}/22",
+      else: "scope-tint-hover"
+  end
 
   # Dot color — full saturation, redundant-signal-beyond-color cue.
-  defp scope_dot(scope), do: "bg-#{slug(scope)}-dot"
+  defp scope_dot(scope) do
+    if legacy_css?(scope),
+      do: "bg-#{slug(scope)}-dot",
+      else: "scope-dot"
+  end
+
+  # The `data-scope` attribute value: the org's SLUG AS STORED, because that
+  # is what `ScopeColorStyles` keys its `[data-scope="…"]{…}` rules on. NOT
+  # `slug/1`, which kebab-cases for Tailwind class names — `:wayne_tech` is the
+  # class fragment `wayne-tech` and the row `wayne_tech`, and using the class
+  # fragment here would silently miss the rule.
+  #
+  # ── Why this takes the whole assigns map and not just the scope ──────
+  #
+  # `data-scope` is the same leak class as `phx-value-scope`: an attribute
+  # value survives `refute html =~ "Wayne-Tech"` untouched and is legible in
+  # the DOM inspector a screen share is likely to have open. There are two
+  # kinds of caller and they need different answers.
+  #
+  #   * The TASKS rail masks by passing BOTH a placeholder `label` and a
+  #     placeholder `value`. `@value` is the payload that is safe to spell,
+  #     so it is what goes in the attribute, and the chip keeps whatever
+  #     colour a rule keyed on that placeholder would give it (none, today).
+  #
+  #   * The CHAT rail and chat header mask by passing a placeholder `label`
+  #     and NOTHING else — they hand over the real scope atom from
+  #     `sub_org_scope_atom/1`. A first cut of this function fell back to
+  #     `@scope` there and wrote `data-scope="wayne_tech"` into a masked
+  #     session. `ChatLiveMaskMobileTest` caught it on both surfaces; it was
+  #     a real leak, not a test being fussy, and it is the reason
+  #     `refute_name_anywhere/3` checks all three spellings of a name rather
+  #     than the display form.
+  #
+  # So: an explicit `@value` is authoritative. Failing that, a caller who has
+  # OVERRIDDEN the visible label has renamed this chip, and spelling its true
+  # slug one attribute over contradicts the rename — emit nothing. Only an
+  # un-renamed chip gets its own scope. Suppression costs those two chat
+  # surfaces their colour while masking is on; they route through
+  # `sub_org_scope_atom/1`, a closed six-name map that returns nil for any
+  # org created after this code was written, so they cannot reach the
+  # runtime colour path at all and there is nothing to lose.
+  #
+  # `label` is `false` (not nil) when a caller writes `@mask_names? && …`
+  # with masking off, which is why the guard is `is_binary/1` and not a nil
+  # check: `false` must fall through to the scope, or an unmasked chat pill
+  # would lose its colour too.
+  defp data_scope(%{value: value}) when is_binary(value), do: value
+  defp data_scope(%{label: label}) when is_binary(label), do: nil
+  defp data_scope(%{scope: scope}), do: stringify_scope(scope)
+
+  defp stringify_scope(scope) when is_atom(scope), do: Atom.to_string(scope)
+  defp stringify_scope(scope) when is_binary(scope), do: scope
+  defp stringify_scope(_), do: nil
 
   # Dot diameter — compact uses a smaller dot to match the tighter chrome.
   defp dot_size(:compact), do: "size-1.5"
@@ -398,6 +541,18 @@ defmodule PlatformWeb.Components.ScopePill do
   defp slug(:paragon), do: "paragon"
   defp slug(:cyberdyne), do: "cyberdyne"
 
+  # TOTAL from task 01a09287 stage 2 on. These clauses used to cover exactly
+  # six atoms, so a seventh org reached the renderer and raised
+  # `FunctionClauseError` — a crash, on a surface whose whole job is to
+  # tolerate arbitrary org slugs. A slug with no `bg-<slug>` utility in
+  # app.css renders an unstyled chip; that is a cosmetic gap, not an outage,
+  # and the colour-token wiring is the follow-on stage.
+  #
+  # `String.to_existing_atom/1` is NOT how the binary clause is implemented,
+  # on purpose: it raises for precisely the new org this clause exists for.
+  defp slug(scope) when is_binary(scope), do: String.replace(scope, "_", "-")
+  defp slug(scope), do: scope |> to_string() |> String.replace("_", "-")
+
   # ── Labels ─────────────────────────────────────────────────────────
 
   defp scope_label(:fabrikam), do: "Fabrikam"
@@ -406,6 +561,18 @@ defmodule PlatformWeb.Components.ScopePill do
   defp scope_label(:sxi), do: "SXI"
   defp scope_label(:paragon), do: "Paragon"
   defp scope_label(:cyberdyne), do: "Cyberdyne"
+
+  # Total fallback (task 01a09287 stage 2). Reached by any org outside the
+  # six compiled ones. Callers that know the org's real name pass it as
+  # `label`, which wins over this via `display_label/2` — the rail always
+  # does. This is only what a caller that passed a bare slug gets.
+  defp scope_label(scope) when is_binary(scope) do
+    scope
+    |> String.split(~r/[-_]/, trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
+
+  defp scope_label(scope), do: scope |> to_string() |> scope_label()
 
   # The caller's override wins over the scope enum's own name. Anything that
   # is not a binary (`nil`, or the `false` an inline `@mask_names? && ...`

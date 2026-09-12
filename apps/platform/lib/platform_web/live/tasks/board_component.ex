@@ -1545,7 +1545,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   end
 
   # Stage-3 wrapper: filters `desktop_column_items/3` through the active
-  # scope-rail selection. `:all` is the unfiltered passthrough. `:fabrikam` also
+  # scope-rail selection. `:all` is the unfiltered passthrough. `"fabrikam"` also
   # returns the full list today because every task folds under :fabrikam until
   # `tasks.org_id` lands (the same contract `count_by_scope/0` encodes). The
   # other scopes return an empty list today; once MT/RBAC ships this helper
@@ -1554,12 +1554,19 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     desktop_column_items(columns, stacks_by_column, col_key)
   end
 
-  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, :fabrikam) do
+  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope)
+       when scope in [:fabrikam, "fabrikam"] do
     desktop_column_items(columns, stacks_by_column, col_key)
   end
 
+  # Any OTHER org — not just the five that used to be listed here by atom.
+  # Task 01a09287 stage 2 turned `@scope_filter` into an org slug string and
+  # removed the fixed enum, so this has to be keyed on "is a scope that is
+  # not fabrikam" rather than on a membership list that a new tenant falls out
+  # of. Falling out of it silently returned the FULL board under the other
+  # clause below, i.e. a new org's chip would have shown every Fabrikam task.
   defp desktop_column_items_for_scope(_columns, _stacks_by_column, _col_key, scope)
-       when scope in [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne] do
+       when is_binary(scope) or scope in [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne] do
     []
   end
 

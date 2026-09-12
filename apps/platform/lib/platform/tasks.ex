@@ -5956,11 +5956,16 @@ defmodule Platform.Tasks do
   @scope_keys [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
 
   @doc """
-  Returns the canonical list of scope atoms used by the scope-filter rail.
+  Returns the canonical list of the six COMPILED scope atoms.
 
-  Exposed so the LiveView (and future callers) iterate the rail in a single
-  source of truth rather than re-declaring the order. Order mirrors
-  `PlatformWeb.Components.ScopePill.scopes/0`.
+  > #### No longer the scope rail's source {: .warning}
+  >
+  > The Tasks rail intersected this list until task 01a09287 stage 2, which
+  > is why standing up a tenant needed a deploy to get a chip. The rail now
+  > reads `Platform.Tenancy.scope_slug_entries/1` — active orgs, as strings,
+  > straight off the rows. This list is retained for the callers that still
+  > hold the enum (`ScopePill.scopes/0` consistency checks,
+  > `AdminOrgsLive`), and it is NOT a registration requirement for a new org.
   """
   @spec scope_keys() :: [atom()]
   def scope_keys, do: @scope_keys
@@ -5968,32 +5973,46 @@ defmodule Platform.Tasks do
   @doc """
   Count tasks per sub-org scope.
 
-  Returns a map with exactly the six scope keys (`:fabrikam`, `:soylent`,
-  `:wayne_tech`, `:sxi`, `:paragon`, `:cyberdyne`) populated as non-negative
-  integers.
+  Returns a map keyed by ORG SLUG AS A STRING — one key per active org —
+  with non-negative integer values.
+
+  ## Keyed on the rows, not on `scope_keys/0`
+
+  It used to return exactly the six `@scope_keys` atoms, which meant a
+  seventh org's chip rendered its count through `Map.get(counts, slug, 0)`
+  and got the default forever. Keying on `orgs` makes a new tenant's bucket
+  appear the moment the row does, with no deploy (task 01a09287 stage 2).
+
+  The keys are strings for the same reason the rail's are: an org slug is
+  user input and may never have been compiled as an atom, so there is no
+  safe conversion. Callers doing `counts.fabrikam` must become
+  `counts["fabrikam"]`.
 
   ## Today-state (pre-MT/RBAC-on-Tasks)
 
   `tasks` has no `org_id` column yet, so the helper folds every non-deleted
-  task under `:fabrikam` and returns 0 for the other four scopes. This keeps the
+  task under `"fabrikam"` and returns 0 for every other org. This keeps the
   scope rail rendering today without coupling the UI to a schema change.
 
   ## Future state (post-task-orgs)
 
   Once `tasks.org_id` lands, swap the body for a `group_by(t.org_id)`
-  aggregate; the public return shape stays the same so the LiveView's
-  scope-rail render is unaffected.
+  aggregate joined to `orgs.slug`; the public return shape is already the
+  one that query produces.
   """
-  @spec count_by_scope() :: %{atom() => non_neg_integer()}
+  @spec count_by_scope() :: %{String.t() => non_neg_integer()}
   def count_by_scope do
     total =
       Task
       |> where([t], is_nil(t.deleted_at))
       |> Repo.aggregate(:count)
 
-    @scope_keys
-    |> Map.new(fn key -> {key, 0} end)
-    |> Map.put(:fabrikam, total)
+    Platform.Tenancy.Org
+    |> where([o], is_nil(o.archived_at))
+    |> select([o], o.slug)
+    |> Repo.all()
+    |> Map.new(fn slug -> {slug, 0} end)
+    |> Map.put("fabrikam", total)
   end
 
   @doc """
