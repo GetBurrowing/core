@@ -32,7 +32,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
 
   alias Platform.Agents.Agent
   alias Platform.Federation.{ToolAuthorization, ToolSurface}
-  alias Platform.Orchestration.{ExecutionLease, RuntimeEvent}
+  alias Platform.Orchestration.{Diagnostics, ExecutionLease, RuntimeEvent}
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tenancy
@@ -389,6 +389,147 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
       |> Repo.insert()
 
     event
+  end
+
+  # ── task 01a0a5ed stage 2 ─────────────────────────────────────────────────
+  #
+  # ANTI-VACUITY. "passing `limit` does not error" is what an IGNORED option
+  # also does. Every test here seeds MORE rows than the bound it asserts and
+  # pins the returned length, the reported `count` AND the echoed `limit`
+  # together: the echoed limit is what lets a caller tell truncation from
+  # exhaustion, so a response that ran with 200 and reported 500 would be the
+  # defect even with a correctly-sized list.
+  describe "execution_lease_list limit" do
+    setup ctx do
+      # 210 > @max_limit (200) > @default_limit (50), so all three bounds are
+      # observable in one seeded task. Newest first == largest started_at.
+      seed_leases(ctx.task, 210)
+      :ok
+    end
+
+    test "with no limit returns exactly the module default", ctx do
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "execution_lease_list",
+                 %{"task_id" => ctx.task.id},
+                 context_for(ctx.agent_sxi)
+               )
+
+      assert result.count == Diagnostics.default_limit()
+      assert result.limit == Diagnostics.default_limit()
+      assert length(result.leases) == Diagnostics.default_limit()
+    end
+
+    test "an over-cap request is CLAMPED to the cap, not rejected and not honoured", ctx do
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "execution_lease_list",
+                 %{"task_id" => ctx.task.id, "limit" => 500},
+                 context_for(ctx.agent_sxi)
+               )
+
+      assert result.count == Diagnostics.max_limit()
+      assert length(result.leases) == Diagnostics.max_limit()
+
+      # The EFFECTIVE limit, not the asked-for one. Echoing 500 here while the
+      # query ran with 200 is the lie this assertion exists to catch.
+      assert result.limit == Diagnostics.max_limit()
+      refute result.limit == 500
+    end
+
+    test "an under-cap limit is honoured and keeps the NEWEST rows", ctx do
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "execution_lease_list",
+                 %{"task_id" => ctx.task.id, "limit" => 5},
+                 context_for(ctx.agent_sxi)
+               )
+
+      assert result.count == 5
+      assert result.limit == 5
+      assert length(result.leases) == 5
+
+      started = Enum.map(result.leases, & &1.started_at)
+      assert started == Enum.sort(started, {:desc, DateTime})
+
+      newest_five =
+        ExecutionLease
+        |> where(task_id: ^ctx.task.id)
+        |> order_by(desc: :started_at, desc: :inserted_at)
+        |> limit(5)
+        |> Repo.all()
+        |> Enum.map(& &1.id)
+
+      assert Enum.map(result.leases, & &1.id) == newest_five
+    end
+
+    test "limit composes with status — both applied, neither dropped", ctx do
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "execution_lease_list",
+                 %{"task_id" => ctx.task.id, "status" => "blocked", "limit" => 2},
+                 context_for(ctx.agent_sxi)
+               )
+
+      assert result.count == 2
+      assert result.limit == 2
+      assert result.status_filter == "blocked"
+      assert length(result.leases) == 2
+
+      # `status` was not silently dropped by the limit: there are more than two
+      # non-blocked leases seeded, so an unfiltered limit-2 read would return
+      # something else.
+      assert Enum.all?(result.leases, &(&1.status == "blocked"))
+
+      blocked_total =
+        ExecutionLease
+        |> where(task_id: ^ctx.task.id, status: "blocked")
+        |> Repo.aggregate(:count)
+
+      assert blocked_total > 2, "the limit must be the thing truncating, not the row count"
+    end
+
+    test "the invalid-status refusal still fires when limit is present", ctx do
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "execution_lease_list",
+                 %{"task_id" => ctx.task.id, "status" => "blokced", "limit" => 2},
+                 context_for(ctx.agent_sxi)
+               )
+
+      assert envelope.error =~ "status"
+      refute Map.has_key?(envelope, :leases)
+      refute Map.has_key?(envelope, :limit)
+    end
+  end
+
+  # Bulk seed: `insert_all` rather than 210 changesets, with strictly
+  # increasing `started_at` so newest-first is observable. Every third row is
+  # "blocked" so the status-composition test has more blocked rows than its
+  # limit.
+  defp seed_leases(task, n) do
+    now = DateTime.utc_now()
+
+    rows =
+      for i <- 1..n do
+        %{
+          id: Platform.Types.UUIDv7.generate(),
+          task_id: task.id,
+          stage_id: Ecto.UUID.generate(),
+          phase: "execution",
+          runtime_id: "runtime-bulk-#{i}",
+          status: if(rem(i, 3) == 0, do: "blocked", else: "active"),
+          started_at: DateTime.add(now, i, :second),
+          expires_at: DateTime.add(now, 1800, :second),
+          metadata: %{},
+          owner_attribution_status: "legacy_pre_migration",
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+
+    {^n, _} = Repo.insert_all(ExecutionLease, rows)
+    :ok
   end
 
   defp insert_lease(task, stage_id, status, runtime_id) do

@@ -1781,12 +1781,17 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Filter to one status: active | blocked | finished | failed | expired | abandoned. An unknown value is REJECTED rather than silently ignored."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Max leases to return. Defaults to 50, hard-capped at 200."
           }
         },
         returns:
-          "%{task_id, count, status_filter, leases: [%{id, stage_id, phase, runtime_id, status, started_at, last_heartbeat_at, last_progress_at, expires_at, block_reason, metadata}]} — newest first by started_at.",
+          "%{task_id, count, limit, status_filter, leases: [%{id, stage_id, phase, runtime_id, status, started_at, last_heartbeat_at, last_progress_at, expires_at, block_reason, metadata}]} — newest first by started_at.",
         limitations:
-          "AN EMPTY LIST IS A LEGITIMATE ANSWER FOR A LIVE, HEALTHY TASK. Leases are created only by the blocker/lifecycle path, never by dispatch: `@event_statuses` maps `\"execution.acked\" => nil`, and `upsert_lease/2` short-circuits on a nil status without inserting. So a task can show a full `runtime_event_list` and zero leases and be working exactly as designed — do NOT report that as missing data. An unknown `status` returns an invalid-argument error rather than every lease, because a silent empty result for a typo is indistinguishable from that genuinely-empty case. Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
+          "AN EMPTY LIST IS A LEGITIMATE ANSWER FOR A LIVE, HEALTHY TASK. Leases are created only by the blocker/lifecycle path, never by dispatch: `@event_statuses` maps `\"execution.acked\" => nil`, and `upsert_lease/2` short-circuits on a nil status without inserting. So a task can show a full `runtime_event_list` and zero leases and be working exactly as designed — do NOT report that as missing data. An unknown `status` returns an invalid-argument error rather than every lease, because a silent empty result for a typo is indistinguishable from that genuinely-empty case. `limit` defaults to 50 and is CLAMPED to a maximum of 200 rather than refused, and the response echoes the EFFECTIVE limit it ran with: when `count` equals that echoed `limit`, the list is truncated at the bound and there may be older leases you did not see, so read `count == 50` or `count == 200` as truncation rather than exhaustion. Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
         when_to_use:
           "When you need a task's lease lifecycle — whether one is active, blocked, expired, or was never created at all — to interpret a watchdog escalation without database or SSH access."
       },
@@ -4581,12 +4586,17 @@ defmodule Platform.Federation.ToolSurface do
   def execute("execution_lease_list", args, context) do
     with {:ok, task_id} <- require_string(args, "task_id", "execution_lease_list"),
          :ok <- authorize_review_access(context, task_id),
+         limit = Diagnostics.clamp_limit_for(Map.get(args, "limit")),
          {:ok, leases} <-
-           lease_list_result(task_id, Map.get(args, "status")) do
+           lease_list_result(task_id, Map.get(args, "status"), limit) do
       {:ok,
        %{
          task_id: task_id,
          count: length(leases),
+         # The EFFECTIVE (clamped) limit, not what the caller asked for: a
+         # response reporting `limit: 500` while the query ran with 200 would
+         # make a truncated list read as exhaustive.
+         limit: limit,
          status_filter: Map.get(args, "status"),
          leases: Enum.map(leases, &serialize_execution_lease/1)
        }}
@@ -11141,8 +11151,8 @@ defmodule Platform.Federation.ToolSurface do
   # silently returning [] would be indistinguishable from the genuinely-empty
   # case (no lease was ever created, which is normal) that these tools exist to
   # let a caller trust.
-  defp lease_list_result(task_id, status) do
-    case Diagnostics.list_execution_leases(task_id, status: status) do
+  defp lease_list_result(task_id, status, limit) do
+    case Diagnostics.list_execution_leases(task_id, status: status, limit: limit) do
       {:ok, leases} ->
         {:ok, leases}
 

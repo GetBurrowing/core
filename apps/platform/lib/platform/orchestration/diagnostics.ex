@@ -82,6 +82,11 @@ defmodule Platform.Orchestration.Diagnostics do
       than an empty list. Silently returning "no leases" for a typo'd status is
       indistinguishable from the genuinely-empty case this tool exists to
       explain.
+    * `:limit` — clamped into `1..#{@max_limit}`. Defaults to `#{@default_limit}`.
+      A caller asking for more than the cap silently receives the cap rather
+      than an error; the cap exists to bound the response, not to reject the
+      question. The limit is applied AFTER the ordering, so a bounded read
+      returns the NEWEST leases rather than an arbitrary slice.
 
   Returns `{:ok, leases}` or `{:error, :invalid_status}`.
 
@@ -96,6 +101,7 @@ defmodule Platform.Orchestration.Diagnostics do
           |> where([l], l.task_id == ^task_id)
           |> filter_status(status)
           |> order_by([l], desc: l.started_at, desc: l.inserted_at)
+          |> limit(^clamp_limit(Keyword.get(opts, :limit)))
           |> Repo.all()
 
         {:ok, leases}
