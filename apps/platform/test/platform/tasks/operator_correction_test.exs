@@ -510,6 +510,93 @@ defmodule Platform.Tasks.OperatorCorrectionTest do
     end
   end
 
+  # ── close_as_delivered/4 ──────────────────────────────────────────────
+
+  describe "close_as_delivered/4" do
+    test "the calling agent and the reference resolution are persisted",
+         %{project: project} do
+      admin = admin!()
+      backlog = task!(project, "backlog")
+      agent_id = Ecto.UUID.generate()
+      resolution = %{"kind" => "sha", "value" => "b85a4a96", "url" => "https://example/c"}
+
+      assert {:ok, _closed} =
+               Tasks.close_as_delivered(backlog.id, "b85a4a96", admin,
+                 via_agent_id: agent_id,
+                 delivery_reference_resolution: resolution
+               )
+
+      # Read off a FRESH row, not the returned struct: a stamp assertion
+      # against the in-memory return value cannot tell a write from a no-op.
+      stamp = reload(backlog).metadata["closed_as_delivered"]
+
+      assert stamp["via_agent_id"] == agent_id
+      assert stamp["resolution"] == resolution
+      assert stamp["reference"] == "b85a4a96"
+      # The authority stays the admin's — the agent is the instrument.
+      assert stamp["by_user_id"] == admin.id
+
+      row =
+        PhaseTransition
+        |> where([t], t.task_id == ^backlog.id and t.to_status == "done")
+        |> Repo.one!()
+
+      assert row.actor_kind == "user"
+      assert row.actor_id == admin.id
+    end
+
+    test "the options are additive: /3 writes no `via_agent_id` key",
+         %{project: project} do
+      admin = admin!()
+      backlog = task!(project, "backlog")
+
+      assert {:ok, _} = Tasks.close_as_delivered(backlog.id, "b85a4a96", admin)
+
+      stamp = reload(backlog).metadata["closed_as_delivered"]
+
+      refute Map.has_key?(stamp, "via_agent_id")
+      refute Map.has_key?(stamp, "resolution")
+      assert stamp["reference"] == "b85a4a96"
+    end
+
+    test "an explicitly nil option is omitted rather than written as a nil key",
+         %{project: project} do
+      admin = admin!()
+      backlog = task!(project, "backlog")
+
+      assert {:ok, _} =
+               Tasks.close_as_delivered(backlog.id, "b85a4a96", admin, via_agent_id: nil)
+
+      stamp = reload(backlog).metadata["closed_as_delivered"]
+
+      # `"via_agent_id" => nil` reads as "an agent did this and we lost its
+      # id", which is a different claim from "no agent was involved".
+      refute Map.has_key?(stamp, "via_agent_id")
+    end
+
+    test "the refusals are unchanged by the added arity", %{project: project} do
+      backlog = task!(project, "backlog")
+      agent_id = Ecto.UUID.generate()
+
+      assert {:error, :not_authorized} =
+               Tasks.close_as_delivered(backlog.id, "b85a4a96", member!(), via_agent_id: agent_id)
+
+      assert {:error, :delivery_reference_required} =
+               Tasks.close_as_delivered(backlog.id, "   ", admin!(), via_agent_id: agent_id)
+
+      assert {:error, :not_found} =
+               Tasks.close_as_delivered(Ecto.UUID.generate(), "b85a4a96", admin!(),
+                 via_agent_id: agent_id
+               )
+
+      assert reload(backlog).status == "backlog"
+
+      # POSITIVE CONTROL: the same /4 call shape does close a real task.
+      assert {:ok, %Task{status: "done"}} =
+               Tasks.close_as_delivered(backlog.id, "b85a4a96", admin!(), via_agent_id: agent_id)
+    end
+  end
+
   # ── operator-console ergonomics ───────────────────────────────────────
 
   describe "a malformed task id" do

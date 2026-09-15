@@ -152,9 +152,14 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # in `task`, so a default runtime could speak in a meeting but could not
       # say it was thinking. A move registers no new tool, so the total is
       # unchanged — a change here would mean the tool was copied, not moved.
-      assert length(tools) == 104
+      # 105 as of task 01a0a552 stage 3, which added `task_close_as_delivered`
+      # to the `task` bundle: the admin-delegated closure for work that
+      # shipped without a plan cycle. A genuinely new tool, not a move, so
+      # the total moves with it.
+      assert length(tools) == 105
 
       tool_names = Enum.map(tools, & &1.name)
+      assert "task_close_as_delivered" in tool_names
       assert "send_media" in tool_names
       assert "react" in tool_names
       assert "canvas.versions" in tool_names

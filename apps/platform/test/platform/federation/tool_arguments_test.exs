@@ -149,7 +149,19 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # infra|product|decision is a recoverable refusal naming every missing
   # field, with nothing written. None is tolerated absent, and none may be:
   # a blocker is expensive by design, and the cost IS these four fields.
-  @surveyed_required_count 150
+  # 152 with `task_close_as_delivered`'s `task_id` + `delivery_reference`
+  # (task 01a0a552 stage 3). Both HONEST. Each is read under its declared
+  # key only, with no alias and no context fallback. `task_id` goes to
+  # `Tasks.get_task_record/1` behind `require_string/3`, so absent or
+  # malformed is a refusal envelope and never a write. `delivery_reference`
+  # is the whole point of the tool: it is required, trimmed, parsed
+  # strictly by `Platform.Tasks.DeliveryReference` and RESOLVED against the
+  # project's repository before `close_as_delivered/4` is called, and
+  # `Tasks.close_as_delivered/4` independently refuses a blank one with
+  # `:delivery_reference_required`. Neither is tolerated absent, and
+  # `delivery_reference` may not be: a closure with no checkable reference
+  # is the free-text close this tool exists to prevent.
+  @surveyed_required_count 152
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

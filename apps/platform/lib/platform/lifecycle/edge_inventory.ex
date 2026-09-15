@@ -85,13 +85,36 @@ defmodule Platform.Lifecycle.EdgeInventory do
     * `Platform.Tasks.apply_operator_correction/6` (task 01a049be) — the
       shared writer behind `Platform.Tasks.reinstate_cancelled_task/3`
       (`cancelled -> backlog`) and `Platform.Tasks.close_as_delivered/3`
-      (`backlog|planning|blocked|stack_pending -> done`). BOTH of those
-      edges are absent from `@valid_task_transitions` and stay absent: the
-      pipeline still cannot leave `cancelled`, and no agent-reachable
-      surface gains a route to `done` that skips the plan gate. These are
-      admin-gated bookkeeping repairs for records the pipeline made
-      unrepresentable, so they fire no hooks by design — running deploy or
-      review pipelines for work that already shipped would be wrong.
+      (`backlog|planning|blocked|stack_pending -> done`, now `/4`). BOTH of
+      those edges are absent from `@valid_task_transitions` and stay absent:
+      the pipeline still cannot leave `cancelled`. These are admin-gated
+      bookkeeping repairs for records the pipeline made unrepresentable, so
+      they fire no hooks by design — running deploy or review pipelines for
+      work that already shipped would be wrong.
+
+      SCOPE UPDATE (task 01a0a552): `close_as_delivered` now has an MCP
+      entry point, `task_close_as_delivered` in the `task` bundle. State
+      what it admits, not what it forbids — an exception sentence rots and
+      a scope sentence survives. The one route it opens is: a Fabrikam admin's
+      own authority, exercised through an AgentRuntime that admin OWNS
+      (`Platform.Tenancy.fabrikam_admin?/1` on the runtime's owner, checked
+      before the task is read so a refusal cannot be used to probe the
+      board), with a `delivery_reference` that is REQUIRED, parsed strictly
+      and RESOLVED against the project's own repo before any write. It
+      confers no independent agent authority: `actor_kind` stays `"user"`
+      and the agent's id is recorded beside the admin's under
+      `metadata.closed_as_delivered.via_agent_id`. `reinstate_cancelled_task/3`
+      has NO MCP entry point, so `cancelled` remains absorbing for every
+      agent-reachable surface — `close_as_delivered` refuses it with
+      `:not_correctable`, because `cancelled` is absent from
+      `@undeliverable_statuses`.
+
+      The MCP entry point changes NOTHING about hook firing: this writer
+      still does not reach `maybe_finalize_transition/3`, so an
+      agent-initiated closure fires no lifecycle edge hooks and appends no
+      `TimelineAppender` entry, exactly like the operator-console call it
+      delegates to. A reader who sees `done` on a task and expects a
+      completion webhook will not find one on this path.
 
   Because BOTH `done -> planning` writers bypass the choke point,
   **the `done -> planning` edge fires nothing today.** Any re-entry-bound

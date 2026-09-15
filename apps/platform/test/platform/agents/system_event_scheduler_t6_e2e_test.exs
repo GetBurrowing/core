@@ -686,7 +686,13 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # with a server-side ttl that expires the declaration on its own. Not a
     # T6 concern — it adds no schedule, no trigger and no historian surface
     # (+meeting_activity_push -> 104)
-    @t6_baseline_tool_count 104
+    # bumped by task 01a0a552 stage 3 — `task_close_as_delivered`, added to
+    # the existing `task` bundle beside `task_complete`. An admin-owned
+    # runtime recording work that shipped outside the plan pipeline, gated
+    # on the runtime OWNER being a Fabrikam admin. Not a T6 concern — it adds no
+    # schedule, no trigger and no historian surface
+    # (+task_close_as_delivered -> 105)
+    @t6_baseline_tool_count 105
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

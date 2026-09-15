@@ -55,6 +55,7 @@ defmodule Platform.Federation.ToolSurface do
 
   alias Platform.Tasks.{
     CanvasAttachments,
+    DeliveryReference,
     PhaseTransitions,
     Plan,
     PlanEngine,
@@ -1863,6 +1864,26 @@ defmodule Platform.Federation.ToolSurface do
         returns: "The updated task object with id and status",
         limitations: "Task must exist and allow transition to done status",
         when_to_use: "When you need to mark a task as complete/done"
+      },
+      %{
+        name: "task_close_as_delivered",
+        description:
+          "Record a task as `done` when the work genuinely shipped without a plan cycle \u2014 a `backlog` / `planning` / `blocked` / `stack_pending` task whose fix merged by direct PR. AUTHORIZATION: callable ONLY when the AgentRuntime you are calling through is owned by a user who is a Fabrikam admin; the authority is that admin's, delegated, and the closure records both the admin and this agent. `delivery_reference` is REQUIRED and is VERIFIED against the project's repository before anything is written \u2014 accepted forms are a 7\u201340 character commit sha, `#1018`, a github.com pull URL, or a github.com commit URL, and a URL naming a DIFFERENT repository than the project's is refused. A PR resolves only when it is MERGED. This does NOT widen the transition table: `backlog -> done` remains absent from @valid_task_transitions, and a task already in `in_progress` / `in_review` / `deploying` is refused, because those have a legitimate route to `done` and this must not become a way around the review gate.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task to close"},
+          delivery_reference: %{
+            type: "string",
+            required: true,
+            description:
+              "What says the work shipped: a commit sha (7\u201340 hex chars), `#1018`, https://github.com/<owner>/<repo>/pull/<n>, or https://github.com/<owner>/<repo>/commit/<sha>. Free text is refused. The owner/repo in a URL must be the project's own."
+          }
+        },
+        returns:
+          "%{task_id, status: \"done\", delivery_reference, resolution} \u2014 `resolution` is the repo-lookup payload persisted under `metadata.closed_as_delivered.resolution`.",
+        limitations:
+          "Refuses `not_authorized` (non-admin owner) before reading the task at all, so the refusal cannot be used to probe a task's status or existence. Refuses an unparseable reference, a reference that names another repository, a sha/PR that does not exist (`not_found`), an unmerged PR (`not_merged`), and \u2014 RECOVERABLY, never as not-found \u2014 a lookup that could not run because `gh` is unavailable.",
+        when_to_use:
+          "When work shipped outside the plan pipeline and the task is stranded in a status from which `done` is unreachable. Not a general completion route: use task_complete for a task that has a legitimate transition."
       },
       %{
         name: "task_update",
@@ -4629,9 +4650,12 @@ defmodule Platform.Federation.ToolSurface do
                    "Do NOT reach for 'cancelled' here: it is terminal, it has no outbound " <>
                    "edges, and it means the work was ABANDONED \u2014 recording delivered work " <>
                    "as cancelled is unrecoverable and is the corruption task 01a049be exists " <>
-                   "to stop. If the work genuinely shipped without a plan cycle, ask a Fabrikam " <>
-                   "admin to record it via Platform.Tasks.close_as_delivered/3, which requires " <>
-                   "a merge/PR reference. If it truly was abandoned or superseded, then " <>
+                   "to stop. If the work genuinely shipped without a plan cycle, call " <>
+                   "task_close_as_delivered with a merge/PR reference \u2014 it is callable when " <>
+                   "the runtime you are calling through is owned by a Fabrikam admin, and it " <>
+                   "verifies the reference against the project's repo before writing. If you " <>
+                   "have no such runtime, ask a Fabrikam admin to run it. If it truly was " <>
+                   "abandoned or superseded, then " <>
                    "task_update with status='cancelled' is correct."
              }}
 
@@ -4643,6 +4667,109 @@ defmodule Platform.Federation.ToolSurface do
                suggestion: "Check that the task_id is valid"
              }}
         end
+    end
+  end
+
+  # ── task_close_as_delivered — THE PERMISSION DECISION (task 01a0a552) ──
+  #
+  # An agent may call this ONLY when the AgentRuntime it is calling
+  # through is owned by a user who satisfies `Platform.Tenancy.fabrikam_admin?/1`.
+  # THE AUTHORITY IS THE OWNER'S, DELEGATED; the agent is the instrument.
+  # That is why `Tasks.close_as_delivered/4` receives the owner as `admin`
+  # (so `actor_kind` on the recorded transition is `"user"`) and the agent
+  # only as `via_agent_id` beside it: the authority and the actor are
+  # separately readable afterwards, which they would not be if the agent
+  # were the actor.
+  #
+  # Two alternatives were considered and REJECTED, recorded here because
+  # the next person to widen this will face the same two:
+  #
+  #   (a) "any agent holding the `task` bundle may call it". That makes
+  #       every agent a Fabrikam admin for this one verb — precisely the
+  #       widening task 01a049be exists to prevent — and it detaches the
+  #       closure from any human who could be asked why.
+  #
+  #   (b) "a new capability bundle, e.g. `task_admin`". A bundle is a
+  #       VISIBILITY SCOPE, not a privilege level:
+  #       `Platform.Federation.ToolAuthorization` deliberately reads
+  #       `allowed_bundles` and nothing else, so encoding privilege there
+  #       would put an admin grant in a column any runtime row can be
+  #       given — an escalation one UPDATE wide, invisible to every
+  #       membership check.
+  #
+  # `fabrikam_admin?/1` is install-coupled: it means "an admin of the ROOT
+  # org" (`Platform.Tenancy` root-membership), which on this install is
+  # Fabrikam. Whoever generalises admin-ness later wants this call site and
+  # the two in `Platform.Tasks` (`reinstate_cancelled_task/3`,
+  # `close_as_delivered/4`) — those three are the set today.
+  #
+  # ORDER IS SECURITY-RELEVANT. The principal is resolved and refused
+  # FIRST, before the task is read, so a non-admin cannot use the refusal
+  # text to probe whether an id names a row or what status it is in. Same
+  # rationale as `Platform.Tasks.close_as_delivered/4`'s own first cond
+  # clause.
+  def execute("task_close_as_delivered", args, context) do
+    with {:ok, admin} <- delivery_closure_principal(context),
+         {:ok, task_id} <- require_string(args, "task_id", "task_close_as_delivered"),
+         {:ok, reference} <-
+           require_non_blank_string(args, "delivery_reference", "task_close_as_delivered"),
+         {:ok, parsed} <- parse_delivery_reference(reference),
+         {:ok, task} <- fetch_task_for_delivery(task_id),
+         {:ok, resolution} <- resolve_delivery_reference(parsed, task) do
+      case Tasks.close_as_delivered(task.id, reference, admin,
+             via_agent_id: Map.get(context, :agent_id),
+             delivery_reference_resolution: resolution
+           ) do
+        {:ok, updated} ->
+          Tasks.broadcast_board({:task_updated, updated})
+
+          {:ok,
+           %{
+             task_id: updated.id,
+             status: updated.status,
+             delivery_reference: reference,
+             resolution: resolution
+           }}
+
+        {:error, :not_correctable} ->
+          {:error,
+           %{
+             error:
+               "Task is '#{task.status}', which is not_correctable by this tool: " <>
+                 "only #{Enum.join(Tasks.undeliverable_statuses(), ", ")} can be closed as " <>
+                 "delivered. Anything else already has a legitimate route to 'done'.",
+             recoverable: false,
+             suggestion:
+               "in_progress, in_review and deploying reach 'done' through the pipeline — " <>
+                 "use task_complete. 'cancelled' must be walked back with " <>
+                 "Platform.Tasks.reinstate_cancelled_task/3 first, so the repair leaves two " <>
+                 "auditable steps rather than one silent jump."
+           }}
+
+        {:error, :not_found} ->
+          {:error, delivery_task_not_found(task_id)}
+
+        {:error, :not_authorized} ->
+          # Unreachable through this clause (the principal was checked
+          # first) and deliberately answered identically if it ever is.
+          {:error, delivery_not_authorized()}
+
+        {:error, :delivery_reference_required} ->
+          {:error,
+           %{
+             error: "task_close_as_delivered: delivery_reference is required",
+             recoverable: true,
+             suggestion: "Pass a commit sha, `#1018`, or a github.com pull/commit URL."
+           }}
+
+        {:error, other} ->
+          {:error,
+           %{
+             error: "Failed to close task as delivered: #{inspect(other)}",
+             recoverable: true,
+             suggestion: "Check that the task_id is valid and retry."
+           }}
+      end
     end
   end
 
@@ -7133,8 +7260,10 @@ defmodule Platform.Federation.ToolSurface do
                      " 'cancelled' is TERMINAL \u2014 it has no outbound edges and it means the " <>
                      "work was ABANDONED. Use it only to retire work that was genuinely " <>
                      "abandoned or superseded, never to close work that actually shipped. " <>
-                     "Delivered-but-unplanned work is recorded by a Fabrikam admin via " <>
-                     "Platform.Tasks.close_as_delivered/3; a task already cancelled by " <>
+                     "Delivered-but-unplanned work is recorded with " <>
+                     "task_close_as_delivered, which requires a merge/PR reference and is " <>
+                     "callable when the runtime you are calling through is owned by a Fabrikam " <>
+                     "admin (otherwise ask one to run it); a task already cancelled by " <>
                      "mistake is corrected via Platform.Tasks.reinstate_cancelled_task/3."
                }}
 
@@ -10805,6 +10934,136 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   defp load_agent(_), do: nil
+
+  # The principal behind an agent call: the USER who owns the runtime the
+  # call arrived on. `context.runtime_id` is present on both transports
+  # (`MCPController` and `RuntimeChannel` both set it); `owner_user_id` is
+  # not, so it is read off the runtime row here rather than trusted from
+  # the wire.
+  defp delivery_closure_principal(context) do
+    with runtime_id when is_binary(runtime_id) <- Map.get(context, :runtime_id),
+         %{owner_user_id: owner_id} when is_binary(owner_id) <-
+           Platform.Federation.get_runtime_by_runtime_id(runtime_id),
+         %{} = owner <- Platform.Accounts.get_user(owner_id),
+         true <- Tenancy.fabrikam_admin?(owner) do
+      {:ok, owner}
+    else
+      _ -> {:error, delivery_not_authorized()}
+    end
+  end
+
+  # ONE envelope for every way the authorization can fail — no runtime, an
+  # unknown runtime, an ownerless runtime, a non-admin owner. It names no
+  # task and carries no argument echo, so a caller who is not authorized
+  # cannot distinguish "that task is in backlog" from "no such task" from
+  # "you may not do this": the refusal is not a read primitive.
+  defp delivery_not_authorized do
+    %{
+      error:
+        "task_close_as_delivered: not authorized. This tool exercises a Fabrikam admin's own " <>
+          "authority and is callable only through a runtime owned by one.",
+      recoverable: false,
+      suggestion:
+        "Ask a Fabrikam admin to record the delivery, either from the operator console or " <>
+          "through a runtime they own."
+    }
+  end
+
+  defp delivery_task_not_found(task_id) do
+    %{
+      error: "Task not found: #{task_id}",
+      recoverable: false,
+      suggestion: "Use task_list to find available tasks"
+    }
+  end
+
+  defp parse_delivery_reference(reference) do
+    case DeliveryReference.parse(reference) do
+      {:ok, parsed} ->
+        {:ok, parsed}
+
+      {:error, :unparseable} ->
+        {:error,
+         %{
+           error:
+             "#{inspect(reference)} could not be read as a delivery reference. " <>
+               "A closure must name an object someone can check, and free text names none.",
+           recoverable: true,
+           suggestion:
+             "Pass exactly one of: a commit sha (7-40 hex characters), `#1018`, " <>
+               "https://github.com/<owner>/<repo>/pull/<number>, or " <>
+               "https://github.com/<owner>/<repo>/commit/<sha>."
+         }}
+    end
+  end
+
+  defp fetch_task_for_delivery(task_id) do
+    case Tasks.get_task_record(task_id) do
+      nil -> {:error, delivery_task_not_found(task_id)}
+      task -> {:ok, task}
+    end
+  end
+
+  defp resolve_delivery_reference(parsed, task) do
+    repo_url = task.project_id |> Tasks.get_project() |> then(&(&1 && &1.repo_url))
+
+    case DeliveryReference.resolve(parsed, repo_url) do
+      {:ok, resolution} ->
+        {:ok, resolution}
+
+      {:error, :not_found} ->
+        {:error,
+         %{
+           error:
+             "#{parsed.raw} does not exist on #{repo_url || "the project's repository"}. " <>
+               "Nothing was recorded.",
+           recoverable: false,
+           suggestion:
+             "Check the sha or PR number against the project's repo. A reference that does " <>
+               "not resolve is not evidence that anything shipped."
+         }}
+
+      {:error, :not_merged} ->
+        {:error,
+         %{
+           error: "#{parsed.raw} is not merged \u2014 'there was a PR' is not 'it shipped'.",
+           recoverable: false,
+           suggestion:
+             "Close the task once the PR merges, or cite the commit that actually landed."
+         }}
+
+      {:error, {:foreign_repo, named, project_slug}} ->
+        # Wrong-row attribution, refused rather than recorded: the URL
+        # names `named`, the task's project is `project_slug`, and
+        # resolving the number against the project's repo would answer
+        # about a DIFFERENT object with the same number. Recording both
+        # slugs instead would only move the decision to whoever reads the
+        # stamp later.
+        {:error,
+         %{
+           error:
+             "#{parsed.raw} names the repository #{named}, but this task's project is " <>
+               "#{project_slug}. Resolving it here would attribute a different " <>
+               "repository's object to this task.",
+           recoverable: true,
+           suggestion:
+             "Cite a reference in #{project_slug} \u2014 or, if the work really shipped in " <>
+               "#{named}, close the task in that repository's project instead."
+         }}
+
+      {:error, {:unavailable, message}} ->
+        {:error,
+         %{
+           error:
+             "Could not verify #{parsed.raw}: #{message}. Nothing was recorded \u2014 " <>
+               "'I could not check' is not 'it does not exist'.",
+           recoverable: true,
+           suggestion:
+             "This is an environment problem (usually a missing or unauthenticated `gh` " <>
+               "CLI on the server), not a bad reference. Retry once it is available."
+         }}
+    end
+  end
 
   defp require_string(args, key, tool) do
     case Map.get(args, key) do

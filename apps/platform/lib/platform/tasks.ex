@@ -5188,7 +5188,16 @@ defmodule Platform.Tasks do
   #
   # The fix is NOT to widen `@valid_task_transitions`. Both edges stay
   # closed to the automated pipeline; `cancelled` stays absorbing for
-  # every agent-reachable surface. What is added is an operator-driven,
+  # every agent-reachable surface. Re-checked 2026-09-15 against task
+  # 01a0a552, which gave `close_as_delivered` an MCP entry point: the
+  # sentence still holds, and it holds for a reason that is readable here
+  # rather than assumed — `cancelled` is absent from
+  # `@undeliverable_statuses`, so `close_as_delivered/4` refuses it with
+  # `:not_correctable` before any write, and `reinstate_cancelled_task/3`
+  # has no MCP tool at all. The measurement that would falsify it: any
+  # tool definition in `Platform.Federation.ToolSurface` reaching a writer
+  # whose accepted from-status list includes `cancelled`.
+  # What is added is an operator-driven,
   # reason-required, admin-gated correction path, in the shape this module
   # already uses twice for exactly this class of problem
   # (`reopen_with_feedback/3` and `supersede_current_plan/3`): a direct
@@ -5288,8 +5297,15 @@ defmodule Platform.Tasks do
   completion route: `delivery_reference` is required and is persisted, the
   actor must be a Fabrikam admin, and only the statuses from which `done` is
   otherwise unreachable are accepted (`#{Enum.join(@undeliverable_statuses, "`, `")}`).
-  The plan gate that ADR 0029 exists to protect is untouched — no agent,
-  and no automated path, gains a route to `done` from this function.
+  The plan gate that ADR 0029 exists to protect is untouched. This function
+  grants exactly one route to `done`, and its scope is: a Fabrikam admin's own
+  authority, exercised either directly or through an agent that admin owns,
+  with a delivery reference required and persisted either way. It confers
+  no independent agent authority — the `admin` argument is always the
+  authorizing user, `actor_kind` on the recorded transition is always
+  `"user"`, and when an agent is the instrument its id is recorded beside
+  the admin's under `metadata.closed_as_delivered.via_agent_id`, so the
+  authority and the actor are separately readable.
 
   `delivery_reference` should identify the merged work: a commit sha, a PR
   URL, or `"#841"`. It is stored verbatim under
@@ -5302,6 +5318,15 @@ defmodule Platform.Tasks do
     * `{:error, :not_correctable}` — task is `done`, `cancelled`, or in an
       execution phase that already has a legitimate route to `done`
     * `{:error, :not_found}` — no such task
+
+  Options (arity 4):
+
+    * `:via_agent_id` — the agent that made the call on the admin's behalf,
+      stored as `"via_agent_id"`. Absent for a direct console closure.
+    * `:delivery_reference_resolution` — the repo-lookup payload that
+      verified the reference, stored as `"resolution"`.
+
+  Neither key is written when the option is absent.
   """
   @spec close_as_delivered(String.t(), String.t() | nil, any()) ::
           {:ok, Task.t()}
@@ -5312,6 +5337,22 @@ defmodule Platform.Tasks do
              | :not_found
              | term()}
   def close_as_delivered(task_id, delivery_reference, admin) when is_binary(task_id) do
+    close_as_delivered(task_id, delivery_reference, admin, [])
+  end
+
+  @doc """
+  `close_as_delivered/3` with an option keyword — see that function.
+  """
+  @spec close_as_delivered(String.t(), String.t() | nil, any(), keyword()) ::
+          {:ok, Task.t()}
+          | {:error,
+             :not_authorized
+             | :delivery_reference_required
+             | :not_correctable
+             | :not_found
+             | term()}
+  def close_as_delivered(task_id, delivery_reference, admin, opts)
+      when is_binary(task_id) and is_list(opts) do
     cond do
       not Platform.Tenancy.fabrikam_admin?(admin) ->
         {:error, :not_authorized}
@@ -5334,16 +5375,36 @@ defmodule Platform.Tasks do
               status: "done",
               metadata:
                 task
-                |> stamp_metadata("closed_as_delivered", %{
-                  "reference" => String.trim(delivery_reference),
-                  "by_user_id" => admin.id,
-                  "from_status" => task.status
-                })
+                |> stamp_metadata(
+                  "closed_as_delivered",
+                  Map.merge(
+                    %{
+                      "reference" => String.trim(delivery_reference),
+                      "by_user_id" => admin.id,
+                      "from_status" => task.status
+                    },
+                    close_as_delivered_opt_keys(opts)
+                  )
+                )
                 |> drop_delivered_but_open_keys()
             }
           end
         )
     end
+  end
+
+  # Absent options must not be written as nil keys: a stamp carrying
+  # `"via_agent_id" => nil` reads as "an agent did this and we lost its id",
+  # which is a different and worse claim than "no agent was involved".
+  defp close_as_delivered_opt_keys(opts) do
+    [{:via_agent_id, "via_agent_id"}, {:delivery_reference_resolution, "resolution"}]
+    |> Enum.reduce(%{}, fn {opt, key}, acc ->
+      case Keyword.fetch(opts, opt) do
+        {:ok, nil} -> acc
+        {:ok, value} -> Map.put(acc, key, value)
+        :error -> acc
+      end
+    end)
   end
 
   @doc """
