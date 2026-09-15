@@ -2448,8 +2448,12 @@ defmodule Platform.Orchestration.TaskRouter do
   # is least able to notice. Bounding the suppression by the stage kind's own
   # `safety_net_ms` makes the guard self-healing: while the executor is inside
   # its safety net it is presumed alive and is not disturbed; once the net
-  # lapses the guard stops suppressing and the normal re-dispatch resumes, on
-  # exactly the deadline the safety-net alarm already fires on.
+  # lapses this guard stops suppressing, so the next `:dispatch` to arrive is
+  # delivered rather than withheld, on exactly the deadline the safety-net
+  # alarm already fires on. Note what that does NOT say: the lapse itself
+  # sends no `:dispatch`. `handle_info(:check_safety_net, ...)` only logs,
+  # notes an awaiting-human gate, or fires the `needs_human` blocker; the
+  # stage moves again when something else asks the router to reconcile.
   #
   # `manual_approval` has `safety_net_ms: nil` and is therefore never
   # suppressed. That is deliberate: those stages park on a human, arm no
@@ -2567,8 +2571,12 @@ defmodule Platform.Orchestration.TaskRouter do
     ExecutionSpace.post_log(
       state.execution_space_id,
       "Dispatch withheld: #{task.title} | stage #{stage.position} already has an acked " <>
-        "executor inside its safety net — not re-sending it. If that executor is gone, " <>
-        "the safety net will re-dispatch this stage when it lapses."
+        "executor inside its safety net, so it is not being re-sent. If that executor is " <>
+        "gone, the safety net does NOT re-dispatch when it lapses: it broadcasts " <>
+        "execution.safety_net_fired and posts a needs_human blocker, and the task then " <>
+        "holds until a person acts. Recovery is manual: spawn a replacement executor, have " <>
+        "it call task_ack, then clear the block with task_update status: in_progress, which " <>
+        "releases the hold and lets the router dispatch this stage again."
     )
 
     {:noreply, %{state | task_status: task.status}}
