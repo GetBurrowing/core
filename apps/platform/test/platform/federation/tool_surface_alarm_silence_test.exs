@@ -336,6 +336,174 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
     end
   end
 
+  # Task 01a0a633 stage 2 — the supplied-stage_id guard added to
+  # `resolve_ack_stage_id/2` in stage 1 fans out to alarm_silence, which
+  # calls the same resolver. Before the `else` clause carried the new
+  # atom/tuple errors, each of these raised `WithClauseError` out of the
+  # tool boundary instead of returning a refusal envelope. A raise is
+  # indistinguishable from a broken tool; these pin the crash-to-envelope
+  # transition. Silencing an alarm on a stage you do not own, or one that
+  # is not running, suppresses the wrong lease exactly as a misdirected
+  # ack does, so the refusal is desired here, not incidental.
+  describe "execute/3 supplied stage_id refusals" do
+    test "a non-running stage of the SAME task is refused, not silenced", %{
+      task: task,
+      plan: plan,
+      stage: stage
+    } do
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+
+      {:ok, done_stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "already_finished",
+          description: "completed stage of the same task"
+        })
+
+      {:ok, done_stage} = Tasks.transition_stage(done_stage, "running")
+      {:ok, done_stage} = Tasks.transition_stage(done_stage, "passed")
+
+      assert {:error, err} =
+               ToolSurface.execute(
+                 "alarm_silence",
+                 %{
+                   "task_id" => task.id,
+                   "stage_id" => done_stage.id,
+                   "until_seconds" => 600,
+                   "reason" => "misdirected silence probe"
+                 },
+                 %{}
+               )
+
+      assert is_map(err)
+      assert err.recoverable == true
+      assert err.error =~ done_stage.id
+      assert err.error =~ "not running"
+
+      refute_silenced(task.id)
+      refute_alarm_event(done_stage.id)
+    end
+
+    test "a RUNNING stage of a DIFFERENT task is refused", %{
+      project: project,
+      task: task,
+      stage: stage
+    } do
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+
+      {:ok, other_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Sibling task"})
+
+      {:ok, other_plan} =
+        Tasks.create_plan(%{task_id: other_task.id, status: "approved", version: 1})
+
+      {:ok, other_stage} =
+        Tasks.create_stage(%{
+          plan_id: other_plan.id,
+          position: 1,
+          name: "sibling_running",
+          description: "running stage owned by another task"
+        })
+
+      {:ok, other_stage} = Tasks.transition_stage(other_stage, "running")
+
+      assert {:error, err} =
+               ToolSurface.execute(
+                 "alarm_silence",
+                 %{
+                   "task_id" => task.id,
+                   "stage_id" => other_stage.id,
+                   "until_seconds" => 600,
+                   "reason" => "cross-task silence probe"
+                 },
+                 %{}
+               )
+
+      assert is_map(err)
+      assert err.recoverable == true
+      assert err.error =~ other_stage.id
+      assert err.error =~ other_task.id
+
+      refute_silenced(task.id)
+      refute_alarm_event(other_stage.id)
+    end
+
+    test "a syntactically valid but non-existent stage_id is refused", %{
+      task: task,
+      stage: stage
+    } do
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+
+      ghost_id = Ecto.UUID.generate()
+
+      assert {:error, err} =
+               ToolSurface.execute(
+                 "alarm_silence",
+                 %{
+                   "task_id" => task.id,
+                   "stage_id" => ghost_id,
+                   "until_seconds" => 600,
+                   "reason" => "ghost stage silence probe"
+                 },
+                 %{}
+               )
+
+      assert is_map(err)
+      assert err.recoverable == true
+      assert err.error =~ ghost_id
+      assert err.error =~ "does not exist"
+
+      refute_silenced(task.id)
+      refute_alarm_event(ghost_id)
+    end
+
+    # The running stage of THIS task still silences — without this control,
+    # "refuse everything" would pass the three cases above and break the
+    # tool the stage exists to keep working.
+    test "the task's own running stage still silences (regression control)", %{
+      task: task,
+      stage: stage
+    } do
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "alarm_silence",
+                 %{
+                   "task_id" => task.id,
+                   "stage_id" => stage.id,
+                   "until_seconds" => 600,
+                   "reason" => "legitimate silence control"
+                 },
+                 %{}
+               )
+
+      assert result.stage_id == stage.id
+      assert %DateTime{} = LeaseManager.get(task.id).silenced_until
+    end
+  end
+
+  # No lease was silenced by the refused call.
+  defp refute_silenced(task_id) do
+    case LeaseManager.get(task_id) do
+      nil -> :ok
+      lease -> assert lease.silenced_until == nil
+    end
+  end
+
+  # No execution.alarm_silenced runtime_event names the refused stage.
+  defp refute_alarm_event(stage_id) do
+    rows =
+      Repo.all(
+        from(e in RuntimeEvent,
+          where: e.event_type == "execution.alarm_silenced"
+        )
+      )
+
+    refute Enum.any?(rows, &(get_in(&1.payload, ["stage_id"]) == stage_id))
+  end
+
   describe "audit bridging" do
     test "successful silence records a platform.orchestration.alarm_silence audit row",
          %{task: task, stage: stage} do

@@ -1949,7 +1949,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_ack",
         description:
-          "Ack that you (the executor/reviewer/deployer) received the dispatch and are actively working on the stage. Call this as your FIRST tool call after spawning for a task (task 019f640d stage 5). Emits an `execution.acked` runtime_event which the TaskRouter consumes to extend the safety-net timer and suppress the 5-minute no-ack alert. Returns `{ack_at, next_safety_net_at}` for reference — `next_safety_net_at` may be nil when no lease is armed (e.g. manual_approval stages, where no safety-net timer runs). Requires a RUNNING stage: with no explicit stage_id and no `status == \"running\"` stage on the current plan this returns `no running stage — cannot ack without a stage_id`. That is expected during the planning phase, which arms no liveness timers and needs no ack — the planning dispatch says so and does not ask you to call this. Requires a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack.",
+          "Ack that you (the executor/reviewer/deployer) received the dispatch and are actively working on the stage. Call this as your FIRST tool call after spawning for a task (task 019f640d stage 5). Emits an `execution.acked` runtime_event which the TaskRouter consumes to extend the safety-net timer and suppress the 5-minute no-ack alert. Returns `{ack_at, next_safety_net_at}` for reference — `next_safety_net_at` may be nil when no lease is armed (e.g. manual_approval stages, where no safety-net timer runs). Requires a RUNNING stage, on both paths. A SUPPLIED `stage_id` is honoured exactly when all three hold: the stage EXISTS, it BELONGS TO this `task_id`, and its `status` is `\"running\"`; if any one fails the call is refused with a recoverable error naming which of the three it was (not-found / wrong-task / not-running), so a caller with a stale id, a caller holding a sibling task's id, and a caller racing a stage transition each get a different next action. The refusal is not bookkeeping: an honoured ack suppresses that stage's dispatch for the whole safety-net window (~90m; 120m in planning), so a misdirected ack would park a stage nobody is working. With NO `stage_id` the tool derives the current plan's running stage, and when there is none it returns `no running stage — cannot ack without a stage_id`. That is expected during the planning phase, which arms no liveness timers and needs no ack — the planning dispatch says so and does not ask you to call this. Requires a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack.",
         parameters: %{
           task_id: %{
             type: "string",
@@ -1960,7 +1960,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description:
-              "Optional — the running stage_id from your dispatch context. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, so callers who lack a stage_id (e.g. planning-phase agents before the plan exists) can still ack the task-level dispatch."
+              "Optional — the running stage_id from your dispatch context. When supplied it must exist, belong to this `task_id`, and be `running`; any other stage is refused with a recoverable error naming which of the three failed, because an honoured ack parks that stage for the safety-net window. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, so callers who lack a stage_id (e.g. planning-phase agents before the plan exists) can still ack the task-level dispatch."
           },
           subagent_id: %{
             type: "string",
@@ -1972,14 +1972,14 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{task_id, stage_id, event_id, acked_at, next_safety_net_at}. `next_safety_net_at` is nil when the LeaseManager has no active lease for the task (planning-phase dispatch, manual_approval stages, or a boot-race before the router recorded the dispatch).",
         limitations:
-          "Idempotent — re-calling on the same stage is a soft ack refresh; each call emits a fresh execution.acked event and extends the safety-net deadline. Unknown `task_id` returns `{:error, :not_found}`. When no stage_id is supplied and the task has no running stage, returns `{:error, :no_running_stage}` so the caller can decide whether to task_start first or ignore. Invalid subagent_id returns `{:error, :invalid_subagent_id}` — one of `missing` (key absent or nil), `empty_or_whitespace` (empty string or whitespace-only), or `oversized` (> 128 bytes). No format policing beyond that; any well-formed string identifying the spawn handle is accepted.",
+          "Idempotent — re-calling on the same stage is a soft ack refresh; each call emits a fresh execution.acked event and extends the safety-net deadline. Unknown `task_id` returns `{:error, :not_found}`. A supplied `stage_id` is accepted only when the stage exists, belongs to this `task_id`, and is `running`; otherwise a recoverable envelope names the failing condition — the stage does not exist, it belongs to another task (the owning task_id is cited), or it is in some other status (the status is cited). When no stage_id is supplied and the task has no running stage, returns `{:error, :no_running_stage}` so the caller can decide whether to task_start first or ignore. Invalid subagent_id returns `{:error, :invalid_subagent_id}` — one of `missing` (key absent or nil), `empty_or_whitespace` (empty string or whitespace-only), or `oversized` (> 128 bytes). No format policing beyond that; any well-formed string identifying the spawn handle is accepted.",
         when_to_use:
           "As your FIRST tool call after being dispatched for a task, before you start reading code or planning steps. Without an ack the router fires an escalation alert in 5 minutes on `coding`/`review`/`deploying` stages (planning: same 5m ack window, longer safety-net)."
       },
       %{
         name: "alarm_silence",
         description:
-          "Operator escape hatch: suppress the `execution.no_ack_timeout` alarm for a stage's lease without firing a blocker. Use when your MCP client's tool cache lacks `task_ack` (a known cross-version issue where a session's catalog predates a new tool) and you KNOW a subagent is actively working the stage. Sets `silenced_until` on the lease so the TaskRouter's `:check_no_ack` reschedules instead of firing. Does NOT pause `stage_complete` / validation dispatch, does NOT clear on `record_ack/1`, dies with the stage transition. Audit-logged to the runtime_event stream AND `platform.orchestration.alarm_silence` audit rows. Capped at 24h — re-silence if the condition persists. Prefer `task_ack` if it's available; this exists to retire the `report_blocker(needs_human: false)` anti-pattern.",
+          "Operator escape hatch: suppress the `execution.no_ack_timeout` alarm for a stage's lease without firing a blocker. Use when your MCP client's tool cache lacks `task_ack` (a known cross-version issue where a session's catalog predates a new tool) and you KNOW a subagent is actively working the stage. Sets `silenced_until` on the lease so the TaskRouter's `:check_no_ack` reschedules instead of firing. Does NOT pause `stage_complete` / validation dispatch, does NOT clear on `record_ack/1`, dies with the stage transition. Audit-logged to the runtime_event stream AND `platform.orchestration.alarm_silence` audit rows. Capped at 24h — re-silence if the condition persists. A SUPPLIED `stage_id` is honoured exactly when all three hold: the stage EXISTS, it BELONGS TO this `task_id`, and its `status` is `\"running\"`; otherwise the call is refused with a recoverable error naming which of the three failed, because silencing a stage you do not own or that is not running suppresses an alarm for work nobody is doing. With no `stage_id` the tool derives the current plan's running stage. Prefer `task_ack` if it's available; this exists to retire the `report_blocker(needs_human: false)` anti-pattern.",
         parameters: %{
           task_id: %{
             type: "string",
@@ -1990,7 +1990,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description:
-              "Optional — the running stage_id from your dispatch context. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, matching the `task_ack` convention."
+              "Optional — the running stage_id from your dispatch context. When supplied it must exist, belong to this `task_id`, and be `running`; anything else is refused with a recoverable error naming which of the three failed. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, matching the `task_ack` convention."
           },
           until_seconds: %{
             type: "integer",
@@ -2008,7 +2008,7 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{task_id, stage_id, silenced_until, reason}. `silenced_until` is a %DateTime{} — the router re-arms `:check_no_ack` at `silenced_until + 1s`.",
         limitations:
-          "Requires an active LeaseManager row for the task (the router must have already recorded the dispatch). Boot-race calls return `{:error, :not_found}` with a recoverable retry hint. `until_seconds` outside 60..86_400 returns a validation error. Silence does NOT prevent `stage_complete`, does NOT block dispatch of new stages, and dies when `clear/1` runs on the lease at stage transition. Use `task_ack` in preference when your MCP catalog carries it.",
+          "Requires an active LeaseManager row for the task (the router must have already recorded the dispatch). Boot-race calls return `{:error, :not_found}` with a recoverable retry hint. A supplied `stage_id` that does not exist, belongs to another task, or is not `running` returns a recoverable envelope naming the failing condition rather than raising. `until_seconds` outside 60..86_400 returns a validation error. Silence does NOT prevent `stage_complete`, does NOT block dispatch of new stages, and dies when `clear/1` runs on the lease at stage transition. Use `task_ack` in preference when your MCP catalog carries it.",
         when_to_use:
           "As an operator override when your MCP client cache doesn't include `task_ack` and a no-ack alarm would otherwise fire a spurious `needs_human=true` blocker. Not for general liveness — use `task_ack` for that. Not for pausing execution — use `report_blocker(needs_human: true)` when the stage is actually stuck."
       },
@@ -5116,6 +5116,9 @@ defmodule Platform.Federation.ToolSurface do
 
               {:ok, stage_id} ->
                 emit_task_ack(task_id, stage_id, subagent_id, context)
+
+              {:error, reason} ->
+                {:error, supplied_stage_id_envelope(reason, supplied_stage_id, task_id)}
             end
         end
     end
@@ -5178,6 +5181,12 @@ defmodule Platform.Federation.ToolSurface do
 
       {:error, envelope} when is_map(envelope) ->
         {:error, envelope}
+
+      # Supplied-stage_id refusals from `resolve_ack_stage_id/2` — silencing
+      # an alarm on a stage that is not this task's running stage suppresses
+      # the wrong lease just as an ack does.
+      {:error, reason} ->
+        {:error, supplied_stage_id_envelope(reason, supplied_stage_id, task_id)}
     end
   end
 
@@ -8757,10 +8766,49 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # Prefer the explicit stage_id from args; otherwise resolve from the
-  # task's current plan. Both branches return {:ok, stage_id} or the
-  # `:no_running_stage` error the caller reports back to the runtime.
-  defp resolve_ack_stage_id(_task_id, stage_id) when is_binary(stage_id) and stage_id != "",
-    do: {:ok, stage_id}
+  # task's current plan. Both branches return {:ok, stage_id} or an error
+  # the caller maps to a recoverable envelope.
+  #
+  # THE SUPPLIED ID IS CHECKED, NOT TRUSTED (task 01a0a633 stage 1).
+  # Before this guard the supplied clause accepted any non-empty binary:
+  # it never asked whether the stage existed, whether it belonged to
+  # `task_id`, or whether it was running. That matters because
+  # `TaskRouter.live_acked_executor?/2` suppresses dispatch whenever
+  # `Orchestration.last_stage_ack_at(task_id, stage.id)` falls inside the
+  # safety-net window, consulting neither the acker's identity nor its
+  # liveness — so an ack naming a stage that is not the one being worked
+  # parks that stage for the whole window (~90m; 120m in planning).
+  #
+  # SCOPE, stated as scope and not as an exception: this guard covers
+  # acks naming a stage of the SAME task the caller passed. It is not a
+  # cross-task defence and does not need to be — `last_stage_ack_at/2`
+  # keys on (task_id, stage_id) and the event is written under the
+  # CALLER's task_id, so an ack can never write a suppression row a
+  # sibling task's router would read.
+  #
+  # Three distinct errors, not one "invalid stage": a caller holding a
+  # stale id, a caller holding another task's id, and a caller racing a
+  # stage transition have three different next actions.
+  defp resolve_ack_stage_id(task_id, stage_id) when is_binary(stage_id) and stage_id != "" do
+    # `Platform.UUID.cast/1`, not a bare `Repo.get/2`: the id arrives
+    # straight off an agent's tool payload, and `repo_lookup_boundary_test.exs`
+    # ratchets against bare casts on agent-facing paths.
+    with {:ok, uuid} <- Platform.UUID.cast(stage_id),
+         %Stage{} = stage <- Repo.get(Stage, uuid) |> Repo.preload(:plan) do
+      cond do
+        is_nil(stage.plan) or stage.plan.task_id != task_id ->
+          {:error, {:stage_wrong_task, stage.plan && stage.plan.task_id}}
+
+        stage.status != "running" ->
+          {:error, {:stage_not_running, stage.status}}
+
+        true ->
+          {:ok, stage.id}
+      end
+    else
+      _ -> {:error, :stage_not_found}
+    end
+  end
 
   defp resolve_ack_stage_id(task_id, _) do
     case Tasks.current_plan(task_id) do
@@ -8773,6 +8821,53 @@ defmodule Platform.Federation.ToolSurface do
           stage -> {:ok, stage.id}
         end
     end
+  end
+
+  # Envelope for the supplied-stage_id refusals. `:no_running_stage` is
+  # deliberately NOT handled here — its wording is asserted verbatim by
+  # `prompt_templates.ex`, `heartbeat_scheduler.ex` and
+  # `dispatch_planning_ack_test.exs`, and it differs per calling tool
+  # ("cannot ack" vs "cannot silence"), so each call site keeps its own.
+  defp supplied_stage_id_envelope(:stage_not_found, stage_id, _task_id) do
+    %{
+      error: "stage_id=#{stage_id} does not exist.",
+      recoverable: true,
+      suggestion:
+        "Re-read the stage_id from your dispatch payload, or omit stage_id entirely to let the system derive the task's running stage."
+    }
+  end
+
+  defp supplied_stage_id_envelope({:stage_wrong_task, owner_task_id}, stage_id, task_id) do
+    %{
+      error:
+        "stage_id=#{stage_id} belongs to task_id=#{owner_task_id || "unknown"}, not task_id=#{task_id}.",
+      recoverable: true,
+      suggestion:
+        "Use the stage_id from THIS task's dispatch payload, or omit stage_id entirely to let the system derive the task's running stage."
+    }
+  end
+
+  defp supplied_stage_id_envelope({:stage_not_running, status}, stage_id, _task_id) do
+    %{
+      error: "stage_id=#{stage_id} is #{status}, not running.",
+      recoverable: true,
+      suggestion:
+        "Only a running stage can be acked. Re-read the stage_id from your dispatch payload, or omit stage_id entirely to let the system derive the task's running stage."
+    }
+  end
+
+  # Catch-all. The three heads above are shape-complete only by
+  # coincidence of today's atom set in `resolve_ack_stage_id/2`: a fourth
+  # reason added later would raise FunctionClauseError from inside the
+  # `else` that exists to turn crashes into refusals. This head keeps the
+  # tool boundary refusal-only whatever reason arrives.
+  defp supplied_stage_id_envelope(reason, stage_id, task_id) do
+    %{
+      error: "stage_id=#{stage_id} was refused for task_id=#{task_id}: #{inspect(reason)}.",
+      recoverable: true,
+      suggestion:
+        "Re-read the stage_id from your dispatch payload, or omit stage_id entirely to let the system derive the task's running stage."
+    }
   end
 
   # Persist + broadcast the execution.acked runtime_event and refresh the

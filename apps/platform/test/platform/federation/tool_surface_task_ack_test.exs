@@ -92,6 +92,41 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       assert task_ack.description =~ "spawn the subagent FIRST",
              "task_ack description must instruct spawn-first ordering"
     end
+
+    # 01a0a633 stage 3: the supplied-stage_id contract is a fact about the
+    # tool, not an implementation detail. Asserted here so the prose cannot
+    # silently drift back to describing only the derived path.
+    test "task_ack description states the supplied-stage_id contract" do
+      task_ack = ToolSurface.list_tools(["task"]) |> Enum.find(&(&1.name == "task_ack"))
+      blob = task_ack.description <> " " <> task_ack.limitations
+
+      assert blob =~ ~r/belongs? to this `task_id`/i,
+             "task_ack must state that a supplied stage_id must belong to the acked task"
+
+      assert blob =~ ~r/exists?/i,
+             "task_ack must state that a supplied stage_id must exist"
+
+      assert blob =~ ~r/running/i,
+             "task_ack must state that a supplied stage_id must be running"
+
+      assert task_ack.parameters.stage_id.description =~ ~r/belong to this `task_id`/i and
+               task_ack.parameters.stage_id.description =~ ~r/running/i,
+             "the stage_id parameter description must carry the same contract"
+    end
+
+    test "alarm_silence description states the same supplied-stage_id contract" do
+      silence =
+        ToolSurface.list_tools(["task"]) |> Enum.find(&(&1.name == "alarm_silence"))
+
+      assert silence, "alarm_silence must be registered"
+      blob = silence.description <> " " <> silence.limitations
+
+      assert blob =~ ~r/belongs? to this `task_id`/i or blob =~ ~r/belongs to another task/i,
+             "alarm_silence must state the belongs-to-this-task requirement"
+
+      assert blob =~ ~r/running/i,
+             "alarm_silence must state the running requirement"
+    end
   end
 
   describe "execute/3 happy path" do
@@ -374,6 +409,119 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
 
       event = Repo.get!(RuntimeEvent, result.event_id)
       assert event.payload["subagent_id"] == id_at_limit
+    end
+  end
+
+  # ── supplied stage_id is checked, not trusted (task 01a0a633 stage 1) ──
+  #
+  # Every test here was RED before the guard landed: the old supplied-id
+  # clause returned {:ok, stage_id} for any non-empty binary, so all three
+  # acks SUCCEEDED and armed the suppression. A test asserting that a
+  # running stage of the right task still acks would be vacuous — it
+  # passes on both sides of the change — so that case is covered by the
+  # existing happy-path describe block and is not restated here.
+  describe "execute/3 supplied stage_id guard" do
+    defp ack_with_stage(task_id, stage_id) do
+      ToolSurface.execute(
+        "task_ack",
+        %{"task_id" => task_id, "stage_id" => stage_id, "subagent_id" => "higgins.moon"},
+        %{}
+      )
+    end
+
+    # A refusal must leave the suppression UNARMED. This is the half that
+    # actually matters: an envelope the caller ignores is cosmetic, a
+    # written execution.acked row parks the stage for the safety-net window.
+    defp refute_suppression_armed(task_id, stage_id) do
+      assert Platform.Orchestration.last_stage_ack_at(task_id, stage_id) == nil
+
+      refute Repo.exists?(
+               from(e in RuntimeEvent,
+                 where:
+                   e.task_id == ^task_id and e.event_type == "execution.acked" and
+                     fragment("?->>'stage_id' = ?", e.payload, ^stage_id)
+               )
+             )
+    end
+
+    test "refuses a stage of the SAME task that is not running", %{
+      task: task,
+      plan: plan,
+      stage: stage
+    } do
+      {:ok, _} = Tasks.transition_stage(stage, "passed")
+
+      {:ok, other} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "review",
+          description: "Review it"
+        })
+
+      {:ok, _} = Tasks.transition_stage(other, "running")
+
+      {:error, err} = ack_with_stage(task.id, stage.id)
+
+      assert err.error =~ "is passed, not running"
+      assert err.error =~ stage.id
+      assert err.recoverable == true
+      assert err.suggestion =~ "omit stage_id"
+
+      refute_suppression_armed(task.id, stage.id)
+    end
+
+    test "refuses a RUNNING stage belonging to a DIFFERENT task", %{
+      project: project,
+      task: task
+    } do
+      {:ok, other_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Sibling task"})
+
+      {:ok, other_plan} =
+        Tasks.create_plan(%{task_id: other_task.id, status: "approved", version: 1})
+
+      {:ok, other_stage} =
+        Tasks.create_stage(%{
+          plan_id: other_plan.id,
+          position: 1,
+          name: "coding",
+          description: "Sibling work"
+        })
+
+      {:ok, other_stage} = Tasks.transition_stage(other_stage, "running")
+
+      {:error, err} = ack_with_stage(task.id, other_stage.id)
+
+      assert err.error =~ "belongs to task_id=#{other_task.id}"
+      assert err.error =~ "not task_id=#{task.id}"
+      assert err.recoverable == true
+
+      refute_suppression_armed(task.id, other_stage.id)
+
+      # And the sibling's own key is untouched — the event is written under
+      # the CALLER's task_id, so this is the bound on the vector, not a
+      # cross-task defence.
+      refute_suppression_armed(other_task.id, other_stage.id)
+    end
+
+    test "refuses a well-formed UUID that names no stage", %{task: task} do
+      ghost = Ecto.UUID.generate()
+
+      {:error, err} = ack_with_stage(task.id, ghost)
+
+      assert err.error =~ "does not exist"
+      assert err.error =~ ghost
+      assert err.recoverable == true
+
+      refute_suppression_armed(task.id, ghost)
+    end
+
+    test "refuses a stage_id that is not a UUID at all", %{task: task} do
+      {:error, err} = ack_with_stage(task.id, "not-a-uuid")
+
+      assert err.error =~ "does not exist"
+      refute_suppression_armed(task.id, "not-a-uuid")
     end
   end
 end
