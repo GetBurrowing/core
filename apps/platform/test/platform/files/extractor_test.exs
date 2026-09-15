@@ -134,6 +134,42 @@ defmodule Platform.Files.ExtractorTest do
     # `:unsupported_content_type` in production. Test suites masked it because
     # `mix test` pre-compiles + loads all modules. This test purges the per-
     # format module right before dispatch to mimic the cold-load state.
+    test "routes audio/mpeg to the Audio module (service disabled -> :service_disabled)" do
+      Application.delete_env(:platform, :files_service)
+
+      assert {:error, :service_disabled} = Extractor.extract("id3 bytes", "audio/mpeg")
+    end
+
+    test "extract/2 bytes overload for an audio MIME reaches ServiceClient with the original content type" do
+      test_pid = self()
+
+      Application.put_env(:platform, :files_service,
+        base_url: "http://files-service:8200",
+        token: "devtoken",
+        timeout: 1_000
+      )
+
+      Req.Test.stub(:extractor_audio_dispatch_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:req, conn, body})
+        Req.Test.json(conn, %{"text" => "transcript", "pages" => nil})
+      end)
+
+      Application.put_env(
+        :platform,
+        :files_service_req_client,
+        Req.new(plug: {Req.Test, :extractor_audio_dispatch_test})
+      )
+
+      assert {:ok, %{text: "transcript", pages: nil}} =
+               Extractor.extract("wav bytes", "audio/wav")
+
+      assert_receive {:req, conn, body}
+      assert conn.request_path == "/extract"
+      assert body =~ "wav bytes"
+      assert body =~ "audio/wav"
+    end
+
     test "extract/2 succeeds even when the per-format module isn't yet loaded (cold-BEAM regression)" do
       # `:code.purge` + `:code.delete` drop the module from the code server.
       # The next call into it must re-load via `Code.ensure_loaded/1` or
@@ -183,7 +219,15 @@ defmodule Platform.Files.ExtractorTest do
       "image/jpeg",
       "image/jpg",
       "image/webp",
-      "application/vnd.google-apps.document"
+      "application/vnd.google-apps.document",
+      "audio/mpeg",
+      "audio/mp4",
+      "audio/x-m4a",
+      "audio/m4a",
+      "audio/wav",
+      "audio/x-wav",
+      "audio/webm",
+      "audio/ogg"
     ]
 
     test "true for every content type with a dispatch clause" do
@@ -196,7 +240,7 @@ defmodule Platform.Files.ExtractorTest do
       refute Extractor.supported_content_type?(nil)
       refute Extractor.supported_content_type?("")
       refute Extractor.supported_content_type?("video/mp4")
-      refute Extractor.supported_content_type?("audio/mpeg")
+      refute Extractor.supported_content_type?("audio/aac")
       refute Extractor.supported_content_type?("application/octet-stream")
       refute Extractor.supported_content_type?("application/zip")
       # Pinned deliberately: the feature ticket claimed application/json was

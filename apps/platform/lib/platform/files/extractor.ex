@@ -34,6 +34,9 @@ defmodule Platform.Files.Extractor do
       `Platform.Files.Extractor.Image`
     * `application/vnd.google-apps.document` →
       `Platform.Files.Extractor.GDoc`
+    * `audio/mpeg`, `audio/mp4`, `audio/x-m4a`, `audio/m4a`, `audio/wav`,
+      `audio/x-wav`, `audio/webm`, `audio/ogg` →
+      `Platform.Files.Extractor.Audio`
 
   ## Two entry points
 
@@ -56,8 +59,8 @@ defmodule Platform.Files.Extractor do
     case dispatch(ct) do
       {:ok, module} ->
         case fetch_bytes(file, module) do
-          {:ok, :no_bytes_needed} -> module.extract(file)
-          {:ok, bytes} -> module.extract(bytes)
+          {:ok, :no_bytes_needed} -> filerow_extract(module, file)
+          {:ok, bytes} -> call_extractor(module, bytes, ct)
           {:error, _} = err -> err
         end
 
@@ -79,14 +82,15 @@ defmodule Platform.Files.Extractor do
     __MODULE__.Image,
     __MODULE__.Text,
     __MODULE__.CSV,
-    __MODULE__.HTML
+    __MODULE__.HTML,
+    __MODULE__.Audio
   ]
 
   @spec extract(binary(), String.t()) :: {:ok, ok_result()} | {:error, term()}
   def extract(bytes, content_type) when is_binary(bytes) and is_binary(content_type) do
     case dispatch(content_type) do
       {:ok, module} when module in @bytes_overload_modules ->
-        module.extract(bytes)
+        call_extractor(module, bytes, content_type)
 
       {:ok, _module} ->
         {:error, {:unsupported_content_type, content_type}}
@@ -95,6 +99,27 @@ defmodule Platform.Files.Extractor do
         {:error, {:unsupported_content_type, content_type}}
     end
   end
+
+  # Every bytes-overload module except Audio handles exactly one MIME, so it
+  # can hardcode its own content type (see PDF, DOCX, ...). Audio is the one
+  # module fielding several distinct MIME types that all need to reach
+  # `ServiceClient.extract/2` with the ORIGINAL content type (files-service
+  # forwards it into the STT backend, so collapsing to a single audio/* value
+  # would mis-decode non-default formats) — so it alone takes the 2-arg form.
+  defp call_extractor(__MODULE__.Audio, bytes, content_type),
+    do: __MODULE__.Audio.extract(bytes, content_type)
+
+  defp call_extractor(module, bytes, _content_type), do: module.extract(bytes)
+
+  # `fetch_bytes/2` answers `:no_bytes_needed` for GDoc alone — the one module
+  # whose `extract/1` takes the FileRow and fetches its own content over the
+  # Drive API — so this is the only reachable clause. It matches the module
+  # explicitly rather than calling `module.extract(file)`, because the bare
+  # dynamic call makes the compiler consider every dispatch target and Audio
+  # deliberately exposes only `extract/2` (warnings-as-errors fails on it).
+  # A future no-bytes module must add its own clause here; a FunctionClauseError
+  # is the intended outcome of forgetting, not a silent fallthrough.
+  defp filerow_extract(__MODULE__.GDoc, file), do: __MODULE__.GDoc.extract(file)
 
   @doc """
   True when `content_type` has an extractor, i.e. when ingestion has any
@@ -131,6 +156,14 @@ defmodule Platform.Files.Extractor do
   defp dispatch("image/jpg"), do: {:ok, __MODULE__.Image}
   defp dispatch("image/webp"), do: {:ok, __MODULE__.Image}
   defp dispatch("application/vnd.google-apps.document"), do: {:ok, __MODULE__.GDoc}
+  defp dispatch("audio/mpeg"), do: {:ok, __MODULE__.Audio}
+  defp dispatch("audio/mp4"), do: {:ok, __MODULE__.Audio}
+  defp dispatch("audio/x-m4a"), do: {:ok, __MODULE__.Audio}
+  defp dispatch("audio/m4a"), do: {:ok, __MODULE__.Audio}
+  defp dispatch("audio/wav"), do: {:ok, __MODULE__.Audio}
+  defp dispatch("audio/x-wav"), do: {:ok, __MODULE__.Audio}
+  defp dispatch("audio/webm"), do: {:ok, __MODULE__.Audio}
+  defp dispatch("audio/ogg"), do: {:ok, __MODULE__.Audio}
   defp dispatch(_), do: :error
 
   # GDoc never reads bytes off disk (it goes through Drive's export API
