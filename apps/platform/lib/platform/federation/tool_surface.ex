@@ -1740,7 +1740,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "runtime_event_list",
         description:
-          "Read a task's orchestration runtime events — the ack/heartbeat/progress/blocked stream the TaskRouter and its watchdog act on — newest first. Pure read over rows `Platform.Orchestration.RuntimeSupervision` already writes; this tool adds no instrumentation and records nothing.",
+          "Read a task's orchestration runtime events — the ack/heartbeat/progress/blocked stream the TaskRouter and its watchdog act on — newest first. Pure read over rows `Platform.Orchestration.RuntimeSupervision` already writes; this tool adds no instrumentation and records nothing. Task-level dispatches that resolve NO stage leave rows here too (task 01a0a5fa): `execution.dispatch_stageless` records that a dispatch frame was SENT for a task with no open stage — its payload carries `stage_id` nil, the addressed runtime id and whether that runtime was connected. `execution.dispatch_unanswered` records that such a dispatch went unanswered past the task-level watchdog window — no state change, no plan, no runtime event came back — and names the elapsed time. Neither mints an `execution_lease` row, so this tool is where a no-stage dispatch is visible at all.",
         parameters: %{
           task_id: %{
             type: "string",

@@ -307,6 +307,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # `arm_liveness_timers(_task_id, nil, _stage_kind), do: :ok` clause means
       # a stage-less dispatch arms no timers and records no lease, so there is
       # no alarm to satisfy. `task_id` stays — the body still names the task.
+      #
+      # SCOPE, corrected by task 01a0a5fa stage 3: the router now records that
+      # the stage-less frame was SENT (`execution.dispatch_stageless`, and
+      # `execution.dispatch_unanswered` if nothing comes back). Those are the
+      # router's own rows, readable over MCP; they arm no timer and mint no
+      # lease, and there is still nothing here for the recipient to ack.
       task_id: contract_id(task, :id) || "",
       task_title: task.title,
       task_description: task.description || "No description provided.",

@@ -419,6 +419,13 @@ defmodule Platform.Orchestration.PromptTemplates do
   #     The preamble's "no-ack alert in 5 minutes" threat is simply false on
   #     that branch.
   #
+  #     SCOPE, corrected by task 01a0a5fa stage 3: the SEND is now recorded.
+  #     The router emits an `execution.dispatch_stageless` runtime_event, and a
+  #     task-level watchdog may later emit `execution.dispatch_unanswered`.
+  #     Both are emitted BY THE ROUTER, about its own send — neither is
+  #     something the recipient acks, arms a lease, or can satisfy. The
+  #     recipient's contract on this branch is unchanged: still no ack.
+  #
   # So the planning body states that no ack is expected rather than demanding
   # one. Do not "fix" this by giving `task_ack` a task-level form — that would
   # be API surface for an alarm that does not exist.

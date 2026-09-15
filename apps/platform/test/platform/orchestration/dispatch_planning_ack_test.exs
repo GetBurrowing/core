@@ -21,6 +21,13 @@ defmodule Platform.Orchestration.DispatchPlanningAckTest do
   no-ack alert in 5 minutes") is false on that branch and a task-level ack form
   would be API surface for a nonexistent alarm.
 
+  Scope note (task 01a0a5fa stage 3): the send itself is recorded now — the
+  router emits `execution.dispatch_stageless`, and a task-level watchdog may
+  emit `execution.dispatch_unanswered` if nothing comes back. Both are the
+  router's rows about its own send. Neither arms a timer, mints a lease, nor
+  gives the recipient anything to ack, so the conclusion above stands
+  unchanged and this file still asserts the planning body demands no ack.
+
   ## Anti-vacuity
 
   Every `refute output =~ ...` here is paired, in the SAME test, with a

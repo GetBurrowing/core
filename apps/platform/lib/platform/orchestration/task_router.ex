@@ -192,6 +192,30 @@ defmodule Platform.Orchestration.TaskRouter do
     )
   end
 
+  # Task 01a0a5fa stage 2. How long a dispatch that resolved NO stage is given
+  # to be answered before the router records that it was not.
+  #
+  # The expected answer to a no-stage dispatch is a STATE CHANGE — a plan
+  # submitted, a `task_update`, a stage opening — not an ack. That is slower
+  # than the 300s ack budget (which does not apply here: no lease, no ack) and
+  # far faster than the 90-minute stage safety net (which also does not apply
+  # here: no stage). Fifteen minutes sits between the two and is long enough
+  # that a recipient doing real planning work is not reported as silent.
+  #
+  # DELIBERATELY NOT sourced from `LeaseManager.stage_kind_timeouts/0`. That
+  # matrix is keyed by STAGE KIND and this path has no stage; borrowing one of
+  # its numbers would make two unrelated clocks look linked, so that a later
+  # edit to a stage's budget would silently move a task-level window.
+  #
+  # Behind `Application.get_env/3` so a test can inject a short window instead
+  # of sleeping on the real one — the same shape as `@dispatch_debounce_ms`
+  # and `@awaiting_human_reminder_ms` above.
+  @stageless_watchdog_ms 15 * 60_000
+
+  defp stageless_watchdog_ms do
+    Application.get_env(:platform, :task_router_stageless_watchdog_ms, @stageless_watchdog_ms)
+  end
+
   # ── State ──────────────────────────────────────────────────────────────
 
   defmodule State do
@@ -205,6 +229,9 @@ defmodule Platform.Orchestration.TaskRouter do
             stage_started_at: DateTime.t() | nil,
             last_evidence_at: DateTime.t() | nil,
             last_runtime_event_at: DateTime.t() | nil,
+            stageless_dispatch_at: DateTime.t() | nil,
+            stageless_dispatch_token: integer(),
+            stageless_dispatch_delivered_online: boolean() | nil,
             last_dispatch_at: DateTime.t() | nil,
             dispatch_timer: reference() | nil,
             task_status: String.t() | nil,
@@ -228,6 +255,17 @@ defmodule Platform.Orchestration.TaskRouter do
       :stage_started_at,
       :last_evidence_at,
       :last_runtime_event_at,
+      # Task 01a0a5fa stage 2. When the most recent NO-STAGE dispatch went out,
+      # or `nil` when there is no unanswered one outstanding. Cleared the
+      # moment the watchdog fires, which is what makes a second fire for the
+      # same dispatch structurally impossible rather than merely guarded.
+      :stageless_dispatch_at,
+      # Whether the runtime the stageless dispatch was addressed to was
+      # connected when the frame went out. Carried on state only so the
+      # watchdog's payload can repeat it — a reader comparing an unanswered
+      # dispatch against a delivery failure needs both in one row, and the
+      # timer message deliberately carries nothing but the token.
+      :stageless_dispatch_delivered_online,
       :last_dispatch_at,
       # Task 01a00587. The pending debounce timer ref, or `nil` when no
       # `:dispatch_now` is scheduled. Deliberately NOT surfaced through
@@ -295,7 +333,13 @@ defmodule Platform.Orchestration.TaskRouter do
       # clears it — including the one the debounce DROPS — so a reconnect that
       # lands inside the boot window makes the coalesced dispatch a real one.
       # Nothing reads it to withhold a prompt in this stage.
-      boot_dispatch?: false
+      boot_dispatch?: false,
+      # Task 01a0a5fa stage 2. Monotonic counter bumped on every stageless
+      # dispatch. A `{:check_stageless_dispatch, token}` message whose token is
+      # not the current one is an ORPHAN from an earlier dispatch and is
+      # ignored: a timer message means "a timer woke us", never "the deadline
+      # passed".
+      stageless_dispatch_token: 0
     ]
   end
 
@@ -520,6 +564,12 @@ defmodule Platform.Orchestration.TaskRouter do
       stage_started_at: state.stage_started_at,
       last_evidence_at: state.last_evidence_at,
       last_runtime_event_at: state.last_runtime_event_at,
+      # Task 01a0a5fa stage 2 — observable so a test (and `router_state`-style
+      # introspection) can see an outstanding unanswered stageless dispatch
+      # without reaching into process state.
+      stageless_dispatch_at: state.stageless_dispatch_at,
+      stageless_dispatch_token: state.stageless_dispatch_token,
+      stageless_dispatch_delivered_online: state.stageless_dispatch_delivered_online,
       last_dispatch_at: state.last_dispatch_at,
       task_status: state.task_status,
       lease_status: state.lease_status,
@@ -951,6 +1001,60 @@ defmodule Platform.Orchestration.TaskRouter do
 
     send(self(), :dispatch)
     {:noreply, %{state | design_run: nil, status: :dispatching}}
+  end
+
+  # Statuses in which a task-level dispatch is still expecting an answer.
+  # Everything else in `Task.statuses/0` (`backlog`, `blocked`, `done`,
+  # `cancelled`, `stack_pending`) is either terminal or parked, and reporting a
+  # dispatch there as unanswered would be reporting a state nobody is in.
+  @stageless_answer_expected_statuses ~w(planning in_progress in_review deploying)
+
+  # Task 01a0a5fa stage 2 — the stageless unanswered watchdog.
+  #
+  # Mirrors the defensive structure of `handle_info(:check_no_ack, ...)` above:
+  # a timer message means "A TIMER WOKE US", not "the deadline passed". Every
+  # reason the fire would be wrong is checked here, at fire time, against live
+  # state — never assumed from the fact that the message arrived.
+  #
+  # This is an OBSERVABILITY FLOOR, not an alarm. It records one runtime_event
+  # and posts one execution-space line. It sets no `needs_human`, does not move
+  # the router to `:stalled`, and does not block the task. It arms no lease and
+  # re-arms no timer: `stageless_dispatch_at` is cleared as it fires, so a
+  # second fire for the same dispatch is structurally impossible rather than
+  # merely guarded.
+  def handle_info({:check_stageless_dispatch, token}, %State{} = state) do
+    cond do
+      token != state.stageless_dispatch_token ->
+        # ORPHAN. A later stageless dispatch bumped the token; this timer
+        # belongs to a dispatch that has been superseded. Timers are never
+        # cancelled here, so an orphan firing is the NORMAL case, not an edge.
+        {:noreply, state}
+
+      is_nil(state.stageless_dispatch_at) ->
+        # Already fired (or never armed) for this token — nothing outstanding.
+        {:noreply, state}
+
+      not is_nil(state.current_stage_id) ->
+        # A stage opened after the dispatch: the thing the dispatch was asking
+        # for happened. Silent.
+        {:noreply, clear_stageless_dispatch(state)}
+
+      runtime_event_since_stageless_dispatch?(state) ->
+        # Something came back for this task inside the window. Silent — a
+        # watchdog that fires on answered dispatches trains readers to ignore
+        # it, which is worse than no watchdog.
+        {:noreply, clear_stageless_dispatch(state)}
+
+      true ->
+        case Tasks.get_task_detail(state.task_id) do
+          %{status: status} = task when status in @stageless_answer_expected_statuses ->
+            {:noreply, fire_stageless_unanswered(state, task)}
+
+          _ ->
+            # Terminal, parked, or gone: nobody is waiting on an answer.
+            {:noreply, clear_stageless_dispatch(state)}
+        end
+    end
   end
 
   # `:check_safety_net` — armed on each successful dispatch at the stage-kind's
@@ -1969,6 +2073,152 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
+  # Task 01a0a5fa stage 1 — record that a dispatch which resolved NO stage was
+  # sent. Before this, the only durable trace was the ExecutionSpace engagement
+  # row, which is a chat message: `runtime_event_list` does not return it, which
+  # is why the 2026-09-15 instance on task 01a09de9 had to be dug out of the
+  # gateway journal.
+  #
+  # Same attrs shape as `record_unresolved_stage_blocker/4`, and the same
+  # `{:error, _}` discipline: a failed emit logs and returns `:error`, it NEVER
+  # crashes the dispatch that just succeeded.
+  #
+  # Arity 4, not 3: `stage` is the discriminator and it is not yet on `state` at
+  # the call site (`maybe_set_stage/2` runs after), so it has to be passed.
+  #
+  # `execution.dispatch_stageless` is registered with a nil status in
+  # `RuntimeSupervision.@event_statuses`, so this mints no execution_lease row.
+  #
+  # Task 01a0a5fa stage 2: this now RETURNS STATE and is threaded at the call
+  # site, because arming the unanswered watchdog means stamping two fields. The
+  # process dictionary would have been the shortcut and is deliberately not
+  # used — router state is the thing `current_status/1` reports, and a timer
+  # whose guard token lived outside that state could not be asserted on.
+  defp maybe_record_stageless_dispatch(%State{} = state, _task, %Stage{}, _delivered_online),
+    do: state
+
+  defp maybe_record_stageless_dispatch(%State{} = state, task, nil, delivered_online) do
+    attrs = %{
+      "task_id" => task.id,
+      "phase" => Tasks.current_phase(task),
+      "runtime_id" => RuntimeSupervision.self_filed_runtime_id(),
+      "event_type" => "execution.dispatch_stageless",
+      "execution_space_id" => state.execution_space_id,
+      "payload" => %{
+        "stage_id" => nil,
+        "task_status" => task.status,
+        "dispatch_runtime_id" => state.assignee.id,
+        "delivered_online" => delivered_online,
+        "reported_by" => "task_router",
+        "description" =>
+          "Task #{task.id} (#{task.title}) was dispatched at #{task.status} but the " <>
+            "dispatch resolved NO stage, so no execution_lease row was minted and no " <>
+            "liveness timer was armed. This event records that the frame was sent."
+      }
+    }
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, _event} ->
+        arm_stageless_watchdog(state, delivered_online)
+
+      {:error, err} ->
+        Logger.error(
+          "[TaskRouter] failed to record stageless dispatch for task #{task.id}: #{inspect(err)}"
+        )
+
+        # No trace was recorded, so there is nothing for a watchdog to find
+        # unanswered. Arming one here would produce an "unanswered" event with
+        # no corresponding "sent" event to read it against.
+        state
+    end
+  end
+
+  defp maybe_record_stageless_dispatch(%State{} = state, _task, _other, _delivered_online),
+    do: state
+
+  # Arm the ONE-SHOT unanswered watchdog for the dispatch just recorded.
+  #
+  # This arms NO lease and touches NO stage timer: `arm_liveness_timers/3`,
+  # `clear_liveness/1`, `:check_no_ack` and `:check_safety_net` are all
+  # untouched by this stage. The token is what makes a second stageless
+  # dispatch retire the first dispatch's timer without cancelling it — the
+  # orphan still fires, and `handle_info({:check_stageless_dispatch, token}, _)`
+  # drops it on the token mismatch.
+  defp arm_stageless_watchdog(%State{} = state, delivered_online) do
+    token = state.stageless_dispatch_token + 1
+
+    Process.send_after(
+      self(),
+      {:check_stageless_dispatch, token},
+      stageless_watchdog_ms()
+    )
+
+    %{
+      state
+      | stageless_dispatch_at: DateTime.utc_now(),
+        stageless_dispatch_token: token,
+        stageless_dispatch_delivered_online: delivered_online
+    }
+  end
+
+  defp clear_stageless_dispatch(%State{} = state) do
+    %{state | stageless_dispatch_at: nil}
+  end
+
+  defp runtime_event_since_stageless_dispatch?(%State{last_runtime_event_at: nil}), do: false
+
+  defp runtime_event_since_stageless_dispatch?(%State{} = state) do
+    DateTime.compare(state.last_runtime_event_at, state.stageless_dispatch_at) != :lt
+  end
+
+  defp fire_stageless_unanswered(%State{} = state, task) do
+    dispatched_at = state.stageless_dispatch_at
+    elapsed_ms = DateTime.diff(DateTime.utc_now(), dispatched_at, :millisecond)
+
+    description =
+      "Task #{task.id} (#{task.title}) was dispatched at #{task.status} with NO stage open " <>
+        "#{div(elapsed_ms, 1_000)}s ago and nothing has come back: no runtime event, no stage " <>
+        "opened, no status change. No lease was minted for this dispatch, so no ack or " <>
+        "safety-net timer covers it. This is a record, not a block — the task is not held " <>
+        "and no human intervention has been requested."
+
+    attrs = %{
+      "task_id" => task.id,
+      "phase" => Tasks.current_phase(task),
+      "runtime_id" => RuntimeSupervision.self_filed_runtime_id(),
+      "event_type" => "execution.dispatch_unanswered",
+      "execution_space_id" => state.execution_space_id,
+      "payload" => %{
+        "stage_id" => nil,
+        "dispatched_at" => DateTime.to_iso8601(dispatched_at),
+        "elapsed_ms" => elapsed_ms,
+        "task_status" => task.status,
+        "dispatch_runtime_id" => state.assignee.id,
+        "delivered_online" => state.stageless_dispatch_delivered_online,
+        "reported_by" => "task_router",
+        "description" => description
+      }
+    }
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, _event} ->
+        :ok
+
+      {:error, err} ->
+        Logger.error(
+          "[TaskRouter] failed to record unanswered stageless dispatch for task #{task.id}: #{inspect(err)}"
+        )
+    end
+
+    if state.execution_space_id do
+      ExecutionSpace.post_log(state.execution_space_id, description)
+    end
+
+    # Cleared whatever the emit did. A failed emit is a lost record, not a
+    # reason to try again later under a different elapsed time.
+    clear_stageless_dispatch(state)
+  end
+
   defp stage_status_census(nil), do: "no plan"
 
   defp stage_status_census(plan) do
@@ -2090,6 +2340,11 @@ defmodule Platform.Orchestration.TaskRouter do
   # `suppress_unresolved_stage_dispatch/2` shape above — log, telemetry,
   # execution-space line — and returns without arming any liveness timer,
   # because nothing was dispatched and there is no ack to wait for.
+  #
+  # SCOPE (task 01a0a5fa stage 3): the `execution.dispatch_stageless` event added
+  # by stage 1 covers dispatches that WERE SENT with no stage open. This path
+  # sends no frame, so it emits no such event — correctly. Suppression and a
+  # stageless send are different facts and are recorded differently.
   defp suppress_user_phase_assignee(state, task) do
     phase = Tasks.current_phase(task)
 
@@ -2322,12 +2577,25 @@ defmodule Platform.Orchestration.TaskRouter do
 
               ExecutionSpace.post_log(state.execution_space_id, log_content)
 
-              # The engagement row is the ONLY durable trace of a dispatch that
-              # resolved no stage: `arm_liveness_timers/3` no-ops on a nil stage,
-              # so a planning dispatch writes no LeaseManager row. Stamping who it
-              # was addressed to and whether that runtime was connected is what
-              # lets a later reader tell a repeat that was never delivered from one
-              # that was.
+              # SCOPE OF THIS ROW (corrected, task 01a0a5fa stage 3). The
+              # engagement row covers the HUMAN-READABLE side of a dispatch that
+              # resolved no stage: the full prompt text, in the execution space,
+              # where a person reading the task's history sees what was actually
+              # said and to whom. Stamping who it was addressed to and whether
+              # that runtime was connected is what lets a later reader tell a
+              # repeat that was never delivered from one that was.
+              #
+              # It is no longer the only durable trace. Stage 1 of task 01a0a5fa
+              # added an `execution.dispatch_stageless` runtime_event covering the
+              # MACHINE-READABLE side: queryable over MCP via `runtime_event_list`,
+              # which does not return chat messages. Two rows because there are two
+              # readers, not because one is a fallback for the other.
+              #
+              # What has NOT changed: the nil-stage clause of
+              # `arm_liveness_timers/3` remains a deliberate no-op, and
+              # `unchanged_boot_engagement?/5` depends on that no-op for its
+              # suppression to be safe. The new event records a send; it arms
+              # nothing and mints no lease.
               ExecutionSpace.post_engagement(state.execution_space_id, prompt,
                 metadata: %{
                   "reason" => "task_assigned",
@@ -2336,6 +2604,19 @@ defmodule Platform.Orchestration.TaskRouter do
                 }
               )
             end
+
+            # Task 01a0a5fa stage 1. OUTSIDE the `if state.execution_space_id`
+            # block above ON PURPOSE: a task with no execution space is exactly
+            # the case where the engagement row does not exist either, so gating
+            # this on it would reproduce the blind spot it exists to close.
+            #
+            # This is NOT a replacement for arming a liveness timer, and it does
+            # not change what `arm_liveness_timers/3` does below. The nil-stage
+            # clause of that function remains a deliberate no-op which
+            # `unchanged_boot_engagement?/5` depends on (see the comment at the
+            # boot-suppression site). What is recorded here is only that the
+            # frame WAS SENT.
+            state = maybe_record_stageless_dispatch(state, task, stage, delivered_online)
 
             # Event-driven liveness arm (task 019f640d stage 3). Record the
             # dispatch in LeaseManager and arm one-shot ack + safety-net timers

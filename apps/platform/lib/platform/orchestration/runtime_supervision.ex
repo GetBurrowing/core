@@ -42,6 +42,28 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     # state (same rationale as `execution.acked`). See LeaseManager.silence/3
     # and the `alarm_silence` MCP tool (task 019f6791-c01b stage 3).
     "execution.alarm_silenced" => nil,
+    # `nil` is LOAD-BEARING, same rationale as `execution.acked` and
+    # `execution.alarm_silenced`: a nil status makes `upsert_lease/2`
+    # short-circuit, so this event inserts NO execution_lease row. That is the
+    # whole point — a dispatch that resolved no stage must leave a durable,
+    # MCP-readable trace WITHOUT minting a lease keyed to a stage that does not
+    # exist (task 01a0a5fa stage 1). Emitted by the TaskRouter itself, never by
+    # a recipient runtime. Payload shape: %{"stage_id" => nil, "task_status" =>
+    # binary, "dispatch_runtime_id" => binary, "delivered_online" => boolean,
+    # "reported_by" => "task_router", "description" => binary}.
+    "execution.dispatch_stageless" => nil,
+    # `nil` for exactly the same lease-free reason as
+    # `execution.dispatch_stageless` above: the watchdog that emits this
+    # (task 01a0a5fa stage 2) observes a TASK-level fact — a dispatch was sent
+    # with no stage open and nothing came back within the stageless watchdog
+    # window — and a lease row keyed to a stage that never existed would be a
+    # record of something that did not happen. Observability floor only: this
+    # event sets no `needs_human`, does not stall the router, and does not
+    # block the task. Emitted at most ONCE per dispatch token. Payload shape:
+    # %{"stage_id" => nil, "dispatched_at" => iso8601, "elapsed_ms" =>
+    # integer, "dispatch_runtime_id" => binary, "delivered_online" => boolean,
+    # "reported_by" => "task_router", "description" => binary}.
+    "execution.dispatch_unanswered" => nil,
     "execution.started" => "active",
     "execution.heartbeat" => "active",
     "execution.progress" => "active",

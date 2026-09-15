@@ -4,12 +4,19 @@ defmodule Platform.Orchestration.ExecutionSpaceLatestEngagementTest do
 
   ## Why the record has to exist at all
 
-  A dispatch that resolves no stage persists nothing.
+  A dispatch that resolves no stage arms nothing.
   `TaskRouter.arm_liveness_timers/3` has an `(_task_id, nil, _stage_kind), do:
-  :ok` clause, so a planning dispatch writes no `LeaseManager` row. The
-  engagement message posted into the execution space is the only trace it
-  happened. Every repeat therefore looks, to anything reading state, exactly
-  like a first attempt.
+  :ok` clause, so a planning dispatch writes no `LeaseManager` row — and that
+  no-op is what this guard's suppression depends on. The engagement message
+  posted into the execution space carries the prompt itself, so every repeat
+  looks, to anything comparing state, exactly like a first attempt unless the
+  engagement bodies are compared.
+
+  Scope note (task 01a0a5fa stage 3): the SEND is also recorded now, as an
+  `execution.dispatch_stageless` runtime_event readable over MCP. That row
+  records that a frame went out; it carries no prompt body and arms no timer,
+  so it neither replaces the engagement row this guard reads nor changes what
+  `latest_engagement/1` has to mean.
 
   ## Why `latest_engagement/1` cannot just mean "the newest message"
 
