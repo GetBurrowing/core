@@ -112,6 +112,9 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:search_performed, false)
      |> assign(:search_truncated, false)
      |> assign(:search_error, nil)
+     |> assign(:search_degraded, false)
+     |> assign(:search_dead_channels, [])
+     |> assign(:search_results_revealed, false)
      |> assign(:proposals_pending_count, count_pending_proposals())
      |> assign(:show_reject_form_for, nil)
      |> assign(:tree_drawer_open, false)
@@ -289,7 +292,10 @@ defmodule PlatformWeb.OrgMemoryLive do
        |> assign(:search_results, [])
        |> assign(:search_performed, false)
        |> assign(:search_truncated, false)
-       |> assign(:search_error, nil)}
+       |> assign(:search_error, nil)
+       |> assign(:search_degraded, false)
+       |> assign(:search_dead_channels, [])
+       |> assign(:search_results_revealed, false)}
     else
       # Dispatch through the federation tool surface — the same gate
       # code path agents use (never Wiki.Search directly). Nil-ish
@@ -300,13 +306,48 @@ defmodule PlatformWeb.OrgMemoryLive do
         |> put_filter("namespace", namespace)
 
       case tool_surface().execute("memory_search", args, %{agent: nil}) do
+        # A degraded search with surviving hits (task 01a0941e stage 1):
+        # the envelope carries NO `results` key at all, so this clause is
+        # the only way those hits reach the page — and it hands them over
+        # UNREVEALED. `search_error` stays nil: a degraded search is a
+        # failed measurement, not a search error, and the red error line
+        # is reserved for the latter.
+        {:ok, %{retrieval_status: "degraded", partial_results: hits, degraded: deg}} ->
+          {:noreply,
+           socket
+           |> assign(:search_results, hits)
+           |> assign(:search_performed, true)
+           |> assign(:search_truncated, true)
+           |> assign(:search_error, nil)
+           |> assign(:search_degraded, true)
+           |> assign(:search_dead_channels, Map.get(deg, :dead_channels, []))
+           |> assign(:search_results_revealed, false)}
+
+        # Degraded with zero surviving hits. Matched BEFORE the generic
+        # `{:error, %{error: message}}` clause below, which would
+        # otherwise swallow it (the degraded error map carries an
+        # `:error` key too) and render it in the wrong register.
+        {:error, %{code: :search_degraded, dead_channels: dead}} ->
+          {:noreply,
+           socket
+           |> assign(:search_results, [])
+           |> assign(:search_performed, true)
+           |> assign(:search_truncated, true)
+           |> assign(:search_error, nil)
+           |> assign(:search_degraded, true)
+           |> assign(:search_dead_channels, dead)
+           |> assign(:search_results_revealed, false)}
+
         {:ok, %{results: results} = envelope} ->
           {:noreply,
            socket
            |> assign(:search_results, results)
            |> assign(:search_performed, true)
            |> assign(:search_truncated, Map.get(envelope, :truncated, false))
-           |> assign(:search_error, nil)}
+           |> assign(:search_error, nil)
+           |> assign(:search_degraded, false)
+           |> assign(:search_dead_channels, [])
+           |> assign(:search_results_revealed, true)}
 
         {:error, %{error: message}} ->
           {:noreply,
@@ -314,9 +355,21 @@ defmodule PlatformWeb.OrgMemoryLive do
            |> assign(:search_results, [])
            |> assign(:search_performed, true)
            |> assign(:search_truncated, false)
-           |> assign(:search_error, message)}
+           |> assign(:search_error, message)
+           |> assign(:search_degraded, false)
+           |> assign(:search_dead_channels, [])
+           |> assign(:search_results_revealed, false)}
       end
     end
+  end
+
+  # Server-side reveal of a degraded search's partial hits (stage 4 renders
+  # the button). Deliberately NOT a JS class toggle: the gate has to be a
+  # state transition the reader performs, not a style a reader learns to
+  # look past. A fresh search resets it to false above.
+  @impl true
+  def handle_event("reveal_degraded_results", _params, socket) do
+    {:noreply, assign(socket, :search_results_revealed, true)}
   end
 
   # Page hit click-through: back to the :pages tab, patched to the hit.
@@ -684,6 +737,9 @@ defmodule PlatformWeb.OrgMemoryLive do
                 performed={@search_performed}
                 truncated={@search_truncated}
                 error={@search_error}
+                degraded={@search_degraded}
+                dead_channels={@search_dead_channels}
+                results_revealed={@search_results_revealed}
               />
             <% :proposals -> %>
               <ProposalsPane.proposals_pane
@@ -752,6 +808,9 @@ defmodule PlatformWeb.OrgMemoryLive do
         search_performed={@search_performed}
         search_truncated={@search_truncated}
         search_error={@search_error}
+        search_degraded={@search_degraded}
+        search_dead_channels={@search_dead_channels}
+        search_results_revealed={@search_results_revealed}
         proposals={@proposals}
         show_reject_form_for={@show_reject_form_for}
         expanded_diffs={@expanded_diffs}

@@ -56,6 +56,59 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
         send(pid, {:memory_search, args, context})
       end
 
+      # Keyed off the query string so every pre-existing test keeps the
+      # healthy envelope untouched (task 01a0941e stage 3).
+      case Map.get(args, "query") do
+        "degraded-with-hits" -> degraded_with_hits()
+        "degraded-no-hits" -> degraded_no_hits()
+        _ -> healthy()
+      end
+    end
+
+    # Degraded WITH surviving hits: no `results` key at all — the hits are
+    # reachable only through `partial_results` (stage 1 envelope).
+    defp degraded_with_hits do
+      {:ok,
+       %{
+         partial_results: [
+           %{
+             source: "page",
+             id: Ecto.UUID.generate(),
+             path: "org/page/identity.md",
+             space_id: nil,
+             content: "Partial hit from the surviving channel.",
+             score: 0.0164,
+             semantic_rank: nil,
+             lexical_rank: 1,
+             authored_by: nil,
+             date_or_inserted_at: "2026-06-01T12:00:00Z"
+           }
+         ],
+         retrieval_status: "degraded",
+         truncated: true,
+         dead_channels: [["semantic", "all"]],
+         degraded: %{
+           dead_channels: [["semantic", "all"]],
+           channels_down: ["semantic"],
+           implication: "Semantic recall is missing from these results."
+         },
+         fusion_constant_k: 60
+       }}
+    end
+
+    # Degraded with ZERO surviving hits: an error, never an empty list.
+    defp degraded_no_hits do
+      {:error,
+       %{
+         error: "memory_search ran degraded: the semantic channel(s) did not answer",
+         code: :search_degraded,
+         recoverable: true,
+         suggestion: "Retry; if it stays degraded, report the absence as unestablished.",
+         dead_channels: [["semantic", "all"]]
+       }}
+    end
+
+    defp healthy do
       {:ok,
        %{
          results: [
@@ -795,6 +848,21 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     end
   end
 
+  # Degraded-search helpers (task 01a0941e stage 3). ExUnit forbids `defp`
+  # inside a `describe` block, so they live at module level.
+  defp assigns_of(view), do: :sys.get_state(view.pid).socket.assigns
+
+  defp open_search(conn) do
+    {:ok, view, _html} = live(conn, ~p"/org_memory")
+    view |> element(~s([data-role="tab-strip"] button[data-tab="search"])) |> render_click()
+    view
+  end
+
+  defp submit_search(view, query) do
+    view |> form("#org-memory-search-form", %{"query" => query}) |> render_submit()
+    view
+  end
+
   describe "search pane (stage 6)" do
     setup %{conn: conn} do
       Repo.delete_all(WikiPage)
@@ -949,6 +1017,170 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       refute_receive {:memory_search, _args, _context}
       refute has_element?(view, ~s([data-search-result]))
+    end
+
+    # ── Degraded search (task 01a0941e stage 3) ───────────────────────────
+    #
+    # Stage 1 made a degraded `memory_search` unreachable except through a
+    # degraded-shaped envelope. This LiveView is the only in-tree consumer
+    # whose behaviour changes on that flip, so these four pin the human
+    # side of it: partial hits arrive UNREVEALED, the degraded error does
+    # not land in the red error line, a healthy search clears the state,
+    # and a fresh search re-arms the gate.
+    test "a degraded envelope with hits assigns partial hits unrevealed and leaves search_error nil",
+         %{conn: conn} do
+      view = conn |> open_search() |> submit_search("degraded-with-hits")
+
+      assigns = assigns_of(view)
+
+      assert length(assigns.search_results) == 1
+      assert assigns.search_degraded == true
+      assert assigns.search_dead_channels == [["semantic", "all"]]
+      assert assigns.search_results_revealed == false
+      assert assigns.search_error == nil
+      assert assigns.search_performed == true
+
+      refute has_element?(view, ~s([data-role="search-error"]))
+    end
+
+    test "a :search_degraded error does not render the red error line", %{conn: conn} do
+      view = conn |> open_search() |> submit_search("degraded-no-hits")
+
+      assigns = assigns_of(view)
+
+      assert assigns.search_results == []
+      assert assigns.search_degraded == true
+      assert assigns.search_dead_channels == [["semantic", "all"]]
+      assert assigns.search_error == nil
+
+      # `--color-error` stays reserved for a genuine search error; a
+      # degraded search is a failed measurement, not one.
+      refute has_element?(view, ~s([data-role="search-error"]))
+    end
+
+    test "a healthy envelope leaves search_degraded false and reveals results", %{conn: conn} do
+      view = conn |> open_search() |> submit_search("deployment")
+
+      assigns = assigns_of(view)
+
+      assert assigns.search_degraded == false
+      assert assigns.search_dead_channels == []
+      assert assigns.search_results_revealed == true
+      assert length(assigns.search_results) == 3
+    end
+
+    test "a fresh search resets search_results_revealed to false", %{conn: conn} do
+      view = conn |> open_search() |> submit_search("degraded-with-hits")
+
+      render_click(view, "reveal_degraded_results", %{})
+      assert assigns_of(view).search_results_revealed == true
+
+      # A second degraded search must re-arm the gate — a reveal that
+      # survived into the next search would render the next degraded
+      # result set directly, which is this defect one search later.
+      submit_search(view, "degraded-with-hits")
+      assert assigns_of(view).search_results_revealed == false
+
+      # And the blank-query reset path resets it too.
+      render_click(view, "reveal_degraded_results", %{})
+      assert assigns_of(view).search_results_revealed == true
+      submit_search(view, "   ")
+      assert assigns_of(view).search_results_revealed == false
+    end
+
+    # ── Stage 4: the rendered degraded surface ──────────────────────────
+    #
+    # Stage 3 pinned the ASSIGNS. These pin the MARKUP, which is where the
+    # guarantee actually lives: a reader cannot be protected by an assign
+    # they never see.
+
+    test "the degraded result list does not auto-render", %{conn: conn} do
+      view = conn |> open_search() |> submit_search("degraded-with-hits")
+
+      # Hits exist and are on the socket...
+      assert length(assigns_of(view).search_results) == 1
+
+      # ...and are NOT in the DOM, in EITHER viewport. Both panes render
+      # into the same document, so a desktop-only gate would leave the
+      # mobile list sitting there — visible to a 375px reader and to no
+      # desktop screenshot. This is the whole stage: a degraded search
+      # renders what did not run, not a list that reads as an answer.
+      refute has_element?(view, "[data-search-result]")
+      refute has_element?(view, ~s([data-role="mobile-search-result"]))
+
+      assert has_element?(view, ~s([data-role="search-degraded-partial"]))
+      assert has_element?(view, ~s([data-role="reveal-partial-results"]))
+    end
+
+    test "clicking the reveal control renders the partial hits", %{conn: conn} do
+      view = conn |> open_search() |> submit_search("degraded-with-hits")
+
+      refute has_element?(view, "[data-search-result]")
+      refute has_element?(view, ~s([data-role="mobile-search-result"]))
+
+      # Both viewports render into the same DOM (they are hidden from each
+      # other by CSS, not by the server), so the bare role selector matches
+      # twice. Scope the click to the desktop pane — and then assert the
+      # MOBILE list revealed too, which is what proves the reveal is server
+      # state shared by both panes rather than a per-pane toggle.
+      view
+      |> element(~s([data-role="search-pane"] [data-role="reveal-partial-results"]))
+      |> render_click()
+
+      assert has_element?(view, "[data-search-result]")
+      assert has_element?(view, ~s([data-role="mobile-search-result"]))
+
+      # The reveal control is spent: the sentence stays, the button does not.
+      refute has_element?(view, ~s([data-role="reveal-partial-results"]))
+      assert has_element?(view, ~s([data-role="search-degraded-partial"]))
+    end
+
+    test "the degraded empty state does not contain the string 'No results'", %{conn: conn} do
+      view = conn |> open_search() |> submit_search("degraded-no-hits")
+
+      html = render(view)
+
+      assert has_element?(view, ~s([data-role="search-degraded-empty"]))
+
+      # In an empty state the headline is the only line reliably read, so a
+      # caveat under a confident headline is still a clean empty result with
+      # a footnote. The confident headline must not be on the page at all.
+      refute html =~ "No results"
+      assert html =~ "absence is not established"
+    end
+
+    test "the channel strip renders on a healthy search as well as a degraded one",
+         %{conn: conn} do
+      view = conn |> open_search() |> submit_search("deployment")
+
+      # Healthy: both chips live. If this ever renders only when degraded,
+      # the strip has become a banner and its ABSENCE carries the signal —
+      # which is the failure mode the always-present property exists to stop.
+      assert has_element?(view, ~s([data-role="channel-strip"]))
+
+      assert has_element?(
+               view,
+               ~s([data-role="channel-chip"][data-channel="semantic"][data-state="live"])
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-role="channel-chip"][data-channel="lexical"][data-state="live"])
+             )
+
+      submit_search(view, "degraded-with-hits")
+
+      assert has_element?(view, ~s([data-role="channel-strip"]))
+
+      assert has_element?(
+               view,
+               ~s([data-role="channel-chip"][data-channel="semantic"][data-state="down"])
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-role="channel-chip"][data-channel="lexical"][data-state="live"])
+             )
     end
   end
 

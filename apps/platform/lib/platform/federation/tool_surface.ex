@@ -762,9 +762,9 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean, dead_channels: [[channel, corpus]], dropped: %{page, journal, message, task}, payload_truncated: boolean}. `dead_channels` lists every search channel that timed out or crashed as a `[channel, corpus]` pair (e.g. `[\"semantic\", \"all\"]` or `[\"lexical\", \"task\"]`) — empty when every channel answered; `dropped` counts, per corpus, the fused hits that hydration refused (row deleted or not readable by the caller) and always carries all four keys. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
+          "HEALTHY (`retrieval_status: \"ok\"`, every channel answered): %{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], retrieval_status: \"ok\", fusion_constant_k: 60, truncated: boolean, dead_channels: [], dropped: %{page, journal, message, task}, payload_truncated: boolean} — and no `degraded` key. DEGRADED WITH SURVIVING HITS: `retrieval_status: \"degraded\"`, the hits under `partial_results` and NO `results` KEY AT ALL, plus `degraded: %{dead_channels, channels_down: [\"semantic\" | \"lexical:<corpus>\"], implication}`. The rename is deliberate: a search with a dead channel is a FAILED MEASUREMENT, not a negative result, so the hits are reachable only through a key whose name says they are partial. DEGRADED WITH ZERO SURVIVING HITS: an ERROR, `code: :search_degraded`, carrying `dead_channels` and no `results` key — an empty `results` there would read as an established absence, which it is not. `dead_channels` lists every search channel that timed out or crashed as a `[channel, corpus]` pair (e.g. `[\"semantic\", \"all\"]` or `[\"lexical\", \"task\"]`) — empty when every channel answered; `dropped` counts, per corpus, the fused hits that hydration refused (row deleted or not readable by the caller) and always carries all four keys. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
         limitations:
-          "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are dropped and counted in `dropped`. `truncated: true` means the result set is incomplete for ANY reason: a channel hit its `2*limit` cap (a higher `limit` may surface more hits) OR a channel died (see `dead_channels` — a non-empty list always forces `truncated: true`; retry later rather than raising `limit`). `payload_truncated: true` is a different thing: the whole response is capped at 20_000 bytes, and lowest-ranked hits were dropped from the tail to fit.",
+          "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are dropped and counted in `dropped`. `truncated: true` means the result set is incomplete for ANY reason: a channel hit its `2*limit` cap (a higher `limit` may surface more hits) OR a channel died (see `dead_channels` — a non-empty list always forces `truncated: true`; retry later rather than raising `limit`). `payload_truncated: true` is a different thing: the whole response is capped at 20_000 bytes, and lowest-ranked hits were dropped from the tail to fit. Degraded-vs-healthy is decided BEFORE that byte bound is applied, so a payload bound that empties the kept list never reports itself as `:search_degraded`. A caller written against `results` will see that key MISSING on a degraded search — that is the intended fail-loud: read `partial_results` and the `degraded` map, or treat the `:search_degraded` error as an unestablished absence.",
         when_to_use:
           "When you need to recall information beyond the org preamble — past decisions, journal entries, relevant chat threads, prior tasks (shipped or in-flight), or any cross-corpus lookup."
       },
@@ -10542,25 +10542,101 @@ defmodule Platform.Federation.ToolSurface do
   defp bound_memory_search_payload({:ok, %{results: hits} = envelope}) when is_list(hits) do
     snipped = Enum.map(hits, &bound_memory_search_hit/1)
 
-    # Measure with the `payload_truncated` key already present (and with
-    # its longer `false` rendering) so the flag we add can never push a
-    # payload back over the budget we just measured it against.
     # `truncated`, `dead_channels` and `dropped` ride through from
     # `Search.search/2` untouched — except that a dead-channel label is
     # a tuple (`{:semantic, :all}`), which JSON cannot carry, so it is
     # rendered as a `["semantic", "all"]` pair here.
-    base =
+    dead =
       envelope
-      |> Map.put(:results, snipped)
-      |> Map.update(:dead_channels, [], &Enum.map(&1, fn {ch, corpus} -> [ch, corpus] end))
-      |> Map.put(:payload_truncated, false)
+      |> Map.get(:dead_channels, [])
+      |> Enum.map(fn
+        {channel, corpus} -> [channel, corpus]
+        pair -> pair
+      end)
 
-    {kept, dropped?} = fit_memory_search_payload(base, snipped)
+    # ORDERING GUARD. Degraded-vs-healthy, and within degraded
+    # zero-hits-vs-partial, are decided on `snipped` — the PRE-BOUND
+    # list. `payload_truncated` can empty the kept list for an oversized
+    # payload, so deciding on `kept` would let a byte-bound artefact
+    # masquerade as a dead-channel failure: a false positive with the
+    # same signature as the real thing.
+    case {dead, snipped} do
+      {[], _} ->
+        envelope
+        |> Map.put(:dead_channels, dead)
+        |> Map.put(:payload_truncated, false)
+        |> Map.put(:retrieval_status, "ok")
+        |> bound_memory_search_fit(:results, snipped)
 
-    {:ok, base |> Map.put(:results, kept) |> Map.put(:payload_truncated, dropped?)}
+      {_, []} ->
+        {:error, memory_search_degraded_error(dead)}
+
+      _ ->
+        # A degraded search with surviving hits carries NO `results` key.
+        # The hits are reachable only through `partial_results`, whose
+        # name says what they are — a caller that reads `results` gets
+        # nothing rather than a partial list it would read as an answer.
+        envelope
+        |> Map.delete(:results)
+        |> Map.put(:dead_channels, dead)
+        |> Map.put(:payload_truncated, false)
+        |> Map.put(:truncated, true)
+        |> Map.put(:retrieval_status, "degraded")
+        |> Map.put(:degraded, %{
+          dead_channels: dead,
+          channels_down: Enum.map(dead, &memory_search_channel_name/1),
+          implication: memory_search_implication(dead)
+        })
+        |> bound_memory_search_fit(:partial_results, snipped)
+    end
   end
 
   defp bound_memory_search_payload(other), do: other
+
+  # Measure with the `payload_truncated` key (and every degraded key)
+  # already present — and with `payload_truncated`'s longer `false`
+  # rendering — so the flag we add can never push a payload back over
+  # the budget we just measured it against.
+  defp bound_memory_search_fit(base, key, snipped) do
+    base = Map.put(base, key, snipped)
+    {kept, dropped?} = fit_memory_search_payload(base, key, snipped)
+
+    {:ok, base |> Map.put(key, kept) |> Map.put(:payload_truncated, dropped?)}
+  end
+
+  # Four-key error convention, mirroring `stage_list_mismatch/2`. There is
+  # deliberately no `results: []` key: an empty `results` is exactly the
+  # reading this branch exists to make unreachable.
+  defp memory_search_degraded_error(dead) do
+    names = dead |> Enum.map(&memory_search_channel_name/1) |> Enum.join(", ")
+
+    %{
+      error:
+        "memory_search ran degraded: the #{names} channel(s) did not answer, and the surviving " <>
+          "channel(s) matched nothing. This is a FAILED MEASUREMENT, not an absence — do not " <>
+          "conclude the thing you searched for does not exist.",
+      code: :search_degraded,
+      recoverable: true,
+      suggestion:
+        "Retry; if it stays degraded, report the absence as unestablished. Raising `limit` does " <>
+          "not help — a dead channel contributes no hits at any limit.",
+      dead_channels: dead
+    }
+  end
+
+  defp memory_search_channel_name([:semantic, _corpus]), do: "semantic"
+  defp memory_search_channel_name([channel, corpus]), do: "#{channel}:#{corpus}"
+
+  defp memory_search_implication(dead) do
+    names = Enum.map(dead, &memory_search_channel_name/1)
+
+    if "semantic" in names do
+      "semantic down → results are lexical only; absence is not established"
+    else
+      "#{Enum.join(names, ", ")} down → those corpora contributed no hits; " <>
+        "absence is not established for them"
+    end
+  end
 
   defp bound_memory_search_hit(%{content: content} = hit) when is_binary(content) do
     sliced = String.slice(content, 0, @memory_search_snippet_chars)
@@ -10573,18 +10649,28 @@ defmodule Platform.Federation.ToolSurface do
 
   defp bound_memory_search_hit(hit), do: hit
 
-  defp fit_memory_search_payload(base, hits) do
+  defp fit_memory_search_payload(base, key, hits) do
     cond do
-      memory_search_payload_bytes(Map.put(base, :results, hits)) <=
-          @memory_search_max_payload_bytes ->
-        {hits, length(hits) < length(base.results)}
+      memory_search_payload_bytes(Map.put(base, key, hits)) <=
+          memory_search_max_payload_bytes() ->
+        {hits, length(hits) < length(Map.fetch!(base, key))}
 
       hits == [] ->
         {[], true}
 
       true ->
-        fit_memory_search_payload(base, Enum.drop(hits, -1))
+        fit_memory_search_payload(base, key, Enum.drop(hits, -1))
     end
+  end
+
+  # Runtime-overridable so a test can shrink the budget far enough to
+  # empty the kept list, which real fixtures cannot do (a 500-char
+  # snippet is ~1 KB and the budget is 20 KB). That case is the only one
+  # in which the ordering guard above can be observed to fail, so without
+  # this seam the guard's test would be vacuous. Unset in dev and prod.
+  defp memory_search_max_payload_bytes do
+    Application.get_env(:platform, :memory_search_max_payload_bytes) ||
+      @memory_search_max_payload_bytes
   end
 
   defp memory_search_payload_bytes(envelope) do

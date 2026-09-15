@@ -43,6 +43,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   alias Phoenix.LiveView.JS
   alias Platform.Memory.Proposals
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
+  alias PlatformWeb.OrgMemoryLive.SearchPane
 
   @tabs [
     {"pages", "Pages"},
@@ -86,6 +87,9 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   attr(:search_performed, :boolean, default: false)
   attr(:search_truncated, :boolean, default: false)
   attr(:search_error, :string, default: nil)
+  attr(:search_degraded, :boolean, default: false)
+  attr(:search_dead_channels, :list, default: [])
+  attr(:search_results_revealed, :boolean, default: false)
 
   # ── Proposals tab ─────────────────────────────────────────────────────
   attr(:proposals, :list, default: [])
@@ -210,6 +214,9 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               performed={@search_performed}
               truncated={@search_truncated}
               error={@search_error}
+              degraded={@search_degraded}
+              dead_channels={@search_dead_channels}
+              results_revealed={@search_results_revealed}
             />
           <% :proposals -> %>
             <.mobile_proposals
@@ -769,6 +776,9 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   attr(:performed, :boolean, default: false)
   attr(:truncated, :boolean, default: false)
   attr(:error, :string, default: nil)
+  attr(:degraded, :boolean, default: false)
+  attr(:dead_channels, :list, default: [])
+  attr(:results_revealed, :boolean, default: false)
 
   defp mobile_search(assigns) do
     ~H"""
@@ -839,6 +849,10 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
         </div>
       </form>
 
+      <%!-- Orientation strip — same component as the desktop pane, pinned
+           to the bottom edge of the search-form block on every render. --%>
+      <SearchPane.channel_strip dead_channels={@dead_channels} />
+
       <%!-- Results — SearchPane's per-source rows restyled as mobile cards --%>
       <div class="flex-1 px-3 py-3">
         <p :if={@error} class="mb-3 text-sm text-error">{@error}</p>
@@ -849,6 +863,17 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               <span class="hero-magnifying-glass mb-3 size-12 text-base-content/20"></span>
               <p class="text-sm text-base-content/40">Type a query to search the org's memory.</p>
             </div>
+          <% @degraded -> %>
+            <%!-- Gating the mobile list too. A desktop-only gate would ship
+                 a viewport where the degraded list renders directly — the
+                 exact defect this guards — and no desktop capture would
+                 show it. Shared component, so the copy cannot drift. --%>
+            <SearchPane.degraded_notice results={@results} results_revealed={@results_revealed} />
+            <ul :if={@results_revealed and @results != []} class="mt-4 space-y-2">
+              <li :for={hit <- @results} data-role="mobile-search-result">
+                <.mobile_result_hit hit={hit} />
+              </li>
+            </ul>
           <% @results == [] -> %>
             <div class="flex flex-col items-center justify-center py-16 text-center">
               <span class="hero-inbox mb-3 size-12 text-base-content/20"></span>

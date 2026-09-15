@@ -101,14 +101,18 @@ defmodule Platform.Federation.ToolSurfaceMemorySearchBoundTest do
   end
 
   defp search(query, agent) do
-    {:ok, envelope} =
-      ToolSurface.execute(
-        "memory_search",
-        %{"query" => query, "source" => "page"},
-        %{agent_id: agent.id}
-      )
-
+    {:ok, envelope} = raw_search(query, agent)
     envelope
+  end
+
+  # Unwrapped dispatch: the degraded branches return `{:error, _}`, which
+  # `search/2` would match-fail on.
+  defp raw_search(query, agent) do
+    ToolSurface.execute(
+      "memory_search",
+      %{"query" => query, "source" => "page"},
+      %{agent_id: agent.id}
+    )
   end
 
   ## ── Shared assertions ────────────────────────────────────────────────
@@ -242,9 +246,117 @@ defmodule Platform.Federation.ToolSurfaceMemorySearchBoundTest do
     # Tuples cannot be JSON-encoded; the head renders the label as a pair.
     assert dead.dead_channels == [[:semantic, :all]]
     assert dead.truncated == true
-    assert dead.results != []
+
+    # A degraded search carries its hits under `partial_results`; the
+    # `results` key does not exist. See the degraded tests below.
+    assert dead.partial_results != []
+    refute Map.has_key?(dead, :results)
 
     assert Jason.decode!(Jason.encode!(dead))["dead_channels"] == [["semantic", "all"]]
+  end
+
+  test "a degraded search with zero hits returns {:error, code: :search_degraded} and carries no results key" do
+    seed_pages(@marker)
+    agent = create_agent()
+
+    Application.put_env(:platform, :memory_service, provider: CrashingProvider)
+
+    assert {:error, error} = raw_search("qwfpgjluyzxcv", agent)
+
+    assert error.code == :search_degraded
+    assert error.recoverable == true
+    assert error.dead_channels == [[:semantic, :all]]
+
+    # No `results` key anywhere: an empty list here is exactly the
+    # reading — "nothing exists" — this branch exists to make unreachable.
+    refute Map.has_key?(error, :results)
+    refute Map.has_key?(error, :partial_results)
+
+    assert error.error =~ "FAILED MEASUREMENT"
+    assert error.error =~ "semantic"
+    assert error.suggestion =~ "limit"
+  end
+
+  test "a degraded search with surviving hits returns partial_results and NO results key" do
+    seed_pages(@marker)
+    agent = create_agent()
+
+    Application.put_env(:platform, :memory_service, provider: CrashingProvider)
+
+    assert {:ok, envelope} = raw_search(@marker, agent)
+
+    assert envelope.retrieval_status == "degraded"
+    assert is_list(envelope.partial_results)
+    assert envelope.partial_results != []
+
+    refute Map.has_key?(envelope, :results),
+           "a degraded envelope must not carry a `results` key — the hits are partial"
+
+    assert envelope.truncated == true
+    assert envelope.degraded.dead_channels == [[:semantic, :all]]
+    assert envelope.degraded.channels_down == ["semantic"]
+    assert envelope.degraded.implication =~ "absence is not established"
+
+    # Still JSON-encodable end to end, like the healthy envelope.
+    decoded = Jason.decode!(Jason.encode!(envelope))
+    refute Map.has_key?(decoded, "results")
+    assert decoded["retrieval_status"] == "degraded"
+  end
+
+  test "a healthy search returns retrieval_status ok, a results key, and NO degraded key" do
+    seed_pages(@marker)
+    agent = create_agent()
+
+    assert {:ok, envelope} = raw_search(@marker, agent)
+
+    assert envelope.retrieval_status == "ok"
+    assert is_list(envelope.results)
+    assert envelope.results != []
+    assert envelope.dead_channels == []
+
+    # The anti-polarity-flip assertion: if the degraded surfacing ever
+    # fires unconditionally, the fix becomes "every search now warns",
+    # which is the same blindness with the polarity reversed.
+    refute Map.has_key?(envelope, :degraded)
+    refute Map.has_key?(envelope, :partial_results)
+
+    # A healthy search that matches nothing is an ordinary negative
+    # result and must stay just as calm.
+    assert {:ok, empty} = raw_search("qwfpgjluyzxcv", agent)
+    assert empty.retrieval_status == "ok"
+    assert empty.results == []
+    refute Map.has_key?(empty, :degraded)
+  end
+
+  test "an empty result set caused only by the payload byte bound is NOT reported as search_degraded" do
+    seed_pages(@marker)
+    agent = create_agent()
+
+    # Shrink the transport budget below one hit so the byte bound empties
+    # the kept list. Real fixtures cannot reach this state: a 500-char
+    # snippet is ~1 KB against a 20 KB budget.
+    Application.put_env(:platform, :memory_search_max_payload_bytes, 120)
+    on_exit(fn -> Application.delete_env(:platform, :memory_search_max_payload_bytes) end)
+
+    # Healthy channels: an emptied list is still an ok payload.
+    assert {:ok, healthy} = raw_search(@marker, agent)
+    assert healthy.retrieval_status == "ok"
+    assert healthy.results == []
+    assert healthy.payload_truncated == true
+
+    # The ordering guard proper. The search DID return hits; only the
+    # transport bound emptied them. Deciding degraded-vs-partial on the
+    # kept list instead of the pre-bound list would turn this into a
+    # `:search_degraded` error — a false positive with the same signature
+    # as a genuinely dead channel.
+    Application.put_env(:platform, :memory_service, provider: CrashingProvider)
+
+    assert {:ok, degraded} = raw_search(@marker, agent),
+           "a byte-bound artefact must not masquerade as a dead-channel failure"
+
+    assert degraded.retrieval_status == "degraded"
+    assert degraded.partial_results == []
+    assert degraded.payload_truncated == true
   end
 
   test "a query matching nothing returns an empty LIST, not an empty string" do
