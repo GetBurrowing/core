@@ -1,7 +1,9 @@
 defmodule PlatformWeb.Components.Meetings.CallRecap do
   @moduledoc """
-  The after-meeting recap — what a viewer sees at 390px once they have
-  LEFT a call (task 01a07410 / FE-17 stage 6).
+  The after-meeting recap — what a viewer sees once they have LEFT a call
+  (task 01a07410 / FE-17 stage 6). Shown on both surfaces: a full-viewport
+  takeover on mobile and, since 01a0691d, the sponsor prototype's centered
+  `.after-screen` panel on desktop (see `call_recap/1` for the `lg:` split).
 
   Four things, in this order: what the meeting was, how long it ran, who
   was in it, and what it PRODUCED — the cards that graduated and what
@@ -146,7 +148,16 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
       "shell surface (bottom nav present) or the chrome-less guest/member surface; decides the bottom padding"
 
   @doc """
-  The recap panel. Fixed, full-viewport, above the stage it replaces.
+  The recap panel. Fixed, above the stage it replaces, on both surfaces.
+
+  Below `lg` it is the full-viewport mobile takeover it has always been.
+  At `lg` it becomes the desktop `.after-screen` from the sponsor
+  prototype: the same fixed ground, but the content is a centered
+  `max-w-[880px]` column (`lg:items-center lg:py-10`, `lg:flex-none`) and
+  the two produced groups sit side by side in a `lg:grid-cols-2` grid —
+  "what became something" beside "what closed without becoming anything".
+  All of this is CSS-only (`lg:` prefixes) so the mobile rendering is
+  byte-for-byte what it was; there is one markup for both widths.
 
   Bottom padding clears `env(safe-area-inset-bottom)` and, on the shell
   surface, `var(--bottom-nav-height,0px)` as well — the guest surface
@@ -173,6 +184,7 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
       id={@id}
       class={[
         "fixed inset-0 z-50 flex flex-col overflow-y-auto bg-base-200 text-base-content",
+        "lg:items-center lg:py-10",
         if(@shell?,
           do: "pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)]",
           else: "pb-[calc(env(safe-area-inset-bottom)+1rem)]"
@@ -182,108 +194,126 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
       aria-labelledby={"#{@id}-title"}
       data-role="call-recap"
     >
-      <header class="flex items-start gap-3 border-b border-edge px-4 pt-[calc(env(safe-area-inset-top)+1rem)] pb-3">
-        <div class="min-w-0 flex-1">
-          <p class="text-xs uppercase tracking-wide text-base-content/60">You left the call</p>
-          <h1 id={"#{@id}-title"} class="truncate text-lg font-semibold" data-role="call-recap-name">
-            {@meeting.name}
-          </h1>
-        </div>
-        <button
-          type="button"
-          phx-click="dismiss_call_recap"
-          class="btn btn-ghost btn-sm btn-square min-h-11"
-          aria-label="Close the recap"
-          data-role="call-recap-dismiss"
-        >
-          <span class="hero-x-mark size-5" aria-hidden="true"></span>
-        </button>
-      </header>
+      <%!-- Below `lg` this wrapper is `flex-1` and fills the takeover just
+           like the section did before it existed; at `lg` it collapses to
+           the centered `max-w-[880px]` `.after-screen` panel. Purely a
+           layout node — no visible chrome of its own, so the base-100 cards
+           inside keep their base-200 ground on both widths. --%>
+      <div
+        class="flex w-full flex-1 flex-col lg:max-w-[880px] lg:flex-none"
+        data-role="call-recap-panel"
+      >
+        <header class="flex items-start gap-3 border-b border-edge px-4 pt-[calc(env(safe-area-inset-top)+1rem)] pb-3 lg:pt-4">
+          <div class="min-w-0 flex-1">
+            <p class="text-xs uppercase tracking-wide text-base-content/60">You left the call</p>
+            <h1 id={"#{@id}-title"} class="truncate text-lg font-semibold" data-role="call-recap-name">
+              {@meeting.name}
+            </h1>
+          </div>
+          <button
+            type="button"
+            phx-click="dismiss_call_recap"
+            class="btn btn-ghost btn-sm btn-square min-h-11"
+            aria-label="Close the recap"
+            data-role="call-recap-dismiss"
+          >
+            <span class="hero-x-mark size-5" aria-hidden="true"></span>
+          </button>
+        </header>
 
-      <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 border-b border-edge px-4 py-3 text-sm">
-        <dt class="text-base-content/60">Ran for</dt>
-        <dd data-role="call-recap-duration">
-          {@duration || "Start time not recorded"}
-        </dd>
-        <dt class="text-base-content/60">In the call</dt>
-        <dd data-role="call-recap-roster">{roster_line(@recap.participants)}</dd>
-      </dl>
+        <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 border-b border-edge px-4 py-3 text-sm">
+          <dt class="text-base-content/60">Ran for</dt>
+          <dd data-role="call-recap-duration">
+            {@duration || "Start time not recorded"}
+          </dd>
+          <dt class="text-base-content/60">In the call</dt>
+          <dd data-role="call-recap-roster">{roster_line(@recap.participants)}</dd>
+        </dl>
 
-      <div class="flex-1 px-4 py-3">
-        <h2 class="mb-2 text-xs uppercase tracking-wide text-base-content/60">
-          What this call produced
-        </h2>
+        <div class="flex-1 px-4 py-3">
+          <h2 class="mb-2 text-xs uppercase tracking-wide text-base-content/60">
+            What this call produced
+          </h2>
 
-        <%!-- Honest empty state. Same register as `call_rail/1`'s empty
+          <%!-- Honest empty state. Same register as `call_rail/1`'s empty
              Canvas tab: it names the condition and says, in words, that
              nothing is still being captured. A blank region here would
              read as loading, and after a call nothing is loading. --%>
-        <p
-          :if={@produced_nothing?}
-          class="rounded-box border border-dashed border-edge px-3 py-2.5 text-sm text-base-content/60"
-          data-role="call-recap-empty"
-        >
-          This call produced nothing. No cards were formed from it, and nothing from it is still
-          being captured.
-        </p>
-
-        <ul :if={@graduated != []} class="flex flex-col gap-2" data-role="call-recap-graduated">
-          <li
-            :for={candidate <- @graduated}
-            class="rounded-box border border-edge bg-base-100 px-3 py-2.5"
-            data-role="call-recap-outcome"
-            data-candidate-id={candidate.id}
-            data-outcome-kind={CandidateDisplay.outcome_kind_label(candidate)}
+          <p
+            :if={@produced_nothing?}
+            class="rounded-box border border-dashed border-edge px-3 py-2.5 text-sm text-base-content/60"
+            data-role="call-recap-empty"
           >
-            <p class="text-sm">{candidate.evidence_quote}</p>
-            <a
-              href={CandidateDisplay.outcome_path(candidate)}
-              class="mt-1 inline-flex min-h-11 items-center gap-1.5 text-sm text-primary"
-              data-role="call-recap-outcome-link"
-            >
-              <span class="hero-arrow-top-right-on-square size-4" aria-hidden="true"></span>
-              <span data-role="call-recap-outcome-label">
-                {CandidateDisplay.outcome_label(candidate)}
-              </span>
-              <span class="font-mono text-[11px] text-base-content/60">
-                {CandidateDisplay.outcome_kind_label(candidate)}
-              </span>
-            </a>
-          </li>
-        </ul>
+            This call produced nothing. No cards were formed from it, and nothing from it is still
+            being captured.
+          </p>
 
-        <div :if={@closed != []} class="mt-4" data-role="call-recap-closed">
-          <h3 class="mb-2 text-xs uppercase tracking-wide text-base-content/60">
-            Closed without becoming anything
-          </h3>
-          <ul class="flex flex-col gap-2">
-            <li
-              :for={candidate <- @closed}
-              class="rounded-box border border-edge px-3 py-2.5"
-              data-role="call-recap-closed-card"
-              data-candidate-id={candidate.id}
-            >
-              <p class="text-sm">{candidate.evidence_quote}</p>
-              <p class="mt-1 text-xs text-base-content/60" data-role="call-recap-closed-reason">
-                {closed_reason_line(candidate)}
-              </p>
-            </li>
-          </ul>
+          <%!-- The mock's desktop `.after-screen` lays "became something" and
+             "closed without becoming" out as two columns (`grid-cols:1fr
+             1fr`). This wrapper does the same at `lg`; below `lg` it is an
+             inert block, so the two groups stack exactly as they did before
+             — the `mt-4` gap between them survives as `lg:mt-0` inside the
+             grid. --%>
+          <div class="lg:grid lg:grid-cols-2 lg:gap-6">
+            <ul :if={@graduated != []} class="flex flex-col gap-2" data-role="call-recap-graduated">
+              <li
+                :for={candidate <- @graduated}
+                class="rounded-box border border-edge bg-base-100 px-3 py-2.5"
+                data-role="call-recap-outcome"
+                data-candidate-id={candidate.id}
+                data-outcome-kind={CandidateDisplay.outcome_kind_label(candidate)}
+              >
+                <p class="text-sm">{candidate.evidence_quote}</p>
+                <a
+                  href={CandidateDisplay.outcome_path(candidate)}
+                  class="mt-1 inline-flex min-h-11 items-center gap-1.5 text-sm text-primary"
+                  data-role="call-recap-outcome-link"
+                >
+                  <span class="hero-arrow-top-right-on-square size-4" aria-hidden="true"></span>
+                  <span data-role="call-recap-outcome-label">
+                    {CandidateDisplay.outcome_label(candidate)}
+                  </span>
+                  <span class="font-mono text-[11px] text-base-content/60">
+                    {CandidateDisplay.outcome_kind_label(candidate)}
+                  </span>
+                </a>
+              </li>
+            </ul>
+
+            <div :if={@closed != []} class="mt-4 lg:mt-0" data-role="call-recap-closed">
+              <h3 class="mb-2 text-xs uppercase tracking-wide text-base-content/60">
+                Closed without becoming anything
+              </h3>
+              <ul class="flex flex-col gap-2">
+                <li
+                  :for={candidate <- @closed}
+                  class="rounded-box border border-edge px-3 py-2.5"
+                  data-role="call-recap-closed-card"
+                  data-candidate-id={candidate.id}
+                >
+                  <p class="text-sm">{candidate.evidence_quote}</p>
+                  <p class="mt-1 text-xs text-base-content/60" data-role="call-recap-closed-reason">
+                    {closed_reason_line(candidate)}
+                  </p>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <p :if={@open != []} class="mt-4 text-xs text-base-content/60" data-role="call-recap-open">
+            {length(@open)} {if length(@open) == 1, do: "card was", else: "cards were"} still open when you left.
+          </p>
         </div>
 
-        <p :if={@open != []} class="mt-4 text-xs text-base-content/60" data-role="call-recap-open">
-          {length(@open)} {if length(@open) == 1, do: "card was", else: "cards were"} still open when you left.
-        </p>
-      </div>
-
-      <div class="px-4 pt-3">
-        <.link
-          navigate="/meetings"
-          class="btn btn-primary min-h-11 w-full"
-          data-role="call-recap-done"
-        >
-          Back to meetings
-        </.link>
+        <div class="px-4 pt-3">
+          <.link
+            navigate="/meetings"
+            class="btn btn-primary min-h-11 w-full"
+            data-role="call-recap-done"
+          >
+            Back to meetings
+          </.link>
+        </div>
       </div>
     </section>
     """

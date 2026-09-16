@@ -1969,12 +1969,17 @@
            stays a DESKTOP-ONLY concern (see the paragraph above): below
            `lg` the expanded branch is the `toggle_call_rail` drawer
            whatever the desktop collapse preference says. --%>
-        <%!-- THE RECAP (task 01a07410 / FE-17 stage 6). Rendered only once
-           the viewer has LEFT the call and only below `lg` — the same
-           server-side width gate the sheet frame uses, so the desktop
-           document is unchanged. Markup lives in `CallRecap`. --%>
+        <%!-- THE RECAP (task 01a07410 / FE-17 stage 6; desktop parity
+           01a0691d). Rendered once the viewer has LEFT the call, on BOTH
+           surfaces — the sponsor prototype shows a post-call recap on
+           desktop (`.after-screen`) as well as mobile (`data-s="after"`),
+           and production used to gate it on `@mobile_viewport?`, so desktop
+           users got nothing. The gate is now just `@call_recap`; the one
+           component adapts its layout with `lg:` classes (full-viewport
+           takeover below `lg`, a centered max-width panel with the mock's
+           two-column produced grid at `lg`). Markup lives in `CallRecap`. --%>
         <CallRecap.call_recap
-          :if={@mobile_viewport? and @call_recap}
+          :if={@call_recap}
           meeting={@meeting}
           recap={@call_recap}
           shell?={@chrome_mode != :none}

@@ -1,8 +1,10 @@
 defmodule PlatformWeb.MeetingLiveRecapTest do
   @moduledoc """
-  FE-17 stage 6 — after LEAVING a call at 390px the viewer sees a recap:
-  what the meeting was, how long it ran, who was in it, and what it
-  produced.
+  FE-17 stage 6 — after LEAVING a call the viewer sees a recap: what the
+  meeting was, how long it ran, who was in it, and what it produced. The
+  recap now renders on desktop as well as at 390px (01a0691d, matching the
+  prototype's `.after-screen`); the mobile takeover is unchanged and the
+  desktop difference is a CSS-only centered `max-w-[880px]` panel.
 
   ## What the load-bearing tests are written against
 
@@ -275,11 +277,28 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       assert count(html, @recap) == 0
     end
 
-    test "is not rendered at a desktop viewport", %{conn: conn, meeting: meeting} do
+    test "is rendered at a desktop viewport too (matches the prototype's .after-screen)",
+         %{conn: conn, meeting: meeting} do
       view = mount(conn, meeting)
       render_hook(view, "meeting_viewport", %{"below" => false})
       html = render_hook(view, "meeting_left", %{})
 
+      # The recap used to be gated on `@mobile_viewport?`; the sponsor
+      # prototype shows it on desktop as well, so it renders on both
+      # surfaces now. Its content is named the same as on mobile.
+      assert count(html, @recap) == 1
+      assert texts(html, "[data-role='call-recap-name']") == [meeting.name]
+
+      # The desktop layout is CSS-only: the one panel node carries the
+      # `lg:max-w-[880px]` centering that turns the mobile takeover into
+      # the prototype's centered `.after-screen`, and the produced groups
+      # sit in the `lg:grid-cols-2` two-column grid.
+      assert count(html, "[data-role='call-recap-panel']") == 1
+      [panel_class] = attr(html, "[data-role='call-recap-panel']", "class")
+      assert panel_class =~ "lg:max-w-[880px]"
+
+      # Dismiss still works from the desktop surface.
+      html = render_hook(view, "dismiss_call_recap", %{})
       assert count(html, @recap) == 0
     end
 
