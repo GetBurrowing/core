@@ -2972,13 +2972,20 @@
           <h1 class="truncate text-sm font-semibold">Meetings</h1>
         </div>
 
-        <%!-- ── Calendar · Archive toggle (task 019fb954-c848) ────────────
+        <%!-- ── Meetings-view shelf: Calendar · Archive (task 019fb954-c848) ──
            URL state, not an assign: `?view=archive` survives a reload, a
            pasted link and the back button. The calendar half is the
            default, so its segment drops every archive parameter rather
            than carrying a dead `view=calendar` around. Labels shorten to
-           `Cal` on phones per the mobile frame; both segments are 44px
-           tall at every width. --%>
+           the entry's `short_label` on phones per the mobile frame; both
+           segments are 44px tall at every width.
+
+           List-driven off `meetings_view_shelf/0` so the switcher reads as
+           one styled, EXTENSIBLE shelf: a future top-level view (e.g. a
+           roadmap) is one more entry there plus a `meetings_view_path/2`
+           clause, not another hand-copied `<.link>`. Each entry carries its
+           own hero-icon and an aria-label naming it; `data-view` (the id) is
+           the stable test contract. --%>
         <div
           class="flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-edge bg-base-100 p-0.5"
           data-role="meetings-view-toggle"
@@ -2986,31 +2993,21 @@
           aria-label="Meetings view"
         >
           <.link
-            patch={~p"/meetings"}
-            data-view="calendar"
-            aria-current={@meetings_view == :calendar && "page"}
+            :for={entry <- meetings_view_shelf()}
+            patch={meetings_view_path(assigns, entry.id)}
+            data-view={entry.id}
+            aria-current={@meetings_view == entry.id && "page"}
+            aria-label={entry.label}
             class={[
-              "flex min-h-11 items-center rounded-md px-3 text-xs font-medium transition sm:min-h-9",
-              @meetings_view == :calendar &&
+              "flex min-h-11 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition sm:min-h-9",
+              @meetings_view == entry.id &&
                 "bg-base-200 text-base-content shadow-sm",
-              @meetings_view != :calendar && "text-base-content/60 hover:text-base-content"
+              @meetings_view != entry.id && "text-base-content/60 hover:text-base-content"
             ]}
           >
-            <span class="sm:hidden">Cal</span>
-            <span class="hidden sm:inline">Calendar</span>
-          </.link>
-          <.link
-            patch={archive_path(assigns)}
-            data-view="archive"
-            aria-current={@meetings_view == :archive && "page"}
-            class={[
-              "flex min-h-11 items-center rounded-md px-3 text-xs font-medium transition sm:min-h-9",
-              @meetings_view == :archive &&
-                "bg-base-200 text-base-content shadow-sm",
-              @meetings_view != :archive && "text-base-content/60 hover:text-base-content"
-            ]}
-          >
-            Archive
+            <span class={[entry.icon, "size-4 flex-shrink-0"]}></span>
+            <span class="hidden sm:inline">{entry.label}</span>
+            <span class="sm:hidden">{entry.short_label}</span>
           </.link>
         </div>
 

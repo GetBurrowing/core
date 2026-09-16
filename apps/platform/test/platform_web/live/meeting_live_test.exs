@@ -1182,6 +1182,44 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~r/data-stage-mode-button="screen"[^>]*data-active="false"/
     end
 
+    test "the shelf renders one button per stage mode, each list-driven from stage_modes/0",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Every mode in the single source of truth renders a button; nothing
+      # else does — so a new mode is one list entry, not hand-copied markup.
+      modes = PlatformWeb.MeetingLive.stage_modes()
+      assert modes == [:canvas, :screen, :gallery, :whiteboard]
+
+      for mode <- modes do
+        assert has_element?(
+                 view,
+                 ~s([data-stage-mode-control='active'] [data-stage-mode-button='#{mode}'])
+               )
+      end
+    end
+
+    test "each stage-mode entry carries a distinct hero-icon and an aria-label naming it",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Whiteboard and the rest each read as a first-class, iconned entry in
+      # the shelf — icon glyph inside the button, aria-label naming the mode.
+      expected = [
+        {"gallery", "Gallery", "hero-squares-2x2"},
+        {"screen", "Screen", "hero-computer-desktop"},
+        {"canvas", "Canvas", "hero-rectangle-stack"},
+        {"whiteboard", "Whiteboard", "hero-pencil-square"}
+      ]
+
+      for {mode, label, icon} <- expected do
+        assert has_element?(
+                 view,
+                 ~s([data-stage-mode-button='#{mode}'][aria-label='#{label}'] .#{icon})
+               )
+      end
+    end
+
     test "clicking a mode button assigns that mode and flips the active class", %{
       conn: conn,
       meeting: meeting

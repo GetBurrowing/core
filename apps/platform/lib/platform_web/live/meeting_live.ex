@@ -2188,6 +2188,29 @@ defmodule PlatformWeb.MeetingLive do
     ~p"/meetings?#{params}"
   end
 
+  # ── Meetings-view shelf (Calendar · Archive) ─────────────────────────────
+  #
+  # One data structure drives the index's top-level view switcher, so it reads
+  # as a single styled, extensible shelf and a future view is one more entry
+  # here (plus a `meetings_view_path/2` clause) rather than another
+  # hand-copied `<.link>`. Each entry carries its own hero-icon and a label;
+  # `id` is the `data-view` test contract, `short_label` is the phone label.
+  # The glyph names are string literals so Tailwind's `matchComponents`
+  # scanner emits their CSS — a computed name would render blank.
+  @meetings_view_shelf [
+    %{id: :calendar, label: "Calendar", short_label: "Cal", icon: "hero-calendar-days"},
+    %{id: :archive, label: "Archive", short_label: "Archive", icon: "hero-archive-box"}
+  ]
+
+  @doc "The meetings index view-switcher entries, in display order."
+  def meetings_view_shelf, do: @meetings_view_shelf
+
+  # Each segment patches to its own URL: Calendar to the bare index (which
+  # defaults to the calendar half and carries no dead `view=` param), Archive
+  # through `archive_path/1` so it preserves whatever filters are active.
+  defp meetings_view_path(_assigns, :calendar), do: ~p"/meetings"
+  defp meetings_view_path(assigns, :archive), do: archive_path(assigns)
+
   # A key the form did not send is left alone; a key it sent EMPTY is cleared
   # (`archive_param/2` normalises blank to `nil`, and `archive_path/2` strips
   # nils out of the query string).

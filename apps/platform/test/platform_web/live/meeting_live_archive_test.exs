@@ -478,6 +478,63 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       end
     end
 
+    test "the list-driven shelf renders exactly its entries, in order", %{conn: conn} do
+      {conn, _world} = archive_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      # Every entry declared in `meetings_view_shelf/0` renders, and nothing
+      # else does — so adding a view is one list entry, and a dropped entry
+      # fails here rather than silently vanishing from the shelf.
+      shelf_ids =
+        PlatformWeb.MeetingLive.meetings_view_shelf() |> Enum.map(& &1.id)
+
+      assert shelf_ids == [:calendar, :archive]
+
+      for id <- shelf_ids do
+        assert has_element?(view, "[data-role='meetings-view-toggle'] [data-view='#{id}']")
+      end
+
+      rendered_ids =
+        view
+        |> render()
+        |> then(&Regex.scan(~r/data-view="([a-z]+)"/, &1))
+        |> Enum.map(fn [_, id] -> id end)
+
+      assert rendered_ids == Enum.map(shelf_ids, &to_string/1)
+    end
+
+    test "each shelf entry carries a distinct hero-icon and an aria-label naming it",
+         %{conn: conn} do
+      {conn, _world} = archive_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      # Calendar gets a calendar glyph, Archive an archive-box glyph — each
+      # inside its own segment, each announced by an aria-label.
+      assert has_element?(
+               view,
+               "[data-view='calendar'][aria-label='Calendar'] .hero-calendar-days"
+             )
+
+      assert has_element?(
+               view,
+               "[data-view='archive'][aria-label='Archive'] .hero-archive-box"
+             )
+    end
+
+    test "the active segment is marked aria-current on each half", %{conn: conn} do
+      {conn, _world} = archive_conn(conn)
+
+      {:ok, calendar_view, _html} = live(conn, ~p"/meetings")
+      assert has_element?(calendar_view, "[data-view='calendar'][aria-current='page']")
+      refute has_element?(calendar_view, "[data-view='archive'][aria-current='page']")
+
+      {:ok, archive_view, _html} = live(conn, ~p"/meetings?view=archive")
+      assert has_element?(archive_view, "[data-view='archive'][aria-current='page']")
+      refute has_element?(archive_view, "[data-view='calendar'][aria-current='page']")
+    end
+
     test "the search box pushes its query into the URL so a result set is linkable", %{conn: conn} do
       {conn, _world} = archive_conn(conn)
 
