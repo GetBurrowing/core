@@ -333,6 +333,32 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       assert CallShell.normalize_tab("chat", CallShell.served_tabs(%{chat: false})) == "people"
       assert CallShell.normalize_tab("chat", CallShell.served_tabs(%{chat: true})) == "chat"
     end
+
+    test "served_tabs/1 drops Canvas when serve_canvas_tab is false" do
+      # Task 01a0693e. The `/meetings` DESKTOP surface moves the candidate card
+      # board into a first-class LEFT rail beside the agents, so its right rail
+      # must NOT carry a Canvas tab. Capability is read the same way `:chat` is:
+      # a flag on the assigns, defaulting to served so the in-chat quickmeet and
+      # the `/meetings` MOBILE sheet keep the tab.
+      ids = fn assigns -> Enum.map(CallShell.served_tabs(assigns), &elem(&1, 0)) end
+
+      # Default keeps Canvas — mobile sheet + quickmeet rely on it.
+      assert "canvas" in ids.(%{chat: true})
+      assert "canvas" in ids.(%{})
+
+      # The desktop `/meetings` rail drops it.
+      assert ids.(%{chat: true, serve_canvas_tab: false}) == ["people", "chat", "transcript"]
+
+      # And a guest desktop surface (no chat, no canvas) is two tabs.
+      assert ids.(%{chat: false, serve_canvas_tab: false}) == ["people", "transcript"]
+
+      # The coercion follows the filtered list: a stale `?tab=canvas` lands on
+      # People rather than a pane with no button.
+      assert CallShell.normalize_tab(
+               "canvas",
+               CallShell.served_tabs(%{chat: true, serve_canvas_tab: false})
+             ) == "people"
+    end
   end
 
   # ── The unread dot on the EXPANDED strip (task 01a084bf stage 4, FE-5's

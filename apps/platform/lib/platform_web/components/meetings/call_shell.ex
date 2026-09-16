@@ -250,6 +250,18 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   # that does not — the mismatch is only visible in a render of the caller
   # (`meeting_live_rail_collapse_test.exs`, describe "(i)").
   defp tab_served?(assigns, "chat"), do: chat_served?(Map.get(assigns, :chat, []))
+
+  # CANVAS IS CONDITIONAL SINCE THE DESKTOP LEFT RAIL LANDED (task 01a0693e).
+  # On `/meetings` at `lg` the candidate card board is a first-class LEFT rail
+  # beside the agents, so the right rail must NOT also carry a Canvas tab — that
+  # was the "buried behind a mislabeled tab" state the prototype alignment
+  # removes. The desktop `/meetings` caller therefore passes
+  # `serve_canvas_tab: false`, and the collapsed strip's `served_meeting_tabs/1`
+  # does the same. Everyone else — the in-chat quickmeet, which is a small panel
+  # with no room for a left rail, and the `/meetings` MOBILE sheet, which reaches
+  # cards through this Canvas tab exactly as before — keeps the default `true`.
+  defp tab_served?(assigns, "canvas"), do: Map.get(assigns, :serve_canvas_tab, true)
+
   defp tab_served?(_assigns, _id), do: true
 
   # A `<:chat>` SLOT from `call_rail/1` — a list, empty exactly when the
@@ -379,6 +391,24 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   attr(:tab_event, :string,
     required: true,
     doc: "event pushed on tab click, with `phx-value-tab` carrying the tab id"
+  )
+
+  attr(:serve_canvas_tab, :boolean,
+    default: true,
+    doc: """
+    Whether this rail carries a Canvas (card board) tab (task 01a0693e).
+
+    TRUE for everyone by default — the in-chat quickmeet and the `/meetings`
+    MOBILE sheet both reach the candidate card board through this tab, exactly
+    as before. FALSE only for the `/meetings` DESKTOP surface, where the card
+    board is now a first-class LEFT rail beside the agents (see
+    `meeting_live.html.heex`) and a Canvas tab here would reproduce the
+    "buried behind a mislabeled tab" state the prototype alignment removes.
+
+    Read by `tab_served?/2`, so an unserved Canvas tab is genuinely ABSENT
+    from the strip AND from `@active`'s coercion — `normalize_tab/2` can never
+    land on a pane the strip has no button for.
+    """
   )
 
   attr(:chat_unread, :boolean,

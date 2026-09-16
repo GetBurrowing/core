@@ -241,6 +241,7 @@ defmodule PlatformWeb.MeetingLive do
   alias PlatformWeb.Components.Meetings.CallShell
   alias PlatformWeb.Components.Meetings.CallRailFrame
   alias PlatformWeb.Components.Meetings.CandidateRail
+  alias PlatformWeb.Components.Meetings.ParticipantRail
 
   import PlatformWeb.Components.Meetings.CallRailFrame, only: [rail_frame: 1]
 
@@ -4610,9 +4611,15 @@ defmodule PlatformWeb.MeetingLive do
   # `shell? == true` rather than `!!shell?`: both mount sites seed the assign,
   # but a nil arriving from some future path must read as "no chat" instead of
   # raising in a render.
+  #
+  # `serve_canvas_tab: false` because this strip is the DESKTOP collapsed rail
+  # (`hidden lg:flex`), and at `lg` the card board is the first-class LEFT rail
+  # beside the agents rather than a Canvas tab here (task 01a0693e). The
+  # expanded rail passes the same `serve_canvas_tab={@mobile_viewport?}` — false
+  # at `lg` — so the strip and the expanded tablist stay one derivation.
   @spec served_meeting_tabs(term()) :: [{String.t(), String.t()}]
   defp served_meeting_tabs(shell?) do
-    CallShell.served_tabs(%{chat: shell? == true})
+    CallShell.served_tabs(%{chat: shell? == true, serve_canvas_tab: false})
   end
 
   # A struct that carries NO space id is not attributed to another room, so

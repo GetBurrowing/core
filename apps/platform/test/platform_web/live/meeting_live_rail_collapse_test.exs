@@ -848,13 +848,20 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       # discriminating is the GUEST fixture: describe "(h)"'s guest agreement
       # case, and describe "(i)", which is where the four-vs-three difference
       # is actually observable.
+      # `serve_canvas_tab: false` since task 01a0693e: this collapsed strip is
+      # the DESKTOP rail, and at `lg` the card board is the first-class LEFT rail
+      # beside the agents, not a Canvas tab here. `served_meeting_tabs/1` passes
+      # the same flag, so the strip derives without Canvas.
       assert tabs ==
                Enum.map(
-                 PlatformWeb.Components.Meetings.CallShell.served_tabs(%{chat: true}),
+                 PlatformWeb.Components.Meetings.CallShell.served_tabs(%{
+                   chat: true,
+                   serve_canvas_tab: false
+                 }),
                  &elem(&1, 0)
                )
 
-      assert tabs == ["people", "chat", "canvas", "transcript"]
+      assert tabs == ["people", "chat", "transcript"]
     end
 
     test "the collapsed strip and the expanded tablist render ONE derivation",
@@ -932,17 +939,28 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       refute "chat" in icon_tabs,
              "Chat must not carry BOTH roles — that would double-count the button"
 
-      assert icon_tabs == ["people", "canvas", "transcript"]
+      # No "canvas" since task 01a0693e — the Canvas tab is gone from the desktop
+      # rail (the card board is the LEFT rail now).
+      assert icon_tabs == ["people", "transcript"]
     end
 
     test "every tab icon carries a hero glyph and an aria-label naming its tab",
          %{view: view} do
       strip = strip!(view)
 
-      for {id, label} <- PlatformWeb.Components.Meetings.CallShell.tabs() do
+      # The tabs this DESKTOP strip actually serves (task 01a0693e drops Canvas
+      # here — the card board is the LEFT rail), not the full vocabulary: a tab
+      # the strip does not render has no button to name itself.
+      served =
+        PlatformWeb.Components.Meetings.CallShell.served_tabs(%{
+          chat: true,
+          serve_canvas_tab: false
+        })
+
+      for {id, label} <- served do
         # Matched on `data-tab` rather than on a role, so the Chat entry —
         # which carries `call-rail-strip-chat` — is covered by this loop
-        # exactly like the other three. Every tab must name itself.
+        # exactly like the others. Every tab must name itself.
         button = LazyHTML.query(strip, ~s([data-tab="#{id}"]))
 
         assert LazyHTML.attribute(button, "aria-label") == [label]
@@ -959,7 +977,7 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
 
     # M6 lives here. An icon that only expands the rail is the dead end this
     # ticket exists to remove.
-    for {tab, _label} <- [{"people", nil}, {"canvas", nil}, {"transcript", nil}] do
+    for {tab, _label} <- [{"people", nil}, {"transcript", nil}] do
       test "clicking the #{tab} icon expands the rail AND selects #{tab}, in one action",
            %{view: view} do
         tab = unquote(tab)
@@ -1029,7 +1047,9 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
     defp marked_tabs(view) do
       view
       |> strip!()
-      |> LazyHTML.query(~s([data-role="call-rail-strip-icon"]))
+      |> LazyHTML.query(
+        ~s([data-role="call-rail-strip-icon"], [data-role="call-rail-strip-chat"])
+      )
       |> Enum.filter(fn node ->
         node
         |> LazyHTML.query(~s([data-role="call-rail-strip-active-marker"]))
@@ -1044,8 +1064,11 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       render_click(view, "meeting_tab_select", %{"tab" => "transcript"})
       assert marked_tabs(view) == ["transcript"]
 
-      render_click(view, "meeting_tab_select", %{"tab" => "canvas"})
-      assert marked_tabs(view) == ["canvas"]
+      # "chat" rather than "canvas": Canvas is no longer a rail tab on desktop
+      # (task 01a0693e — the card board is the LEFT rail), so a canvas selection
+      # would coerce to People and the strip has no canvas button to mark.
+      render_click(view, "meeting_tab_select", %{"tab" => "chat"})
+      assert marked_tabs(view) == ["chat"]
     end
 
     test "it is a 2px full-height bar in the `primary` slot on the STAGE-FACING edge",
@@ -1261,7 +1284,7 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       assert html |> LazyHTML.query(~s([data-role="call-rail-tab-unread-dot"])) |> Enum.count() ==
                1
 
-      for other <- ~w(people canvas transcript) do
+      for other <- ~w(people transcript) do
         assert html
                |> LazyHTML.query(
                  ~s([data-role="call-rail-tab"][data-tab="#{other}"] [data-role="call-rail-tab-unread-dot"])
@@ -1349,7 +1372,8 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
         |> LazyHTML.query(~s([data-component="call-rail"] [data-role="call-rail-tab"]))
         |> LazyHTML.attribute("data-tab")
 
-      assert tabs == ~w(people chat canvas transcript)
+      # No "canvas" since task 01a0693e — the card board is the LEFT rail now.
+      assert tabs == ~w(people chat transcript)
     end
   end
 
@@ -1562,10 +1586,11 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
 
       ids = assert_presentations_agree(view, "shell")
 
-      # The four-up named explicitly, so a change that drops the same tab
-      # from BOTH presentations at once cannot keep this green on a
-      # symmetrically shortened pair. This is the control's other job.
-      assert ids == ["people", "chat", "canvas", "transcript"]
+      # The set named explicitly, so a change that drops the same tab from
+      # BOTH presentations at once cannot keep this green on a symmetrically
+      # shortened pair. This is the control's other job. No "canvas" since task
+      # 01a0693e — the card board is the LEFT rail now.
+      assert ids == ["people", "chat", "transcript"]
     end
 
     test "GUEST (@shell? false): the two sets are equal — DISCRIMINATING, both directions",
@@ -1713,13 +1738,16 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       # `refute "chat" in …` over a selector that has stopped matching passes
       # for the worst possible reason, and pinning the exact three-up also
       # catches a change that drops MORE than Chat.
-      assert strip_ids == ["people", "canvas", "transcript"],
-             "the guest's collapsed strip should serve exactly the three " <>
-               "unconditional tabs — got #{inspect(strip_ids)}"
+      # Since task 01a0693e Canvas is no longer a rail tab on desktop (the card
+      # board is the LEFT rail), so a guest — who also serves no Chat tab —
+      # serves exactly People and Transcript.
+      assert strip_ids == ["people", "transcript"],
+             "the guest's collapsed strip should serve exactly the two " <>
+               "unconditional non-canvas tabs — got #{inspect(strip_ids)}"
 
-      assert tablist_ids == ["people", "canvas", "transcript"],
-             "the guest's expanded tablist should serve exactly the three " <>
-               "unconditional tabs — got #{inspect(tablist_ids)}"
+      assert tablist_ids == ["people", "transcript"],
+             "the guest's expanded tablist should serve exactly the two " <>
+               "unconditional non-canvas tabs — got #{inspect(tablist_ids)}"
 
       # HALF (a), stated as the refutation it is, in BOTH presentations. The
       # strip is the half that only became possible once stage 1 made it
@@ -1817,7 +1845,7 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       doc = view |> render() |> LazyHTML.from_fragment()
       ids = tablist_tab_ids(doc)
 
-      assert ids == ["people", "canvas", "transcript"], "got #{inspect(ids)}"
+      assert ids == ["people", "transcript"], "got #{inspect(ids)}"
       refute "chat" in ids
       assert doc |> LazyHTML.query(~s([data-pane="meeting-chat-panel"])) |> Enum.empty?()
     end
@@ -1837,7 +1865,7 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       doc = view |> render() |> LazyHTML.from_fragment()
       ids = tablist_tab_ids(doc)
 
-      assert ids == ["people", "chat", "canvas", "transcript"], "got #{inspect(ids)}"
+      assert ids == ["people", "chat", "transcript"], "got #{inspect(ids)}"
       assert "chat" in ids
 
       # The slot is supplied here, so the persistent wrapper exists…

@@ -922,7 +922,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       # the wrapper is a persistent sibling of the tab `case`, so switching
       # tabs hides it rather than unmounting it. A `case` branch would make
       # both counts 0 here.
-      for tab <- ["people", "canvas", "transcript", "chat"] do
+      # No "canvas" here since task 01a0693e: the desktop right rail drops the
+      # Canvas tab (the card board is the first-class LEFT rail now), so there is
+      # no canvas tab to switch to on this surface.
+      for tab <- ["people", "transcript", "chat"] do
         switched =
           view
           |> element(~s([data-role="call-rail-tab"][data-tab="#{tab}"]))
@@ -7445,12 +7448,15 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "renders the four tabs with exactly one active", %{conn: conn, meeting: meeting} do
+    test "renders the three tabs with exactly one active", %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert count(html, ~s([data-role="call-rail-tab"])) == 4
+      # Three, not four, since task 01a0693e: the mislabeled Canvas tab is gone
+      # from the desktop right rail (the card board is the first-class LEFT rail).
+      assert count(html, ~s([data-role="call-rail-tab"])) == 3
+      assert count(html, ~s([data-role="call-rail-tab"][data-tab="canvas"])) == 0
 
-      for tab <- ~w(people chat canvas transcript) do
+      for tab <- ~w(people chat transcript) do
         assert count(html, ~s([data-role="call-rail-tab"][data-tab="#{tab}"])) == 1
       end
 
@@ -7503,19 +7509,26 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert count(html, ~s([data-role="call-rail-pane"][data-pane-tab="people"])) == 1
 
-      canvas =
+      # Canvas is no longer a right-rail tab on desktop (task 01a0693e — the card
+      # board is the LEFT rail), so the swap is exercised through Transcript.
+      transcript =
         view
-        |> element(~s([data-role="call-rail-tab"][data-tab="canvas"]))
+        |> element(~s([data-role="call-rail-tab"][data-tab="transcript"]))
         |> render_click()
 
-      assert count(canvas, ~s([data-role="call-rail-pane"][data-pane-tab="canvas"])) == 1
-      assert count(canvas, ~s([data-role="call-rail-pane"][data-pane-tab="people"])) == 0
-
-      assert count(canvas, ~s([data-role="call-rail-tab"][data-tab="canvas"][data-active="true"])) ==
-               1
-
-      transcript = render_click(view, "meeting_tab_select", %{"tab" => "transcript"})
       assert count(transcript, ~s([data-role="call-rail-pane"][data-pane-tab="transcript"])) == 1
+      assert count(transcript, ~s([data-role="call-rail-pane"][data-pane-tab="people"])) == 0
+
+      assert count(
+               transcript,
+               ~s([data-role="call-rail-tab"][data-tab="transcript"][data-active="true"])
+             ) == 1
+
+      # There is NO Canvas tab in the right rail to swap to.
+      assert count(transcript, ~s([data-role="call-rail-tab"][data-tab="canvas"])) == 0
+
+      people = render_click(view, "meeting_tab_select", %{"tab" => "people"})
+      assert count(people, ~s([data-role="call-rail-pane"][data-pane-tab="people"])) == 1
 
       # An unrecognised tab costs the tab, not the pane.
       fallback = render_click(view, "meeting_tab_select", %{"tab" => "nope"})
@@ -7594,22 +7607,105 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert count(again, ~s([data-role="meeting-transcript-wrap"][hidden])) == 0
     end
 
-    test "the candidate rail lives in the Canvas pane, once", %{
-      conn: conn,
-      meeting: meeting
-    } do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+    test "the candidate rail is the first-class LEFT rail, once, and NOT in the right rail",
+         %{
+           conn: conn,
+           meeting: meeting
+         } do
+      # A live candidate so the board component actually materialises — the
+      # `candidate_rail` renders NOTHING when it has no card, so a value under a
+      # known id is what tells "renders the board" from "renders an empty div".
+      {:ok, candidate} =
+        Platform.Meetings.Candidates.create(%{
+          meeting_id: meeting.id,
+          transcript_chunk_id: Ecto.UUID.generate(),
+          transcript_chunk_ids: [Ecto.UUID.generate()],
+          state: :heard,
+          acts_at: nil,
+          evidence_quote: "we should add a CSV export"
+        })
 
-      # Not in the People pane at all — it MOVED, it was not copied.
-      assert count(html, ~s([data-component="candidate-rail"])) == 0
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
 
-      canvas = render_click(view, "meeting_tab_select", %{"tab" => "canvas"})
+      # RE-POINTED by task 01a0693e. This used to assert the board lived ONLY in
+      # the right rail's Canvas pane (count 0 on the default People tab, then
+      # revealed by clicking Canvas). The prototype alignment moved the board to
+      # a first-class LEFT rail that is ALWAYS visible on desktop — no tab to
+      # select — and dropped the Canvas tab from the right rail entirely.
 
-      assert count(canvas, ~s([data-component="candidate-rail"])) ==
-               count(
-                 canvas,
-                 ~s([data-component="call-rail"] [data-component="candidate-rail"])
-               )
+      # The board is present WITHOUT selecting any tab, carrying this
+      # candidate's own card (the `candidate_rail` renders nothing when empty,
+      # so a card under a KNOWN id is what proves the board rendered).
+      assert count(
+               html,
+               ~s([data-role="meeting-candidate-card"][data-candidate-id="#{candidate.id}"])
+             ) ==
+               1
+
+      # It lives in the left rail, not the right (call) rail.
+      assert count(
+               html,
+               ~s([data-role="meeting-left-rail"] [data-role="meeting-candidate-card"][data-candidate-id="#{candidate.id}"])
+             ) == 1
+
+      assert count(
+               html,
+               ~s([data-component="call-rail"] [data-role="meeting-candidate-card"])
+             ) == 0
+
+      # And the mislabeled Canvas tab is gone from the right rail.
+      assert count(html, ~s([data-role="call-rail-tab"][data-tab="canvas"])) == 0
+    end
+
+    test "the desktop left rail shows cards AND agents at once, without a tab (task 01a0693e)",
+         %{conn: conn, meeting: meeting, space: space} do
+      # The sponsor's core complaint: cards and agents could never be seen
+      # together. The left rail restores the prototype's layout — the card board
+      # on top, the roster below, both present on first paint with no tab to
+      # pick.
+      seed_meeting_presence(space, "user", "Ada Human")
+      seed_meeting_presence(space, "agent", "Left Rail Agent")
+
+      {:ok, candidate} =
+        Platform.Meetings.Candidates.create(%{
+          meeting_id: meeting.id,
+          transcript_chunk_id: Ecto.UUID.generate(),
+          transcript_chunk_ids: [Ecto.UUID.generate()],
+          state: :heard,
+          acts_at: nil,
+          evidence_quote: "rotate the staging secrets"
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      left = ~s([data-role="meeting-left-rail"] )
+
+      # The rail exists, and holds both sections simultaneously.
+      assert count(html, ~s([data-role="meeting-left-rail"])) == 1
+      assert count(html, left <> ~s([data-role="meeting-left-rail-cards"])) == 1
+      assert count(html, left <> ~s([data-role="meeting-left-rail-agents"])) == 1
+
+      # Cards: this candidate's card, present without selecting anything.
+      assert count(
+               html,
+               left <>
+                 ~s([data-role="meeting-candidate-card"][data-candidate-id="#{candidate.id}"])
+             ) == 1
+
+      # Agents: the same roster component, showing the seeded agent, alongside
+      # the board in the same rail.
+      assert count(html, left <> ~s([data-component="participant-rail"])) == 1
+      assert html =~ "Left Rail Agent"
+
+      # It is a desktop affordance: hidden below `lg`.
+      [rail_class] =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-left-rail"]))
+        |> LazyHTML.attribute("class")
+
+      assert rail_class =~ ~r/\bhidden\b/
+      assert rail_class =~ ~r/\blg:flex\b/
     end
 
     test "the controls are CallShell's, and Share keeps its hook", %{
@@ -11905,11 +12001,20 @@ defmodule PlatformWeb.MeetingLiveTest do
   # The rail's activity BADGE for one participant row — ring + glyph +
   # word, which replaced the single green dot for every non-idle state.
   # An idle agent has no badge at all and keeps the dot below.
+  # SCOPED TO THE LEFT RAIL (task 01a0693e). Since the desktop card board landed
+  # as a first-class LEFT rail beside the agents, `participant-rail` renders in
+  # TWO places on the People tab — the always-visible left rail and the right
+  # rail's People pane — so an unscoped `[data-component="participant-rail"]`
+  # would match both and hand these helpers a two-element list. The left rail is
+  # present regardless of which right-rail tab is active, so it is the stable
+  # place to read one agent's activity badge.
+  @left_rail_participant ~s([data-role="meeting-left-rail"] [data-component="participant-rail"] )
+
   defp rail_activity_state(html, participant_row_id) do
     html
     |> frag()
     |> LazyHTML.query(
-      ~s([data-component="participant-rail"] ) <>
+      @left_rail_participant <>
         ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-avatar"])
     )
     |> LazyHTML.attribute("data-activity-state")
@@ -11919,7 +12024,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     html
     |> frag()
     |> LazyHTML.query(
-      ~s([data-component="participant-rail"] ) <>
+      @left_rail_participant <>
         ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-word"])
     )
     |> LazyHTML.text()
@@ -11933,7 +12038,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     html
     |> frag()
     |> LazyHTML.query(
-      ~s([data-component="participant-rail"] ) <>
+      @left_rail_participant <>
         ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-delay-reason"])
     )
     |> LazyHTML.text()
@@ -11944,7 +12049,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     html
     |> frag()
     |> LazyHTML.query(
-      ~s([data-component="participant-rail"] ) <>
+      @left_rail_participant <>
         ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-status-dot"])
     )
     |> LazyHTML.attribute("class")

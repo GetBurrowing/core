@@ -217,8 +217,13 @@ defmodule PlatformWeb.MeetingLiveDeclaredStateTest do
 
   defp frag(html), do: LazyHTML.from_fragment(html)
 
+  # SCOPED TO THE LEFT RAIL (task 01a0693e). The desktop card board is now a
+  # first-class LEFT rail beside the agents, so `participant-rail` renders both
+  # there and in the right rail's People pane; an unscoped selector would match
+  # both rows. The left rail carries the roster regardless of the right rail's
+  # active tab, so it is the stable place to read one agent's declared state.
   defp row_selector(participant_id) do
-    ~s([data-component="participant-rail"] [data-participant-id="#{participant_id}"])
+    ~s([data-role="meeting-left-rail"] [data-component="participant-rail"] [data-participant-id="#{participant_id}"])
   end
 
   defp activity_state(html, participant_id) do
