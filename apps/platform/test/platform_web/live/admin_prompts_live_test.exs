@@ -28,6 +28,8 @@ defmodule PlatformWeb.AdminPromptsLiveTest do
   alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
+  alias Platform.Responsibilities
+  alias Platform.Responsibilities.Responsibility
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
@@ -315,5 +317,160 @@ defmodule PlatformWeb.AdminPromptsLiveTest do
 
       refute q(html, ~s([data-role="variant-diff"])) |> LazyHTML.text() =~ "LIVE ROW HAS MOVED"
     end
+  end
+
+  describe "the declared-but-unbacked row (task 01a0a74d stage 4)" do
+    setup do
+      # Seeded here rather than leaning on either REAL orphan. The task's own
+      # orphans move under it: stage 2 seeded `memory.daily_summary.v1`, so it
+      # resolves now, and `meetings.summarize.v1` is out of scope and could be
+      # seeded by anyone. A test that asserted on either would be asserting on
+      # the state of the fix, not on the rendering.
+      #
+      # The slug sorts between `dispatch.` and `historian.` deliberately — the
+      # sort-position assertion below needs a known neighbour on each side and
+      # a slug hoisted to the top would pass a test that hoisting also passes.
+      key = "fakegap.render"
+      slug = "fakegap.render.v1"
+
+      {:ok, row} =
+        Responsibilities.create_responsibility(%{
+          key: key,
+          feature: "fakegap",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "0 23 * * *"},
+          scope: "global",
+          cost_profile: "low_freq_capable",
+          default_prompt_template: slug
+        })
+
+      assert PromptTemplates.get_template_by_slug(slug) == nil,
+             "the fixture is only meaningful while no template carries #{slug}"
+
+      {:ok, key: key, slug: slug, row: row}
+    end
+
+    test "the declared slug appears in the table even though no template row exists", %{
+      conn: conn,
+      slug: slug
+    } do
+      {:ok, _view, html} = live(conn, ~p"/admin/prompts")
+
+      assert html =~ slug,
+             "the page lists only what exists, so the one thing a cron is firing at and " <>
+               "nobody has is still invisible"
+
+      assert html =~ "declared-missing-row"
+    end
+
+    test "it sits in SORT ORDER among the real templates, not hoisted above them", %{
+      conn: conn,
+      slug: slug
+    } do
+      {:ok, _view, html} = live(conn, ~p"/admin/prompts")
+
+      # Byte offsets rather than a parsed table: what matters is the order the
+      # reader meets these strings in, and `:binary.match/2` measures exactly
+      # that without depending on the markup around them.
+      #
+      # `dispatch.deploying` sorts BEFORE and `historian.` sorts AFTER
+      # `fakegap.render.v1`, so a hoisted row fails the first assertion and a
+      # row appended at the end fails the second. Either alone passes for the
+      # wrong reason.
+      {before_at, _} = :binary.match(html, "dispatch.deploying")
+      {missing_at, _} = :binary.match(html, slug)
+      {after_at, _} = :binary.match(html, "historian.")
+
+      assert before_at < missing_at,
+             "the declared-but-unbacked row was hoisted above the templates that sort " <>
+               "before it — the direction is a row IN PLACE, not a banner with a body"
+
+      assert missing_at < after_at,
+             "the declared-but-unbacked row landed after slugs it sorts before"
+    end
+
+    test "the utility line states what is true and what it implies", %{conn: conn, key: key} do
+      {:ok, _view, html} = live(conn, ~p"/admin/prompts")
+
+      assert html =~ "declared-missing-utility"
+      assert html =~ "no template · dispatches render empty"
+
+      assert html =~ key,
+             "the utility line must name the responsibility KEY — the mono cell carries " <>
+               "the slug so sort order is meaningful, and the key is the thing you go and fix"
+    end
+
+    test "there is NO banner and NO count of missing templates above the list", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/admin/prompts")
+
+      index = html |> String.split("<table") |> hd()
+
+      refute index =~ "declared-missing",
+             "something about the missing key is rendered above the table. A banner is " <>
+               "attached to the list and can be read past; a row IS the list"
+
+      # No generic `refute index =~ "alert-*"`: the application shell renders
+      # flash containers with those classes on every page, so such a check
+      # fails for a reason that has nothing to do with this feature. The
+      # discriminating assertion is that nothing carrying this feature's own
+      # `declared-missing` marker renders above the table.
+
+      # The header badge is the count of templates that EXIST. Folding the
+      # orphan into it is the badge-count this design refuses, and it would
+      # also make the number disagree with `list_templates/0`.
+      assert index =~
+               ~s(<span class="badge badge-ghost badge-sm">#{length(PromptTemplates.list_templates())}</span>)
+    end
+
+    test "selecting it renders the refusal, and NOT an editor", %{conn: conn, slug: slug} do
+      {:ok, view, _html} = live(conn, ~p"/admin/prompts")
+
+      html =
+        view
+        |> element(~s([data-role="declared-missing-row"][data-slug="#{slug}"]))
+        |> render_click()
+
+      assert html =~
+               "No template carries this slug. A cron fires this responsibility, so the dispatch"
+
+      assert html =~ "Create a template for this key"
+
+      refute html =~ "<textarea",
+             "an empty editor is the shape that invites someone to type a body into it " <>
+               "without deciding whether this key should have one"
+
+      refute html =~ ~s(name="template[content]")
+    end
+
+    test "with ZERO orphans the table renders exactly as it did before", %{conn: conn} do
+      {:ok, _view, with_orphan} = live(conn, ~p"/admin/prompts")
+
+      # Empty the audit's source rather than stubbing the module: the union is
+      # supposed to collapse to `list_templates/0` when the declared side is
+      # empty, and the cheapest honest way to show that is to make it empty.
+      Repo.delete_all(Responsibility)
+
+      {:ok, _view, without} = live(conn, ~p"/admin/prompts")
+
+      refute without =~ "declared-missing"
+
+      assert table(without) == table_without_marked_rows(with_orphan),
+             "removing the declared key changed the table beyond dropping its row — the " <>
+               "union is a regression on every page that has no orphans, which is most of them"
+    end
+  end
+
+  defp table(html) do
+    [_, rest] = String.split(html, "<table", parts: 2)
+    [body, _] = String.split(rest, "</table>", parts: 2)
+    body
+  end
+
+  defp table_without_marked_rows(html) do
+    html
+    |> table()
+    |> String.split("<tr")
+    |> Enum.reject(&String.contains?(&1, "declared-missing"))
+    |> Enum.join("<tr")
   end
 end

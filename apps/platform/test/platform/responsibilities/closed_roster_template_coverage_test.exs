@@ -128,22 +128,29 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "tasks.weekly_review.v1"
   ]
 
-  # The roster slugs NO seeder owns today. Measured, not assumed: both
-  # are named by a live handler
-  # (`Handlers.MeetingSummarize.register/0`, `Handlers.DailySummary.register/0`)
-  # and neither has a row in `default_templates/0` or an inserting
-  # migration, so a native fire on either key ships
-  # `prompt_status: :render_gap` with `template_missing:<slug>` rather
-  # than a body.
+  # The roster slugs NO seeder owns today. Measured, not assumed: it is
+  # named by a live handler (`Handlers.MeetingSummarize.register/0`) and
+  # has no row in `default_templates/0` and no inserting migration, so a
+  # native fire on that key ships `prompt_status: :render_gap` with
+  # `template_missing:meetings.summarize.v1` rather than a body.
   #
-  # Task `019fb8ed` stage 2 deliberately did not invent bodies for
-  # them: a named absence that says which row to seed beats prompt
-  # content nobody authored reaching a live model. Seeding one is what
-  # retires it from this list — and the equality assertion below makes
-  # that removal mandatory rather than optional.
+  # Task `019fb8ed` stage 2 deliberately did not invent bodies for the two
+  # slugs that were here: a named absence that says which row to seed beats
+  # prompt content nobody authored reaching a live model. Seeding one is
+  # what retires it from this list — and the equality assertion below makes
+  # that removal mandatory rather than optional. Task `01a0a74d` stage 2
+  # did exactly that for `memory.daily_summary.v1` (descriptor in
+  # `default_templates/0` + `20260916103000_seed_memory_daily_summary_prompt.exs`),
+  # so it came off this pin in the same commit that seeded it.
+  #
+  # `meetings.summarize.v1` was NOT swept in with it, and the difference is
+  # measured rather than aesthetic: its trigger is `event`
+  # (`meeting_finished`), not a clock, so it does not fire unattended the
+  # way the 23:00 UTC daily summary does, and it carries a legacy fallback
+  # MFA (`Platform.Meetings.Summarizer:run_summary:1`) so a render gap there
+  # degrades to the legacy path instead of to an empty prompt.
   @unseeded_roster_slugs [
-    "meetings.summarize.v1",
-    "memory.daily_summary.v1"
+    "meetings.summarize.v1"
   ]
 
   # Creation calls. A migration that only force-updates an existing row

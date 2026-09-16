@@ -139,7 +139,13 @@ defmodule Platform.Responsibilities.RegistryTest do
 
     test "tolerates an empty provider list" do
       {_pid, name} = start_registry(providers: [])
-      assert Registry.status(name) == %{ok: [], errors: []}
+      # Pattern match, not equality: `status/0` gained a
+      # `:prompt_template_orphans` key in task 01a0a74d stage 3 and will
+      # gain more. Pinning the exact map here would make every future
+      # observability key a test edit, and — the reason that matters —
+      # would put THIS test in the failure set of a mutation aimed at the
+      # audit, muddying which test actually detects the audit's absence.
+      assert %{ok: [], errors: []} = Registry.status(name)
       assert Registry.providers(name) == []
     end
   end

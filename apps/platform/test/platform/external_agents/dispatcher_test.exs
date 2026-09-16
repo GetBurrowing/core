@@ -71,13 +71,19 @@ defmodule Platform.ExternalAgents.DispatcherTest do
     "tasks.weekly_review"
   ]
 
-  # The one member with NO `prompt_templates` row — not in
-  # `PromptTemplates.default_templates/0`, no inserting migration, and
-  # already carried on `@unseeded_roster_slugs` at
-  # test/platform/responsibilities/closed_roster_template_coverage_test.exs:132.
-  # Stage 3 of this task owns the missing-row behaviour; stage 1 only pins
-  # that today it is indistinguishable on the wire from a seeded key.
-  @unseeded_builder_less_slug "memory.daily_summary.v1"
+  # The roster slug with NO `prompt_templates` row — not in
+  # `PromptTemplates.default_templates/0`, no inserting migration, still
+  # carried on `@unseeded_roster_slugs` in
+  # test/platform/responsibilities/closed_roster_template_coverage_test.exs.
+  #
+  # This USED to be `memory.daily_summary.v1`, which task `01a0a74d`
+  # stage 2 seeded. It was repointed rather than deleted: the value of this
+  # constant is that it names a slug that is really in this state on a real
+  # install, not a fixture, and `meetings.summarize.v1` is now the only one
+  # left. It is NOT builder-less — hence the rename — so it reaches the
+  # template render only on the branch below, which is exactly as latent as
+  # the old one was.
+  @unseeded_roster_slug "meetings.summarize.v1"
 
   setup do
     {:ok, _} = Application.ensure_all_started(:req)
@@ -849,9 +855,9 @@ defmodule Platform.ExternalAgents.DispatcherTest do
             # The missing-row member. Stage 3 owns the final taxonomy and
             # the abort plumbing; what stage 2 pins is that a slug naming
             # no row does NOT become a paid round-trip carrying the slug.
-            assert slug == @unseeded_builder_less_slug,
+            assert slug == @unseeded_roster_slug,
                    "#{key}: has no prompt_templates row but is not the pinned unseeded slug " <>
-                     "(#{@unseeded_builder_less_slug}) — the seeding gap moved"
+                     "(#{@unseeded_roster_slug}) — the seeding gap moved"
 
             assert {:error, {:template_missing, ^slug}} =
                      Dispatcher.dispatch(responsibility, agent, %{})
@@ -984,27 +990,29 @@ defmodule Platform.ExternalAgents.DispatcherTest do
              "the slug must never appear in a request payload"
     end
 
-    # The live instance, not a synthetic one. `memory.daily_summary.v1` has
+    # The live instance, not a synthetic one. `meetings.summarize.v1` has
     # no row in `default_templates/0`, no inserting migration, and no row in
-    # production; it is already carried on `@unseeded_roster_slugs` at
-    # closed_roster_template_coverage_test.exs:132. It is builder-less and
-    # native (higgins) TODAY, so this branch is latent — it runs the first
-    # time the key is reassigned to an external agent. Seeding a body nobody
-    # authored to make this go away is the thing 019fb8ed stage 2 explicitly
-    # decided against.
+    # production; it is carried on `@unseeded_roster_slugs` in
+    # closed_roster_template_coverage_test.exs. This branch is latent — the
+    # key has a builder, so the render path is reached only when the builder
+    # declines. Seeding a body nobody authored to make this go away is the
+    # thing 019fb8ed stage 2 explicitly decided against, and that decision
+    # still stands for THIS key: it is event-triggered rather than cron, and
+    # it carries a legacy fallback MFA, so a gap degrades to the legacy
+    # summariser rather than to an empty prompt on the wire.
     test "the real unseeded roster slug aborts rather than reaching a model", %{agent: agent} do
-      refute PromptTemplates.get_template_by_slug(@unseeded_builder_less_slug),
-             "#{@unseeded_builder_less_slug} acquired a row — this test's premise moved; " <>
+      refute PromptTemplates.get_template_by_slug(@unseeded_roster_slug),
+             "#{@unseeded_roster_slug} acquired a row — this test's premise moved; " <>
                "re-derive the unseeded set rather than editing this assertion away"
 
       responsibility =
         build_responsibility(%{
-          key: "memory.daily_summary",
-          feature: "memory",
-          default_prompt_template: @unseeded_builder_less_slug
+          key: "meetings.summarize",
+          feature: "meetings",
+          default_prompt_template: @unseeded_roster_slug
         })
 
-      assert {:error, {:template_missing, @unseeded_builder_less_slug}} =
+      assert {:error, {:template_missing, @unseeded_roster_slug}} =
                Dispatcher.dispatch(responsibility, agent, %{})
 
       assert drain_dispatch_bodies() == []

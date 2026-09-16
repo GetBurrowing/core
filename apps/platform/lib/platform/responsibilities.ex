@@ -225,6 +225,131 @@ defmodule Platform.Responsibilities do
     {:ok, %{ok: oks, errors: Enum.reverse(errors)}}
   end
 
+  # ── prompt-template audit (task 01a0a74d stage 3) ──────────────────────────
+
+  @typedoc """
+  Verdict for one responsibility's declared `default_prompt_template`.
+
+  Mirrors the taxonomy `Router.render_default_template/2` already produces
+  per fire, minus the context: `:none` is the router's `{:absent, :legacy}`
+  (the key never named a template), `{:missing, slug}` is
+  `{:absent, {:template_missing, slug}}`, `{:blank, slug}` is
+  `{:absent, {:template_blank, slug}}`. Deliberately the SAME words, so a
+  boot-time verdict and a per-fire log line about the same key read as the
+  same finding rather than as two problems.
+
+  `{:blank, slug}` is decided on the STORED body here, where the router
+  decides it on the RENDERED body. A row whose content is non-blank but
+  renders blank for some particular context cannot be known before the
+  fire, so this is the strictly weaker check — it catches the row that is
+  empty for everyone, which is the one knowable with zero fires.
+  """
+  @type prompt_template_verdict ::
+          :resolved | :none | {:missing, String.t()} | {:blank, String.t()}
+
+  @typedoc "One `prompt_template_audit/0` row."
+  @type prompt_template_audit_entry :: %{
+          key: String.t(),
+          trigger_kind: String.t() | nil,
+          slug: String.t() | nil,
+          status: prompt_template_verdict()
+        }
+
+  @doc """
+  Audit every persisted responsibility's `default_prompt_template` against
+  the `prompt_templates` table (task `01a0a74d` stage 3, acceptance item 5).
+
+  Returns one entry per responsibility key, sorted by key. This is the
+  single read that `Registry`'s boot-time audit, the
+  `mix responsibilities.prompt_audit` task and the `/admin/prompts`
+  declared-but-unbacked row all go through — it is public precisely so
+  those three cannot drift into three different definitions of "orphan".
+
+  The gap this closes: everything the router knows about a missing template
+  it learns per FIRE and writes to a log. A cron key that fires once a day
+  at 23:00 UTC announces its own breakage once a day, into a container log,
+  after the agent has already received an empty prompt. The same fact is
+  knowable at registration time with zero fires, because the slug is
+  declared in source.
+
+  Never raises: a caller may be a boot path running against a database whose
+  `prompt_templates` rows are not seeded yet (every fresh test database
+  before `seed_defaults/0`), and an audit that took the app down would be a
+  worse defect than the one it reports.
+  """
+  @spec prompt_template_audit() :: [prompt_template_audit_entry()]
+  def prompt_template_audit do
+    prompt_template_audit(list_responsibilities())
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
+  end
+
+  @doc """
+  Audit an explicit list of responsibilities.
+
+  Same contract as `prompt_template_audit/0`; takes the rows rather than
+  reading them so `Registry.do_register/1` can audit exactly what it just
+  registered instead of issuing a second query whose answer could differ.
+  """
+  @spec prompt_template_audit([Responsibility.t()]) :: [prompt_template_audit_entry()]
+  def prompt_template_audit(responsibilities) when is_list(responsibilities) do
+    responsibilities
+    |> Enum.map(fn %Responsibility{} = r ->
+      %{
+        key: r.key,
+        trigger_kind: r.trigger_kind,
+        slug: r.default_prompt_template,
+        status: prompt_template_status(r.default_prompt_template)
+      }
+    end)
+    |> Enum.sort_by(& &1.key)
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
+  end
+
+  @doc """
+  The subset of `prompt_template_audit/1` whose verdict is a defect —
+  `{:missing, slug}` or `{:blank, slug}`.
+
+  `:none` is NOT a defect and is excluded: a responsibility that names no
+  template is a legacy-path key, which is a different (and deliberate)
+  state. Folding it in here would make the orphan list permanently
+  non-empty and therefore permanently ignored.
+  """
+  @spec prompt_template_orphans([prompt_template_audit_entry()]) ::
+          [prompt_template_audit_entry()]
+  def prompt_template_orphans(entries) when is_list(entries) do
+    Enum.filter(entries, fn
+      %{status: {:missing, _}} -> true
+      %{status: {:blank, _}} -> true
+      _ -> false
+    end)
+  end
+
+  defp prompt_template_status(slug) when is_binary(slug) do
+    case String.trim(slug) do
+      "" ->
+        :none
+
+      slug ->
+        case Platform.Orchestration.PromptTemplates.get_template_by_slug(slug) do
+          nil -> {:missing, slug}
+          %{content: content} when is_binary(content) -> blank_or_resolved(content, slug)
+          _ -> {:blank, slug}
+        end
+    end
+  end
+
+  defp prompt_template_status(_), do: :none
+
+  defp blank_or_resolved(content, slug) do
+    if String.trim(content) == "", do: {:blank, slug}, else: :resolved
+  end
+
   # ── register/1 helpers ─────────────────────────────────────────────────────
 
   defp ensure_provider(mod) do

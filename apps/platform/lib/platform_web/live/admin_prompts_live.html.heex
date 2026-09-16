@@ -1,22 +1,31 @@
 <div class="flex h-full min-h-0 flex-col">
   <.breadcrumb segments={
-    if @selected_template do
-      [
-        %{label: "Admin", navigate: ~p"/admin"},
-        %{label: "Prompts", navigate: ~p"/admin/prompts"},
-        %{label: @selected_template.slug, navigate: nil}
-      ]
-    else
-      [
-        %{label: "Admin", navigate: ~p"/admin"},
-        %{label: "Prompts", navigate: nil}
-      ]
+    cond do
+      @missing_key ->
+        [
+          %{label: "Admin", navigate: ~p"/admin"},
+          %{label: "Prompts", navigate: ~p"/admin/prompts"},
+          %{label: @missing_key.slug, navigate: nil}
+        ]
+
+      @selected_template ->
+        [
+          %{label: "Admin", navigate: ~p"/admin"},
+          %{label: "Prompts", navigate: ~p"/admin/prompts"},
+          %{label: @selected_template.slug, navigate: nil}
+        ]
+
+      true ->
+        [
+          %{label: "Admin", navigate: ~p"/admin"},
+          %{label: "Prompts", navigate: nil}
+        ]
     end
   } />
   <%!-- Header --%>
   <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
-      <%= if @selected_template do %>
+      <%= if @selected_template || @missing_key do %>
         <button
           phx-click="back_to_index"
           class="btn btn-ghost btn-xs btn-square"
@@ -25,7 +34,7 @@
           <span class="hero-arrow-left size-4"></span>
         </button>
         <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
-          Admin · Prompts · {@selected_template.slug}
+          Admin · Prompts · {(@selected_template && @selected_template.slug) || @missing_key.slug}
         </h1>
       <% else %>
         <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
@@ -40,16 +49,16 @@
   </div>
 
   <%!-- INDEX VIEW --%>
-  <%= if is_nil(@selected_template) do %>
+  <%= if is_nil(@selected_template) && is_nil(@missing_key) do %>
     <div class="flex-1 overflow-y-auto p-4">
       <div
-        :if={@templates == []}
+        :if={@rows == []}
         class="flex items-center justify-center h-full text-base-content/30"
       >
         No prompt templates found. Run migrations to seed defaults.
       </div>
 
-      <div :if={@templates != []} class="overflow-x-auto">
+      <div :if={@rows != []} class="overflow-x-auto">
         <table class="table table-sm w-full">
           <thead>
             <tr>
@@ -67,24 +76,74 @@
             </tr>
           </thead>
           <tbody>
-            <tr
-              :for={template <- @templates}
-              phx-click="select_template"
-              phx-value-slug={template.slug}
-              class="cursor-pointer hover:bg-base-200 transition-colors"
-            >
-              <td class="font-mono text-xs text-primary">{template.slug}</td>
-              <td class="text-sm font-medium">{template.name}</td>
-              <td class="text-xs text-base-content/60 hidden md:table-cell max-w-xs">
-                <span class="line-clamp-1">{template.description || "—"}</span>
-              </td>
-              <td class="text-xs text-base-content/50 hidden sm:table-cell whitespace-nowrap">
-                {relative_time(template.updated_at)}
-              </td>
-              <td class="text-xs text-base-content/50 hidden sm:table-cell">
-                {template.updated_by || "—"}
-              </td>
-            </tr>
+            <%!-- The union: templates that exist and responsibility slugs that
+                  are declared, sorted TOGETHER on slug. The marked row is not
+                  hoisted and there is no banner or badge above this table —
+                  see the moduledoc. A banner can be read past; a row is the
+                  list. --%>
+            <%= for row <- @rows do %>
+              <tr
+                :if={row.kind == :template}
+                phx-click="select_template"
+                phx-value-slug={row.slug}
+                class="cursor-pointer hover:bg-base-200 transition-colors"
+              >
+                <td class="font-mono text-xs text-primary">{row.template.slug}</td>
+                <td class="text-sm font-medium">{row.template.name}</td>
+                <td class="text-xs text-base-content/60 hidden md:table-cell max-w-xs">
+                  <span class="line-clamp-1">{row.template.description || "—"}</span>
+                </td>
+                <td class="text-xs text-base-content/50 hidden sm:table-cell whitespace-nowrap">
+                  {relative_time(row.template.updated_at)}
+                </td>
+                <td class="text-xs text-base-content/50 hidden sm:table-cell">
+                  {row.template.updated_by || "—"}
+                </td>
+              </tr>
+
+              <%!-- A declared key with no template. Ground is base-200 so it
+                    reads as a member of this list rather than an alert
+                    dropped into it; the name is at the SAME size and weight a
+                    real template's name gets, because visual weight tracks
+                    consequence, not existence. The slug is mono like every
+                    other slug but NOT text-primary: primary is the action
+                    colour here and this row is a statement. --%>
+              <tr
+                :if={row.kind == :missing}
+                data-role="declared-missing-row"
+                data-slug={row.slug}
+                phx-click="select_template"
+                phx-value-slug={row.slug}
+                class="cursor-pointer bg-base-200 hover:bg-base-300 transition-colors"
+              >
+                <td class="font-mono text-xs text-base-content">{row.slug}</td>
+                <td class="text-sm font-medium">
+                  <div class="flex items-center gap-2">
+                    <span>{row.slug}</span>
+                    <span
+                      data-role="declared-missing-marker"
+                      class="badge badge-sm bg-warning text-warning-content border-0 font-mono"
+                      title="Declared by a responsibility, with no prompt template"
+                    >
+                      !
+                    </span>
+                  </div>
+                  <div
+                    data-role="declared-missing-utility"
+                    class="mt-0.5 text-xs text-base-content/70"
+                  >
+                    declared by {row.entry.trigger_kind || "responsibility"} {row.entry.key} · no template · dispatches render empty
+                  </div>
+                </td>
+                <td class="text-xs text-base-content/70 hidden md:table-cell max-w-xs">
+                  <span class="line-clamp-1">No template carries this slug.</span>
+                </td>
+                <td class="text-xs text-base-content/50 hidden sm:table-cell whitespace-nowrap">
+                  —
+                </td>
+                <td class="text-xs text-base-content/50 hidden sm:table-cell">—</td>
+              </tr>
+            <% end %>
           </tbody>
         </table>
       </div>
@@ -296,4 +355,41 @@
       </aside>
     </div>
   <% end %>
+
+  <%!-- DECLARED-BUT-UNBACKED PANE (task 01a0a74d stage 4).
+        Deliberately NOT an editor. There is nothing to edit, and an empty
+        editor is the shape that invites someone to type a body into it
+        without deciding whether this key should have one — which is the open
+        question this task exists to answer. --%>
+  <div :if={@missing_key} data-role="declared-missing-pane" class="flex-1 overflow-y-auto p-4">
+    <div class="max-w-xl space-y-4 rounded-lg bg-base-200 p-4">
+      <div class="flex items-center gap-2">
+        <span class="font-mono text-sm text-base-content">{@missing_key.slug}</span>
+        <span
+          class="badge badge-sm bg-warning text-warning-content border-0 font-mono"
+          title="Declared by a responsibility, with no prompt template"
+        >
+          !
+        </span>
+      </div>
+
+      <p data-role="declared-missing-explanation" class="text-sm text-base-content">
+        No template carries this slug. A cron fires this responsibility, so the dispatch
+        renders with an empty body and nothing errors.
+      </p>
+
+      <p class="text-xs text-base-content/70">
+        Declared by {@missing_key.trigger_kind || "responsibility"} {@missing_key.key}.
+      </p>
+
+      <button
+        type="button"
+        phx-click="create_template_for_key"
+        data-role="declared-missing-create"
+        class="btn btn-sm"
+      >
+        Create a template for this key
+      </button>
+    </div>
+  </div>
 </div>

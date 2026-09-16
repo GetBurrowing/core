@@ -99,7 +99,43 @@ defmodule Platform.Responsibilities.Handlers.DailySummary do
            ContextProviders.gather_context(:recent_journal, opts),
          {:ok, %{org_identity: identity}} <-
            ContextProviders.gather_context(:org_identity, opts) do
-      {:ok, %{recent_journal: journal, org_identity: identity}}
+      # `date` and `workspace_id` are returned as CONTEXT, not only read as
+      # options, because the context map is what
+      # `Router.template_assigns/1` hands to
+      # `PromptTemplates.render_template/2`. `interpolate/2` substitutes ""
+      # for an assign nobody supplied, so a `{{date}}` declared in the
+      # `memory.daily_summary.v1` descriptor while the context omitted it
+      # would render as a hole that reads like content — the same
+      # empty-prompt class of defect that template was seeded to close
+      # (task 01a0a74d stage 2). They are derived here exactly as
+      # `append/3` below derives them from the same `trigger_meta`, so the
+      # day named in the prompt is the day the entry is filed under.
+      # Both are normalised to BINARIES here rather than passed through as
+      # a `%Date{}` and a possibly-nil id. `Router.template_assigns/1`
+      # falls through to `inspect/1` for anything that is not a binary,
+      # number or atom, so a `%Date{}` would interpolate as `~D[2026-09-16]`
+      # into prose; and `to_string(nil)` is "", which would put an empty
+      # string where the prompt says "Workspace:". A per_org fire legitimately
+      # has no workspace, so say that in words instead of leaving a blank.
+      date =
+        case Map.get(ctx, :date) || Map.get(ctx, "date") || Date.utc_today() do
+          %Date{} = d -> Date.to_iso8601(d)
+          other -> to_string(other)
+        end
+
+      workspace_id =
+        case Keyword.get(opts, :workspace_id) do
+          nil -> "(none — this is an org-wide fire)"
+          id -> to_string(id)
+        end
+
+      {:ok,
+       %{
+         recent_journal: journal,
+         org_identity: identity,
+         date: date,
+         workspace_id: workspace_id
+       }}
     end
   end
 

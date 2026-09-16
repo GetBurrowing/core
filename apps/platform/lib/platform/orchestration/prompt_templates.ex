@@ -1024,6 +1024,63 @@ defmodule Platform.Orchestration.PromptTemplates do
         content: @dreaming_content
       },
       %{
+        slug: "memory.daily_summary.v1",
+        name: "Memory Daily Summary Dispatch Prompt",
+        description:
+          "Looked up by `Platform.Responsibilities.Handlers.DailySummary.register/0` " <>
+            "as its `default_prompt_template` for the 23:00 UTC `per_org` cron fire. " <>
+            "Not an alias of `historian.scheduled`: that body is a PAGE-CURATION " <>
+            "prompt over `activity_digest` / `pending_tokens` / `deleted_paths_notice`, " <>
+            "none of which this handler's `gather_context/2` supplies, and it asks for " <>
+            "wiki edits from a handler whose `output_contract` accepts only " <>
+            "`%{\"summary\" => string}` and appends the result as a journal entry.",
+        # EVERY name here is supplied by `Handlers.DailySummary.gather_context/2`
+        # and survives `Router.template_assigns/1`. That is a constraint, not a
+        # preference: `interpolate/2` substitutes "" for an assign nobody
+        # supplied, so a variable the context never carries renders as a hole
+        # that reads like content — the exact defect this template exists to
+        # close. `date` and `workspace_id` were added to the handler's returned
+        # context in the same commit rather than declared hopefully here.
+        variables: [
+          "recent_journal",
+          "org_identity",
+          "date",
+          "workspace_id"
+        ],
+        content: """
+        You are writing the organisation's daily summary for {{date}}.
+
+        Workspace: {{workspace_id}}
+
+        ## Who this organisation is
+
+        {{org_identity}}
+
+        ## The record for {{date}}
+
+        The journal entries below are THE record you are summarising. They are the only source you may draw on. Do not supplement them from recollection, from earlier days, or from anything you believe happened but cannot point at in this text — you did not observe the day, you are reading it.
+
+        {{recent_journal}}
+
+        ## If the record above is empty
+
+        If the section above is empty, blank, or carries no journal entries, RETURN NO SUMMARY. Reply with exactly `{"summary": ""}` and stop. The handler declines an empty summary and appends nothing, which is the correct outcome for a day with no record.
+
+        Do NOT compose a plausible day from recollection to fill the gap. A summary invented to avoid returning nothing enters org memory indistinguishable from one drawn from real entries, and every later reader — human and agent — will treat it as observed fact.
+
+        ## Output contract
+
+        Reply with a single JSON object:
+
+            {"summary": "<the day's summary as prose>"}
+
+        `summary` must be a string. Any other shape is rejected by
+        `Handlers.DailySummary.handle_output/3` and nothing is written.
+
+        Keep it concrete: what shipped, what broke, what was decided, who was involved. Name things the entries name. Do not editorialise about momentum or mood.\
+        """
+      },
+      %{
         slug: "historian.meeting_ended",
         name: "Historian Meeting-Ended Dispatch Prompt",
         description:

@@ -34,6 +34,20 @@ defmodule Platform.Responsibilities.Registry do
   `:responsibility_provider_overrides` seam counts as covered. The check is
   observability only: it cannot change `status/0` and cannot raise.
 
+  ## Prompt-template orphans (task 01a0a74d stage 3)
+
+  After registration the Registry resolves every registered
+  responsibility's `default_prompt_template` against the
+  `prompt_templates` table via `Responsibilities.prompt_template_audit/1`
+  and emits one `Logger.error/1` plus a
+  `[:platform, :responsibilities, :prompt_template_orphan]` telemetry event
+  per key whose slug is missing or blank. The orphan list is carried into
+  state and returned by `status/0` under `:prompt_template_orphans`.
+
+  Like the provider-coverage check above, this **never raises** — see the
+  comment on `audit_prompt_templates/1`. A responsibility naming no
+  template at all is `:none` and is not an orphan.
+
   ## Configuration
 
       config :platform, Platform.Responsibilities,
@@ -70,7 +84,8 @@ defmodule Platform.Responsibilities.Registry do
   @typedoc "Aggregated result of the last `register_all/1` invocation."
   @type results :: %{
           ok: [Responsibilities.Responsibility.t()],
-          errors: [{module(), term()}]
+          errors: [{module(), term()}],
+          prompt_template_orphans: [Responsibilities.prompt_template_audit_entry()]
         }
 
   @typedoc "Internal state."
@@ -181,7 +196,7 @@ defmodule Platform.Responsibilities.Registry do
     log_failures(errors)
     log_provider_coverage(providers)
 
-    results
+    Map.put(results, :prompt_template_orphans, audit_prompt_templates(oks))
   end
 
   # Group successful rows by provider so each module gets exactly one
@@ -310,6 +325,76 @@ defmodule Platform.Responsibilities.Registry do
       [:platform, :responsibility, :provider_missing],
       %{count: length(keys)},
       %{feature: feature, keys: keys}
+    )
+  rescue
+    _ -> :ok
+  end
+
+  # ── prompt-template orphans (task 01a0a74d stage 3) ───────────────────────
+
+  # WHY THIS IS HERE RATHER THAN IN THE ROUTER. `router.ex` already
+  # distinguishes `{:template_missing, slug}` from `{:template_blank, slug}`
+  # from `:legacy`, already logs a warning naming the slug, and already
+  # stamps `prompt_status: :render_gap` on the native envelope. None of that
+  # is duplicated here and none of it should be. The gap is that all of it is
+  # per-FIRE and after the fact: `memory.daily_summary` fires once a day at
+  # 23:00 UTC, so a missing row announced itself once a day, in a container
+  # log, AFTER the Historian had already been handed an empty prompt. The
+  # slug is declared in source, so the same fact is knowable at registration
+  # time with zero fires. That is the only thing this adds.
+  #
+  # MUST NOT RAISE, AND MUST NOT BE "FIXED" INTO A RAISE. `do_register/1`
+  # relies on `register_all/1` being boot-safe and there is deliberately no
+  # try/rescue around it; a raise here would take the application down on
+  # every environment whose `prompt_templates` rows are not seeded yet —
+  # which is every fresh test database before `seed_defaults/0`, and any
+  # install mid-migration. Loud means `Logger.error` + telemetry + an
+  # inspectable `status/0` key. It does not mean a boot crash.
+  #
+  # Audits the rows just registered (`oks`) rather than re-reading the table,
+  # so the verdict is about what this Registry actually put there.
+  @spec audit_prompt_templates([Responsibilities.Responsibility.t()]) :: [map()]
+  defp audit_prompt_templates(oks) do
+    orphans =
+      oks
+      |> Responsibilities.prompt_template_audit()
+      |> Responsibilities.prompt_template_orphans()
+
+    Enum.each(orphans, &report_prompt_template_orphan/1)
+
+    orphans
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
+  end
+
+  defp report_prompt_template_orphan(%{key: key, status: status} = entry) do
+    {verdict, slug} =
+      case status do
+        {:missing, slug} -> {"missing", slug}
+        {:blank, slug} -> {"blank", slug}
+      end
+
+    Logger.error(
+      "[ResponsibilityRegistry] prompt_template_#{verdict} key=#{key} " <>
+        "slug=#{slug} trigger=#{entry.trigger_kind} — this responsibility registers and " <>
+        "fires, but the template it names is #{verdict}, so every dispatch renders with an " <>
+        "empty body and nothing errors. Fix: add a descriptor to " <>
+        "Platform.Orchestration.PromptTemplates.do_default_templates/0 AND a seeding " <>
+        "migration — seed_defaults/0 is INSERT-only and skips an already-migrated " <>
+        "environment, so editing the hardcoded default list alone does NOT put the row on " <>
+        "a live install."
+    )
+
+    emit_prompt_template_orphan_telemetry(entry, verdict, slug)
+  end
+
+  defp emit_prompt_template_orphan_telemetry(entry, verdict, slug) do
+    :telemetry.execute(
+      [:platform, :responsibilities, :prompt_template_orphan],
+      %{count: 1},
+      %{key: entry.key, slug: slug, verdict: verdict, trigger_kind: entry.trigger_kind}
     )
   rescue
     _ -> :ok

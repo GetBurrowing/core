@@ -75,8 +75,8 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
   owned by a SEEDER (a static scan of `default_templates/0` plus the
   migrations). This file asks whether the ROW IS THERE on a migrated
   database, for the narrower set of keys that actually need it. Both
-  pin their known gaps by equality; the two `@unseeded*` lists overlap
-  in `memory.daily_summary.v1` and disagree about
+  pin their known gaps by equality. They no longer overlap: this file's
+  `@unseeded` is empty, and the sibling still carries
   `meetings.summarize.v1` for a stated reason — that key has a builder,
   so it never reaches the render path and is not this file's business.
 
@@ -89,15 +89,21 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
   its cost is one `String.trim/1` and its absence would let a raw SQL
   fixture through.
 
-  ## `memory.daily_summary.v1` is NOT to be seeded
+  ## `memory.daily_summary.v1` WAS seeded — `@unseeded` is now empty
 
-  It is listed, by name, in `@unseeded`. Task `019fb8ed` stage 2 made
-  that decision — a named absence that says which row to seed beats
-  prompt content nobody authored reaching a live model — and it is not
-  this task's to reverse. Its sibling record is
-  `closed_roster_template_coverage_test.exs:132`. The list is asserted
-  by equality, so seeding the body later is a mandatory REMOVAL here,
-  not an optional one.
+  It used to be listed by name in `@unseeded`. Task `019fb8ed` stage 2
+  deliberately left it unseeded — a named absence that says which row to
+  seed beats prompt content nobody authored reaching a live model — and
+  task `01a0a74d` stage 2 reversed that on purpose, having established
+  what the body should say: the key fires on a 23:00 UTC cron, unattended,
+  at the one agent with write access to org-wide pages, so the absence was
+  not being read by anyone before the dispatch went out empty. It now has a
+  descriptor in `default_templates/0` and an inserting migration
+  (`20260916103000_seed_memory_daily_summary_prompt.exs`).
+
+  The list is asserted by equality, so that seeding was a mandatory
+  REMOVAL here rather than an optional one — which is how this guard
+  reported the change instead of quietly tolerating it.
   """
   use Platform.DataCase, async: false
 
@@ -137,7 +143,13 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
   # Slugs among the above that have NO `prompt_templates` row on a
   # migrated database. Exactly one today, and deliberately so — see the
   # moduledoc. EXACT pin, not an allowlist to grow.
-  @unseeded ["memory.daily_summary.v1"]
+  # EMPTY, as of task `01a0a74d` stage 2 — every builder-less key's slug
+  # now has a non-blank row. An empty pin is not a vacuous one here: the
+  # test directly above asserts the DERIVED builder-less key set equals the
+  # eleven-key `@builder_less_keys` list, so a classifier that enumerated
+  # nothing reddens there before it can satisfy this equality by sweeping an
+  # empty set.
+  @unseeded []
 
   setup do
     # Registers every built-in provider so the `responsibilities` table

@@ -34,6 +34,43 @@ defmodule PlatformWeb.AdminPromptsLive do
 
   It is deliberately NOT dismissible. The state in which someone dismisses a
   warning is exactly the state in which the misunderstanding does its damage.
+
+  ## The list is a UNION of what exists and what is declared (task `01a0a74d` stage 4)
+
+  A list built from one source can only render that source's members. Reading
+  `prompt_templates` alone, this page was structurally unable to show that a
+  live cron fires at a slug nobody has: an absence has no row, so it is not
+  rendered faintly — it is not rendered at all. That is the same defect as the
+  empty dispatch this task is about, one layer up.
+
+  So `@rows` is the union of templates that EXIST and responsibility slugs that
+  are DECLARED, sorted together on slug, with the difference marked in place.
+  The declared side is read through
+  `Platform.Responsibilities.prompt_template_audit/0` — the same public audit
+  the boot-time registry check and `mix responsibilities.prompt_audit` go
+  through — and is deliberately NOT re-derived here, because three definitions
+  of "orphan" is how three surfaces come to disagree.
+
+  Two choices that read as mistakes and are not:
+
+    * **The marked row sits in SORT ORDER, and there is no banner and no badge
+      count above the list.** A banner is attached to the list and can be read
+      past, and after the second time you see it resolved you stop resolving
+      it. A row IS the list: someone scanning `memory.*` meets it in the place
+      they were already looking.
+
+    * **The missing key's name renders at FULL weight** — not greyed, not
+      shrunk. Greying encodes EXISTENCE; this row must encode CONSEQUENCE, as
+      it is the only entry on the page currently causing a live cron to
+      deliver an empty prompt. `--color-error` is not used either (a declared
+      key with no template is a configuration gap, not a failure, and error
+      already means "this save failed" here), nor `--color-primary` (cyan is
+      the action colour on this page, and this row is a statement, not an
+      action).
+
+  Selecting such a row renders a REFUSAL, not an editor. An empty editor is
+  the shape that invites someone to type a body into it without deciding
+  whether this key should have one — which is the open question.
   """
 
   use PlatformWeb, :live_view
@@ -41,6 +78,7 @@ defmodule PlatformWeb.AdminPromptsLive do
   alias Platform.Experiments
   alias Platform.Experiments.Experiment
   alias Platform.Orchestration.{HeartbeatScheduler, PromptTemplate, PromptTemplates}
+  alias Platform.Responsibilities
 
   # A prompt author reads the preview and the variable sidebar to learn what a
   # placeholder will hold at render time, so a sample value is a contract
@@ -150,15 +188,15 @@ defmodule PlatformWeb.AdminPromptsLive do
 
   @impl true
   def mount(_params, session, socket) do
-    templates = PromptTemplates.list_templates()
     current_user_id = session["current_user_id"] || "unknown"
 
     {:ok,
      socket
      |> assign(:page_title, "Admin · Prompts")
-     |> assign(:templates, templates)
      |> assign(:current_user_id, current_user_id)
+     |> assign_list()
      |> assign(:selected_template, nil)
+     |> assign(:missing_key, nil)
      |> assign(:edit_form, nil)
      |> assign(:preview_content, nil)
      |> assign(:save_status, nil)
@@ -172,11 +210,28 @@ defmodule PlatformWeb.AdminPromptsLive do
   def handle_params(%{"slug" => slug}, _url, socket) do
     case PromptTemplates.get_template_by_slug(slug) do
       nil ->
-        {:noreply,
-         socket
-         |> assign(:selected_template, nil)
-         |> assign(:edit_form, nil)
-         |> put_flash(:error, "Template not found.")}
+        # A slug with no row is not automatically "not found": it may be a
+        # responsibility key declared in source whose template nobody ever
+        # wrote, which is exactly the case this page now renders rather than
+        # bouncing with a flash.
+        case find_missing_key(socket.assigns.declared_missing, slug) do
+          nil ->
+            {:noreply,
+             socket
+             |> assign(:selected_template, nil)
+             |> assign(:missing_key, nil)
+             |> assign(:edit_form, nil)
+             |> put_flash(:error, "Template not found.")}
+
+          entry ->
+            {:noreply,
+             socket
+             |> assign(:selected_template, nil)
+             |> assign(:edit_form, nil)
+             |> assign(:preview_content, nil)
+             |> assign(:missing_key, entry)
+             |> assign(:page_title, "Admin · #{entry.slug}")}
+        end
 
       template ->
         edit_form = to_form(PromptTemplate.changeset(template, %{}), as: "template")
@@ -185,6 +240,7 @@ defmodule PlatformWeb.AdminPromptsLive do
         {:noreply,
          socket
          |> assign(:selected_template, template)
+         |> assign(:missing_key, nil)
          |> assign(:edit_form, edit_form)
          |> assign(:preview_content, preview)
          |> assign(:save_status, nil)
@@ -197,6 +253,7 @@ defmodule PlatformWeb.AdminPromptsLive do
     {:noreply,
      socket
      |> assign(:selected_template, nil)
+     |> assign(:missing_key, nil)
      |> assign(:edit_form, nil)
      |> assign(:preview_content, nil)}
   end
@@ -212,6 +269,7 @@ defmodule PlatformWeb.AdminPromptsLive do
     {:noreply,
      socket
      |> assign(:selected_template, nil)
+     |> assign(:missing_key, nil)
      |> assign(:edit_form, nil)
      |> assign(:preview_content, nil)
      |> push_patch(to: ~p"/admin/prompts")}
@@ -257,7 +315,7 @@ defmodule PlatformWeb.AdminPromptsLive do
          |> assign(:selected_template, updated)
          |> assign(:edit_form, edit_form)
          |> assign(:preview_content, preview)
-         |> assign(:templates, PromptTemplates.list_templates())
+         |> assign_list()
          |> assign(:save_status, :saved)
          |> put_flash(:info, "Template saved.")}
 
@@ -293,6 +351,47 @@ defmodule PlatformWeb.AdminPromptsLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Could not reset template.")}
+    end
+  end
+
+  # The one action the refusal pane offers. It does NOT open an empty editor —
+  # it writes the row, then navigates to the editor over a row that now
+  # exists. The difference is that creating the template is an explicit,
+  # attributed act (`updated_by` is the operator) rather than a side effect of
+  # someone typing into a blank box they were shown by default.
+  #
+  # The body comes from `default_content_for_slug/1` when the code declares
+  # one, because a slug that HAS a descriptor and no row is a seeding gap and
+  # the descriptor is the intended text. When there is no descriptor, the body
+  # is a single sentence naming the responsibility key and saying it is
+  # unwritten: `content` is `validate_required`, so it cannot be blank, and a
+  # sentence that says "nobody has written this" is a better thing for a cron
+  # to render than whitespace.
+  def handle_event("create_template_for_key", _params, socket) do
+    case socket.assigns.missing_key do
+      %{slug: slug} = entry when is_binary(slug) ->
+        attrs = %{
+          "slug" => slug,
+          "name" => slug,
+          "description" => "Declared by responsibility #{entry.key}.",
+          "content" => starting_content_for(slug, entry),
+          "updated_by" => socket.assigns.current_user_id
+        }
+
+        case PromptTemplates.create_template(attrs) do
+          {:ok, template} ->
+            {:noreply,
+             socket
+             |> assign_list()
+             |> put_flash(:info, "Created #{template.slug}.")
+             |> push_patch(to: ~p"/admin/prompts/#{template.slug}")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not create a template for #{slug}.")}
+        end
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -435,5 +534,68 @@ defmodule PlatformWeb.AdminPromptsLive do
 
   defp default_content_for(slug) do
     PromptTemplates.default_content_for_slug(slug) || ""
+  end
+
+  defp starting_content_for(slug, entry) do
+    case PromptTemplates.default_content_for_slug(slug) do
+      content when is_binary(content) and content != "" ->
+        content
+
+      _ ->
+        "No body has been written for #{entry.key} (`#{slug}`) yet."
+    end
+  end
+
+  # ── The declared-but-unbacked union (task 01a0a74d stage 4) ─────────────
+
+  # Both list assigns move together or they disagree, so they are set in one
+  # place. `@templates` stays exactly what it was — the header count and the
+  # empty state are about templates that exist, and folding orphans into that
+  # count would be the badge this design explicitly refuses.
+  defp assign_list(socket) do
+    templates = PromptTemplates.list_templates()
+    declared_missing = declared_missing()
+
+    socket
+    |> assign(:templates, templates)
+    |> assign(:declared_missing, declared_missing)
+    |> assign(:rows, union_rows(templates, declared_missing))
+  end
+
+  # Read through the stage-3 public audit, never re-derived here.
+  #
+  # Only `{:missing, slug}` produces a row. `{:blank, slug}` is excluded on
+  # purpose: a blank template HAS a row and is therefore already in the list
+  # above, and rendering it twice would make the union list disagree with
+  # itself. `:none` and `:resolved` are not defects at all.
+  defp declared_missing do
+    Responsibilities.prompt_template_audit()
+    |> Responsibilities.prompt_template_orphans()
+    |> Enum.flat_map(fn
+      %{status: {:missing, slug}} = entry -> [Map.put(entry, :slug, slug)]
+      _ -> []
+    end)
+    |> Enum.uniq_by(& &1.slug)
+  end
+
+  # Sorted on SLUG, together, because the table is keyed on slug and a row
+  # sorted by anything else lands somewhere the reader is not looking. The
+  # wireframe labelled the row with the responsibility KEY; the key rides in
+  # the utility line instead, so the mono cell stays comparable to its
+  # neighbours.
+  defp union_rows(templates, declared_missing) do
+    existing = MapSet.new(templates, & &1.slug)
+
+    rows =
+      Enum.map(templates, &%{kind: :template, slug: &1.slug, template: &1}) ++
+        (declared_missing
+         |> Enum.reject(&MapSet.member?(existing, &1.slug))
+         |> Enum.map(&%{kind: :missing, slug: &1.slug, entry: &1}))
+
+    Enum.sort_by(rows, & &1.slug)
+  end
+
+  defp find_missing_key(declared_missing, slug) do
+    Enum.find(declared_missing, &(&1.slug == slug))
   end
 end
