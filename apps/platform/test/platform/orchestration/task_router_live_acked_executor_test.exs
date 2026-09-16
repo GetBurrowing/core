@@ -394,6 +394,79 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
       )
     end
 
+    # Ticket 01a08e86, instance 1. A review gate that FAILED, opened a
+    # remediation stage and was then re-started carries a fresh `started_at`
+    # while the prior round's ack is still inside the safety net — and the
+    # subagent that wrote that ack returned long ago. Measured on the incident
+    # stage (`01a08e59-60bf-7005`, task `01a08e57`): ack 03:15:45.117Z, restart
+    # 03:31:11.254Z, and ZERO `execution.finished` rows for the stage or the
+    # task, which is why `finished_since?/3` did not already cover it. The
+    # fixture below deliberately records NO finished event for the same reason.
+    test "a stage restarted after the ack is re-dispatched", %{
+      task: task,
+      stage: stage,
+      assignee: assignee
+    } do
+      pid = start_router(task.id, assignee)
+      assert_dispatched!()
+
+      ack!(task, stage)
+
+      # POSITIVE CONTROL ON THIS FIXTURE. Before varying anything, show the
+      # guard is actively suppressing here — otherwise the assertion at the
+      # bottom passes for any reason at all, including a guard that never ran.
+      send(pid, :dispatch)
+      :ok = sync_router(task.id)
+
+      refute_dispatched!(
+        "with the stage still on its original started_at the ack must suppress, " <>
+          "or the restart probe below is varying nothing"
+      )
+
+      assert_receive {:dispatch_suppressed, %{reason: :live_acked_executor}}, 2_000
+
+      # THE ONE VARIED CONDITION: the stage restarts. This is the shape
+      # `reset_gate_stage/1` + the `"running"` arm of `transition_stage/2`
+      # produce — `started_at` NULLed on the way down, re-stamped on the way
+      # back up — reproduced directly so the test pins the router's reading of
+      # `started_at` and not PlanEngine's route to it.
+      restarted_at = DateTime.utc_now()
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: restarted_at})
+      |> Repo.update!()
+
+      assert DateTime.compare(
+               restarted_at,
+               Orchestration.last_stage_ack_at(task.id, stage.id)
+             ) == :gt,
+             "the restart must postdate the ack, or this is not the incident shape"
+
+      assert DateTime.diff(
+               DateTime.utc_now(),
+               Orchestration.last_stage_ack_at(task.id, stage.id),
+               :millisecond
+             ) < coding_safety_net_ms(),
+             "the ack must still be INSIDE its window, or this test passes on " <>
+               "the age bound rather than on the restart"
+
+      refute Repo.exists?(
+               from(e in RuntimeEvent,
+                 where: e.task_id == ^task.id and e.event_type == "execution.finished"
+               )
+             ),
+             "no execution.finished may exist here — the incident had none, and " <>
+               "one would let this pass on finished_since?/3 instead"
+
+      send(pid, :dispatch)
+      :ok = sync_router(task.id)
+
+      assert_dispatched!(
+        "a stage that restarted after the ack has opened a NEW round; the prior " <>
+          "round's ack is not a live claim on it and the dispatch must go out"
+      )
+    end
+
     test "a stage whose only pending gate is manual_approval has no safety net and is re-dispatched",
          %{task: task, stage: stage, validation: validation, assignee: assignee} do
       # Make `manual_approval` the ONLY pending validation, which is what

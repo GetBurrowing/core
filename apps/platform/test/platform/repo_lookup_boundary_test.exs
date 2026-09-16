@@ -965,7 +965,18 @@ defmodule Platform.RepoLookupBoundaryTest do
     # path segment or tool argument. The `stage_id` half is compared as text
     # through `payload->>'stage_id'` and cannot cast-raise at all. If a boundary
     # caller ever appears, it needs the guard — and this count is the tripwire.
-    "platform/orchestration.ex" => 1,
+    # 1 → 2 for ticket 01a08e86 stage 2's `last_stage_ack/2`, which returns the
+    # ack's instant AND its `subagent_id` so the withheld-dispatch notice can
+    # name who acked and how long ago. HAND TRIAGE: same query shape and the
+    # same two bound values as `last_stage_event_at/3` directly above it — the
+    # `where:` pins `e.task_id` as a uuid and compares `stage_id` as text
+    # through `payload->>'stage_id'`, which cannot cast-raise. Its only caller
+    # is `TaskRouter.live_ack_identity/2`, reached from
+    # `suppress_live_acked_executor/3` with `state.task_id` and a `stage.id`
+    # read off a `%Stage{}` already loaded from the plan. No boundary caller
+    # exists; one would need `Platform.UUID.valid?/1`, and this count is the
+    # tripwire that makes somebody look.
+    "platform/orchestration.ex" => 2,
     "platform/orchestration/execution_space.ex" => 4,
     # 4 → 5 for task 01a04a8c's `needs_human_hold/3`. Its `where:` pins a
     # `task_id`, a `runtime_id` and a `stage_id`, and all three reach it from

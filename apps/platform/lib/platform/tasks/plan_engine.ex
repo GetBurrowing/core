@@ -1454,13 +1454,19 @@ defmodule Platform.Tasks.PlanEngine do
   # retained, and the task carries the list in
   # `metadata["unevaluated_review_cases"]`.
   #
-  # What stays exactly as it was: a `:genuine` or `:malformed` failure fails
-  # the stage on sight (the marker without a reason is a free "don't count
-  # this" switch — `ReviewDisposition` explains why that must read as
-  # genuine); a gate whose EVERY case is unevaluated and NONE passed still
-  # fails, so the router's 3-strikes bookkeeping and blocker path
+  # What stays exactly as it was: a `:genuine` or `:malformed` failure still
+  # fails the stage (the marker without a reason is a free "don't count this"
+  # switch — `ReviewDisposition` explains why that must read as genuine); a
+  # gate whose EVERY case is unevaluated and NONE passed still fails, so the
+  # router's 3-strikes bookkeeping and blocker path
   # (`task_router_review_round_bound_test.exs`) are untouched; and a stage
   # with no `e2e_behavior` row never reaches the new arm.
+  #
+  # What CHANGED (task 01a08e86 stage 3): a `:genuine`/`:malformed` failure no
+  # longer fails the stage ON SIGHT — it fails it on the first SETTLED round.
+  # While any sibling on the gate is `pending` or `running` the verdict is not
+  # in yet and `:pending` wins. See the arm comment in `e2e_host_verdict/1`
+  # for the measured bounce this covers and the second bounce it does not.
   defp stage_verdict(stage) do
     validations = Repo.all(from(v in Validation, where: v.stage_id == ^stage.id))
 
@@ -1480,15 +1486,37 @@ defmodule Platform.Tasks.PlanEngine do
       |> Enum.map(fn v -> {v, classify_failed_row(v)} end)
 
     cond do
-      # A real verdict about the feature fails the stage immediately, even
-      # with siblings still owed — today's `:has_failures` path, verbatim.
-      Enum.any?(classified, fn {_v, disposition} -> disposition in [:genuine, :malformed] end) ->
-        :has_failures
-
-      # A could_not_evaluate recorded FIRST must not fail the stage while its
-      # siblings are still pending: the verdict is not in yet.
+      # THE SETTLED-ROUND HOLD (task 01a08e86 stage 3). Nothing on an e2e host
+      # is a verdict until the round settles, so an owed sibling outranks every
+      # failure classification. This arm was BELOW the `:genuine`/`:malformed`
+      # arm and covered `could_not_evaluate` only; it now covers all of them,
+      # which is the whole behavioural change.
+      #
+      # WHAT THIS COVERS, precisely: the 09:38:09.960Z bounce of 2026-09-11 on
+      # gate stage 01a08fa3-b3ef-7006-876b-08a7a0ef1a85. At that evaluation the
+      # gate held ONE failed row (`…700a`) and one never-dispositioned sibling
+      # (`…700b`), so the reviewer was mid-run and the fast-fail path bounced
+      # the task and opened a remediation stage quoting a partial finding set.
+      # Under this arm that write returns `:pending` and the gate holds.
+      #
+      # WHAT THIS DOES NOT COVER, and the distinction matters: the SECOND
+      # bounce at 09:50:17.903Z is UNEXPLAINED, and this change does not claim
+      # to prevent it. That write was `passed`, so it cannot reach the
+      # fast-fail branch; `reset_gate_stage/1` had already driven the gate to
+      # `pending`, and `maybe_advance_resolved_stage/1` takes `_other -> :ok`
+      # there. No write path was identified that produces that transition. Do
+      # not read a recurrence of it as a regression in this hold.
+      #
+      # A genuine failure is DELAYED here, never swallowed: once the last
+      # sibling lands, this arm goes false and the `:has_failures` arm below
+      # fails the stage exactly as it did before.
       Enum.any?(validations, &(&1.status in ~w(pending running))) ->
         :pending
+
+      # A real verdict about the feature fails the stage — unchanged, except
+      # that it is now reached only on a settled round.
+      Enum.any?(classified, fn {_v, disposition} -> disposition in [:genuine, :malformed] end) ->
+        :has_failures
 
       classified == [] ->
         :all_passed

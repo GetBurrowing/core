@@ -121,6 +121,49 @@ defmodule Platform.Orchestration do
     do: last_stage_event_at(task_id, stage_id, "execution.acked")
 
   @doc """
+  The most recent stage ack as `{occurred_at, subagent_id}`, or `nil`.
+
+  The identity twin of `last_stage_ack_at/2`, and it exists because an INSTANT
+  alone does not let a reader tell a live executor from a dead one. On the
+  2026-09-11 incident (ticket `01a08e86`) the router withheld a dispatch saying
+  the stage "already has an acked executor"; the executor had returned twenty
+  minutes earlier, and the notice named neither when the ack happened nor who
+  made it, so the only way to check the assertion was to query `runtime_events`
+  by hand. Handing back the subagent handle alongside the instant is what makes
+  the notice checkable by the person reading it.
+
+  `subagent_id` is read from the `execution.acked` payload, whose shape is
+  documented at `RuntimeSupervision`'s `@event_statuses` entry:
+  `%{"stage_id", "acked_at", "runtime_id", "subagent_id"}`. It is `nil` for
+  legacy rows written before task `019f6c73` made the handle mandatory — a nil
+  is a real and expected value here, not a failure, and callers must render it
+  rather than crash on it.
+
+  Returns the `occurred_at` column, NOT the payload's `"acked_at"` string: the
+  column is what `last_stage_ack_at/2` compares against `safety_net_ms`, and a
+  notice quoting a different field than the guard measured would be the kind of
+  near-miss this stage exists to remove. Same `stage_id` guard, ordering and
+  deliberately un-indexed query shape as `last_stage_event_at/3` — read
+  `stage_acked?/2`'s cost note before adding an index for this.
+  """
+  @spec last_stage_ack(String.t(), String.t() | nil) :: {DateTime.t(), String.t() | nil} | nil
+  def last_stage_ack(_task_id, stage_id) when stage_id in [nil, ""], do: nil
+
+  def last_stage_ack(task_id, stage_id) when is_binary(task_id) and is_binary(stage_id) do
+    from(e in RuntimeEvent,
+      where:
+        e.task_id == ^task_id and e.event_type == "execution.acked" and
+          fragment("?->>'stage_id' = ?", e.payload, ^stage_id),
+      order_by: [desc: e.occurred_at, desc: e.id],
+      limit: 1,
+      select: {e.occurred_at, fragment("?->>'subagent_id'", e.payload)}
+    )
+    |> Repo.one()
+  end
+
+  def last_stage_ack(_task_id, _stage_id), do: nil
+
+  @doc """
   When a stage last emitted `event_type`, from the durable `runtime_events` log.
 
   The general form behind `last_stage_ack_at/2`. It exists because "was this

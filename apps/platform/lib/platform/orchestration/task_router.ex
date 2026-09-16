@@ -2755,7 +2755,8 @@ defmodule Platform.Orchestration.TaskRouter do
       {safety_net_ms, %DateTime{} = acked_at} when is_integer(safety_net_ms) ->
         DateTime.diff(DateTime.utc_now(), acked_at, :millisecond) < safety_net_ms and
           not finished_since?(state.task_id, stage.id, acked_at) and
-          not human_released_since?(state.task_id, stage.id, acked_at)
+          not human_released_since?(state.task_id, stage.id, acked_at) and
+          not stage_restarted_since?(stage, acked_at)
 
       _ ->
         false
@@ -2804,6 +2805,41 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
+  # A STAGE THAT RESTARTED AFTER THE ACK is the third shape (ticket 01a08e86,
+  # observed live on task 01a08e57 / stage 01a08e59-60bf-7005, 2026-09-11). A
+  # review gate failed, `PlanEngine.open_remediation_stage/2` drove it back to
+  # `pending` via `reset_gate_stage/1` (which NULLs `started_at`), the
+  # remediation stage passed, and the gate was re-started — `transition_stage/2`
+  # stamping a fresh `started_at`. Round 2's dispatch was then judged against
+  # ROUND 1's ack and withheld behind a subagent that had returned sixteen
+  # minutes earlier. Measured on that stage: ack at 03:15:45.117Z, restart
+  # `started_at` 03:31:11.254Z, and — this is why `finished_since?/3` did not
+  # already cover it — ZERO `execution.finished` rows for the stage, or for the
+  # whole task. Task-tool subagents do not reliably emit one on exit, so the
+  # exit clause cannot be the mechanism here.
+  #
+  # `stages.started_at` can be: it is written by the engine itself on every
+  # `-> running` transition, so it needs no cooperation from the runtime, and
+  # like `runtime_events` it survives a `LeaseManager` restart and a node
+  # restart. The comparison matches its siblings — an ack OLDER than the
+  # restart says nothing about the round the restart opened and does NOT
+  # suppress; an ack NEWER than it (the ordinary path, where the stage starts
+  # and THEN the executor acks) protects the stage exactly as before, which is
+  # what keeps this from degenerating into "never suppress anything".
+  #
+  # The `stage` reaching here is the freshly-loaded row from
+  # `Tasks.current_plan/1`'s `Repo.preload(stages: :validations)` in
+  # `do_dispatch/2`, not a struct carried on a broadcast payload, so
+  # `started_at` is the committed value and not a stale one.
+  defp stage_restarted_since?(
+         %Stage{started_at: %DateTime{} = started_at},
+         %DateTime{} = acked_at
+       ) do
+    DateTime.compare(started_at, acked_at) != :lt
+  end
+
+  defp stage_restarted_since?(_stage, _acked_at), do: false
+
   # A `needs_human` hold released by a PERSON after the ack is the same shape
   # (task 01a0665e stage 4). The dispatch text tells every runtime to ack
   # first, so an executor that then files `report_blocker(needs_human: true)`
@@ -2842,9 +2878,11 @@ defmodule Platform.Orchestration.TaskRouter do
     stage_kind = current_stage_type(%{state | current_stage_id: stage.id})
     arm_liveness_timers(state.task_id, stage, stage_kind)
 
+    ack_identity = live_ack_identity(state.task_id, stage.id)
+
     Logger.info(
       "[TaskRouter] suppressed dispatch for task=#{state.task_id} stage=#{stage.id}: " <>
-        "stage already acked by a live executor inside its safety net"
+        "stage already acked by a live executor inside its safety net (#{ack_identity})"
     )
 
     emit_dispatch_suppressed_telemetry(state.task_id, :live_acked_executor)
@@ -2852,7 +2890,8 @@ defmodule Platform.Orchestration.TaskRouter do
     ExecutionSpace.post_log(
       state.execution_space_id,
       "Dispatch withheld: #{task.title} | stage #{stage.position} already has an acked " <>
-        "executor inside its safety net, so it is not being re-sent. If that executor is " <>
+        "executor inside its safety net (#{ack_identity}), so it is not being re-sent. " <>
+        "If that executor is " <>
         "gone, the safety net does NOT re-dispatch when it lapses: it broadcasts " <>
         "execution.safety_net_fired and posts a needs_human blocker, and the task then " <>
         "holds until a person acts. Recovery is manual: spawn a replacement executor, have " <>
@@ -2861,6 +2900,40 @@ defmodule Platform.Orchestration.TaskRouter do
     )
 
     {:noreply, %{state | task_status: task.status}}
+  end
+
+  # WHAT THE NOTICE OWES ITS READER (ticket 01a08e86, fix candidate 2). The
+  # withheld-dispatch notice asserts a state — "an executor is on this stage" —
+  # and until now supplied nothing to check it against. On the 2026-09-11
+  # incident the acked executor had returned twenty minutes earlier; the notice
+  # named only the stage POSITION, so Saru caught it solely by happening to know
+  # that no stage 4 had ever been acked. Age and handle turn an assertion into
+  # something a reader can falsify without opening Postgres: an ack 40 minutes
+  # old attached to a subagent id nobody recognises reads very differently from
+  # one two minutes old.
+  #
+  # This is text only. The guard's control flow is unchanged — stage 1 of this
+  # task fixed the BEHAVIOUR (`stage_restarted_since?/2`); this fixes what the
+  # operator is told when the behaviour is correct.
+  #
+  # `subagent_id` is nil on rows written before task 019f6c73 made the handle
+  # mandatory, so `unknown` is a rendering of a real value and not an error
+  # path being swallowed. `nil` for the whole ack cannot normally reach here —
+  # `live_acked_executor?/2` only returns true having read one — but a row
+  # deleted between the two queries would, and a notice is never worth crashing
+  # the router over, so that races to `ack: unknown` rather than to a
+  # FunctionClauseError.
+  defp live_ack_identity(task_id, stage_id) do
+    case Platform.Orchestration.last_stage_ack(task_id, stage_id) do
+      {%DateTime{} = acked_at, subagent_id} ->
+        age_min = DateTime.diff(DateTime.utc_now(), acked_at, :second) |> div(60)
+
+        "acked #{DateTime.to_iso8601(acked_at)}, #{age_min}m ago, by subagent " <>
+          (subagent_id || "unknown")
+
+      _ ->
+        "ack instant unknown, by subagent unknown"
+    end
   end
 
   # ── Unchanged-boot-engagement guard (task 01a03ed3 stage 3) ───────────

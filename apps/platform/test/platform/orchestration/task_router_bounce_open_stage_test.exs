@@ -94,7 +94,7 @@ defmodule Platform.Orchestration.TaskRouterBounceOpenStageTest do
 
       # One genuine behavioural failure — no `could_not_evaluate` marker, so
       # the router spends a review round and bounces.
-      [failing | _rest] = Tasks.list_validations(gate_stage.id)
+      [failing | rest] = Tasks.list_validations(gate_stage.id)
 
       log =
         capture_log(fn ->
@@ -104,6 +104,18 @@ defmodule Platform.Orchestration.TaskRouterBounceOpenStageTest do
               evaluated_by: "test",
               evidence: %{"summary" => "cross-org denial did not hold"}
             })
+
+          # SETTLE THE ROUND (task 01a08e86 stage 3). The gate carries THREE
+          # e2e rows and this test only ever failed one, so before stage 3 the
+          # bounce fired while two siblings were still owed — which is the
+          # incident this fixture accidentally encoded, not a property it set
+          # out to assert. Resolving the remainder keeps every assertion below
+          # (the bounce, the open stage, the log line) testing exactly what it
+          # always tested, on a round that has actually finished.
+          for v <- rest do
+            {:ok, _} =
+              PlanEngine.evaluate_validation(v.id, %{status: "passed", evaluated_by: "test"})
+          end
 
           barrier(task)
         end)
@@ -184,12 +196,17 @@ defmodule Platform.Orchestration.TaskRouterBounceOpenStageTest do
       {:ok, _failed} =
         PlanEngine.evaluate_validation(failing.id, %{status: "failed", evaluated_by: "test"})
 
-      assert reload_stage(gate_stage.id).status == "failed",
-             "guard: the failed state this test recovers from must actually be reached"
-
+      # The siblings are resolved BEFORE the guard now (task 01a08e86 stage 3):
+      # a gate no longer fails on a write that leaves the round unsettled, so
+      # the failed state this test recovers from is only reachable once every
+      # row has landed. The guard itself is unmoved in meaning — it still
+      # refuses to let the recovery assertion pass vacuously.
       for v <- rest do
         {:ok, _} = PlanEngine.evaluate_validation(v.id, %{status: "passed", evaluated_by: "test"})
       end
+
+      assert reload_stage(gate_stage.id).status == "failed",
+             "guard: the failed state this test recovers from must actually be reached"
 
       {:ok, _repassed} =
         PlanEngine.evaluate_validation(failing.id, %{status: "passed", evaluated_by: "test"})
