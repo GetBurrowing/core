@@ -24,6 +24,43 @@ defmodule Platform.Tasks.TransitionActor do
   `actor_kind` column is to separate human wait from engine wait. An
   unattributed write must be visibly unattributed so it can be found and
   attributed later.
+
+  ## Reading a row: `via` and `actor_kind` are two separate questions
+
+  `via` answers "which code path wrote this"; `actor_kind` answers "who
+  asked for it". They fail independently, and the PAIR is what a reader
+  must look at:
+
+    * `via` non-nil, `actor_kind` in `user | agent | system` — fully
+      attributed. The normal case.
+    * `via` non-nil, `actor_kind` `"unknown"` — KNOWN code path, caller
+      genuinely not identifiable from it. Two shipped instances: the
+      `cleanup_ghost_tasks` mix task (run by a human at a shell whose
+      identity never enters the BEAM) and an MCP `task_complete` whose
+      call context carried no `agent_id`. Nothing more is knowable here
+      without changing the CALLER; the recorder already did its job.
+    * `via` nil, `actor_kind` `"unknown"` — NOT CAPTURED. Some status
+      writer ran outside `with_actor/3` entirely. That is a measurement
+      gap and a defect in the writer: find it and wrap it.
+
+  So `via` is the field that separates "we looked and there is no actor"
+  from "we never looked". It deliberately carries work a fifth
+  `actor_kind` value would otherwise do: `actor_kind` is a four-value
+  domain declared and inclusion-validated on
+  `Platform.Tasks.PhaseTransition`, and widening it needs a migration
+  plus an audit of every consumer that buckets human-wait against
+  engine-wait.
+
+  THE LIMIT OF THAT ENCODING, stated rather than glossed: a row written
+  BEFORE its path was wrapped also carries `via: nil`. On historical data
+  "not captured" and "written before the stamp landed" are therefore NOT
+  distinguishable from the row alone — only by comparing `occurred_at`
+  against the commit that wrapped that path.
+
+  Pass `:unattributed` when a path is reachable but its caller is not
+  threaded through: it records exactly the honest default while still
+  stamping `via`, and reads at the call site as a deliberate choice
+  rather than an omission.
   """
 
   @key :platform_task_transition_actor
@@ -80,6 +117,12 @@ defmodule Platform.Tasks.TransitionActor do
   def normalize({:agent, id}) when is_binary(id), do: {"agent", id}
   def normalize(:system), do: {"system", nil}
 
+  # Explicit "this path has no knowable caller". Same recorded value as the
+  # fall-through below, but it is a DECISION at the call site rather than an
+  # accident, and it keeps `via` stamped. See the moduledoc's two-field
+  # reading.
+  def normalize(:unattributed), do: {"unknown", nil}
+
   def normalize(%{__struct__: Platform.Accounts.User, id: id}) when is_binary(id),
     do: {"user", id}
 
@@ -89,6 +132,7 @@ defmodule Platform.Tasks.TransitionActor do
   defp label_for({:user, _}), do: "user"
   defp label_for({:agent, _}), do: "agent"
   defp label_for(:system), do: "system:auto"
+  defp label_for(:unattributed), do: nil
   defp label_for(%{__struct__: Platform.Accounts.User}), do: "user"
   defp label_for(id) when is_binary(id), do: "agent"
   defp label_for(_), do: nil

@@ -109,7 +109,16 @@ defmodule Mix.Tasks.Platform.CleanupGhostTasks do
   # we may still need to stamp deleted_at and sweep the registry.
   defp maybe_cancel(%Task{status: "cancelled"} = task), do: {:ok, task}
 
-  defp maybe_cancel(%Task{} = task), do: Tasks.transition_task_status(task, "cancelled")
+  # `:unattributed`, deliberately NOT `:system`: a human ran this mix task
+  # at a shell and their identity never enters the BEAM, so there is no
+  # actor to record. Stamping `:system` would file an operator sweep as
+  # engine time. `via` is still written, so the row reads as "known code
+  # path, caller not identifiable" rather than "not captured".
+  defp maybe_cancel(%Task{} = task) do
+    Tasks.TransitionActor.with_actor(:unattributed, "cleanup_ghost_tasks", fn ->
+      Tasks.transition_task_status(task, "cancelled")
+    end)
+  end
 
   defp maybe_stamp_deleted_at(%Task{deleted_at: nil} = task) do
     case Tasks.soft_delete_task(task) do

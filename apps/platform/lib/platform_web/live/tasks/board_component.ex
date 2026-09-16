@@ -128,7 +128,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
         send(self(), {:board_refresh_requested})
 
       task ->
-        case Tasks.promote(task) do
+        case Tasks.promote(task, {:user, socket.assigns[:current_user_id]}) do
           {:ok, updated} ->
             send(self(), {:board_refresh_requested})
             maybe_flash_promotion_transition(task, updated)

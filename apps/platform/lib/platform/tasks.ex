@@ -599,15 +599,29 @@ defmodule Platform.Tasks do
       one `:task_updated` broadcast.
     * `needs_promotion == true, status != "backlog"` → clears flag only;
       one `:task_updated` broadcast.
-  """
-  @spec promote(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  def promote(%Task{needs_promotion: false} = task), do: {:ok, task}
 
-  def promote(%Task{needs_promotion: true, status: "backlog"} = task) do
-    update_task(task, %{needs_promotion: false, status: "planning"})
+  `actor` attributes the `backlog -> planning` transition this may write.
+  The only production caller is the kanban "Needs promotion" badge, which
+  holds a `current_user_id`, so the actor is knowable and is threaded
+  rather than defaulted: the default `:unattributed` exists for tests and
+  for any future caller that genuinely has no user, and records
+  `actor_kind: "unknown"` with `via: "board_promote"` — a known path with
+  an unidentifiable caller, not an uncaptured write.
+  """
+  @spec promote(Task.t(), actor()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def promote(task, actor \\ :unattributed)
+
+  def promote(%Task{needs_promotion: false} = task, _actor), do: {:ok, task}
+
+  def promote(%Task{needs_promotion: true, status: "backlog"} = task, actor) do
+    # The ONLY branch that moves `status`; the other two are plain-field
+    # writes and record nothing, so wrapping is confined to this one.
+    TransitionActor.with_actor(actor, "board_promote", fn ->
+      update_task(task, %{needs_promotion: false, status: "planning"})
+    end)
   end
 
-  def promote(%Task{needs_promotion: true} = task) do
+  def promote(%Task{needs_promotion: true} = task, _actor) do
     update_task(task, %{needs_promotion: false})
   end
 
@@ -1644,68 +1658,158 @@ defmodule Platform.Tasks do
   def transition_task_status(%Task{} = task, new_status) do
     with :ok <- require_deploy_target_for(task, new_status),
          :ok <- require_stack_commencement_for(task, new_status),
-         :ok <- require_stack_not_shipped_for(task, new_status) do
-      allowed = Map.get(@valid_task_transitions, task.status, [])
-
-      if new_status in allowed do
-        # Task 019fb977 stage 4: the flat pointer is derived BEFORE the
-        # write, against the NEW status, and folded into the SAME
-        # changeset. It used to be a second `Repo.update` fired after the
-        # status commit (`maybe_apply_phase_assignee_and_reload/1`), which
-        # left a window in which any reader — `TaskRouterWatcher`'s
-        # `list_should_run_tasks/0` and `redispatch_for_runtime/1` are
-        # exactly such readers — saw the new status paired with the
-        # PREVIOUS phase's assignee.
-        pointer_attrs = phase_pointer_attrs(task, new_status)
-
-        # The awaiting-human-action stamp is scoped to the deploy park: it
-        # says "this task is sitting in `deploying` on a gate only a person
-        # can pass". The moment the task leaves `deploying` that sentence is
-        # false, so the stamp clears here — folded into the SAME changeset as
-        # the status flip for the reason documented just above, and because a
-        # follow-up `Repo.update` would leave the `{:task_updated, ...}`
-        # broadcast below carrying metadata that still shows the stamp.
-        #
-        # NOTE (task 01a01a4a stage 2): the `unmet_dependencies` clear the
-        # spec pointed at lives in `unblock_task/1`, on the dependency sweep
-        # that runs when a blocked task's deps finish. That path is never
-        # reached from `deploying`, so this key is cleared at the status
-        # choke point instead — every caller, `transition_task/3` included,
-        # funnels through here.
-        #
-        # Task 01a0665e stage 1: the delivered-but-open stamp clears on the
-        # SAME changeset, but only on `done` / `cancelled`. Both clears write
-        # `:metadata`, so the second is folded onto the first's output rather
-        # than `Map.merge`d beside it — a merge of two `%{metadata: ...}` maps
-        # keeps one and silently drops the other.
-        clear_attrs =
-          task
-          |> awaiting_human_action_clear_attrs(new_status)
-          |> delivered_but_open_clear_attrs(task, new_status)
-
-        task
-        |> Task.changeset(pointer_attrs |> Map.merge(clear_attrs) |> Map.put(:status, new_status))
-        |> Repo.update()
-        |> case do
-          {:ok, updated} ->
-            maybe_dispatch_teardown(updated, new_status)
-            # `maybe_apply_phase_assignee/1` is what used to broadcast on a
-            # pointer change; folding its write into the status changeset
-            # removes that broadcast, so it is re-emitted here with the
-            # SAME preloads (`tasks.ex:4978`). A `{:task_updated, ...}`
-            # carrying a different association set is a silent break for
-            # every `tasks:board` subscriber, the watcher included.
-            maybe_broadcast_pointer_move(updated, pointer_attrs)
-            maybe_append_timeline(updated, new_status)
-            {:ok, updated}
-
-          error ->
-            error
-        end
-      else
-        {:error, :invalid_transition}
+         :ok <- require_stack_not_shipped_for(task, new_status),
+         {:ok, changeset, pointer_attrs} <- status_transition_changeset(task, new_status) do
+      case Repo.update(changeset) do
+        {:ok, updated} -> after_status_transition(updated, new_status, pointer_attrs)
+        error -> error
       end
     end
+  end
+
+  @doc """
+  `transition_task_status/2` with a compare-and-set token.
+
+  Task 01a094d4 stage 3. `base_updated_at` is the `updated_at` the caller read
+  the task at; the status write runs under a `WHERE updated_at = ^base` filter,
+  so a row that advanced since is REFUSED and nothing is written.
+
+  WHY THIS EXISTS RATHER THAN REUSING `update_task_if_unmodified/4`: that
+  function guards the PLAIN-FIELD write only. A status transition is applied by
+  a different statement and its own changeset, so before this function there was
+  no guarded path for a status write at all — `task_update`'s own `limitations`
+  prose says a base plus only a status change "SUCCEEDS WITHOUT COMPARING
+  ANYTHING". `task_complete` is a pure status transition, so the guard had to be
+  built for the status write itself.
+
+  The changeset is built by the SAME private builder `transition_task_status/2`
+  uses (`status_transition_changeset/2`) and the SAME post-write side effects
+  fire (`after_status_transition/3`), so the guarded and unguarded paths cannot
+  drift in what they write or what they emit — the only difference is the WHERE
+  clause.
+
+  Returns:
+
+    * `{:ok, Task.t()}`
+    * `{:error, {:stale_base, %{current_updated_at: DateTime.t() | nil,
+      base_updated_at: DateTime.t()}}}` — the row advanced; nothing was written
+    * `{:error, :invalid_transition}` / the same gate errors
+      `transition_task_status/2` returns, checked BEFORE the write
+    * `{:error, %Ecto.Changeset{}}`
+  """
+  @spec transition_task_status_if_unmodified(Task.t(), String.t(), DateTime.t()) ::
+          {:ok, Task.t()}
+          | {:error,
+             {:stale_base,
+              %{current_updated_at: DateTime.t() | nil, base_updated_at: DateTime.t()}}}
+          | {:error, atom()}
+          | {:error, Ecto.Changeset.t()}
+  def transition_task_status_if_unmodified(
+        %Task{} = task,
+        new_status,
+        %DateTime{} = base_updated_at
+      ) do
+    with :ok <- require_deploy_target_for(task, new_status),
+         :ok <- require_stack_commencement_for(task, new_status),
+         :ok <- require_stack_not_shipped_for(task, new_status),
+         {:ok, changeset, pointer_attrs} <- status_transition_changeset(task, new_status) do
+      changeset
+      |> Ecto.Changeset.optimistic_lock(:updated_at, fn _old ->
+        DateTime.truncate(DateTime.utc_now(), :microsecond)
+      end)
+      |> force_updated_at_filter(base_updated_at)
+      |> guarded_update()
+      |> case do
+        {:ok, updated} ->
+          after_status_transition(updated, new_status, pointer_attrs)
+
+        {:error, :stale_entry} ->
+          fresh = get_task_record(task.id)
+
+          {:error,
+           {:stale_base,
+            %{
+              current_updated_at: fresh && fresh.updated_at,
+              base_updated_at: base_updated_at
+            }}}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  # The single changeset builder for a status transition. Both the unguarded
+  # `transition_task_status/2` and the guarded
+  # `transition_task_status_if_unmodified/3` call it, so the transition table
+  # check, the flat phase pointer and the two metadata clears cannot diverge
+  # between them. Returns the pointer attrs alongside the changeset because
+  # `after_status_transition/3` needs them to decide whether to re-broadcast.
+  defp status_transition_changeset(%Task{} = task, new_status) do
+    allowed = Map.get(@valid_task_transitions, task.status, [])
+
+    if new_status in allowed do
+      # Task 019fb977 stage 4: the flat pointer is derived BEFORE the
+      # write, against the NEW status, and folded into the SAME
+      # changeset. It used to be a second `Repo.update` fired after the
+      # status commit (`maybe_apply_phase_assignee_and_reload/1`), which
+      # left a window in which any reader — `TaskRouterWatcher`'s
+      # `list_should_run_tasks/0` and `redispatch_for_runtime/1` are
+      # exactly such readers — saw the new status paired with the
+      # PREVIOUS phase's assignee.
+      pointer_attrs = phase_pointer_attrs(task, new_status)
+
+      # The awaiting-human-action stamp is scoped to the deploy park: it
+      # says "this task is sitting in `deploying` on a gate only a person
+      # can pass". The moment the task leaves `deploying` that sentence is
+      # false, so the stamp clears here — folded into the SAME changeset as
+      # the status flip for the reason documented just above, and because a
+      # follow-up `Repo.update` would leave the `{:task_updated, ...}`
+      # broadcast below carrying metadata that still shows the stamp.
+      #
+      # NOTE (task 01a01a4a stage 2): the `unmet_dependencies` clear the
+      # spec pointed at lives in `unblock_task/1`, on the dependency sweep
+      # that runs when a blocked task's deps finish. That path is never
+      # reached from `deploying`, so this key is cleared at the status
+      # choke point instead — every caller, `transition_task/3` included,
+      # funnels through here.
+      #
+      # Task 01a0665e stage 1: the delivered-but-open stamp clears on the
+      # SAME changeset, but only on `done` / `cancelled`. Both clears write
+      # `:metadata`, so the second is folded onto the first's output rather
+      # than `Map.merge`d beside it — a merge of two `%{metadata: ...}` maps
+      # keeps one and silently drops the other.
+      clear_attrs =
+        task
+        |> awaiting_human_action_clear_attrs(new_status)
+        |> delivered_but_open_clear_attrs(task, new_status)
+
+      changeset =
+        Task.changeset(
+          task,
+          pointer_attrs |> Map.merge(clear_attrs) |> Map.put(:status, new_status)
+        )
+
+      {:ok, changeset, pointer_attrs}
+    else
+      {:error, :invalid_transition}
+    end
+  end
+
+  # The single post-write path for a status transition, shared by the guarded
+  # and unguarded entry points so a successful guarded write emits exactly what
+  # an unguarded one does.
+  defp after_status_transition(%Task{} = updated, new_status, pointer_attrs) do
+    maybe_dispatch_teardown(updated, new_status)
+    # `maybe_apply_phase_assignee/1` is what used to broadcast on a
+    # pointer change; folding its write into the status changeset
+    # removes that broadcast, so it is re-emitted here with the
+    # SAME preloads (`tasks.ex:4978`). A `{:task_updated, ...}`
+    # carrying a different association set is a silent break for
+    # every `tasks:board` subscriber, the watcher included.
+    maybe_broadcast_pointer_move(updated, pointer_attrs)
+    maybe_append_timeline(updated, new_status)
+    {:ok, updated}
   end
 
   # ADR-0044 stage 5: append a line to `docs/architecture/timeline.md` when
@@ -4263,6 +4367,28 @@ defmodule Platform.Tasks do
 
   defp human_approver(_other), do: nil
 
+  # Map a plan's `approved_by` onto a `TransitionActor` actor.
+  #
+  # NOT a bare pass-through, and that is the whole point:
+  # `TransitionActor.normalize/1` maps a bare binary to `{"agent", id}`,
+  # but `approved_by` binaries are USER ids (the LiveView button) or the
+  # literal `"system"` (the MCP `plan_approve` default). Passing it
+  # through raw would file every human plan approval as an agent.
+  defp approval_actor(%Accounts.User{id: id}), do: {:user, id}
+  defp approval_actor({:user, id}) when is_binary(id), do: {:user, id}
+  defp approval_actor({:agent, id}) when is_binary(id), do: {:agent, id}
+  defp approval_actor(:system), do: :system
+  defp approval_actor("system"), do: :system
+
+  defp approval_actor(approved_by) when is_binary(approved_by) do
+    case human_approver(approved_by) do
+      %Accounts.User{id: id} -> {:user, id}
+      nil -> :unattributed
+    end
+  end
+
+  defp approval_actor(_other), do: :unattributed
+
   defp record_architecture_human_override(%Plan{} = plan, %Accounts.User{} = user) do
     case resolve_architecture_gate(plan, :human_override, resolved_by: user.id) do
       {:ok, resolved} ->
@@ -4362,7 +4488,7 @@ defmodule Platform.Tasks do
       {finalized_task, frozen_messages} =
         case task.status do
           status when status in ["planning", "backlog"] ->
-            apply_dispatch_gate(task)
+            apply_dispatch_gate(task, approval_actor(approved_by))
 
           _ ->
             {nil, []}
@@ -4614,7 +4740,11 @@ defmodule Platform.Tasks do
   # messages frozen by Policy 2 (empty unless the task moved into
   # `:in_progress`). Broadcasting `frozen` is the caller's responsibility
   # — it should fire post-commit to avoid stale events on rollback.
-  defp apply_dispatch_gate(%Task{} = task) do
+  #
+  # `actor` is the plan's `approved_by`, resolved by `approval_actor/1`:
+  # the transitions below are written on behalf of whoever approved the
+  # plan, and that caller IS knowable at every production entry point.
+  defp apply_dispatch_gate(%Task{} = task, actor) do
     # ADR 0042 Decision 4: for stack members whose commencement gate is
     # still closed (some sibling plan hasn't landed yet), park in
     # `stack_pending` rather than surfacing `{:error, :stack_plans_pending}`
@@ -4622,6 +4752,12 @@ defmodule Platform.Tasks do
     # enclosing `approve_plan` transaction. Non-stack tasks are vacuously
     # open per `CommencementGate.open?/1` and fall through to the existing
     # unmet-dependencies branch.
+    TransitionActor.with_actor(actor, "plan_approval_dispatch_gate", fn ->
+      do_apply_dispatch_gate(task)
+    end)
+  end
+
+  defp do_apply_dispatch_gate(%Task{} = task) do
     case Platform.Tasks.Stacks.CommencementGate.open?(task) do
       false ->
         # A late member of a SHIPPED stack (ADR 0045 decision 7) is refused
@@ -4708,7 +4844,14 @@ defmodule Platform.Tasks do
   end
 
   defp ensure_blocked(%Task{status: "blocked"} = task), do: {:ok, task}
-  defp ensure_blocked(%Task{} = task), do: transition_task_status(task, "blocked")
+  # The only caller of `stamp_blocked_reason/2` is the TaskRouter's
+  # escalation path (`task_router.ex` no-ack / stall / blocker handling),
+  # so the engine genuinely decided this one: `:system`, not `:unattributed`.
+  defp ensure_blocked(%Task{} = task) do
+    TransitionActor.with_actor(:system, "blocked_escalation", fn ->
+      transition_task_status(task, "blocked")
+    end)
+  end
 
   @doc """
   Stamp `metadata["awaiting_human_action"]` (plus an ISO-8601 `_at`) WITHOUT
@@ -6244,8 +6387,16 @@ defmodule Platform.Tasks do
   actor triple so we don't invent a parallel taxonomy — see
   `sponsor_bypasses_plan_gate?/2` for why the predicate needs to know
   who's moving the task.
+
+  `:unattributed` is the fourth member and is NOT an audit-actor: it means
+  "this path is reachable but its caller is not threaded through here".
+  It records `actor_kind: "unknown"` exactly as an unwrapped write would,
+  but stamps `via` — see `Platform.Tasks.TransitionActor`'s moduledoc for
+  the two-field reading. Predicates that ask "who is moving this task"
+  (e.g. `sponsor_bypasses_plan_gate?/2`) treat it as no one, which is the
+  same answer they already give for an unrecognised actor.
   """
-  @type actor :: {:user, String.t()} | {:agent, String.t()} | :system
+  @type actor :: {:user, String.t()} | {:agent, String.t()} | :system | :unattributed
 
   @doc """
   Predicate: does the sponsor-bypass rule apply for this `task` + `actor`?

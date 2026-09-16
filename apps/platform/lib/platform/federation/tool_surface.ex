@@ -1857,12 +1857,22 @@ defmodule Platform.Federation.ToolSurface do
       },
       %{
         name: "task_complete",
-        description: "Mark a task as done.",
+        description:
+          "Mark a task as done. Pass `base_updated_at` (the `updated_at` you read the task at) to be REFUSED with a recoverable `stale_base` error instead of completing a task someone else moved out from under you.",
         parameters: %{
-          task_id: %{type: "string", required: true, description: "The task ID to complete"}
+          task_id: %{type: "string", required: true, description: "The task ID to complete"},
+          base_updated_at: %{
+            type: "string",
+            required: false,
+            aliases: ["if_unmodified_since"],
+            description:
+              "Optional compare-and-set token: the ISO8601 `updated_at` you read the task at (take it verbatim from the task_get / task_update response). When supplied and the row has advanced since, the completion is REFUSED with a recoverable `stale_base` error naming the current updated_at, and the task's status is left untouched. Omit it to keep the pre-existing last-write-wins behaviour."
+          }
         },
-        returns: "The updated task object with id and status",
-        limitations: "Task must exist and allow transition to done status",
+        returns:
+          "%{task_id, status: \"done\", updated_at, previous_updated_at} \u2014 `previous_updated_at` is the `updated_at` the row held BEFORE this call, so a caller that passed no base can still see which revision it completed over. The status transition is RECORDED AGAINST THE CALLING AGENT: the resulting `task_phase_transitions` row carries `via: \"mcp_task_complete\"` and, when the call context carries an `agent_id`, `actor_kind: \"agent\"` with `actor_id` set to that id and `actor_label: \"agent\"`. The via is deliberately distinct from task_update's `\"mcp_task_update\"` so an agent ruling its own gate delivered is distinguishable from the same agent editing status.",
+        limitations:
+          "`base_updated_at` GUARDS THE STATUS WRITE, WHICH IS THE ONLY WRITE THIS TOOL MAKES \u2014 so when it is supplied and the row has advanced, nothing at all happens: the status stays as it was and no `task_phase_transitions` row is written. (This is a stronger guarantee than task_update's base, which covers that tool's plain-field statement only.) An unparseable base is rejected before any write. Without it this tool is last-write-wins, unchanged. Task must exist and allow transition to done status. Attribution scope: this stamps the status write that this tool makes, and nothing else — it does not resolve, evaluate or hide any validation, so a `done` task can sit beside a still-`pending` gate. When the call context carries NO `agent_id`, the actor falls back to the bare `:agent` atom, which `TransitionActor.normalize/1` does not match and therefore records as `actor_kind: \"unknown\"`, `actor_id: nil`, `actor_label: nil` — `via` is still `\"mcp_task_complete\"`, so the row reads as \"known code path, caller not identifiable\" rather than \"not captured\".",
         when_to_use: "When you need to mark a task as complete/done"
       },
       %{
@@ -4624,7 +4634,7 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("task_complete", %{"task_id" => task_id}, _context) do
+  def execute("task_complete", %{"task_id" => task_id} = args, context) do
     case Tasks.get_task_record(task_id) do
       nil ->
         {:error,
@@ -4635,10 +4645,62 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       task ->
-        case Tasks.transition_task_status(task, "done") do
+        # `transition_task_status/2` deliberately takes no actor (the router,
+        # Stacks, CommencementGate and ChatPins all call it). The MCP caller's
+        # identity travels out-of-band so the recorded transition is attributed
+        # to the calling agent instead of `unknown` — the same shape
+        # `maybe_transition_status/3` uses for task_update. The `via` differs on
+        # purpose: an agent ruling its own gate delivered via `task_complete`
+        # must stay distinguishable from the same agent's `task_update`.
+        actor = actor_from_mcp_context(context)
+
+        # COMPARE-AND-SET (task 01a094d4 stage 3). `base_updated_at` (alias
+        # `if_unmodified_since`) guards THE STATUS WRITE, which is the only
+        # write this tool makes — so unlike `task_update`, where the base
+        # covers the plain-field statement and leaves the status statement
+        # unguarded, here the guard's scope is the tool's whole effect.
+        # Absent → unguarded, last-write-wins, exactly as before.
+        # Unparseable → refused before any write.
+        result =
+          with {:ok, base} <- parse_base_updated_at(args, "task_complete") do
+            Tasks.TransitionActor.with_actor(actor, "mcp_task_complete", fn ->
+              case base do
+                nil -> Tasks.transition_task_status(task, "done")
+                %DateTime{} -> Tasks.transition_task_status_if_unmodified(task, "done", base)
+              end
+            end)
+          end
+
+        case result do
           {:ok, updated} ->
             Tasks.broadcast_board({:task_updated, updated})
-            {:ok, %{task_id: updated.id, status: updated.status}}
+
+            # `previous_updated_at` is the PRE-call stamp (`task` was read at
+            # the top of this function), mirroring the task_update envelope:
+            # a caller that passed no base can still see what it displaced.
+            {:ok,
+             %{
+               task_id: updated.id,
+               status: updated.status,
+               updated_at: updated.updated_at,
+               previous_updated_at: task.updated_at
+             }}
+
+          {:error, {:stale_base, %{current_updated_at: ts, base_updated_at: supplied}}} ->
+            # A retryable CONFLICT, not a fatal error. The task was NOT
+            # transitioned and no `task_phase_transitions` row was written.
+            {:error,
+             %{
+               error:
+                 "stale_base: task was modified at #{stale_base_stamp(ts)}, after the base you supplied (#{stale_base_stamp(supplied)}). Your task_complete was REFUSED and nothing was changed \u2014 the task is still '#{task.status}'.",
+               recoverable: true,
+               submitted_args: args,
+               suggestion:
+                 "Re-read the task with task_get. Whoever moved it may already have completed it, or may have moved it somewhere `done` is not reachable from \u2014 check the current status before retrying with base_updated_at set to the updated_at you just read."
+             }}
+
+          {:error, %{error: _} = err} ->
+            {:error, err}
 
           {:error, :invalid_transition} ->
             {:error,
@@ -7091,7 +7153,10 @@ defmodule Platform.Federation.ToolSurface do
   # `base_updated_at` (alias `if_unmodified_since`) is the caller's
   # compare-and-set token. Absent → `{:ok, nil}` → last-write-wins, unchanged.
   # Present but unparseable → a recoverable rejection, never a write.
-  defp parse_base_updated_at(args) do
+  # The tool name is a PARAMETER, not a literal: `task_complete` accepts the
+  # same token (task 01a094d4 stage 3), and a rejection naming `task_update`
+  # would send the caller to read the wrong tool's contract.
+  defp parse_base_updated_at(args, tool \\ "task_update") do
     case Map.get(args, "base_updated_at") || Map.get(args, "if_unmodified_since") do
       nil ->
         {:ok, nil}
@@ -7099,21 +7164,21 @@ defmodule Platform.Federation.ToolSurface do
       value when is_binary(value) ->
         case DateTime.from_iso8601(value) do
           {:ok, dt, _utc_offset} -> {:ok, dt}
-          {:error, _reason} -> {:error, base_updated_at_error(value)}
+          {:error, _reason} -> {:error, base_updated_at_error(value, tool)}
         end
 
       other ->
-        {:error, base_updated_at_error(other)}
+        {:error, base_updated_at_error(other, tool)}
     end
   end
 
-  defp base_updated_at_error(value) do
+  defp base_updated_at_error(value, tool) do
     %{
       error:
-        "task_update: `base_updated_at` must be an ISO8601 timestamp, got #{inspect(value)}. No write was attempted.",
+        "#{tool}: `base_updated_at` must be an ISO8601 timestamp, got #{inspect(value)}. No write was attempted.",
       recoverable: true,
       suggestion:
-        "Pass the `updated_at` value verbatim from the task_get / task_update response you composed your edit against, e.g. \"2026-09-10T19:33:15.879562Z\". Omit the parameter entirely to keep the pre-existing last-write-wins behaviour."
+        "Pass the `updated_at` value verbatim from the task_get / #{tool} response you composed your edit against, e.g. \"2026-09-10T19:33:15.879562Z\". Omit the parameter entirely to keep the pre-existing last-write-wins behaviour."
     }
   end
 
