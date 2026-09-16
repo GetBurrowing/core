@@ -388,32 +388,43 @@ defmodule PlatformWeb.RuntimeChannel do
       Platform.Federation.NodeContext.set_space(agent_id, space_id)
     end
 
-    agent_participant_id = get_agent_participant_id(socket, space_id)
+    case authorize_space_write(socket, space_id) do
+      {:error, error_map} ->
+        # Kept for older bridges that only listen for the out-of-band event.
+        # It carries no correlation to the push that caused it, which is why
+        # the `{:reply, {:error, ...}}` below exists alongside it.
+        push(socket, "error", %{error: error_map.error})
+        {:reply, {:error, error_map}, socket}
 
-    case agent_participant_id do
-      nil ->
-        push(socket, "error", %{error: "Agent is not a participant in this space"})
-        {:noreply, socket}
-
-      participant_id ->
+      {:ok, participant_id} ->
         # Stop typing indicator when reply arrives
         Platform.Chat.PubSub.broadcast_agent_typing(space_id, participant_id, false)
 
-        Chat.post_message(%{
-          space_id: space_id,
-          participant_id: participant_id,
-          content_type: "text",
-          content: content,
-          metadata: %{
-            "source" => "external_runtime",
-            "runtime_id" => socket.assigns.runtime_id
-          }
-        })
+        case Chat.post_message(%{
+               space_id: space_id,
+               participant_id: participant_id,
+               content_type: "text",
+               content: content,
+               metadata: %{
+                 "source" => "external_runtime",
+                 "runtime_id" => socket.assigns.runtime_id
+               }
+             }) do
+          {:ok, message} ->
+            # Refresh active agent mutex timeout on successful reply
+            Platform.Chat.ActiveAgentStore.set_active(space_id, participant_id)
 
-        # Refresh active agent mutex timeout on successful reply
-        Platform.Chat.ActiveAgentStore.set_active(space_id, participant_id)
+            {:reply, {:ok, %{message_id: message.id, space_id: space_id}}, socket}
 
-        {:noreply, socket}
+          {:error, changeset} ->
+            error_map = %{
+              error: "Failed to post message: #{inspect(changeset_errors(changeset))}",
+              recoverable: false
+            }
+
+            push(socket, "error", %{error: error_map.error})
+            {:reply, {:error, error_map}, socket}
+        end
     end
   end
 
@@ -424,37 +435,52 @@ defmodule PlatformWeb.RuntimeChannel do
         socket
       ) do
     RuntimePresence.touch(socket.assigns.runtime_id)
-    agent_participant_id = get_agent_participant_id(socket, space_id)
 
-    if agent_participant_id do
-      Platform.Chat.PubSub.broadcast(
-        space_id,
-        {:agent_reply_chunk,
-         %{
-           space_id: space_id,
-           chunk_id: chunk_id,
-           text: text,
-           done: done,
-           participant_id: agent_participant_id
-         }}
-      )
+    case authorize_space_write(socket, space_id) do
+      {:error, error_map} ->
+        push(socket, "error", %{error: error_map.error})
+        {:reply, {:error, error_map}, socket}
+
+      {:ok, agent_participant_id} ->
+        Platform.Chat.PubSub.broadcast(
+          space_id,
+          {:agent_reply_chunk,
+           %{
+             space_id: space_id,
+             chunk_id: chunk_id,
+             text: text,
+             done: done,
+             participant_id: agent_participant_id
+           }}
+        )
+
+        # A chunk is an ephemeral PubSub broadcast with no persisted row, so
+        # there is no message_id to hand back — a bare `:ok` is the whole ack.
+        {:reply, :ok, socket}
     end
-
-    {:noreply, socket}
   end
 
   @impl true
   def handle_in("typing", %{"space_id" => space_id, "typing" => typing}, socket) do
     RuntimePresence.touch(socket.assigns.runtime_id)
-    agent_participant_id = get_agent_participant_id(socket, space_id)
 
-    # `typing` is raw client input; the producer takes a boolean, so
-    # anything that is not literally `true` is "stopped".
-    if agent_participant_id do
-      Platform.Chat.PubSub.broadcast_agent_typing(space_id, agent_participant_id, typing == true)
+    case authorize_space_write(socket, space_id) do
+      {:error, error_map} ->
+        push(socket, "error", %{error: error_map.error})
+        {:reply, {:error, error_map}, socket}
+
+      {:ok, agent_participant_id} ->
+        # `typing` is raw client input; the producer takes a boolean, so
+        # anything that is not literally `true` is "stopped".
+        Platform.Chat.PubSub.broadcast_agent_typing(
+          space_id,
+          agent_participant_id,
+          typing == true
+        )
+
+        # Ephemeral broadcast, nothing persisted: no message_id exists to return.
+        {:reply, :ok, socket}
     end
-
-    {:noreply, socket}
   end
 
   @impl true
@@ -509,69 +535,84 @@ defmodule PlatformWeb.RuntimeChannel do
       when is_list(attachments) do
     alias Platform.Chat.AttachmentStorage
 
-    agent_participant_id = get_agent_participant_id(socket, space_id)
+    # The authorization check is deliberately the OUTER gate: the
+    # attachment-size branch sits strictly inside the `{:ok, _}` arm so an
+    # unauthorized caller never learns whether its payload was within limits.
+    case authorize_space_write(socket, space_id) do
+      {:error, error_map} ->
+        # Kept for older bridges that only listen for the out-of-band event.
+        push(socket, "error", %{error: error_map.error})
+        {:reply, {:error, error_map}, socket}
 
-    cond do
-      is_nil(agent_participant_id) ->
-        push(socket, "error", %{error: "Agent is not a participant in this space"})
-        {:noreply, socket}
+      {:ok, agent_participant_id} ->
+        if not attachments_within_limits?(attachments) do
+          error_map = %{
+            error: "Attachment size limits exceeded (10MB per file, 25MB total)",
+            recoverable: false
+          }
 
-      not attachments_within_limits?(attachments) ->
-        push(socket, "error", %{
-          error: "Attachment size limits exceeded (10MB per file, 25MB total)"
-        })
+          push(socket, "error", %{error: error_map.error})
+          {:reply, {:error, error_map}, socket}
+        else
+          # Stop typing indicator
+          Platform.Chat.PubSub.broadcast_agent_typing(space_id, agent_participant_id, false)
 
-        {:noreply, socket}
+          # Decode and persist each attachment
+          attachment_results =
+            Enum.map(attachments, fn att ->
+              with {:ok, data} <- Base.decode64(att["data"] || ""),
+                   tmp_path = write_temp_file(data),
+                   {:ok, stored} <-
+                     AttachmentStorage.persist_upload(
+                       tmp_path,
+                       att["filename"],
+                       att["content_type"]
+                     ) do
+                File.rm(tmp_path)
+                {:ok, stored}
+              else
+                _error -> {:error, :attachment_failed}
+              end
+            end)
 
-      true ->
-        # Stop typing indicator
-        Platform.Chat.PubSub.broadcast_agent_typing(space_id, agent_participant_id, false)
+          # Filter successful attachments
+          attachment_attrs =
+            attachment_results
+            |> Enum.filter(&match?({:ok, _}, &1))
+            |> Enum.map(fn {:ok, attrs} -> attrs end)
 
-        # Decode and persist each attachment
-        attachment_results =
-          Enum.map(attachments, fn att ->
-            with {:ok, data} <- Base.decode64(att["data"] || ""),
-                 tmp_path = write_temp_file(data),
-                 {:ok, stored} <-
-                   AttachmentStorage.persist_upload(
-                     tmp_path,
-                     att["filename"],
-                     att["content_type"]
-                   ) do
-              File.rm(tmp_path)
-              {:ok, stored}
-            else
-              _error -> {:error, :attachment_failed}
-            end
-          end)
+          message_content = content || ""
 
-        # Filter successful attachments
-        attachment_attrs =
-          attachment_results
-          |> Enum.filter(&match?({:ok, _}, &1))
-          |> Enum.map(fn {:ok, attrs} -> attrs end)
+          case Chat.post_message_with_attachments(
+                 %{
+                   space_id: space_id,
+                   participant_id: agent_participant_id,
+                   content_type: "text",
+                   content: message_content,
+                   metadata: %{
+                     "source" => "external_runtime",
+                     "runtime_id" => socket.assigns.runtime_id,
+                     "has_media" => true
+                   }
+                 },
+                 attachment_attrs
+               ) do
+            {:ok, message, _attachments} ->
+              # Refresh active agent mutex timeout on successful reply
+              Platform.Chat.ActiveAgentStore.set_active(space_id, agent_participant_id)
 
-        message_content = content || ""
+              {:reply, {:ok, %{message_id: message.id, space_id: space_id}}, socket}
 
-        Chat.post_message_with_attachments(
-          %{
-            space_id: space_id,
-            participant_id: agent_participant_id,
-            content_type: "text",
-            content: message_content,
-            metadata: %{
-              "source" => "external_runtime",
-              "runtime_id" => socket.assigns.runtime_id,
-              "has_media" => true
-            }
-          },
-          attachment_attrs
-        )
+            {:error, reason} ->
+              error_map = %{
+                error: "Failed to post message: #{inspect(reason)}",
+                recoverable: false
+              }
 
-        # Refresh active agent mutex timeout on successful reply
-        Platform.Chat.ActiveAgentStore.set_active(space_id, agent_participant_id)
-
-        {:noreply, socket}
+              push(socket, "error", %{error: error_map.error})
+              {:reply, {:error, error_map}, socket}
+          end
+        end
     end
   end
 
@@ -829,6 +870,35 @@ defmodule PlatformWeb.RuntimeChannel do
     tmp_path = Path.join(System.tmp_dir!(), "runtime-upload-#{Ecto.UUID.generate()}")
     File.write!(tmp_path, data)
     tmp_path
+  end
+
+  # Authorize an agent-originated WRITE into `space_id`.
+  #
+  # The lookup itself is delegated to `get_agent_participant_id/2` — this only
+  # shapes the refusal, deliberately mirroring the read path in
+  # `Platform.Federation.ToolSurface` so a caller sees one wording (and the
+  # offending id) whichever transport it used.
+  defp authorize_space_write(socket, space_id) do
+    case get_agent_participant_id(socket, space_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Access denied: agent is not a participant in space #{space_id}",
+           recoverable: false,
+           suggestion: "Use space_list to find spaces the agent has access to"
+         }}
+
+      participant_id ->
+        {:ok, participant_id}
+    end
+  end
+
+  defp changeset_errors(%Ecto.Changeset{} = changeset) do
+    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
+      Enum.reduce(opts, msg, fn {key, value}, acc ->
+        String.replace(acc, "%{#{key}}", to_string(value))
+      end)
+    end)
   end
 
   defp get_agent_participant_id(socket, space_id) do

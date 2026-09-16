@@ -108,6 +108,17 @@ defmodule PlatformWeb.RuntimeChannelTest do
     space
   end
 
+  defp joined_socket(ctx) do
+    {:ok, socket} =
+      connect(PlatformWeb.RuntimeSocket, %{
+        "runtime_id" => ctx.runtime.runtime_id,
+        "token" => ctx.raw_token
+      })
+
+    {:ok, _reply, socket} = subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+    socket
+  end
+
   describe "connect and join" do
     test "authenticated runtime can connect and join channel", ctx do
       {:ok, socket} =
@@ -1441,6 +1452,58 @@ defmodule PlatformWeb.RuntimeChannelTest do
       messages = Chat.list_messages(ctx.space.id, limit: 10)
       assert Enum.any?(messages, fn m -> m.content == "Hello from external runtime!" end)
     end
+
+    # The positive control for the two refusal tests below. Without it a
+    # handler that refused EVERY frame would pass both of them.
+    test "a permitted reply replies :ok with the persisted message id", ctx do
+      socket = joined_socket(ctx)
+
+      ref = push(socket, "reply", %{"space_id" => ctx.space.id, "content" => "Authorized"})
+
+      assert_reply ref, :ok, %{message_id: message_id, space_id: space_id}
+      assert space_id == ctx.space.id
+
+      # The id is not merely well-formed — the row is in the database.
+      message = Repo.get!(Chat.Message, message_id)
+      assert message.content == "Authorized"
+      assert message.space_id == ctx.space.id
+    end
+
+    test "an unknown space_id is refused on the push ref, naming the id", ctx do
+      socket = joined_socket(ctx)
+      unknown_space_id = Ecto.UUID.generate()
+
+      ref = push(socket, "reply", %{"space_id" => unknown_space_id, "content" => "x"})
+
+      assert_reply ref, :error, %{error: error, recoverable: false}
+      assert error =~ unknown_space_id
+      assert error == "Access denied: agent is not a participant in space #{unknown_space_id}"
+
+      # The out-of-band event still fires for older bridges.
+      assert_push "error", %{error: ^error}
+    end
+
+    test "an existing space with no participant row is refused identically", ctx do
+      socket = joined_socket(ctx)
+
+      other_space =
+        create_space(%{name: "Other", slug: "other-#{System.unique_integer([:positive])}"})
+
+      ref = push(socket, "reply", %{"space_id" => other_space.id, "content" => "x"})
+
+      assert_reply ref, :error, %{error: error, recoverable: false}
+
+      # Byte-identical to the unknown-space wording modulo the id: the two
+      # cases must not be distinguishable by the caller.
+      assert error == "Access denied: agent is not a participant in space #{other_space.id}"
+
+      unknown_space_id = Ecto.UUID.generate()
+
+      assert String.replace(error, other_space.id, unknown_space_id) ==
+               "Access denied: agent is not a participant in space #{unknown_space_id}"
+
+      refute Enum.any?(Chat.list_messages(other_space.id, limit: 10), &(&1.content == "x"))
+    end
   end
 
   # The wire half of task 019ff292 stage 2. The queue-side anchoring is
@@ -1839,34 +1902,220 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert error =~ "size limits exceeded"
     end
 
-    test "rejects when agent not participant in space", ctx do
+    # Positive control for the two refusal tests below: without it, a handler
+    # that refused EVERY reply_with_media frame would pass both of them.
+    test "a permitted reply_with_media replies :ok with the persisted message id", ctx do
+      socket = joined_socket(ctx)
+
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => ctx.space.id,
+          "content" => "Authorized media",
+          "attachments" => [
+            %{
+              "filename" => "ok.txt",
+              "content_type" => "text/plain",
+              "data" => Base.encode64("hello")
+            }
+          ]
+        })
+
+      assert_reply ref, :ok, %{message_id: message_id, space_id: space_id}, 2000
+      assert space_id == ctx.space.id
+
+      message = Repo.get!(Chat.Message, message_id)
+      assert message.content == "Authorized media"
+      assert message.metadata["has_media"] == true
+      assert [attachment] = Chat.list_attachments(message.id)
+      assert attachment.filename == "ok.txt"
+    end
+
+    test "an existing space with no participant row is refused on the push ref", ctx do
+      socket = joined_socket(ctx)
+
       other_space =
         create_space(%{name: "Other", slug: "other-#{System.unique_integer([:positive])}"})
 
-      {:ok, socket} =
-        connect(PlatformWeb.RuntimeSocket, %{
-          "runtime_id" => ctx.runtime.runtime_id,
-          "token" => ctx.raw_token
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => other_space.id,
+          "content" => "Unauthorized",
+          "attachments" => []
         })
 
-      {:ok, _reply, socket} =
-        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+      assert_reply ref, :error, %{error: error, recoverable: false}
+      assert error == "Access denied: agent is not a participant in space #{other_space.id}"
+      assert_push "error", %{error: ^error}
 
-      push(socket, "reply_with_media", %{
-        "space_id" => other_space.id,
-        "content" => "Unauthorized",
-        "attachments" => []
-      })
+      refute Enum.any?(
+               Chat.list_messages(other_space.id, limit: 10),
+               &(&1.content == "Unauthorized")
+             )
+    end
 
-      # The agent IS auto-joined via ensure_agent_participant, so let's
-      # test with a nil space_id instead
-      push(socket, "reply_with_media", %{
-        "space_id" => nil,
-        "content" => "No space",
-        "attachments" => []
-      })
+    # MEASURED against a mutant that restores the pre-fix shape (the frame
+    # calling a helper that returns `{:ok, get_agent_participant_id(...)}`,
+    # nil and all, on 2026-09-16): this test DOES die, but not the way the
+    # unguarded-handler story predicts. It dies on the exact-string compare
+    # with left: "Failed to post message: #Ecto.Changeset<... errors:
+    # [participant_id: {"can't be blank", ...}]>" — the Message changeset's
+    # required-participant validation rejects the insert BEFORE the
+    # `chat_messages_space_id_fkey` FK is ever reached, so no
+    # Ecto.ConstraintError occurs here.
+    #
+    # The exact-equality assertion (not a `=~`) is what makes that
+    # discriminating: a crash-shaped error string is visibly not a refusal.
+    # The no-participant-row case above remains the stronger fixture because
+    # it also asserts nothing was persisted.
+    test "an unknown space_id is refused, naming the id", ctx do
+      socket = joined_socket(ctx)
+      unknown_space_id = Ecto.UUID.generate()
 
-      assert_push "error", %{error: "Agent is not a participant in this space"}
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => unknown_space_id,
+          "content" => "x",
+          "attachments" => []
+        })
+
+      assert_reply ref, :error, %{error: error, recoverable: false}
+      assert error =~ unknown_space_id
+      assert error == "Access denied: agent is not a participant in space #{unknown_space_id}"
+    end
+
+    # The size-limit branch lives strictly inside the authorized arm, so an
+    # unauthorized caller learns nothing about its own payload. An oversized
+    # attachment aimed at a space the agent cannot write gets the ACCESS
+    # wording, never the size wording.
+    test "an unauthorized oversized payload is refused for access, not for size", ctx do
+      socket = joined_socket(ctx)
+
+      other_space =
+        create_space(%{name: "Other", slug: "other-#{System.unique_integer([:positive])}"})
+
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => other_space.id,
+          "content" => "Too big and unauthorized",
+          "attachments" => [
+            %{
+              "filename" => "huge.bin",
+              "content_type" => "application/octet-stream",
+              "data" => String.duplicate("A", 14_000_000)
+            }
+          ]
+        })
+
+      assert_reply ref, :error, %{error: error}, 2000
+      assert error == "Access denied: agent is not a participant in space #{other_space.id}"
+      refute error =~ "size limits exceeded"
+    end
+  end
+
+  describe "reply_chunk authorization" do
+    # Positive control: a chunk into a space the agent participates in is
+    # acked AND actually broadcast.
+    test "a permitted chunk replies :ok and broadcasts", ctx do
+      socket = joined_socket(ctx)
+      Platform.Chat.PubSub.subscribe(ctx.space.id)
+
+      ref =
+        push(socket, "reply_chunk", %{
+          "space_id" => ctx.space.id,
+          "chunk_id" => "c1",
+          "text" => "partial",
+          "done" => false
+        })
+
+      assert_reply ref, :ok
+      assert_receive {:agent_reply_chunk, %{chunk_id: "c1", text: "partial", done: false}}, 1000
+    end
+
+    test "an existing space with no participant row is refused on the push ref", ctx do
+      socket = joined_socket(ctx)
+
+      other_space =
+        create_space(%{name: "Other", slug: "other-#{System.unique_integer([:positive])}"})
+
+      Platform.Chat.PubSub.subscribe(other_space.id)
+
+      ref =
+        push(socket, "reply_chunk", %{
+          "space_id" => other_space.id,
+          "chunk_id" => "c2",
+          "text" => "partial",
+          "done" => false
+        })
+
+      assert_reply ref, :error, %{error: error, recoverable: false}
+      assert error == "Access denied: agent is not a participant in space #{other_space.id}"
+      assert_push "error", %{error: ^error}
+      refute_receive {:agent_reply_chunk, _}, 200
+    end
+
+    # Pins the id in the wording. Its mutation signal is WEAK and is recorded
+    # as such: under the pre-fix mutant it dies as "no matching message after
+    # 100ms" on the assert_reply, which is what a handler that simply never
+    # answers looks like too. It cannot tell "refused" from "silent". The
+    # no-participant-row case above is the discriminating fixture — it also
+    # asserts the broadcast did NOT go out.
+    test "an unknown space_id is refused, naming the id", ctx do
+      socket = joined_socket(ctx)
+      unknown_space_id = Ecto.UUID.generate()
+
+      ref =
+        push(socket, "reply_chunk", %{
+          "space_id" => unknown_space_id,
+          "chunk_id" => "c3",
+          "text" => "partial",
+          "done" => true
+        })
+
+      assert_reply ref, :error, %{error: error, recoverable: false}
+      assert error =~ unknown_space_id
+      assert error == "Access denied: agent is not a participant in space #{unknown_space_id}"
+    end
+  end
+
+  describe "typing authorization" do
+    test "a permitted typing frame replies :ok and broadcasts", ctx do
+      socket = joined_socket(ctx)
+      Platform.Chat.PubSub.subscribe(ctx.space.id)
+
+      ref = push(socket, "typing", %{"space_id" => ctx.space.id, "typing" => true})
+
+      assert_reply ref, :ok
+      assert_receive {:agent_typing, %{typing: true}}, 1000
+    end
+
+    test "an existing space with no participant row is refused on the push ref", ctx do
+      socket = joined_socket(ctx)
+
+      other_space =
+        create_space(%{name: "Other", slug: "other-#{System.unique_integer([:positive])}"})
+
+      Platform.Chat.PubSub.subscribe(other_space.id)
+
+      ref = push(socket, "typing", %{"space_id" => other_space.id, "typing" => true})
+
+      assert_reply ref, :error, %{error: error, recoverable: false}
+      assert error == "Access denied: agent is not a participant in space #{other_space.id}"
+      assert_push "error", %{error: ^error}
+      refute_receive {:agent_typing, _}, 200
+    end
+
+    # Same weak signal as reply_chunk's: under the pre-fix mutant this dies on
+    # "no matching message after 100ms", indistinguishable from a handler that
+    # never replies. The no-participant-row case above is what discriminates.
+    test "an unknown space_id is refused, naming the id", ctx do
+      socket = joined_socket(ctx)
+      unknown_space_id = Ecto.UUID.generate()
+
+      ref = push(socket, "typing", %{"space_id" => unknown_space_id, "typing" => true})
+
+      assert_reply ref, :error, %{error: error, recoverable: false}
+      assert error =~ unknown_space_id
+      assert error == "Access denied: agent is not a participant in space #{unknown_space_id}"
     end
   end
 
