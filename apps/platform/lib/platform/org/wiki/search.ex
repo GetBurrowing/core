@@ -69,7 +69,10 @@ defmodule Platform.Org.Wiki.Search do
   ## Robustness
 
   Each channel runs in its own `Task.async_stream/3` with a 2s timeout.
-  A channel that times out or crashes is DEAD: it is logged by name,
+  A channel that does not answer the query is DEAD — it timed out, it
+  crashed, or its provider returned an error (`{:error, reason}`, e.g. a
+  refused connection or a 5xx from memory-service). A dead channel is
+  logged by name,
   contributes zero hits, and the fusion proceeds with the surviving
   channels — a memory-service outage degrades to lexical-only rather
   than failing the call. A dead channel is never silent in the
@@ -79,6 +82,10 @@ defmodule Platform.Org.Wiki.Search do
 
   `truncated` therefore means "incomplete for ANY reason": a live
   channel hit its `2*limit` cap, or a channel died.
+
+  The semantic channel being CONFIGURED OFF (`Platform.Memory.enabled?/0`
+  false — the Noop provider) is NOT an outage: it contributes zero hits
+  and is not dead. Only a timeout, a crash, or an error return is dead.
 
   ## Hydration drops
 
@@ -194,8 +201,9 @@ defmodule Platform.Org.Wiki.Search do
   Hybrid (semantic + lexical) search across pages, journal entries,
   chat messages and tasks. Returns
   `{:ok, %{results, fusion_constant_k, truncated, dead_channels, dropped}}`
-  (see `t:response/0`): `dead_channels` names every channel that timed
-  out or crashed (and forces `truncated: true`), `dropped` counts the
+  (see `t:response/0`): `dead_channels` names every channel that did not
+  answer — it timed out, crashed, or its provider returned an error —
+  and forces `truncated: true`; `dropped` counts the
   fused hits hydration refused per corpus.
 
   ## Options
@@ -268,6 +276,7 @@ defmodule Platform.Org.Wiki.Search do
       |> Enum.zip(labels)
       |> Enum.map(fn
         {{:ok, {:ok, hits}}, label} -> {label, hits}
+        {{:ok, {:errored, reason}}, label} -> handle_channel_error(label, reason)
         {{:ok, {:crashed, reason}}, label} -> handle_channel_exit(label, reason)
         {{:exit, reason}, label} -> handle_channel_exit(label, reason)
       end)
@@ -310,10 +319,24 @@ defmodule Platform.Org.Wiki.Search do
         {:lexical, corpus} -> {:lexical, corpus}
       end
 
-    {^label, hits} = run_channel(channel, query, opts, channel_cap, corpora)
-    {:ok, hits}
+    case run_channel(channel, query, opts, channel_cap, corpora) do
+      {^label, {:errored, reason}} -> {:errored, reason}
+      {^label, hits} when is_list(hits) -> {:ok, hits}
+    end
   catch
     kind, reason -> {:crashed, {kind, reason}}
+  end
+
+  # A channel whose provider ANSWERED with an error did not answer the
+  # query: it is dead for the same reason a crashed or timed-out channel
+  # is, and appears in `dead_channels` in exactly the same shape.
+  @spec handle_channel_error(channel_label(), term()) :: {channel_label(), :dead}
+  defp handle_channel_error(label, reason) do
+    Logger.warning(
+      "Platform.Org.Wiki.Search: channel #{inspect(label)} returned an error: #{inspect(reason)}"
+    )
+
+    {label, :dead}
   end
 
   @spec handle_channel_exit(channel_label(), term()) :: {channel_label(), :dead}
@@ -397,7 +420,10 @@ defmodule Platform.Org.Wiki.Search do
 
         {:error, reason} ->
           Logger.warning("Platform.Org.Wiki.Search: semantic channel error: #{inspect(reason)}")
-          {{:semantic, :all}, []}
+          # The error is carried out of this branch rather than collapsing
+          # to `[]`: an empty hit list is what the CONFIGURED-OFF (Noop)
+          # branch below returns, and configured-off is not an outage.
+          {{:semantic, :all}, {:errored, reason}}
       end
     else
       {{:semantic, :all}, []}

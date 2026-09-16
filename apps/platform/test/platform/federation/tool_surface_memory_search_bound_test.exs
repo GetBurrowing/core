@@ -229,6 +229,69 @@ defmodule Platform.Federation.ToolSurfaceMemorySearchBoundTest do
     def health(_c), do: :ok
   end
 
+  # The ERROR path (task 01a0a730). Distinct from CrashingProvider above:
+  # this provider does not exit, it ANSWERS with `{:error, reason}` —
+  # a refused connection or a 5xx from memory-service. Before stage 1 that
+  # return collapsed to `[]` and was indistinguishable from "found
+  # nothing"; it is the configuration that produced the original bug.
+  defmodule ErroringProvider do
+    @behaviour Platform.Memory.Provider
+
+    @impl true
+    def ingest(_entries, _config), do: {:ok, 0}
+
+    @impl true
+    def search(_query, _opts, _config), do: {:error, :econnrefused}
+
+    @impl true
+    def delete(_ids, _config), do: {:ok, 0}
+
+    @impl true
+    def health(_c), do: :ok
+  end
+
+  test "a semantic provider answering with an error yields the degraded envelope, not retrieval_status ok" do
+    seed_pages(@marker)
+    agent = create_agent()
+
+    Application.put_env(:platform, :memory_service, provider: ErroringProvider)
+
+    assert {:ok, payload} = raw_search(@marker, agent)
+
+    # Acceptance line 1 of the ticket, as an executable assertion. The
+    # pre-fix measurement was `retrieval_status: "ok"` with a `results`
+    # key and `dead_channels: []` — if any of these four flip back, the
+    # error return has stopped reaching the degraded branch.
+    refute Map.has_key?(payload, :results),
+           "an errored semantic channel must not produce a `results` key — the hits are partial"
+
+    assert payload.retrieval_status == "degraded"
+    assert payload.partial_results != []
+    assert payload.degraded.channels_down == ["semantic"]
+    assert payload.degraded.dead_channels == [[:semantic, :all]]
+    assert payload.truncated == true
+
+    # Same JSON rendering as the crash path: the pair, not a tuple.
+    assert Jason.decode!(Jason.encode!(payload))["dead_channels"] == [["semantic", "all"]]
+  end
+
+  test "an errored semantic channel with zero surviving hits is {:error, code: :search_degraded}" do
+    seed_pages(@marker)
+    agent = create_agent()
+
+    Application.put_env(:platform, :memory_service, provider: ErroringProvider)
+
+    assert {:error, error} = raw_search("qwfpgjluyzxcv", agent)
+
+    assert error.code == :search_degraded
+    assert error.dead_channels == [[:semantic, :all]]
+
+    # An empty `results: []` here would read as an established absence,
+    # which is precisely what a failed measurement is not.
+    refute Map.has_key?(error, :results)
+    refute Map.has_key?(error, :partial_results)
+  end
+
   test "dead_channels and dropped ride through alongside truncated, JSON-safe" do
     seed_pages(@marker)
     agent = create_agent()

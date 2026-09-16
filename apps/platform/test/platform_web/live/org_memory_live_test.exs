@@ -61,6 +61,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       case Map.get(args, "query") do
         "degraded-with-hits" -> degraded_with_hits()
         "degraded-no-hits" -> degraded_no_hits()
+        "errored-semantic" -> errored_semantic()
         _ -> healthy()
       end
     end
@@ -95,6 +96,16 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
          fusion_constant_k: 60
        }}
     end
+
+    # Semantic provider ANSWERED with an error (task 01a0a730) rather than
+    # crashing or timing out. The envelope is byte-for-byte the degraded
+    # shape above because `dead_channels` carries no cause — verified
+    # against the real tool surface by
+    # `ToolSurfaceMemorySearchBoundTest` "a semantic provider answering
+    # with an error yields the degraded envelope, not retrieval_status ok".
+    # That sameness is the point the LiveView must honour: the pane has no
+    # cause to branch on, and must not invent one.
+    defp errored_semantic, do: degraded_with_hits()
 
     # Degraded with ZERO surviving hits: an error, never an empty list.
     defp degraded_no_hits do
@@ -1147,6 +1158,58 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       # a footnote. The confident headline must not be on the page at all.
       refute html =~ "No results"
       assert html =~ "absence is not established"
+    end
+
+    # ── Task 01a0a730: an ERRORED semantic channel reaches the same pane ──
+    #
+    # Design ruling, canvas 01a0a6d9-6022-7001-ad68-c6adfea319bd: the
+    # payload MAY distinguish crashed / timed_out / errored; the RENDERED
+    # SENTENCE MUST NOT. Three near-identical headlines differing in a word
+    # the reader cannot act on is worse than one — a headline with variants
+    # is one a reader starts skimming to identify which variant it is,
+    # which is the first step back toward the badge this design removed.
+    #
+    # The exact-sentence assertion below is what makes that ruling
+    # executable: an implementer who branches the headline on cause breaks
+    # it, and cannot make it pass again without reverting the branch.
+    test "an errored semantic channel renders the single degraded headline, with no cause word",
+         %{conn: conn} do
+      view = conn |> open_search() |> submit_search("errored-semantic")
+
+      assert has_element?(view, ~s([data-role="search-degraded-partial"]))
+
+      assert has_element?(
+               view,
+               ~s([data-role="channel-chip"][data-channel="semantic"][data-state="down"])
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-role="channel-chip"][data-channel="lexical"][data-state="live"])
+             )
+
+      headline =
+        view
+        |> element(~s([data-role="search-pane"] [data-role="search-degraded-partial"] p))
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.text()
+        |> String.trim()
+
+      # VERBATIM, and as a PREFIX of the headline element's own text — not
+      # `render(view) =~ ...`, which would still pass if a cause-branched
+      # variant were rendered anywhere else on the page.
+      assert String.starts_with?(headline, "Semantic search did not run."),
+             "headline must open with the single designed sentence, got: #{inspect(headline)}"
+
+      # And the cause is absent from the statement itself. `errored` is
+      # excluded deliberately: it is a substring of neither a permitted
+      # word nor a designed one, and its appearance would mean the
+      # provider reason leaked into the sentence.
+      for cause <- ["crashed", "timed out", "timed_out", "error", "econnrefused"] do
+        refute String.contains?(String.downcase(headline), cause),
+               "the headline must not name the failure cause, but contains #{inspect(cause)}: #{inspect(headline)}"
+      end
     end
 
     test "the channel strip renders on a healthy search as well as a degraded one",

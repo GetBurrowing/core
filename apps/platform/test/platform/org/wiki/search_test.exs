@@ -38,8 +38,10 @@ defmodule Platform.Org.Wiki.SearchTest do
 
     # `:search_behaviour` models a DEAD semantic channel without any
     # network: `:sleep` never returns (the stream kills the task on its
-    # timeout), `:crash` exits the task abnormally. Anything else answers
-    # with `:search_results`. The live service is never asserted on.
+    # timeout), `:crash` exits the task abnormally, `:error` ANSWERS with
+    # `{:error, reason}` (the connection-refused / 5xx shape). Anything
+    # else answers with `:search_results`. The live service is never
+    # asserted on.
     @impl true
     def search(query, _opts, config) do
       case Keyword.get(config, :search_behaviour) do
@@ -48,6 +50,9 @@ defmodule Platform.Org.Wiki.SearchTest do
 
         :crash ->
           exit(:boom)
+
+        :error ->
+          {:error, :econnrefused}
 
         _ ->
           results =
@@ -88,7 +93,7 @@ defmodule Platform.Org.Wiki.SearchTest do
     |> Kernel.-(1)
   end
 
-  defp install_dead_provider(behaviour) when behaviour in [:sleep, :crash] do
+  defp install_dead_provider(behaviour) when behaviour in [:sleep, :crash, :error] do
     prev = Application.get_env(:platform, :memory_service, [])
 
     Application.put_env(:platform, :memory_service,
@@ -474,7 +479,7 @@ defmodule Platform.Org.Wiki.SearchTest do
   ##     the death (sleep / exit); no network is involved.
   ## ─────────────────────────────────────────────────────────────────────
 
-  describe "dead channels (StubProvider sleep / crash, never the network)" do
+  describe "dead channels (StubProvider sleep / crash / error, never the network)" do
     # The stream budget is @channel_timeout_ms (2_000) + 500; the test
     # must finish inside that plus slack, or the kill is not working.
     @channel_timeout_ms 2_000
@@ -514,6 +519,38 @@ defmodule Platform.Org.Wiki.SearchTest do
       assert [%{source: "page", content: "medlar bletting schedule"}] = response.results
       assert log =~ "channel {:semantic, :all} crashed"
       assert log =~ ":boom"
+    end
+
+    test "a semantic provider that ANSWERS with an error marks the channel dead, not empty" do
+      install_dead_provider(:error)
+
+      seed_page("org/page/feijoa.md", "feijoa chutney fermentation notes")
+
+      {{:ok, response}, log} =
+        with_log(fn -> Search.search("feijoa chutney", source: "page", limit: 10) end)
+
+      assert response.dead_channels == [{:semantic, :all}]
+      assert response.truncated == true
+      assert [%{source: "page", content: "feijoa chutney fermentation notes"}] = response.results
+      assert log =~ "channel {:semantic, :all} returned an error"
+      assert log =~ ":econnrefused"
+    end
+
+    test "a HEALTHY semantic provider answering {:ok, results} leaves the channel live" do
+      # The negative control for the error arm above: the fix must not
+      # ship as "every search now warns". A provider that answers
+      # normally yields no dead channel and no truncation.
+      install_provider([])
+
+      seed_page("org/page/jabuticaba.md", "jabuticaba liqueur steeping notes")
+
+      {{:ok, response}, log} =
+        with_log(fn -> Search.search("jabuticaba liqueur", source: "page", limit: 10) end)
+
+      assert response.dead_channels == []
+      assert response.truncated == false
+      assert [%{source: "page", content: "jabuticaba liqueur steeping notes"}] = response.results
+      refute log =~ "channel {:semantic, :all}"
     end
 
     test "a dead channel does not push truncated toward false when a live channel is capped" do
