@@ -133,6 +133,20 @@ defmodule Platform.Analytics.Pricing do
   @spec known_models() :: [String.t()]
   def known_models, do: Map.keys(@pricing_table)
 
+  @doc """
+  Whether the pricing table has rates for `model`, after provider-prefix strip.
+
+  Distinguishes "unpriced because unknown" from "priced and the answer is
+  0.0", which `calculate_cost/1` cannot express — it returns 0.0 in both
+  cases. Callers that want to keep a runtime-supplied cost for models this
+  table does not cover need the distinction.
+  """
+  @spec known_model?(String.t() | nil) :: boolean()
+  def known_model?(nil), do: false
+
+  def known_model?(model) when is_binary(model),
+    do: Map.has_key?(@pricing_table, normalize_model(model))
+
   # Strip provider prefix: "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6"
   defp normalize_model(nil), do: nil
 

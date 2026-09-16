@@ -97,16 +97,25 @@ defmodule Platform.Analytics.UsageEvent do
     put_change(changeset, :total_tokens, input + output + cache_read + cache_write)
   end
 
-  # Always compute cost server-side from the pricing table (ignore caller-provided cost_usd)
+  # Cost is authoritative from the pricing table for models the table
+  # covers. Models it does not cover keep the caller-provided cost_usd when
+  # there is one: the dsh and OpenClaw federation plugins price OpenRouter
+  # models from pi-ai's catalog at push time, and zeroing that value threw
+  # away the one number that was actually right — the runtime holds the
+  # provider's receipt, the table just does not list every model on it.
   defp compute_cost(changeset) do
     cost =
-      Platform.Analytics.Pricing.calculate_cost(%{
-        model: get_field(changeset, :model),
-        input_tokens: get_field(changeset, :input_tokens) || 0,
-        output_tokens: get_field(changeset, :output_tokens) || 0,
-        cache_read_tokens: get_field(changeset, :cache_read_tokens) || 0,
-        cache_write_tokens: get_field(changeset, :cache_write_tokens) || 0
-      })
+      if Platform.Analytics.Pricing.known_model?(get_field(changeset, :model)) do
+        Platform.Analytics.Pricing.calculate_cost(%{
+          model: get_field(changeset, :model),
+          input_tokens: get_field(changeset, :input_tokens) || 0,
+          output_tokens: get_field(changeset, :output_tokens) || 0,
+          cache_read_tokens: get_field(changeset, :cache_read_tokens) || 0,
+          cache_write_tokens: get_field(changeset, :cache_write_tokens) || 0
+        })
+      else
+        get_field(changeset, :cost_usd) || 0.0
+      end
 
     put_change(changeset, :cost_usd, cost)
   end

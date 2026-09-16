@@ -64,8 +64,18 @@ defmodule Platform.AnalyticsTest do
       assert event.cost_usd == expected
     end
 
-    test "returns 0.0 cost for unknown models" do
+    test "keeps caller-provided cost for models the pricing table does not cover" do
       attrs = Map.merge(@valid_attrs, %{model: "unknown/model", provider: "unknown"})
+      assert {:ok, event} = Analytics.record_usage_event(attrs)
+      # The runtime holds the provider's receipt for models the table has
+      # no rates for; zeroing it threw away the one number that was right.
+      assert event.cost_usd == 0.023
+    end
+
+    test "returns 0.0 cost for unknown models when the caller supplies none" do
+      attrs =
+        Map.merge(@valid_attrs, %{model: "unknown/model", provider: "unknown", cost_usd: nil})
+
       assert {:ok, event} = Analytics.record_usage_event(attrs)
       assert event.cost_usd == 0.0
     end

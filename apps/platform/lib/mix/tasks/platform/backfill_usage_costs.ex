@@ -47,14 +47,21 @@ defmodule Mix.Tasks.Platform.BackfillUsageCosts do
     updated_count =
       events
       |> Enum.reduce(0, fn event, count ->
+        # Models the pricing table does not cover keep their stored cost —
+        # it is the runtime's own computation (see UsageEvent.compute_cost/1),
+        # and recomputing it "from the table" here would mean zeroing it.
         new_cost =
-          Pricing.calculate_cost(%{
-            model: event.model,
-            input_tokens: event.input_tokens,
-            output_tokens: event.output_tokens,
-            cache_read_tokens: event.cache_read_tokens,
-            cache_write_tokens: event.cache_write_tokens
-          })
+          if Pricing.known_model?(event.model) do
+            Pricing.calculate_cost(%{
+              model: event.model,
+              input_tokens: event.input_tokens,
+              output_tokens: event.output_tokens,
+              cache_read_tokens: event.cache_read_tokens,
+              cache_write_tokens: event.cache_write_tokens
+            })
+          else
+            event.cost_usd
+          end
 
         input = event.input_tokens || 0
         output = event.output_tokens || 0
