@@ -8,6 +8,7 @@ defmodule Platform.Agents.ActivityDigestTest do
 
   @window_end ~U[2026-04-22 12:00:00.000000Z]
   @window_start ~U[2026-04-21 12:00:00.000000Z]
+  @withheld_marker "[WITHHELD: credential-shaped span]"
 
   describe "build/2" do
     test "returns empty fallback when no activity exists in the window" do
@@ -817,5 +818,915 @@ defmodule Platform.Agents.ActivityDigestTest do
       result = ActivityDigest.build(@window_start, @window_end)
       assert result =~ "internal chatter"
     end
+  end
+
+  # ── Credential withholding (task 01a09c9b stage 2) ───────────────────────
+  #
+  # EVERY test here seeds BOTH halves into the SAME window and asserts both
+  # in the same block: the synthetic credential must be gone, the benign
+  # sentinel must still be there. The positive control is load-bearing, not
+  # decoration — `refute body =~ secret` alone is an absence-shaped
+  # assertion that any upstream failure satisfies. A digest that is empty,
+  # broken, or never assembled passes the refute and fails the assert.
+  #
+  # Fixtures are SYNTHETIC and generated at test time. Nothing here is, or
+  # has ever been, a real credential.
+  describe "credential withholding — build/3 (call site 1)" do
+    test "a credential-shaped message body is replaced by the marker; benign traffic survives" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "Eng", slug: "eng-w1", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      # Fixture guard: if these two flip, every assertion below is vacuous.
+      assert Platform.Agents.CredentialShape.credential_shaped?(secret)
+      refute Platform.Agents.CredentialShape.credential_shaped?(benign)
+
+      insert_message(space.id, participant.id, %{
+        content: "here is the key: " <> secret,
+        inserted_at: within_window()
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: within_window()
+      })
+
+      body = ActivityDigest.build(@window_start, @window_end)
+
+      refute body =~ secret
+      assert body =~ benign
+
+      # The marker occupies the message's POSITION — author, space and
+      # timestamp survive. Never a blank, never a silent drop.
+      assert body =~ "[WITHHELD: credential-shaped span]"
+      assert body =~ "@Ada"
+      assert body =~ "#Eng"
+      refute body =~ "_No activity in this window._"
+    end
+
+    test "a credential-shaped transcript summary is withheld, benign summary is not" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "Board", slug: "board-w1", kind: "channel"})
+
+      insert_transcript(%{
+        space_id: space.id,
+        status: "complete",
+        started_at: DateTime.add(@window_start, 60, :second),
+        completed_at: DateTime.add(@window_start, 600, :second),
+        summary: "rotation discussed, value " <> secret,
+        segments: []
+      })
+
+      insert_transcript(%{
+        space_id: space.id,
+        status: "complete",
+        started_at: DateTime.add(@window_start, 1_200, :second),
+        completed_at: DateTime.add(@window_start, 1_800, :second),
+        summary: benign,
+        segments: []
+      })
+
+      body = ActivityDigest.build(@window_start, @window_end)
+
+      refute body =~ secret
+      assert body =~ benign
+      assert body =~ "[WITHHELD: credential-shaped span]"
+      assert body =~ "### Meetings"
+    end
+  end
+
+  describe "credential withholding — build_external/3 (call site 2)" do
+    # This is the call site that gets skipped. An external-user digest
+    # reaches a WIDER audience than the internal one, so a leak here is
+    # strictly worse. Deleting the `build_external/3` call MUST turn this
+    # red — which is why it drives `build_external/3` directly rather than
+    # asserting through `build/3`.
+    test "the external digest withholds credential-shaped content and keeps benign content" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      ext = external_user!()
+      space = insert_space(%{name: "sxi-support", slug: "sxi-w1", kind: "channel"})
+      ep = insert_participant(space.id, %{participant_id: ext.id, display_name: "Ext"})
+
+      insert_message(space.id, ep.id, %{
+        content: "creds for the sandbox: " <> secret,
+        inserted_at: within_window()
+      })
+
+      insert_message(space.id, ep.id, %{
+        content: benign,
+        inserted_at: within_window()
+      })
+
+      insert_transcript(%{
+        space_id: space.id,
+        status: "complete",
+        started_at: DateTime.add(@window_start, 60, :second),
+        completed_at: DateTime.add(@window_start, 600, :second),
+        summary: "handover, token " <> secret,
+        segments: []
+      })
+
+      body = ActivityDigest.build_external(ext.id, @window_start, @window_end)
+
+      refute body =~ secret
+      assert body =~ benign
+      assert body =~ "[WITHHELD: credential-shaped span]"
+      assert body =~ "@Ext"
+      refute body =~ "_No activity in this window._"
+    end
+  end
+
+  describe "credential withholding — windowed_body (call site 3)" do
+    test "applies to :messages after the budget, so the count reflects what is RENDERED" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "Win", slug: "win-w1", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      insert_message(space.id, participant.id, %{
+        content: "key " <> secret,
+        inserted_at: DateTime.add(@window_start, 60, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 120, :second)
+      })
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      refute body =~ secret
+      assert body =~ benign
+      assert body =~ "[WITHHELD: credential-shaped span]"
+
+      # A FOURTH state. The row was eligible, within budget and rendered —
+      # only its body was removed. So it still counts as included and it
+      # does NOT set truncated?, because the cursor has passed it and must
+      # not re-dispatch it.
+      assert meta.credential_withheld_count == 1
+      assert meta.included_count == 2
+      assert meta.item_count == 2
+      refute meta.truncated?
+    end
+
+    test "the count is of RENDERED rows — a budget-withheld credential row is not counted" do
+      # The ordering assertion: withholding runs AFTER take_within_budget/2.
+      # If it ran on `items` instead of `included`, this count would be 2.
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "Ord", slug: "ord-w1", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      # Row 1 fits the cap. Rows 2 is pushed out by it.
+      insert_message(space.id, participant.id, %{
+        content: "k1 " <> secret <> String.duplicate("x", 120),
+        inserted_at: DateTime.add(@window_start, 60, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: "k2 " <> secret <> String.duplicate("y", 120),
+        inserted_at: DateTime.add(@window_start, 120, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 180, :second)
+      })
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 45
+        })
+
+      refute body =~ secret
+      assert meta.included_count == 1
+      assert meta.credential_withheld_count == 1
+      assert meta.truncated?
+
+      # `withheld` (budget) and `credential_withheld_count` are DIFFERENT
+      # quantities and the module must not collapse them: the partial line
+      # renders ALONGSIDE the marker, never instead of it.
+      assert body =~ "partial —"
+      assert body =~ "[WITHHELD: credential-shaped span]"
+
+      # Positive control: the benign row is genuinely in this window and is
+      # excluded by the BUDGET, not by the redactor.
+      assert meta.item_count == 3
+      refute body =~ benign
+    end
+
+    test "applies to :transcripts" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "Mtg", slug: "mtg-w1", kind: "channel"})
+
+      insert_transcript(%{
+        space_id: space.id,
+        status: "complete",
+        started_at: DateTime.add(@window_start, 60, :second),
+        completed_at: DateTime.add(@window_start, 600, :second),
+        summary: "rotate " <> secret,
+        segments: []
+      })
+
+      insert_transcript(%{
+        space_id: space.id,
+        status: "complete",
+        started_at: DateTime.add(@window_start, 1_200, :second),
+        completed_at: DateTime.add(@window_start, 1_800, :second),
+        summary: benign,
+        segments: []
+      })
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :transcripts,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      refute body =~ secret
+      assert body =~ benign
+      assert meta.credential_withheld_count == 1
+    end
+
+    test "applies to :pages" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      insert_org_page!("runbook/deploy", "export KEY=" <> secret)
+      insert_org_page!("runbook/notes", benign)
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :pages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      refute body =~ secret
+      assert body =~ benign
+      assert meta.credential_withheld_count == 1
+    end
+
+    test "applies to :journal" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      insert_org_journal!("pasted " <> secret)
+      insert_org_journal!(benign)
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :journal,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      refute body =~ secret
+      assert body =~ benign
+      assert meta.credential_withheld_count == 1
+    end
+  end
+
+  describe "credential withholding — the digest stays useful" do
+    test "ordinary traffic carrying task ids, commit shas and memory paths is NOT redacted" do
+      # A redactor that eats ordinary traffic gets switched off, and a
+      # switched-off redactor is worse than none because the ticket reads
+      # as closed. These four shapes cross our channels hourly.
+      ordinary = [
+        "task 01a09c9b-5d2d-7001-b7bd-0ea5b3fb1def moved to in_review",
+        "deployed 2910fad5c681e3f6ece7c6e1b375a424f9ee31ee to staging",
+        "promoted org/page/evidence-and-measurement-discipline.md",
+        "see https://suite.example.com/tasks for the board"
+      ]
+
+      space = insert_space(%{name: "Ops", slug: "ops-w1", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      ordinary
+      |> Enum.with_index(1)
+      |> Enum.each(fn {content, i} ->
+        insert_message(space.id, participant.id, %{
+          content: content,
+          inserted_at: DateTime.add(@window_start, i * 60, :second)
+        })
+      end)
+
+      body = ActivityDigest.build(@window_start, @window_end)
+
+      refute body =~ "[WITHHELD: credential-shaped span]"
+      assert Enum.reject(ordinary, &(body =~ &1)) == []
+    end
+  end
+
+  # ── The incompleteness notice (stage 3) ──────────────────────────────────
+  #
+  # Without it a careful Historian does the wrong thing CORRECTLY: sees a
+  # marker, respects it, curates around it, and publishes an org-wide page
+  # that silently omits what the withheld span was about. Every test here
+  # pins one of the three properties an implementer drops — ONCE, at the
+  # TOP, carrying the COUNT.
+  describe "credential withholding — the incompleteness notice" do
+    @notice_head "> **This window is INCOMPLETE:"
+
+    test "appears exactly once, above the first marker, carrying the count" do
+      secret_a = synthetic_credential()
+      secret_b = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "Not", slug: "not-w1", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      [{"k1 " <> secret_a, 60}, {"k2 " <> secret_b, 120}, {benign, 180}]
+      |> Enum.each(fn {content, offset} ->
+        insert_message(space.id, participant.id, %{
+          content: content,
+          inserted_at: DateTime.add(@window_start, offset, :second)
+        })
+      end)
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      assert meta.credential_withheld_count == 2
+
+      # ONCE — not once per marker. Two markers, one notice.
+      assert length(String.split(body, @notice_head)) - 1 == 1
+      assert length(String.split(body, @withheld_marker)) - 1 == 2
+
+      # THE COUNT, rendered — and it is the credential count, not the row
+      # count and not the budget-withheld count.
+      assert body =~
+               "> **This window is INCOMPLETE: 2 message(s) withheld — " <>
+                 "credential-shaped content removed before delivery.**"
+
+      assert body =~
+               "> **Do not publish a summary that implies full coverage of this window.**"
+
+      # AT THE TOP — under the header, before the first marker AND before
+      # any message line. A footer arrives after the reader has already
+      # formed the summary.
+      [notice_at, marker_at, benign_at] =
+        Enum.map([@notice_head, @withheld_marker, benign], fn needle ->
+          {at, _len} = :binary.match(body, needle)
+          at
+        end)
+
+      assert notice_at < marker_at
+      assert notice_at < benign_at
+      assert String.starts_with?(body, "## ")
+
+      assert body
+             |> String.split("\n\n", parts: 2)
+             |> List.last()
+             |> String.starts_with?(@notice_head)
+
+      # Positive control, same run: benign traffic still delivered.
+      assert body =~ benign
+      refute body =~ secret_a
+      refute body =~ secret_b
+    end
+
+    test "the rendered count is the count of RENDERED withholdings, not of queried rows" do
+      # Pins the notice's count to the same pipeline position stage 2 pinned
+      # `credential_withheld_count` to. If the notice were assembled from a
+      # count taken BEFORE take_within_budget/2 this would read 2, not 1 —
+      # so this fails on a count computed at the wrong point, not merely on
+      # a count that is absent.
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "NotOrd", slug: "not-ord-w1", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      insert_message(space.id, participant.id, %{
+        content: "k1 " <> secret <> String.duplicate("x", 120),
+        inserted_at: DateTime.add(@window_start, 60, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: "k2 " <> secret <> String.duplicate("y", 120),
+        inserted_at: DateTime.add(@window_start, 120, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 180, :second)
+      })
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 45
+        })
+
+      assert meta.item_count == 3
+      assert meta.credential_withheld_count == 1
+      assert body =~ "> **This window is INCOMPLETE: 1 message(s) withheld"
+      refute body =~ "INCOMPLETE: 2 message(s)"
+      refute body =~ "INCOMPLETE: 3 message(s)"
+
+      # A FOURTH state rendered ALONGSIDE the third, never instead of it.
+      assert body =~ "partial —"
+    end
+
+    test "build/3 carries the notice at the top with its count" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "NotB", slug: "not-b1", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      insert_message(space.id, participant.id, %{
+        content: "key " <> secret,
+        inserted_at: DateTime.add(@window_start, 60, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 120, :second)
+      })
+
+      body = ActivityDigest.build(@window_start, @window_end)
+
+      refute body =~ secret
+      assert body =~ benign
+      assert body =~ "> **This window is INCOMPLETE: 1 message(s) withheld"
+      assert length(String.split(body, @notice_head)) - 1 == 1
+
+      assert body
+             |> String.split("\n\n", parts: 2)
+             |> List.last()
+             |> String.starts_with?(@notice_head)
+    end
+
+    test "build_external/3 carries the notice at the top with its count" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      ext = external_user!()
+      space = insert_space(%{name: "NotE", slug: "not-e1", kind: "channel"})
+      ep = insert_participant(space.id, %{participant_id: ext.id, display_name: "Ext"})
+
+      insert_message(space.id, ep.id, %{
+        content: "key " <> secret,
+        inserted_at: DateTime.add(@window_start, 60, :second)
+      })
+
+      insert_message(space.id, ep.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 120, :second)
+      })
+
+      body = ActivityDigest.build_external(ext.id, @window_start, @window_end)
+
+      refute body =~ secret
+      assert body =~ benign
+      assert body =~ "> **This window is INCOMPLETE: 1 message(s) withheld"
+      assert length(String.split(body, @notice_head)) - 1 == 1
+    end
+
+    test "a clean window renders NO notice and NO marker" do
+      # The regression that protects the digest's usefulness: a notice on a
+      # window that lost nothing trains the reader to read past it, at which
+      # point the notice is decoration.
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "NotC", slug: "not-c1", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 60, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: "task 01a09c9b-5d2d-7001-b7bd-0ea5b3fb1def at 2910fad5",
+        inserted_at: DateTime.add(@window_start, 120, :second)
+      })
+
+      {:ok, windowed, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      assert meta.credential_withheld_count == 0
+      refute windowed =~ "INCOMPLETE"
+      refute windowed =~ @withheld_marker
+      assert windowed =~ benign
+
+      built = ActivityDigest.build(@window_start, @window_end)
+      refute built =~ "INCOMPLETE"
+      refute built =~ @withheld_marker
+      assert built =~ benign
+    end
+  end
+
+  # ── Stage 4: the acceptance clause, both halves in one assertion block ───
+  #
+  # Every test here asserts BOTH halves together:
+  #
+  #     credential-shaped string  MUST NOT appear verbatim
+  #     benign sentinel           MUST still appear in the SAME window
+  #
+  # The second clause is load-bearing. A bare `refute body =~ secret` is an
+  # absence-shaped assertion: it passes when the digest is empty, broken, or
+  # never assembled at all, so it certifies any upstream failure as a pass.
+  # Splitting the two halves across two tests loses the property, because
+  # neither test then observes the window the other one did.
+  describe "credential withholding — acceptance clause (stage 4)" do
+    test "windowed pass withholds the credential and keeps the benign sentinel" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      # Fixture guard: if the detector's verdict on either fixture flips,
+      # both halves below go vacuous in opposite directions.
+      assert Platform.Agents.CredentialShape.credential_shaped?(secret)
+      refute Platform.Agents.CredentialShape.credential_shaped?(benign)
+
+      space = insert_space(%{name: "Acc", slug: "acc-s4-win", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      insert_message(space.id, participant.id, %{
+        content: "rotate this: " <> secret,
+        inserted_at: DateTime.add(@window_start, 60, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 120, :second)
+      })
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      refute body =~ secret
+      assert body =~ benign
+
+      assert body =~ @withheld_marker
+      assert meta.credential_withheld_count == 1
+    end
+
+    test "24h build/3 withholds the credential and keeps the benign sentinel" do
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      assert DateTime.diff(@window_end, @window_start) == 86_400
+
+      space = insert_space(%{name: "Acc24", slug: "acc-s4-24h", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      insert_message(space.id, participant.id, %{
+        content: "sandbox creds " <> secret,
+        inserted_at: within_window()
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: within_window()
+      })
+
+      body = ActivityDigest.build(@window_start, @window_end, scope: :internal)
+
+      refute body =~ secret
+      assert body =~ benign
+
+      assert body =~ @withheld_marker
+      assert body =~ "@Ada"
+    end
+
+    test "build_external/3 withholds the credential and keeps the benign sentinel" do
+      # Driven DIRECTLY, never through `build/3`. The two entry points hold
+      # separate call sites, so a test that reaches this path via `build/3`
+      # stays green when the `build_external/3` call site alone is deleted —
+      # and that is the site an implementer skips, on the wider audience.
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      ext = external_user!()
+      space = insert_space(%{name: "AccX", slug: "acc-s4-ext", kind: "channel"})
+      ep = insert_participant(space.id, %{participant_id: ext.id, display_name: "Ext"})
+
+      insert_message(space.id, ep.id, %{
+        content: "handover token " <> secret,
+        inserted_at: within_window()
+      })
+
+      insert_message(space.id, ep.id, %{
+        content: benign,
+        inserted_at: within_window()
+      })
+
+      body = ActivityDigest.build_external(ext.id, @window_start, @window_end)
+
+      refute body =~ secret
+      assert body =~ benign
+
+      assert body =~ @withheld_marker
+      assert body =~ "@Ext"
+    end
+
+    test "a re-dispatched window withholds on every pass" do
+      # The property that makes this ticket critical rather than a one-off.
+      # Chunked passes re-dispatch ADJACENT, overlapping windows until the
+      # value is dead or the message is removed, so a fix that only holds on
+      # first delivery is not a fix: the second pass over the same row is
+      # a second delivery of the same credential.
+      secret = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "AccR", slug: "acc-s4-redis", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      insert_message(space.id, participant.id, %{
+        content: "key " <> secret,
+        inserted_at: DateTime.add(@window_start, 120, :second)
+      })
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 180, :second)
+      })
+
+      pass = fn ws, we ->
+        {:ok, body, meta} =
+          ActivityDigest.build_windowed_result(%{
+            corpus: :messages,
+            window_start: ws,
+            window_end: we,
+            oversize: false,
+            budget_tokens: 30_000
+          })
+
+        {body, meta}
+      end
+
+      # Two overlapping spans, each covering BOTH rows.
+      {first_body, first_meta} =
+        pass.(@window_start, DateTime.add(@window_start, 300, :second))
+
+      {second_body, second_meta} =
+        pass.(
+          DateTime.add(@window_start, 60, :second),
+          DateTime.add(@window_start, 600, :second)
+        )
+
+      # Both passes really did see the row — otherwise "withheld on the
+      # second pass" would be satisfied by an empty second window.
+      assert first_meta.included_count == 2
+      assert second_meta.included_count == 2
+
+      refute first_body =~ secret
+      assert first_body =~ benign
+
+      refute second_body =~ secret
+      assert second_body =~ benign
+
+      assert first_meta.credential_withheld_count == 1
+      assert second_meta.credential_withheld_count == 1
+      assert second_body =~ @withheld_marker
+    end
+
+    test "the incompleteness notice appears once, at the top, carrying the count" do
+      secret_a = synthetic_credential()
+      secret_b = synthetic_credential()
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "AccN", slug: "acc-s4-notice", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      [{"k1 " <> secret_a, 60}, {"k2 " <> secret_b, 120}, {benign, 180}]
+      |> Enum.each(fn {content, offset} ->
+        insert_message(space.id, participant.id, %{
+          content: content,
+          inserted_at: DateTime.add(@window_start, offset, :second)
+        })
+      end)
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      refute body =~ secret_a
+      refute body =~ secret_b
+      assert body =~ benign
+
+      # EXACTLY ONE occurrence — not one per marker.
+      assert length(String.split(body, @notice_head)) - 1 == 1
+      assert length(String.split(body, @withheld_marker)) - 1 == 2
+
+      # Byte offset PRECEDES the first marker, and the first body line.
+      {notice_at, _} = :binary.match(body, @notice_head)
+      {marker_at, _} = :binary.match(body, @withheld_marker)
+      {benign_at, _} = :binary.match(body, benign)
+      assert notice_at < marker_at
+      assert notice_at < benign_at
+
+      # The RENDERED count equals the number withheld — and it is
+      # `meta.credential_withheld_count`, NOT the budget-withheld set that
+      # `windowed_body/4` binds to `withheld`, and not the row count.
+      assert meta.credential_withheld_count == 2
+      assert body =~ "> **This window is INCOMPLETE: 2 message(s) withheld"
+      refute body =~ "INCOMPLETE: 3 message(s)"
+      assert meta.item_count == 3
+    end
+
+    test "a window with no credential-shaped content renders no notice and no marker" do
+      # The regression that protects the digest's USEFULNESS. A redactor
+      # that eats ordinary traffic gets switched off, and a switched-off
+      # redactor is worse than none, because the ticket still reads closed.
+      benign = benign_sentinel()
+
+      space = insert_space(%{name: "AccC", slug: "acc-s4-clean", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      insert_message(space.id, participant.id, %{
+        content: benign,
+        inserted_at: DateTime.add(@window_start, 60, :second)
+      })
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      assert meta.credential_withheld_count == 0
+      assert body =~ benign
+      refute body =~ @withheld_marker
+      refute body =~ "INCOMPLETE"
+
+      # Nothing at all is inserted between the header and the body: the
+      # section that follows the header is the corpus section itself, byte
+      # for byte what a clean window rendered before this ticket.
+      [header, rest] = String.split(body, "\n\n", parts: 2)
+      assert String.starts_with?(header, "## ")
+      assert String.starts_with?(rest, "### Chat\n\n")
+      refute rest =~ ">"
+    end
+
+    test "UUIDs, git SHAs and memory paths survive the window intact" do
+      # Named allowlist regression, asserted in the SAME window as a real
+      # withholding so a detector that has stopped firing altogether cannot
+      # satisfy it.
+      secret = synthetic_credential()
+
+      ordinary = [
+        "task 01a09c9b-5d2d-7001-b7bd-0ea5b3fb1def moved to in_review",
+        "deployed 9c1726764c1e6a2d0d1e5b1f0a9c2d3e4f5a6b7c to staging",
+        "promoted org/page/evidence-and-measurement-discipline.md",
+        "space/01a0aa6d-8ea4-7001-a442-97d8c187d03b/journal/2026-09-16.md"
+      ]
+
+      space = insert_space(%{name: "AccA", slug: "acc-s4-allow", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      ordinary
+      |> Enum.with_index(1)
+      |> Enum.each(fn {content, i} ->
+        insert_message(space.id, participant.id, %{
+          content: content,
+          inserted_at: DateTime.add(@window_start, i * 60, :second)
+        })
+      end)
+
+      insert_message(space.id, participant.id, %{
+        content: "and the key is " <> secret,
+        inserted_at: DateTime.add(@window_start, 600, :second)
+      })
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false,
+          budget_tokens: 30_000
+        })
+
+      refute body =~ secret
+      assert Enum.reject(ordinary, &(body =~ &1)) == []
+      assert meta.credential_withheld_count == 1
+    end
+  end
+
+  # ── Synthetic fixtures ───────────────────────────────────────────────────
+
+  # Generated at test time from `:crypto.strong_rand_bytes/1`. A `ghp_`
+  # prefix plus a 30-character base32 body is tier-1 credential-shaped and
+  # is not, and cannot be, anyone's real token.
+  defp synthetic_credential do
+    body =
+      32
+      |> :crypto.strong_rand_bytes()
+      |> Base.encode32(padding: false)
+      |> binary_part(0, 30)
+
+    "ghp_" <> body
+  end
+
+  # Distinctive ordinary prose. Every run in it is short and space
+  # separated, so no tier can reach it — asserted directly by the fixture
+  # guard in the first test.
+  defp benign_sentinel do
+    "the kettle boiled at dawn marker #{System.unique_integer([:positive])}"
+  end
+
+  defp insert_org_page!(file_key, content) do
+    attrs = %{
+      workspace_id: nil,
+      file_key: "#{file_key}-#{System.unique_integer([:positive])}",
+      content: content
+    }
+
+    page =
+      %Platform.Org.WikiPage{}
+      |> Platform.Org.WikiPage.changeset(attrs)
+      |> Repo.insert!()
+
+    ts = within_window()
+
+    {1, _} =
+      Repo.update_all(
+        from(p in Platform.Org.WikiPage, where: p.id == ^page.id),
+        set: [updated_at: ts, inserted_at: ts]
+      )
+
+    page
+  end
+
+  defp insert_org_journal!(content) do
+    row =
+      %Platform.Org.WikiJournalEntry{}
+      |> Platform.Org.WikiJournalEntry.changeset(%{
+        workspace_id: nil,
+        content: content,
+        date: DateTime.to_date(within_window())
+      })
+      |> Repo.insert!()
+
+    ts = within_window()
+
+    {1, _} =
+      Repo.update_all(
+        from(e in Platform.Org.WikiJournalEntry, where: e.id == ^row.id),
+        set: [inserted_at: ts]
+      )
+
+    row
   end
 end

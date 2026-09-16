@@ -30,6 +30,7 @@ defmodule Platform.Agents.ActivityDigest do
 
   import Ecto.Query
 
+  alias Platform.Agents.CredentialShape
   alias Platform.Agents.HistorianAudit
   alias Platform.Chat
   alias Platform.Chat.Space
@@ -78,6 +79,64 @@ defmodule Platform.Agents.ActivityDigest do
   # classify a window without re-deriving eligibility at read time.
   @empty_line "_No activity in this window._"
 
+  # ── The FOURTH state: `withheld` (task 01a09c9b) ─────────────────────────
+  #
+  # Distinct from all three above, and never to be collapsed into any of
+  # them. `@empty_line` says the window was quiet; the `@oversize_empty_*`
+  # lines say we could not digest it; `partial_line/2` / `skipped_line/3`
+  # say we could not digest ALL of it. `@withheld_marker` says something
+  # different again: content EXISTED, was eligible, was within budget, and
+  # was deliberately removed because it is shaped like a credential.
+  #
+  # It occupies the message's POSITION in the stream rather than deleting
+  # the row, so author, space and timestamp survive and the reader can see
+  # that a thing was said and go read it at the source. A blank or a silent
+  # drop would be worse than a false claim: a hole invites the recipient to
+  # invent what filled it, which is the defect task 01a0a74d closed.
+  #
+  # Renders ALONGSIDE `partial_line/2` when both apply, never instead of it.
+  @withheld_marker "[WITHHELD: credential-shaped span]"
+
+  # ── The incompleteness notice (task 01a09c9b stage 3) ────────────────────
+  #
+  # The marker above changes what the Historian SEES. This changes what it
+  # PRODUCES. Without it a careful reader does the wrong thing correctly:
+  # sees a marker, respects it, curates everything around it, and publishes
+  # an org-wide page that silently omits what the withheld span was about.
+  # `@empty_line` and the `RETURN SILENTLY` instruction downstream are both
+  # scoped to "nothing to curate", never to "something was withheld".
+  #
+  # Three properties, each of which is the one an implementer drops:
+  #
+  #   1. ONCE per dispatch, NOT per marker. Per-marker repetition trains the
+  #      reader past it by the third occurrence.
+  #   2. At the TOP, immediately under the header — never a footer. At the
+  #      end it arrives after the reader has already formed the summary; at
+  #      the top it is a precondition on the whole task, and the reader
+  #      cannot reach the messages without passing it.
+  #   3. It carries the COUNT. The count is the part cut as "redundant with
+  #      the markers". It is not: the markers are scattered through the
+  #      stream and nobody totals them, and 1 versus 14 licenses completely
+  #      different curation decisions.
+  #
+  # Rendered ALONGSIDE `partial_line/2` when both apply, never instead of.
+  @spec incompleteness_notice(non_neg_integer()) :: String.t()
+  defp incompleteness_notice(0), do: ""
+
+  defp incompleteness_notice(count) when is_integer(count) and count > 0 do
+    "> **This window is INCOMPLETE: #{count} message(s) withheld — " <>
+      "credential-shaped content removed before delivery.**\n" <>
+      "> **Do not publish a summary that implies full coverage of this window.**\n\n"
+  end
+
+  # Header, then the notice (when anything was withheld), then the body.
+  # The notice is prepended exactly once here, which is the only place any
+  # of the three entry points assembles a header onto a body.
+  @spec with_header(String.t(), non_neg_integer(), String.t()) :: String.t()
+  defp with_header(header, withheld_count, body) do
+    header <> "\n\n" <> incompleteness_notice(withheld_count) <> body
+  end
+
   @doc """
   Returns a markdown string summarising activity in the half-open
   window `[window_start, window_end)`.
@@ -96,6 +155,10 @@ defmodule Platform.Agents.ActivityDigest do
 
     tasks = Tasks.list_tasks_updated_since(window_start, window_end: window_end)
 
+    {messages, messages_withheld} = withhold_credentialed(messages, :content)
+    {transcripts, transcripts_withheld} = withhold_credentialed(transcripts, :summary)
+    withheld_count = messages_withheld + transcripts_withheld
+
     space_names = fetch_space_names(messages, transcripts)
 
     sections =
@@ -113,7 +176,7 @@ defmodule Platform.Agents.ActivityDigest do
       end
 
     header = "## Activity since #{format_datetime(window_start)} (UTC)"
-    header <> "\n\n" <> body
+    with_header(header, withheld_count, body)
   end
 
   @doc """
@@ -143,6 +206,12 @@ defmodule Platform.Agents.ActivityDigest do
     transcripts =
       Meetings.list_transcripts_since(window_start, window_end: window_end, scope: scope)
 
+    # An external-user digest reaches a WIDER audience than the internal
+    # one, not a narrower one. This call site is the one that gets skipped.
+    {messages, messages_withheld} = withhold_credentialed(messages, :content)
+    {transcripts, transcripts_withheld} = withhold_credentialed(transcripts, :summary)
+    withheld_count = messages_withheld + transcripts_withheld
+
     space_names = fetch_space_names(messages, transcripts)
 
     sections =
@@ -159,7 +228,7 @@ defmodule Platform.Agents.ActivityDigest do
       end
 
     header = "## Activity since #{format_datetime(window_start)} (UTC)"
-    header <> "\n\n" <> body
+    with_header(header, withheld_count, body)
   end
 
   @doc """
@@ -210,6 +279,12 @@ defmodule Platform.Agents.ActivityDigest do
       row (or timestamp-tied group) that exceeds the whole window budget on
       its own. Forward progress requires stepping past it; the caller emits
       an `:item_skipped` audit row so the step is never silent.
+    * `:credential_withheld_count` — how many INCLUDED rows had their
+      rendered field replaced by `[WITHHELD: credential-shaped span]`. A
+      fourth state, distinct from every count above: the row was eligible,
+      within budget and rendered — only its body was removed. It is still
+      counted in `:included_count` and it does not set `:truncated?`,
+      because the cursor HAS passed it and must not re-dispatch it.
 
   ## Item-wise truncation
 
@@ -257,7 +332,7 @@ defmodule Platform.Agents.ActivityDigest do
 
     {body, meta} = windowed_body(corpus, ws, we, input)
 
-    {:ok, header <> "\n\n" <> body, meta}
+    {:ok, with_header(header, meta.credential_withheld_count, body), meta}
   end
 
   @doc """
@@ -360,6 +435,13 @@ defmodule Platform.Agents.ActivityDigest do
     items = corpus_items(corpus, ws, we, scope: scope)
     {included, withheld, skipped} = take_within_budget(items, cap_bytes)
 
+    # AFTER the budget, BEFORE the render: the count then reflects what is
+    # actually RENDERED rather than what was queried. Note `withheld` above
+    # is the BUDGET-withheld set and is a different quantity entirely — the
+    # collision is in the existing name, not in this one.
+    {included, credential_withheld_count} =
+      withhold_credentialed_items(included, withheld_content_key(corpus))
+
     item_count = length(items)
     included_count = length(included)
 
@@ -369,7 +451,8 @@ defmodule Platform.Agents.ActivityDigest do
       last_included_at: watermark(included),
       truncated?: included_count < item_count,
       oversize_empty?: oversize? and item_count == 0,
-      skipped: skipped
+      skipped: skipped,
+      credential_withheld_count: credential_withheld_count
     }
 
     {render_windowed(corpus, ws, we, included, withheld, meta, cap_bytes), meta}
@@ -383,7 +466,8 @@ defmodule Platform.Agents.ActivityDigest do
        last_included_at: nil,
        truncated?: false,
        oversize_empty?: false,
-       skipped: nil
+       skipped: nil,
+       credential_withheld_count: 0
      }}
   end
 
@@ -443,6 +527,54 @@ defmodule Platform.Agents.ActivityDigest do
   defp render_corpus(:pages, included), do: digest_pages(Enum.map(included, & &1.row))
   defp render_corpus(:journal, included), do: digest_journal(Enum.map(included, & &1.row))
   defp render_corpus(:files, included), do: digest_file_cards(Enum.map(included, & &1.row))
+
+  # ── Credential withholding (task 01a09c9b) ───────────────────────────────
+
+  # Replace the `content_key` field of every credential-shaped row with
+  # `@withheld_marker`, returning the rewritten rows and how many were
+  # rewritten. The row itself survives — author, space and timestamp are
+  # untouched — so the marker takes the message's POSITION in the stream.
+  #
+  # The count is the figure a top-of-dispatch notice is assembled from. It
+  # is returned rather than discarded even where no caller reads it yet.
+  #
+  # Assembly is the seam on purpose: it is the one point every push shape
+  # passes through, and it needs no decision from any reader.
+  @spec withhold_credentialed([map()], atom()) :: {[map()], non_neg_integer()}
+  defp withhold_credentialed(rows, content_key) do
+    Enum.map_reduce(rows, 0, fn row, count ->
+      if CredentialShape.credential_shaped?(Map.get(row, content_key)) do
+        {Map.put(row, content_key, @withheld_marker), count + 1}
+      else
+        {row, count}
+      end
+    end)
+  end
+
+  # `withhold_credentialed/2` lifted over the `%{id:, at:, bytes:, row:}`
+  # wrappers `corpus_items/4` emits. `:bytes` is deliberately NOT recomputed:
+  # it is the currency the oversize decision and the byte signal were made
+  # in, and rewriting it here would make the renderer disagree with
+  # `Historian.sum_corpus_bytes/3` — the exact drift task 019fa1cc closed.
+  @spec withhold_credentialed_items([map()], atom()) :: {[map()], non_neg_integer()}
+  defp withhold_credentialed_items(items, nil), do: {items, 0}
+
+  defp withhold_credentialed_items(items, content_key) do
+    Enum.map_reduce(items, 0, fn item, count ->
+      {[row], n} = withhold_credentialed([item.row], content_key)
+      {%{item | row: row}, count + n}
+    end)
+  end
+
+  # Which field of a row actually REACHES the rendered body, per corpus.
+  # `:transcripts` is `:summary`, not `:segments` — `digest_transcripts/2`
+  # renders only the summary, though `transcript_bytes/1` weighs both.
+  # `:files` returns `nil`: file cards carry cards, not bodies.
+  defp withheld_content_key(:messages), do: :content
+  defp withheld_content_key(:transcripts), do: :summary
+  defp withheld_content_key(:pages), do: :content
+  defp withheld_content_key(:journal), do: :content
+  defp withheld_content_key(_other), do: nil
 
   defp watermark([]), do: nil
   defp watermark(included), do: included |> List.last() |> Map.fetch!(:at)
