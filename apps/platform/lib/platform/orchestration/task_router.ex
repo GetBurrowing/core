@@ -3630,6 +3630,35 @@ defmodule Platform.Orchestration.TaskRouter do
     maybe_set_stage(state, running_stage)
   end
 
+  # The self-filed event types that are DELIBERATELY NOT noop'd, each with the
+  # reason. This attribute exists so the clause list below can be read as
+  # complete: every event type this module emits with
+  # `RuntimeSupervision.self_filed_runtime_id()` is either noop'd in
+  # `apply_runtime_event/2` or listed here with a reason. A self-filed type in
+  # neither place is an undeclared decision, and task 01a0a6e3 stage 3's
+  # category guard fails on exactly that.
+  #
+  # Do not "tidy" the clause list into consistency with this map. The
+  # inconsistency is the point, and the tidy is the regression.
+  @self_processed_self_filed_types %{
+    "execution.blocked" =>
+      "NOT noop'd on purpose: self-receipt through apply_runtime_event/2 is the only path " <>
+        "by which a ROUTER-AUTHORED blocker reaches :waiting_human (the \"execution.blocked\" " <>
+        "arm of the generic clause, behind blocker_targets_current_stage?/2). The pre-dispatch " <>
+        "human_hold guard cannot cover it: RuntimeSupervision.needs_human_hold/3 is scoped to " <>
+        "the assignee's runtime_id and documents that it deliberately ignores the router's own " <>
+        "self-filed blockers, and record_unresolved_stage_blocker/4 writes a nil stage_id, " <>
+        "which that function returns nil for outright. Both emit sites " <>
+        "(record_unresolved_stage_blocker/4, record_review_unrunnable_blocker/4) end at " <>
+        "Logger + :ok and thread nothing into state, so a noop clause here would silently " <>
+        "disable router self-blocking while still writing the event row and the log line: " <>
+        "the trace stays, the behaviour goes."
+  }
+
+  @doc false
+  @spec self_processed_self_filed_types() :: %{String.t() => String.t()}
+  def self_processed_self_filed_types, do: @self_processed_self_filed_types
+
   # Router-emitted alerts (`execution.no_ack_timeout`, `execution.safety_net_fired`)
   # are broadcast on `tasks:board` — which the router is subscribed to — so we
   # receive our own alerts back. They must NOT re-enter the state machine
@@ -3646,6 +3675,21 @@ defmodule Platform.Orchestration.TaskRouter do
   # `last_runtime_event_at` from it — hydrating, by the back door, exactly the
   # liveness the foreign-lease clause deliberately refuses to hydrate.
   defp apply_runtime_event(state, %{event_type: "execution.assignee_drift"}), do: state
+
+  # Task 01a0a6e3 stage 1. The router's own stageless-dispatch trace pair
+  # (task 01a0a5fa, PR #1023) arrives back on `tasks:board` like every other
+  # self-filed alert above, and each one corrupts a different piece of state:
+  #
+  #   * `execution.dispatch_stageless` would stamp `last_runtime_event_at`,
+  #     making `runtime_event_since_stageless_dispatch?/1` read true against
+  #     the router's OWN record of the dispatch — the stageless watchdog would
+  #     then suppress itself and `execution.dispatch_unanswered` could never
+  #     fire.
+  #   * `execution.dispatch_unanswered` would run `maybe_reset_stalled/1` and
+  #     flip a `:stalled` router back to `:running` off an event whose entire
+  #     content is "nothing came back".
+  defp apply_runtime_event(state, %{event_type: "execution.dispatch_stageless"}), do: state
+  defp apply_runtime_event(state, %{event_type: "execution.dispatch_unanswered"}), do: state
 
   defp apply_runtime_event(state, event) do
     event_time = event.occurred_at || DateTime.utc_now()
