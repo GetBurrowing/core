@@ -733,11 +733,15 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     # would take the control away from exactly this viewer.
     test "a signed-in member on the meet host has no shell and still gets the section",
          %{conn: conn, meeting: meeting, agent: agent} do
+      # `?no_autojoin=true` reaches the call shell (where the People-tab
+      # invite section lives) without a live connection: a signed-in member
+      # on the `meet.` host now lands in the pre-join lobby by default (task
+      # 01a09415).
       {:ok, view, _html} =
         conn
         |> login(user!("meet-member"))
         |> Map.put(:host, "meet.localhost")
-        |> live("/meetings/#{meeting.slug}")
+        |> live("/meetings/#{meeting.slug}?no_autojoin=true")
 
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.shell? == false

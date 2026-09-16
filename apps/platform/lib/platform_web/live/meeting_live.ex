@@ -1152,14 +1152,64 @@ defmodule PlatformWeb.MeetingLive do
         # exactly the quickmeet-only-fix trap the stage brief calls out.
         if connected?(socket), do: MeetingHooks.schedule_agent_activity_tick()
 
-        # Auto-join on connected mount unless ?no_autojoin=true is set
-        # (the e2e tests in stage 7 use that escape hatch so they can
-        # assert the manual "Join" CTA path). `send(self(), :auto_join)`
-        # defers the join one tick so the LV is fully mounted before
-        # MeetingHooks reads `:active_space`.
-        if connected?(socket) and Map.get(params, "no_autojoin") != "true" do
-          send(self(), :auto_join)
-        end
+        # Pre-join LOBBY for signed-in members on the chrome-less meeting
+        # surface (task 01a09415). This is Harper's #4 divergence from the
+        # prototype: "member lobby — guests get the camera-preview prejoin,
+        # but signed-in members skip straight into the call with no preview."
+        #
+        # An invited member arrives on the `meet.` host (`chrome_mode ==
+        # :none`, a real signed-in account) EXACTLY as a guest does — via a
+        # meeting link, with no app shell around them — so this is the
+        # surface where "the member skips the prejoin the guest gets" is the
+        # literal, side-by-side comparison the divergence names. That member
+        # now lands in the SAME lobby a guest gets: `:lobby` renders the
+        # identical preview + mic/camera toggles + Join markup as the guest's
+        # `:name_entry`, minus the name field the account makes redundant.
+        # The lobby's "Join" (`"join_meeting"`) runs the very
+        # `maybe_start_meeting |> MeetingHooks.join()` path auto-join used to,
+        # so a mic or camera toggled off in the lobby stays off in the room
+        # (`do_join/1` reads the live `:mic_enabled`/`:camera_enabled` pair at
+        # push time — device choice survives the transition unchanged).
+        #
+        # SCOPE (a documented judgment call). An INTERNAL user reaching a
+        # meeting from the in-app meetings list renders inside the shell
+        # (`chrome_mode == :shell`) and continues to auto-join on a connected
+        # mount, unchanged. They navigated INTO the meeting from their own
+        # list; the divergence is about the link-arrival surface that mirrors
+        # a guest, and that is the chrome-less one. Widening the prejoin to
+        # the in-app shell surface is a larger change (every in-call shell
+        # test would have to enter through the lobby) and is left as a
+        # follow-up rather than bundled in here.
+        #
+        # `?no_autojoin=true` keeps its meaning as the test/deep-link escape
+        # hatch: SKIP the lobby / auto-join and render the call shell (with
+        # its own manual "Join" CTA) WITHOUT connecting. `:in_meeting` guards
+        # a live-patch re-entry (e.g. a `?tab=` deep-link) on an already
+        # joined member so it cannot bounce them back out of the call.
+        socket =
+          cond do
+            Map.get(params, "no_autojoin") == "true" ->
+              socket
+
+            socket.assigns[:in_meeting] ->
+              socket
+
+            socket.assigns[:chrome_mode] == :none ->
+              # Set on both the disconnected and connected render so the
+              # static first paint and the live view agree; the join itself
+              # happens only on the explicit "Join".
+              assign(socket, :state, :lobby)
+
+            connected?(socket) ->
+              # Internal shell surface, unchanged: defer the join one tick so
+              # the LV is fully mounted before MeetingHooks reads
+              # `:active_space`.
+              send(self(), :auto_join)
+              socket
+
+            true ->
+              socket
+          end
 
         {:noreply, socket}
     end
@@ -1221,6 +1271,14 @@ defmodule PlatformWeb.MeetingLive do
      socket
      |> assign(:page_title, "Meetings")
      |> assign(:meeting, nil)
+     # Drop any meeting-surface `:state` (task 01a09415). A member who
+     # patches from a meeting's pre-join `:lobby` back to `/meetings` stays
+     # on ONE pid (both routes share the `:meet_member` live_session), so
+     # without this the stale `:state == :lobby` would keep the lobby cond
+     # branch selected while `:meeting` is now nil — a `@meeting.name` on nil.
+     # The index never reads `:state`, and a normal index mount already has
+     # it nil, so this is a no-op everywhere except that transition.
+     |> assign(:state, nil)
      # `:meetings` and `:grouped_meetings` keep their exact prior meaning:
      # `data-role="meetings-count"` and the archive sibling both read them,
      # and the calendar is an additional projection, not a replacement.
@@ -3178,6 +3236,32 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_event("submit_name", _params, socket) do
     {:noreply, assign(socket, :name_error, "Please enter your name.")}
+  end
+
+  # Member pre-join lobby "Join" (task 01a09415). The signed-in-member
+  # parallel to a guest's `"submit_name"`: there is no name to collect (the
+  # account already names them), so a plain action rather than a form
+  # submit. Clears the `:lobby` state back to `nil` — the member's post-join
+  # state, which the call-shell member identity badge (`is_nil(@state)`)
+  # keys on — then runs the SAME `maybe_start_meeting |> MeetingHooks.join()`
+  # path the `:auto_join` handler's live branch runs, so a scheduled meeting
+  # is flipped `live` on entry and the `:mic_enabled`/`:camera_enabled` the
+  # lobby toggles committed ride into the room via `do_join/1`. Guarded on a
+  # connected socket + binary `:user_id`: `MeetingHooks.join/1` no-ops
+  # without a real user, so a stray click on a disconnected mount cannot
+  # strand the socket out of both the lobby and the call.
+  def handle_event("join_meeting", _params, socket) do
+    if connected?(socket) and is_binary(socket.assigns[:user_id]) do
+      socket =
+        socket
+        |> assign(:state, nil)
+        |> maybe_start_meeting()
+        |> MeetingHooks.join()
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Lobby name field (task 01a07410 / FE-17 stage 4). Tracks what the guest

@@ -37,8 +37,11 @@
       chosen by `@unavailable_kind` (task 01a04353): `:permanent` promises
       no retry and points at the invite sender, `:unknown` keeps the
       try-again-shortly wording.
-    * `@chrome_mode == :none and @state == :name_entry` — guest pre-join lobby
-      (name entry plus mic/camera toggles and a self-preview; FE-17 stage 4).
+    * `@state == :name_entry or @state == :lobby` — the pre-join lobby
+      (mic/camera toggles and a self-preview; FE-17 stage 4). `:name_entry`
+      is the GUEST variant and adds a name field; `:lobby` is the signed-in
+      MEMBER variant (task 01a09415) and has no name field — the account
+      names them. One lobby, two entrances, gated so BOTH reach it.
     * `@meeting != nil` — full meeting shell (both `chrome_mode == :shell` and
       guest `:in_meeting`; shell-only regions gated with `@shell?` below).
     * Fallthrough — `:index` action (grouped meetings list + Start-meeting FAB).
@@ -142,23 +145,32 @@
         </div>
       </div>
     </div>
-  <% @chrome_mode == :none and @state == :name_entry -> %>
-    <%!-- Pre-join LOBBY (task 01a07410 / FE-17 stage 4). This is the guest
-       name-entry card grown into a lobby, not a screen beside it: same
-       `:name_entry` state, same `submit_name` event, same assigns. The
-       mic and camera toggles fire the SAME `meeting_toggle_mic` /
-       `meeting_toggle_camera` events the in-call controls use, handled by
-       `MeetingHooks.attach_guest/1`'s hook (installed at mount by
-       `seed_guest_shell_tree_assigns/2`), so they write the one
-       `:mic_enabled` / `:camera_enabled` pair the join payload then
-       carries into the room. `MeetingLobbyPreview` only mirrors
-       `data-camera-enabled` into a local getUserMedia preview.
+  <% @state == :name_entry or @state == :lobby -> %>
+    <%!-- Pre-join LOBBY (task 01a07410 / FE-17 stage 4; members added in
+       task 01a09415). This is the name-entry card grown into a lobby, not a
+       screen beside it. The GUEST reaches it as `:name_entry` and Joins via
+       `submit_name`; the signed-in MEMBER reaches it as `:lobby` and Joins
+       via `join_meeting`. Both share the preview + toggles below.
 
-       Mobile-first: a single column that fills the viewport, the preview
-       and toggles in the scrolling middle, and the Join action pinned to
-       the bottom with `pb-[env(safe-area-inset-bottom)]` — the guest
-       surface has no shell chrome, so no `--bottom-nav-height` term
-       (meeting_live_test's chrome-escape test refutes it here).
+       The mic and camera toggles fire the SAME `meeting_toggle_mic` /
+       `meeting_toggle_camera` events the in-call controls use — the guest's
+       are handled by `MeetingHooks.attach_guest/1`'s hook, the member's by
+       `MeetingHooks.attach/2`'s — so both write the one `:mic_enabled` /
+       `:camera_enabled` pair the join payload then carries into the room
+       (`do_join/1` reads it at push time). `MeetingLobbyPreview` only
+       mirrors `data-camera-enabled` into a local getUserMedia preview.
+
+       Both variants render only on the chrome-less surface (`:name_entry`
+       for a guest, `:lobby` for a signed-in member on the `meet.` host) —
+       an internal in-app member reaches the call shell directly and does
+       not pass through here.
+
+       Mobile-first: a single column capped at `max-w-md` that fills the
+       viewport, the preview and toggles in the scrolling middle, and the
+       Join action pinned to the bottom with `pb-[env(safe-area-inset-bottom)]`
+       — the chrome-less surface has no shell chrome, so no
+       `--bottom-nav-height` term (meeting_live_test's chrome-escape test
+       refutes it here).
 
        Mic-off keeps the `hero-microphone` glyph and says "Mic off" in
        words: `hero-microphone-slash` compiles to nothing (see
@@ -261,49 +273,75 @@
         </div>
       </div>
 
-      <%!-- `phx-change` keeps `:name_value` current so a toggle click, which
-         re-renders `value={@name_value}`, does not wipe a half-typed name
-         (morphdom preserves only the FOCUSED input's value). --%>
-      <form
-        phx-submit="submit_name"
-        phx-change="lobby_name_change"
-        class="mt-4 flex flex-1 flex-col gap-3"
-        data-role="meeting-lobby-join-form"
-      >
-        <label class="form-control w-full">
-          <span class="label-text mb-1 text-sm">Your name</span>
-          <input
-            type="text"
-            name="guest[name]"
-            value={@name_value}
-            autofocus
-            required
-            maxlength="80"
-            placeholder="Jane Doe"
-            class={[
-              "input input-bordered w-full",
-              @name_error && "input-error"
-            ]}
-          />
-          <span :if={@name_error} class="mt-1 text-xs text-error">
-            {@name_error}
-          </span>
-        </label>
-        <p class="text-xs text-base-content/60" data-role="meeting-lobby-summary">
-          You will join with your microphone {if @mic_enabled, do: "on", else: "off"} and your camera {if @camera_enabled,
-            do: "on",
-            else: "off"}.
-        </p>
-        <div class="sticky bottom-0 mt-auto bg-base-100 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <button
-            type="submit"
-            data-role="meeting-lobby-join"
-            class="btn btn-primary min-h-12 w-full text-primary-content"
-          >
-            Join meeting
-          </button>
+      <%!-- GUEST (`:name_entry`) collects a name; the signed-in MEMBER
+         (`:lobby`) does not — the account already names them, so the member
+         branch is a plain "Join" action, not a form submit. Both branches
+         share the preview + toggles above and the same summary + Join
+         styling below, so the two surfaces are one lobby, not a member-only
+         duplicate. --%>
+      <%= if @state == :name_entry do %>
+        <%!-- `phx-change` keeps `:name_value` current so a toggle click, which
+           re-renders `value={@name_value}`, does not wipe a half-typed name
+           (morphdom preserves only the FOCUSED input's value). --%>
+        <form
+          phx-submit="submit_name"
+          phx-change="lobby_name_change"
+          class="mt-4 flex flex-1 flex-col gap-3"
+          data-role="meeting-lobby-join-form"
+        >
+          <label class="form-control w-full">
+            <span class="label-text mb-1 text-sm">Your name</span>
+            <input
+              type="text"
+              name="guest[name]"
+              value={@name_value}
+              autofocus
+              required
+              maxlength="80"
+              placeholder="Jane Doe"
+              class={[
+                "input input-bordered w-full",
+                @name_error && "input-error"
+              ]}
+            />
+            <span :if={@name_error} class="mt-1 text-xs text-error">
+              {@name_error}
+            </span>
+          </label>
+          <p class="text-xs text-base-content/60" data-role="meeting-lobby-summary">
+            You will join with your microphone {if @mic_enabled, do: "on", else: "off"} and your camera {if @camera_enabled,
+              do: "on",
+              else: "off"}.
+          </p>
+          <div class="sticky bottom-0 mt-auto bg-base-100 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+            <button
+              type="submit"
+              data-role="meeting-lobby-join"
+              class="btn btn-primary min-h-12 w-full text-primary-content"
+            >
+              Join meeting
+            </button>
+          </div>
+        </form>
+      <% else %>
+        <div class="mt-4 flex flex-1 flex-col gap-3" data-role="meeting-lobby-join-form">
+          <p class="text-xs text-base-content/60" data-role="meeting-lobby-summary">
+            You will join with your microphone {if @mic_enabled, do: "on", else: "off"} and your camera {if @camera_enabled,
+              do: "on",
+              else: "off"}.
+          </p>
+          <div class="sticky bottom-0 mt-auto bg-base-100 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+            <button
+              type="button"
+              phx-click="join_meeting"
+              data-role="meeting-lobby-join"
+              class="btn btn-primary min-h-12 w-full text-primary-content"
+            >
+              Join meeting
+            </button>
+          </div>
         </div>
-      </form>
+      <% end %>
     </div>
   <% @meeting != nil -> %>
     <div class="flex h-full flex-col bg-base-100 text-base-content">

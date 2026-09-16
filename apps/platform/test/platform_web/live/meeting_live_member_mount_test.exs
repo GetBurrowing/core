@@ -144,11 +144,15 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
 
     test "renders the meeting with a MEMBER badge naming the account, and no guest badge",
          %{conn: conn, ext: ext, meeting: meeting} do
+      # `?no_autojoin=true` reaches the CALL SHELL without a live LiveKit
+      # connection (task 01a09415): a member now lands in the pre-join lobby
+      # by default, and the identity badge is a call-shell element, so the
+      # hatch is how this test asserts against the shell it means to.
       {:ok, view, html} =
         conn
         |> login(ext)
         |> on_meet_host()
-        |> live("/meetings/#{meeting.slug}")
+        |> live("/meetings/#{meeting.slug}?no_autojoin=true")
 
       # The room actually rendered — not a denial card.
       assert html =~ meeting.name
@@ -168,11 +172,14 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
     end
 
     test "carries no internal shell chrome", %{conn: conn, ext: ext, meeting: meeting} do
+      # `?no_autojoin=true`: the positive control below reads a call-shell
+      # element (`meeting-controls`), which the default pre-join lobby does
+      # not render (task 01a09415).
       {:ok, view, html} =
         conn
         |> login(ext)
         |> on_meet_host()
-        |> live("/meetings/#{meeting.slug}")
+        |> live("/meetings/#{meeting.slug}?no_autojoin=true")
 
       # The specific rail element, not a substring search for "/tasks" —
       # a page can contain a string from somewhere else entirely.
@@ -190,19 +197,56 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
       assert has_element?(view, "[data-role=meeting-controls]")
     end
 
-    test "auto-join runs — the member enters the call, not just the page",
+    test "a member lands in the pre-join lobby, NOT straight in the call",
          %{conn: conn, ext: ext, meeting: meeting} do
-      # `handle_info(:auto_join, _)` used to no-op on `chrome_mode == :none`,
-      # a guard that spelled "guest" wrongly: the stated reason for the skip
-      # was the guest surface's nil `:user_id`, and a member has a real one.
-      # Under the old guard this page loaded and the member never entered the
-      # room — reachable, unusable. Both halves asserted: the socket says it
-      # joined AND a participant row exists carrying this user's id.
+      # Task 01a09415, Harper's #4 divergence: a member used to be
+      # auto-joined straight into the call with no camera preview, while a
+      # guest got the prejoin lobby. A member now gets the SAME lobby. The
+      # socket must NOT be `:in_meeting` on mount, and the lobby's
+      # preview + Join action must be on the page — the guest-parity claim.
+      {:ok, view, html} =
+        conn
+        |> login(ext)
+        |> on_meet_host()
+        |> live("/meetings/#{meeting.slug}")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.state == :lobby
+      refute assigns.in_meeting
+
+      assert has_element?(view, ~s([data-role="meeting-lobby"]))
+      assert has_element?(view, ~s([data-role="meeting-lobby-preview"]))
+      assert has_element?(view, ~s([data-role="meeting-lobby-mic"]))
+      assert has_element?(view, ~s([data-role="meeting-lobby-camera"]))
+      assert has_element?(view, ~s([data-role="meeting-lobby-join"]))
+
+      # A member has no name to enter — the guest's name field is absent.
+      refute has_element?(view, ~s(input[name="guest[name]"]))
+
+      # And no LiveKit client is mounted yet: the room does not exist until
+      # the member presses Join.
+      refute html =~ ~s(id="meeting-client")
+
+      # No participant row has been written either.
+      assert Repo.get_by(Room, space_id: meeting.chat_space_id) == nil
+    end
+
+    test "pressing Join from the lobby enters the call — the member is in the room",
+         %{conn: conn, ext: ext, meeting: meeting} do
+      # The other half of the divergence fix: Join actually connects. Both
+      # halves asserted — the socket says it joined AND a participant row
+      # exists carrying this user's id.
       {:ok, view, _html} =
         conn
         |> login(ext)
         |> on_meet_host()
         |> live("/meetings/#{meeting.slug}")
+
+      refute :sys.get_state(view.pid).socket.assigns.in_meeting
+
+      view
+      |> element(~s([data-role="meeting-lobby-join"]))
+      |> render_click()
 
       assert :sys.get_state(view.pid).socket.assigns.in_meeting
 
@@ -213,6 +257,26 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
       assert [%{user_id: user_id, metadata: metadata}] = rows
       assert user_id == ext.id
       assert metadata["identity"] == "user:" <> ext.id
+    end
+
+    test "a mic switched off in the lobby is off in the join payload",
+         %{conn: conn, ext: ext, meeting: meeting} do
+      # Device choice survives the lobby -> call transition for a member the
+      # same way it does for a guest: `do_join/1` reads the live
+      # `:mic_enabled`/`:camera_enabled` pair at push time.
+      {:ok, view, _html} =
+        conn
+        |> login(ext)
+        |> on_meet_host()
+        |> live("/meetings/#{meeting.slug}")
+
+      view |> element(~s([data-role="meeting-lobby-mic"])) |> render_click()
+      assert :sys.get_state(view.pid).socket.assigns.mic_enabled == false
+
+      view |> element(~s([data-role="meeting-lobby-join"])) |> render_click()
+
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting
+      assert_push_event(view, "join-meeting", %{mic_enabled: false, camera_enabled: true})
     end
   end
 
@@ -266,11 +330,14 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
       ungranted = meeting!(org)
       bare_invite!(ungranted, ext)
 
+      # `?no_autojoin=true` on the GRANTED side reaches the call shell (where
+      # the identity badge lives) without a live connection; the denied side
+      # renders a terminal card and needs no hatch (task 01a09415).
       {:ok, granted_view, granted_html} =
         conn
         |> login(ext)
         |> on_meet_host()
-        |> live("/meetings/#{granted.slug}")
+        |> live("/meetings/#{granted.slug}?no_autojoin=true")
 
       assert granted_html =~ granted.name
       assert has_element?(granted_view, "[data-role=member-identity-badge]")
@@ -321,10 +388,13 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
 
       meeting = meeting!(org)
 
+      # `?no_autojoin=true` reaches the call shell (chat-panel-toggle,
+      # breadcrumb) without a live connection; a member — internal or not —
+      # now lands in the pre-join lobby by default (task 01a09415).
       {:ok, view, html} =
         conn
         |> login(int)
-        |> live("/meetings/#{meeting.slug}")
+        |> live("/meetings/#{meeting.slug}?no_autojoin=true")
 
       assert html =~ meeting.name
 
@@ -352,11 +422,13 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
 
       meeting = meeting!(org)
 
+      # `?no_autojoin=true`: the member-identity badge is a call-shell
+      # element, reached without a live connection (task 01a09415).
       {:ok, view, html} =
         conn
         |> login(int)
         |> on_meet_host()
-        |> live("/meetings/#{meeting.slug}")
+        |> live("/meetings/#{meeting.slug}?no_autojoin=true")
 
       assert html =~ meeting.name
       refute :sys.get_state(view.pid).socket.assigns.shell?
@@ -413,7 +485,7 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
     test "the title may shrink but owns a proportional share of the line",
          %{conn: conn, ext: ext, meeting: meeting} do
       {:ok, view, _html} =
-        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}")
+        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}?no_autojoin=true")
 
       class = class_of(view, "[data-role=meeting-title]")
 
@@ -428,7 +500,7 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
     test "the identity badge is capped proportionally and truncates",
          %{conn: conn, ext: ext, meeting: meeting} do
       {:ok, view, _html} =
-        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}")
+        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}?no_autojoin=true")
 
       class = class_of(view, "[data-role=member-identity-badge]")
 
@@ -448,7 +520,7 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
     test "the stage-mode control may shrink, so its own scroller engages",
          %{conn: conn, ext: ext, meeting: meeting} do
       {:ok, view, _html} =
-        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}")
+        conn |> login(ext) |> on_meet_host() |> live("/meetings/#{meeting.slug}?no_autojoin=true")
 
       class = class_of(view, "[data-stage-mode-control]")
 

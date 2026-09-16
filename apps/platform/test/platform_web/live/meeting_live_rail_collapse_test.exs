@@ -1836,7 +1836,19 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
       # is `@shell?`, so the claim "every `@shell?`-false viewer" needs this
       # second surface or it is a claim about one mount.
       meeting = meeting!(org, "member-no-chat-tab")
-      view = open_meeting(conn, viewer, meeting)
+
+      # `?no_autojoin=true` reaches the call-shell rail (whose tablist this
+      # test reads from the DOM) without a live LiveKit connection: a
+      # signed-in member on the `meet.` host now lands in the pre-join lobby
+      # by default (task 01a09415), which renders no rail.
+      {:ok, view, html} =
+        conn
+        |> login(viewer)
+        |> on_meet_host()
+        |> live("/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert html =~ meeting.name
+      view = settle(view)
 
       assert assigns(view).shell? == false,
              "if this surface is `@shell?` true it is the shell control, not " <>
