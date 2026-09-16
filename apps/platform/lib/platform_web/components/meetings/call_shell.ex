@@ -460,6 +460,29 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     """
   )
 
+  attr(:hold_to_talk?, :boolean,
+    default: false,
+    doc: """
+    Forwarded to `ParticipantRail.participant_rail/1`: render a per-agent
+    press-and-hold control on every agent row in the People pane. `false`
+    — the default — is what the in-chat quickmeet gets (no push-to-talk
+    producer) and what `/meetings` passes on DESKTOP, where the left rail
+    already carries the controls. `/meetings` passes `true` only below
+    `lg`, where the left rail is gone and the People pane is the only
+    roster; that keeps exactly one set of controls per viewport.
+    """
+  )
+
+  attr(:hold_to_talk_id_prefix, :string,
+    default: "meeting-people-ptt",
+    doc: "Forwarded to the rail as `id_prefix` — distinct from the left rail's."
+  )
+
+  attr(:pressed_agent_id, :any,
+    default: nil,
+    doc: "Forwarded to the rail: the agent this viewer is currently holding, or nil."
+  )
+
   attr(:invite_rows, :list,
     default: [],
     doc: """
@@ -712,6 +735,9 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               muted_identities={@muted_identities}
               camera_off_identities={@camera_off_identities}
               now={@now}
+              hold_to_talk?={@hold_to_talk?}
+              id_prefix={@hold_to_talk_id_prefix}
+              pressed_agent_id={@pressed_agent_id}
             />
             {render_slot(@people_extra)}
             <.invite_section

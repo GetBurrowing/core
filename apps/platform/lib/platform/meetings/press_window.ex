@@ -129,7 +129,9 @@ defmodule Platform.Meetings.PressWindow do
           identity: identity(),
           pressed_at: DateTime.t(),
           released_at: DateTime.t() | nil,
-          card_intent_id: binary() | nil
+          card_intent_id: binary() | nil,
+          target_agent_id: binary() | nil,
+          target_agent_slug: String.t() | nil
         }
 
   # ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -308,6 +310,50 @@ defmodule Platform.Meetings.PressWindow do
   end
 
   def attach_card(_meeting_id, _identity, _intent_id), do: {:error, :no_window}
+
+  @doc """
+  Record the agent this press is DIRECTED AT (per-agent hold-to-talk).
+
+  With per-agent push-to-talk the human presses a specific agent's row,
+  so the target is known at press time rather than inferred from the
+  transcript after the fact. Storing it ON THE WINDOW — the one join
+  between a press and the speech that arrives under it — is what lets the
+  classifier honour that choice when the utterance is finally classified,
+  instead of re-resolving a target from the words via
+  `Platform.Meetings.SpokenTarget`. Without this the card would be bylined
+  to the pressed agent at press time and then silently RE-bylined to the
+  configured default the moment the model answered (see `reconcile/2` in
+  `Platform.Meetings.Candidates`).
+
+  `agent_id` / `agent_slug` may be nil — an untargeted press (no explicit
+  agent) leaves the window's target blank and the after-the-fact
+  resolution stands, which is the pre-per-agent behaviour.
+
+  Returns `{:ok, window}`, or `{:error, :no_window}` when there is
+  nothing to target.
+  """
+  @spec set_target(binary(), identity(), binary() | nil, String.t() | nil) ::
+          {:ok, window()} | {:error, :no_window | :invalid_identity}
+  def set_target(meeting_id, identity, agent_id, agent_slug)
+      when is_binary(meeting_id) do
+    case normalize_identity(identity) do
+      nil ->
+        {:error, :invalid_identity}
+
+      known ->
+        case lookup(meeting_id, known) do
+          nil ->
+            {:error, :no_window}
+
+          window ->
+            window = %{window | target_agent_id: agent_id, target_agent_slug: agent_slug}
+            :ets.insert(@table, {{meeting_id, known}, window})
+            {:ok, window}
+        end
+    end
+  end
+
+  def set_target(_meeting_id, _identity, _agent_id, _agent_slug), do: {:error, :no_window}
 
   @doc """
   Drop every window for `meeting_id`. Called when a meeting ends.
@@ -555,7 +601,9 @@ defmodule Platform.Meetings.PressWindow do
       identity: identity,
       pressed_at: at,
       released_at: nil,
-      card_intent_id: nil
+      card_intent_id: nil,
+      target_agent_id: nil,
+      target_agent_slug: nil
     }
   end
 

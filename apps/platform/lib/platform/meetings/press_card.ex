@@ -51,11 +51,13 @@ defmodule Platform.Meetings.PressCard do
 
   require Logger
 
+  alias Platform.Agents.Agent
   alias Platform.Meetings.Candidates
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.PressWindow
   alias Platform.Meetings.SpokenTarget
+  alias Platform.Repo
 
   @doc """
   Open a press window for `identity` in `meeting_id` and put its card on
@@ -69,6 +71,16 @@ defmodule Platform.Meetings.PressCard do
       what the transcript attributes their speech to. See the note below
       on why the identity is the wrong value for this field.
     * `:room_id` — the LiveKit room, when the caller knows it.
+
+    * `:target_agent_id` — the agent the human PRESSED (per-agent
+      hold-to-talk). When it names an active agent, that agent is the
+      card's target from the instant the key goes down and stays so
+      through classification (the id is recorded on the press window so
+      the classifier honours it rather than re-resolving from the
+      words). When absent — or naming no active agent — the card takes
+      the configured default via `SpokenTarget`, the pre-per-agent
+      behaviour. The id is validated against the roster here so a
+      crafted `phx-value-` cannot byline a card to a stranger.
 
   Returns `{:ok, %{window: window, intent: row, duplicate?: boolean}}`,
   or `{:error, reason}` when the identity is blank or the queue is
@@ -95,19 +107,37 @@ defmodule Platform.Meetings.PressCard do
     at = Keyword.get(opts, :at) || DateTime.utc_now()
 
     with {:ok, window} <- PressWindow.press(meeting_id, identity, at) do
-      {agent_id, agent_slug} = default_target(meeting_id)
+      {agent_id, agent_slug} =
+        case pressed_agent(opts) do
+          {:ok, id, slug} ->
+            # An EXPLICIT per-agent press. Record it on the window too, so
+            # it survives to classification: `Candidates.reconcile/2`
+            # overwrites this card's target with whatever the classifier
+            # resolved, and the classifier reads the WINDOW (not this row)
+            # for a push-to-talk target. The window was just pressed, so
+            # the only non-`:ok` here would be a blank identity — which
+            # `press/3` already refused, so the `with` never reaches it.
+            _ = PressWindow.set_target(meeting_id, identity, id, slug)
+            {id, slug}
+
+          :none ->
+            # An untargeted press: byline the card to the configured
+            # default, but leave the window's target BLANK so the
+            # classifier resolves it from the words — the pre-per-agent
+            # behaviour, and what the spoken-name path still depends on.
+            default_target(meeting_id)
+        end
 
       attrs = %{
         room_id: Keyword.get(opts, :room_id),
         speaker: Keyword.get(opts, :speaker),
         source: :push_to_talk,
         dedupe_key: dedupe_key(window),
-        # Who will hear this, known at press time (task 01a03f4e stage
-        # 4). Nothing has been said yet, so nobody has been named and
-        # the card takes the configured default — which is what makes
-        # the card say where it is going from the instant the key goes
-        # down rather than after the model answers. If the speaker then
-        # names an agent, the classified intent reconciles over this.
+        # Who will hear this, known at press time. With per-agent
+        # hold-to-talk this is the agent the human PRESSED; without an
+        # explicit press it is the configured default. Either way the
+        # card says where it is going from the instant the key goes down,
+        # rather than after the model answers.
         target_agent_id: agent_id,
         target_agent_slug: agent_slug,
         # No text and no classification: nothing has been said yet. The
@@ -201,6 +231,52 @@ defmodule Platform.Meetings.PressCard do
 
   defp log_close_failure(intent_id, detail) do
     Logger.warning("[PressCard] empty-press close failed intent_id=#{intent_id} error=#{detail}")
+  end
+
+  # The agent the human EXPLICITLY pressed, or `:none` when no agent was
+  # pressed or the pressed id names no active agent (a crafted
+  # `phx-value-` or a departed agent). `:none` is what routes a press to
+  # the default byline and the words-based resolution, exactly like the
+  # pre-per-agent single button.
+  defp pressed_agent(opts) do
+    case Keyword.get(opts, :target_agent_id) do
+      id when is_binary(id) and id != "" ->
+        case resolve_pressed_agent(id) do
+          {:ok, _agent_id, _slug} = ok -> ok
+          :error -> :none
+        end
+
+      _ ->
+        :none
+    end
+  end
+
+  # The roster is read every call, like `SpokenTarget` — a card must
+  # never be bylined to an agent that is not an active participant.
+  #
+  # `Repo.get/2` casts `agent_id` through `Agent`'s strict UUIDv7 primary
+  # key and RAISES `Ecto.Query.CastError` on a malformed id rather than
+  # returning nil. This id arrives on the `push_to_talk_press` payload —
+  # a user-controlled phx-value / channel message — so a non-UUID id
+  # would crash the press instead of falling back. `Platform.UUID.valid?/1`
+  # (the strict 36-char check, not a bare `Ecto.UUID.cast/1`) folds a
+  # malformed id into `:error`, exactly like an absent one, so both take
+  # the default target. See the `:platform_uuid_guard` / `get(Agent)`
+  # entries for this file in `repo_lookup_boundary_test.exs`.
+  defp resolve_pressed_agent(agent_id) do
+    if Platform.UUID.valid?(agent_id) do
+      case Repo.get(Agent, agent_id) do
+        %Agent{status: "active"} = agent -> {:ok, agent.id, agent.slug}
+        _ -> :error
+      end
+    else
+      :error
+    end
+  rescue
+    # Belt and braces: an off-sandbox lookup must not take down the press
+    # path either; degrade to the default target, the same posture the
+    # classifier takes when its own resolution raises.
+    _ -> :error
   end
 
   # No text yet, so `resolve/1` can only take the default branch.

@@ -1087,7 +1087,13 @@ defmodule Platform.Meetings.IntentClassifier do
             # Stamped on arrival by `stamp_press_window_source/1`, not
             # computed here — see the comment at the transcript_chunk
             # handler for why the instant matters.
-            source: Map.get(payload, :press_window_source)
+            source: Map.get(payload, :press_window_source),
+            # The agent the human pressed, when this utterance arrived
+            # under a per-agent hold. `resolve_agent_for/1` prefers it
+            # over the words, so the pressed agent's byline survives
+            # classification.
+            press_window_target_agent_id: Map.get(payload, :press_window_target_agent_id),
+            press_window_target_agent_slug: Map.get(payload, :press_window_target_agent_slug)
           })
 
         settle_skeleton(skeleton, enqueue_result)
@@ -1382,6 +1388,18 @@ defmodule Platform.Meetings.IntentClassifier do
   # role-assignment lookup would let a role the model happened to guess
   # silently outrank the default the operator set, which is the opposite
   # of what holding the key means.
+  # Per-agent hold-to-talk: the human pressed a specific agent's row, so
+  # the target is already decided and rides in on the press window. It
+  # wins over both a name the transcriber happened to catch and the
+  # configured default — pressing Octavius and then saying "Rowan" still
+  # reaches Octavius, which is what holding Octavius's row means. Only an
+  # untargeted press (no agent on the window) falls through to resolving
+  # the target from the words.
+  defp resolve_agent_for(%{source: :push_to_talk, press_window_target_agent_id: agent_id} = args)
+       when is_binary(agent_id) do
+    {agent_id, Map.get(args, :press_window_target_agent_slug)}
+  end
+
   defp resolve_agent_for(%{source: :push_to_talk} = args) do
     case SpokenTarget.resolve(Map.get(args, :chunk_text)) do
       {:ok, agent_id, agent_slug, _via} ->
@@ -2205,6 +2223,14 @@ defmodule Platform.Meetings.IntentClassifier do
           # pre-classification write below fills THAT row in instead of
           # opening a second one next to it (task 01a03f4e stage 3).
           |> Map.put(:press_window_card_intent_id, Map.get(window, :card_intent_id))
+          # The agent the human PRESSED, when they held a specific agent's
+          # row (per-agent hold-to-talk). Carried through so
+          # `resolve_agent_for/1` honours that choice rather than
+          # re-resolving a target from the words — the card stays bylined
+          # to the agent that was pressed. nil for an untargeted press,
+          # which then takes the after-the-fact resolution as before.
+          |> Map.put(:press_window_target_agent_id, Map.get(window, :target_agent_id))
+          |> Map.put(:press_window_target_agent_slug, Map.get(window, :target_agent_slug))
 
         :none ->
           payload

@@ -1232,6 +1232,9 @@
                   )
                 }
                 now={assigns[:agent_activity_now]}
+                hold_to_talk?={true}
+                id_prefix="meeting-left-ptt"
+                pressed_agent_id={assigns[:pressed_agent_id]}
               />
             </div>
           </section>
@@ -1902,6 +1905,18 @@
              makes it CENTRED under the tiles rather than left-packed,
              and `shrink-0` keeps it 46px when the grid above wants
              more room. --%>
+          <%!-- Push-to-talk MOVED to the roster (per-agent hold-to-talk).
+             The single generic "hold to talk" button that used to live in
+             this bar's `<:before_leave>` slot is gone: the sponsor prototype
+             has the human press-and-hold a SPECIFIC agent's row to speak
+             directed at it, and the card comes back bylined to that agent.
+             That control now renders per agent inside
+             `ParticipantRail.participant_rail/1` (the desktop LEFT rail on
+             `lg`, the People pane below it), driven by the same
+             `MeetingPushToTalk` hook and pushing the same
+             `push_to_talk_press` / `push_to_talk_release` events — now with
+             the addressed agent's id. See the rail component and the two
+             `hold_to_talk?` call sites above. --%>
           <CallShell.call_controls
             data-role="meeting-stage-controls"
             class="h-[46px] w-full shrink-0 gap-2"
@@ -1919,83 +1934,7 @@
             leave_role="meeting-leave"
             share_id="meeting-share-btn-desktop"
             share_hook="MeetingShareButton"
-          >
-            <:before_leave>
-              <%!-- Push-to-talk (task 01a03f4e stage 5, re-homed here in
-                 the merge with #910). Hold to address an agent directly;
-                 the waveform beside it is the evidence that something is
-                 actually being heard.
-
-                 `/meetings` ONLY. The quickmeet mounts the same
-                 `call_controls` without this slot because it has no
-                 push-to-talk producer -- a control that lit up there
-                 would be the exact lie the hook is written against.
-
-                 This bar renders ONCE on `/meetings` (the desktop /
-                 mobile split is the quickmeet's, in `partials.ex`), so
-                 the id stays unique without a suffix and the hook mounts
-                 on the one visible copy at every width.
-
-                 The level is read client-side by the `MeetingPushToTalk`
-                 hook from an AnalyserNode on the LOCAL LiveKit publication.
-                 There is no server-side level to render — the microphone is
-                 published to the SFU and never reaches Suite — so the hook
-                 is the only possible source and the bars below are inert
-                 until it paints them.
-
-                 `phx-update="ignore"`: the hook owns the bars' inline
-                 transforms, and a re-render (a roster change, a flash being
-                 cleared) would otherwise reset them mid-press.
-
-                 Colour comes from semantic token slots only — `primary` /
-                 `primary-content` for the armed state, `base-content` for
-                 rest, `error` for a refused press. No raw hex and no fixed
-                 tailwind palette colour: `lib/platform_web` currently
-                 contains zero of either and this is not the place to
-                 start. --%>
-              <button
-                id="meeting-push-to-talk"
-                phx-hook="MeetingPushToTalk"
-                phx-update="ignore"
-                type="button"
-                aria-label="Hold to talk to an agent"
-                title="Hold to talk to an agent"
-                data-role="meeting-push-to-talk"
-                data-pressed="false"
-                class={[
-                  "btn btn-sm btn-ghost min-h-11 gap-2 px-2",
-                  "meeting-hold-target",
-                  "text-base-content/70",
-                  "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
-                  "data-[rejected=no-microphone]:text-error",
-                  "data-[rejected=microphone-muted]:text-error",
-                  "data-[rejected=pointer-lost]:text-error"
-                ]}
-              >
-                <span class="hero-signal size-4" aria-hidden="true"></span>
-                <%!-- The waveform. Twelve bars, scaled on the Y axis by the
-                   hook; `origin-center` so a bar grows from its middle and
-                   the meter reads as a waveform rather than a bar chart.
-                   `currentColor` keeps them on whatever token the button is
-                   wearing, so the armed and refused states carry through
-                   without JS ever naming a colour. --%>
-                <span
-                  class="flex h-4 items-center gap-px"
-                  data-role="meeting-push-to-talk-waveform"
-                  aria-hidden="true"
-                >
-                  <span
-                    :for={_bar <- 1..12}
-                    data-ptt-bar
-                    class="h-full w-0.5 origin-center rounded-full bg-current opacity-70 transition-transform duration-75"
-                    style="transform: scaleY(0.08)"
-                  >
-                  </span>
-                </span>
-                <span class="sr-only lg:not-sr-only lg:text-xs">Hold to talk</span>
-              </button>
-            </:before_leave>
-          </CallShell.call_controls>
+          />
 
           <%!-- THE PEEK SPACER (task 01a07410 stage 3). While a countdown
              is live below `lg`, the shut rail sheet's handle peeks 2.75rem
@@ -2413,6 +2352,9 @@
               tab_event="meeting_tab_select"
               chat_unread={@call_rail_unread}
               serve_canvas_tab={@mobile_viewport?}
+              hold_to_talk?={@mobile_viewport?}
+              hold_to_talk_id_prefix="meeting-people-ptt"
+              pressed_agent_id={assigns[:pressed_agent_id]}
               participants={assigns[:participants] || []}
               agents_by_id={assigns[:agents_by_id] || %{}}
               meeting={@meeting}

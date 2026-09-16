@@ -3542,14 +3542,30 @@ defmodule PlatformWeb.MeetingLive do
   # shape the transcriber stamps on every segment — so the window this
   # opens is the window an arriving segment will match. A crafted
   # `phx-value-` cannot open a window in somebody else's name.
-  def handle_event("push_to_talk_press", _params, socket) do
-    with %{id: meeting_id} <- socket.assigns[:meeting],
-         identity when is_binary(identity) <- press_identity(socket) do
-      PressCard.open(meeting_id, identity,
-        speaker: socket.assigns[:display_name],
-        room_id: socket.assigns[:meeting].chat_space_id
-      )
-    end
+  def handle_event("push_to_talk_press", params, socket) do
+    # The agent the human PRESSED (per-agent hold-to-talk). Read off the
+    # payload, but never trusted: `PressCard.open/3` validates the id
+    # against the active roster and falls back to the configured default
+    # for an unknown or absent one, so a crafted `phx-value-` cannot
+    # byline a card to a stranger.
+    agent_id = pressed_agent_id_param(params)
+
+    socket =
+      with %{id: meeting_id} <- socket.assigns[:meeting],
+           identity when is_binary(identity) <- press_identity(socket) do
+        PressCard.open(meeting_id, identity,
+          speaker: socket.assigns[:display_name],
+          room_id: socket.assigns[:meeting].chat_space_id,
+          target_agent_id: agent_id
+        )
+
+        # Only reflect the held state once the press actually opened a
+        # card — a viewer with no `press_identity` (a guest) opens nothing,
+        # so a "Talking to…" cue for them would be a lie.
+        assign(socket, :pressed_agent_id, agent_id)
+      else
+        _ -> socket
+      end
 
     {:noreply, socket}
   end
@@ -3564,7 +3580,7 @@ defmodule PlatformWeb.MeetingLive do
       PressWindow.release(meeting_id, identity)
     end
 
-    {:noreply, socket}
+    {:noreply, assign(socket, :pressed_agent_id, nil)}
   end
 
   # The rail freezes its order while a pointer is over it (task 01a0740e
@@ -5753,6 +5769,12 @@ defmodule PlatformWeb.MeetingLive do
       _ -> nil
     end
   end
+
+  # The agent a per-agent hold-to-talk press names, or nil for a press
+  # carrying no agent (an untargeted press, which takes the configured
+  # default downstream).
+  defp pressed_agent_id_param(%{"agent_id" => id}) when is_binary(id) and id != "", do: id
+  defp pressed_agent_id_param(_params), do: nil
 
   defp apply_candidate_stop(socket, candidate) do
     result =

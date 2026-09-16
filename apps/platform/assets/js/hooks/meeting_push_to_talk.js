@@ -157,7 +157,18 @@ const MeetingPushToTalk = {
     this._pressed = true
     this._levels = []
     this.el.dataset.pressed = "true"
-    this.pushEvent("push_to_talk_press", {})
+    this.pushEvent("push_to_talk_press", this._pressPayload())
+  },
+
+  // Per-agent hold-to-talk: the control sits on a specific agent's row
+  // and carries that agent's id in `data-agent-id`, so the server knows
+  // WHO the press is addressed to up front rather than working it out
+  // from the transcript afterwards. A control with no id (an untargeted
+  // press) sends an empty payload and takes the configured default
+  // downstream, which is the pre-per-agent behaviour.
+  _pressPayload() {
+    const agentId = this.el && this.el.dataset ? this.el.dataset.agentId : null
+    return typeof agentId === "string" && agentId !== "" ? { agent_id: agentId } : {}
   },
 
   endPress() {

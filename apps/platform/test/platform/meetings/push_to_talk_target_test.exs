@@ -227,6 +227,102 @@ defmodule Platform.Meetings.PushToTalkTargetTest do
     assert row.target_agent_slug == ctx.default_agent.slug
   end
 
+  # ── Per-agent hold-to-talk: the PRESSED agent is authoritative ───────────
+
+  test "a PRESSED agent wins over a spoken name AND the configured default", ctx do
+    %{meeting_id: m, room_id: r, identity: i} = ctx
+    assign_default!(ctx.default_agent)
+
+    {pid, _} = start_classifier!()
+    plant_ok_stub(pid)
+
+    # The human held `named_agent`'s row.
+    {:ok, _} =
+      PressCard.open(m, i, speaker: "alice", room_id: r, target_agent_id: ctx.named_agent.id)
+
+    :ok = MeetingsPubSub.subscribe_intents(m)
+    # …but then said a DIFFERENT agent's name inside the window. The
+    # press decides, not the words: pressing is the address.
+    chunk(m, r, i, "#{ctx.role_agent.slug} rotate the staging secrets")
+    assert_receive {:intent_classified, _}, 2_000
+
+    row = classified_row(m)
+
+    # The agent that was PRESSED, through classification.
+    assert row.target_agent_id == ctx.named_agent.id
+    assert row.target_agent_slug == ctx.named_agent.slug
+
+    # And all three rivals would otherwise have been legal answers — the
+    # spoken name (`role_agent`), the configured default, the inferred
+    # role — so this is the press winning, not the only candidate.
+    refute row.target_agent_id == ctx.role_agent.id
+    refute row.target_agent_id == ctx.default_agent.id
+  end
+
+  test "the press card is stamped with the PRESSED agent at press time, over the default",
+       ctx do
+    %{meeting_id: m, identity: i} = ctx
+    assign_default!(ctx.default_agent)
+
+    assert {:ok, _} =
+             PressCard.open(m, i,
+               speaker: "alice",
+               room_id: ctx.room_id,
+               target_agent_id: ctx.named_agent.id
+             )
+
+    assert [row] = IntentQueue.list(m)
+    # The pressed agent, from the instant the key goes down — NOT the
+    # configured default, which is what an untargeted press would take.
+    assert row.target_agent_id == ctx.named_agent.id
+    assert row.target_agent_slug == ctx.named_agent.slug
+    refute row.target_agent_id == ctx.default_agent.id
+
+    # And the window carries it too, so it survives to classification.
+    assert %{target_agent_id: agent_id, target_agent_slug: slug} = PressWindow.get(m, i)
+    assert agent_id == ctx.named_agent.id
+    assert slug == ctx.named_agent.slug
+  end
+
+  test "an unknown pressed agent id is refused and falls back to the default", ctx do
+    %{meeting_id: m, identity: i} = ctx
+    assign_default!(ctx.default_agent)
+
+    # A well-formed but unassigned/absent id — a crafted phx-value- or a
+    # departed agent — must not byline the card to a stranger.
+    assert {:ok, _} =
+             PressCard.open(m, i,
+               speaker: "alice",
+               room_id: ctx.room_id,
+               target_agent_id: Ecto.UUID.generate()
+             )
+
+    assert [row] = IntentQueue.list(m)
+    assert row.target_agent_id == ctx.default_agent.id
+    assert %{target_agent_id: nil} = PressWindow.get(m, i)
+  end
+
+  test "a MALFORMED pressed id falls back to the default and does NOT raise", ctx do
+    %{meeting_id: m, identity: i} = ctx
+    assign_default!(ctx.default_agent)
+
+    # The pressed id comes off the `push_to_talk_press` payload, which is
+    # user-controlled. A non-UUID string must be treated exactly like an
+    # absent agent — `Repo.get(Agent, "not-a-uuid")` would otherwise RAISE
+    # `Ecto.Query.CastError` from inside `PressCard.open/3` on key-down.
+    # The well-formed-but-absent test above never exercises this path.
+    assert {:ok, _} =
+             PressCard.open(m, i,
+               speaker: "alice",
+               room_id: ctx.room_id,
+               target_agent_id: "not-a-uuid"
+             )
+
+    assert [row] = IntentQueue.list(m)
+    assert row.target_agent_id == ctx.default_agent.id
+    assert %{target_agent_id: nil} = PressWindow.get(m, i)
+  end
+
   # ── Harness ──────────────────────────────────────────────────────────────
 
   defmodule StubProvider do

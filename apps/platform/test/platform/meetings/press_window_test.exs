@@ -263,4 +263,41 @@ defmodule Platform.Meetings.PressWindowTest do
       assert length(PressWindow.list(other)) == 1
     end
   end
+
+  describe "set_target/4" do
+    test "records the pressed agent on the live window, and claim/3 carries it",
+         %{meeting_id: m, t0: t0} do
+      {:ok, opened} = PressWindow.press(m, @a, t0)
+      # A fresh window names no agent — the pre-per-agent default.
+      assert opened.target_agent_id == nil
+      assert opened.target_agent_slug == nil
+
+      agent_id = Ecto.UUID.generate()
+      assert {:ok, window} = PressWindow.set_target(m, @a, agent_id, "octavius")
+      assert window.target_agent_id == agent_id
+      assert window.target_agent_slug == "octavius"
+
+      # The target is durable and rides out on the claim the classifier
+      # reads — which is the whole point of storing it here.
+      assert %{target_agent_id: ^agent_id, target_agent_slug: "octavius"} =
+               PressWindow.get(m, @a)
+
+      assert {:ok, claimed} = PressWindow.claim(m, @a, ms(t0, 500))
+      assert claimed.target_agent_id == agent_id
+      assert claimed.target_agent_slug == "octavius"
+    end
+
+    test "an untargeted press leaves the window's target blank", %{meeting_id: m, t0: t0} do
+      {:ok, _} = PressWindow.press(m, @a, t0)
+      assert {:ok, window} = PressWindow.set_target(m, @a, nil, nil)
+      assert window.target_agent_id == nil
+    end
+
+    test "targeting a window that does not exist is a no-op error", %{meeting_id: m} do
+      assert PressWindow.set_target(m, @a, Ecto.UUID.generate(), "x") == {:error, :no_window}
+
+      assert PressWindow.set_target(m, "", Ecto.UUID.generate(), "x") ==
+               {:error, :invalid_identity}
+    end
+  end
 end

@@ -201,6 +201,28 @@ describe("with a live microphone", () => {
     expect(hook.lastRejection()).toBe(null)
   })
 
+  it("sends the ADDRESSED agent id with the press when the control carries one", () => {
+    const { el, pushed } = mountHook(roomWith([micPublication()]))
+    // Per-agent hold-to-talk: the control sits on a specific agent's row.
+    el.dataset.agentId = "agent-123"
+
+    el.fire("pointerdown", { button: 0 })
+
+    const press = pushed.find(([name]) => name === "push_to_talk_press")
+    expect(press).toBeTruthy()
+    // The server learns WHO the press addresses up front, from the event.
+    expect(press[1]).toEqual({ agent_id: "agent-123" })
+  })
+
+  it("sends an empty payload when the control names no agent (untargeted press)", () => {
+    const { el, pushed } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+
+    const press = pushed.find(([name]) => name === "push_to_talk_press")
+    expect(press[1]).toEqual({})
+  })
+
   it("scales the waveform bars from the measured level", () => {
     const { hook, el } = mountHook(roomWith([micPublication()]))
 

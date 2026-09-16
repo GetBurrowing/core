@@ -236,6 +236,44 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     """
   )
 
+  attr(:hold_to_talk?, :boolean,
+    default: false,
+    doc: """
+    Render a per-agent PRESS-AND-HOLD control on every agent row (the
+    sponsor prototype's model: you hold a specific agent to talk to it,
+    and the card comes back bylined to that agent). Each control hosts the
+    `MeetingPushToTalk` hook, carries the agent id it addresses, and
+    pushes `push_to_talk_press` / `push_to_talk_release`.
+
+    `false` — the default — is what every surface without a push-to-talk
+    producer gets (the in-chat quickmeet, and the desktop People tab when
+    the desktop LEFT rail already carries the controls). Rendering the
+    control on two rosters at once would put two hooks with the same DOM
+    id in one document, so exactly one roster per viewport sets this.
+    """
+  )
+
+  attr(:id_prefix, :string,
+    default: "meeting-agent-ptt",
+    doc: """
+    Prefix for each hold control's DOM id (`\#{id_prefix}-\#{agent_id}`).
+    Distinct per rendered roster so the desktop left rail and the People
+    tab never collide even if both are briefly in the document during a
+    viewport change.
+    """
+  )
+
+  attr(:pressed_agent_id, :any,
+    default: nil,
+    doc: """
+    The agent id currently being held by THIS viewer, or nil. Drives the
+    visible \"Talking…\" cue and the live-region announcement; the
+    control's own pressed styling is client-side (the hook sets
+    `data-pressed`), so the row highlights the instant the key goes down
+    without waiting for this to round-trip.
+    """
+  )
+
   def participant_rail(assigns) do
     {humans, agents} = MeetingLive.partition_participants(assigns.participants)
     now = assigns[:now] || DateTime.utc_now()
@@ -278,6 +316,20 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
 
     ~H"""
     <div data-component="participant-rail" class="flex flex-col">
+      <%!-- Held-state announcement. A persistent `aria-live` region whose
+           TEXT changes, so a screen reader hears "Talking to <name>…" when
+           the viewer presses an agent's row and silence when they let go.
+           The visible cue lives on the row itself; this is its non-visual
+           twin. --%>
+      <span
+        :if={@hold_to_talk?}
+        class="sr-only"
+        role="status"
+        aria-live="polite"
+        data-role="meeting-ptt-live-region"
+      >
+        {pressed_agent_announcement(assigns)}
+      </span>
       <%!-- ── Section 1: Hosts / humans ─────────────────────────────────── --%>
       <section data-section="humans" class="px-2 py-2">
         <%!-- The Agents section below has carried a heading since it
@@ -400,6 +452,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  palette and stamp them `data-avatar-kind="human"`.
                  `agent_activity_avatar/1` renders it internally. --%>
             <% info = agent_row_info(assigns, p) %>
+            <% aid = agent_id_of(p) %>
             <.agent_activity_avatar
               state={info.ring_state}
               name={p.display_name || "Agent"}
@@ -458,6 +511,80 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 {info.delay_reason}
               </div>
             </div>
+
+            <%!-- PER-AGENT HOLD-TO-TALK (per the prototype). Press and hold
+                 this agent's row to speak directed at it; the card that
+                 forms comes back bylined to this agent. The `data-agent-id`
+                 is what the `MeetingPushToTalk` hook sends with
+                 `push_to_talk_press`, so the server knows WHO up front
+                 instead of working it out from the words afterwards.
+
+                 A real <button>, so it is keyboard-reachable (the hook
+                 binds Space/Enter to press/release), with an `aria-label`
+                 naming the agent. `phx-update="ignore"`: the hook owns the
+                 waveform bars' inline transforms and this row re-renders on
+                 every activity tick. The id carries `@id_prefix` so the
+                 desktop left rail and the People tab never collide. --%>
+            <button
+              :if={@hold_to_talk? and is_binary(aid)}
+              id={"#{@id_prefix}-#{aid}"}
+              phx-hook="MeetingPushToTalk"
+              phx-update="ignore"
+              type="button"
+              data-role="meeting-agent-hold-to-talk"
+              data-agent-id={aid}
+              data-pressed="false"
+              aria-label={"Hold to talk to #{p.display_name || "this agent"}"}
+              title={"Hold to talk to #{p.display_name || "this agent"}"}
+              class={
+                [
+                  "group/ptt btn btn-xs btn-ghost min-h-11 flex-shrink-0 gap-1 px-1.5",
+                  # The shared touch utility (`touch-action: none`, no callout,
+                  # no selection) — the same class the old single button wore,
+                  # so a long press on a phone holds instead of raising the OS
+                  # text-selection menu and the hook's pointer capture is not
+                  # arming a control the browser has already claimed for
+                  # scrolling.
+                  "meeting-hold-target",
+                  "text-base-content/55",
+                  "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
+                  "data-[rejected=no-microphone]:text-error",
+                  "data-[rejected=microphone-muted]:text-error",
+                  "data-[rejected=pointer-lost]:text-error"
+                ]
+              }
+            >
+              <span class="hero-signal size-3.5" aria-hidden="true"></span>
+              <%!-- The waveform, hidden until the key is down. Twelve bars,
+                 scaled on the Y axis by the hook; `currentColor` keeps them
+                 on whatever token the button is wearing so the armed and
+                 refused states carry through without JS naming a colour. --%>
+              <span
+                class="flex h-3 items-center gap-px opacity-0 transition-opacity group-data-[pressed=true]/ptt:opacity-100"
+                data-role="meeting-agent-hold-waveform"
+                aria-hidden="true"
+              >
+                <span
+                  :for={_bar <- 1..12}
+                  data-ptt-bar
+                  class="h-full w-0.5 origin-center rounded-full bg-current opacity-70 transition-transform duration-75"
+                  style="transform: scaleY(0.08)"
+                >
+                </span>
+              </span>
+            </button>
+
+            <%!-- The visible held cue, server-driven so it names WHICH agent
+                 is being addressed while the key is down (per the mock's
+                 "Asking <name>…"). The control's own highlight is
+                 client-side; this is the roster-level confirmation. --%>
+            <span
+              :if={@pressed_agent_id == aid and is_binary(aid)}
+              data-role="meeting-agent-talking"
+              class="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
+            >
+              <span class="hero-signal size-3 animate-pulse" aria-hidden="true"></span> Talking…
+            </span>
 
             <%!-- REACHABILITY, a different fact from the activity above:
                  is this agent connected at all. It is a real signal, so
@@ -647,6 +774,21 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
        do: agent_id
 
   defp agent_id_of(_participant), do: nil
+
+  # The `aria-live` text while an agent is held: "Talking to <name>…", or
+  # empty when nobody is being addressed. The name is read off the same
+  # `@agents` list the rows render from, so it cannot disagree with the
+  # visible cue. Empty (not absent) when idle, so the region stays in the
+  # document and its text is what changes.
+  defp pressed_agent_announcement(%{pressed_agent_id: id, agents: agents})
+       when is_binary(id) do
+    case Enum.find(agents, fn p -> agent_id_of(p) == id end) do
+      nil -> ""
+      p -> "Talking to #{p.display_name || "the agent"}…"
+    end
+  end
+
+  defp pressed_agent_announcement(_assigns), do: ""
 
   # ── Resolution: two readings of one value ───────────────────────────────
   #

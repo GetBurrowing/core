@@ -19,6 +19,7 @@ defmodule PlatformWeb.MeetingPushToTalkPressTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
+  alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.Candidates
@@ -129,5 +130,48 @@ defmodule PlatformWeb.MeetingPushToTalkPressTest do
     assert render_hook(view, "push_to_talk_release", %{})
     assert %{released_at: %DateTime{}} = PressWindow.get(meeting.id, "user:#{user.id}")
     assert [_still_open] = Candidates.open_for_meeting(meeting.id)
+  end
+
+  test "pressing a SPECIFIC agent bylines the card and the window to that agent",
+       %{view: view, user: user, meeting: meeting} do
+    n = System.unique_integer([:positive])
+
+    agent =
+      %Agent{}
+      |> Agent.changeset(%{slug: "octavius-#{n}", name: "Octavius #{n}", status: "active"})
+      |> Repo.insert!()
+
+    # The human held THIS agent's row.
+    assert render_hook(view, "push_to_talk_press", %{"agent_id" => agent.id})
+
+    assert [card] = Candidates.open_for_meeting(meeting.id)
+    # Bylined to the pressed agent from the instant the key went down —
+    # not the configured default, and not resolved from the (empty) words.
+    # (`meeting_candidates` names this `assigned_agent_id`; the intent-queue
+    # row it mirrors calls the same value `target_agent_id`.)
+    assert card.assigned_agent_id == agent.id
+    assert card.assigned_agent_slug == agent.slug
+
+    # And the window carries the same target, so it survives to
+    # classification when the utterance arrives.
+    assert %{target_agent_id: agent_id, target_agent_slug: slug} =
+             PressWindow.get(meeting.id, "user:#{user.id}")
+
+    assert agent_id == agent.id
+    assert slug == agent.slug
+
+    assert render_hook(view, "push_to_talk_release", %{})
+  end
+
+  test "a crafted agent id that names no active agent falls back rather than bylining a stranger",
+       %{view: view, meeting: meeting} do
+    assert render_hook(view, "push_to_talk_press", %{"agent_id" => Ecto.UUID.generate()})
+
+    assert [card] = Candidates.open_for_meeting(meeting.id)
+    # No default target is configured in this meeting, so the fallback is
+    # "nobody" — never the stranger whose id was crafted.
+    assert card.assigned_agent_id == nil
+
+    assert render_hook(view, "push_to_talk_release", %{})
   end
 end

@@ -955,4 +955,93 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       refute row =~ "hero-microphone-slash"
     end
   end
+
+  # Per-agent hold-to-talk (per the prototype). The control renders on
+  # each agent row when the caller opts in, carries the agent id it
+  # addresses, and is keyboard- and screen-reader-reachable.
+  defp hold_rail(participants, opts) do
+    render_component(
+      &ParticipantRail.participant_rail/1,
+      [
+        participants: participants,
+        agents_by_id: %{},
+        meeting: %{id: "m-1", host_participant_id: "u-1"}
+      ] ++ opts
+    )
+  end
+
+  defp hold_controls(html) do
+    html |> Floki.parse_fragment!() |> Floki.find(~s([data-role="meeting-agent-hold-to-talk"]))
+  end
+
+  describe "per-agent hold-to-talk control" do
+    test "is absent by default — a surface with no push-to-talk producer gets no control" do
+      html = hold_rail([agent("Octavius", "oct-1")], [])
+      assert hold_controls(html) == []
+    end
+
+    test "renders one control per agent, wired to the hook and carrying the agent id" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+
+      [control] = hold_controls(html)
+
+      assert Floki.attribute(control, "phx-hook") == ["MeetingPushToTalk"]
+      # The hook owns the waveform transforms; a re-render on the next
+      # activity tick must not wipe them mid-press.
+      assert Floki.attribute(control, "phx-update") == ["ignore"]
+      # The id the server reads from `push_to_talk_press` to know WHO the
+      # press is addressed to, up front.
+      assert Floki.attribute(control, "data-agent-id") == ["oct-1"]
+
+      # Keyboard- and screen-reader-reachable, and named for the agent.
+      assert Floki.attribute(control, "type") == ["button"]
+      [label] = Floki.attribute(control, "aria-label")
+      assert label =~ "Octavius"
+
+      # Twelve bars for the hook to paint, like the retired single button.
+      bars =
+        html
+        |> Floki.parse_fragment!()
+        |> Floki.find(~s([data-role="meeting-agent-hold-to-talk"] [data-ptt-bar]))
+
+      assert Enum.count(bars) == 12
+
+      # The shared touch utility and the refused-press slot survive the move.
+      [classes] = Floki.attribute(control, "class")
+      assert classes =~ "meeting-hold-target"
+      assert classes =~ "min-h-11"
+      assert classes =~ "data-[rejected=pointer-lost]:text-error"
+    end
+
+    test "the control id carries the caller's prefix, so two rosters never collide" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true, id_prefix: "left")
+      [control] = hold_controls(html)
+      assert Floki.attribute(control, "id") == ["left-oct-1"]
+    end
+
+    test "the held agent shows a Talking cue and the live region names it" do
+      html =
+        hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true, pressed_agent_id: "oct-1")
+
+      frag = Floki.parse_fragment!(html)
+      assert Floki.find(frag, ~s([data-role="meeting-agent-talking"])) != []
+
+      region = Floki.find(frag, ~s([data-role="meeting-ptt-live-region"]))
+      assert Floki.text(region) =~ "Talking to Octavius"
+    end
+
+    test "a NON-held agent shows no cue and an empty live region" do
+      html =
+        hold_rail([agent("Octavius", "oct-1")],
+          hold_to_talk?: true,
+          pressed_agent_id: "someone-else"
+        )
+
+      frag = Floki.parse_fragment!(html)
+      assert Floki.find(frag, ~s([data-role="meeting-agent-talking"])) == []
+
+      region = Floki.find(frag, ~s([data-role="meeting-ptt-live-region"]))
+      assert Floki.text(region) |> String.trim() == ""
+    end
+  end
 end
