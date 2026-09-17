@@ -41,6 +41,38 @@ defmodule PlatformWeb.Router do
     plug(:put_secure_browser_headers)
   end
 
+  # Task 01a09415: content-negotiation variant of `:browser` used by ONE
+  # route, `/files/blob/:id`. Identical to `:browser` — same plugs, same
+  # order — except `:accepts` also admits "json".
+  #
+  # Why: `:browser`'s FIRST plug is `plug(:accepts, ["html"])`, which runs
+  # ahead of `:require_auth`, so a caller sending `Accept: application/json`
+  # was refused with 406 by content negotiation before the auth layer ever
+  # ran. (Discriminator: the same request carrying a VALID session cookie
+  # also returned 406, so the 406 was never an authentication outcome.)
+  # Widening `:browser` itself was rejected — it is piped by the whole app —
+  # and mounting the route on `:api` was rejected because `:api` has no
+  # `fetch_session` and this route authorizes off the session.
+  #
+  # `put_secure_browser_headers` is LOAD-BEARING and must stay: the
+  # controller's sandbox CSP APPENDS to the `base-uri` / `frame-ancestors`
+  # this plug sets (see FileBlobController's "APPENDS rather than sets"
+  # note). Dropping it would silently remove both while looking like a
+  # hardening change.
+  #
+  # Widening `:accepts` here is behaviourally inert beyond removing the
+  # 406: every exit path of `FileBlobController.show/2` is `send_download/3`
+  # or `send_resp/3` — no `render`, no template lookup, no
+  # `action_fallback` — so no already-working caller's bytes change.
+  pipeline :blob_browser do
+    plug(:accepts, ["html", "json"])
+    plug(:fetch_session)
+    plug(:fetch_live_flash)
+    plug(:put_root_layout, html: {PlatformWeb.Layouts, :root})
+    plug(:protect_from_forgery)
+    plug(:put_secure_browser_headers)
+  end
+
   # Guest meeting ingress pipeline (task 019f2483 stage 3). Mirrors :browser
   # but installs the stripped `guest_root` layout (no shell chrome, no
   # sidebar, no sign-in CTA) and — critically — does NOT apply
@@ -619,6 +651,23 @@ defmodule PlatformWeb.Router do
     end
   end
 
+  # ADR-0042 stage 5: inline preview for FilesLive (images / PDFs / text).
+  # Same `:require_auth` gate as the /files LV routes — the controller does
+  # the per-file org-membership check.
+  #
+  # DECISION OF RECORD (task 01a09415): this route sits in its own scope
+  # solely so it can pipe through `:blob_browser` instead of `:browser`,
+  # making Accept-based API-client classification reachable by
+  # `PlatformWeb.Plugs.RequireAuth` on this route and no other. It stays
+  # app-fenced: `:require_app_surface` LAST, `:enforce_external_scope`
+  # after `:require_auth`, exactly as in the fenced scope below. This is a
+  # content-negotiation change only.
+  scope "/", PlatformWeb do
+    pipe_through([:blob_browser, :require_auth, :enforce_external_scope, :require_app_surface])
+
+    get("/files/blob/:id", FileBlobController, :show)
+  end
+
   # THE FENCED SCOPE. `:require_app_surface` is LAST in the pipeline on
   # purpose: an unauthenticated request must still redirect to login (via
   # `:require_auth`) rather than 404, which keeps existing auth behaviour on
@@ -635,11 +684,6 @@ defmodule PlatformWeb.Router do
 
     get("/artifacts/preview", ArtifactPreviewController, :show)
     get("/api/transcripts/:id/download", TranscriptController, :show)
-
-    # ADR-0042 stage 5: inline preview for FilesLive (images / PDFs / text).
-    # Same `:require_auth` browser pipeline as the /files LV routes — the
-    # controller does the per-file org-membership check.
-    get("/files/blob/:id", FileBlobController, :show)
 
     live_session :authenticated,
       on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],

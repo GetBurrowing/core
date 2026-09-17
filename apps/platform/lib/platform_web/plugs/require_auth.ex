@@ -1,4 +1,42 @@
 defmodule PlatformWeb.Plugs.RequireAuth do
+  @moduledoc """
+  Session-cookie authentication gate for browser-facing pipelines.
+
+  A request carrying a valid `:current_user_id` session is annotated with
+  `:current_user` plus the MT/RBAC assigns and passed through. A request
+  that is NOT authenticated is denied by `deny/2`, whose outcome depends on
+  who is calling:
+
+    * `PlatformWeb.ApiClientRequest.api_client?/1` is true (an
+      `authorization` header, or an `accept` header that asks for neither
+      `text/html` nor `*/*`) -> `401` with a JSON body
+      `%{"error" => "unauthorized", "reason" => <reason>}`.
+    * otherwise (a browser navigation) -> `302` redirect to `/auth/login`,
+      exactly as before.
+
+  `401` and not `403`: the caller presented no valid identity at all, which
+  is an authentication failure. Per-resource ownership checks downstream
+  keep returning `403`, so the seam stays legible — 401 "who are you",
+  403 "not yours".
+
+  SITING (task 01a09415, beneath ADR 0004 — which governs the
+  redirect-vs-status contract; this is a placement detail under it, not a
+  new strategy). Accept-based classification only reaches `deny/2` on
+  pipelines whose `:accepts` list admits the caller's media type: on a
+  pipeline declaring `plug(:accepts, ["html"])`, an `Accept:
+  application/json` request is refused by content negotiation with 406
+  before this plug runs. `PlatformWeb.Router`'s `:blob_browser` pipeline
+  (used only by `/files/blob/:id`) is the one that has opted in, by
+  declaring `plug(:accepts, ["html", "json"])`. On every other browser
+  pipeline the reachable API-caller signal remains the `authorization`
+  header.
+
+  Both outcomes emit the same `[:platform, :auth, :access_blocked]`
+  telemetry, and the stale-session / archived-user branches drop the
+  session cookie in BOTH outcomes: an API caller presenting a dead session
+  cookie should not keep it.
+  """
+
   import Plug.Conn
   import Phoenix.Controller
 
@@ -16,8 +54,7 @@ defmodule PlatformWeb.Plugs.RequireAuth do
 
             conn
             |> configure_session(drop: true)
-            |> redirect(to: "/auth/login")
-            |> halt()
+            |> deny(:stale_session)
 
           %{archived_at: %DateTime{}} ->
             # Stage 5: archived user with a lingering session — drop it
@@ -28,8 +65,7 @@ defmodule PlatformWeb.Plugs.RequireAuth do
 
             conn
             |> configure_session(drop: true)
-            |> redirect(to: "/auth/login")
-            |> halt()
+            |> deny(:user_archived)
 
           user ->
             conn
@@ -40,9 +76,25 @@ defmodule PlatformWeb.Plugs.RequireAuth do
       _ ->
         emit_access_blocked(conn, :no_session, nil)
 
-        conn
-        |> redirect(to: "/auth/login")
-        |> halt()
+        deny(conn, :no_session)
+    end
+  end
+
+  # Single denial tail for every unauthenticated branch above. Mirrors the
+  # dual-principal split already used by `PlatformWeb.Plugs.AttachmentAuth`
+  # (`unauthorized_json/1` vs. the session redirect).
+  defp deny(conn, reason) do
+    if PlatformWeb.ApiClientRequest.api_client?(conn) do
+      body = Jason.encode!(%{error: "unauthorized", reason: to_string(reason)})
+
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(401, body)
+      |> halt()
+    else
+      conn
+      |> redirect(to: "/auth/login")
+      |> halt()
     end
   end
 

@@ -424,4 +424,146 @@ defmodule PlatformWeb.FileBlobControllerTest do
       assert redirected_to(conn) == "/auth/login"
     end
   end
+
+  describe "API-caller auth contract (task 01a09415 stage 3)" do
+    # NOTE (task 01a09415 stage 1): `/files/blob/:id` is mounted behind the
+    # `:blob_browser` pipeline, NOT the shared `:browser` pipeline.
+    # `:blob_browser` is identical to `:browser` except it declares
+    # `plug(:accepts, ["html", "json"])`, so an `Accept: application/json`
+    # request is no longer refused with 406 by content negotiation and DOES
+    # reach `RequireAuth.deny/2`. Both API-caller signals are therefore
+    # reachable on this route: the bare `authorization` header and the
+    # `accept` header. On every other `:browser` route the Accept path is
+    # still refused with 406 — the widening is scoped to this route alone.
+    test "bearer token without a session gets 401, not a login redirect", %{conn: conn} do
+      project = seed_fabrikam_project()
+      {file, _path} = seed_blob(project, "text/plain", "x")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer not-a-real-token")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert conn.status == 401
+    end
+
+    test "the 401 body is JSON, not an HTML login page", %{conn: conn} do
+      project = seed_fabrikam_project()
+      {file, _path} = seed_blob(project, "text/plain", "x")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer not-a-real-token")
+        |> get(~p"/files/blob/#{file.id}")
+
+      # The negative alone would be satisfied by an empty body from a 500 or
+      # a vanished route, so it is paired with a positive decode.
+      refute conn.resp_body =~ "<html"
+      assert Jason.decode!(conn.resp_body)["error"] == "unauthorized"
+    end
+
+    test "positive control: an authenticated session still gets the exact bytes",
+         %{conn: conn} do
+      user = insert_user()
+      project = seed_fabrikam_project()
+      body = "POSITIVE-CONTROL-BYTES"
+      {file, _path} = seed_blob(project, "text/plain", body)
+
+      conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
+
+      assert conn.status == 200
+      assert conn.resp_body == body
+    end
+
+    test "Accept: application/json without a session reaches RequireAuth and gets 401 JSON",
+         %{conn: conn} do
+      project = seed_fabrikam_project()
+      {file, _path} = seed_blob(project, "text/plain", "JSON-PREFERRING-CLIENT-BYTES")
+
+      # Before task 01a09415 this request raised `Phoenix.NotAcceptableError`
+      # (406) from `plug(:accepts, ["html"])` before `:require_auth` ran. On
+      # `:blob_browser` it reaches `RequireAuth.deny/2` instead.
+      conn =
+        conn
+        |> put_req_header("accept", "application/json")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert conn.status == 401
+      # The negative alone would be satisfied by an empty body from a 500 or
+      # a vanished route, so it is paired with a positive decode.
+      refute conn.resp_body =~ "<html"
+      assert Jason.decode!(conn.resp_body)["error"] == "unauthorized"
+    end
+
+    test "an authenticated session sending Accept: application/json still gets the exact bytes",
+         %{conn: conn} do
+      user = insert_user()
+      project = seed_fabrikam_project()
+      body = "JSON-ACCEPT-POSITIVE-CONTROL-BYTES"
+      {file, _path} = seed_blob(project, "text/plain", body)
+
+      # Positive control for the test above: proves the 401 is the auth gate
+      # firing, not the route having stopped serving under this Accept header.
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("accept", "application/json")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert conn.status == 200
+      assert conn.resp_body == body
+    end
+
+    test "authenticated non-member sending Accept: application/json gets 403 Forbidden",
+         %{conn: conn} do
+      project = seed_fabrikam_project()
+      {file, _path} = seed_blob(project, "text/plain", "x")
+
+      # `member: false` skips the default Fabrikam-org membership, so the
+      # controller's own org gate — which this task does not change —
+      # answers. Reachable only now that the Accept header no longer 406s.
+      user = insert_user(member: false)
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("accept", "application/json")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert conn.status == 403
+      assert conn.resp_body == "Forbidden"
+    end
+
+    test "authenticated member sending Accept: application/json gets 404 for an absent id",
+         %{conn: conn} do
+      user = insert_user()
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("accept", "application/json")
+        |> get(~p"/files/blob/#{Ecto.UUID.generate()}")
+
+      assert conn.status == 404
+      assert conn.resp_body == "Not found"
+    end
+  end
+
+  describe "content-negotiation blast radius (task 01a09415 stage 2)" do
+    test "another :browser route still raises Phoenix.NotAcceptableError for Accept: application/json",
+         %{conn: conn} do
+      user = insert_user()
+
+      # `~p"/"` is mounted on the SHARED `:browser` pipeline, whose first plug
+      # is still `plug(:accepts, ["html"])`. Stage 1 widened `:blob_browser`
+      # only. If this ever stops raising, `:browser` itself was widened and
+      # the siting decision this task recorded has been undone.
+      assert_raise Phoenix.NotAcceptableError, fn ->
+        conn
+        |> authed_conn(user)
+        |> put_req_header("accept", "application/json")
+        |> get(~p"/")
+      end
+    end
+  end
 end

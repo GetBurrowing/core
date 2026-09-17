@@ -48,6 +48,12 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
     |> RequireAuth.call(RequireAuth.init([]))
   end
 
+  defp call_without_session(conn) do
+    conn
+    |> Plug.Test.init_test_session(%{})
+    |> RequireAuth.call(RequireAuth.init([]))
+  end
+
   describe "MT/RBAC assigns" do
     test "admin user → membership + fabrikam_admin?=true", %{conn: conn} do
       user = create_user!()
@@ -146,6 +152,57 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
       [m] = memberships
       assert m.role == "admin"
       assert %Platform.Tenancy.Org{} = m.org
+    end
+  end
+
+  describe "denial shape for API vs browser callers (01a09415 stage 2)" do
+    test "no session + accept: application/json → 401 JSON, no location header", %{conn: conn} do
+      conn =
+        conn
+        |> Plug.Conn.put_req_header("accept", "application/json")
+        |> call_without_session()
+
+      assert conn.status == 401
+      assert conn.halted
+      assert Jason.decode!(conn.resp_body)["error"] == "unauthorized"
+      assert Jason.decode!(conn.resp_body)["reason"] == "no_session"
+      assert Plug.Conn.get_resp_header(conn, "location") == []
+    end
+
+    test "no session + authorization: Bearer → 401", %{conn: conn} do
+      conn =
+        conn
+        |> Plug.Conn.put_req_header("authorization", "Bearer nope")
+        |> call_without_session()
+
+      assert conn.status == 401
+      assert conn.halted
+      assert Jason.decode!(conn.resp_body)["error"] == "unauthorized"
+    end
+
+    # POSITIVE CONTROL. Without this, a plug that stopped running at all
+    # would still satisfy the three 401 assertions above — nothing there
+    # distinguishes "denied with 401" from "never reached". This pins that
+    # the plug IS reachable and that the browser path is untouched.
+    test "no session + no extra headers → still 302 to /auth/login", %{conn: conn} do
+      conn = call_without_session(conn)
+
+      assert conn.status == 302
+      assert conn.halted
+      assert Plug.Conn.get_resp_header(conn, "location") == ["/auth/login"]
+    end
+
+    test "stale current_user_id + accept: json → 401 and the session is dropped", %{conn: conn} do
+      conn =
+        conn
+        |> Plug.Conn.put_req_header("accept", "application/json")
+        |> Plug.Test.init_test_session(%{"current_user_id" => Ecto.UUID.generate()})
+        |> RequireAuth.call(RequireAuth.init([]))
+
+      assert conn.status == 401
+      assert conn.halted
+      assert Jason.decode!(conn.resp_body)["reason"] == "stale_session"
+      assert conn.private[:plug_session_info] == :drop
     end
   end
 end
