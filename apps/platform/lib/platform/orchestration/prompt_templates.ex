@@ -477,6 +477,53 @@ defmodule Platform.Orchestration.PromptTemplates do
   # Downstream stack members (scribe_completion, triage_dispatch) reference
   # the section headers below as stable anchors — do NOT rename them without
   # coordinating with those templates.
+  # ENFORCED VERSUS INSTRUCTED — the split, stated where the next reader of
+  # this file will find it (task 01a0a5f5 stage 5). Recorded verbatim here and
+  # beside `compose_description/3` in
+  # `lib/platform_web/live/tasks/task_create_component.ex`; both readers need
+  # it and neither will read the other file.
+  #
+  # > **Falsifier presence and falsifier placement are STRUCTURAL and testable
+  # > on the human form — a required field, composed first into the description
+  # > body by `compose_description/3`. On every other filing path they are
+  # > INSTRUCTION ONLY: the MCP `task_create` body is free-form prose with no
+  # > composer and no anchor, so nothing enforces presence and nothing can even
+  # > locate placement. A ticket filed through MCP, a seed, or a script arrives
+  # > with no falsifier and nothing rejects it. That is the documented state of
+  # > this feature, not a defect.**
+  #
+  # MECHANISM CLASSES, RANKED. The human-form field is structural — required,
+  # at the moment of filing, unskippable, order fixed by a function. The
+  # agent-side preamble section below (`## Filing a ticket — state its
+  # falsifier`) is the WEAKEST class: a sentence in a document read earlier.
+  # The `task_create` descriptor in `Platform.Federation.ToolSurface` sits
+  # between them — rendered at the moment of the call, still only text. The
+  # agent side is text because the ticket's scope bound rules out schema and
+  # required-field changes, and because the alternative remedy — keeping cites
+  # fresh — is unmaintainable at the observed blast radius: commit `014371a6`
+  # (2026-08-26, -4023/+238) invalidated every line cite into
+  # `chat_live.html.heex` across the whole backlog in one change. Four times on
+  # this platform a correct note failed to change behaviour because nothing
+  # made the reader re-read it at the moment of the hazard; Dalton's summary of
+  # what did work is "the fix that worked was never a better note — it was a
+  # field on a form nobody could skip." The task-create form field is literally
+  # that. This preamble section is not, and this comment does not pretend
+  # otherwise.
+  #
+  # EFFICACY OF THE AGENT SIDE IS UNMEASURED. Firing looks like: agent-filed
+  # tickets after the deploy carry a falsifier at a rate materially above the
+  # pre-change base rate for the same filers, and at least one reader reports
+  # stopping on one. Skipped looks like: tickets lacking the sentence, carrying
+  # boilerplate that names no checkable observation, carrying it below the
+  # prescription, or carrying one the reader proceeded past anyway. The
+  # divergence in that rate between the form path and the MCP path is itself
+  # the measurement of structure-versus-sentence, and is the thing to read once
+  # there is a sample.
+  #
+  # THE n=1 BOUND. The evidence that self-stated falsifiers fail safe is ONE
+  # ticket (`01a04aec`) that did. An existence proof, not a rate. No artifact
+  # in this task may assert more.
+  #
   @federation_preamble """
   ## Execution posture — close the ticket
 
@@ -515,6 +562,16 @@ defmodule Platform.Orchestration.PromptTemplates do
   Do not file tickets about the tooling, the router, the board, or the process while you are executing a stage. Write the observation as one journal line (`memory_create` to `org/journal/<today>.md`) and continue. A ticket about the process never satisfies a stage.
 
   Do not restate the plan back, and do not ask for confirmation of an assignment. The dispatch is the authorization. Start.
+
+  ## Filing a ticket — state its falsifier
+
+  Every ticket you file must carry a sentence naming the observation that would show its premise is wrong, and instructing the reader what to do on seeing it. This is a checkable instruction, the same device as the refuter that closes your own brief — not a hedge and not a confidence rating. A caveat is not a falsifier.
+
+  **State what would show this ticket is wrong.** Name the observation — a grep that comes back empty, a status that differs, a test that passes — and instruct the reader: if you see it, stop and re-derive rather than proceeding.
+
+  **Put it ABOVE the prescriptive content, not at the end.** Your own brief closes with its refuter because a brief is read as a unit before you act. A ticket is not: a fixer reads it to find the instruction and STOPS SCANNING when they find one. A falsifier placed below the prescription is routable-around by construction, and the reader it would have saved — the confident one following a stale instruction to the letter — is exactly the one who never reaches it. On the human task-create form the same content is composed into the body under a `## Wrong` heading placed first; write yours so it reads the same way.
+
+  Why any of this: a cite decays but a falsifier does not. A ticket whose central premise was false four months before it was filed still cost only one verification, because it said "if that does not reproduce, the hypothesis is wrong — say so and re-derive". Without it, a stale ticket whose instruction still applies cleanly LANDS: the fixer passes their own tests and ships the wrong change.
 
   ## Subagent-spawn discipline
 

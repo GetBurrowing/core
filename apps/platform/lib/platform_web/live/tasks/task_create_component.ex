@@ -7,7 +7,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
   ## Ownership
 
   Assigns owned here, none left in the shell: `:show_task_sheet`,
-  `:task_form`, `:sheet_what`, `:sheet_why`, `:validation_modes`,
+  `:task_form`, `:sheet_what`, `:sheet_why`, `:sheet_wrong`, `:validation_modes`,
   `:manual_validation_text`, `:deploy_strategy_type`, `:auto_merge_enabled`,
   `:auto_approve_plan_enabled`, `:merge_method`, `:fab_menu_open`,
   `:default_task_agent_id`, plus the `:task_attachments` upload.
@@ -76,6 +76,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
      |> assign(:task_form, to_form(Task.changeset(%Task{}, %{}), as: "task"))
      |> assign(:sheet_what, "")
      |> assign(:sheet_why, "")
+     |> assign(:sheet_wrong, "")
      |> assign(:validation_modes, MapSet.new())
      |> assign(:manual_validation_text, "")
      |> assign(:deploy_strategy_type, "inherit")
@@ -266,6 +267,19 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
             label="Why"
             required
             placeholder="Why is this change needed?"
+          />
+
+          <%!-- Wrong: a peer of What and Why, deliberately undemoted. Renders LAST
+               here and composes FIRST into the body — see compose_description/3. --%>
+          <.input
+            type="textarea"
+            kind={:auto_resize}
+            id="task-sheet-wrong"
+            name="task[wrong]"
+            value={@sheet_wrong}
+            label="Wrong"
+            required
+            placeholder="What would you expect to see if this ticket is wrong?"
           />
 
           <%!-- Epic --%>
@@ -564,6 +578,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
         )
         |> assign(:sheet_what, "")
         |> assign(:sheet_why, "")
+        |> assign(:sheet_wrong, "")
         |> assign(:validation_modes, MapSet.new())
         |> assign(:manual_validation_text, "")
         |> assign(:deploy_strategy_type, "inherit")
@@ -601,6 +616,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
      |> assign(:task_form, to_form(changeset, as: "task"))
      |> assign(:sheet_what, Map.get(params, "what", ""))
      |> assign(:sheet_why, Map.get(params, "why", ""))
+     |> assign(:sheet_wrong, Map.get(params, "wrong", ""))
      |> assign(:manual_validation_text, Map.get(params, "manual_validation_text", ""))
      |> assign(:deploy_strategy_type, strategy_type)
      |> assign(:auto_merge_enabled, auto_merge)
@@ -657,17 +673,85 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
     end
   end
 
+  @doc """
+  Composes the task description body from the three sheet fields.
+
+  **`## Wrong` comes FIRST, above the prescriptive What/Why content — this is
+  deliberate and it INVERTS the form order. Do not "fix" it.** The form renders
+  Wrong last because it is a peer field completing a set (What · Why · Wrong).
+  The composed body puts it first because a ticket is not read as a unit: a
+  fixer reads it to FIND the instruction and stops scanning once they find one.
+  A falsifier placed below the prescription is routable-around by construction,
+  and the reader it exists for — the confident one following a stale instruction
+  to the letter — never arrives at it.
+
+  Blank sections are dropped; an all-blank result is `nil`.
+
+  Public only so the ordering can be asserted by index in tests rather than
+  inferred from a persisted row.
+
+  ## Enforced versus instructed — the split (task 01a0a5f5 stage 5)
+
+  Recorded verbatim here and beside the `@federation_preamble` constant in
+  `lib/platform/orchestration/prompt_templates.ex`; both readers need it and
+  neither will read the other file.
+
+  > **Falsifier presence and falsifier placement are STRUCTURAL and testable on
+  > the human form — a required field, composed first into the description body
+  > by `compose_description/3`. On every other filing path they are INSTRUCTION
+  > ONLY: the MCP `task_create` body is free-form prose with no composer and no
+  > anchor, so nothing enforces presence and nothing can even locate placement.
+  > A ticket filed through MCP, a seed, or a script arrives with no falsifier
+  > and nothing rejects it. That is the documented state of this feature, not a
+  > defect.**
+
+  **Mechanism classes, ranked.** This form field is structural — required, at
+  the moment of filing, unskippable, order fixed by this function. The
+  agent-side preamble section (`## Filing a ticket — state its falsifier` in
+  the `federation.preamble` template) is the weakest class: a sentence in a
+  document read earlier. The `task_create` descriptor in
+  `Platform.Federation.ToolSurface` sits between them — rendered at the moment
+  of the call, still only text. The agent side is text because the ticket's
+  scope bound rules out schema and required-field changes, and because the
+  alternative remedy — keeping cites fresh — is unmaintainable at the observed
+  blast radius: commit `014371a6` (2026-08-26, -4023/+238) invalidated every
+  line cite into `chat_live.html.heex` across the whole backlog in one change.
+  Four times on this platform a correct note failed to change behaviour because
+  nothing made the reader re-read it at the moment of the hazard; Dalton's
+  summary of what did work is "the fix that worked was never a better note — it
+  was a field on a form nobody could skip." This field is literally that. The
+  preamble section is not, and the plan does not pretend otherwise.
+
+  **Efficacy of the agent side is UNMEASURED.** Firing looks like: agent-filed
+  tickets after the deploy carry a falsifier at a rate materially above the
+  pre-change base rate for the same filers, and at least one reader reports
+  stopping on one. Skipped looks like: tickets lacking the sentence, carrying
+  boilerplate that names no checkable observation, carrying it below the
+  prescription, or carrying one the reader proceeded past anyway. The
+  divergence in that rate between the form path and the MCP path is itself the
+  measurement of structure-versus-sentence, and is the thing to read once there
+  is a sample.
+
+  **The n=1 bound.** The evidence that self-stated falsifiers fail safe is ONE
+  ticket (`01a04aec`) that did. An existence proof, not a rate. No artifact in
+  this task may assert more.
+  """
+  def compose_description(wrong, what, why) do
+    [{"Wrong", wrong}, {"What", what}, {"Why", why}]
+    |> Enum.reject(fn {_h, v} -> String.trim(v || "") == "" end)
+    |> Enum.map_join("\n\n", fn {h, v} -> "## #{h}\n#{String.trim(v)}" end)
+    |> case do
+      "" -> nil
+      body -> body
+    end
+  end
+
   defp do_create_task_with_assignee(params, socket, status, {assignee_id, assignee_type}) do
     what = Map.get(params, "what", "")
     why = Map.get(params, "why", "")
+    wrong = Map.get(params, "wrong", "")
 
-    description =
-      case {String.trim(what), String.trim(why)} do
-        {"", ""} -> nil
-        {w, ""} -> "## What\n#{w}"
-        {"", w} -> "## Why\n#{w}"
-        {w, y} -> "## What\n#{w}\n\n## Why\n#{y}"
-      end
+    description = compose_description(wrong, what, why)
 
     # Build validation metadata
     modes = socket.assigns.validation_modes
