@@ -93,6 +93,7 @@
     sidebar_sections={@sidebar_sections}
     channel_sections={@channel_sections}
     pinned_task_spaces={@pinned_task_spaces}
+    agents_block={@agents_block}
     channels={@channels}
     dm_conversations={@dm_conversations}
     archived_channels={@archived_channels}
@@ -186,6 +187,9 @@
         active_agent_armable_id={@active_agent_armable_id}
         active_agent_name={@active_agent_name}
         active_agent_armable_name={@active_agent_armable_name}
+        goal_panel={@goal_panel}
+        goal_edit={@goal_edit}
+        can_edit_goal?={@can_edit_goal?}
       />
 
       <.mobile_pinned_strip

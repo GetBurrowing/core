@@ -465,6 +465,17 @@ webmcp_enabled =
 
 config :platform, :webmcp_enabled, webmcp_enabled
 
+# ── Agents goal surface (task 01a0b491) ──────────────────────────────────────
+# Gates the WHOLE agents surface: the rail block above Pinned and the space
+# header's goal line. OFF BY DEFAULT IN EVERY ENVIRONMENT, dev included —
+# unlike WEBMCP_ENABLED above, which defaults on in dev. The stage-1 columns
+# (`chat_spaces.goal`, `chat_spaces.leader_agent_id`) stay inert while it is
+# unset: they may hold values and nothing renders. Set AGENTS_GOAL_SURFACE=true
+# to turn it on.
+config :platform,
+       :agents_goal_surface,
+       System.get_env("AGENTS_GOAL_SURFACE") in ["true", "1"]
+
 # ── LiveKit (Meetings) ────────────────────────────────────────────────────────
 # Feature-gated: meetings are inert unless LIVEKIT_API_KEY + LIVEKIT_API_SECRET
 # are set. See ADR 0030.

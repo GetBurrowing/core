@@ -81,7 +81,8 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.SecuritySecretLeak,
     Platform.Responsibilities.Handlers.ArchitectureReviewPlan,
     Platform.Responsibilities.Handlers.ArchitectureAuditDiff,
-    Platform.Responsibilities.Handlers.ArchitectureCronSweep
+    Platform.Responsibilities.Handlers.ArchitectureCronSweep,
+    Platform.Responsibilities.Handlers.AgentsGoalHeartbeat
   ]
 
 # Meeting-triage guardrails (task 019f5e2b-8d29). Two independent caps:

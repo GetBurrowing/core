@@ -16,9 +16,12 @@ defmodule Platform.Chat.Sidebar do
 
   alias Platform.Accounts
   alias Platform.Accounts.User
+  alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.Section
   alias Platform.Repo
+  alias Platform.Responsibilities.Handlers.AgentsGoalHeartbeat
+  alias Platform.Roles
   alias Platform.Tenancy
 
   # users.preferences keys for the per-user arrangement layer (Stage 3).
@@ -681,4 +684,110 @@ defmodule Platform.Chat.Sidebar do
   defp with_admin(actor, fun) do
     if Tenancy.fabrikam_admin?(actor), do: fun.(), else: {:error, :unauthorized}
   end
+
+  # ── Agents goal surface (task 01a0b491, stage 4) ───────────────────────────
+
+  @agents_leader_role "agents_leader"
+
+  @doc """
+  Whether the agents goal surface renders at all.
+
+  ONE switch for the whole feature: the rail block above Pinned and the
+  space header's goal line both ask this and both render NOTHING when it
+  is false. Set in `config/runtime.exs` from `AGENTS_GOAL_SURFACE`,
+  default off in every environment.
+
+  It is not a permission and not a per-user preference — it is a build
+  gate, so it is read straight from application env at render time rather
+  than carried through a context struct.
+  """
+  @spec agents_surface_enabled?() :: boolean()
+  def agents_surface_enabled? do
+    Application.get_env(:platform, :agents_goal_surface, false) == true
+  end
+
+  @doc """
+  The rail block's data, or `nil`.
+
+  Returns `nil` — meaning render nothing, no label and no placeholder —
+  when the flag is off or no space carries a goal. The top of a 260px
+  rail is too expensive to spend on a feature nobody has adopted, which
+  is the same rule `pinned_block/1` states for its own empty case.
+
+  The shape is `%{space: %Space{}, leader: %Agent{} | nil}`. The leader
+  is resolved by `agents_leader/1`, NOT read off the space row directly —
+  see that function for why.
+  """
+  @spec agents_rail_block() :: %{space: term(), leader: term() | nil} | nil
+  def agents_rail_block do
+    if agents_surface_enabled?() do
+      case AgentsGoalHeartbeat.agents_space() do
+        nil -> nil
+        space -> %{space: space, leader: agents_leader(space)}
+      end
+    end
+  end
+
+  @doc """
+  The header goal panel for `space`, or `nil`.
+
+  `nil` when the flag is off, when there is no space, or when the space
+  carries no goal — which is what makes an ordinary channel's header
+  identical to what it was before this feature existed. That absence is
+  the positive control for every assertion about the panel.
+
+  `measurement` is DERIVED HERE on every call, never cached beside the
+  goal. That is what makes a saved goal whose measurement can no longer
+  be derived show the no-measurement state immediately rather than the
+  previous goal's stale number: there is no stored number for the header
+  to fall back to.
+  """
+  @spec goal_panel(term()) :: map() | nil
+  def goal_panel(%Chat.Space{goal: goal} = space) when is_binary(goal) and goal != "" do
+    if agents_surface_enabled?() do
+      %{
+        space: space,
+        goal: goal,
+        measurement: AgentsGoalHeartbeat.measure(space, goal),
+        leader: agents_leader(space)
+      }
+    end
+  end
+
+  def goal_panel(_space), do: nil
+
+  @doc """
+  The agent accountable for `space`'s goal.
+
+  ROLE FIRST, column second. `role_assignments` is the live pin and it
+  broadcasts on `Roles.assignments_topic/0`, so resolving the role here
+  is what lets a leader swap repaint both avatars with no reload;
+  resolving `chat_spaces.leader_agent_id` first would pin the surface to
+  a column nothing broadcasts about. The column is the fallback for an
+  install that set a leader on the space without pinning the role.
+
+  Returns `nil` when neither names an existing agent — the rail row then
+  renders its glyph slot empty rather than a placeholder face.
+  """
+  @spec agents_leader(term()) :: term() | nil
+  def agents_leader(%Chat.Space{leader_agent_id: column_id}) do
+    case Roles.agent_id_for_role(@agents_leader_role) do
+      id when is_binary(id) -> Repo.get(Agent, id) || fetch_agent(column_id)
+      _ -> fetch_agent(column_id)
+    end
+  end
+
+  def agents_leader(_), do: nil
+
+  @doc """
+  The role key the agents surface reads its leader from.
+
+  Exposed so a LiveView can filter `{:role_assignment_changed, ...}`
+  broadcasts without restating the string.
+  """
+  @spec agents_leader_role() :: String.t()
+  def agents_leader_role, do: @agents_leader_role
+
+  defp fetch_agent(id) when is_binary(id), do: Repo.get(Agent, id)
+  defp fetch_agent(_), do: nil
 end

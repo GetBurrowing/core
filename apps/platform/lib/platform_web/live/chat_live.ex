@@ -425,6 +425,18 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:spaces, channels ++ pinned_task_spaces ++ dm_conversations)
       |> assign(:channels, channels)
       |> assign(:pinned_task_spaces, pinned_task_spaces)
+      # Agents goal surface (task 01a0b491 stage 4). All four are nil/false
+      # whenever `AGENTS_GOAL_SURFACE` is unset: `agents_rail_block/0` and
+      # `goal_panel/1` both return nil behind the flag, so the rail block and
+      # the header strip render zero DOM and the stage-1 columns stay inert
+      # even when they hold values.
+      #
+      # `@goal_panel` is re-derived in `assign_active_space/2` on every space
+      # change; seeded here because `mount/3` has no active space yet and the
+      # component's attrs are `required: true`.
+      |> assign(:agents_block, Sidebar.agents_rail_block())
+      |> assign(:goal_panel, nil)
+      |> assign(:goal_edit, false)
       |> assign(:archived_channels, archived_channels)
       # Collapse state for the sidebar's "Archived" group (task 019e95ea
       # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
@@ -550,6 +562,11 @@ defmodule PlatformWeb.ChatLive do
       # the server-side gate agree. Desktop only — the whole rail is
       # `hidden lg:flex`; the admin toggle lives inside that aside.
       |> assign(:fabrikam_admin?, Platform.Tenancy.fabrikam_admin?(%{id: user_id}))
+      # Who may edit the goal. Fabrikam admin only, mirroring
+      # `:can_cancel_deletion?` above: the goal is org-wide state with a
+      # daily heartbeat behind it, not a per-user preference. This is an
+      # AFFORDANCE — `save_goal` re-checks it server-side before writing.
+      |> assign(:can_edit_goal?, Platform.Tenancy.fabrikam_admin?(%{id: user_id}))
       # Container-lifecycle affordances on the org section headers (task
       # 019f4eaa stage 6). `:tenant_org_ids` is the set of NON-root org ids —
       # the root (Fabrikam) section never gets archive controls (the lifecycle
@@ -734,6 +751,15 @@ defmodule PlatformWeb.ChatLive do
         # / reassign) triggers a resolver recompute in EVERY connected session,
         # so an admin's default change is visible to all users live.
         ChatPubSub.subscribe_sidebar_defaults()
+        # Role assignments (task 01a0b491 stage 4). The agents surface resolves
+        # its leader through `role_assignments`, which is the pin that
+        # broadcasts; subscribing here is what lets a leader swap repaint the
+        # rail avatar AND the header avatar with no reload. Subscribed
+        # unconditionally rather than behind the feature flag: the flag is read
+        # at render time from application env, so a subscription taken while it
+        # was off would otherwise have to be established retroactively when it
+        # was turned on. The handler is a no-op for every role_key but ours.
+        Platform.Roles.subscribe_assignments()
         socket
       else
         socket
@@ -1219,6 +1245,52 @@ defmodule PlatformWeb.ChatLive do
   # rides to the drawer's input as a data attribute; the DrawerSearchFocus
   # hook focuses the field client-side on mount. Openers WITHOUT the intent
   # get a plain browse drawer — no focus, no keyboard.
+  # ── Agents goal editing (task 01a0b491 stage 4) ───────────────────────────
+  #
+  # ONE OPERATION, NOT TWO. There is deliberately no `is_nil(goal)` branch, no
+  # insert-vs-update split and no "set goal" event distinct from an "edit goal"
+  # event anywhere in this path: `save_goal` always runs `Chat.update_space/2`
+  # through the stage-1 changeset, whether the space had a goal a moment ago or
+  # not. Setting the first goal and revising the tenth are the same code.
+  def handle_event("edit_goal", _params, socket) do
+    {:noreply, assign(socket, :goal_edit, socket.assigns.can_edit_goal?)}
+  end
+
+  def handle_event("cancel_goal_edit", _params, socket) do
+    {:noreply, assign(socket, :goal_edit, false)}
+  end
+
+  def handle_event("save_goal", %{"goal" => goal}, socket) do
+    space = socket.assigns.active_space
+
+    cond do
+      not socket.assigns.can_edit_goal? ->
+        # The pencil is an affordance; THIS is the gate.
+        {:noreply, put_flash(socket, :error, "You cannot edit this goal.")}
+
+      is_nil(space) ->
+        {:noreply, socket}
+
+      true ->
+        case Chat.update_space(space, %{goal: goal}) do
+          {:ok, updated} ->
+            # RE-DERIVE, never carry forward. `goal_panel/1` recomputes the
+            # measurement from the SAVED goal, so a goal that can no longer
+            # name a number shows the no-measurement state immediately rather
+            # than the previous goal's numeral. A stale number that looks live
+            # is the failure this whole feature was designed against, so there
+            # is no cached measurement for it to fall back to.
+            {:noreply,
+             socket
+             |> assign_active_space(updated)
+             |> assign(:agents_block, Sidebar.agents_rail_block())}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not save that goal.")}
+        end
+    end
+  end
+
   def handle_event("toggle_mobile_browser", params, socket) do
     opening = !socket.assigns.mobile_browser_open
 
@@ -3501,7 +3573,26 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, socket}
   end
 
+  # Agents goal surface (task 01a0b491 stage 4): a leader swap repaints both
+  # avatars with no reload. Matches ONLY the `agents_leader` role — every other
+  # role broadcasts on the same topic and must fall through untouched, which
+  # the catch-all clause below does.
+  #
+  # Both assigns are recomputed, not patched: the rail block and the header
+  # panel each carry their own copy of the leader, and refreshing one of them
+  # is how the two faces would come to disagree.
   @impl true
+  def handle_info({:role_assignment_changed, %{role_key: role_key}}, socket) do
+    if role_key == Sidebar.agents_leader_role() do
+      {:noreply,
+       socket
+       |> assign(:agents_block, Sidebar.agents_rail_block())
+       |> assign(:goal_panel, Sidebar.goal_panel(socket.assigns.active_space))}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:settings_closed}, socket) do
     {:noreply, assign(socket, :show_settings, false)}
   end
@@ -4843,6 +4934,16 @@ defmodule PlatformWeb.ChatLive do
     socket
     |> assign(:active_space, space)
     |> assign(:active_space_scope, space_scope_atom(space))
+    # The agents goal panel (task 01a0b491 stage 4) rides the SAME funnel as
+    # the scope atom and for the same reason: it is derived from the space,
+    # and a second write path is how it would come to describe a space that
+    # is no longer open. `goal_panel/1` returns nil when the feature flag is
+    # off, so with the flag unset this is an unconditional nil.
+    #
+    # The edit form closes on every space change. An edit box left open over
+    # a different space's goal would save this space's text onto that one.
+    |> assign(:goal_panel, Sidebar.goal_panel(space))
+    |> assign(:goal_edit, false)
     # A new conversation starts at its own tip: this state is about the space
     # you are leaving, so carrying it across would show a stale pill in the
     # space you just opened (task 01a03c76 stage 1).

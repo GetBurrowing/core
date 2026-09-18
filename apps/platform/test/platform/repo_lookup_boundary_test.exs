@@ -240,6 +240,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "resolve_actor/2 checks Platform.UUID.valid?/1 on assignee_id — routinely \"system\" or an agent slug — before the :binary_id-keyed lookup, keeping nil as the not-found value"},
     {"platform/chat/messages/edit.ex", :get, "Participant", 1, :safe_internal,
      "`message.frozen_by_participant_id` destructured off a loaded `%Message{}`"},
+    {"platform/chat/sidebar.ex", :get, "Agent", 2, :safe_internal,
+     "task 01a0b491 stage 4's `agents_leader/1`. Site one takes `Roles.agent_id_for_role/1`'s return, which is `select: ra.agent_id` off `role_assignments` — a :binary_id column, and the function is guarded `is_binary(id)` before the get. Site two takes `leader_agent_id` destructured off a `%Chat.Space{}` the function head pattern-matches, which is a :binary_id column on `chat_spaces` with an FK to `agents`. Neither id ever comes from params, an MCP payload or a URL segment: there is no caller that passes an agent id INTO this function"},
     {"platform/chat/sidebar.ex", :get, "Section", 1, :safe_internal,
      "update_section/2 checks Platform.UUID.valid?/1 on the phx-value- section_id, folding a malformed id into the existing {:error, :not_found}"},
     {"platform/chat/sidebar.ex", :get_by, "Section", 1, :safe_internal,
@@ -1023,6 +1025,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # rescue, like every lookup in the file, so a bad id degrades an OPTIONAL
     # context slot to nil rather than raising out of the provider.
     "platform/responsibilities/context_providers.ex" => 1,
+    # Both are id-free aggregates: `agents_space/0` filters on
+    # `goal IS NOT NULL` and `open_task_count/0` on `status NOT IN (...)`.
+    # Neither where clause pins an id, boundary-supplied or otherwise, so
+    # neither needs a `Platform.UUID.valid?/1` guard.
+    "platform/responsibilities/handlers/agents_goal_heartbeat.ex" => 2,
     "platform/responsibilities/handlers/architecture_cron_sweep.ex" => 1,
     "platform/roles.ex" => 2,
     "platform/tasks.ex" => 6,

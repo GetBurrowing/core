@@ -24,6 +24,13 @@ defmodule Platform.Chat.Space do
     field(:deletion_scheduled_at, :utc_datetime_usec)
     field(:archived_cascade_org_id, :binary_id)
 
+    # A single sentence of intent for this space, and the agent accountable
+    # for it (task 01a0b491 stage 1). Both are nil on every space but the
+    # agents space, and nil is the readable "none declared" state the stage-4
+    # render is conditional on — so neither carries a `topic`-style default.
+    field(:goal, :string)
+    field(:leader_agent_id, :binary_id)
+
     # Virtual: the newest non-deleted message's `inserted_at`, falling back to
     # the space's own `inserted_at` when nothing has been said yet. Populated
     # only by `Platform.Chat.list_user_conversations/2`, which already computes
@@ -53,9 +60,12 @@ defmodule Platform.Chat.Space do
       :created_by,
       :archived_at,
       :deletion_scheduled_at,
-      :archived_cascade_org_id
+      :archived_cascade_org_id,
+      :goal,
+      :leader_agent_id
     ])
     |> validate_required([:kind])
+    |> validate_length(:goal, max: 500)
     |> validate_inclusion(:kind, @kinds)
     |> validate_channel_fields()
     |> validate_is_direct()
@@ -65,6 +75,7 @@ defmodule Platform.Chat.Space do
     |> unique_constraint(:slug, name: :chat_spaces_null_scope_channel_slug)
     |> foreign_key_constraint(:primary_agent_id)
     |> foreign_key_constraint(:org_id)
+    |> foreign_key_constraint(:leader_agent_id)
   end
 
   defp validate_channel_fields(changeset) do

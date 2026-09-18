@@ -88,9 +88,11 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   import PlatformWeb.Components.ChatMessage, only: [local_time: 1]
   import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
   import PlatformWeb.Components.ScopePill, only: [scope_pill: 1]
+  import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
 
   alias Phoenix.LiveView.JS
   alias Platform.Chat.Sidebar
+  alias Platform.Responsibilities.Handlers.AgentsGoalHeartbeat
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.PresenceHooks
@@ -124,6 +126,9 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:active_agent_armable_id, :any, required: true)
   attr(:active_agent_name, :any, required: true)
   attr(:active_agent_armable_name, :any, required: true)
+  attr(:goal_panel, :any, required: true)
+  attr(:goal_edit, :boolean, required: true)
+  attr(:can_edit_goal?, :boolean, required: true)
 
   @doc """
   The conversation `<header>` — space title, meeting entry, search, the
@@ -250,8 +255,17 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
               }
             />
           </span>
+          <%!-- DECISION (task 01a0b491, stage 4): `topic` is SUPPRESSED while a
+               goal renders. Two strings answering "what is this space about"
+               in one header will diverge, and the goal is the one with an
+               owner, a measurement and a daily heartbeat behind it — the
+               topic is free text nothing checks. So the goal REPLACES the
+               topic rather than sitting beside it, and on every space
+               without a goal (which is all but one) the topic renders
+               exactly as it always did. Recorded here rather than inherited
+               silently. --%>
           <span
-            :if={@active_space.kind == "channel" && @active_space.topic}
+            :if={@active_space.kind == "channel" && @active_space.topic && is_nil(@goal_panel)}
             class="truncate text-xs text-base-content/40"
           >
             — {@active_space.topic}
@@ -444,6 +458,119 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
         </button>
       </div>
     </header>
+    <%!-- The agents goal strip (task 01a0b491, stage 4).
+
+         A SIBLING of the header, not a child of it: the header is `h-12`
+         and the goal needs its own line, so nesting it would either
+         squeeze the title row or force the header taller for every space
+         in the product. Rendered only when `@goal_panel` is present —
+         flag off, no goal on this space, or embedded mode, and this is
+         zero DOM. An ordinary channel's header is byte-for-byte what it
+         was before this feature existed, which is the positive control
+         for every claim below.
+
+         NO stat tile, NO delta colour, NO progress bar, NO agent roster.
+         "Close backlog items" has no denominator, and a bar would have to
+         invent one; an invented denominator is a number that looks
+         measured. `--color-warning` appears in exactly ONE place on this
+         surface — the no-measurement state — and nowhere else, not on the
+         delta and not on a falling count. --%>
+    <div
+      :if={@goal_panel && !@embedded}
+      class="flex flex-shrink-0 items-start gap-2 border-b border-base-content/10 px-5 py-2"
+      data-role="agents-goal-strip"
+    >
+      <%!-- The same leader face as the rail row, once. Swapping the leader
+           through `role_assignments` broadcasts on `Roles.assignments_topic/0`
+           and repaints both with no reload — the change is legible across
+           the room because it is a different face, not a different word. --%>
+      <.agent_avatar
+        :if={@goal_panel.leader}
+        name={@goal_panel.leader.name}
+        avatar_url={@goal_panel.leader.avatar_url}
+        size="xs"
+        class="ring-2 ring-primary mt-0.5"
+        title={"#{@goal_panel.leader.name} leads"}
+      />
+      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span
+          :if={@goal_panel.leader}
+          class="text-xs text-base-content/60"
+          data-role="agents-goal-leader"
+        >
+          {@goal_panel.leader.name} leads
+        </span>
+        <%= if @goal_edit do %>
+          <%!-- ONE operation. There is no first-time path and no
+               "set goal" control distinct from an "edit goal" control:
+               this form always submits `save_goal`, which always runs
+               `Chat.update_space/2` through the stage-1 changeset. No
+               branch anywhere in the write path reads `is_nil(goal)`. --%>
+          <form phx-submit="save_goal" class="flex items-center gap-2" data-role="agents-goal-form">
+            <input
+              type="text"
+              name="goal"
+              value={@goal_panel.goal}
+              maxlength="500"
+              aria-label="Goal"
+              class="input input-bordered input-sm min-w-0 flex-1"
+            />
+            <button type="submit" class="btn btn-sm btn-primary">Save</button>
+            <button type="button" phx-click="cancel_goal_edit" class="btn btn-sm btn-ghost">
+              Cancel
+            </button>
+          </form>
+        <% else %>
+          <div class="flex min-w-0 items-baseline gap-2">
+            <%!-- The goal sentence at FULL `--color-base-content`: it is
+                 the most meaningful string on the surface, and the
+                 truncation rule says the most meaningful fragment is the
+                 last thing allowed to truncate. `shrink-0` here,
+                 `min-w-0 truncate` on the clause beside it. --%>
+            <span class="shrink-0 text-sm text-base-content" data-role="agents-goal-sentence">
+              {@goal_panel.goal}
+            </span>
+            <%!-- The measurement clause at `/60`, which is the measured
+                 contrast FLOOR and not a preference: composited, `/40`
+                 (the treatment `topic` uses two lines up) is 2.85:1 light
+                 and 3.53:1 dark and fails AA in both themes; `/60` is
+                 5.74:1 and 6.26:1. --%>
+            <%= if @goal_panel.measurement[:missing?] do %>
+              <span
+                class="min-w-0 truncate text-xs text-warning"
+                data-role="agents-goal-measurement-missing"
+              >
+                {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
+              </span>
+            <% else %>
+              <span
+                class="min-w-0 truncate text-xs text-base-content/60"
+                data-role="agents-goal-measurement"
+              >
+                <%!-- The number, and ONLY the number, in JetBrains Mono
+                     inline in the sentence. A changing digit is legible
+                     at a glance in mono without building a tile around
+                     it. --%>
+                <span class="font-mono" data-role="agents-goal-number">
+                  {@goal_panel.measurement.value}
+                </span>
+                {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
+              </span>
+            <% end %>
+            <button
+              :if={@can_edit_goal?}
+              type="button"
+              phx-click="edit_goal"
+              class="btn btn-ghost btn-xs shrink-0"
+              aria-label="Edit goal"
+              title="Edit goal"
+            >
+              <span class="hero-pencil-square size-3.5"></span>
+            </button>
+          </div>
+        <% end %>
+      </div>
+    </div>
     """
   end
 

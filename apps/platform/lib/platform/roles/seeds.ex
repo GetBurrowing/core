@@ -8,6 +8,11 @@ defmodule Platform.Roles.Seeds do
   Per Decision 2 from the M4 stack — the role roster is fixed by the
   platform, not user-extensible. The closed list:
 
+    * `agents_leader` — accountable for the agents space's declared
+      goal and the daily heartbeat that measures it (added in task
+      `01a0b491` stage 1). No assignment is seeded: pinning an agent is
+      a runtime `role_assignments` operation, so naming the first leader
+      and reassigning later are the same operation.
     * `architect` — cross-task architectural coherence checks (added
       in ADR-0044 stage 1, task `019f3da3`)
     * `designer` — visual design, critique, brand alignment
@@ -152,6 +157,15 @@ defmodule Platform.Roles.Seeds do
         "architecture.review_plan",
         "architecture.audit_diff",
         "architecture.cron_sweep"
+      ]
+    },
+    %{
+      key: "agents_leader",
+      name: "Agents Leader",
+      description: "Accountable for the agents space's declared goal and its daily measurement",
+      icon: "hero-flag",
+      bundle: [
+        "agents.goal_heartbeat"
       ]
     }
   ]

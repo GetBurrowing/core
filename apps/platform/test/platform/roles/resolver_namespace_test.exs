@@ -97,7 +97,8 @@ defmodule Platform.Roles.ResolverNamespaceTest do
         |> Enum.flat_map(& &1.bundle)
         |> MapSet.new()
 
-      assert MapSet.size(role_keys) == 7
+      # 7 -> 8: `agents_leader` (task 01a0b491 stage 1).
+      assert MapSet.size(role_keys) == 8
       refute Enum.empty?(bundled_keys)
 
       assert MapSet.disjoint?(role_keys, bundled_keys),

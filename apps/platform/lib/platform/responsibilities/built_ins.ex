@@ -68,7 +68,8 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.SecuritySecretLeak,
       Handlers.ArchitectureReviewPlan,
       Handlers.ArchitectureAuditDiff,
-      Handlers.ArchitectureCronSweep
+      Handlers.ArchitectureCronSweep,
+      Handlers.AgentsGoalHeartbeat
     ]
   end
 end

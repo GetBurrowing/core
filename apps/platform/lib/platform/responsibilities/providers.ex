@@ -65,6 +65,7 @@ defmodule Platform.Responsibilities.Providers do
   runtime state and must not leak into drift detection.
   """
 
+  alias Platform.Responsibilities.Providers.Agents
   alias Platform.Responsibilities.Providers.Architecture
   alias Platform.Responsibilities.Providers.Design
   alias Platform.Responsibilities.Providers.Meetings
@@ -72,6 +73,7 @@ defmodule Platform.Responsibilities.Providers do
   alias Platform.Responsibilities.Providers.Tasks
 
   @feature_providers %{
+    "agents" => Agents,
     "architecture" => Architecture,
     "design" => Design,
     "meetings" => Meetings,

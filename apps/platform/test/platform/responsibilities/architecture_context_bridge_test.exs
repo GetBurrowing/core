@@ -138,6 +138,19 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
   # twelve are stated, not fixed — the original nine plus the three
   # `design.task_direction` declares (ADR-0046 stack member 7 stage 3).
   @unresolved_slots %{
+    "goal" =>
+      "agents.goal_heartbeat reads the goal straight off the chat space " <>
+        "(chat_spaces.goal, task 01a0b491 stage 1) — there is no " <>
+        "ContextProviders clause and no other handler declares it",
+    "measurement" =>
+      "agents.goal_heartbeat derives this itself in measure/2, and the " <>
+        "derivation is goal-specific by design: a goal it cannot count " <>
+        "must come back `missing?: true` rather than through a generic " <>
+        "resolver that would have to invent a number",
+    "leader" =>
+      "agents.goal_heartbeat serves this from chat_spaces.leader_agent_id; " <>
+        "the role assignment behind it is already resolved by the Router " <>
+        "before the handler runs",
     "open_prs" =>
       "architecture.cron_sweep shells out to `gh pr list` in its own " <>
         "gather_open_prs/0 — no DB-backed resolver exists",

@@ -100,6 +100,7 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
   # below — putting them there would pin a render gap that does not
   # exist and would go red the moment anyone read the migration.
   @closed_roster_template_slugs [
+    "agents.goal_heartbeat.v1",
     "architecture.audit_diff.v1",
     "architecture.cron_sweep.v1",
     "architecture.review_plan.v1",

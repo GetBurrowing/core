@@ -81,6 +81,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
 
   import PlatformWeb.Components.LifecycleControls, only: [lifecycle_menu: 1]
   import PlatformWeb.Components.ScopePill, only: [scope_pill: 1]
+  import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
 
   alias PlatformWeb.ChatLive
 
@@ -100,6 +101,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:sidebar_sections, :list, required: true)
   attr(:channel_sections, :map, required: true)
   attr(:pinned_task_spaces, :list, required: true)
+  attr(:agents_block, :any, required: true)
   attr(:channels, :list, required: true)
   attr(:dm_conversations, :list, required: true)
   attr(:archived_channels, :list, required: true)
@@ -144,6 +146,13 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         class="flex-1 overflow-y-auto py-2"
         aria-label="Channel sections"
       >
+        <%!-- Agents block (task 01a0b491) — ABOVE Pinned. Renders nothing
+             when the feature flag is off or no space carries a goal. --%>
+        <.agents_block
+          agents_block={@agents_block}
+          active_space={@active_space}
+          unread_counts={@unread_counts}
+        />
         <.pinned_block
           channel_sections={@channel_sections}
           pinned_task_spaces={@pinned_task_spaces}
@@ -430,6 +439,96 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         Show all
       </button>
     </div>
+    """
+  end
+
+  attr(:agents_block, :any, required: true)
+  attr(:active_space, :any, required: true)
+  attr(:unread_counts, :map, required: true)
+
+  @doc """
+  The Agents block — ONE row, above the Pinned block, for the space whose
+  goal the federated agents are serving (task 01a0b491, stage 4).
+
+  NOT a `channel_sections` row, and it cannot be one: that table carries
+  `unique_index(:channel_sections, [:org_id])` — one row per org — and
+  membership derives from `chat_spaces.org_id`. An "Agents" section would
+  have to invent an org. So this is a bespoke block mirroring
+  `pinned_block/1`'s structure, its `channel-section` classes and its
+  `border-b border-edge pb-2 mb-2` separator.
+
+  NO CHROME, inherited deliberately from `pinned_block/1` three rows
+  below: no surface fill, no border box, no badge, no second line, no
+  collapse control. The original ticket asked for a row "visually heavier
+  than a normal channel row"; that reverses a rule this file already
+  states and which is load-bearing for the block underneath, so the
+  ticket was corrected and the correction wins. Row height, left padding,
+  unread pill and truncation are the pinned row's, unchanged.
+
+  WEIGHT COMES FROM EXACTLY ONE THING: the leader's avatar at 20px, in
+  the `w-5` glyph column the pinned rows already reserve for their flat
+  glyphs, ringed in `--color-primary`. That column has only ever held
+  glyphs; a face in it says someone is accountable with no label and no
+  added height, and the ring is the only chroma on this surface.
+
+  Renders NOTHING when `@agents_block` is nil — flag off, or no space
+  carries a goal. No label, no placeholder, no empty container. Same rule
+  `pinned_block/1` applies to its own empty case and for the same reason.
+  """
+  def agents_block(assigns) do
+    ~H"""
+    <%= if @agents_block do %>
+      <% space = @agents_block.space %>
+      <% leader = @agents_block.leader %>
+      <section
+        class="channel-section group border-b border-edge pb-2 mb-2"
+        data-section-key="agents"
+        data-role="agents-rail-block"
+        aria-label="Agents"
+      >
+        <div
+          class={[
+            "channel-row-wrap group/row",
+            @active_space && @active_space.id == space.id && "channel-row-wrap--active"
+          ]}
+          data-space-id={space.id}
+        >
+          <.link
+            patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
+            data-role="agents-rail-row"
+            class={[
+              "channel-row",
+              @active_space && @active_space.id == space.id && "channel-row--active"
+            ]}
+          >
+            <%!-- The glyph column, at the pinned rows' exact `w-5` width so
+                   the names form one straight column with the block below.
+                   The avatar is `xs` (size-5 = 20px), which is the box, not
+                   an enlargement of the row.
+
+                   Empty when no leader resolves, rather than a placeholder
+                   face: a stand-in face would claim accountability nobody
+                   holds, which is the one thing this row exists to say. --%>
+            <span class="w-5 shrink-0 flex items-center justify-center" data-role="agents-row-glyph">
+              <.agent_avatar
+                :if={leader}
+                name={leader.name}
+                avatar_url={leader.avatar_url}
+                size="xs"
+                class="ring-2 ring-primary"
+                title={"#{leader.name} leads"}
+              />
+            </span>
+            <span class="truncate flex-1">{space.name}</span>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <span class="channel-row-unread-pill">
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
+              </span>
+            <% end %>
+          </.link>
+        </div>
+      </section>
+    <% end %>
     """
   end
 

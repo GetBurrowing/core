@@ -381,9 +381,24 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # and `user_id` non-nil in every case (`ChatLive.Embedded` is a nested
   # LiveView, which Phoenix forbids from defining `handle_params/3` at all).
   #
-  # RE-DERIVED by running `code_line_count/1` on this tree (2,224), not by
+  # ── 2026-09-18, task 01a0b491 stage 4: +42 (2,224 -> 2,266) ────────────────
+  #
+  # The agents goal surface: three mount assigns, the `goal_panel` /
+  # `goal_edit` pair in the `assign_active_space/2` funnel, one
+  # `{:role_assignment_changed, ...}` handler, and the three goal-editing
+  # events (`edit_goal`, `cancel_goal_edit`, `save_goal`).
+  #
+  # The derivation lives in `Platform.Chat.Sidebar` — `agents_rail_block/0`,
+  # `goal_panel/1` and `agents_leader/1` — and the markup lives in
+  # `partials/rail.ex` and `partials/conversation.ex`. What remains in this
+  # file is only what has to: assigns, the PubSub handler and the events. The
+  # `save_goal` clause is the largest single piece at ~20 lines, and it is a
+  # `cond` over three outcomes (refused / no space / written) rather than a
+  # write with the gate implied.
+  #
+  # RE-DERIVED from the guard's own measurement of this tree (2,266), not by
   # adding a remembered delta to a remembered pin.
-  @chat_live_code_line_count 2224
+  @chat_live_code_line_count 2266
 
   @doc """
   Count the CODE lines of a source file.

@@ -109,16 +109,18 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts seven roles and twenty-six bundle rows on a fresh DB" do
+    test "inserts eight roles and twenty-seven bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
-      # 7 roles: designer, historian, meeting_producer, meeting_scribe,
-      # triage_officer, security_guard, architect (ADR-0044 stage 1).
-      assert Repo.aggregate(Role, :count, :key) == 7
+      # 8 roles: designer, historian, meeting_producer, meeting_scribe,
+      # triage_officer, security_guard, architect (ADR-0044 stage 1),
+      # agents_leader (task 01a0b491 stage 1).
+      assert Repo.aggregate(Role, :count, :key) == 8
 
       # 26 bundle rows = 6 (designer) + 4 (historian) + 1 (meeting_producer)
       #                + 4 (meeting_scribe) + 4 (triage_officer)
-      #                + 4 (security_guard) + 3 (architect).
+      #                + 4 (security_guard) + 3 (architect)
+      #                + 1 (agents_leader).
       #
       # Designer went 3 → 4 in ADR-0046 stack member 7 (task
       # 019f9b29-5ecd stage 3), which added `design.task_direction`.
@@ -132,20 +134,26 @@ defmodule Platform.Roles.SeedsTest do
       # than inventing a role, which is the fact this pair of counts
       # keeps honest: a new key that quietly arrived with a new role
       # would move both numbers and has to be argued for.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 26
+      #
+      # 26 -> 27 in task 01a0b491 stage 1: `agents_leader` moved BOTH
+      # numbers, which is the argued-for case this comment describes —
+      # `agents.goal_heartbeat` needs an accountable role, and pinning it
+      # onto an existing bundle would have made the heartbeat somebody
+      # else's job.
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 27
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
       assert :ok = Seeds.seed_defaults()
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 7
+      assert Repo.aggregate(Role, :count, :key) == 8
 
-      # Same 26 as the fresh-DB case above — the point of this test is
+      # Same 27 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 26
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 27
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do
