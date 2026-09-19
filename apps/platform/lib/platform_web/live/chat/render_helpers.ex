@@ -270,8 +270,16 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # Without it, a masked search for a real org name renders an EMPTY list with
   # no "No matches" line, and the difference between "blank" and "No matches"
   # is itself the oracle the masked filter just closed.
-  def drawer_no_matches?(_pinned, _channel_sections, _sidebar_sections, "", _user_id, _mask_ctx),
-    do: false
+  def drawer_no_matches?(
+        _pinned,
+        _channel_sections,
+        _sidebar_sections,
+        "",
+        _user_id,
+        _mask_ctx,
+        _agents_block
+      ),
+      do: false
 
   def drawer_no_matches?(
         pinned_entries,
@@ -279,16 +287,36 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
         sidebar_sections,
         query,
         user_id,
-        mask_ctx
+        mask_ctx,
+        agents_block
       ) do
     # Takes the MERGED Pinned block rather than `channel_sections.pinned`:
     # the block now holds task conversations too, and a query that matches
     # only a pinned task would otherwise render a row and the "No matches"
     # copy at the same time.
-    drawer_filter_pinned(pinned_entries, query, user_id) == [] and
+    # The Agents block is the FOURTH list this gate consults (task 01a0b491
+    # v2 stage 1). Without it, a query matching only the Agents space renders
+    # a navigable row AND the "No matches" copy at once — the exact defect the
+    # pinned-task comment above records having already shipped once.
+    not drawer_agents_visible?(agents_block, query) and
+      drawer_filter_pinned(pinned_entries, query, user_id) == [] and
       drawer_filter_dms(channel_sections.dms, query, user_id) == [] and
       drawer_filter_sections(sidebar_sections, query, mask_ctx) == []
   end
+
+  @doc """
+  Whether the drawer's Agents row survives the active search.
+
+  Nil block (flag off, or no space carries a goal) never renders. An empty
+  query always renders. Otherwise the space's name is matched with the same
+  case-insensitive substring rule `drawer_filter_pinned/3` uses, so the row
+  and `drawer_no_matches?/7` can never disagree about it.
+  """
+  def drawer_agents_visible?(nil, _query), do: false
+  def drawer_agents_visible?(_agents_block, ""), do: true
+
+  def drawer_agents_visible?(%{space: space}, query),
+    do: drawer_match?(space.name, query)
 
   def unread_label(count) when count >= 9, do: "9+"
   def unread_label(count) when count > 0, do: Integer.to_string(count)

@@ -83,12 +83,14 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
       drawer_filter_dms: 3,
       drawer_filter_pinned: 3,
       drawer_filter_sections: 3,
-      drawer_no_matches?: 6,
+      drawer_agents_visible?: 2,
+      drawer_no_matches?: 7,
       pinned_row_label: 3,
       sidebar_row_label: 2,
       unread_label: 1
     ]
 
+  import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
   import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
 
   alias Phoenix.LiveView.JS
@@ -112,6 +114,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
   attr(:sidebar_sections, :list, required: true)
   attr(:channel_sections, :map, required: true)
   attr(:pinned_task_spaces, :list, required: true)
+  attr(:agents_block, :any, required: true)
   attr(:channels, :list, required: true)
   attr(:dm_conversations, :list, required: true)
   attr(:archived_channels, :list, required: true)
@@ -284,6 +287,19 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           <div :if={@sidebar_edit} class="sr-only" aria-live="polite">
             {@drawer_reorder_announcement}
           </div>
+          <%!-- Agents block FIRST, so drawer order matches rail order
+               (Agents, Pinned, DMs, sub-orgs). Mirrored from
+               `Rail.agents_block/1` rather than called into it: the drawer is
+               a deliberately independent DOM tree (see this module's
+               moduledoc), and its rows carry the drawer's touch-target
+               geometry, not the rail's 32px row. --%>
+          <.drawer_agents
+            agents_block={@agents_block}
+            active_space={@active_space}
+            unread_counts={@unread_counts}
+            drawer_query={@drawer_query}
+          />
+
           <.drawer_pinned
             sidebar_edit={@sidebar_edit}
             drawer_query={@drawer_query}
@@ -371,7 +387,8 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                   @sidebar_sections,
                   @drawer_query,
                   @user_id,
-                  drawer_mask_ctx
+                  drawer_mask_ctx,
+                  @agents_block
                 )
             }
             class="flex flex-col items-center gap-3 px-6 py-10 text-center"
@@ -508,6 +525,84 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
         </button>
       </form>
     </div>
+    """
+  end
+
+  attr(:agents_block, :any, required: true)
+  attr(:active_space, :any, required: true)
+  attr(:unread_counts, :map, required: true)
+  attr(:drawer_query, :string, required: true)
+
+  @doc """
+  The Agents block, mirrored into the drawer (task 01a0b491 v2 stage 1).
+
+  Renders NOTHING when `@agents_block` is nil — flag off, or no space carries
+  a goal. No label, no placeholder, no empty container, no empty `<section>`;
+  the same rule `drawer_pinned/1` applies to its own empty case.
+
+  ROW SHAPE IS THE DRAWER'S, NOT THE DESKTOP RAIL'S. Geometry is copied from
+  the pinned BROWSE row below (`px-4 py-3`, the drawer's unread pill), because
+  the difference between the two surfaces is a touch-target decision and that
+  is the one honest reason a mobile row may differ from its desktop twin.
+
+  NO CHROME otherwise, inherited from `Rail.agents_block/1`: no icon beside
+  the label, no surface fill, no border box, no badge, no second line, no
+  collapse control. Weight comes from exactly one thing — the leader's avatar
+  at 20px in the `w-5` glyph column the pinned rows already reserve, ringed in
+  `--color-primary`. Empty column when no leader resolves, never a stand-in
+  face: it would claim accountability nobody holds.
+
+  NO `row_actions_control`. The neighbouring pinned channel rows carry one and
+  this row does not: parity with the DESKTOP AGENTS ROW wins over parity with
+  the adjacent drawer row, because the sheet's verbs (pin/mute/leave) are all
+  wrong for a block whose membership is derived, not chosen.
+
+  SEARCH. Suppressed when `@drawer_query` matches neither nothing nor this
+  space's name, via the same predicate `drawer_no_matches?/7` consults — a row
+  rendering beside the "No matches" copy is the defect already shipped once on
+  this surface for pinned tasks.
+  """
+  def drawer_agents(assigns) do
+    ~H"""
+    <%= if drawer_agents_visible?(@agents_block, @drawer_query) do %>
+      <% space = @agents_block.space %>
+      <% leader = @agents_block.leader %>
+      <section data-role="agents-drawer-block" aria-label="Agents" class="mb-2">
+        <div class="flex items-center" data-role="drawer-row-wrap" data-space-id={space.id}>
+          <.link
+            patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
+            phx-click="close_mobile_browser"
+            data-role="agents-drawer-row"
+            class={[
+              "flex items-center gap-3 flex-1 min-w-0 px-4 py-3 text-sm transition-colors",
+              "hover:bg-base-200",
+              @active_space && @active_space.id == space.id &&
+                "bg-base-200 text-primary font-semibold"
+            ]}
+          >
+            <span
+              class="w-5 shrink-0 flex items-center justify-center"
+              data-role="agents-drawer-row-glyph"
+            >
+              <.agent_avatar
+                :if={leader}
+                name={leader.name}
+                avatar_url={leader.avatar_url}
+                size="xs"
+                class="ring-2 ring-primary"
+                title={"#{leader.name} leads"}
+              />
+            </span>
+            <span class="truncate flex-1">{space.name}</span>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
+              </span>
+            <% end %>
+          </.link>
+        </div>
+      </section>
+    <% end %>
     """
   end
 

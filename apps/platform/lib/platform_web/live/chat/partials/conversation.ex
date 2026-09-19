@@ -521,13 +521,33 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             </button>
           </form>
         <% else %>
-          <div class="flex min-w-0 items-baseline gap-2">
+          <%!-- WRAPS BELOW `sm`, single row from `sm:` upward. MEASURED at
+               375x812 before this change, against goals of growing length:
+               the measurement clause reached 0px at 38 characters and the
+               strip overflowed the viewport (scrollWidth 382 > clientWidth
+               375) at 40, while the goal input allows `maxlength="500"`.
+               The desktop rule below — sentence `shrink-0`, clause
+               `min-w-0 truncate` — is correct at 1280px where there is
+               slack, and at 375px it spends the entire deficit on the one
+               fragment that carries the heartbeat's payload. So: let the
+               row become two lines below `sm` instead of truncating the
+               numeral away. `sm:flex-nowrap` and `sm:shrink-0` restore the
+               desktop rule exactly — at >=640px the computed layout is
+               identical to what shipped in v1, which is why v1's existing
+               assertions in `chat_live_agents_goal_surface_test.exs` must
+               stay green. --%>
+          <div
+            class="flex min-w-0 flex-wrap items-baseline gap-2 sm:flex-nowrap"
+            data-role="agents-goal-row"
+          >
             <%!-- The goal sentence at FULL `--color-base-content`: it is
                  the most meaningful string on the surface, and the
                  truncation rule says the most meaningful fragment is the
-                 last thing allowed to truncate. `shrink-0` here,
-                 `min-w-0 truncate` on the clause beside it. --%>
-            <span class="shrink-0 text-sm text-base-content" data-role="agents-goal-sentence">
+                 last thing allowed to truncate. `sm:shrink-0` here,
+                 `min-w-0 truncate` on the clause beside it. Below `sm` the
+                 sentence is NOT `shrink-0`: it wraps onto a second line and
+                 the clause keeps its own line at full width. --%>
+            <span class="text-sm text-base-content sm:shrink-0" data-role="agents-goal-sentence">
               {@goal_panel.goal}
             </span>
             <%!-- The measurement clause at `/60`, which is the measured
@@ -557,11 +577,22 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                 {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
               </span>
             <% end %>
+            <%!-- TAP TARGET, and this is independent of the reflow above:
+                 MEASURED at 375x812 BEFORE any change, the control's box was
+                 32 x 21 px — under 44px in BOTH dimensions, and it was that
+                 size before this stage existed. `max-sm:` raises the target
+                 with PADDING below `sm` and leaves the glyph at `size-3.5`,
+                 because a bigger pencil is a louder surface and the
+                 no-chrome contract above forbids that. `max-sm:` rather than
+                 a `sm:` reset is deliberate: it adds no class that is live
+                 at >=640px, so the desktop computed box stays 32 x 21 with
+                 nothing to restore. Matches the drawer's own `min-h-11
+                 min-w-11` treatment (`mobile_browser.ex:178`). --%>
             <button
               :if={@can_edit_goal?}
               type="button"
               phx-click="edit_goal"
-              class="btn btn-ghost btn-xs shrink-0"
+              class="btn btn-ghost btn-xs shrink-0 max-sm:min-h-11 max-sm:min-w-11"
               aria-label="Edit goal"
               title="Edit goal"
             >
@@ -578,6 +609,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:embedded, :boolean, required: true)
   attr(:pinned_task_spaces, :list, required: true)
   attr(:channel_sections, :map, required: true)
+  attr(:agents_block, :any, required: true)
   attr(:unread_counts, :map, required: true)
   attr(:user_id, :any, required: true)
   # Masking attrs: the channel-chip branch calls `masked_space_name/2`.
@@ -625,13 +657,62 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     <nav
       :if={
         @active_space && !@embedded &&
-          (@pinned_task_spaces != [] || @channel_sections.pinned != [])
+          (@agents_block != nil || @pinned_task_spaces != [] ||
+             @channel_sections.pinned != [])
       }
       class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10 bg-base-200/40"
       style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
       aria-label="Pinned"
       data-role="mobile-pinned-strip"
     >
+      <%!-- The Agents chip (task 01a0b491 v2 stage 2). FIRST child, mirroring
+           the rail order where `agents_block/1` sits above `pinned_block/1`.
+
+           The strip's `:if` above was widened for a non-nil `@agents_block`:
+           it previously fired only when the user had pins, so a user with no
+           pins never got the strip at all and an Agents chip inside the old
+           guard would have been invisible to exactly the people with nothing
+           else on this surface.
+
+           NO GLYPH SLOT when no leader resolves — not an empty span. That is
+           this strip's own recorded rule (see the comment on the channel
+           chips below): a blank 20px inside a pill reads as broken padding
+           rather than as an absent glyph. It is deliberately the OPPOSITE of
+           the rail and drawer rows, which keep their empty `w-5` column to
+           hold the name column straight. Both are right on their own surface
+           and must not be harmonised. --%>
+      <%= if @agents_block do %>
+        <% agents_space = @agents_block.space %>
+        <% agents_leader = @agents_block.leader %>
+        <.link
+          patch={~p"/chat/#{space_nav_target(agents_space)}"}
+          data-role="agents-pinned-strip-chip"
+          data-space-id={agents_space.id}
+          class={[
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
+            if(@active_space.id == agents_space.id,
+              do: "bg-primary text-primary-content",
+              else: "bg-base-100 text-base-content/80 border border-base-content/10"
+            )
+          ]}
+        >
+          <.agent_avatar
+            :if={agents_leader}
+            name={agents_leader.name}
+            avatar_url={agents_leader.avatar_url}
+            size="xs"
+            class="ring-2 ring-primary"
+            title={"#{agents_leader.name} leads"}
+          />
+          <span class="truncate max-w-[10rem]">{agents_space.name}</span>
+          <span
+            :if={unread_label(Map.get(@unread_counts, agents_space.id, 0))}
+            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
+          >
+            {unread_label(Map.get(@unread_counts, agents_space.id, 0))}
+          </span>
+        </.link>
+      <% end %>
       <.link
         :for={space <- @pinned_task_spaces}
         patch={~p"/chat/#{space_nav_target(space)}"}

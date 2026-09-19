@@ -268,4 +268,185 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       refute html =~ "Firstleader leads"
     end
   end
+
+  # ---- breakpoint-resolution helpers for the reflow describe below -------
+  #
+  # Tailwind emits base utilities before `sm:` ones, so among the classes
+  # live at >=640px the `sm:`-prefixed member of a conflicting family wins.
+  # `max-sm:` classes are not live at >=640px at all, and both base and
+  # `max-sm:` classes are live below 640px.
+
+  defp desktop_live(class_string) do
+    classes = split_classes(class_string)
+    resolve(base_classes(classes) ++ prefixed(classes, "sm:"))
+  end
+
+  defp mobile_live(class_string) do
+    classes = split_classes(class_string)
+    resolve(base_classes(classes) ++ prefixed(classes, "max-sm:"))
+  end
+
+  defp split_classes(class_string), do: String.split(class_string || "", ~r/\s+/, trim: true)
+
+  defp base_classes(classes), do: Enum.reject(classes, &String.contains?(&1, ":"))
+
+  defp prefixed(classes, prefix) do
+    classes
+    |> Enum.filter(&String.starts_with?(&1, prefix))
+    |> Enum.map(&String.replace_prefix(&1, prefix, ""))
+  end
+
+  # Last-wins within a conflicting family, which is what the cascade does
+  # for same-specificity utilities emitted in layer order.
+  defp resolve(ordered) do
+    ordered
+    |> Enum.reduce(%{}, fn class, acc -> Map.put(acc, family(class), class) end)
+    |> Map.values()
+    |> MapSet.new()
+  end
+
+  defp family("flex-wrap"), do: :wrap
+  defp family("flex-nowrap"), do: :wrap
+  defp family(other), do: other
+
+  defp class_of(html, role) do
+    html
+    |> Floki.parse_fragment!()
+    |> Floki.find(~s([data-role="#{role}"]))
+    |> Floki.attribute("class")
+    |> List.first()
+  end
+
+  describe "the goal strip reflows below sm without changing desktop" do
+    # WHY THESE ASSERT ON CLASSES AT ALL, against this module's own rule.
+    # The reflow IS a Tailwind-breakpoint claim and a breakpoint is not
+    # observable in a LiveView render test — there is no viewport here. So
+    # classes are the only evidence available, and the interesting
+    # assertion is NOT "the mobile class was added": that passes for a
+    # change that dropped `shrink-0` at EVERY width, which is the actual
+    # regression this stage could ship. Each test derives what is live at
+    # >=640px AND what is live below it, and asserts on both.
+    #
+    # PREMISE, measured on the dev-on-moon rig at 375x812 BEFORE the change,
+    # with the goal input's own `maxlength="500"` as the range: the
+    # measurement clause reached 0px width at a 38-character goal, and the
+    # strip overflowed the viewport (scrollWidth 382 > clientWidth 375) at
+    # 40. At the 28-character goal v1 shipped with, neither was true — which
+    # is why this is keyed to the threshold and not to one string.
+
+    defp goal_html(conn, opts \\ []) do
+      {conn, user} = authenticated_conn(conn)
+      agent = insert_agent("Dalton")
+      enable_flag()
+
+      # `can_edit_goal?` is `Tenancy.fabrikam_admin?/1` (chat_live.ex:569), so
+      # the pencil does NOT render for an ordinary user. Without this the
+      # pencil test reads a nil class attribute, every `refute ... in` on it
+      # passes vacuously, and only the one `assert` catches it — which is
+      # how this was caught on the first moon run rather than shipped.
+      if Keyword.get(opts, :admin?, false), do: make_fabrikam_admin(user)
+
+      space = create_space(goal: "Close backlog items in Suite", leader_agent_id: agent.id)
+      add_user(space, user)
+      {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
+      html
+    end
+
+    defp make_fabrikam_admin(user) do
+      org_id = Platform.Tenancy.get_org_by_slug!("fabrikam").id
+
+      %Platform.Tenancy.OrgMembership{}
+      |> Platform.Tenancy.OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: org_id,
+        role: "admin"
+      })
+      |> Repo.insert!()
+    end
+
+    test "the sentence keeps shrink-0 at desktop and loses it below sm", %{conn: conn} do
+      class = conn |> goal_html() |> class_of("agents-goal-sentence")
+      assert is_binary(class), "the goal sentence did not render"
+
+      # THE ASSERTION THAT MATTERS. A test that only looked for
+      # `sm:shrink-0` would also pass if `shrink-0` had been deleted at
+      # every width.
+      assert "shrink-0" in desktop_live(class),
+             "desktop lost shrink-0 on the goal sentence: #{class}"
+
+      refute "shrink-0" in mobile_live(class),
+             "the sentence is still shrink-0 below sm, so it cannot wrap: #{class}"
+
+      # v1's desktop set for this span, exactly — tripwire on any drift.
+      assert desktop_live(class) == MapSet.new(["shrink-0", "text-sm", "text-base-content"])
+    end
+
+    test "the inner row wraps below sm and stays nowrap at desktop", %{conn: conn} do
+      class = conn |> goal_html() |> class_of("agents-goal-row")
+      assert is_binary(class), "the goal row did not render"
+
+      assert "flex-nowrap" in desktop_live(class),
+             "desktop row would wrap, which v1 did not: #{class}"
+
+      assert "flex-wrap" in mobile_live(class),
+             "the row cannot wrap below sm: #{class}"
+
+      # v1's row was `flex min-w-0 items-baseline gap-2` — nowrap by
+      # default. Resolved at desktop that is this set plus the explicit
+      # `flex-nowrap` restoring it.
+      assert desktop_live(class) ==
+               MapSet.new(["flex", "min-w-0", "items-baseline", "gap-2", "flex-nowrap"])
+    end
+
+    test "the pencil tap target is raised below sm only, by padding not glyph", %{conn: conn} do
+      button =
+        conn
+        |> goal_html(admin?: true)
+        |> Floki.parse_fragment!()
+        |> Floki.find(~s(button[aria-label="Edit goal"]))
+
+      # POSITIVE CONTROL for the class reads below: a nil class attribute
+      # makes every `refute ... in` on it pass for the wrong reason.
+      assert button != [], "the pencil did not render — can_edit_goal? was false"
+      class = button |> Floki.attribute("class") |> List.first()
+      assert is_binary(class)
+
+      # Measured 32 x 21 px at 375px before this change — under 44 in both
+      # dimensions, and true before this stage existed.
+      assert "min-h-11" in mobile_live(class)
+      assert "min-w-11" in mobile_live(class)
+
+      # Desktop untouched: `max-sm:` emits nothing live at >=640px, so
+      # there is no reset to get wrong.
+      refute "min-h-11" in desktop_live(class)
+      refute "min-w-11" in desktop_live(class)
+      assert desktop_live(class) == MapSet.new(["btn", "btn-ghost", "btn-xs", "shrink-0"])
+
+      # PADDING, NOT ICON SCALE — the no-chrome contract forbids a louder
+      # glyph, so the size stays exactly v1's.
+      assert button |> Floki.find("span") |> Floki.attribute("class") |> List.first() =~
+               "size-3.5"
+    end
+
+    test "the reflow does not relax the clause's truncation, contrast or mono numeral", %{
+      conn: conn
+    } do
+      html = goal_html(conn)
+      class = class_of(html, "agents-goal-measurement")
+      assert is_binary(class), "the measurement clause did not render"
+
+      # Giving the clause its own line below sm does not licence dropping
+      # the desktop truncation rule.
+      assert "truncate" in desktop_live(class)
+      assert "min-w-0" in desktop_live(class)
+      assert "text-base-content/60" in desktop_live(class)
+      refute class =~ "text-base-content/40"
+
+      assert class_of(html, "agents-goal-number") =~ "font-mono"
+
+      # No raw hex anywhere on the strip itself.
+      strip = class_of(html, "agents-goal-strip")
+      refute strip =~ ~r/#[0-9a-fA-F]{3,8}\b/
+    end
+  end
 end
