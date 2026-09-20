@@ -7846,6 +7846,71 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  describe "board stack-member badges close the status_label vocabulary (task 01a08e08 stage 2)" do
+    # The defect: `status_label/1` used to launder any status it didn't
+    # recognize straight through as the raw string (e.g. the literal text
+    # "stack_pending"). The BOARD's expanded stack-member row
+    # (`board_component.ex`, both the mobile and desktop halves) renders
+    # its badge from `task_display_status/2`
+    # (`lib/platform_web/live/tasks/task_display.ex`), whose fallback
+    # clause calls `status_label/1` directly — it does NOT call
+    # `member_status_pill/1` in `stack_styles.ex`, which already had a
+    # correct `"stack_pending" -> "Waiting"` clause and was never on the
+    # broken path. A test that calls `status_label/1` in isolation cannot
+    # see this class of bug: the board and the helper can disagree, and
+    # only exercising the board's actual LiveView render proves they
+    # don't.
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      {:ok, conn: conn, project: project}
+    end
+
+    # Bound a rendered fragment to a single member's desktop row: from its
+    # own `id="stack-member-<id>"` anchor up to (but excluding) the next
+    # member's anchor, or — for the last member — a generous fixed
+    # window. This is what keeps the "Backlog" assertion below from being
+    # satisfiable by the board's OWN COLUMN HEADER, which renders the
+    # literal text "Backlog" via this same `status_label/1` (see
+    # `column_to_status/1` call sites in `board_component.ex`) well
+    # outside any member row.
+    defp member_row_fragment(html, member_id, next_member_id \\ nil) do
+      anchor = ~s(id="stack-member-#{member_id}")
+      {start, _} = :binary.match(html, anchor)
+
+      stop =
+        case next_member_id && :binary.match(html, ~s(id="stack-member-#{next_member_id}")) do
+          {next_start, _} -> next_start
+          _ -> min(start + 2000, byte_size(html))
+        end
+
+      binary_part(html, start, stop - start)
+    end
+
+    test "stack_pending member's badge reads Waiting (never the raw status), and the sibling backlog member's badge reads Backlog, in the same render",
+         %{conn: conn, project: project} do
+      {stack, [backlog_member, pending_member]} =
+        seed_stack_with_member_statuses(project, ["backlog", "stack_pending"])
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
+
+      backlog_row = member_row_fragment(html, backlog_member.id, pending_member.id)
+      pending_row = member_row_fragment(html, pending_member.id)
+
+      # Positive control: without this, an assertion that the pending
+      # row merely "does not contain stack_pending" would pass just as
+      # well against a board that rendered no badge — or no row — at
+      # all. Scoped to the backlog member's OWN row, not the page, so
+      # the column header's "Backlog" text can't stand in for it.
+      assert backlog_row =~ "Backlog"
+
+      assert pending_row =~ "Waiting"
+      refute pending_row =~ "stack_pending"
+    end
+  end
+
   describe "stack detail panel — meta-grid (T8 stage 2)" do
     # Mock canvas 019e1a16 rev 2: a 4-cell summary card under the head
     # — Status / Members / Dep edges / Branch — laid out as 4 desktop

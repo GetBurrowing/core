@@ -16,7 +16,21 @@ defmodule PlatformWeb.Tasks.StatusLabels do
   def status_label("deploying"), do: "Deploying"
   def status_label("done"), do: "Done"
   def status_label("blocked"), do: "Blocked"
-  def status_label(other), do: other
+  def status_label("stack_pending"), do: "Waiting"
+  def status_label("cancelled"), do: "Cancelled"
+  def status_label("forming"), do: "Forming"
+  def status_label("abandoned"), do: "Abandoned"
+  def status_label("unknown"), do: "Unknown"
+
+  # The vocabulary above is closed by design: a status that reaches this
+  # point has no human label anywhere on the Tasks surface. The old catch-all
+  # `def status_label(other), do: other` laundered raw status identifiers
+  # straight into the UI; any future status added elsewhere in Tasks now
+  # fails loudly at render time instead of leaking silently.
+  def status_label(other) do
+    raise ArgumentError,
+          "status_label/1 has no clause for #{inspect(other)}"
+  end
 
   @doc "Phase key → the label the UI shows for it."
   def phase_label("planning"), do: "Planning"
