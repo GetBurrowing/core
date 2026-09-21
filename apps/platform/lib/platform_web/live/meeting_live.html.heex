@@ -188,6 +188,28 @@
         <p class="text-sm text-base-content/60" data-role="meeting-lobby-roster">
           {lobby_roster_line(@participants)}
         </p>
+        <%!-- The agents that will be in THIS meeting, and whether each can
+           actually hear the room -- checked here, before anyone joins,
+           rather than discovered mid-call. See `lobby_agent_rows/1`'s own
+           doc for why this reads `@invite_rows` rather than a new query. --%>
+        <div
+          :if={lobby_agent_rows(@invite_rows) != []}
+          class="mt-1 flex flex-col gap-0.5"
+          data-role="meeting-lobby-agents"
+        >
+          <p
+            :for={row <- lobby_agent_rows(@invite_rows)}
+            class="text-xs text-base-content/50"
+            data-role="meeting-lobby-agent-line"
+            data-agent-id={row.agent.id}
+            data-capability={row.capability}
+          >
+            {row.agent.name}
+            <span :if={lobby_agent_capability_line(row.capability)}>
+              · {lobby_agent_capability_line(row.capability)}
+            </span>
+          </p>
+        </div>
       </header>
 
       <div

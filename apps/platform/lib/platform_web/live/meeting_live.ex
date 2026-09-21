@@ -690,6 +690,16 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
     |> assign(:agents_by_id, %{})
+    # The lobby's own agent-capability list (task 019e07cd, meetings-vs-
+    # mockups audit). `attach_guest/1` below only `assign_new`s an empty
+    # default for `:invite_rows` -- it has to, since it also runs on the
+    # `:name_entry -> :in_meeting` transition where re-deriving would be
+    # wrong -- so the FIRST seed has to happen here, on the guest's actual
+    # mount, the same way `assign_invite_rows/3` seeds it on the member
+    # mount path (line ~1088). Without this call `@invite_rows` renders as
+    # `[]` silently (never a KeyError) and the lobby shows no agent block
+    # at all, indistinguishable from a meeting with no agents on it.
+    |> assign_invite_rows(meeting.chat_space_id, participants)
     # Per-meeting agent activity (task 01a04a98). Hydrated on the GUEST
     # surface too: the guest holds `meeting:<id>` (see
     # `enter_guest_topics/2`), which is the topic the activity mirror
@@ -4934,6 +4944,38 @@ defmodule PlatformWeb.MeetingLive do
 
   defp lobby_name(%{display_name: name}) when is_binary(name) and name != "", do: name
   defp lobby_name(_), do: "Someone"
+
+  # THE LOBBY'S OWN AGENT LIST -- the gap the meeting-vs-mockups audit named
+  # as the single biggest divergence: "an agent silently unable to hear the
+  # room, discovered mid-call" is exactly the failure this section exists to
+  # surface BEFORE anyone joins, the same way the mock's "Coming" / "Agents"
+  # lobby draws it.
+  #
+  # `@invite_rows` IS ALREADY COMPUTED AND ASSIGNED ON MOUNT
+  # (`assign_invite_rows/3`), BEFORE `@state` is decided -- this is not a new
+  # query, only a new READ of data the lobby already had sitting in the
+  # socket unread. Filtered to `in_space?`, not the full active-agent picker
+  # list `invite_rows/2` unions in: the lobby is telling a member which OF
+  # THIS MEETING'S OWN agents will be able to hear them, not offering a
+  # deployment-wide add-agent picker a pre-join screen has no button for.
+  @doc false
+  def lobby_agent_rows(invite_rows) do
+    Enum.filter(invite_rows, & &1.in_space?)
+  end
+
+  # THE SAME TWO STRINGS `CallShell.invite_reason/1` ALREADY SHIPS for
+  # `:capable`/`:incapable` ("Voice runtime online" / "No voice runtime
+  # online"), not a second spelling of the same fact -- restated here rather
+  # than imported because that function is keyed on the INVITE picker's
+  # `:state` (invitable/pending/incapable/in_call), a shape the lobby has no
+  # equivalent of: a lobby row has nothing to click and nothing pending.
+  # `:unknown` renders NO LINE AT ALL, matching `invite_reason/1`'s own
+  # `:invitable` + `:unknown` case: a client core the deployment has never
+  # heard from is announced as present, not guessed at.
+  @doc false
+  def lobby_agent_capability_line(:capable), do: "Voice runtime online"
+  def lobby_agent_capability_line(:incapable), do: "No voice runtime online"
+  def lobby_agent_capability_line(:unknown), do: nil
 
   # The join payload PLUS the lobby's choice (task 01a07410 / FE-17 stage 4).
   # `:mic_enabled` / `:camera_enabled` are read off the socket AFTER

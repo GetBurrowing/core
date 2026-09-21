@@ -25,6 +25,10 @@ defmodule PlatformWeb.MeetingLiveLobbyTest do
 
   import Phoenix.LiveViewTest
 
+  alias Platform.Accounts.User
+  alias Platform.Agents.Agent
+  alias Platform.Chat
+  alias Platform.Federation
   alias Platform.Meetings
   alias Platform.Meetings.GuestInvite
   alias Platform.Repo
@@ -67,7 +71,12 @@ defmodule PlatformWeb.MeetingLiveLobbyTest do
   # which is the lobby.
   defp open_lobby(conn) do
     put_livekit_env()
-    meeting = create_meeting()
+    open_lobby_for_meeting(conn, create_meeting())
+  end
+
+  # Same lobby entry, for a meeting the test already built (and, for the
+  # agent-capability tests below, already populated a space roster for).
+  defp open_lobby_for_meeting(conn, meeting) do
     expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
     token = GuestInvite.sign(meeting.slug, expires_at, nil)
 
@@ -76,6 +85,65 @@ defmodule PlatformWeb.MeetingLiveLobbyTest do
       |> live("/#{meeting.slug}/#{token}")
 
     {view, html, meeting}
+  end
+
+  # An agent on the meeting's OWN space roster, with no runtime linked at
+  # all -- `join_capability/1` answers `:unknown` for this shape, matching
+  # `meeting_live_agent_invite_test.exs`'s own `bare_roster_agent!`.
+  defp bare_roster_agent!(space_id, name) do
+    n = System.unique_integer([:positive])
+
+    agent =
+      Repo.insert!(%Agent{
+        slug: "lobby-agent-#{n}",
+        name: name,
+        status: "active"
+      })
+
+    {:ok, _entry} = Chat.add_space_agent(space_id, agent.id, role: "member")
+
+    agent
+  end
+
+  # The same roster agent, with a linked runtime that has DECLARED a
+  # capability set -- mirrors `meeting_live_agent_invite_test.exs`'s own
+  # `roster_agent!` + `declaring_roster_agent!`, written straight onto the
+  # runtime's metadata rather than driven through a real channel join, for
+  # the same reason that file gives: the declaration is the input under
+  # test, not the handshake that would produce one.
+  defp declaring_roster_agent!(space_id, name, features) do
+    agent = bare_roster_agent!(space_id, name)
+    n = System.unique_integer([:positive])
+
+    owner =
+      Repo.insert!(%User{
+        email: "lobby-agent-owner-#{n}@example.com",
+        name: "Lobby Agent Owner #{n}",
+        oidc_sub: "oidc-lobby-agent-owner-#{n}"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(owner.id, %{runtime_id: "lobby-agent-rt-#{n}"})
+
+    {:ok, activated, _raw_token} = Federation.activate_runtime(runtime)
+    {:ok, agent} = Federation.link_agent(activated, agent)
+
+    # `link_agent/2` auto-rosters federated agents into every channel
+    # space, so re-affirm membership idempotently rather than asserting on
+    # a row that may already exist -- matching the sibling fixture's own
+    # comment on why this call is here.
+    {:ok, _entry} = Chat.ensure_space_agent(space_id, agent.id, role: "member")
+
+    client_info =
+      %{"product" => "openclaw", "version" => "0.1.0"}
+      |> then(fn ci -> if is_nil(features), do: ci, else: Map.put(ci, "features", features) end)
+
+    {:ok, _runtime} =
+      Federation.update_metadata(Federation.get_runtime(activated.id), %{
+        "client_info" => client_info
+      })
+
+    agent
   end
 
   defp assigns(view), do: :sys.get_state(view.pid).socket.assigns
@@ -191,6 +259,97 @@ defmodule PlatformWeb.MeetingLiveLobbyTest do
 
       assert MeetingLive.lobby_roster_line([%{display_name: ""}]) ==
                "Someone is already in the call."
+    end
+
+    test "lobby_agent_rows/1 keeps only rows this meeting's space actually has as a member" do
+      alias PlatformWeb.MeetingLive
+
+      member = %{agent: %{id: "a"}, state: :invitable, capability: :capable, in_space?: true}
+      outsider = %{agent: %{id: "b"}, state: :invitable, capability: :capable, in_space?: false}
+
+      assert MeetingLive.lobby_agent_rows([member, outsider]) == [member]
+      assert MeetingLive.lobby_agent_rows([outsider]) == []
+      assert MeetingLive.lobby_agent_rows([]) == []
+    end
+
+    test "lobby_agent_capability_line/1 answers the two known capabilities and stays silent on unknown" do
+      alias PlatformWeb.MeetingLive
+
+      assert MeetingLive.lobby_agent_capability_line(:capable) == "Voice runtime online"
+      assert MeetingLive.lobby_agent_capability_line(:incapable) == "No voice runtime online"
+      assert MeetingLive.lobby_agent_capability_line(:unknown) == nil
+    end
+  end
+
+  # ── The lobby's own agent list (the meeting-vs-mockups audit's gap) ────
+  #
+  # The mock built the pre-join screen specifically so a member sees, before
+  # anyone joins, whether an agent in the meeting can actually hear them --
+  # "the exact failure that bit you mid-call that night" (an agent silently
+  # unable to hear the room, discovered only once it mattered). These are the
+  # cases that prove the fix reads the real capability rather than a
+  # hardcoded line.
+  describe "the lobby's agent list" do
+    test "a capable agent's name and \"Voice runtime online\" both render", %{conn: conn} do
+      put_livekit_env()
+      meeting = create_meeting()
+      agent = declaring_roster_agent!(meeting.chat_space_id, "Saru", [Meetings.voice_feature()])
+
+      {_view, html, _meeting} = open_lobby_for_meeting(conn, meeting)
+
+      assert html =~ ~s(data-role="meeting-lobby-agents")
+      assert html =~ ~s(data-agent-id="#{agent.id}")
+      assert html =~ ~s(data-capability="capable")
+      assert html =~ "Saru"
+      assert html =~ "Voice runtime online"
+    end
+
+    test "an incapable agent's name and \"No voice runtime online\" both render", %{conn: conn} do
+      put_livekit_env()
+      meeting = create_meeting()
+      _agent = declaring_roster_agent!(meeting.chat_space_id, "Higgins", ["some_other_feature"])
+
+      {_view, html, _meeting} = open_lobby_for_meeting(conn, meeting)
+
+      assert html =~ ~s(data-capability="incapable")
+      assert html =~ "Higgins"
+      assert html =~ "No voice runtime online"
+    end
+
+    test "an agent with no runtime at all shows its name and NO capability line", %{conn: conn} do
+      put_livekit_env()
+      meeting = create_meeting()
+      _agent = bare_roster_agent!(meeting.chat_space_id, "Geordi")
+
+      {_view, html, _meeting} = open_lobby_for_meeting(conn, meeting)
+
+      assert html =~ ~s(data-capability="unknown")
+      assert html =~ "Geordi"
+      refute html =~ "Voice runtime online"
+      refute html =~ "No voice runtime online"
+    end
+
+    test "a human-only meeting renders no agent list at all", %{conn: conn} do
+      {_view, html, _meeting} = open_lobby(conn)
+
+      refute html =~ ~s(data-role="meeting-lobby-agents")
+    end
+
+    test "TWO agents, one of each capability, both render on their own line", %{conn: conn} do
+      put_livekit_env()
+      meeting = create_meeting()
+
+      capable = declaring_roster_agent!(meeting.chat_space_id, "Saru", [Meetings.voice_feature()])
+
+      incapable =
+        declaring_roster_agent!(meeting.chat_space_id, "Higgins", ["some_other_feature"])
+
+      {_view, html, _meeting} = open_lobby_for_meeting(conn, meeting)
+
+      assert html =~ ~s(data-agent-id="#{capable.id}")
+      assert html =~ ~s(data-agent-id="#{incapable.id}")
+      assert html =~ "Voice runtime online"
+      assert html =~ "No voice runtime online"
     end
   end
 
