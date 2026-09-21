@@ -38,6 +38,45 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   measurement for this goal" rather than reporting a difference between
   two different questions.
 
+  ## Where the baseline is written (task `01a0c332`)
+
+  In `do_gather_context/1`, immediately after `measure/2` returns the
+  slot, via `record_measurement/2`.
+
+  The original build wrote the baseline from `handle_output/3` instead,
+  on the stated belief that persisting there "keeps a dry-run context
+  read from silently consuming the delta". That belief was false for
+  this responsibility, and the decision built on it was load-bearing in
+  the worst way: `Router.dispatch_native/5`
+  (`apps/platform/lib/platform/responsibilities/router.ex`, ~1657) — the
+  arm `dispatch_assignee/4` (~1165) routes EVERY non-"external" assignee
+  kind to, which is what the heartbeat's native agent assignee is —
+  never calls `invoke_handle_output/3`. That seam runs only after the
+  external HTTP round trip, in `run_external_dispatch/5` (~1244). The
+  only code that wrote the baseline was therefore unreachable, and every
+  real fire re-reported "first measurement — no prior run to compare
+  against" forever (defect task `01a0c332`; measured live in the Agents
+  space, where the heartbeat reverted to the constant ping it was built
+  to replace).
+
+  The gather is the write point on its own merits, not a workaround for
+  a missing hook: there is no dry-run path in the Router (grep
+  `dry_run` in router.ex returns nothing), and
+  `gather_context_via_provider/3` runs exactly once per fire from the
+  shared preamble in `dispatch_assignee/4`, so a context read cannot
+  happen without a real dispatch. The one other caller of `measure/2` is
+  the stage-4 header re-derivation on every goal save — which is why the
+  write MUST NOT move into `measure/2`: it is public and it runs on
+  every save, so persisting there would advance the baseline on every
+  render and the heartbeat would read "unchanged" forever.
+  `measure/2` stays non-persisting by design; `record_measurement/2`
+  takes the already-computed slot instead of re-deriving it, so the
+  gather writes exactly what it reports. `handle_output/3` still
+  delegates to the same `record_measurement/2` (re-deriving via
+  `measure/2`) for a hypothetical external assignee, where the seam is
+  live; for this key it stays unreachable in production and that is
+  fine.
+
   ## A goal that cannot name a number has no heartbeat
 
   When no measurement can be derived — no space carries a goal, or the
@@ -235,14 +274,21 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   @impl true
   def handle_output(%Responsibility{} = _responsibility, _output, trigger_meta) do
-    # The dispatched turn has happened; persist the measurement this run
-    # observed so the NEXT run has a baseline. Persisting here rather
-    # than in `gather_context/2` keeps a dry-run context read from
-    # silently consuming the delta.
-    case Map.get(trigger_meta || %{}, :space_id) || Map.get(trigger_meta || %{}, "space_id") do
-      id when is_binary(id) -> persist_measurement(Chat.get_space(id))
-      _ -> persist_measurement(agents_space())
-    end
+    # Baseline write for the EXTERNAL path only. `invoke_handle_output/3`
+    # is reachable from `run_external_dispatch/5` (~1244) and never from
+    # `dispatch_native/5` (~1657) — the arm every cron→agent-turn fire
+    # takes — so for this key this callback does not run in production.
+    # The write that runs on every real fire lives in
+    # `do_gather_context/1` → `record_measurement/2` (task `01a0c332`).
+    # Kept as parity for a hypothetical external assignee, re-deriving
+    # through the public (and deliberately non-persisting) `measure/2`.
+    space =
+      case Map.get(trigger_meta || %{}, :space_id) || Map.get(trigger_meta || %{}, "space_id") do
+        id when is_binary(id) -> Chat.get_space(id)
+        _ -> agents_space()
+      end
+
+    record_measurement(space, measure(space, space && space.goal))
 
     :ok
   end
@@ -260,6 +306,15 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
     goal = space && space.goal
     measurement = measure(space, goal)
+
+    # THE BASELINE WRITE (task `01a0c332`). The only handler-owned point
+    # that runs on every real fire: the Router's native arm
+    # (`dispatch_native/5`) never invokes `handle_output/3`, so the
+    # original build's persist was unreachable and every fire read as a
+    # first measurement. `measure/2` must stay non-persisting — it is
+    # also the stage-4 header re-derivation, called on every goal save,
+    # and persisting there would advance the baseline on every render.
+    record_measurement(space, measurement)
 
     %{
       goal: goal || %{missing?: true, reason: "no chat space carries a goal"},
@@ -369,34 +424,37 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   defp previous_measurement(_space, _goal), do: nil
 
-  defp persist_measurement(%Space{} = space) do
-    case measure(space, space.goal) do
-      %{missing?: false, value: value} ->
-        metadata =
-          Map.put(space.metadata || %{}, @metadata_key, %{
-            "measurement" => value,
-            "measured_at" => DateTime.to_iso8601(DateTime.utc_now()),
-            "goal" => space.goal
-          })
+  # The baseline write (task `01a0c332`). Takes the ALREADY-COMPUTED slot
+  # rather than re-deriving it, so the gather writes exactly the number
+  # it reports. Reached from `do_gather_context/1` on every real fire and
+  # from `handle_output/3` on the external path. A missing slot (no
+  # measurable goal, or no space at all) writes nothing — a slot that
+  # cannot name a number has no baseline to advance. A persist failure
+  # logs a warning and proceeds: losing the delta must never lose the
+  # dispatch.
+  defp record_measurement(%Space{} = space, %{missing?: false, value: value})
+       when is_integer(value) do
+    metadata =
+      Map.put(space.metadata || %{}, @metadata_key, %{
+        "measurement" => value,
+        "measured_at" => DateTime.to_iso8601(DateTime.utc_now()),
+        "goal" => space.goal
+      })
 
-        case Chat.update_space(space, %{metadata: metadata}) do
-          {:ok, _} ->
-            :ok
+    case Chat.update_space(space, %{metadata: metadata}) do
+      {:ok, _} ->
+        :ok
 
-          {:error, reason} ->
-            Logger.warning(
-              "[agents.goal_heartbeat] could not persist measurement: #{inspect(reason)}"
-            )
+      {:error, reason} ->
+        Logger.warning(
+          "[agents.goal_heartbeat] could not persist measurement: #{inspect(reason)}"
+        )
 
-            :ok
-        end
-
-      _ ->
         :ok
     end
   end
 
-  defp persist_measurement(_), do: :ok
+  defp record_measurement(_space, _slot), do: :ok
 
   defp leader_slot(%Space{leader_agent_id: id}) when is_binary(id), do: %{agent_id: id}
   defp leader_slot(_), do: %{missing?: true, reason: "no leader pinned to this space"}
