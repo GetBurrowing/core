@@ -1444,96 +1444,37 @@
                    disclosure state is pure client-side presentation, and
                    keeping it out of the assigns means a peer's canvas
                    broadcast can't snap the list shut mid-scroll. --%>
-                  <details
+                  <%!-- Canvas picker (task 019ff704 stage 3; swapped onto the
+                   real `CanvasExplorer` component -- search/groups/paging
+                   are the component's, not reimplemented here). See
+                   `MeetingLive.meeting_canvas_explorer_group/3` for why the
+                   group is built in memory rather than re-queried, and
+                   `.canvas_explorer`'s own `changed_ids` attr (added for
+                   this swap) for the "news" dot this meeting still needs
+                   and the shared drawer never did. --%>
+                  <.canvas_explorer
                     :if={@meeting_canvases != []}
-                    class="group w-full max-w-3xl shrink-0 px-1 pt-1"
-                    data-role="canvas-picker"
-                    data-canvas-count={length(@meeting_canvases)}
-                  >
-                    <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg border border-edge bg-base-200 px-3 text-left">
-                      <span
-                        class="hero-rectangle-stack size-4 shrink-0 text-base-content/60"
-                        aria-hidden="true"
-                      >
-                      </span>
-                      <span class="shrink-0 text-xs uppercase tracking-wide text-base-content/50">
-                        Canvas
-                      </span>
-                      <%!-- The name yields space; the affordance never does. --%>
-                      <span
-                        class="min-w-0 truncate text-sm font-medium text-base-content"
-                        data-role="canvas-picker-current"
-                      >
-                        {canvas_picker_label(@meeting_canvas)}
-                      </span>
-                      <span
-                        class="hero-chevron-down ml-auto size-4 shrink-0 text-base-content/60 group-open:rotate-180"
-                        aria-hidden="true"
-                      >
-                      </span>
-                    </summary>
-
-                    <ul
-                      class="mt-1 max-h-64 overflow-y-auto rounded-lg border border-edge bg-base-100 py-1"
-                      aria-label="Choose a canvas"
-                    >
-                      <li :for={c <- @meeting_canvases}>
-                        <button
-                          type="button"
-                          phx-click="select_meeting_canvas"
-                          phx-value-canvas_id={c.id}
-                          data-role="canvas-picker-option"
-                          data-canvas-id={c.id}
-                          data-selected={to_string(c.id == @meeting_canvas.id)}
-                          aria-current={c.id == @meeting_canvas.id && "true"}
-                          class={[
-                            "flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm",
-                            if(c.id == @meeting_canvas.id,
-                              do: "font-medium text-primary",
-                              else: "text-base-content"
-                            )
-                          ]}
-                        >
-                          <span class="min-w-0 truncate">{canvas_picker_label(c)}</span>
-                          <%!-- The marker is `shrink-0 whitespace-nowrap`: a
-                           marker must never win space from the name it
-                           annotates. --%>
-                          <span
-                            :if={c.id == @meeting_canvas.id}
-                            class="ml-auto shrink-0 whitespace-nowrap text-xs text-primary"
-                          >
-                            Showing
-                          </span>
-                          <%!-- Changed-since-you-looked marker (task 019ff704
-                           stage 4). A DOT, and that is the whole signal:
-                           the list is where you go to change what you are
-                           looking at, so the list is where the news
-                           belongs. It does not move the view and there is
-                           no auto-switch anywhere behind it.
-
-                           NO looping animation. A dot that pulses forever
-                           is a thing you have to actively ignore for the
-                           rest of the call; the marker's job is to be
-                           findable when you look, not to keep asking.
-
-                           Mutually exclusive with "Showing" by
-                           construction — `canvas_changed?/3` returns
-                           false for the canvas on screen — so both may
-                           claim `ml-auto` without ever competing. --%>
-                          <span
-                            :if={canvas_changed?(@canvas_seen_revisions, c, @meeting_canvas)}
-                            class="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-secondary"
-                            data-role="canvas-changed-dot"
-                            data-canvas-id={c.id}
-                          >
-                            <span class="size-2 rounded-full bg-secondary" aria-hidden="true">
-                            </span>
-                            <span class="sr-only">Changed</span>
-                          </span>
-                        </button>
-                      </li>
-                    </ul>
-                  </details>
+                    id="meeting-canvas-picker"
+                    collapsed={false}
+                    space_groups={[
+                      meeting_canvas_explorer_group(
+                        @meeting_canvases,
+                        @meeting.chat_space_id,
+                        @canvas_explorer_offset
+                      )
+                    ]}
+                    expanded_keys={@canvas_explorer_expanded_keys}
+                    active_canvas_id={@meeting_canvas.id}
+                    archive_count={length(@meeting_canvases)}
+                    changed_ids={
+                      meeting_canvas_changed_ids(
+                        @canvas_seen_revisions,
+                        @meeting_canvases,
+                        @meeting_canvas
+                      )
+                    }
+                    class="w-full max-w-3xl shrink-0 rounded-lg border border-edge"
+                  />
 
                   <%!-- `min-h-0` on the scroll child: a flex item's default
                    `min-height: auto` refuses to shrink below its content,
@@ -2654,8 +2595,18 @@
          instead — in gallery the humans are already tiles in the grid, so
          re-rendering them here would give two DOM nodes per participant
          (which is exactly what the differing `gallery-tile` /
-         `strip-tile` id prefixes exist to keep safe). The AGENT section
-         renders in every mode: that is the dock.
+         `strip-tile` id prefixes exist to keep safe).
+
+         STALE AS OF THE CARD-BOARD REBUILD (PR #1033): there is no agent
+         section in this footer any more. Agents render in the always-
+         visible left rail (desktop) or the People-tab rail (mobile) via
+         `<.participant_rail>`, never in the bottom strip — this section
+         is HUMANS and CANVAS only, confirmed by the two `data-section`
+         values actually below (`"humans"`, `"canvas"`). That split is the
+         CORRECT target behaviour the mock asked for, not a regression;
+         this paragraph used to describe an "AGENT section" that predates
+         the rail and no longer exists, and it should not have kept
+         claiming one rendered "in every mode".
 
          Empty-bar guard: we put the zero-agent guard on the FOOTER
          (rather than only on the agents `<section>`) because an empty

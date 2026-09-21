@@ -145,7 +145,7 @@ defmodule PlatformWeb.MeetingLive do
       both render this. May be `nil` when the space has no canvas.
     * `:meeting_canvases` — every non-deleted canvas in the meeting's
       chat space (`Chat.list_canvases/1`, oldest-first). Drives the
-      canvas picker and is the CLAMP SET for `select_meeting_canvas`.
+      canvas picker and is the CLAMP SET for `canvas_open`.
     * `:selected_canvas_id` — the viewer's explicit pick, or `nil` for
       "no pick yet, use the default". **A per-socket assign, exactly like
       `:captions_visible`** — never persisted to a shared row and never
@@ -235,6 +235,7 @@ defmodule PlatformWeb.MeetingLive do
   require Logger
 
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
+  import PlatformWeb.Components.Canvases.CanvasExplorer, only: [canvas_explorer: 1]
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
 
   alias PlatformWeb.Components.Meetings.CallRecap
@@ -366,6 +367,14 @@ defmodule PlatformWeb.MeetingLive do
   # LV clears it. Long enough to notice on a glance back at the grid,
   # short enough that it does not become permanent chrome.
   @canvas_changed_ms 6_000
+
+  # Rows per page in the canvas-mode picker's `CanvasExplorer` group. Matches
+  # that component's own default page size on purpose — see
+  # `ChatLive.CanvasHooks`'s identical constant and comment: the component
+  # takes at most `page_size` of whatever `rows` it is handed, so a slice
+  # LARGER than this would load rows nothing renders, and a smaller one
+  # would make the pager offer a next page that repeats rows already shown.
+  @canvas_explorer_page_size 20
 
   # ── New-meeting sheet: duration options and refusal copy ─────────────────
   #
@@ -2901,7 +2910,7 @@ defmodule PlatformWeb.MeetingLive do
   # current selection stands. A hand-crafted phx-click therefore cannot
   # point this LV at a canvas in another space, nor blank the stage by
   # naming something that does not exist.
-  def handle_event("select_meeting_canvas", %{"canvas_id" => canvas_id}, socket) do
+  def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
     canvases = socket.assigns[:meeting_canvases] || []
 
     case Enum.find(canvases, fn c -> c.id == canvas_id end) do
@@ -2924,6 +2933,37 @@ defmodule PlatformWeb.MeetingLive do
          # raise the dot again once the viewer moves off it.
          |> mark_canvas_seen(canvas)}
     end
+  end
+
+  # The picker's own group has exactly one member (this meeting's chat
+  # space), but the toggle is still real: `CanvasExplorer` always renders a
+  # clickable group header, so a click has to go somewhere rather than into
+  # a handler that does not exist. Same shape as `CanvasHooks`'s own
+  # `canvas_explorer_toggle_group` handler, kept local rather than shared
+  # because this LiveView has no other use for that module's much larger
+  # surface (multi-space drawer, search, sort, versions panel).
+  def handle_event("canvas_explorer_toggle_group", %{"key" => key}, socket) do
+    keys = socket.assigns[:canvas_explorer_expanded_keys] || []
+    updated = if key in keys, do: List.delete(keys, key), else: [key | keys]
+    {:noreply, assign(socket, :canvas_explorer_expanded_keys, updated)}
+  end
+
+  # Paging past the first `@canvas_explorer_page_size` canvases. The old
+  # `<details>` list had no cap at all (a scrollable `max-h-64`), so this
+  # exists to make sure a meeting with more canvases than the page size does
+  # not silently lose the rest of them under the new, bounded component.
+  # `Integer.parse` rather than `String.to_integer`: a hand-crafted
+  # phx-click could send anything, and this is a viewer-scoped display
+  # offset, not a value worth crashing the LiveView over — an unparsable or
+  # negative offset is treated as "back to the start" rather than raising.
+  def handle_event("canvas_explorer_page", %{"offset" => offset}, socket) do
+    parsed =
+      case Integer.parse(offset) do
+        {n, ""} when n >= 0 -> n
+        _ -> 0
+      end
+
+    {:noreply, assign(socket, :canvas_explorer_offset, parsed)}
   end
 
   # "Create canvas" CTA on the Canvas-mode empty state. Mints a fresh
@@ -7009,6 +7049,17 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:selected_canvas_id, selected)
     |> assign(:meeting_canvas, resolve_meeting_canvas(canvases, selected))
     |> seed_canvas_seen_revisions(canvases)
+    # The explorer's own state, preserved across a peer's canvas arriving
+    # the same way `:selected_canvas_id` is above — re-deriving from
+    # `socket.assigns` rather than resetting means a viewer who collapsed
+    # the group or paged past the first screen does not snap back to page 1
+    # every time someone else creates a canvas. Seeded open (not collapsed)
+    # on first load, matching the old `<details>` list's always-visible rows.
+    |> assign(
+      :canvas_explorer_expanded_keys,
+      socket.assigns[:canvas_explorer_expanded_keys] || ["space:" <> to_string(space_id)]
+    )
+    |> assign(:canvas_explorer_offset, socket.assigns[:canvas_explorer_offset] || 0)
   end
 
   # The session's "state of the world when you arrived" baseline. Every
@@ -7105,6 +7156,79 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def canvas_changed?(_, _, _), do: false
+
+  @doc """
+  This meeting's own canvases, shaped as the ONE `CanvasExplorer` group the
+  canvas-mode picker renders (task 019ff704, `CanvasExplorer` swap).
+
+  A `t:Platform.Chat.canvas_group/0` map, built here rather than through
+  `Chat.list_canvas_groups/2` on purpose: that function is a bounded,
+  paged DATABASE query built for `ChatLive`'s MANY-space drawer, and this
+  LiveView already holds the meeting's full, live-kept `:meeting_canvases`
+  list in memory (kept in step by its own PubSub subscriptions, not by
+  `ChatHooks.put/2`) — querying again would be a second, redundant source
+  of truth for data already on the socket. `offset`/`take` here is the
+  in-memory equivalent of that query's own `:limit`/`:offset`, paired with
+  `@canvas_explorer_page_size` the same way `ChatLive.CanvasHooks` pairs
+  its own query limit with the component's page size.
+
+  `space_name: "This meeting"` rather than the chat space's own row name:
+  a meeting's bound chat space is an internal implementation detail the
+  viewer has never seen named, and the component always needs SOME label
+  for its one group header.
+
+  Row order is NOT re-sorted — `canvases` keeps `:meeting_canvases`' own
+  oldest-first order (`Chat.list_canvases/1`), the same order the old
+  `<details>` list rendered in, and the order `resolve_meeting_canvas/2`
+  relies on (`List.last/1` for "most recently created").
+  """
+  @spec meeting_canvas_explorer_group([Canvas.t()], binary() | nil, non_neg_integer()) ::
+          Chat.canvas_group()
+  def meeting_canvas_explorer_group(canvases, space_id, offset) do
+    %{
+      space_id: space_id || "",
+      space_name: "This meeting",
+      total_count: length(canvases),
+      rows:
+        canvases
+        |> Enum.drop(offset)
+        |> Enum.take(@canvas_explorer_page_size)
+        |> Enum.map(&canvas_explorer_row/1),
+      offset: offset
+    }
+  end
+
+  # `t:Platform.Chat.canvas_group_row/0`'s exact key set, off a live
+  # `%Canvas{}` rather than a second query — see the group builder's own
+  # doc. `Map.take/2` rather than a literal `%{}` so a future field added to
+  # BOTH the struct and the type is picked up without this drifting, and a
+  # field REMOVED from the struct fails loudly (`KeyError`) rather than
+  # silently handing the explorer a row one key short.
+  @explorer_row_keys [
+    :id,
+    :title,
+    :space_id,
+    :updated_at,
+    :inserted_at,
+    :cloned_from,
+    :created_by_display_name
+  ]
+
+  defp canvas_explorer_row(canvas), do: Map.take(canvas, @explorer_row_keys)
+
+  @doc """
+  Ids of this meeting's own canvases the viewer has not seen change —
+  exactly the set `CanvasExplorer`'s own `changed_ids` attr wants, derived
+  from `canvas_changed?/3` rather than a second rule: the picker's dot and
+  the stage-mode button's dot (`any_canvas_changed?/1`) must never be able
+  to disagree about which canvases carry news.
+  """
+  @spec meeting_canvas_changed_ids(map(), [Canvas.t()], Canvas.t() | map() | nil) :: [binary()]
+  def meeting_canvas_changed_ids(seen, canvases, shown) do
+    canvases
+    |> Enum.filter(&canvas_changed?(seen, &1, shown))
+    |> Enum.map(& &1.id)
+  end
 
   @doc """
   Does ANY canvas in the picker carry unseen news?

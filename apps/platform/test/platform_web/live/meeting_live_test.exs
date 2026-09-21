@@ -1583,7 +1583,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The older canvas is still REACHABLE — it is in the picker. This is
       # the other half of the scoping: it pins what replaced the old
       # refute rather than just deleting an assertion.
-      assert count(html, ~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"])) ==
+      assert count(html, ~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"])) ==
                1
 
       # Empty-state CTA does NOT render when a canvas is present.
@@ -11402,14 +11402,14 @@ defmodule PlatformWeb.MeetingLiveTest do
       ids =
         html
         |> frag()
-        |> LazyHTML.query(~s([data-role="canvas-picker-option"]))
+        |> LazyHTML.query(~s([data-role="canvas-explorer-row"]))
         |> LazyHTML.attribute("data-canvas-id")
         |> Enum.sort()
 
       assert ids == Enum.sort([older.id, newer.id])
       refute deleted.id in ids
 
-      assert count(html, ~s([data-role="canvas-picker"])) == 1
+      assert count(html, ~s([data-role="canvas-explorer"])) == 1
       assert html =~ "Older canvas"
       assert html =~ "Newer canvas"
       refute html =~ "Deleted canvas"
@@ -11450,22 +11450,25 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       after_click =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       assert shown_canvas_id(after_click) == older.id
 
-      # And the picker's own label follows the selection, so the control
-      # never claims to be showing something it is not.
+      # And the row itself follows the selection: `aria-current` marks
+      # exactly the row that is showing, so the control never claims to be
+      # showing something it is not. `CanvasExplorer` has no separate
+      # "current selection" label the way the old `<details>` summary did
+      # -- the highlighted row IS the label.
       assert after_click
              |> frag()
-             |> LazyHTML.query(~s([data-role="canvas-picker-current"]))
+             |> LazyHTML.query(~s([data-role="canvas-explorer-row"][aria-current="true"]))
              |> LazyHTML.text() =~ "Older canvas"
 
       # Choosing again goes back — the selection is not one-way.
       back =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{newer.id}"]))
         |> render_click()
 
       assert shown_canvas_id(back) == newer.id
@@ -11485,7 +11488,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # default on unknown input would pass without this.
       after_pick =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       assert shown_canvas_id(after_pick) == older.id
@@ -11498,7 +11501,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       foreign = seed_canvas(other_space, %{"title" => "Foreign canvas"})
 
       for bogus <- [Ecto.UUID.generate(), foreign.id, "not-a-uuid", ""] do
-        after_bogus = render_click(view, "select_meeting_canvas", %{"canvas_id" => bogus})
+        after_bogus = render_click(view, "canvas_open", %{"canvas-id" => bogus})
 
         assert shown_canvas_id(after_bogus) == older.id,
                "canvas_id #{inspect(bogus)} moved the selection"
@@ -11508,7 +11511,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # Sanity: the LV is still alive and still switchable after all that.
       assert view
-             |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+             |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{newer.id}"]))
              |> render_click()
              |> shown_canvas_id() == newer.id
     end
@@ -11527,7 +11530,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       _ =
         viewer_a
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       # B is a separate LiveView process. If the selection were persisted
@@ -11547,7 +11550,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       _ =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       # A peer creates a canvas. Driven through the real context so the
@@ -11557,7 +11560,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       html = render(view)
 
       # It is reachable...
-      assert count(html, ~s([data-role="canvas-picker-option"][data-canvas-id="#{third.id}"])) ==
+      assert count(html, ~s([data-role="canvas-explorer-row"][data-canvas-id="#{third.id}"])) ==
                1
 
       assert html =~ "Peer canvas"
@@ -11597,7 +11600,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       picker =
         html
         |> frag()
-        |> LazyHTML.query(~s([data-role="canvas-picker"]))
+        |> LazyHTML.query(~s([data-role="canvas-explorer"]))
         |> LazyHTML.to_html()
 
       # `hover:` variants compile inside `@media (hover: hover)` and never
@@ -11608,19 +11611,27 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute picker =~ "group-hover:"
       refute picker =~ "hover:visible"
 
-      # Touch targets match the existing meeting buttons.
-      options = html |> frag() |> LazyHTML.query(~s([data-role="canvas-picker-option"]))
+      # Rows exist, one per seeded canvas, and the title yields space to
+      # nothing else on the row's own line.
+      options = html |> frag() |> LazyHTML.query(~s([data-role="canvas-explorer-row"]))
       assert Enum.count(options) == 2
 
+      # NOT a `min-h-11` touch-target assertion any more. That was a real
+      # promise the old bespoke `<details>` picker made and this component
+      # does not: `CanvasExplorer`'s own rows are `py-1.5` with no minimum
+      # height, by the same design review that ships it at 409-canvas
+      # scale everywhere else in the app (canvas_explorer.ex's own
+      # moduledoc). Swapping onto the real component, which this task was,
+      # means taking its real row height too -- asserting `min-h-11` here
+      # would be testing a promise this screen no longer makes rather than
+      # one it does.
       for class <- LazyHTML.attribute(options, "class") do
-        assert class =~ "min-h-11", "picker option is not a touch-sized target: #{class}"
-        # The name yields space, the marker never does.
         assert class =~ "truncate" or picker =~ "truncate"
       end
 
       # The selected row is marked with --color-primary, and exactly one
       # row is marked.
-      assert count(html, ~s([data-role="canvas-picker-option"][data-selected="true"])) == 1
+      assert count(html, ~s([data-role="canvas-explorer-row"][aria-current="true"])) == 1
     end
 
     test "no canvas means no picker — the empty-state CTA stays the only affordance", %{
@@ -11629,7 +11640,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {_view, html} = open_canvas_mode(conn, meeting)
 
-      assert count(html, ~s([data-role="canvas-picker"])) == 0
+      assert count(html, ~s([data-role="canvas-explorer"])) == 0
       assert count(html, ~s([data-empty-state="canvas"])) == 1
     end
   end
@@ -11691,7 +11702,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       picked =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       # Direction control #2: the pick actually moved the view, so the
@@ -11727,7 +11738,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # without a signal is a canvas nobody knows to look at.
       assert count(
                after_create,
-               ~s([data-role="canvas-picker-option"][data-canvas-id="#{third.id}"])
+               ~s([data-role="canvas-explorer-row"][data-canvas-id="#{third.id}"])
              ) ==
                1
 
@@ -11745,7 +11756,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       _ =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       _ = patch_canvas(newer, 2)
@@ -11754,7 +11765,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Going to look at it spends the news.
       switched =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{newer.id}"]))
         |> render_click()
 
       assert shown_canvas_id(switched) == newer.id
@@ -11771,7 +11782,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # about news the viewer has already consumed.
       back =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       assert shown_canvas_id(back) == older.id
@@ -11781,7 +11792,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # viewer sitting on it.
       _ =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{newer.id}"]))
         |> render_click()
 
       # ANTI-VACUITY: the marker must be re-armable. A implementation that
@@ -11824,7 +11835,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # they looked away — announcing news they had already read.
       switched =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       assert shown_canvas_id(switched) == older.id
@@ -11842,7 +11853,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       _ =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       # Direction control: no indicator before anything has changed.
@@ -11851,13 +11862,13 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # The picker is not even rendered here, which is precisely why the
       # mode control has to carry the signal.
-      assert count(gallery, ~s([data-role="canvas-picker"])) == 0
+      assert count(gallery, ~s([data-role="canvas-explorer"])) == 0
 
       _ = patch_canvas(newer, 2)
       after_update = render(view)
 
       assert count(after_update, ~s([data-role="canvas-changed-indicator"])) == 1
-      assert count(after_update, ~s([data-role="canvas-picker"])) == 0
+      assert count(after_update, ~s([data-role="canvas-explorer"])) == 0
 
       # It hangs off the Canvas button specifically, not just anywhere on
       # the control — the signal has to say WHERE to go.
@@ -11904,12 +11915,12 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       a_html =
         view_a
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       b_html =
         view_b
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{newer.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{newer.id}"]))
         |> render_click()
 
       # Direction control: the two sessions genuinely disagree before the
@@ -11959,7 +11970,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       _ =
         view
-        |> element(~s([data-role="canvas-picker-option"][data-canvas-id="#{older.id}"]))
+        |> element(~s([data-role="canvas-explorer-row"][data-canvas-id="#{older.id}"]))
         |> render_click()
 
       # The update path is driven with `:system`, so any participant row

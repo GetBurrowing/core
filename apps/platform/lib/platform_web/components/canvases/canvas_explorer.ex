@@ -228,6 +228,15 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
     """
   )
 
+  attr(:changed_ids, :list,
+    default: [],
+    doc: """
+    Row ids to mark with a small changed-since-seen dot, next to the title.
+    Meaning is entirely the caller's: this component tracks no revisions and
+    no "seen" state of its own -- it renders whichever ids it is handed.
+    """
+  )
+
   attr(:target, :any, default: nil, doc: "`phx-target` for every event this emits")
   attr(:class, :any, default: nil)
 
@@ -235,6 +244,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
     assigns =
       assigns
       |> assign(:searching?, search_active?(assigns.query))
+      |> assign(:changed_id_set, MapSet.new(assigns.changed_ids))
       |> assign_groups()
 
     ~H"""
@@ -278,6 +288,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
           page_size={@page_size}
           parent_titles={@parent_titles}
           active_canvas_id={@active_canvas_id}
+          changed_id_set={@changed_id_set}
           target={@target}
           id_prefix={@id}
         />
@@ -379,6 +390,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
   attr(:page_size, :integer, required: true)
   attr(:parent_titles, :map, required: true)
   attr(:active_canvas_id, :any, default: nil)
+  attr(:changed_id_set, :any, default: MapSet.new())
   attr(:target, :any, default: nil)
   attr(:id_prefix, :string, required: true)
 
@@ -438,6 +450,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
           query={@query}
           parent_titles={@parent_titles}
           active_canvas_id={@active_canvas_id}
+          changed_id_set={@changed_id_set}
           target={@target}
         />
 
@@ -496,6 +509,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
   attr(:query, :string, required: true)
   attr(:parent_titles, :map, required: true)
   attr(:active_canvas_id, :any, default: nil)
+  attr(:changed_id_set, :any, default: MapSet.new())
   attr(:target, :any, default: nil)
 
   defp explorer_row(assigns) do
@@ -507,6 +521,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
       |> assign(:meta, meta_line(row))
       |> assign(:lineage, lineage_line(row, assigns.parent_titles))
       |> assign(:selected?, assigns.active_canvas_id && assigns.active_canvas_id == row.id)
+      |> assign(:changed?, MapSet.member?(assigns.changed_id_set, row.id))
       |> assign(:absolute, absolute_title(row))
       |> assign(:snippet, Map.get(row, :snippet))
 
@@ -525,28 +540,42 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
         !@selected? && "border-transparent bg-base-100"
       ]}
     >
-      <%!-- `phx-no-format` is load-bearing here, the same hazard
-           `conversation.ex` records on `canvas_result_snippet/1`: left to
-           itself the HEEx formatter puts each run on its own line, which
-           lands a newline and an indent INSIDE the title between two runs.
-           Every markup assertion still passes on that, and the title a
-           reader compares against four near-identical siblings quietly
-           grows whitespace it does not have.
+      <%!-- The title yields space to the changed-dot; the dot never yields
+           to the title. A caller-supplied signal (`@changed?`) about a row
+           this component otherwise has no memory of -- see `changed_ids`'s
+           own doc above. --%>
+      <div class="flex items-center gap-1.5">
+        <%!-- `phx-no-format` is load-bearing here, the same hazard
+             `conversation.ex` records on `canvas_result_snippet/1`: left to
+             itself the HEEx formatter puts each run on its own line, which
+             lands a newline and an indent INSIDE the title between two runs.
+             Every markup assertion still passes on that, and the title a
+             reader compares against four near-identical siblings quietly
+             grows whitespace it does not have.
 
-           `<mark>` for the match, matching the snippet's element choice —
-           it is what a search hit IS. Its UA yellow is overridden by the
-           `base-200` band, and the weight is the signal that survives
-           truncation. --%>
-      <span
-        phx-no-format
-        data-role="canvas-explorer-row-title"
-        title={@absolute}
-        class="block truncate text-sm font-normal text-base-content"
-      ><%= for {kind, text} <- @title_runs do %><mark
-          :if={kind == :match}
-          data-role="canvas-explorer-title-match"
-          class="rounded-[3px] bg-base-200 px-[1px] font-semibold text-base-content"
-        >{text}</mark><span :if={kind == :plain}>{text}</span><% end %></span>
+             `<mark>` for the match, matching the snippet's element choice —
+             it is what a search hit IS. Its UA yellow is overridden by the
+             `base-200` band, and the weight is the signal that survives
+             truncation. --%>
+        <span
+          phx-no-format
+          data-role="canvas-explorer-row-title"
+          title={@absolute}
+          class="block min-w-0 flex-1 truncate text-sm font-normal text-base-content"
+        ><%= for {kind, text} <- @title_runs do %><mark
+            :if={kind == :match}
+            data-role="canvas-explorer-title-match"
+            class="rounded-[3px] bg-base-200 px-[1px] font-semibold text-base-content"
+          >{text}</mark><span :if={kind == :plain}>{text}</span><% end %></span>
+        <span
+          :if={@changed?}
+          data-role="canvas-changed-dot"
+          data-canvas-id={@row.id}
+          class="size-2 shrink-0 rounded-full bg-secondary"
+          aria-hidden="true"
+        >
+        </span>
+      </div>
 
       <%!-- WHY THIS ROW MATCHED, when the title does not say so.
 
