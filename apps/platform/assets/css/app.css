@@ -6611,7 +6611,7 @@ body, .font-fabrikam {
      5.0024:1 light / 6.7068:1 dark on that ground. */
   --cc-stage: var(--cc-title-half);
   --cc-reason: #6a7284;
-  --cc-micro: #6b7385;
+  --cc-micro: var(--cc-title-half);
   --cc-chip-bg: #eef0f4;
   --cc-chip-fg: #5f6779;
   --cc-ask-fg: #2c4f8f;
@@ -6775,7 +6775,7 @@ body, .font-fabrikam {
   --cc-byline: #7f8798;
   --cc-stage: var(--cc-title-half);
   --cc-reason: #5f6779;
-  --cc-micro: #6b7385;
+  --cc-micro: var(--cc-title-half);
   --cc-chip-bg: #1b202c;
   --cc-chip-fg: #7f8798;
   --cc-ask-fg: #9fb4dd;
@@ -6905,7 +6905,7 @@ body, .font-fabrikam {
     --cc-byline: #7f8798;
     --cc-stage: var(--cc-title-half);
     --cc-reason: #5f6779;
-    --cc-micro: #6b7385;
+    --cc-micro: var(--cc-title-half);
     --cc-chip-bg: #1b202c;
     --cc-chip-fg: #7f8798;
     --cc-ask-fg: #9fb4dd;
