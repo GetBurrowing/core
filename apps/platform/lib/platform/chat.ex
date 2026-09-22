@@ -2352,6 +2352,39 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  The newest non-deleted, non-log-only message in `space_id` authored by
+  one of `agent_ids` and inserted STRICTLY after `since`, or `nil`.
+
+  Built for `Platform.Responsibilities.Handlers.AgentsGoalHeartbeat`
+  (task `01a0ca24` stage 3), which reads the leader's last reply back as
+  the next beat's prior claim. It lives here rather than as a `Repo`
+  query inside the handler so the Responsibilities context does not
+  reach into the messages table.
+
+  `author_agent_id` is the author snapshot `put_author_snapshot/3`
+  writes at insert: the participant's `participant_id` when the
+  participant is an agent, which is the agent's id. The bound is
+  exclusive on purpose: a message stamped at exactly `since` belongs to
+  the beat that wrote `since`, not to the one after it. `m.id`
+  (UUIDv7, time-ordered) breaks `inserted_at` ties.
+  """
+  @spec latest_agent_message_since(binary(), [binary()], DateTime.t()) :: Message.t() | nil
+  def latest_agent_message_since(space_id, agent_ids, %DateTime{} = since)
+      when is_binary(space_id) and is_list(agent_ids) do
+    from(m in Message,
+      where:
+        m.space_id == ^space_id and
+          m.author_agent_id in ^agent_ids and
+          is_nil(m.deleted_at) and
+          m.log_only == false and
+          m.inserted_at > ^since,
+      order_by: [desc: m.inserted_at, desc: m.id],
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  @doc """
   The unbounded digest-eligibility predicate for the `messages` corpus —
   every filter that decides whether a `chat_messages` row can ever reach a
   Historian digest, and nothing else. No time bound, no ordering, no select.

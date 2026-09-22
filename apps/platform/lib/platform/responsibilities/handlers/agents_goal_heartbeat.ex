@@ -77,6 +77,82 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   live; for this key it stays unreachable in production and that is
   fine.
 
+  ## The heartbeat drives; it does not report
+
+  Rowan, 2026-09-22: "this is just a way to make sure that our assigned
+  agent gets regular prods saying, keep working towards this goal, and
+  you have no agents to delegate to, so this is on you to manage." The
+  first live fire of the status-report version was answered with three
+  sentences and no work, which is exactly what that prompt asked for.
+
+  So the gather carries a `delegates` roster and the prompt branches on
+  its size (task `01a0ca24`):
+
+    * zero delegates -- `drive_instruction/1` renders the solo sentence
+      ("You are the only agent working this goal. There is no one to
+      delegate to; this is yours. ..."). That sentence appears for an
+      EMPTY roster and for nothing else.
+    * N delegates -- the same drive, plus "Agents you can delegate to:"
+      and every `Name (agent_id)` in `Delegation.eligible_agents/0`'s
+      name order.
+
+  The roster is `Platform.Agents.Delegation.eligible_agents/0` minus the
+  leader ids: the space's `leader_agent_id` AND whoever
+  `Roles.assignee_for/1` resolves for this key (the agent the Router
+  actually dispatches the prompt to). Those are separate fields, and
+  neither is ever offered to itself as a delegate. `eligible_agents/0`
+  counts only agents with a CONNECTED (`RuntimePresence.online?/1`),
+  active, non-voice-only runtime and no `DelegationExclusion` row, so the
+  roster is THIS HOUR's roster, not the org chart: an agent whose socket
+  is down is not offered, and the next fire re-reads it. It is not
+  re-derived here from runtimes and exclusions, so the heartbeat and the
+  delegation surface cannot disagree about who counts.
+
+  A raise while reading the roster logs a warning and yields `[]` with
+  `roster_error: true` rather than losing the dispatch. That case does
+  NOT render the solo sentence: "there is no one to delegate to" would be
+  a claim nobody measured. It renders `drive_instruction(:unavailable)`,
+  which says the roster could not be read.
+
+  ## Where the last beat's claim is read
+
+  Each beat asks the leader to end its reply with a "Next:" line, and the
+  NEXT beat puts that line back to it ("Last beat you said you would: X.
+  Did it ship?"). The claim is read at the next fire's gather, from the
+  leader's latest message in the goal space. It is NOT stored from
+  `handle_output/3`, and must not be moved there:
+
+    * `Router.dispatch_assignee/4` (router.ex ~1140) sends every
+      non-"external" assignee kind to `dispatch_native/6` (~1657), which
+      classifies the prompt, builds the signal, calls
+      `call_agent_responder/1` and returns `{:ok, :dispatched}`. It never
+      calls `invoke_handle_output/3`; that is reached only from
+      `run_external_dispatch/5` (~1244).
+    * `AgentResponder.broadcast_system_event/3` (agent_responder.ex ~455)
+      broadcasts the signal to the runtime's attention topic and returns.
+      There is no return channel for the model's output.
+
+  So on the heartbeat's native path, what the leader says exists only as
+  a chat message it posts. A claim stored from `handle_output/3` would
+  record nothing in production, and a test calling `handle_output/3`
+  directly would pass anyway.
+
+  The read (`Chat.latest_agent_message_since/3`): messages in the goal
+  space, authored by a leader id (the same ids the roster excludes),
+  not deleted, not log-only, inserted strictly after the previous beat's
+  `measured_at`. That timestamp is taken BEFORE `record_measurement/2`
+  overwrites it. The LAST "Next:" line of the newest such message is the
+  claim, trimmed and capped at 280 characters. The four outcomes (claim /
+  reply with no Next: line / no reply / first beat) render four distinct
+  sentences via `prior_claim_instruction/1`, because an absent claim must
+  not read like a kept promise, and "no reply" must not read like "first
+  beat".
+
+  The other half of the bridge: the gather sets `dispatch_space_id` to the
+  goal space, so `signal.metadata.space_id` names it and AgentResponder
+  invites the leader there. Without it the leader had no in-band way to
+  know where to reply, and the read above would depend on luck.
+
   ## A goal that cannot name a number has no heartbeat
 
   When no measurement can be derived — no space carries a goal, or the
@@ -134,7 +210,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
     * `feature` — `"agents"`
     * `trigger_kind` — `cron`, `expression: "0 * * * *"` (top of every hour)
     * `scope` — `global`
-    * `context_provided` — `["goal", "measurement", "leader"]`
+    * `context_provided` — `["goal", "measurement", "leader", "delegates", "prior_claim"]`
     * `default_prompt_template` — `"agents.goal_heartbeat.v1"`
     * `cost_profile` — `low_freq_capable`
   """
@@ -144,11 +220,14 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Platform.Agents.Agent
+  alias Platform.Agents.Delegation
   alias Platform.Chat
   alias Platform.Chat.Space
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
   alias Platform.Responsibilities.Responsibility
+  alias Platform.Roles
   alias Platform.Tasks.Task, as: TaskSchema
 
   @key "agents.goal_heartbeat"
@@ -183,7 +262,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
         # every hour at minimum. You need to be regularly reminded of your
         # goal." Dispatch is gated by the `agents_leader` role assignee via
         # `Roles.assignee_for/1` in the Router, so with no leader pinned this
-        # costs nothing hourly rather than nothing daily.
+        # costs nothing, whatever the cadence.
         #
         # NOTE FOR ANYONE CHANGING THIS: `trigger_config` is listed in
         # `Responsibilities.@upsert_replace_fields`, so `register/0` REPLACES
@@ -193,7 +272,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
         # undoes itself. Change it here, not only in the row.
         trigger_config: %{"expression" => "0 * * * *"},
         scope: "global",
-        context_provided: ["goal", "measurement", "leader"],
+        context_provided: ["goal", "measurement", "leader", "delegates", "prior_claim"],
         output_contract: %{
           "heartbeat" => "string"
         },
@@ -216,7 +295,8 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   def gather_context(_responsibility, _ctx), do: {:ok, do_gather_context(%{})}
 
   @doc """
-  Assemble the heartbeat context — goal, measurement, leader.
+  Assemble the heartbeat context — goal, measurement, leader, the
+  delegate roster and the drive paragraph built from it.
 
   Public so tests can exercise the shape without the full Router
   pipeline.
@@ -242,10 +322,9 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
       _ ->
         system =
-          "You are the agents leader posting the daily goal heartbeat. " <>
-            "Report the goal, the current measurement and its movement since the " <>
-            "previous run in at most three sentences. Never invent a number: use " <>
-            "only the figures given. If the delta is absent, say this is the first " <>
+          "You are the agents leader. This hourly heartbeat is a prod to drive " <>
+            "the goal, not a status report. Never invent a number: use only the " <>
+            "figures given. If the delta is absent, say this is the first " <>
             "measurement rather than reporting no change."
 
         {:ok, %{system: system, user: render_instruction(context)}}
@@ -261,7 +340,10 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   so an edit to a code default is a runtime no-op wherever a row already
   exists. This slug is therefore owned by a seed migration
   (`..._seed_agents_goal_heartbeat_prompt.exs`), which is what actually
-  puts it on a migrated database.
+  puts it on a migrated database, and the hourly drive body that
+  replaced it (task `01a0ca24`) arrived by an UPDATE migration
+  (`..._update_agents_goal_heartbeat_prompt_drive.exs`) for the same
+  reason.
   """
   @spec render_instruction(map()) :: String.t()
   def render_instruction(context) when is_map(context) do
@@ -314,6 +396,14 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   defp do_gather_context(_ctx) do
     space = agents_space()
 
+    # THE PREVIOUS BEAT'S TIMESTAMP, taken from the snapshot loaded above
+    # and therefore BEFORE `record_measurement/2` below overwrites it. It
+    # is the lower bound of the window the leader's reply is read from;
+    # read after the write, the window would start at "now" and every
+    # reply would fall outside it. See "Where the last beat's claim is
+    # read" in the moduledoc.
+    since = previous_beat_at(space)
+
     goal = space && space.goal
     measurement = measure(space, goal)
 
@@ -326,12 +416,193 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
     # and persisting there would advance the baseline on every render.
     record_measurement(space, measurement)
 
+    leader_ids = leader_ids(space)
+    {delegates, roster_error?} = delegate_roster(leader_ids)
+
+    drive_text =
+      if roster_error?, do: drive_instruction(:unavailable), else: drive_instruction(delegates)
+
+    prior_claim = prior_claim(space, leader_ids, since)
+
     %{
       goal: goal || %{missing?: true, reason: "no chat space carries a goal"},
       measurement: measurement,
-      leader: leader_slot(space)
+      leader: leader_slot(space),
+      delegates: delegates,
+      roster_error: roster_error?,
+      drive_text: drive_text,
+      prior_claim: prior_claim,
+      prior_claim_text: prior_claim_instruction(prior_claim)
     }
+    |> put_dispatch_space(space)
   end
+
+  # Names the goal space as the space this dispatch writes into, so the
+  # Router copies it to `signal.metadata.space_id` (`put_dispatch_space/2`)
+  # and AgentResponder invites the leader there. That is where the reply
+  # the next beat reads back has to land.
+  defp put_dispatch_space(context, %Space{id: id}) when is_binary(id),
+    do: Map.put(context, :dispatch_space_id, id)
+
+  defp put_dispatch_space(context, _space), do: context
+
+  # The previous beat's `measured_at`, whatever goal it was taken for, or
+  # `nil` when no beat has been recorded (or the stamp does not parse).
+  defp previous_beat_at(%Space{metadata: %{} = metadata}) do
+    with %{"measured_at" => stamp} when is_binary(stamp) <- Map.get(metadata, @metadata_key),
+         {:ok, at, _offset} <- DateTime.from_iso8601(stamp) do
+      at
+    else
+      _ -> nil
+    end
+  end
+
+  defp previous_beat_at(_space), do: nil
+
+  # Longest claim carried into the next prompt, in characters.
+  @claim_cap 280
+
+  # The last line of a reply that starts "Next:", with its text captured.
+  # `[ \t]` rather than `\s` so a bare "Next:" cannot capture the line
+  # below it.
+  @next_line ~r/^[ \t]*Next:[ \t]*(.+?)[ \t]*$/mi
+
+  # The prior-claim slot. `:first_beat` when no previous beat is recorded;
+  # otherwise the leader's latest message in the goal space since that
+  # beat decides between `:claimed`, `:no_next_line` and `:no_reply`.
+  defp prior_claim(_space, _leader_ids, nil), do: %{status: :first_beat}
+  defp prior_claim(nil, _leader_ids, _since), do: %{status: :first_beat}
+  defp prior_claim(_space, [], _since), do: %{status: :no_reply}
+
+  defp prior_claim(%Space{id: space_id}, leader_ids, %DateTime{} = since) do
+    case Chat.latest_agent_message_since(space_id, leader_ids, since) do
+      nil ->
+        %{status: :no_reply}
+
+      message ->
+        case next_claim(message.content) do
+          nil -> %{status: :no_next_line, message_id: message.id}
+          claim -> %{status: :claimed, claim: claim, message_id: message.id}
+        end
+    end
+  rescue
+    error ->
+      Logger.warning("[agents.goal_heartbeat] prior claim read raised: #{inspect(error)}")
+      %{status: :unavailable}
+  end
+
+  defp next_claim(content) when is_binary(content) do
+    case @next_line |> Regex.scan(content) |> List.last() do
+      [_, claim] ->
+        case claim |> String.trim() |> String.slice(0, @claim_cap) |> String.trim() do
+          "" -> nil
+          text -> text
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp next_claim(_content), do: nil
+
+  @doc """
+  The prior-claim line for a prior-claim slot (task `01a0ca24` stage 3).
+
+  Four states, four DISTINCT sentences, so an absent claim can never read
+  like a kept promise:
+
+    * `%{status: :claimed, claim: x}` -- the leader's last `Next:` line,
+      put back to it as a question;
+    * `%{status: :no_next_line}` -- the leader replied but named no next
+      action;
+    * `%{status: :no_reply}` -- a previous beat exists and the leader
+      posted nothing in the goal space since;
+    * `%{status: :first_beat}` -- no previous beat is recorded.
+
+  `%{status: :unavailable}` (the read raised) claims none of the four.
+  """
+  @spec prior_claim_instruction(map()) :: String.t()
+  def prior_claim_instruction(%{status: :claimed, claim: claim}) when is_binary(claim),
+    do:
+      "Last beat you said you would: #{String.trim_trailing(claim, ".")}. " <>
+        "Did it ship? Say yes or no and what changed."
+
+  def prior_claim_instruction(%{status: :no_next_line}),
+    do: "Last beat your reply named no next action."
+
+  def prior_claim_instruction(%{status: :no_reply}),
+    do: "Last beat got no reply from you in this space."
+
+  def prior_claim_instruction(%{status: :first_beat}),
+    do: "This is the first beat; there is no prior claim to check."
+
+  def prior_claim_instruction(%{status: :unavailable}),
+    do:
+      "Last beat's reply could not be read this hour, so whether its claim was kept is not known."
+
+  # The agents never offered to themselves as a delegate: the space's
+  # `leader_agent_id` and the agent the Router dispatches this key to
+  # (`Roles.assignee_for/1` returns `%Agent{} | nil`, override first).
+  defp leader_ids(space) do
+    space_leader = if match?(%Space{}, space), do: space.leader_agent_id
+
+    assignee =
+      case Roles.assignee_for(@key) do
+        %Agent{id: id} -> id
+        _ -> nil
+      end
+
+    [space_leader, assignee] |> Enum.reject(&is_nil/1) |> Enum.uniq()
+  end
+
+  # `{roster, roster_error?}`. A raise must not lose the dispatch, and must
+  # not be rendered as "no one to delegate to" either -- see the moduledoc.
+  defp delegate_roster(leader_ids) do
+    roster =
+      Delegation.eligible_agents()
+      |> Enum.reject(fn {agent, _features} -> agent.id in leader_ids end)
+      |> Enum.map(fn {agent, _features} -> %{agent_id: agent.id, name: agent.name} end)
+
+    {roster, false}
+  rescue
+    error ->
+      Logger.warning("[agents.goal_heartbeat] delegate roster raised: #{inspect(error)}")
+      {[], true}
+  end
+
+  @solo_drive "You are the only agent working this goal. There is no one to delegate to; " <>
+                "this is yours. Pick the single open item that most moves the measurement " <>
+                "and work it this turn. Report what you picked and what changed."
+
+  @delegate_drive "Pick the single open item that most moves the measurement. Assign it to " <>
+                    "one of these agents by creating or assigning a task, or work it yourself " <>
+                    "this turn. Report what you picked, who has it, and what changed.\n" <>
+                    "Agents you can delegate to: "
+
+  @unavailable_drive "The delegate roster could not be read this hour, so it is not known " <>
+                       "whether anyone else can take work. Pick the single open item that most " <>
+                       "moves the measurement and work it this turn. Report what you picked " <>
+                       "and what changed."
+
+  @doc """
+  The drive paragraph for a delegate roster (task `01a0ca24`).
+
+  `[]` renders the solo instruction -- and ONLY `[]` does. A non-empty
+  roster renders the delegate drive followed by `Name (agent_id)` entries
+  joined with ", " in the roster's order (which is
+  `Delegation.eligible_agents/0`'s name order). `:unavailable` is the
+  roster-read-failed case: it claims neither solitude nor a roster.
+  """
+  @spec drive_instruction([%{agent_id: String.t(), name: String.t()}] | :unavailable) ::
+          String.t()
+  def drive_instruction([]), do: @solo_drive
+
+  def drive_instruction(roster) when is_list(roster) do
+    @delegate_drive <> Enum.map_join(roster, ", ", fn d -> "#{d.name} (#{d.agent_id})" end)
+  end
+
+  def drive_instruction(:unavailable), do: @unavailable_drive
 
   @doc """
   The space this heartbeat speaks for: the earliest-created space that
@@ -469,12 +740,20 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   defp leader_slot(%Space{leader_agent_id: id}) when is_binary(id), do: %{agent_id: id}
   defp leader_slot(_), do: %{missing?: true, reason: "no leader pinned to this space"}
 
+  # `:prior_claim_text` / `:drive_text` are populated by the gather (task
+  # `01a0ca24` stages 2-3); a context without them renders the
+  # placeholder as blank.
   defp context_to_assigns(context) do
     %{
       goal: format_goal(Map.get(context, :goal)),
-      measurement: format_measurement(Map.get(context, :measurement))
+      measurement: format_measurement(Map.get(context, :measurement)),
+      prior_claim: text_or_empty(Map.get(context, :prior_claim_text)),
+      drive: text_or_empty(Map.get(context, :drive_text))
     }
   end
+
+  defp text_or_empty(text) when is_binary(text), do: text
+  defp text_or_empty(_), do: ""
 
   defp format_goal(%{missing?: true} = slot),
     do: "(no goal set — #{Map.get(slot, :reason, "unknown")})"
@@ -531,8 +810,17 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   def format_measurement_tail(slot), do: format_measurement(slot)
 
+  # Same layout as the `agents.goal_heartbeat.v1` row written by
+  # `20260922180000_update_agents_goal_heartbeat_prompt_drive.exs`
+  # (task `01a0ca24`), for a database that carries no row at all.
   defp fallback_body(assigns) do
-    "Goal: #{assigns.goal}\nMeasurement: #{assigns.measurement}\n" <>
-      "Post the daily heartbeat for this goal in at most three sentences."
+    "Goal: #{assigns.goal}\nMeasurement: #{assigns.measurement}\n\n" <>
+      "#{assigns.prior_claim}\n\n" <>
+      "#{assigns.drive}\n\n" <>
+      "Lead with the measurement and its movement exactly as given above. " <>
+      "Do not recompute it, do not round it, and do not invent a number that is not there. " <>
+      "If the measurement says this is the first run, say so rather than reporting no change.\n\n" <>
+      "Post your reply in this space. End it with one line that starts \"Next:\" " <>
+      "naming the single action you will have done before the next beat."
   end
 end

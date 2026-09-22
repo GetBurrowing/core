@@ -771,7 +771,17 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `Platform.UUID.valid?/1` guard. A malformed cursor returns nil and drops
     # through to the plain `m.id < ^before_id` comparison that path already
     # had, so this lookup adds no failure mode the caller did not already have.
-    "platform/chat.ex" => 19,
+    #
+    # 19 -> 20 for task 01a0ca24 stage 3's `latest_agent_message_since/3`,
+    # the goal heartbeat's read-back of the leader's last reply. Triaged by
+    # hand as this map asks: its `where:` pins `m.space_id == ^space_id` and
+    # `m.author_agent_id in ^agent_ids`, and none of those ids arrives from a
+    # boundary. Its one caller, `AgentsGoalHeartbeat.prior_claim/3`, passes
+    # `space.id` off the `%Space{}` `agents_space/0` loaded and agent ids read
+    # off `space.leader_agent_id` and the `%Agent{}` `Roles.assignee_for/1`
+    # returned, i.e. column values. A malformed id cannot reach it today; a
+    # future boundary caller would need a `Platform.UUID.valid?/1` guard.
+    "platform/chat.ex" => 20,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,
     # Task 019e2c4b stage 1 — `CanvasAccess.org_readable_space?/2`. Triaged by

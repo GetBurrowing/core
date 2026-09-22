@@ -151,6 +151,16 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
       "agents.goal_heartbeat serves this from chat_spaces.leader_agent_id; " <>
         "the role assignment behind it is already resolved by the Router " <>
         "before the handler runs",
+    "delegates" =>
+      "agents.goal_heartbeat serves this from " <>
+        "Platform.Agents.Delegation.eligible_agents/0 minus the leader ids " <>
+        "(task 01a0ca24 stage 2) — it is this hour's connected roster, not " <>
+        "a row a shared resolver could read",
+    "prior_claim" =>
+      "agents.goal_heartbeat reads this back from the leader's latest " <>
+        "message in the goal space since the previous beat, via " <>
+        "Chat.latest_agent_message_since/3 (task 01a0ca24 stage 3) — the " <>
+        "native path has no handle_output/3 return channel to store it from",
     "open_prs" =>
       "architecture.cron_sweep shells out to `gh pr list` in its own " <>
         "gather_open_prs/0 — no DB-backed resolver exists",

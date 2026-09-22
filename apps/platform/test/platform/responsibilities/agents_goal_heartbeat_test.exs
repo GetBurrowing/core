@@ -30,7 +30,7 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatTest do
   end
 
   describe "register/0" do
-    test "declares a parseable daily cron expression and the leader role" do
+    test "declares a parseable hourly cron expression and the leader role" do
       [spec] = Handler.register()
 
       assert spec.key == "agents.goal_heartbeat"
@@ -38,6 +38,7 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatTest do
       assert spec.default_prompt_template == "agents.goal_heartbeat.v1"
       assert spec.metadata["role"] == "agents_leader"
 
+      assert spec.trigger_config["expression"] == "0 * * * *"
       assert {:ok, _parsed} = Cron.parse(spec.trigger_config["expression"])
     end
 
@@ -82,8 +83,36 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatTest do
 
       {:ok, context} = Handler.gather_context(nil, %{})
       assert {:ok, %{system: system, user: user}} = Handler.build_prompt(context)
-      assert system =~ "goal heartbeat"
+      # Literal, task `01a0ca24`: the hourly drive wording.
+      assert system ==
+               "You are the agents leader. This hourly heartbeat is a prod to drive " <>
+                 "the goal, not a status report. Never invent a number: use only the " <>
+                 "figures given. If the delta is absent, say this is the first " <>
+                 "measurement rather than reporting no change."
+
+      refute system =~ "daily"
+      refute system =~ "three sentences"
+
       assert user =~ "Close backlog items in Suite"
+      # The user body is the migrated ROW, not `fallback_body/1`.
+      assert user =~ ~s(End it with one line that starts "Next:")
+      refute user =~ "daily"
+      refute user =~ "three sentences"
+      refute user =~ "{{prior_claim}}"
+      refute user =~ "{{drive}}"
+    end
+
+    test "prior_claim_text and drive_text render into the user body" do
+      _space = space_with_goal("Close backlog items in Suite")
+
+      {:ok, context} = Handler.gather_context(nil, %{})
+
+      context =
+        Map.merge(context, %{prior_claim_text: "PRIOR-CLAIM-XYZ", drive_text: "DRIVE-XYZ"})
+
+      assert {:ok, %{user: user}} = Handler.build_prompt(context)
+      assert user =~ "PRIOR-CLAIM-XYZ"
+      assert user =~ "DRIVE-XYZ"
     end
   end
 
