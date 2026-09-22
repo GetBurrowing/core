@@ -1473,6 +1473,16 @@ defmodule Platform.Tasks do
     * `:project_id` — scope to a project
     * `:epic_id` — scope to an epic
     * `:status` — scope to a task-side status (`t.status`)
+    * `:assignee_id` — scope to tasks assigned to this id in ANY phase: the
+      flat current-phase column (`t.assignee_id`) OR any `phase_assignees`
+      slot. The flat column holds only the current phase's assignee, so a
+      review-phase owner of a task still in execution appears only in its
+      slot; matching the flat column alone would undercount. Must be a valid
+      UUID string — the `binary_id` comparison raises `Ecto.Query.CastError`
+      otherwise; validation belongs at the tool boundary, not here.
+    * `:assignee_type` — only with `:assignee_id`; narrows both branches to
+      `"agent"` or `"user"`. A phase slot with no `assignee_type` key does
+      not match when a type is given. Ignored when `:assignee_id` is `nil`.
 
   Unrecognized or `nil` options are ignored. With an empty list, returns all
   non-deleted tasks (equivalent to `list_tasks_by_*` with no filter).
@@ -1564,12 +1574,15 @@ defmodule Platform.Tasks do
     project_id = Keyword.get(opts, :project_id)
     epic_id = Keyword.get(opts, :epic_id)
     status = Keyword.get(opts, :status)
+    assignee_id = Keyword.get(opts, :assignee_id)
+    assignee_type = Keyword.get(opts, :assignee_type)
 
     Task
     |> where([t], is_nil(t.deleted_at))
     |> maybe_filter_project(project_id)
     |> maybe_filter_epic(epic_id)
     |> maybe_filter_status(status)
+    |> maybe_filter_assignee(assignee_id, assignee_type)
     |> order_by([t], desc: t.inserted_at, desc: t.id)
   end
 
@@ -6001,6 +6014,49 @@ defmodule Platform.Tasks do
 
   defp maybe_filter_status(query, nil), do: query
   defp maybe_filter_status(query, status), do: where(query, [t], t.status == ^status)
+
+  # Task 01a0acc3 stage 2: "assigned to X" means ANY phase, so this is the
+  # flat current-phase column OR any phase_assignees slot, in ONE `where`
+  # (an OR, not two ANDed clauses). `jsonb_each` walks the map instead of
+  # naming the three phase keys, so a phase added to `Task` @phases is
+  # covered without touching this. `jsonb_typeof(slot) = 'object'` stops a
+  # null / legacy scalar slot from matching; the CASE keeps a non-object
+  # `phase_assignees` value from raising inside `jsonb_each` and failing the
+  # whole query for every caller. `id` is assumed to be a valid UUID string
+  # (the tool boundary validates it) — `t.assignee_id == ^id` casts to
+  # binary_id and raises on anything else.
+  defp maybe_filter_assignee(query, nil, _type), do: query
+
+  defp maybe_filter_assignee(query, id, type) when is_binary(id) do
+    flat =
+      if is_nil(type),
+        do: dynamic([t], t.assignee_id == ^id),
+        else: dynamic([t], t.assignee_id == ^id and t.assignee_type == ^type)
+
+    slot =
+      dynamic(
+        [t],
+        fragment(
+          """
+          EXISTS (
+            SELECT 1
+            FROM jsonb_each(CASE WHEN jsonb_typeof(?) = 'object' THEN ? ELSE '{}'::jsonb END)
+              AS s(phase, slot)
+            WHERE jsonb_typeof(slot) = 'object'
+              AND slot->>'assignee_id' = ?
+              AND (?::text IS NULL OR slot->>'assignee_type' = ?)
+          )
+          """,
+          t.phase_assignees,
+          t.phase_assignees,
+          ^id,
+          ^type,
+          ^type
+        )
+      )
+
+    where(query, ^dynamic([t], ^flat or ^slot))
+  end
 
   # Stage 2 of task 019f3f22 (ADR-0042 sponsor visibility): opt-in filter
   # to narrow the board to tasks the given user sponsors. `nil` is the

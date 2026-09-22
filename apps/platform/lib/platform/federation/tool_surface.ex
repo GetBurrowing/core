@@ -1815,6 +1815,21 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description: "Filter by status (backlog, in_progress, in_review, done, etc.)"
           },
+          assignee_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Only tasks where this agent/user id is the current-phase assignee OR holds any " <>
+                "phase_assignees slot (planning, execution, review). Must be a UUID; a slug or " <>
+                "display name is refused with code invalid_assignee_id."
+          },
+          assignee_type: %{
+            type: "string",
+            required: false,
+            description:
+              "\"agent\" or \"user\"; requires assignee_id (refused with code " <>
+                "assignee_type_requires_assignee_id without it). Omit to match either type."
+          },
           limit: %{
             type: "integer",
             required: false,
@@ -1834,7 +1849,10 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{tasks: [...], total, limit, offset, has_more} — an ENVELOPE, not a bare array. `total` is the " <>
+          "%{tasks: [...], total, limit, offset, has_more, filters} — an ENVELOPE, not a bare array. " <>
+            "`filters` lists ONLY the filters the query applied, string-keyed (e.g. " <>
+            "%{\"assignee_id\" => id, \"project_id\" => p}; %{} when unfiltered), so a zero result can be " <>
+            "told apart from a dropped filter by the response alone. `total` is the " <>
             "number of tasks matching the filters, counted in the database, independent of `limit`; `has_more` " <>
             "is true exactly when tasks matching the filters remain beyond this page. Read `has_more` rather " <>
             "than comparing `tasks` against `limit`. Each entry in `tasks` includes sponsor (nil or " <>
@@ -1851,7 +1869,16 @@ defmodule Platform.Federation.ToolSurface do
             "repeat a task. Before task 01a049de this tool returned every matching task with every full " <>
             "description, which measured 3_366_819 bytes on an 807-task project and could not be called " <>
             "safely; before task 01a04a7a it returned a bare array with no way to tell 50 tasks from 50 of " <>
-            "807.",
+            "807. An undeclared argument key (anything but the parameters above, plus `space_id`) is " <>
+            "refused with code unknown_parameter naming the key, rather than silently ignored; " <>
+            "`space_id` is tolerated as a transport key and filters nothing. `assignee_id` matches a " <>
+            "task when the id is in the flat current-phase assignee column OR in any phase_assignees " <>
+            "slot, so a task you review but that is still in execution is included. The id is " <>
+            "lowercased before matching. With `assignee_type`, both the column and the slot must carry " <>
+            "that type, and a slot with no recorded assignee_type does NOT match a typed query (even " <>
+            "though such a slot is treated as an agent elsewhere); omit `assignee_type` to include it. " <>
+            "A non-UUID assignee_id, an assignee_type other than agent/user, and assignee_type without " <>
+            "assignee_id are each refused recoverably before any query runs.",
         when_to_use:
           "When you need to see what tasks exist, check the backlog, or find tasks in a specific state"
       },
@@ -4847,74 +4874,15 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("task_list", args, _context) do
-    # Compose every supplied filter together — passing project_id and status
-    # both must AND, not pick one branch. The old `cond` was mutually
-    # exclusive and silently dropped the status filter when project_id was
-    # also present, producing false positives.
-    opts =
-      [
-        project_id: Map.get(args, "project_id"),
-        epic_id: Map.get(args, "epic_id"),
-        status: Map.get(args, "status")
-      ]
-      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-
-    # Task 01a049de — `task_list` on the 807-task project measured 3_366_819
-    # bytes, 83% of it `description`. Two bounds, both additive:
-    #
-    #   * `detail` defaults to "summary", which SNIPPETS description rather
-    #     than dropping it. A caller that reads `description` still gets a
-    #     string plus `description_truncated` / `description_length`; the full
-    #     text is one `task_get` away. Dropping the key would have made an
-    #     existing caller silently read nil, which is the failure mode the
-    #     ticket explicitly warns against.
-    #   * `limit`/`offset` default to #{ResultBound.default_limit()}/0.
-    #
-    # Task 01a04a7a made the truncation VISIBLE. #840 left a caller able to
-    # page but unable to tell whether it needed to: the result was a bare JSON
-    # array, and "50 rows" and "50 of 807 rows" were the same eight hundred
-    # bytes. The orchestrator's measured cost was having to answer "how big is
-    # the backlog?" with "at least 50, upper bound unknown".
-    #
-    # A JSON array is structurally incapable of carrying that signal, so the
-    # result is now an envelope: `%{tasks:, total:, limit:, offset:,
-    # has_more:}`. `total` is a real `SELECT count(*)` over the same filters
-    # (`Tasks.count_tasks/1`), NOT an inference from the page length — see
-    # `has_more` below.
-    #
-    # Paging moved from `Enum.drop |> Enum.take` into SQL
-    # (`Tasks.list_tasks_page/2`). The two share a private query builder with
-    # `Tasks.list_tasks/1`, so the count and the page can never be taken over
-    # different sets, and the order is now total (`inserted_at`, then `id`) so
-    # two pages cannot skip or repeat a row.
-    {limit, offset} = ResultBound.page(args)
-
-    total = Tasks.count_tasks(opts)
-
-    rows =
-      opts
-      |> Tasks.list_tasks_page(limit: limit, offset: offset)
-      |> Enum.map(&serialize_task_row(&1, full_detail?(args)))
-
-    # `offset + length(rows) < total`, never `length(rows) == limit`. The
-    # cheap form is wrong at exactly the boundary that matters: a corpus of
-    # exactly 50 with a limit of 50 reports "there is more", the caller pages
-    # again, and gets nothing. A flag that fires on a full page is not
-    # reporting truncation, it is restating the page size.
-    #
-    # `total` and the page are two statements, so a concurrent insert between
-    # them can make `has_more` stale by one call. That is a race a caller
-    # re-paging resolves on its own; a transaction here would buy consistency
-    # nobody asked for at the cost of a read lock on the hottest list in the
-    # product.
-    {:ok,
-     %{
-       tasks: rows,
-       total: total,
-       limit: limit,
-       offset: offset,
-       has_more: offset + length(rows) < total
-     }}
+    # Task 01a0acc3 stage 3: the assignee pair is validated BEFORE any query.
+    # A non-UUID id would raise Ecto.Query.CastError inside the flat-column
+    # comparison (a 500 to the caller), and an `assignee_type` with no id
+    # would be a silently dropped filter — the exact defect this task exists
+    # to remove, reintroduced one key over.
+    case task_list_assignee_opts(args) do
+      {:ok, assignee_opts} -> do_task_list(args, assignee_opts)
+      {:error, _} = refusal -> refusal
+    end
   end
 
   # `task_update` — canonical shape defined by
@@ -13476,6 +13444,135 @@ defmodule Platform.Federation.ToolSurface do
           Map.put(acc, :"#{key}_omitted", false)
       end
     end)
+  end
+
+  defp do_task_list(args, assignee_opts) do
+    # Compose every supplied filter together — passing project_id and status
+    # both must AND, not pick one branch. The old `cond` was mutually
+    # exclusive and silently dropped the status filter when project_id was
+    # also present, producing false positives.
+    opts =
+      ([
+         project_id: Map.get(args, "project_id"),
+         epic_id: Map.get(args, "epic_id"),
+         status: Map.get(args, "status")
+       ] ++ assignee_opts)
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+    # Task 01a049de — `task_list` on the 807-task project measured 3_366_819
+    # bytes, 83% of it `description`. Two bounds, both additive:
+    #
+    #   * `detail` defaults to "summary", which SNIPPETS description rather
+    #     than dropping it. A caller that reads `description` still gets a
+    #     string plus `description_truncated` / `description_length`; the full
+    #     text is one `task_get` away. Dropping the key would have made an
+    #     existing caller silently read nil, which is the failure mode the
+    #     ticket explicitly warns against.
+    #   * `limit`/`offset` default to #{ResultBound.default_limit()}/0.
+    #
+    # Task 01a04a7a made the truncation VISIBLE. #840 left a caller able to
+    # page but unable to tell whether it needed to: the result was a bare JSON
+    # array, and "50 rows" and "50 of 807 rows" were the same eight hundred
+    # bytes. The orchestrator's measured cost was having to answer "how big is
+    # the backlog?" with "at least 50, upper bound unknown".
+    #
+    # A JSON array is structurally incapable of carrying that signal, so the
+    # result is now an envelope: `%{tasks:, total:, limit:, offset:,
+    # has_more:}`. `total` is a real `SELECT count(*)` over the same filters
+    # (`Tasks.count_tasks/1`), NOT an inference from the page length — see
+    # `has_more` below.
+    #
+    # Paging moved from `Enum.drop |> Enum.take` into SQL
+    # (`Tasks.list_tasks_page/2`). The two share a private query builder with
+    # `Tasks.list_tasks/1`, so the count and the page can never be taken over
+    # different sets, and the order is now total (`inserted_at`, then `id`) so
+    # two pages cannot skip or repeat a row.
+    {limit, offset} = ResultBound.page(args)
+
+    total = Tasks.count_tasks(opts)
+
+    rows =
+      opts
+      |> Tasks.list_tasks_page(limit: limit, offset: offset)
+      |> Enum.map(&serialize_task_row(&1, full_detail?(args)))
+
+    # `offset + length(rows) < total`, never `length(rows) == limit`. The
+    # cheap form is wrong at exactly the boundary that matters: a corpus of
+    # exactly 50 with a limit of 50 reports "there is more", the caller pages
+    # again, and gets nothing. A flag that fires on a full page is not
+    # reporting truncation, it is restating the page size.
+    #
+    # `total` and the page are two statements, so a concurrent insert between
+    # them can make `has_more` stale by one call. That is a race a caller
+    # re-paging resolves on its own; a transaction here would buy consistency
+    # nobody asked for at the cost of a read lock on the hottest list in the
+    # product.
+    {:ok,
+     %{
+       tasks: rows,
+       total: total,
+       limit: limit,
+       offset: offset,
+       has_more: offset + length(rows) < total,
+       # Task 01a0acc3 stage 3: exactly the filters that reached the query,
+       # derived from the SAME `opts` list, so the echo cannot claim a filter
+       # the query did not apply. A caller can tell "zero tasks are mine" from
+       # "my filter was dropped" from this response alone.
+       filters: Map.new(opts, fn {key, value} -> {Atom.to_string(key), value} end)
+     }}
+  end
+
+  # `{:ok, keyword}` of validated assignee options, or a recoverable refusal.
+  # The id is replaced by `Platform.UUID.cast/1`'s canonical lowercase form:
+  # the query compares the flat column as uuid (case-insensitive) but the
+  # phase_assignees slots as text, so an uppercase id would otherwise match
+  # the flat column and miss every slot. `Platform.UUID`, not a bare
+  # `Ecto.UUID.cast/1`, so a 16-byte slug cannot clear the guard and raise.
+  defp task_list_assignee_opts(args) do
+    id = Map.get(args, "assignee_id")
+    type = Map.get(args, "assignee_type")
+
+    cond do
+      is_nil(id) and not is_nil(type) ->
+        {:error,
+         %{
+           error: "task_list: assignee_type requires assignee_id",
+           code: :assignee_type_requires_assignee_id,
+           recoverable: true,
+           suggestion:
+             "Pass assignee_id alongside assignee_type, or drop assignee_type. It is refused " <>
+               "rather than ignored so a narrowing you asked for is never silently dropped."
+         }}
+
+      not is_nil(type) and type not in ["agent", "user"] ->
+        {:error,
+         %{
+           error: "task_list: assignee_type must be \"agent\" or \"user\"",
+           code: :invalid_assignee_type,
+           recoverable: true,
+           suggestion: "Pass assignee_type \"agent\" or \"user\", or omit it to match either."
+         }}
+
+      is_nil(id) ->
+        {:ok, []}
+
+      true ->
+        case Platform.UUID.cast(id) do
+          {:ok, uuid} ->
+            {:ok, [assignee_id: uuid, assignee_type: type]}
+
+          :error ->
+            {:error,
+             %{
+               error: "task_list: assignee_id must be a UUID",
+               code: :invalid_assignee_id,
+               recoverable: true,
+               suggestion:
+                 "Pass the agent or user id as a canonical 36-character UUID, not a slug or " <>
+                   "display name."
+             }}
+        end
+    end
   end
 
   defp serialize_task_row(task, true), do: serialize_task(task)

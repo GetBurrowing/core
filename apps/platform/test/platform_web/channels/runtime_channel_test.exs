@@ -2677,6 +2677,38 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
   end
 
+  describe "task_list undeclared keys over the WebSocket (task 01a0acc3)" do
+    setup ctx do
+      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      %{runtime: runtime}
+    end
+
+    test "an undeclared key is refused and named, not silently dropped", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-unknown-param",
+        "tool" => "task_list",
+        "args" => %{"assignee" => Ecto.UUID.generate()}
+      })
+
+      assert_push "tool_result", %{call_id: "call-unknown-param", status: "error", error: error}
+
+      assert error.code == :unknown_parameter
+      assert to_string(error.code) == "unknown_parameter"
+      assert error.error =~ "assignee"
+      assert error.unknown_parameters == ["assignee"]
+      assert error.recoverable == true
+    end
+  end
+
   defp create_project(attrs \\ %{}) do
     default = %{name: "Channel Test Project #{System.unique_integer([:positive])}"}
     {:ok, project} = Tasks.create_project(Map.merge(default, attrs))

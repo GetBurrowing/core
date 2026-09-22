@@ -704,6 +704,50 @@ defmodule PlatformWeb.MCPControllerTest do
       refute envelope["code"] == "missing_task_id"
       assert envelope["error"] =~ "not found"
     end
+
+    test "task_list advertises assignee_id and assignee_type in its inputSchema (task 01a0acc3)",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      conn = mcp_post(conn, token, rpc("tools/list"))
+      %{"result" => %{"tools" => tools}} = json_response(conn, 200)
+
+      schema = tools |> Enum.find(&(&1["name"] == "task_list")) |> Map.fetch!("inputSchema")
+      props = schema["properties"]
+
+      # Positive control: a pre-existing declared filter is present, so an
+      # absence below cannot be a schema that renders no properties at all.
+      assert Map.has_key?(props, "project_id")
+      assert props["assignee_id"]["type"] == "string"
+      assert props["assignee_type"]["type"] == "string"
+      refute "assignee_id" in schema["required"]
+      refute "assignee_type" in schema["required"]
+    end
+
+    test "task_list refuses an undeclared key instead of answering unfiltered (task 01a0acc3)",
+         %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+
+      conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "task_list",
+            "arguments" => %{"assignee" => Ecto.UUID.generate()}
+          })
+        )
+
+      %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+        json_response(conn, 200)
+
+      envelope = Jason.decode!(text)
+
+      # The atom code reaches the wire as its string form.
+      assert envelope["code"] == "unknown_parameter"
+      assert envelope["error"] =~ "assignee"
+      assert envelope["unknown_parameters"] == ["assignee"]
+      assert envelope["recoverable"] == true
+    end
   end
 
   describe "external-principal tool scoping (M11)" do

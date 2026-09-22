@@ -198,6 +198,41 @@ defmodule Platform.Federation.ToolArguments do
   `required: true` mean something different per tool, which is precisely the
   "documentation the runtime does not read" failure this module exists to
   end. A rule the gate cannot state honestly belongs in the handler that can.
+
+  ## Undeclared keys: opt-in strictness (task 01a0acc3)
+
+  Presence is one half of argument policy; the other half is a key the tool
+  never declared. Before task 01a0acc3 nothing on the surface looked: a
+  `task_list` call carrying `assignee_id` reached a handler that reads only
+  `project_id`, `epic_id` and `status` as filters, and answered with the
+  UNFILTERED list. The caller could not tell "my filter matched everything"
+  from "my filter was thrown away", and read the first page as its board.
+
+  **Scope: `task_list` and nothing else.** `strict_tools/0` is the complete
+  list of tools whose undeclared keys are refused, and today it holds exactly
+  `"task_list"`. Every other tool keeps ignoring extra keys, as it always has.
+  A global flip is unsafe: live runtimes send undeclared keys to other tools
+  and nobody has surveyed which, so refusing them surface-wide would break
+  callers that work today — the same "breaking change dressed as a bug fix"
+  the presence gate declined to make.
+
+  **To opt a tool in**, add its name to `@strict_tools`. Its declared keys are
+  its `parameters` plus every `aliases:` entry, read from
+  `ToolSurface.tool_definitions/0` — so there is no second list to keep in
+  sync. Before adding one, check what its live callers actually send.
+
+  **Why `space_id` is always tolerated.** Both transports read `space_id` out
+  of the tool ARGS to build the call context (`MCPController.build_context/2`,
+  `RuntimeChannel.execute_tool_call/4`), and the legacy openclaw plugin tells
+  agents to pass it to `suite_task_list` and forwards params verbatim. It is a
+  transport key that happens to travel in `args`, not a tool parameter, so a
+  strict tool must still accept it. `@transport_reserved` lists such keys;
+  each entry needs a transport that reads it.
+
+  The unknown-key check runs BEFORE the required check, so a misspelled
+  required key is reported as the misspelling rather than as a missing key.
+  The refusal carries `code: :unknown_parameter`, `recoverable: true`, and
+  `unknown_parameters` — the sorted list of offending keys.
   """
 
   alias Platform.Federation.ToolSurface
@@ -224,6 +259,26 @@ defmodule Platform.Federation.ToolArguments do
     {"task_create", "title",
      "ToolSurface's task_create clause applies Map.put_new(\"title\", \"Untitled Task\") under an in-source comment declaring the absent-key defaults preserved for wire compatibility."}
   ]
+
+  # ── Tools whose undeclared keys are refused (OPT-IN) ───────────────────
+  #
+  # An opt-in list, not a default. A global flip is unsafe: live runtimes send
+  # undeclared keys to other tools and nobody has surveyed which, so refusing
+  # them everywhere would break callers that work today. Add a tool here only
+  # after checking what its callers send. Task 01a0acc3.
+  @strict_tools ["task_list"]
+
+  # ── Keys a strict tool must still tolerate ─────────────────────────────
+  #
+  # Transport keys that travel in `args` without being tool parameters. Each
+  # entry needs a reader outside the tool:
+  #
+  #   * `space_id` — `MCPController.build_context/2` and
+  #     `RuntimeChannel.execute_tool_call/4` both read `args["space_id"]` to
+  #     build the call context, and the legacy openclaw plugin
+  #     (startup-suite-channel src/message-bridge.ts) tells agents to pass it
+  #     to suite_task_list, forwarding params verbatim (src/channel.ts).
+  @transport_reserved ["space_id"]
 
   # ── Honest declarations whose handler still defaults on absence ────────
   #
@@ -284,9 +339,55 @@ defmodule Platform.Federation.ToolArguments do
   A tool with no required parameters passes, and so does an unknown tool —
   deciding that a name does not exist is `ToolAuthorization`'s job, and it has
   already run by the time this is called.
+
+  For a tool in `strict_tools/0` (today only `task_list`), an undeclared key
+  is refused first with `code: :unknown_parameter`, naming every such key.
+  `transport_reserved/0` keys are tolerated. Every other tool is not checked.
   """
   @spec validate(String.t(), map()) :: :ok | {:error, map()}
   def validate(tool_name, args) when is_binary(tool_name) and is_map(args) do
+    with :ok <- validate_known_keys(tool_name, args) do
+      validate_required(tool_name, args)
+    end
+  end
+
+  # Only tools in `@strict_tools` are checked; every other tool returns `:ok`
+  # here, so `validate/2` answers for them exactly as it did before.
+  defp validate_known_keys(tool_name, args) when tool_name in @strict_tools do
+    case unknown_keys(tool_name, args) do
+      [] -> :ok
+      unknown -> {:error, unknown_refusal(tool_name, unknown)}
+    end
+  end
+
+  defp validate_known_keys(_tool_name, _args), do: :ok
+
+  defp unknown_keys(tool_name, args) do
+    allowed = declared_keys(tool_name) ++ @transport_reserved
+
+    args
+    |> Map.keys()
+    |> Enum.map(&to_string/1)
+    |> Enum.reject(&(&1 in allowed))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp unknown_refusal(tool_name, unknown) do
+    declared = tool_name |> declared_keys() |> Enum.sort() |> Enum.join(", ")
+
+    %{
+      error: "#{tool_name}: unknown parameter(s) #{Enum.join(unknown, ", ")}",
+      code: :unknown_parameter,
+      recoverable: true,
+      unknown_parameters: unknown,
+      suggestion:
+        "Declared parameters for #{tool_name}: #{declared}. " <>
+          "Call tools/list for the full inputSchema."
+    }
+  end
+
+  defp validate_required(tool_name, args) do
     tool_name
     |> required_params()
     |> Enum.reject(&exempt?(tool_name, &1.key))
@@ -345,6 +446,39 @@ defmodule Platform.Federation.ToolArguments do
   @spec default_on_absence() :: [{String.t(), String.t(), String.t()}]
   def default_on_absence, do: @default_on_absence
 
+  @doc """
+  The tools whose undeclared keys `validate/2` refuses with
+  `code: :unknown_parameter`. Opt-in: every tool not listed here ignores
+  extra keys. See the moduledoc section on undeclared keys.
+  """
+  @spec strict_tools() :: [String.t()]
+  def strict_tools, do: @strict_tools
+
+  @doc "Keys every strict tool tolerates because a transport reads them from `args`."
+  @spec transport_reserved() :: [String.t()]
+  def transport_reserved, do: @transport_reserved
+
+  @doc """
+  Every key `tool_name` declares: its `parameters` plus every declared
+  `aliases:` entry, as strings. `[]` for an unknown tool.
+  """
+  @spec declared_keys(String.t()) :: [String.t()]
+  def declared_keys(tool_name) when is_binary(tool_name) do
+    case find_tool(tool_name) do
+      nil ->
+        []
+
+      tool ->
+        tool
+        |> Map.get(:parameters, %{})
+        |> Enum.flat_map(fn {key, spec} ->
+          aliases = if is_map(spec), do: Map.get(spec, :aliases, []), else: []
+          [to_string(key) | Enum.map(aliases, &to_string/1)]
+        end)
+        |> Enum.uniq()
+    end
+  end
+
   @doc "Is `parameter` on `tool` a declaration the runtime has never enforced?"
   @spec exempt?(String.t(), String.t()) :: boolean()
   def exempt?(tool, parameter) when is_binary(tool) and is_binary(parameter) do
@@ -366,11 +500,14 @@ defmodule Platform.Federation.ToolArguments do
   """
   @spec required_params(String.t()) :: [required_param()]
   def required_params(tool_name) when is_binary(tool_name) do
-    case Enum.find(ToolSurface.tool_definitions(), &(&1.name == tool_name)) do
+    case find_tool(tool_name) do
       nil -> []
       tool -> declared_required(tool)
     end
   end
+
+  defp find_tool(tool_name),
+    do: Enum.find(ToolSurface.tool_definitions(), &(&1.name == tool_name))
 
   @doc """
   `{tool_name, required_param}` for every declared-required parameter in the
