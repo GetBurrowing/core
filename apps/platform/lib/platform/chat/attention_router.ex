@@ -424,8 +424,13 @@ defmodule Platform.Chat.AttentionRouter do
         mentioned?(participant, message) and
           case Map.get(roster_by_agent_id, participant.participant_id) do
             %{role: role} when role in ["principal", "member"] -> true
-            # Agent is a participant but NOT in roster — block mention (ADR 0027)
-            nil -> roster == []
+            # Agent is a participant but NOT on the space roster — never
+            # mention-route it (ADR 0027). This clause previously read
+            # `nil -> roster == []`, which routed a mention to an off-roster
+            # agent whenever the roster happened to be empty: an
+            # "everyone is allowed because nobody is listed" fallback, which is
+            # the opposite of what an allow-list means. Task 01a0ac64 stage 3.
+            nil -> false
             _ -> false
           end
       end)

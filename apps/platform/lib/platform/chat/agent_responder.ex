@@ -792,6 +792,10 @@ defmodule Platform.Chat.AgentResponder do
         [top_level_only: true, limit: @history_limit]
       end
 
+    # Bound the agent's context load at its own history grant, if it has one
+    # (task 01a0ac64). NULL / absent grant = unbounded, as before.
+    opts = Keyword.put(opts, :as_participant, agent_participant_id)
+
     candidates =
       space_id
       |> Chat.list_messages(opts)

@@ -105,7 +105,7 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
 
   defp authed(conn, user), do: init_test_session(conn, current_user_id: user.id)
 
-  defp add_user(space, user_or_id, name) do
+  defp add_user(space, user_or_id, name, role \\ "member") do
     id = if is_binary(user_or_id), do: user_or_id, else: user_or_id.id
 
     {:ok, p} =
@@ -113,6 +113,7 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
         participant_type: "user",
         participant_id: id,
         display_name: name,
+        role: role,
         joined_at: DateTime.utc_now()
       })
 
@@ -353,7 +354,10 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
       agent = insert_agent(%{name: "Mentionable Two"})
       channel = create_channel()
       human = insert_user()
-      author = add_user(channel, human, human.name)
+      # Admin: since task 01a0ac64 stage 1 only an authorized author can
+      # summon an agent, so the positive control must use one — otherwise
+      # the DM refusal above would be free.
+      author = add_user(channel, human, human.name, "admin")
 
       refute Chat.get_agent_participant(channel.id, agent.id)
 

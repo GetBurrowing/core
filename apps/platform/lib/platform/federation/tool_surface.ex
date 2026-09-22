@@ -3914,6 +3914,17 @@ defmodule Platform.Federation.ToolSurface do
       opts = [limit: limit, top_level_only: true]
       opts = if before_id, do: Keyword.put(opts, :before_id, before_id), else: opts
 
+      # Bound the read at the calling agent's history grant, if it has one
+      # (task 01a0ac64). `get_agent_participant/2` returns the same row
+      # `assert_agent_in_space/2` just proved exists; a NULL
+      # `history_visible_from` on it leaves this read unbounded.
+      opts =
+        Keyword.put(
+          opts,
+          :as_participant,
+          Chat.get_agent_participant(space_id, Map.get(context, :agent_id))
+        )
+
       messages = Chat.list_messages(space_id, opts)
       attachments_by_msg = Chat.list_attachments_for_messages(Enum.map(messages, & &1.id))
 

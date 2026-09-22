@@ -26,6 +26,12 @@ defmodule Platform.Chat.Participant do
     field(:attention_mode, :string, default: "mention")
     field(:attention_config, :map, default: %{})
     field(:joined_at, :utc_datetime_usec)
+
+    # NULL = unbounded history (pre-existing row, or a dispatch-side add via
+    # `Platform.Chat.DispatchMembership.ensure_writable/3`). A timestamp means
+    # the row was created by a mention grant and its history is bounded from
+    # that instant (task 01a0ac64-a959-7001-9ca2-e429535a1bb2).
+    field(:history_visible_from, :utc_datetime_usec)
   end
 
   def changeset(participant, attrs) do
@@ -40,7 +46,8 @@ defmodule Platform.Chat.Participant do
       :last_read_message_id,
       :attention_mode,
       :attention_config,
-      :joined_at
+      :joined_at,
+      :history_visible_from
     ])
     |> validate_required([:space_id, :participant_type, :participant_id, :role, :joined_at])
     |> validate_inclusion(:participant_type, @participant_types)

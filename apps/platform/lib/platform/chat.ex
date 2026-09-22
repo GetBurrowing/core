@@ -1759,7 +1759,11 @@ defmodule Platform.Chat do
           # NULL. `do_add_participant/2` resolves it again as a backstop.
           display_name: Keyword.get(opts, :display_name) || agent.name,
           attention_mode: Keyword.get(opts, :attention_mode, "mention"),
-          joined_at: Keyword.get(opts, :joined_at, DateTime.utc_now())
+          joined_at: Keyword.get(opts, :joined_at, DateTime.utc_now()),
+          # NULL unless the caller is an authorized mention grant. The
+          # dispatch-side path (`DispatchMembership.ensure_writable/3`) does
+          # not pass it, so its rows stay unbounded by construction.
+          history_visible_from: Keyword.get(opts, :history_visible_from)
         })
     end
   end
@@ -2102,6 +2106,26 @@ defmodule Platform.Chat do
     * `:thread_id` — filter to a specific thread
     * `:top_level_only` — when `true`, include only messages where `thread_id` is `NULL`
     * `:order` — `:desc` (default, newest first) | `:asc` (oldest first)
+    * `:as_participant` — a `%Participant{}` or participant id. When that row
+      carries a non-NULL `history_visible_from` (stage 1 of task 01a0ac64), the
+      read is bounded to `m.inserted_at >= history_visible_from`.
+
+  ## `:as_participant` and the history grant
+
+  `history_visible_from` is written ONLY by the mention grant in
+  `reinvite_and_pin_mentioned/1`. It is NULL for every pre-existing row and for
+  every row `Platform.Chat.DispatchMembership.ensure_writable/3` adds at
+  dispatch time, and a NULL (or an absent `:as_participant`) leaves this read
+  byte-identical to what it was before the opt existed — a genuinely assigned
+  executor still reads the ticket history posted before its participant row
+  existed. The bound therefore applies exactly to the path that grants space
+  access without the author being authorized to grant it.
+
+  Threaded through the AGENT-facing reads only (`Federation.ToolSurface`'s
+  `space_get_messages` and `Chat.AgentResponder`'s context load). Human
+  LiveView reads (`PlatformWeb.Chat.MessagesHooks`) deliberately do NOT pass
+  it: bounding those would silently truncate human scrollback, which is a
+  separate decision nobody has taken.
 
   ## `:order` and the `:after_id` cursor
 
@@ -2164,10 +2188,30 @@ defmodule Platform.Chat do
 
     base = keyset_before(base, before_id)
     base = keyset_after(base, after_id)
+    base = bound_by_history_grant(base, Keyword.get(opts, :as_participant))
 
     base
     |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
+  end
+
+  # NULL `history_visible_from`, an unknown id, or no `:as_participant` at all
+  # all mean "unbounded" — the pre-01a0ac64 behaviour. Only a real timestamp
+  # narrows the read.
+  defp bound_by_history_grant(query, nil), do: query
+
+  defp bound_by_history_grant(query, %Participant{history_visible_from: nil}), do: query
+
+  defp bound_by_history_grant(query, %Participant{history_visible_from: %DateTime{} = from}) do
+    where(query, [m], m.inserted_at >= ^from)
+  end
+
+  defp bound_by_history_grant(query, participant_id) when is_binary(participant_id) do
+    if Platform.UUID.valid?(participant_id) do
+      bound_by_history_grant(query, get_participant(participant_id))
+    else
+      query
+    end
   end
 
   @doc """
@@ -4644,17 +4688,24 @@ defmodule Platform.Chat do
             # slug OR display name (case-insensitive). Currently-present
             # participants are handled by the attention router; this path only
             # fires an insert-if-missing, so already-present agents are no-ops.
-            from(a in Platform.Agents.Agent, where: a.status != "archived")
-            |> maybe_scope_to_workspace(space.workspace_id)
-            |> Repo.all()
-            |> Enum.each(fn agent ->
-              slug = String.downcase(agent.slug || "")
-              name = String.downcase(agent.name || "")
+            # Task 01a0ac64 stage 1: the add is AUTHORIZED, not automatic.
+            # Only an admin user participant of the space, or the sponsor of
+            # the task owning an execution space, may summon an agent into it.
+            # An unauthorized author's mention is a silent no-op: no row, no
+            # error, the message posts normally.
+            if mention_summon_authorized?(space, msg) do
+              from(a in Platform.Agents.Agent, where: a.status != "archived")
+              |> maybe_scope_to_workspace(space.workspace_id)
+              |> Repo.all()
+              |> Enum.each(fn agent ->
+                slug = String.downcase(agent.slug || "")
+                name = String.downcase(agent.name || "")
 
-              if slug in tokens or name in tokens do
-                reinstate_on_mention(space_id, agent)
-              end
-            end)
+                if slug in tokens or name in tokens do
+                  reinstate_on_mention(space_id, agent)
+                end
+              end)
+            end
 
             # Stage 3 pin-propagation pass. Only executes when the space is
             # a task's execution space AND the message author is that task's
@@ -4842,8 +4893,49 @@ defmodule Platform.Chat do
   # Mention-reinvite. Post-ADR-0038 there's no soft-dismissed state —
   # either the row exists (already in the space) or it doesn't (dismissed
   # and hard-deleted). So "reinvite" is just an add-if-missing.
+  # Authorization for the mention-summon path (task 01a0ac64 stage 1).
+  #
+  # Two grounds, either sufficient:
+  #   * the author is a `user` participant of THIS space with role "admin";
+  #   * the space is an execution space whose task the author sponsors —
+  #     resolved with the same `sponsor_authored?/2` predicate
+  #     `maybe_propagate_task_pins/3` already uses, not a second lookup.
+  #
+  # Anything else (agent authors, ordinary members, observers, a message with
+  # no snapshotted author user) is unauthorized.
+  defp mention_summon_authorized?(%Space{} = space, %Message{author_user_id: author_id} = msg)
+       when is_binary(author_id) do
+    admin_user_participant?(space.id, author_id) or sponsor_of_space_task?(space, msg)
+  end
+
+  defp mention_summon_authorized?(_space, _msg), do: false
+
+  defp admin_user_participant?(space_id, user_id) do
+    Repo.exists?(
+      from(p in Participant,
+        where:
+          p.space_id == ^space_id and p.participant_type == "user" and
+            p.participant_id == ^user_id and p.role == "admin"
+      )
+    )
+  end
+
+  defp sponsor_of_space_task?(%Space{kind: "execution"} = space, %Message{} = msg) do
+    with %{"task_id" => task_id} when is_binary(task_id) <- space.metadata || %{},
+         %Platform.Tasks.Task{} = task <- Repo.get(Platform.Tasks.Task, task_id) do
+      sponsor_authored?(task, msg)
+    else
+      _ -> false
+    end
+  end
+
+  defp sponsor_of_space_task?(_space, _msg), do: false
+
   defp reinstate_on_mention(space_id, %Platform.Agents.Agent{} = agent) do
-    case add_agent_participant(space_id, agent, attention_mode: "mention") do
+    case add_agent_participant(space_id, agent,
+           attention_mode: "mention",
+           history_visible_from: DateTime.utc_now()
+         ) do
       {:ok, _} -> :ok
       _ -> :ok
     end

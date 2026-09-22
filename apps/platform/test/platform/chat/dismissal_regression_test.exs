@@ -31,12 +31,13 @@ defmodule Platform.Chat.DismissalRegressionTest do
     space
   end
 
-  defp create_user_participant(space_id) do
+  defp create_user_participant(space_id, role \\ "member") do
     {:ok, participant} =
       Chat.add_participant(space_id, %{
         participant_type: "user",
         participant_id: Ecto.UUID.generate(),
         display_name: "Alice",
+        role: role,
         joined_at: DateTime.utc_now()
       })
 
@@ -86,7 +87,10 @@ defmodule Platform.Chat.DismissalRegressionTest do
   describe "2. @-mention reinvites a dismissed agent with a fresh participant row" do
     test "post_message with @[Name] re-adds the agent and creates a new participant.id" do
       space = create_space()
-      author = create_user_participant(space.id)
+      # Admin: since task 01a0ac64 stage 1 the mention-reinvite fires only
+      # for an author authorized to summon. An ordinary member's mention is a
+      # deliberate no-op, covered in mention_summon_authorization_test.exs.
+      author = create_user_participant(space.id, "admin")
       agent = create_agent(%{name: "Higgins"})
 
       {:ok, %Participant{id: original_participant_id}} =
