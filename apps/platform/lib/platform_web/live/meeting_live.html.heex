@@ -366,7 +366,16 @@
       <% end %>
     </div>
   <% @meeting != nil -> %>
-    <div class="flex h-full flex-col bg-base-100 text-base-content">
+    <%!-- The shell sits on `bg-base-200` (task 01a0b520), not `bg-base-100`.
+       The mock's `.room` is a flex row of independently-outlined boxes
+       (`.rail`, `.stage`, `.ctrls`) floating on a darker page — that
+       layering is what makes `border-edge` (already correctly distinct
+       from `base-300`, see `app.css`) actually read as a panel edge.
+       With the page and every panel both on `base-100`, `border-edge`
+       was the ONLY signal and measured ~1.20:1 — present in the DOM,
+       invisible on screen. `base-200` under an opaque `base-100` panel
+       fill restores the two-tier contrast the mock relies on. --%>
+    <div class="flex h-full flex-col bg-base-200 text-base-content">
       <%!-- LiveKit JS hooks. MeetingClient listens for `join-meeting` /
          `leave-meeting` / `toggle-{mic,camera,screen-share}` push_events
          from MeetingHooks (server-side) and drives the local WebRTC
@@ -991,7 +1000,7 @@
            in tasks_live/chat_live: a classic 15px scrollbar inside this
            48px (`h-12`) bar would eat the row it is scrolling. --%>
         <div
-          class="join min-w-0 shrink overflow-x-auto"
+          class="join min-w-0 shrink overflow-x-auto rounded-field border border-edge bg-base-200 p-0.5"
           style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
           role="group"
           aria-label="Stage mode"
@@ -1188,7 +1197,7 @@
            and a hold hint, not the invite control. --%>
         <aside
           :if={not @mobile_viewport?}
-          class="hidden w-64 flex-shrink-0 flex-col border-r border-edge bg-base-200/40 lg:flex"
+          class="hidden w-64 flex-shrink-0 flex-col border-r border-edge bg-base-100 lg:flex"
           data-role="meeting-left-rail"
         >
           <%!-- Cards on top — flex-1 so the board takes the leftover height and
@@ -1305,7 +1314,7 @@
            renderer selection and is the e2e/test contract — keep it
            stable. --%>
         <main
-          class="relative flex min-h-0 min-w-0 flex-1 flex-col bg-base-100 p-4"
+          class="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4"
           data-pane="center-stage"
           data-role="call-stage"
           data-stage-mode={@current_stage_mode}
@@ -1412,7 +1421,7 @@
              they keep covering the WHOLE stage, controls included,
              which is what they did before. --%>
           <div
-            class="relative flex min-h-0 min-w-0 flex-1 items-center justify-center"
+            class="relative flex min-h-0 min-w-0 flex-1 items-center justify-center rounded-box border border-edge bg-base-100"
             data-role="meeting-stage-body"
           >
             <%= cond do %>
@@ -1920,7 +1929,7 @@
              `hold_to_talk?` call sites above. --%>
           <CallShell.call_controls
             data-role="meeting-stage-controls"
-            class="h-[46px] w-full shrink-0 gap-2"
+            class="h-[46px] w-full shrink-0 gap-2 rounded-box border border-edge bg-base-100 px-3"
             mic_event="meeting_toggle_mic"
             camera_event="meeting_toggle_camera"
             share_event="meeting_toggle_screen_share"
