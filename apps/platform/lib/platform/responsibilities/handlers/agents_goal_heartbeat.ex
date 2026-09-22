@@ -2,7 +2,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   @moduledoc """
   `agents.goal_heartbeat` responsibility provider (task `01a0b491`, stage 3).
 
-  A daily 09:00 UTC ping from the `agents_leader` to the humans who set
+  An hourly ping from the `agents_leader` to the humans who set
   the agents space's goal. Structure, moduledoc discipline and
   `register/0` shape mirror
   `Platform.Responsibilities.Handlers.ArchitectureCronSweep`, which is the
@@ -132,7 +132,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
     * `key` — `"agents.goal_heartbeat"`
     * `feature` — `"agents"`
-    * `trigger_kind` — `cron`, `expression: "0 9 * * *"` (daily 09:00 UTC)
+    * `trigger_kind` — `cron`, `expression: "0 * * * *"` (top of every hour)
     * `scope` — `global`
     * `context_provided` — `["goal", "measurement", "leader"]`
     * `default_prompt_template` — `"agents.goal_heartbeat.v1"`
@@ -179,9 +179,19 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
         key: @key,
         feature: @feature,
         trigger_kind: "cron",
-        # Daily 09:00 UTC. Dispatch is gated by the `agents_leader`
-        # role assignee via `Roles.assignee_for/1` in the Router.
-        trigger_config: %{"expression" => "0 9 * * *"},
+        # Top of every hour. Rowan, 2026-09-22: "that heartbeat should fire
+        # every hour at minimum. You need to be regularly reminded of your
+        # goal." Dispatch is gated by the `agents_leader` role assignee via
+        # `Roles.assignee_for/1` in the Router, so with no leader pinned this
+        # costs nothing hourly rather than nothing daily.
+        #
+        # NOTE FOR ANYONE CHANGING THIS: `trigger_config` is listed in
+        # `Responsibilities.@upsert_replace_fields`, so `register/0` REPLACES
+        # whatever is in the database on every boot. Editing the row alone
+        # works until the next deploy and then silently reverts to this
+        # literal -- which is how a schedule change appears to take and then
+        # undoes itself. Change it here, not only in the row.
+        trigger_config: %{"expression" => "0 * * * *"},
         scope: "global",
         context_provided: ["goal", "measurement", "leader"],
         output_contract: %{
