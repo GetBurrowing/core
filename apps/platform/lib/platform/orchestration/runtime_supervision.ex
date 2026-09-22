@@ -836,6 +836,24 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       "execution.abandoned" ->
         "Runtime #{runtime} abandoned execution"
 
+      "execution.dispatch_stageless" ->
+        case event.payload["description"] || event.payload[:description] do
+          description when is_binary(description) ->
+            "TaskRouter recorded a stage-less dispatch: #{description}"
+
+          _ ->
+            "Runtime #{runtime} recorded a stage-less dispatch (no description in payload)"
+        end
+
+      "execution.dispatch_unanswered" ->
+        case event.payload["description"] || event.payload[:description] do
+          description when is_binary(description) ->
+            "TaskRouter stage-less dispatch went unanswered: #{description}"
+
+          _ ->
+            "Runtime #{runtime} recorded an unanswered stage-less dispatch (no description in payload)"
+        end
+
       other ->
         "Runtime #{runtime} event: #{other}"
     end

@@ -482,4 +482,85 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
       assert lease.stage_id == stage_a
     end
   end
+
+  describe "format_log_message/2 dispatch events" do
+    # Every assertion below is on a literal written into the fixture payload,
+    # never on a string re-derived by calling the renderer.
+
+    defp record_dispatch_event!(event_type, payload, runtime_id \\ nil) do
+      task = create_task!()
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+      assert {:ok, _event} =
+               RuntimeSupervision.record_event(%{
+                 "task_id" => task.id,
+                 "phase" => "execution",
+                 "runtime_id" => runtime_id || RuntimeSupervision.self_filed_runtime_id(),
+                 "event_type" => event_type,
+                 "execution_space_id" => space.id,
+                 "idempotency_key" => "fmt-log-#{System.unique_integer([:positive])}",
+                 "payload" => payload
+               })
+
+      ExecutionSpace.list_messages_with_participants(space.id)
+      |> Enum.map(& &1.content)
+    end
+
+    test "execution.dispatch_stageless mirrors the payload description verbatim" do
+      contents =
+        record_dispatch_event!("execution.dispatch_stageless", %{
+          "stage_id" => nil,
+          "description" => "SENTINEL-stageless-7f3a"
+        })
+
+      assert Enum.any?(contents, &String.contains?(&1, "SENTINEL-stageless-7f3a"))
+
+      refute Enum.any?(
+               contents,
+               &(&1 == "Runtime task_router event: execution.dispatch_stageless")
+             )
+    end
+
+    test "execution.dispatch_unanswered mirrors the payload description verbatim" do
+      contents =
+        record_dispatch_event!("execution.dispatch_unanswered", %{
+          "stage_id" => nil,
+          "description" => "SENTINEL-unanswered-9c1e"
+        })
+
+      assert Enum.any?(contents, &String.contains?(&1, "SENTINEL-unanswered-9c1e"))
+
+      refute Enum.any?(
+               contents,
+               &(&1 == "Runtime task_router event: execution.dispatch_unanswered")
+             )
+    end
+
+    test "control: execution.blocked still renders its description unchanged" do
+      contents =
+        record_dispatch_event!(
+          "execution.blocked",
+          %{"stage_id" => nil, "description" => "SENTINEL-blocked-4d2b"},
+          "runtime:control"
+        )
+
+      assert "Runtime reported blocker: SENTINEL-blocked-4d2b" in contents
+    end
+
+    test "dispatch_stageless without a binary description falls back without raising" do
+      for payload <- [%{"stage_id" => nil}, %{"stage_id" => nil, "description" => 42}] do
+        contents = record_dispatch_event!("execution.dispatch_stageless", payload)
+
+        assert "Runtime task_router recorded a stage-less dispatch (no description in payload)" in contents
+      end
+    end
+
+    test "dispatch_unanswered without a binary description falls back without raising" do
+      for payload <- [%{"stage_id" => nil}, %{"stage_id" => nil, "description" => 42}] do
+        contents = record_dispatch_event!("execution.dispatch_unanswered", payload)
+
+        assert "Runtime task_router recorded an unanswered stage-less dispatch (no description in payload)" in contents
+      end
+    end
+  end
 end
