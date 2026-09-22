@@ -129,6 +129,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:goal_panel, :any, required: true)
   attr(:goal_edit, :boolean, required: true)
   attr(:can_edit_goal?, :boolean, required: true)
+  # Task 01a0ca99: true only for an admin on the one channel where
+  # `Sidebar.first_goal_offered?/1` holds. With `@goal_panel` nil it is the
+  # strip's empty-and-admin state: the same line, carrying the invitation.
+  attr(:goal_invite?, :boolean, default: false)
 
   @doc """
   The conversation `<header>` — space title, meeting entry, search, the
@@ -476,7 +480,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
          surface — the no-measurement state — and nowhere else, not on the
          delta and not on a falling count. --%>
     <div
-      :if={@goal_panel && !@embedded}
+      :if={(@goal_panel || @goal_invite?) && !@embedded}
       class="flex flex-shrink-0 items-start gap-2 border-b border-base-content/10 px-5 py-2"
       data-role="agents-goal-strip"
     >
@@ -484,8 +488,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
            through `role_assignments` broadcasts on `Roles.assignments_topic/0`
            and repaints both with no reload — the change is legible across
            the room because it is a different face, not a different word. --%>
+      <%!-- No placeholder face: in the invitation state there is no panel,
+           so there is no leader to claim and nothing renders here. --%>
       <.agent_avatar
-        :if={@goal_panel.leader}
+        :if={@goal_panel && @goal_panel.leader}
         name={@goal_panel.leader.name}
         avatar_url={@goal_panel.leader.avatar_url}
         size="xs"
@@ -494,25 +500,28 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       />
       <div class="flex min-w-0 flex-1 flex-col gap-0.5">
         <span
-          :if={@goal_panel.leader}
+          :if={@goal_panel && @goal_panel.leader}
           class="text-xs text-base-content/60"
           data-role="agents-goal-leader"
         >
           {@goal_panel.leader.name} leads
         </span>
         <%= if @goal_edit do %>
-          <%!-- ONE operation. There is no first-time path and no
-               "set goal" control distinct from an "edit goal" control:
-               this form always submits `save_goal`, which always runs
-               `Chat.update_space/2` through the stage-1 changeset. No
-               branch anywhere in the write path reads `is_nil(goal)`. --%>
+          <%!-- ONE form, ONE write. The invitation and the pencil both open
+               THIS form, and it always submits `save_goal`, which always
+               runs `Chat.update_space/2` through the stage-1 changeset.
+               The handler's only `goal in [nil, ""]` branch is the
+               install-level first-goal scope gate (task 01a0ca99), not a
+               second write path. --%>
           <form phx-submit="save_goal" class="flex items-center gap-2" data-role="agents-goal-form">
             <input
               type="text"
               name="goal"
-              value={@goal_panel.goal}
+              value={@goal_panel && @goal_panel.goal}
               maxlength="500"
               aria-label="Goal"
+              placeholder="Close backlog items"
+              phx-mounted={JS.focus()}
               class="input input-bordered input-sm min-w-0 flex-1"
             />
             <button type="submit" class="btn btn-sm btn-primary">Save</button>
@@ -521,6 +530,27 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             </button>
           </form>
         <% else %>
+          <%!-- EMPTY + ADMIN (task 01a0ca99): the invitation occupies the
+               line the goal will occupy, at the goal sentence's `text-sm`,
+               inside the strip's existing padding and border, so nothing
+               moves between wanting a goal, typing it and having it. Ghost,
+               `/60` (the measured AA floor; `/40` fails), and no warning,
+               error or info token: a goal-less channel is not a fault. The
+               tap target matches the pencil's `max-sm:` treatment, and
+               `max-sm:-my-2` hands the extra height back to the strip's own
+               `py-2`. MEASURED at 375x812 without it: the 44px box grew the
+               strip to 61px while the editing form's strip is 45px, so the
+               page jumped 16px on click. With it the box stays 44px tall and
+               the strip is the same height in both states. --%>
+          <button
+            :if={!@goal_panel}
+            type="button"
+            phx-click="edit_goal"
+            class="btn btn-ghost btn-sm self-start px-0 text-sm font-normal text-base-content/60 max-sm:-my-2 max-sm:min-h-11 max-sm:min-w-11"
+            data-role="agents-goal-invite"
+          >
+            Set a goal for this channel
+          </button>
           <%!-- WRAPS BELOW `sm`, single row from `sm:` upward. MEASURED at
                375x812 before this change, against goals of growing length:
                the measurement clause reached 0px at 38 characters and the
@@ -537,6 +567,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                assertions in `chat_live_agents_goal_surface_test.exs` must
                stay green. --%>
           <div
+            :if={@goal_panel}
             class="flex min-w-0 flex-wrap items-baseline gap-2 sm:flex-nowrap"
             data-role="agents-goal-row"
           >

@@ -269,6 +269,237 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
     end
   end
 
+  describe "save_goal enforces the first-goal scope server-side (task 01a0ca99)" do
+    # Every case drives `save_goal` DIRECTLY, not through a rendered control:
+    # hiding an affordance is not a permission, and `Chat.update_space/2`
+    # broadcasts nothing, so a stale window can still submit.
+    defp goal_less_view(conn, admin?) do
+      {conn, user} = authenticated_conn(conn)
+      enable_flag()
+      if admin?, do: make_fabrikam_admin(user)
+
+      space = create_space(name: "agents-first-goal")
+      add_user(space, user)
+      {:ok, view, _html} = live_at(conn, "/chat/#{space.slug}")
+      {view, space}
+    end
+
+    test "(a) an admin on a goal-less channel with no goal anywhere sets the first goal", %{
+      conn: conn
+    } do
+      {view, space} = goal_less_view(conn, true)
+      assert Sidebar.first_goal_offered?(space)
+
+      render_change(view, "save_goal", %{"goal" => "Close backlog items in Suite"})
+
+      assert Repo.reload!(space).goal == "Close backlog items in Suite"
+    end
+
+    test "(b) a non-admin on the same fixture is refused and the row stays nil", %{conn: conn} do
+      {view, space} = goal_less_view(conn, false)
+      # Same fixture as (a): the scope holds, so the refusal is the admin gate.
+      assert Sidebar.first_goal_offered?(space)
+
+      html = render_change(view, "save_goal", %{"goal" => "Hijack"})
+
+      assert html =~ "You cannot edit this goal."
+      assert Repo.reload!(space).goal == nil
+    end
+
+    test "(c) an admin is refused when another space already carries a goal", %{conn: conn} do
+      {view, space} = goal_less_view(conn, true)
+      # Mounted while the invitation would still hold — the stale-window case.
+      assert Sidebar.first_goal_offered?(space)
+
+      create_space(name: "agents-earlier", goal: "Close backlog items in Suite")
+
+      html = render_change(view, "save_goal", %{"goal" => "Other goal"})
+
+      assert html =~ "A first goal cannot be set on this channel."
+      assert Repo.reload!(space).goal == nil
+    end
+
+    test "(d) an admin still edits the EXISTING goal while a later space also has one", %{
+      conn: conn
+    } do
+      {conn, user} = authenticated_conn(conn)
+      enable_flag()
+      make_fabrikam_admin(user)
+
+      agents = create_space(name: "agents-existing", goal: "Close backlog items in Suite")
+      add_user(agents, user)
+      create_space(name: "agents-later", goal: "A second goal")
+      refute Sidebar.first_goal_offered?(agents)
+
+      {:ok, view, _html} = live_at(conn, "/chat/#{agents.slug}")
+      render_change(view, "save_goal", %{"goal" => "Get SXI to a good state"})
+
+      assert Repo.reload!(agents).goal == "Get SXI to a good state"
+    end
+  end
+
+  describe "the in-place Set-a-goal invitation (task 01a0ca99 stage 2)" do
+    # ONE LINE, THREE STATES in the existing strip slot: empty+admin shows the
+    # invitation, editing shows the existing `save_goal` form, set shows
+    # today's strip. Empty+non-admin is zero DOM. Every absence below is
+    # paired, in the same test, with the presence that proves it was the
+    # condition under test and not a broken render.
+
+    @fault_token ~r/\b(?:text|bg|border|btn|badge|alert)-(?:warning|error|info)\b/
+
+    defp invite_fixture(conn, admin?) do
+      {conn, user} = authenticated_conn(conn)
+      if admin?, do: make_fabrikam_admin(user)
+      space = create_space(name: "agents-invite")
+      add_user(space, user)
+      {conn, user, space}
+    end
+
+    defp role_nodes(html, role),
+      do: html |> Floki.parse_document!() |> Floki.find(~s([data-role="#{role}"]))
+
+    defp strip_fragment(html), do: html |> role_nodes("agents-goal-strip") |> Floki.raw_html()
+
+    test "admin: invitation -> form -> saved goal and rail block, all with no remount", %{
+      conn: conn
+    } do
+      enable_flag()
+      {conn, _user, space} = invite_fixture(conn, true)
+
+      {:ok, view, html} = live_at(conn, "/chat/#{space.slug}")
+
+      [invite] = role_nodes(html, "agents-goal-invite")
+      assert Floki.text(invite) |> String.trim() == "Set a goal for this channel"
+      # No placeholder leader face, and no form until the admin asks for it.
+      assert role_nodes(html, "agents-goal-leader") == []
+      assert role_nodes(html, "agents-goal-form") == []
+      refute html =~ ~s(data-role="agents-rail-block")
+
+      html = view |> element(~s([data-role="agents-goal-invite"])) |> render_click()
+
+      [input] = html |> role_nodes("agents-goal-form") |> Floki.find(~s(input[name="goal"]))
+      assert Floki.attribute(input, "placeholder") == ["Close backlog items"]
+      assert Floki.attribute(input, "value") in [[], [""]]
+      assert role_nodes(html, "agents-goal-invite") == []
+
+      html =
+        view
+        |> form(~s([data-role="agents-goal-form"]), %{goal: "Close backlog items in Suite"})
+        |> render_submit()
+
+      assert Repo.reload!(space).goal == "Close backlog items in Suite"
+
+      [sentence] = role_nodes(html, "agents-goal-sentence")
+      assert Floki.text(sentence) =~ "Close backlog items in Suite"
+      assert role_nodes(html, "agents-goal-invite") == []
+      assert role_nodes(html, "agents-goal-form") == []
+
+      # The rail block now names THIS space — same view, no remount.
+      assert html
+             |> role_nodes("agents-rail-block")
+             |> Floki.find(~s([data-space-id="#{space.id}"])) != []
+    end
+
+    test "cancel returns the line to the invitation", %{conn: conn} do
+      enable_flag()
+      {conn, _user, space} = invite_fixture(conn, true)
+      {:ok, view, _html} = live_at(conn, "/chat/#{space.slug}")
+
+      view |> element(~s([data-role="agents-goal-invite"])) |> render_click()
+      html = render_click(view, "cancel_goal_edit", %{})
+
+      assert role_nodes(html, "agents-goal-invite") != []
+      assert role_nodes(html, "agents-goal-form") == []
+    end
+
+    test "non-admin on the same channel gets zero DOM; an admin on it sees the invitation", %{
+      conn: conn
+    } do
+      enable_flag()
+      {conn, _user, space} = invite_fixture(conn, false)
+      # Same fixture as the admin control below: the scope holds, so any
+      # absence is the admin gate.
+      assert Sidebar.first_goal_offered?(space)
+
+      {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
+      refute html =~ ~s(data-role="agents-goal-invite")
+      refute html =~ ~s(data-role="agents-goal-strip")
+
+      {admin_conn, admin} = authenticated_conn(build_conn())
+      make_fabrikam_admin(admin)
+      add_user(space, admin)
+
+      {:ok, _view, admin_html} = live_at(admin_conn, "/chat/#{space.slug}")
+      assert admin_html =~ ~s(data-role="agents-goal-invite")
+      assert admin_html =~ ~s(data-role="agents-goal-strip")
+    end
+
+    test "scope: no invitation while another space carries a goal; archive it and it returns",
+         %{conn: conn} do
+      enable_flag()
+      {conn, _user, space} = invite_fixture(conn, true)
+      other = create_space(name: "agents-elsewhere", goal: "Close backlog items in Suite")
+
+      {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
+      refute html =~ ~s(data-role="agents-goal-invite")
+      refute html =~ ~s(data-role="agents-goal-strip")
+
+      other |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update!()
+
+      {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
+      assert html =~ ~s(data-role="agents-goal-invite")
+    end
+
+    test "flag off: no strip for the admin; flag on, same fixture: invitation present", %{
+      conn: conn
+    } do
+      disable_flag()
+      {conn, _user, space} = invite_fixture(conn, true)
+
+      {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
+      refute html =~ ~s(data-role="agents-goal-strip")
+      refute html =~ ~s(data-role="agents-goal-invite")
+
+      enable_flag()
+
+      {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
+      assert html =~ ~s(data-role="agents-goal-invite")
+    end
+
+    test "the empty state carries no fault colour; the invite is /60", %{conn: conn} do
+      enable_flag()
+      {conn, _user, space} = invite_fixture(conn, true)
+      {:ok, view, html} = live_at(conn, "/chat/#{space.slug}")
+
+      strip = strip_fragment(html)
+      assert strip =~ ~s(data-role="agents-goal-invite")
+      refute strip =~ @fault_token
+
+      [invite_class] = html |> role_nodes("agents-goal-invite") |> Floki.attribute("class")
+      assert "text-base-content/60" in split_classes(invite_class)
+      refute invite_class =~ "text-base-content/40"
+      # Tap target below sm, the pencil's treatment.
+      assert "min-h-11" in mobile_live(invite_class)
+      assert "min-w-11" in mobile_live(invite_class)
+      # ...without growing the strip: the negative margin returns the extra
+      # height to the strip's padding, and exists below sm only.
+      assert "-my-2" in mobile_live(invite_class)
+      refute "-my-2" in desktop_live(invite_class)
+
+      # POSITIVE CONTROL, same view: save an unmeasurable goal and the SAME
+      # detector over the SAME strip fragment does fire on the one warning
+      # this surface is allowed — so its silence above is not blindness.
+      view |> element(~s([data-role="agents-goal-invite"])) |> render_click()
+
+      html =
+        view
+        |> form(~s([data-role="agents-goal-form"]), %{goal: "Get SXI to a good state"})
+        |> render_submit()
+
+      assert html |> strip_fragment() =~ @fault_token
+    end
+  end
+
   # ---- breakpoint-resolution helpers for the reflow describe below -------
   #
   # Tailwind emits base utilities before `sm:` ones, so among the classes

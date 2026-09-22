@@ -149,6 +149,67 @@ defmodule Platform.Chat.AgentsGoalSurfaceTest do
     end
   end
 
+  describe "first_goal_offered?/1 scopes the first goal to the install (task 01a0ca99)" do
+    # ONE fixture — a goal-less channel, flag on, no goal anywhere — is the
+    # positive control for every false below. Each false case changes exactly
+    # one condition from it, so a false cannot be a broken fixture.
+    setup do
+      enable_flag()
+      %{space: insert_space(name: "agents")}
+    end
+
+    defp archive!(space),
+      do: space |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update!()
+
+    test "true for a goal-less channel with the flag on and no goal anywhere", %{space: space} do
+      assert Sidebar.first_goal_offered?(space) == true
+    end
+
+    test "false with the flag off", %{space: space} do
+      assert Sidebar.first_goal_offered?(space)
+      disable_flag()
+      assert Sidebar.first_goal_offered?(space) == false
+    end
+
+    test "false when another non-archived space already carries a goal", %{space: space} do
+      assert Sidebar.first_goal_offered?(space)
+      insert_space(name: "other", goal: "Close backlog items in Suite")
+      assert Sidebar.first_goal_offered?(space) == false
+    end
+
+    test "true again when the only other goal-carrying space is archived", %{space: space} do
+      other = insert_space(name: "other", goal: "Close backlog items in Suite")
+      refute Sidebar.first_goal_offered?(space)
+
+      archive!(other)
+      assert Sidebar.first_goal_offered?(space) == true
+    end
+
+    test "false for a dm", %{space: space} do
+      assert Sidebar.first_goal_offered?(space)
+      dm = space |> Ecto.Changeset.change(kind: "dm") |> Repo.update!()
+      assert Sidebar.first_goal_offered?(dm) == false
+    end
+
+    test "false for an archived channel", %{space: space} do
+      assert Sidebar.first_goal_offered?(space)
+      assert Sidebar.first_goal_offered?(archive!(space)) == false
+    end
+
+    test "false for a space that already has a goal, and for a blank goal it is true", %{
+      space: space
+    } do
+      assert Sidebar.first_goal_offered?(%{space | goal: ""})
+      {:ok, goaled} = Chat.update_space(space, %{goal: "Close backlog items in Suite"})
+      assert Sidebar.first_goal_offered?(goaled) == false
+    end
+
+    test "false for nil and non-space input" do
+      assert Sidebar.first_goal_offered?(nil) == false
+      assert Sidebar.first_goal_offered?(%{kind: "channel", goal: nil}) == false
+    end
+  end
+
   describe "format_measurement_tail/1 splits the sentence at the numeral" do
     alias Platform.Responsibilities.Handlers.AgentsGoalHeartbeat
 

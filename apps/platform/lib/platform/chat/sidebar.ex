@@ -783,6 +783,42 @@ defmodule Platform.Chat.Sidebar do
   def goal_panel(_space), do: nil
 
   @doc """
+  Whether `space` may be offered its FIRST goal.
+
+  True only when ALL hold: the space is a non-archived `kind: "channel"`
+  whose own goal is nil or `""`, the flag is on, and NO space on the
+  install carries a goal (`AgentsGoalHeartbeat.agents_space/0` is nil).
+  Clauses are ordered so the struct match and the flag short-circuit
+  before the one DB query.
+
+  Why install-wide, not every channel: `agents_space/0` takes the
+  EARLIEST goal-carrying space, so a first goal on a second channel
+  yields a goal but not the agents surface. Two identical controls with
+  two different outcomes and no visible difference is the trap this
+  scope exists to avoid. Setting a goal where none exists anywhere is
+  exactly the adoption case; an ordinary per-channel goal has no
+  consumer today.
+
+  Takes no user: the admin gate stays `can_edit_goal?` in the LiveView.
+  `save_goal` also calls this, because `Chat.update_space/2` broadcasts
+  nothing and a second window's invitation can be stale.
+
+  BEST-EFFORT, not a database invariant: this is a read that runs before
+  the write, so two admins submitting at the same instant can both pass
+  it. The consequence is bounded — `agents_space/0` picks the earliest
+  goal-carrying space deterministically, so the rail stays stable.
+  `agents_space/0` also returns nil when its query raises, so a DB error
+  reads as "no goal anywhere" here.
+  """
+  @spec first_goal_offered?(term()) :: boolean()
+  def first_goal_offered?(%Chat.Space{kind: "channel", archived_at: nil, goal: goal})
+      when goal in [nil, ""] do
+    agents_surface_enabled?() and is_nil(AgentsGoalHeartbeat.agents_space())
+  end
+
+  def first_goal_offered?(_space), do: false
+
+  @doc """
   The agent accountable for `space`'s goal.
 
   ROLE FIRST, column second. `role_assignments` is the live pin and it

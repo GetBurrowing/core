@@ -442,6 +442,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:agents_block, agents_block)
       |> assign(:goal_panel, nil)
       |> assign(:goal_edit, false)
+      |> assign(:goal_invite?, false)
       |> assign(:archived_channels, archived_channels)
       # Collapse state for the sidebar's "Archived" group (task 019e95ea
       # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
@@ -1254,11 +1255,11 @@ defmodule PlatformWeb.ChatLive do
   # get a plain browse drawer — no focus, no keyboard.
   # ── Agents goal editing (task 01a0b491 stage 4) ───────────────────────────
   #
-  # ONE OPERATION, NOT TWO. There is deliberately no `is_nil(goal)` branch, no
-  # insert-vs-update split and no "set goal" event distinct from an "edit goal"
-  # event anywhere in this path: `save_goal` always runs `Chat.update_space/2`
-  # through the stage-1 changeset, whether the space had a goal a moment ago or
-  # not. Setting the first goal and revising the tenth are the same code.
+  # ONE WRITE, NOT TWO. There is no insert-vs-update split and no "set goal"
+  # event distinct from an "edit goal" event: `save_goal` always runs
+  # `Chat.update_space/2` through the stage-1 changeset. The blank-goal clause
+  # below is an install-level SCOPE gate (task 01a0ca99), not a second write
+  # path: a first goal is refused unless `Sidebar.first_goal_offered?/1` holds.
   def handle_event("edit_goal", _params, socket) do
     {:noreply, assign(socket, :goal_edit, socket.assigns.can_edit_goal?)}
   end
@@ -1277,6 +1278,11 @@ defmodule PlatformWeb.ChatLive do
 
       is_nil(space) ->
         {:noreply, socket}
+
+      # `update_space/2` broadcasts nothing, so a stale invitation can still
+      # submit; refusing here keeps it from minting a second agents space.
+      space.goal in [nil, ""] and not Sidebar.first_goal_offered?(space) ->
+        {:noreply, put_flash(socket, :error, "A first goal cannot be set on this channel.")}
 
       true ->
         case Chat.update_space(space, %{goal: goal}) do
@@ -4978,6 +4984,11 @@ defmodule PlatformWeb.ChatLive do
     # a different space's goal would save this space's text onto that one.
     |> assign(:goal_panel, Sidebar.goal_panel(space))
     |> assign(:goal_edit, false)
+    # `and` short-circuits: non-admins never run the predicate's query.
+    |> assign(
+      :goal_invite?,
+      Map.get(socket.assigns, :can_edit_goal?, false) and Sidebar.first_goal_offered?(space)
+    )
     # A new conversation starts at its own tip: this state is about the space
     # you are leaving, so carrying it across would show a stale pill in the
     # space you just opened (task 01a03c76 stage 1).

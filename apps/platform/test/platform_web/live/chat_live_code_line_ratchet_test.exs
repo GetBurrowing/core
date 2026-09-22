@@ -405,7 +405,23 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # reads the block once into a local, and `assign_agents_block/2`
   # recomputes the org list at the two sites that re-assign the block.
   # Measured by this file's `code_line_count/1` rule.
-  @chat_live_code_line_count 2283
+  #
+  # ── 2026-09-22, task 01a0ca99 stage 1: +7 (2,266 -> 2,273) ────────────────
+  #
+  # The first-goal scope: a `:goal_invite?` mount default, its recompute in
+  # the `assign_active_space/2` funnel, and ONE extra `save_goal` cond clause
+  # refusing a blank-goal write unless `Sidebar.first_goal_offered?/1` holds.
+  # The predicate itself lives in `Platform.Chat.Sidebar`.
+  #
+  # RE-DERIVED from the guard's own measurement of this tree (2,273), not by
+  # adding a remembered delta to a remembered pin.
+  #
+  # ── 2026-09-22, task 01a0ca99 merge of origin/main (01a0ca8b, #1055) ─────
+  #
+  # Both sides started from 2,266. 01a0ca8b pinned 2,283; 01a0ca99 pinned
+  # 2,273. The merged tree was RE-MEASURED by this file's `code_line_count/1`
+  # rule on the merged chat_live.ex (2,290), not computed as a sum of deltas.
+  @chat_live_code_line_count 2290
 
   @doc """
   Count the CODE lines of a source file.
