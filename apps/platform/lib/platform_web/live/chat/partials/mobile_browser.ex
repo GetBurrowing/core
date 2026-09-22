@@ -549,8 +549,14 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
   the label, no surface fill, no border box, no badge, no second line, no
   collapse control. Weight comes from exactly one thing — the leader's avatar
   at 20px in the `w-5` glyph column the pinned rows already reserve, ringed in
-  `--color-primary`. Empty column when no leader resolves, never a stand-in
-  face: it would claim accountability nobody holds.
+  `ring-focus-ring` (the same ring as the desktop row, and for the same
+  measured reason; see `Rail.agents_block/1`). Empty column when no leader
+  resolves, never a stand-in face: it would claim accountability nobody holds.
+
+  TAP TARGET. The link, not the ring, is the hit area: the whole row is the
+  `<.link>`, and `py-3` around a 20px line holds it at 44px tall (measured in
+  Chrome at 375px, task 01a0ca8b stage 2). The name truncates and the unread
+  pill never does (`min-w-0 flex-1 truncate` / `shrink-0 whitespace-nowrap`).
 
   NO `row_actions_control`. The neighbouring pinned channel rows carry one and
   this row does not: parity with the DESKTOP AGENTS ROW wins over parity with
@@ -589,13 +595,13 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                 name={leader.name}
                 avatar_url={leader.avatar_url}
                 size="xs"
-                class="ring-2 ring-primary"
+                class="ring-2 ring-focus-ring"
                 title={"#{leader.name} leads"}
               />
             </span>
-            <span class="truncate flex-1">{space.name}</span>
+            <span class="min-w-0 flex-1 truncate">{space.name}</span>
             <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-              <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+              <span class="ml-1 shrink-0 whitespace-nowrap min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
                 {unread_label(Map.get(@unread_counts, space.id, 0))}
               </span>
             <% end %>

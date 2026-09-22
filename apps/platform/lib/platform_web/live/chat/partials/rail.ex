@@ -454,8 +454,20 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   `unique_index(:channel_sections, [:org_id])` — one row per org — and
   membership derives from `chat_spaces.org_id`. An "Agents" section would
   have to invent an org. So this is a bespoke block mirroring
-  `pinned_block/1`'s structure, its `channel-section` classes and its
-  `border-b border-edge pb-2 mb-2` separator.
+  `pinned_block/1`'s structure and its `channel-section` classes.
+
+  GROUPED BY SPACING, NOT BY A LINE (task 01a0ca8b stage 2). Once the space
+  stopped also listing under its org heading, the block's separator became
+  its only grouping cue, and it was not a visible one: `border-edge` painted
+  in Chrome measures 1.2856:1 against the light rail (#D7D7D7 on #F2F2F2)
+  and 1.4373:1 against the dark rail (#232A38 on #000306). The only existing
+  tokens that clear 3:1 on both rails are `--color-secondary` (a near-black
+  rule in light, heavier than the section below it) and the two cyans (a
+  second chroma on a surface whose one chroma is the ring). So the line is
+  dropped rather than raised: `border-b-0` cancels the `.channel-section`
+  component border as well as the old utility, and `pb-2 mb-2` keep the
+  block's geometry, so the row does not move and the Pinned heading below
+  is the boundary. The drawer twin already had no line.
 
   NO CHROME, inherited deliberately from `pinned_block/1` three rows
   below: no surface fill, no border box, no badge, no second line, no
@@ -467,9 +479,20 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
 
   WEIGHT COMES FROM EXACTLY ONE THING: the leader's avatar at 20px, in
   the `w-5` glyph column the pinned rows already reserve for their flat
-  glyphs, ringed in `--color-primary`. That column has only ever held
+  glyphs, ringed in `ring-focus-ring`. That column has only ever held
   glyphs; a face in it says someone is accountable with no label and no
   added height, and the ring is the only chroma on this surface.
+
+  The ring was `ring-primary` until task 01a0ca8b stage 2, and #06D5ED
+  painted 1.5956:1 against the light rail: the one device the block spends
+  its boldness on was close to invisible in light. `--focus-ring` is the
+  existing theme-split slot minted for exactly this job (a non-text
+  indicator that must clear 3:1 on every ground): painted in Chrome it
+  measures 4.199:1 on the light rail (#087F93) and 11.5672:1 on the dark
+  rail, where it IS #06D5ED, so dark renders the same ring as before.
+  `focus_ring_slot_test.exs` pins the slot's ratios, so a retune that
+  breaks the floor reds there first. The avatar is not focusable, so the
+  ring cannot be mistaken for a focus state on this element.
 
   Renders NOTHING when `@agents_block` is nil — flag off, or no space
   carries a goal. No label, no placeholder, no empty container. Same rule
@@ -481,7 +504,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
       <% space = @agents_block.space %>
       <% leader = @agents_block.leader %>
       <section
-        class="channel-section group border-b border-edge pb-2 mb-2"
+        class="channel-section group border-b-0 pb-2 mb-2"
         data-section-key="agents"
         data-role="agents-rail-block"
         aria-label="Agents"
@@ -515,11 +538,11 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                 name={leader.name}
                 avatar_url={leader.avatar_url}
                 size="xs"
-                class="ring-2 ring-primary"
+                class="ring-2 ring-focus-ring"
                 title={"#{leader.name} leads"}
               />
             </span>
-            <span class="truncate flex-1">{space.name}</span>
+            <span class="min-w-0 flex-1 truncate">{space.name}</span>
             <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
               <span class="channel-row-unread-pill">
                 {unread_label(Map.get(@unread_counts, space.id, 0))}

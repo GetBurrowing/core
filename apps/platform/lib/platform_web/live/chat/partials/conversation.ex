@@ -701,7 +701,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             name={agents_leader.name}
             avatar_url={agents_leader.avatar_url}
             size="xs"
-            class="ring-2 ring-primary"
+            class="ring-2 ring-focus-ring"
             title={"#{agents_leader.name} leads"}
           />
           <span class="truncate max-w-[10rem]">{agents_space.name}</span>
@@ -882,6 +882,8 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       <.link
         :for={space <- switcher_channel_pills}
         patch={~p"/chat/#{space_nav_target(space)}"}
+        data-role="channel-pill"
+        data-space-id={space.id}
         class={[
           "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
           "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",

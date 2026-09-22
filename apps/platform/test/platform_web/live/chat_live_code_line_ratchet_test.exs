@@ -398,7 +398,14 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   #
   # RE-DERIVED from the guard's own measurement of this tree (2,266), not by
   # adding a remembered delta to a remembered pin.
-  @chat_live_code_line_count 2266
+  #
+  # 2,266 -> 2,283 (+17), task 01a0ca8b stage 1: the agents space leaves its
+  # org list while the rail block shows it. `resolve_sidebar_sections/4`
+  # takes the block (one arg at each call site plus the filter line), mount
+  # reads the block once into a local, and `assign_agents_block/2`
+  # recomputes the org list at the two sites that re-assign the block.
+  # Measured by this file's `code_line_count/1` rule.
+  @chat_live_code_line_count 2283
 
   @doc """
   Count the CODE lines of a source file.

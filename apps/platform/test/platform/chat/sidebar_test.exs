@@ -1045,4 +1045,31 @@ defmodule Platform.Chat.SidebarTest do
       refute Repo.exists?(from(o in Tenancy.Org, where: o.slug == "nosuchorg"))
     end
   end
+
+  # Task 01a0ca8b stage 1: the agents space leaves its org list only while the
+  # rail block shows it. Pure, so plain maps stand in for spaces — the
+  # function reads nothing but `:id`.
+  describe "reject_agents_space/2" do
+    test "a nil block returns the identical list" do
+      channels = [%{id: "a"}, %{id: "b"}]
+
+      assert Sidebar.reject_agents_space(channels, nil) === channels
+    end
+
+    test "a block removes exactly its space id and keeps the sibling" do
+      agents = %{id: "agents", name: "agents"}
+      sibling = %{id: "design", name: "design"}
+      other = %{id: "ops", name: "ops"}
+
+      assert Sidebar.reject_agents_space([sibling, agents, other], %{space: agents, leader: nil}) ==
+               [sibling, other]
+    end
+
+    test "a block whose space is not in the list returns the list unchanged" do
+      channels = [%{id: "design"}, %{id: "ops"}]
+
+      assert Sidebar.reject_agents_space(channels, %{space: %{id: "elsewhere"}, leader: nil}) ==
+               channels
+    end
+  end
 end

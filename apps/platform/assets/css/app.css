@@ -5959,7 +5959,7 @@ body, .font-fabrikam {
      inline classes but lifted out so we don't repeat the long utility
      stack at every row. */
   .channel-row-unread-pill {
-    @apply ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none;
+    @apply ml-1 shrink-0 whitespace-nowrap min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none;
   }
 
   /* Ajar group (019fd80f stage 3) — the peeked rows of a COLLAPSED client

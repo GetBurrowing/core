@@ -365,6 +365,11 @@ defmodule PlatformWeb.ChatLive do
         email -> Platform.Tasks.ChatPins.list_pinned_task_spaces_for(%{kind: "user", id: email})
       end
 
+    # Read ONCE (task 01a0ca8b): the same value feeds `@agents_block` and the
+    # org-list exclusion in `resolve_sidebar_sections/4`, so mount cannot see
+    # two different answers to "which space does the block show".
+    agents_block = Sidebar.agents_rail_block()
+
     socket =
       socket
       |> assign(:page_title, "Chat")
@@ -434,7 +439,7 @@ defmodule PlatformWeb.ChatLive do
       # `@goal_panel` is re-derived in `assign_active_space/2` on every space
       # change; seeded here because `mount/3` has no active space yet and the
       # component's attrs are `required: true`.
-      |> assign(:agents_block, Sidebar.agents_rail_block())
+      |> assign(:agents_block, agents_block)
       |> assign(:goal_panel, nil)
       |> assign(:goal_edit, false)
       |> assign(:archived_channels, archived_channels)
@@ -529,7 +534,8 @@ defmodule PlatformWeb.ChatLive do
         resolve_sidebar_sections(
           user_id,
           channels,
-          Accounts.get_hidden_channel_ids(user_id)
+          Accounts.get_hidden_channel_ids(user_id),
+          agents_block
         )
       )
       # Sub-org scope filter (chat plan v2 Stage 4). nil = no filter, all
@@ -1098,7 +1104,8 @@ defmodule PlatformWeb.ChatLive do
          resolve_sidebar_sections(
            socket.assigns.user_id,
            channels,
-           socket.assigns.hidden_channel_ids
+           socket.assigns.hidden_channel_ids,
+           socket.assigns.agents_block
          )
        )
        |> clear_unread(space.id)
@@ -1283,7 +1290,7 @@ defmodule PlatformWeb.ChatLive do
             {:noreply,
              socket
              |> assign_active_space(updated)
-             |> assign(:agents_block, Sidebar.agents_rail_block())}
+             |> assign_agents_block(Sidebar.agents_rail_block())}
 
           {:error, _changeset} ->
             {:noreply, put_flash(socket, :error, "Could not save that goal.")}
@@ -1448,7 +1455,8 @@ defmodule PlatformWeb.ChatLive do
        resolve_sidebar_sections(
          user_id,
          socket.assigns.channels,
-         hidden
+         hidden,
+         socket.assigns.agents_block
        )
      )
      # Hide is the only action that raises this toast. Stage 2 of task
@@ -2195,7 +2203,8 @@ defmodule PlatformWeb.ChatLive do
        resolve_sidebar_sections(
          socket.assigns.user_id,
          socket.assigns.channels,
-         socket.assigns.hidden_channel_ids
+         socket.assigns.hidden_channel_ids,
+         socket.assigns.agents_block
        )
      )}
   end
@@ -2625,7 +2634,8 @@ defmodule PlatformWeb.ChatLive do
                resolve_sidebar_sections(
                  socket.assigns.user_id,
                  channels,
-                 socket.assigns.hidden_channel_ids
+                 socket.assigns.hidden_channel_ids,
+                 socket.assigns.agents_block
                )
              )
              |> put_flash(:info, "##{updated.name} was unarchived.")}
@@ -2806,7 +2816,8 @@ defmodule PlatformWeb.ChatLive do
       resolve_sidebar_sections(
         user_id,
         socket.assigns.channels,
-        hidden
+        hidden,
+        socket.assigns.agents_block
       )
     )
     |> assign(:undo_toast, cleared_toast)
@@ -3067,7 +3078,8 @@ defmodule PlatformWeb.ChatLive do
       resolve_sidebar_sections(
         socket.assigns.user_id,
         socket.assigns.channels,
-        socket.assigns.hidden_channel_ids
+        socket.assigns.hidden_channel_ids,
+        socket.assigns.agents_block
       )
     )
   end
@@ -3267,7 +3279,8 @@ defmodule PlatformWeb.ChatLive do
               resolve_sidebar_sections(
                 socket.assigns.user_id,
                 socket.assigns.channels,
-                socket.assigns.hidden_channel_ids
+                socket.assigns.hidden_channel_ids,
+                socket.assigns.agents_block
               ),
               new_ids
             )
@@ -3586,7 +3599,7 @@ defmodule PlatformWeb.ChatLive do
     if role_key == Sidebar.agents_leader_role() do
       {:noreply,
        socket
-       |> assign(:agents_block, Sidebar.agents_rail_block())
+       |> assign_agents_block(Sidebar.agents_rail_block())
        |> assign(:goal_panel, Sidebar.goal_panel(socket.assigns.active_space))}
     else
       {:noreply, socket}
@@ -3693,7 +3706,8 @@ defmodule PlatformWeb.ChatLive do
        resolve_sidebar_sections(
          socket.assigns.user_id,
          channels,
-         socket.assigns.hidden_channel_ids
+         socket.assigns.hidden_channel_ids,
+         socket.assigns.agents_block
        )
      )}
   end
@@ -4686,10 +4700,11 @@ defmodule PlatformWeb.ChatLive do
   @spec resolve_sidebar_sections(
           binary() | nil,
           [Platform.Chat.Space.t()],
-          MapSet.t()
+          MapSet.t(),
+          map() | nil
         ) ::
           [Sidebar.resolved()]
-  defp resolve_sidebar_sections(user_id, channels, hidden_ids) do
+  defp resolve_sidebar_sections(user_id, channels, hidden_ids, agents_block) do
     {visible_channels, _hidden} = HiddenChannels.filter(channels, hidden_ids)
 
     # The pin exclusion is read HERE rather than threaded in as a fourth
@@ -4702,7 +4717,26 @@ defmodule PlatformWeb.ChatLive do
     {_pinned, unpinned} =
       PinnedSpaces.partition(visible_channels, Sidebar.pinned_space_ids(user_id))
 
+    # The agents-space exclusion (task 01a0ca8b) IS threaded in, the opposite
+    # of the pin choice above, and that is deliberate too. It must exclude
+    # exactly the space the rail block renders from `@agents_block` in this
+    # process, so it keys on that assign rather than re-querying: a fresh
+    # query could disagree with a stale block and drop the channel from BOTH
+    # places. The arity makes a call site that forgets it a compile error.
+    # `nil` (flag off, or no goal anywhere) leaves the list untouched.
+    unpinned = Sidebar.reject_agents_space(unpinned, agents_block)
+
     Sidebar.resolve_for_user(user_id, unpinned)
+  end
+
+  # Re-assign `@agents_block` AND recompute the org list from the NEW block
+  # (task 01a0ca8b). The two move together: without the recompute, saving a
+  # goal leaves the space listed under its org beside the block, and clearing
+  # one leaves it missing from both until some unrelated recompute.
+  defp assign_agents_block(socket, agents_block) do
+    socket
+    |> assign(:agents_block, agents_block)
+    |> recompute_sidebar()
   end
 
   # Apply an explicit section-id order to already-resolved sections IN-MEMORY,

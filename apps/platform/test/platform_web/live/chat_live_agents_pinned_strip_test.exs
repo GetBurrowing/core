@@ -206,7 +206,7 @@ defmodule PlatformWeb.ChatLiveAgentsPinnedStripTest do
       strip = strip_html(html)
 
       assert strip =~ "Dalton leads"
-      assert strip =~ "ring-2 ring-primary"
+      assert strip =~ "ring-2 ring-focus-ring"
     end
 
     test "no leader renders NO glyph element at all — not an empty span", %{conn: conn} do
@@ -220,7 +220,7 @@ defmodule PlatformWeb.ChatLiveAgentsPinnedStripTest do
       strip = strip_html(html)
 
       assert strip =~ ~s(data-role="agents-pinned-strip-chip")
-      refute strip =~ "ring-2 ring-primary"
+      refute strip =~ "ring-2 ring-focus-ring"
       refute strip =~ "leads"
 
       # This strip's recorded rule, and the OPPOSITE of the rail/drawer rows:

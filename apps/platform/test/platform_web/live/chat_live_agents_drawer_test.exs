@@ -170,7 +170,7 @@ defmodule PlatformWeb.ChatLiveAgentsDrawerTest do
 
       assert drawer =~ ~s(data-role="agents-drawer-row-glyph")
       assert drawer =~ "Dalton leads"
-      assert drawer =~ "ring-2 ring-primary"
+      assert drawer =~ "ring-2 ring-focus-ring"
     end
 
     test "no leader renders the empty glyph column and no stand-in face", %{conn: conn} do
@@ -186,7 +186,7 @@ defmodule PlatformWeb.ChatLiveAgentsDrawerTest do
       assert drawer =~ ~s(data-role="agents-drawer-row-glyph")
 
       [_, glyph] = String.split(drawer, ~s(data-role="agents-drawer-row-glyph"), parts: 2)
-      refute glyph |> String.slice(0, 200) =~ "ring-2 ring-primary"
+      refute glyph |> String.slice(0, 200) =~ "ring-2 ring-focus-ring"
     end
   end
 

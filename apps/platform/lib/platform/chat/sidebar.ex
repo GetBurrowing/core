@@ -729,6 +729,32 @@ defmodule Platform.Chat.Sidebar do
   end
 
   @doc """
+  Removes the agents space from a channel list, keyed on the rail block
+  the caller RENDERS.
+
+  Invariant: it excludes exactly the space `agents_block` shows, and
+  nothing else. A `nil` block (flag off, or no space carries a goal)
+  returns `channels` unchanged, so with the feature off the org list is
+  exactly what it was before this function existed.
+
+  It takes the block rather than querying `agents_rail_block/0` itself on
+  purpose. The block and the org list must answer from the SAME snapshot:
+  a fresh query here could disagree with a stale `@agents_block` and drop
+  the channel from the org list while the block does not show it, leaving
+  it reachable nowhere. Keyed on the rendered block, a stale snapshot errs
+  toward listing the channel (or showing it in the block), never neither.
+
+  Only the listing changes. The space keeps its `org_id`, membership and
+  access; `place_channels/4` never sees it.
+  """
+  @spec reject_agents_space([%{id: term()}], %{space: %{id: term()}} | nil) :: [%{id: term()}]
+  def reject_agents_space(channels, nil), do: channels
+
+  def reject_agents_space(channels, %{space: %{id: id}}) do
+    Enum.reject(channels, &(&1.id == id))
+  end
+
+  @doc """
   The header goal panel for `space`, or `nil`.
 
   `nil` when the flag is off, when there is no space, or when the space
