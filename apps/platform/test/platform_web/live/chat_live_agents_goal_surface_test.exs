@@ -11,8 +11,12 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
     * the measurement clause carries `text-base-content/60` and NOT
       `/40` — `/40` is the treatment `topic` uses and it was measured at
       2.85:1 light / 3.53:1 dark, which fails AA in both themes;
-    * `text-warning` appears on the no-measurement clause and NOWHERE
-      else on either surface.
+    * `text-warning` appears on the FAULT no-measurement clause (a goal
+      whose project scope names no project, `kind: :unknown_scope`) and
+      NOWHERE else on either surface. An uncounted goal (`kind:
+      :uncounted`, task `01a0ca9f` stage 3) is a normal state the heartbeat
+      fires for: it renders "no count for this goal" at
+      `text-base-content/60`, with no warning and no numeral.
 
   Every absence is paired with the presence that proves the absence was
   the condition under test and not a broken render.
@@ -184,7 +188,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       assert html =~ ~s(data-role="agents-goal-number")
     end
 
-    test "warning appears on the no-measurement state and on nothing else", %{conn: conn} do
+    test "a measured goal renders no warning and no uncounted clause", %{conn: conn} do
       {conn, user} = authenticated_conn(conn)
       enable_flag()
 
@@ -197,13 +201,53 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       # anywhere on the surface — not on the delta, not on a falling count.
       refute measurable_html =~ ~s(data-role="agents-goal-measurement-missing")
       refute measurable_html =~ "text-warning"
+      # The uncounted branch cannot render for a counted goal, and the
+      # numeral is present — the render reached the measurement slot.
+      refute measurable_html =~ ~s(data-role="agents-goal-measurement-uncounted")
+      assert measurable_html =~ ~s(data-role="agents-goal-number")
+    end
 
-      {:ok, unmeasurable} = Chat.update_space(measurable, %{goal: "Get SXI to a good state"})
+    test "an uncounted goal renders 'no count for this goal' at /60, with no warning and no numeral",
+         %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      enable_flag()
 
-      {:ok, _view, warning_html} = live_at(conn, "/chat/#{unmeasurable.slug}")
+      space = create_space(goal: "Get SXI to a good state")
+      add_user(space, user)
 
-      assert warning_html =~ ~s(data-role="agents-goal-measurement-missing")
-      assert warning_html =~ "text-warning"
+      {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
+
+      assert html =~ ~s(data-role="agents-goal-measurement-uncounted")
+      assert html =~ "no count for this goal"
+
+      class = class_of(html, "agents-goal-measurement-uncounted")
+      assert "text-base-content/60" in split_classes(class)
+      refute "font-mono" in split_classes(class)
+
+      refute html =~ "text-warning"
+      refute html =~ ~s(data-role="agents-goal-measurement-missing")
+      refute html =~ ~s(data-role="agents-goal-number")
+      refute html =~ "so no heartbeat"
+    end
+
+    test "a goal whose project scope names no project renders the warning", %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      enable_flag()
+
+      space =
+        create_space(
+          goal: "Close backlog items in Suite",
+          metadata: %{"goal_project_id" => Ecto.UUID.generate()}
+        )
+
+      add_user(space, user)
+
+      {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
+
+      assert html =~ ~s(data-role="agents-goal-measurement-missing")
+      assert "text-warning" in split_classes(class_of(html, "agents-goal-measurement-missing"))
+      refute html =~ ~s(data-role="agents-goal-measurement-uncounted")
+      refute html =~ ~s(data-role="agents-goal-number")
     end
   end
 
@@ -469,6 +513,15 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
     test "the empty state carries no fault colour; the invite is /60", %{conn: conn} do
       enable_flag()
       {conn, _user, space} = invite_fixture(conn, true)
+
+      # The positive control below needs a goal that renders the strip's
+      # one allowed warning. Since task 01a0ca9f stage 3 an UNCOUNTED goal
+      # is a normal /60 state, so the fault is a goal whose project scope
+      # names no project (`kind: :unknown_scope`). The scope is set before
+      # mount; with no goal the space still shows the invitation.
+      {:ok, space} =
+        Chat.update_space(space, %{metadata: %{"goal_project_id" => Ecto.UUID.generate()}})
+
       {:ok, view, html} = live_at(conn, "/chat/#{space.slug}")
 
       strip = strip_fragment(html)
@@ -486,16 +539,18 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       assert "-my-2" in mobile_live(invite_class)
       refute "-my-2" in desktop_live(invite_class)
 
-      # POSITIVE CONTROL, same view: save an unmeasurable goal and the SAME
-      # detector over the SAME strip fragment does fire on the one warning
-      # this surface is allowed — so its silence above is not blindness.
+      # POSITIVE CONTROL, same view: save a counted goal whose project scope
+      # names no project, and the SAME detector over the SAME strip fragment
+      # does fire on the one warning this surface is allowed — so its
+      # silence above is not blindness.
       view |> element(~s([data-role="agents-goal-invite"])) |> render_click()
 
       html =
         view
-        |> form(~s([data-role="agents-goal-form"]), %{goal: "Get SXI to a good state"})
+        |> form(~s([data-role="agents-goal-form"]), %{goal: "Close backlog items in Suite"})
         |> render_submit()
 
+      assert html =~ ~s(data-role="agents-goal-measurement-missing")
       assert html |> strip_fragment() =~ @fault_token
     end
   end

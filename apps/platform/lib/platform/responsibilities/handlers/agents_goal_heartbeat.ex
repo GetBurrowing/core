@@ -22,6 +22,59 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   Suite") it is the count of open tasks plus its delta against the
   previous run.
 
+  ## Which tasks are counted: the goal's project scope (task `01a0ca9f`)
+
+  Install-wide by default. Rowan, 2026-09-22: "we need to scope the tasks
+  just to the Job Hunt project, not all tasks across all projects" --
+  measured on milv the same day, the install-wide "31 open tasks" was 28
+  Job Hunt tasks plus 3 from an unrelated project, so the number moved
+  with work that had nothing to do with the goal.
+
+  The scope is `chat_spaces.metadata["goal_project_id"]` on the goal
+  space: a project UUID string. It is NOT a column (no migration), and
+  nothing in the UI writes it. Saving the goal text (`save_goal` writes
+  only `goal`) and every beat's write (`Map.put` on the existing map)
+  leave it in place. Set it server-side, e.g. from a remote console:
+
+      space = Platform.Chat.get_space(space_id)
+
+      Platform.Chat.update_space(space, %{
+        metadata: Map.put(space.metadata || %{}, "goal_project_id", "<project uuid>")
+      })
+
+  Unset it by deleting the key (`Map.delete(space.metadata, "goal_project_id")`
+  in the same call); `nil` also reads as unset.
+
+  Because the value is untyped, `goal_scope/1` validates it on every read
+  and has exactly three outcomes:
+
+    * `:install` -- the key is absent or `nil`. Today's count, slot and
+      prompt, byte for byte (`unit: "open tasks"`, no `:project_id`).
+    * `{:project, project}` -- the value casts with `Platform.UUID.cast/1`
+      (cast FIRST: `Repo.get` raises on a non-UUID string) and names a
+      project whose `archived_at` and `deletion_scheduled_at` are both
+      nil. The count adds `project_id == ^id`; the unit is
+      `"open tasks in <project name>"` and the slot carries `:project_id`.
+    * `:unknown` -- anything else: not a UUID, no such project, archived,
+      or deletion scheduled. The slot is `%{missing?: true, kind:
+      :unknown_scope}` and carries NO number. It never falls back to the
+      install-wide count: that is the wrong-population number this scope
+      exists to remove. The id is never interpolated either (a UUID would
+      carry digits into the measurement line). The beat still fires, as
+      for an uncounted goal.
+
+  Only the `:open_tasks` arm reads the scope; an uncounted goal ignores
+  it.
+
+  ## A count that could not be read is not zero
+
+  `open_task_count/1` used to rescue a raised query and return `0`, a
+  number nobody measured. It now returns `:error`, and the slot is
+  `%{missing?: true, kind: :count_failed}`: no number, the beat still
+  fires with the no-count system message, and the previous baseline is
+  left untouched (a beat stamp is written only when no row exists), so
+  the next readable count still gets a real delta.
+
   ## The first run has no delta and says so
 
   `delta` is `nil` on the first run for a given space, and the rendered
@@ -32,11 +85,18 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   The previous measurement is persisted on the space's `metadata` map
   under `"goal_heartbeat"` (`%{"measurement" => integer, "measured_at" =>
-  iso8601, "goal" => the goal string it was taken for}`). The goal is
-  stored alongside the number on purpose: when the goal changes, the old
-  number is not a comparable baseline, so the delta resets to "first
-  measurement for this goal" rather than reporting a difference between
-  two different questions.
+  iso8601, "goal" => the goal string it was taken for}`, plus
+  `"project_id"` ONLY when the count was scoped to a project; an unscoped
+  row is exactly the three keys it always was). The goal is stored
+  alongside the number on purpose: when the goal changes, the old number
+  is not a comparable baseline, so the delta resets to "first measurement
+  for this goal" rather than reporting a difference between two
+  different questions. The scope is compared the same way:
+  `previous_measurement/3` requires the row's `"project_id"` (nil when
+  absent) to equal the current scope's (nil for `:install`). So an
+  existing unscoped baseline still yields its delta, and any scope change
+  (install to project, project A to B, project to install) reads as a
+  first measurement, never as a delta between two populations.
 
   ## Where the baseline is written (task `01a0c332`)
 
@@ -153,16 +213,40 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   invites the leader there. Without it the leader had no in-band way to
   know where to reply, and the read above would depend on luck.
 
-  ## A goal that cannot name a number has no heartbeat
+  ## A goal with no count still fires, and says it has no count
 
-  When no measurement can be derived — no space carries a goal, or the
-  goal names nothing countable — `gather_context/2` returns the
-  measurement slot as `%{missing?: true, reason: ...}` and `build_prompt/1`
-  refuses with `{:error, {:no_measurement, reason}}` instead of
-  dispatching a content-free ping. The Router's refusal path surfaces
-  that to the human who set the goal. **This is the single state stage 4
-  paints with `--color-warning`** — spending that colour on a delta or a
-  falling count would leave nothing to raise this one with.
+  Task `01a0ca9f`. A goal that names nothing this handler can count ("Keep
+  the job board populated ...") used to refuse the heartbeat outright, so
+  the leader of an uncounted goal was never prodded. Now `measure/2`
+  returns `%{missing?: true, kind: :uncounted, reason: "no count for this
+  goal"}` — no `:value`, `:delta` or `:previous` — and `build_prompt/1`
+  dispatches it with its own system message ("This goal has no count:
+  never invent a number for it ..."). The prompt's measurement line comes
+  from `prompt_measurement/1` ("no count for this goal. There is no number
+  the system can count for this goal, so do not supply one: ..."), and
+  neither string interpolates the goal, so a goal like "Ship 3 demos"
+  cannot put a digit on that line.
+
+  `missing?` stays `true` deliberately: every consumer that branches on it
+  (the header strip, `format_measurement_tail/1`, `record_measurement/2`)
+  keeps treating the slot as no-number. `missing?: false` with `value:
+  nil` would render " (first measurement ...)", a fabricated first run.
+
+  An uncounted beat writes `%{"goal", "beat_at"}` under `"goal_heartbeat"`
+  and NO `"measurement"` / `"measured_at"`, so no delta can ever be read
+  from it. `previous_beat_at/1` falls back to `"beat_at"`, which is what
+  lets the next beat read the leader's reply instead of reporting "first
+  beat" forever.
+
+  ## Two states still refuse
+
+  No chat space carries a goal (`measure(nil, _)`), or the space's goal is
+  blank (`measure(_, goal) when goal in [nil, ""]`). Those slots carry no
+  `kind`, and `build_prompt/1` refuses with `{:error, {:no_measurement,
+  reason}}`. On the native path the Router still hands the leader a
+  signal for a refused render — with no `prompt` key and
+  `prompt_status: :render_gap` (`Router.build_native_signal/5`) — so
+  "refuses" means no prompt body is dispatched, not that nothing is.
 
   ## Assignment IS the enable signal
 
@@ -228,6 +312,8 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   alias Platform.Repo
   alias Platform.Responsibilities.Responsibility
   alias Platform.Roles
+  alias Platform.Tasks
+  alias Platform.Tasks.Project
   alias Platform.Tasks.Task, as: TaskSchema
 
   @key "agents.goal_heartbeat"
@@ -236,6 +322,9 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   # Where the previous measurement lives on `chat_spaces.metadata`.
   @metadata_key "goal_heartbeat"
+
+  # Where the goal's project scope lives on `chat_spaces.metadata`.
+  @scope_key "goal_project_id"
 
   # Task statuses that count as OPEN for the backlog goal. Derived from
   # `Platform.Tasks.Task.statuses/0` minus the two terminal ones, so a
@@ -304,19 +393,36 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   @spec gather_context(map()) :: map()
   def gather_context(ctx \\ %{}) when is_map(ctx), do: do_gather_context(ctx)
 
+  # The system message for a goal with no count (task `01a0ca9f`). The
+  # measured string is NOT reused: its "if the delta is absent, say this
+  # is the first measurement" would have the leader call every uncounted
+  # beat a first measurement.
+  @uncounted_system "You are the agents leader. This hourly heartbeat is a prod to drive " <>
+                      "the goal, not a status report. This goal has no count: never invent " <>
+                      "a number for it, and report concretely what changed since the last " <>
+                      "beat instead."
+
+  # Slots that carry no number and still dispatch: an uncounted goal, a
+  # project scope that names no project, and a count that raised.
+  @no_count_kinds [:uncounted, :unknown_scope, :count_failed]
+
   @impl true
   @doc """
   Build the (system + user) messages for the heartbeat.
 
-  Refuses with `{:error, {:no_measurement, reason}}` when the
-  measurement slot is missing. A goal that cannot name a number has no
-  heartbeat: dispatching anyway would produce the byte-similar ping this
-  responsibility exists to avoid.
+  A slot with no number (`kind: :uncounted`, `:unknown_scope` or
+  `:count_failed`) dispatches with its own system message and a
+  measurement line that says there is no count.
+  Refuses with `{:error, {:no_measurement, reason}}` for every other
+  missing slot: no space carries a goal, or the goal is blank.
   """
   @spec build_prompt(map()) ::
           {:ok, %{system: String.t(), user: String.t()}} | {:error, {:no_measurement, String.t()}}
   def build_prompt(context) when is_map(context) do
     case Map.get(context, :measurement) do
+      %{missing?: true, kind: kind} when kind in @no_count_kinds ->
+        {:ok, %{system: @uncounted_system, user: render_instruction(context)}}
+
       %{missing?: true} = slot ->
         {:error, {:no_measurement, Map.get(slot, :reason, "no measurement derivable")}}
 
@@ -446,10 +552,15 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   defp put_dispatch_space(context, _space), do: context
 
-  # The previous beat's `measured_at`, whatever goal it was taken for, or
-  # `nil` when no beat has been recorded (or the stamp does not parse).
+  # The previous beat's `measured_at` (a counted beat) or, failing that,
+  # its `beat_at` (an uncounted beat, task `01a0ca9f`), whatever goal it
+  # was taken for; `nil` when no beat has been recorded (or the stamp
+  # does not parse).
   defp previous_beat_at(%Space{metadata: %{} = metadata}) do
-    with %{"measured_at" => stamp} when is_binary(stamp) <- Map.get(metadata, @metadata_key),
+    row = Map.get(metadata, @metadata_key)
+    stamp = is_map(row) && (Map.get(row, "measured_at") || Map.get(row, "beat_at"))
+
+    with stamp when is_binary(stamp) <- stamp,
          {:ok, at, _offset} <- DateTime.from_iso8601(stamp) do
       at
     else
@@ -640,26 +751,29 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   def measure(%Space{} = space, goal) when is_binary(goal) do
     case measurable_kind(goal) do
       :open_tasks ->
-        count = open_task_count()
-        previous = previous_measurement(space, goal)
+        case goal_scope(space) do
+          :install ->
+            open_tasks_slot(space, goal, nil, "open tasks")
 
-        %{
-          missing?: false,
-          kind: :open_tasks,
-          unit: "open tasks",
-          value: count,
-          previous: previous && previous.value,
-          delta: previous && count - previous.value,
-          previous_measured_at: previous && previous.measured_at
-        }
+          {:project, %Project{} = project} ->
+            open_tasks_slot(space, goal, project.id, "open tasks in #{project.name}")
 
+          # Never the install-wide count, and never the id: see the
+          # moduledoc's scope section.
+          :unknown ->
+            %{
+              missing?: true,
+              kind: :unknown_scope,
+              reason: "the goal's project scope names no project that exists"
+            }
+        end
+
+      # An uncounted goal (task `01a0ca9f`). `missing?: true` on purpose:
+      # every consumer that branches on it keeps treating the slot as
+      # no-number. The reason does NOT interpolate the goal, which could
+      # carry a digit ("Ship 3 demos") into the measurement line.
       :none ->
-        %{
-          missing?: true,
-          reason:
-            "the goal #{inspect(goal)} names nothing this handler can count — " <>
-              "no measurement, so no heartbeat"
-        }
+        %{missing?: true, kind: :uncounted, reason: "no count for this goal"}
     end
   end
 
@@ -678,32 +792,107 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
     end
   end
 
-  defp open_task_count do
-    from(t in TaskSchema,
-      where: t.status not in ^@closed_statuses and is_nil(t.deleted_at),
-      select: count(t.id)
-    )
-    |> Repo.one()
+  @doc """
+  The goal space's project scope (task `01a0ca9f`), read from
+  `metadata["goal_project_id"]`.
+
+    * `:install` -- the key is absent or `nil`;
+    * `{:project, %Project{}}` -- it casts as a UUID and names a project
+      that is neither archived nor scheduled for deletion;
+    * `:unknown` -- anything else.
+
+  The value is cast with `Platform.UUID.cast/1` before any Repo call: it
+  accepts only the canonical 36-character form, so a 16-byte binary
+  cannot clear it the way it clears a bare `Ecto.UUID.cast/1`.
+  """
+  @spec goal_scope(Space.t() | nil) :: :install | {:project, Project.t()} | :unknown
+  def goal_scope(%Space{metadata: %{} = metadata}) do
+    case Map.get(metadata, @scope_key) do
+      nil -> :install
+      raw -> resolve_scope(raw)
+    end
+  end
+
+  def goal_scope(_space), do: :install
+
+  defp resolve_scope(raw) do
+    with {:ok, id} <- Platform.UUID.cast(raw),
+         %Project{archived_at: nil, deletion_scheduled_at: nil} = project <-
+           Tasks.get_project(id) do
+      {:project, project}
+    else
+      _ -> :unknown
+    end
+  end
+
+  # The measured slot for the `:install` (`project_id` nil) or
+  # `{:project, _}` scope. The install slot is today's slot exactly: no
+  # `:project_id` key.
+  defp open_tasks_slot(space, goal, project_id, unit) do
+    case open_task_count(project_id) do
+      {:ok, count} ->
+        previous = previous_measurement(space, goal, project_id)
+
+        %{
+          missing?: false,
+          kind: :open_tasks,
+          unit: unit,
+          value: count,
+          previous: previous && previous.value,
+          delta: previous && count - previous.value,
+          previous_measured_at: previous && previous.measured_at
+        }
+        |> put_project_id(project_id)
+
+      :error ->
+        %{
+          missing?: true,
+          kind: :count_failed,
+          reason: "the open-task count could not be read"
+        }
+    end
+  end
+
+  defp put_project_id(slot, nil), do: slot
+  defp put_project_id(slot, project_id), do: Map.put(slot, :project_id, project_id)
+
+  # `{:ok, count}`, or `:error` when the query raised. Never a made-up
+  # `0`: see "A count that could not be read is not zero".
+  defp open_task_count(project_id) do
+    query =
+      from(t in TaskSchema,
+        where: t.status not in ^@closed_statuses and is_nil(t.deleted_at),
+        select: count(t.id)
+      )
+
+    query =
+      if project_id, do: from(t in query, where: t.project_id == ^project_id), else: query
+
+    {:ok, Repo.one(query)}
   rescue
     error ->
       Logger.warning("[agents.goal_heartbeat] open task count raised: #{inspect(error)}")
-      0
+      :error
   end
 
-  # The persisted baseline, or `nil` when there is none FOR THIS GOAL.
-  # A measurement taken for a different goal is not a baseline for this
-  # one — see the moduledoc.
-  defp previous_measurement(%Space{metadata: metadata}, goal) when is_map(metadata) do
+  # The persisted baseline, or `nil` when there is none FOR THIS GOAL AND
+  # THIS SCOPE. A measurement taken for a different goal, or over a
+  # different population, is not a baseline for this one — see the
+  # moduledoc. An unscoped row has no "project_id" key, which reads as
+  # nil and so matches the `:install` scope exactly as before.
+  defp previous_measurement(%Space{metadata: metadata}, goal, project_id)
+       when is_map(metadata) do
     case Map.get(metadata, @metadata_key) do
       %{"measurement" => value, "goal" => ^goal} = row when is_integer(value) ->
-        %{value: value, measured_at: Map.get(row, "measured_at")}
+        if Map.get(row, "project_id") == project_id,
+          do: %{value: value, measured_at: Map.get(row, "measured_at")}
 
       _ ->
         nil
     end
   end
 
-  defp previous_measurement(_space, _goal), do: nil
+  defp previous_measurement(_space, _goal, _project_id), do: nil
 
   # The baseline write (task `01a0c332`). Takes the ALREADY-COMPUTED slot
   # rather than re-deriving it, so the gather writes exactly the number
@@ -713,14 +902,23 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   # cannot name a number has no baseline to advance. A persist failure
   # logs a warning and proceeds: losing the delta must never lose the
   # dispatch.
-  defp record_measurement(%Space{} = space, %{missing?: false, value: value})
+  defp record_measurement(%Space{} = space, %{missing?: false, value: value} = slot)
        when is_integer(value) do
-    metadata =
-      Map.put(space.metadata || %{}, @metadata_key, %{
-        "measurement" => value,
-        "measured_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "goal" => space.goal
-      })
+    row = %{
+      "measurement" => value,
+      "measured_at" => DateTime.to_iso8601(DateTime.utc_now()),
+      "goal" => space.goal
+    }
+
+    # "project_id" ONLY when scoped, so an unscoped row stays the exact
+    # three-key map it always was.
+    row =
+      case Map.get(slot, :project_id) do
+        nil -> row
+        project_id -> Map.put(row, "project_id", project_id)
+      end
+
+    metadata = Map.put(space.metadata || %{}, @metadata_key, row)
 
     case Chat.update_space(space, %{metadata: metadata}) do
       {:ok, _} ->
@@ -735,7 +933,48 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
     end
   end
 
+  # An uncounted goal stamps the beat and writes NO baseline: no
+  # "measurement" and no "measured_at" key, so `previous_measurement/2`
+  # can never compute a delta from it. The stamp is what lets the next
+  # beat read the leader's reply instead of saying "first beat" forever.
+  # A scope that names no project is stamped the same way.
+  defp record_measurement(%Space{} = space, %{missing?: true, kind: kind})
+       when kind in [:uncounted, :unknown_scope] do
+    persist_beat(space, %{
+      "goal" => space.goal,
+      "beat_at" => DateTime.to_iso8601(DateTime.utc_now())
+    })
+  end
+
+  # A count that raised leaves an existing row untouched, so the next
+  # readable count still has its baseline; with no row at all it stamps
+  # the beat so the next one is not read as the first.
+  defp record_measurement(%Space{} = space, %{missing?: true, kind: :count_failed}) do
+    if is_map(Map.get(space.metadata || %{}, @metadata_key)) do
+      :ok
+    else
+      persist_beat(space, %{
+        "goal" => space.goal,
+        "beat_at" => DateTime.to_iso8601(DateTime.utc_now())
+      })
+    end
+  end
+
   defp record_measurement(_space, _slot), do: :ok
+
+  defp persist_beat(%Space{} = space, row) do
+    metadata = Map.put(space.metadata || %{}, @metadata_key, row)
+
+    case Chat.update_space(space, %{metadata: metadata}) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[agents.goal_heartbeat] could not persist beat stamp: #{inspect(reason)}")
+
+        :ok
+    end
+  end
 
   defp leader_slot(%Space{leader_agent_id: id}) when is_binary(id), do: %{agent_id: id}
   defp leader_slot(_), do: %{missing?: true, reason: "no leader pinned to this space"}
@@ -746,7 +985,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   defp context_to_assigns(context) do
     %{
       goal: format_goal(Map.get(context, :goal)),
-      measurement: format_measurement(Map.get(context, :measurement)),
+      measurement: prompt_measurement(Map.get(context, :measurement)),
       prior_claim: text_or_empty(Map.get(context, :prior_claim_text)),
       drive: text_or_empty(Map.get(context, :drive_text))
     }
@@ -766,6 +1005,14 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   (stage 4) the header use. The first run reads as a first run.
   """
   @spec format_measurement(map() | nil) :: String.t()
+  def format_measurement(%{missing?: true, kind: :uncounted}), do: "no count for this goal"
+
+  def format_measurement(%{missing?: true, kind: :unknown_scope}),
+    do: "no count: the goal's project scope names no project that exists"
+
+  def format_measurement(%{missing?: true, kind: :count_failed}),
+    do: "no count: the open-task count could not be read"
+
   def format_measurement(%{missing?: true} = slot),
     do: "no measurement available — #{Map.get(slot, :reason, "unknown")}"
 
@@ -782,6 +1029,32 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   end
 
   def format_measurement(_), do: "no measurement available"
+
+  @doc """
+  The measurement clause as the PROMPT carries it (task `01a0ca9f`).
+
+  For an uncounted goal it adds the instruction not to supply a number;
+  for every other slot it is `format_measurement/1` verbatim, so a
+  measured prompt is unchanged. Neither string interpolates the goal.
+  """
+  @spec prompt_measurement(map() | nil) :: String.t()
+  def prompt_measurement(%{missing?: true, kind: :uncounted} = slot),
+    do:
+      format_measurement(slot) <>
+        ". There is no number the system can count for this goal, so do not " <>
+        "supply one: report concretely what changed since the last beat."
+
+  def prompt_measurement(%{missing?: true, kind: :unknown_scope}),
+    do:
+      "no count for this goal. Its project scope names no project that exists, so " <>
+        "nothing was counted: report concretely what changed since the last beat."
+
+  def prompt_measurement(%{missing?: true, kind: :count_failed}),
+    do:
+      "no count for this goal. The open-task count could not be read this hour, so " <>
+        "nothing was counted: report concretely what changed since the last beat."
+
+  def prompt_measurement(slot), do: format_measurement(slot)
 
   @doc """
   `format_measurement/1` minus its leading numeral.

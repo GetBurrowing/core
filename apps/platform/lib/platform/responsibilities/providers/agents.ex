@@ -20,9 +20,12 @@ defmodule Platform.Responsibilities.Providers.Agents do
 
   The one deliberate divergence: `AgentsGoalHeartbeat.build_prompt/1`
   DOES return a non-`:no_build_prompt` error — `{:error,
-  {:no_measurement, reason}}` — and that refusal is intended. A goal
-  that cannot name a number has no heartbeat, and a content-free ping is
-  the failure this feature exists to prevent.
+  {:no_measurement, reason}}` — and that refusal is intended. It is
+  returned in exactly two cases: no chat space carries a goal, or the
+  space's goal is blank. A goal the handler cannot count, a project
+  scope that names no project, and a count query that raised are NOT
+  among them (task `01a0ca9f`): each dispatches, with a measurement line
+  that says there is no count.
 
   Keys owned here:
 

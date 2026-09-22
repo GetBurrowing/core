@@ -477,8 +477,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
          "Close backlog items" has no denominator, and a bar would have to
          invent one; an invented denominator is a number that looks
          measured. `--color-warning` appears in exactly ONE place on this
-         surface — the no-measurement state — and nowhere else, not on the
-         delta and not on a falling count. --%>
+         surface — the FAULT no-measurement state (an unknown project scope,
+         a failed count) — and nowhere else, not on the delta, not on a
+         falling count, and not on an uncounted goal, which is a normal
+         state the heartbeat fires for (task 01a0ca9f stage 3). --%>
     <div
       :if={(@goal_panel || @goal_invite?) && !@embedded}
       class="flex flex-shrink-0 items-start gap-2 border-b border-base-content/10 px-5 py-2"
@@ -586,27 +588,51 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                  (the treatment `topic` uses two lines up) is 2.85:1 light
                  and 3.53:1 dark and fails AA in both themes; `/60` is
                  5.74:1 and 6.26:1. --%>
-            <%= if @goal_panel.measurement[:missing?] do %>
-              <span
-                class="min-w-0 truncate text-xs text-warning"
-                data-role="agents-goal-measurement-missing"
-              >
-                {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
-              </span>
-            <% else %>
-              <span
-                class="min-w-0 truncate text-xs text-base-content/60"
-                data-role="agents-goal-measurement"
-              >
-                <%!-- The number, and ONLY the number, in JetBrains Mono
-                     inline in the sentence. A changing digit is legible
-                     at a glance in mono without building a tile around
-                     it. --%>
-                <span class="font-mono" data-role="agents-goal-number">
-                  {@goal_panel.measurement.value}
+            <%!-- An UNCOUNTED goal (task 01a0ca9f stage 3, Saru's canvas
+                 "Design direction: the goal strip when a goal has no
+                 count"). The heartbeat fires for it, so this is a normal
+                 state and not a fault: `/60`, the same tier as the measured
+                 clause, NOT `text-warning` and NOT `text-info`. No mono span,
+                 no rule, no icon — there is no numeral to set in mono, and a
+                 glyph would read as a status. Same slot, size and
+                 truncation as the other two branches. This branch sits
+                 BEFORE the `missing?` one because an uncounted slot is
+                 `missing?: true` too (every no-number consumer keeps
+                 treating it as no-number); it matches on `kind` only, so a
+                 counted slot (`missing?: false`, no `kind`) never reaches it. --%>
+            <%= cond do %>
+              <% @goal_panel.measurement[:kind] == :uncounted -> %>
+                <span
+                  class="min-w-0 truncate text-xs text-base-content/60"
+                  data-role="agents-goal-measurement-uncounted"
+                >
+                  {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
                 </span>
-                {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
-              </span>
+              <% @goal_panel.measurement[:missing?] -> %>
+                <%!-- The warning is reserved for a genuine fault:
+                     `:unknown_scope` (the goal's project scope names no
+                     project that exists), `:count_failed`, and the unkinded
+                     missing slots. --%>
+                <span
+                  class="min-w-0 truncate text-xs text-warning"
+                  data-role="agents-goal-measurement-missing"
+                >
+                  {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
+                </span>
+              <% true -> %>
+                <span
+                  class="min-w-0 truncate text-xs text-base-content/60"
+                  data-role="agents-goal-measurement"
+                >
+                  <%!-- The number, and ONLY the number, in JetBrains Mono
+                       inline in the sentence. A changing digit is legible
+                       at a glance in mono without building a tile around
+                       it. --%>
+                  <span class="font-mono" data-role="agents-goal-number">
+                    {@goal_panel.measurement.value}
+                  </span>
+                  {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
+                </span>
             <% end %>
             <%!-- TAP TARGET, and this is independent of the reflow above:
                  MEASURED at 375x812 BEFORE any change, the control's box was

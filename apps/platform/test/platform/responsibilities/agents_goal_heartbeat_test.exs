@@ -66,16 +66,22 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatTest do
       refute Handler.format_measurement(measurement) =~ "unchanged"
     end
 
-    test "marks the measurement slot missing? for a goal with no derivable number" do
+    test "marks the measurement slot uncounted for a goal with no derivable number" do
       _space = space_with_goal("Get SXI to a good state")
 
       {:ok, context} = Handler.gather_context(nil, %{})
 
-      assert context.measurement.missing? == true
-      assert context.measurement.reason =~ "names nothing this handler can count"
+      # Task `01a0ca9f`: still `missing?: true` (no number), but the goal
+      # is uncounted rather than refused, and the slot carries no number.
+      assert context.measurement ==
+               %{missing?: true, kind: :uncounted, reason: "no count for this goal"}
 
-      # A goal that cannot name a number has no heartbeat.
-      assert {:error, {:no_measurement, _reason}} = Handler.build_prompt(context)
+      assert Handler.format_measurement(context.measurement) == "no count for this goal"
+
+      # An uncounted goal dispatches; it does not refuse.
+      assert {:ok, %{system: system}} = Handler.build_prompt(context)
+      assert system =~ "This goal has no count"
+      refute system =~ "first measurement"
     end
 
     test "build_prompt/1 succeeds on the measurable goal (control for the refusal above)" do
