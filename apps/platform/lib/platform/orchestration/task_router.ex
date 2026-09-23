@@ -2176,11 +2176,12 @@ defmodule Platform.Orchestration.TaskRouter do
     elapsed_ms = DateTime.diff(DateTime.utc_now(), dispatched_at, :millisecond)
 
     description =
-      "Task #{task.id} (#{task.title}) was dispatched at #{task.status} with NO stage open " <>
-        "#{div(elapsed_ms, 1_000)}s ago and nothing has come back: no runtime event, no stage " <>
-        "opened, no status change. No lease was minted for this dispatch, so no ack or " <>
-        "safety-net timer covers it. This is a record, not a block — the task is not held " <>
-        "and no human intervention has been requested."
+      "Task #{task.id} (#{task.title}) had a stage-less dispatch recorded " <>
+        "#{div(elapsed_ms, 1_000)}s ago. Since then the router has recorded no runtime event " <>
+        "for this task and tracks no running stage, and the task is now at #{task.status}. " <>
+        "Plan submissions are not read by this check. No lease was minted for this dispatch, " <>
+        "so no ack or safety-net timer covers it. This is a record, not a block — the task " <>
+        "is not held and no human intervention has been requested."
 
     attrs = %{
       "task_id" => task.id,

@@ -283,6 +283,103 @@ defmodule Platform.Orchestration.TaskRouterStagelessDispatchTraceTest do
     end
   end
 
+  describe "task 01a0b5ce — the unanswered description states only what the watchdog measured" do
+    # The watchdog's fire-time checks are: token, already-fired,
+    # `state.current_stage_id`, `last_runtime_event_at`, and membership of the
+    # live task status in the answer-expected set. It reads no plan row. The
+    # old description claimed "nothing has come back ... no status change" and
+    # "was dispatched at <status>" — none of which those checks measure. These
+    # tests pin the rendered text against the case that exposed it: a plan that
+    # WAS submitted (so something did come back) while the watchdog fires anyway.
+
+    test "(A) a submitted, unapproved plan: the event fires and the text claims nothing it did not read",
+         %{project: project} do
+      # Wide enough to build and submit a plan before the timer lands, short
+      # enough that `await_event/3` below sees the real `send_after` fire.
+      put_watchdog_ms(1_500)
+
+      %{task: task} = fixture = planning_task(project)
+      %{pid: pid} = start_router!(fixture)
+
+      # The stage-less dispatch must be RECORDED (watchdog armed) before the
+      # plan is submitted. The boot dispatch is still inside its debounce when
+      # `start_router!/1` returns, and a submit that lands first moves the
+      # router to `:waiting_human` with no stage-less dispatch ever sent — a
+      # run measured on moon at token 0 throughout. So drive one and wait for
+      # the arm, as the suppression tests above do.
+      send(pid, :dispatch)
+
+      await_token(task, 1) ||
+        flunk(
+          "ANTI-VACUITY: the watchdog was never armed, so there is no stage-less " <>
+            "dispatch for the submitted plan to follow"
+        )
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      assert plan.status == "draft"
+
+      for position <- 1..2 do
+        {:ok, _stage} =
+          Tasks.create_stage(%{
+            plan_id: plan.id,
+            position: position,
+            name: "Authored stage #{position}"
+          })
+      end
+
+      assert {:ok, %{status: "pending_review"}} = Tasks.submit_plan_for_review(plan)
+
+      # The plan work finished BEFORE the watchdog fired — otherwise this is the
+      # no-plan case under another name.
+      assert unanswered_events(task.id) == [],
+             "the watchdog fired before the plan was submitted; the test did not exercise " <>
+               "the submitted-plan case"
+
+      event =
+        await_event(task.id, "execution.dispatch_unanswered", 250) ||
+          flunk(
+            "FINDING: with a submitted pending_review plan the watchdog stayed silent — " <>
+              "no execution.dispatch_unanswered event was persisted"
+          )
+
+      description = event.payload["description"]
+
+      refute description =~ "nothing has come back",
+             "clause 'nothing has come back' is false here: a plan with 2 stages was " <>
+               "submitted, and the check never reads plans"
+
+      refute description =~ "no status change",
+             "clause 'no status change' is unmeasured: the check only tests membership " <>
+               "in the answer-expected status set"
+
+      refute description =~ "dispatched at",
+             "clause 'dispatched at <status>' is false: the status is re-read when the " <>
+               "watchdog fires, not taken from dispatch time"
+
+      assert description =~ "tracks no running stage"
+      assert description =~ "is now at planning"
+      assert description =~ task.id
+    end
+
+    test "(B) no plan: the event fires and names the runtime-event measurement", %{
+      project: project
+    } do
+      put_watchdog_ms(25)
+
+      %{task: task} = fixture = planning_task(project)
+      %{runtime_id: _runtime_id} = start_router!(fixture)
+
+      event =
+        await_event(task.id, "execution.dispatch_unanswered") ||
+          flunk("the watchdog never fired: no execution.dispatch_unanswered event was persisted")
+
+      description = event.payload["description"]
+
+      assert description =~ "no runtime event"
+      assert description =~ task.id
+    end
+  end
+
   # ── fixtures ───────────────────────────────────────────────────────────
 
   # A task at `planning` with NO plan: no plan means no stage can resolve, which
