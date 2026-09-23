@@ -1318,8 +1318,15 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                It is the difference between "not found" and "not searched yet" —
                opposite conclusions for the reader — so it sits ABOVE whichever
                pane follows, where it is read before that pane is.
-               `--color-neutral`, not `--color-warning`: nothing is wrong and
-               nobody is being asked for anything. No icon, no spinner and no
+               Neutral, not `--color-warning`: nothing is wrong and nobody is
+               being asked for anything. The colour is `--color-neutral` via
+               the utility below in LIGHT. In DARK, task 01a0792c overrides
+               that with a rule in `app.css` scoped to this element
+               (`--color-base-content` at 55%), because `--color-neutral`
+               measured 2.23:1 on this box against a 4.5:1 floor. Both themes
+               are guarded by
+               `Platform.Design.CanvasSearchSnippetContrastTest`.
+               No icon, no spinner and no
                percentage, on purpose — a percentage invites someone to sit and
                watch a backfill.
 

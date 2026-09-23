@@ -423,8 +423,19 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
       text = LazyHTML.text(line)
       assert text =~ "still being indexed"
 
-      # Informational, not a warning: --color-neutral, and none of the
-      # semantic tokens the design canvas rules out of a result row.
+      # Informational, not a warning: none of the semantic tokens the design
+      # canvas rules out of a result row.
+      #
+      # `text-neutral` is what LIGHT renders. In DARK it is overridden, as of
+      # task 01a0792c, by an unlayered rule in `app.css` scoped to this
+      # element: `--color-base-content` at 55%, because `--color-neutral`
+      # measured 2.23:1 on the drawer's box against a 4.5:1 floor. The utility
+      # stays in the markup, which is why this assertion is unchanged.
+      #
+      # Nothing here is a contrast check. This reads a class attribute and
+      # would pass identically against the colour that failed. The guard that
+      # recomputes both themes out of the stylesheet is
+      # `Platform.Design.CanvasSearchSnippetContrastTest`.
       classes = LazyHTML.attribute(line, "class") |> List.first()
       assert classes =~ "text-neutral"
       refute classes =~ "warning"
@@ -485,8 +496,11 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
       assert [line] = query_all(html, @indexing_selector)
       assert LazyHTML.text(line) =~ "still being indexed"
 
-      # Same contract as in results mode: neutral, and none of the semantic
-      # tokens. Restated here because this is a different render path.
+      # Same contract as in results mode, and the same limit: the utility is
+      # LIGHT's colour, DARK comes from the scoped `app.css` rule task
+      # 01a0792c added, and contrast for both is guarded by
+      # `Platform.Design.CanvasSearchSnippetContrastTest`, not here. Restated
+      # because this is a different render path.
       classes = LazyHTML.attribute(line, "class") |> List.first()
       assert classes =~ "text-neutral"
       refute classes =~ "warning"

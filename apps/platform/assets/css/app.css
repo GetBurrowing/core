@@ -7976,3 +7976,69 @@ body, .font-fabrikam {
   direction: rtl;
   text-align: left;
 }
+
+/* ── THE CANVASES-DRAWER INDEXING LINE (task 01a0792c) ─────────────────────
+   "Older canvases are still being indexed, so a phrase you remember may not
+   be findable yet." — the caveat under the drawer's search field
+   (`canvases_drawer/1`, conversation.ex:1338-1344), rendered only while
+   `@canvas_unindexed_count > 0`. It shipped as a bare `text-neutral` utility
+   at 11px and measured 2.2474:1 in dark: a WCAG 1.4.3 AA failure on text that
+   owes 4.5:1. 11px carries no large-text allowance, and the design direction
+   rejects buying contrast by growing the type, so the colour is what moves.
+
+   MEASURED. Instrument: painted pixel, CDP — Chrome screenshot pixels sampled
+   inside the line's own bounding box on a running dev server at 1440x900,
+   2026-09-23. Ground = the modal (most frequent) pixel in that box; glyph =
+   the extreme-luminance pixel in it. Nothing here is computed from the
+   palette on paper and nothing here was read by eye.
+
+     colour, on the drawer box `--color-base-200` (painted rgb 0,3,6)
+     --color-neutral (what shipped)                          2.2474:1  FAIL
+     --color-base-content at 55%                             5.5179:1  PASS
+
+   ONE GROUND, AND THAT IS MEASURED RATHER THAN ASSUMED. The attribution line
+   corrected on task 01a07402 sits on a result ROW, so it owed rest, hover and
+   active figures. This `<p>` is a direct child of the drawer's own box and is
+   outside every row. Walked live: every ancestor between it and that box
+   computes `rgba(0, 0, 0, 0)`, the box itself is opaque with no alpha, and
+   hovering a result row leaves this line's sampled pixels bit-identical
+   (2.2474:1 before, unchanged after). There is no second state to measure, so
+   no second figure is claimed.
+
+   THE TOKEN IS NOT RETUNED. Dark `--color-neutral` is also a FILL paired with
+   `--color-neutral-content`, where it measures 6.8383:1; lifting it far
+   enough to fix this line as text drops that pairing under the floor. One
+   token, two jobs, opposite requirements — the shape that split `--edge` out
+   of `--color-base-300`. Hence a correction scoped to this element.
+
+   THE SLOT IS THE `--color-base-content` ALPHA RAMP. It composites against
+   whatever ground it lands on instead of fighting a fixed token, and the
+   drawer's own "Live Canvases" heading already uses that ramp at 50%. 55% is
+   a visible step below the 95%-lightness title above it and clears the floor
+   by 23%. The durable fix is a system-wide muted-text slot, which the design
+   direction calls for and which is a follow-up ticket, not this one.
+
+   LIGHT IS UNTOUCHED and deliberately has no rule here: the utility keeps it
+   on `--color-neutral`, which measures 6.6918:1 on light `--color-base-200`.
+   One declaration instead of two, and nothing to keep in step.
+
+   UNLAYERED, and that is load-bearing. The element keeps its Tailwind
+   `text-neutral` utility, Tailwind utilities live in `@layer utilities`, and
+   unlayered CSS beats anything in a layer regardless of specificity. Proved
+   by reading the painted `getComputedStyle().color` off the live element
+   after the change, not by reasoning about the cascade.
+
+   The `prefers-color-scheme` twin is the house pattern (see `.msg-agent`
+   above): the dark theme is declared `prefersdark: true`, and
+   `setAppTheme("system")` removes `data-theme` outright, so a viewer on
+   "system" under a dark OS gets the dark palette with no `[data-theme=dark]`
+   to match. */
+[data-theme="dark"] [data-role="canvas-search-indexing-state"] {
+  color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) [data-role="canvas-search-indexing-state"] {
+    color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
+  }
+}
