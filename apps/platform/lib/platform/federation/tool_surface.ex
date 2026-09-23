@@ -3386,44 +3386,15 @@ defmodule Platform.Federation.ToolSurface do
       Map.get(context, :agent_participant_id) ||
         get_agent_participant_id_for_space(space_id, context)
 
-    case normalize_send_media_attachments(args) do
-      {:ok, attachment_specs} ->
-        with {:ok, attachment_attrs} <- persist_send_media_attachments(attachment_specs),
-             {:ok, message, attachments} <-
-               Chat.post_message_with_attachments(
-                 %{
-                   space_id: space_id,
-                   participant_id: participant_id,
-                   content_type: "text",
-                   content: content
-                 },
-                 attachment_attrs
-               ) do
-          {:ok,
-           %{
-             message_id: message.id,
-             space_id: space_id,
-             attachment_count: length(attachments)
-           }}
-        else
-          {:error, reason} ->
-            {:error,
-             %{
-               error: "Failed to send media: #{inspect(reason)}",
-               recoverable: true,
-               suggestion:
-                 "Check that the files exist and the agent is a participant in the space"
-             }}
-        end
-
-      {:error, message} ->
-        {:error,
-         %{
-           error: message,
-           recoverable: true,
-           suggestion:
-             "Pass file_paths as a non-empty array, or file_path for a single attachment"
-         }}
+    # This participation check IS the authorization barrier for send_media
+    # (task 01a0ac54). The Message changeset's `validate_required([:participant_id])`
+    # is NOT one and must not be relied on: it only happens to refuse the
+    # insert, after `persist_send_media_attachments/1` has already written
+    # files to attachment storage. Refuse before normalize, persist and post.
+    if is_nil(participant_id) do
+      {:error, space_write_denied(space_id)}
+    else
+      send_media_as_participant(args, space_id, participant_id, content)
     end
   end
 
@@ -3521,27 +3492,22 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("design_critique_request", args, context) do
-    request = %{
-      canvas_id: Map.get(args, "canvas_id"),
-      note: Map.get(args, "note"),
-      task_id: Map.get(args, "task_id"),
-      review_request_id: Map.get(args, "review_request_id"),
-      space_id: Map.get(context, :space_id),
-      requested_by: Map.get(context, :agent_id)
-    }
+    space_id = Map.get(context, :space_id)
 
-    case Platform.Design.Critique.request(request) do
-      {:ok, verdict} ->
-        {:ok,
-         %{
-           issues: Map.get(verdict, :issues, []),
-           raw: Map.get(verdict, :raw),
-           unparseable?: Map.get(verdict, :unparseable?, false),
-           review_item_id: Map.get(verdict, :review_item_id)
-         }}
-
-      {:error, reason} ->
-        {:error, design_critique_error(reason)}
+    # `space_id` is transport-reserved (the caller's own `args["space_id"]`),
+    # and `Platform.Design.Critique.land_verdict/2` posts the critique into it
+    # through `ExecutionSpace.post_engagement/3`, which seats a system
+    # participant there. Without this gate a caller could land a post in, and
+    # invite the Designer into, any space it can name (task 01a0ac54 sweep).
+    # No `space_id` keeps today's path: the landing resolves from `task_id`.
+    if is_binary(space_id) and space_id != "" and
+         is_nil(
+           Map.get(context, :agent_participant_id) ||
+             get_agent_participant_id_for_space(space_id, context)
+         ) do
+      {:error, space_write_denied(space_id)}
+    else
+      request_design_critique(args, context)
     end
   end
 
@@ -7681,6 +7647,48 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  defp send_media_as_participant(args, space_id, participant_id, content) do
+    case normalize_send_media_attachments(args) do
+      {:ok, attachment_specs} ->
+        with {:ok, attachment_attrs} <- persist_send_media_attachments(attachment_specs),
+             {:ok, message, attachments} <-
+               Chat.post_message_with_attachments(
+                 %{
+                   space_id: space_id,
+                   participant_id: participant_id,
+                   content_type: "text",
+                   content: content
+                 },
+                 attachment_attrs
+               ) do
+          {:ok,
+           %{
+             message_id: message.id,
+             space_id: space_id,
+             attachment_count: length(attachments)
+           }}
+        else
+          {:error, reason} ->
+            {:error,
+             %{
+               error: "Failed to send media: #{inspect_errors_safe(reason)}",
+               recoverable: true,
+               suggestion:
+                 "Check that the files exist and the agent is a participant in the space"
+             }}
+        end
+
+      {:error, message} ->
+        {:error,
+         %{
+           error: message,
+           recoverable: true,
+           suggestion:
+             "Pass file_paths as a non-empty array, or file_path for a single attachment"
+         }}
+    end
+  end
+
   defp normalize_send_media_attachments(args) do
     file_paths =
       case Map.get(args, "file_paths") do
@@ -7748,12 +7756,7 @@ defmodule Platform.Federation.ToolSurface do
             get_agent_participant_id_for_space(space_id, context)
 
         if is_nil(participant_id) do
-          {:error,
-           %{
-             error: "Access denied: agent is not a participant in space #{space_id}",
-             recoverable: false,
-             suggestion: "Use space_list to find spaces the agent has access to"
-           }}
+          {:error, space_write_denied(space_id)}
         else
           persist_reaction(space_id, message_id, participant_id, emoji)
         end
@@ -13862,14 +13865,52 @@ defmodule Platform.Federation.ToolSurface do
             :ok
 
           _ ->
-            {:error,
-             %{
-               error: "Access denied: agent is not a participant in space #{space_id}",
-               recoverable: false,
-               suggestion: "Use space_list to find spaces the agent has access to"
-             }}
+            {:error, space_write_denied(space_id)}
         end
     end
+  end
+
+  defp request_design_critique(args, context) do
+    request = %{
+      canvas_id: Map.get(args, "canvas_id"),
+      note: Map.get(args, "note"),
+      task_id: Map.get(args, "task_id"),
+      review_request_id: Map.get(args, "review_request_id"),
+      space_id: Map.get(context, :space_id),
+      requested_by: Map.get(context, :agent_id)
+    }
+
+    case Platform.Design.Critique.request(request) do
+      {:ok, verdict} ->
+        {:ok,
+         %{
+           issues: Map.get(verdict, :issues, []),
+           raw: Map.get(verdict, :raw),
+           unparseable?: Map.get(verdict, :unparseable?, false),
+           review_item_id: Map.get(verdict, :review_item_id)
+         }}
+
+      {:error, reason} ->
+        {:error, design_critique_error(reason)}
+    end
+  end
+
+  # The one refusal for "this agent has no participant row in that space".
+  # Callers: `execute("send_media", ...)`, `execute("design_critique_request", ...)`,
+  # `react_after_validation/4`, the read gate `assert_agent_in_space/2`, and
+  # `PlatformWeb.RuntimeChannel.authorize_space_write/2` (the runtime `reply`,
+  # `reply_with_media`, `reply_chunk` and `typing` frames).
+  # The error string is a cross-transport contract from task 01a09415: a caller
+  # sees one wording, carrying the offending space id, whichever tool or
+  # transport refused it. Keep every site routed through here (task 01a0ac54)
+  # rather than re-typing the map, so the sites cannot drift apart.
+  @doc false
+  def space_write_denied(space_id) do
+    %{
+      error: "Access denied: agent is not a participant in space #{space_id}",
+      recoverable: false,
+      suggestion: "Use space_list to find spaces the agent has access to"
+    }
   end
 
   defp get_agent_participant_id_for_space(space_id, context) do

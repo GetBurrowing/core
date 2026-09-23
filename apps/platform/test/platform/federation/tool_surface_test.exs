@@ -5385,6 +5385,147 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "Failed to send media"
     end
 
+    # ── send_media space authorization (task 01a0ac54) ───────────────────
+    #
+    # Driven through `ToolArguments.dispatch/3` with the context shape both
+    # transports build (`MCPController.build_context/2`,
+    # `RuntimeChannel.execute_tool_call/4`): `agent_participant_id` is nil for
+    # a caller with no participant row in `space_id`.
+    #
+    # The Message changeset still refuses a nil participant_id, so absence of
+    # a Message row alone cannot detect removal of the gate. The refusal string,
+    # the `recoverable: false` flag and the EMPTY attachments root can: without
+    # the gate, persist_send_media_attachments/1 writes the file before the
+    # changeset refuses the insert.
+
+    defp with_send_media_fixture(fun) do
+      root = Path.join(System.tmp_dir!(), "platform_test_uploads_#{Ecto.UUID.generate()}")
+      prev = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, root)
+
+      tmp_path = Path.join(System.tmp_dir!(), "test-upload-#{Ecto.UUID.generate()}.txt")
+      File.write!(tmp_path, "hello world")
+
+      try do
+        fun.(tmp_path, root)
+      after
+        Application.put_env(:platform, :chat_attachments_root, prev)
+        File.rm(tmp_path)
+        File.rm_rf(root)
+      end
+    end
+
+    defp stored_files(root) do
+      root
+      |> Path.join("**/*")
+      |> Path.wildcard()
+      |> Enum.filter(&File.regular?/1)
+    end
+
+    defp transport_context(space_id, agent) do
+      %{
+        space_id: space_id,
+        agent_id: agent.id,
+        agent_participant_id: nil,
+        runtime_id: "rt-#{System.unique_integer([:positive])}"
+      }
+    end
+
+    defp send_media_args(space_id, tmp_path) do
+      %{"space_id" => space_id, "file_path" => tmp_path, "content" => "hi"}
+    end
+
+    test "send_media refuses a caller with no participant row in an existing space, before any storage write" do
+      agent = create_agent()
+      space = create_space()
+      # Someone else is in the space; the caller is not.
+      create_participant(space.id)
+
+      with_send_media_fixture(fn tmp_path, root ->
+        assert {:error, error} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   send_media_args(space.id, tmp_path),
+                   transport_context(space.id, agent)
+                 )
+
+        assert error.error == "Access denied: agent is not a participant in space #{space.id}"
+        assert error.recoverable == false
+        assert error.suggestion == "Use space_list to find spaces the agent has access to"
+        refute error.error =~ "Changeset"
+
+        assert Repo.aggregate(
+                 from(m in Platform.Chat.Message, where: m.space_id == ^space.id),
+                 :count
+               ) == 0
+
+        assert stored_files(root) == []
+      end)
+    end
+
+    test "send_media refuses a well-formed space_id naming no space" do
+      agent = create_agent()
+      ghost_id = Ecto.UUID.generate()
+
+      with_send_media_fixture(fn tmp_path, root ->
+        assert {:error, error} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   send_media_args(ghost_id, tmp_path),
+                   transport_context(ghost_id, agent)
+                 )
+
+        assert error.error == "Access denied: agent is not a participant in space #{ghost_id}"
+        assert error.recoverable == false
+        assert stored_files(root) == []
+      end)
+    end
+
+    test "send_media refuses a non-UUID space_id without raising" do
+      agent = create_agent()
+
+      with_send_media_fixture(fn tmp_path, root ->
+        assert {:error, error} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   send_media_args("not-a-uuid", tmp_path),
+                   transport_context("not-a-uuid", agent)
+                 )
+
+        assert error.error == "Access denied: agent is not a participant in space not-a-uuid"
+        assert error.recoverable == false
+        assert stored_files(root) == []
+      end)
+    end
+
+    test "send_media resolves the caller's participant row from agent_id when the context carries none" do
+      agent = create_agent()
+      space = create_space()
+
+      participant =
+        create_participant(space.id, %{participant_type: "agent", participant_id: agent.id})
+
+      with_send_media_fixture(fn tmp_path, root ->
+        assert {:ok, result} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   send_media_args(space.id, tmp_path),
+                   transport_context(space.id, agent)
+                 )
+
+        assert result.space_id == space.id
+        assert result.attachment_count == 1
+
+        message = Repo.get!(Platform.Chat.Message, result.message_id)
+        assert message.space_id == space.id
+        assert message.participant_id == participant.id
+
+        # Positive control for the storage assertion above: a permitted call
+        # DOES write under this root, so an empty root on refusal means something.
+        assert [_file] = stored_files(root)
+      end)
+    end
+
     # ── react ───────────────────────────────────────────────────────────
 
     test "react adds an emoji reaction to a message" do
@@ -5488,6 +5629,35 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "not found"
+    end
+
+    # Task 01a0ac54 stage 2: react's participant nil-check had no test pinning
+    # its refusal. The caller is named by `agent_id` only and has no participant
+    # row in the space that owns the message, so both lookups come back nil.
+    test "react refuses a caller with no participant row in the message's space" do
+      agent = create_agent()
+      space = create_space()
+      author = create_participant(space.id)
+
+      {:ok, message} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "hello"
+        })
+
+      assert {:error, error} =
+               ToolSurface.execute(
+                 "react",
+                 %{"space_id" => space.id, "message_id" => message.id, "emoji" => "👍"},
+                 %{space_id: space.id, agent_id: agent.id, agent_participant_id: nil}
+               )
+
+      assert error.error == "Access denied: agent is not a participant in space #{space.id}"
+      assert error.recoverable == false
+      assert error.suggestion == "Use space_list to find spaces the agent has access to"
+      assert Chat.list_reactions(message.id) == []
     end
 
     # Migrated to dispatch/3 in 019fa609 stage 4. The empty-string emoji is
@@ -8798,6 +8968,53 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert envelope.recoverable == false
       assert envelope.suggestion =~ "Designer"
       refute_receive {:outbound, _}
+    end
+
+    # Task 01a0ac54 stage 2 sweep. `space_id` is transport-reserved, so it
+    # reaches this tool as `context.space_id`, and `Critique.land_verdict/2`
+    # posts the verdict there via `ExecutionSpace.post_engagement/3`. The
+    # positive control shows that landing happens for a participant, so the
+    # refusal test's empty space is the gate, not a landing that never runs.
+    test "lands the critique in a named space the caller participates in" do
+      %{canvas: canvas} = critique_wiring()
+      critique_stub!(critique_issues_json())
+      agent = create_agent()
+      target = create_space()
+
+      participant =
+        create_participant(target.id, %{participant_type: "agent", participant_id: agent.id})
+
+      assert {:ok, _result} =
+               ToolSurface.execute(
+                 "design_critique_request",
+                 %{"canvas_id" => canvas.id},
+                 %{space_id: target.id, agent_id: agent.id, agent_participant_id: participant.id}
+               )
+
+      assert Enum.any?(
+               Chat.list_messages(target.id, limit: 10),
+               &(&1.content =~ "contrast ratio 2.1:1")
+             )
+    end
+
+    test "refuses a named space the caller does not participate in, before dispatch" do
+      %{canvas: canvas} = critique_wiring()
+      critique_stub!(critique_issues_json())
+      agent = create_agent()
+      foreign = create_space()
+      create_participant(foreign.id)
+
+      assert {:error, error} =
+               ToolSurface.execute(
+                 "design_critique_request",
+                 %{"canvas_id" => canvas.id},
+                 %{space_id: foreign.id, agent_id: agent.id, agent_participant_id: nil}
+               )
+
+      assert error.error == "Access denied: agent is not a participant in space #{foreign.id}"
+      assert error.recoverable == false
+      refute_receive {:outbound, _}
+      assert Chat.list_messages(foreign.id, limit: 10) == []
     end
   end
 

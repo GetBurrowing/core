@@ -2119,6 +2119,54 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
   end
 
+  # Task 01a0ac54 stage 2. One foreign space, two transports' write paths: the
+  # runtime `reply` frame (`authorize_space_write/2`) and the `send_media` tool
+  # (`ToolSurface.execute/3`). Both build their refusal with
+  # `ToolSurface.space_write_denied/1`. Parity alone would still pass if that
+  # builder's text changed, so each string is also pinned to the literal.
+  describe "space write refusal parity across reply and send_media" do
+    test "a foreign space is refused with one byte-identical string on both paths", ctx do
+      socket = joined_socket(ctx)
+
+      foreign =
+        create_space(%{name: "Foreign", slug: "foreign-#{System.unique_integer([:positive])}"})
+
+      literal = "Access denied: agent is not a participant in space #{foreign.id}"
+
+      ref = push(socket, "reply", %{"space_id" => foreign.id, "content" => "x"})
+      assert_reply ref, :error, %{error: reply_error, recoverable: reply_recoverable}
+
+      tmp_path =
+        Path.join(
+          System.tmp_dir!(),
+          "runtime-send-media-#{System.unique_integer([:positive])}.txt"
+        )
+
+      File.write!(tmp_path, "hello world")
+      on_exit(fn -> File.rm(tmp_path) end)
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-send-media-foreign",
+        "tool" => "send_media",
+        "args" => %{"space_id" => foreign.id, "file_path" => tmp_path, "content" => "x"}
+      })
+
+      assert_push "tool_result", %{
+        call_id: "call-send-media-foreign",
+        status: "error",
+        error: media_error
+      }
+
+      assert reply_error == media_error.error
+      assert reply_error == literal
+      assert media_error.error == literal
+      assert reply_recoverable == false
+      assert media_error.recoverable == false
+
+      assert Chat.list_messages(foreign.id, limit: 10) == []
+    end
+  end
+
   describe "tool_call" do
     test "executes tool and returns result", ctx do
       # `canvas` is NOT in AgentRuntime.default_allowed_bundles/0, and

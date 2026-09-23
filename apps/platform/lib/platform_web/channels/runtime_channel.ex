@@ -15,6 +15,7 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Federation.RuntimePresence
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
+  alias Platform.Federation.ToolSurface
   alias Platform.Meetings
   alias Platform.Meetings.IntentQueue
 
@@ -874,19 +875,14 @@ defmodule PlatformWeb.RuntimeChannel do
 
   # Authorize an agent-originated WRITE into `space_id`.
   #
-  # The lookup itself is delegated to `get_agent_participant_id/2` — this only
-  # shapes the refusal, deliberately mirroring the read path in
-  # `Platform.Federation.ToolSurface` so a caller sees one wording (and the
-  # offending id) whichever transport it used.
+  # The lookup itself is delegated to `get_agent_participant_id/2`. The refusal
+  # map is built by `ToolSurface.space_write_denied/1`, the single definition
+  # shared with the ToolSurface read gate, send_media and react, so a caller sees
+  # one wording (and the offending id) whichever transport it used.
   defp authorize_space_write(socket, space_id) do
     case get_agent_participant_id(socket, space_id) do
       nil ->
-        {:error,
-         %{
-           error: "Access denied: agent is not a participant in space #{space_id}",
-           recoverable: false,
-           suggestion: "Use space_list to find spaces the agent has access to"
-         }}
+        {:error, ToolSurface.space_write_denied(space_id)}
 
       participant_id ->
         {:ok, participant_id}
