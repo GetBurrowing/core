@@ -429,10 +429,14 @@ defmodule Platform.Orchestration.PromptTemplates do
   # So the planning body states that no ack is expected rather than demanding
   # one. Do not "fix" this by giving `task_ack` a task-level form — that would
   # be API surface for an alarm that does not exist.
+  #
+  # Spawn paragraph reworded by task 01a0ac55: it no longer claims the server makes an unspawned ack impossible.
+  @task_ack_spawn_paragraph "Spawn the subagent FIRST, then pass the id of the subagent you actually spawned as `subagent_id`. The server rejects only a missing, empty, whitespace-only, non-string or over-128-byte subagent_id; it does not verify that the id names a real spawn, so spawn-before-ack ordering is your discipline, not a server guarantee. Without a successful ack the router will fire a no-ack alert in 5 minutes."
+
   @task_ack_preamble """
   **Your first tool call must be `suite_task_ack(task_id="{{task_id}}", stage_id="{{stage_id}}", subagent_id="<the id returned when you spawned the SuiteExecutor / SuiteReviewer via the Agent tool>")`.**
 
-  Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation — this ordering makes it structurally impossible to ack a dispatch you never spawned a subagent for. Without a successful ack the router will fire a no-ack alert in 5 minutes.
+  #{@task_ack_spawn_paragraph}
 
   **If `suite_task_ack` is missing from your MCP tool cache** (a known cross-version issue where a session's catalog predates a new tool), call `suite_alarm_silence(task_id="{{task_id}}", stage_id="{{stage_id}}", until_seconds=1800, reason="task_ack absent from stale MCP catalog; subagent live")` as the operator escape hatch. Do NOT use `report_blocker(needs_human: false)` — that anti-pattern sets a task-level lease to blocked and leaks across stage boundaries.
   """
@@ -440,6 +444,15 @@ defmodule Platform.Orchestration.PromptTemplates do
   @doc "Ack-first preamble string interpolated into every stage-scoped dispatch template body."
   @spec task_ack_preamble() :: String.t()
   def task_ack_preamble, do: @task_ack_preamble
+
+  @doc """
+  The spawn-ordering paragraph of `task_ack_preamble/0` (task 01a0ac55), on
+  its own so a force-update migration can locate and rewrite it in seeded rows.
+  It states what `task_ack` actually checks: presence and size of
+  `subagent_id`, not that the id names a real spawn.
+  """
+  @spec task_ack_spawn_paragraph() :: String.t()
+  def task_ack_spawn_paragraph, do: @task_ack_spawn_paragraph
 
   # What `dispatch.planning` says INSTEAD of the ack preamble (task 019fa469
   # stage 5). Kept as its own attribute so the DB template body and

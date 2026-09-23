@@ -2024,7 +2024,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: true,
             description:
-              "Opaque handle identifying the subagent working this stage — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 chars. Presence forces spawn-before-ack ordering: an operator cannot ack a dispatch they never spawned a subagent for."
+              "Opaque handle identifying the subagent working this stage — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 chars. The server checks presence and size only — it does not verify that the id names a real spawn — so pass the id of the subagent you actually spawned."
           }
         },
         returns:
@@ -2772,7 +2772,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: true,
             description:
-              "Opaque handle identifying the subagent working this intent — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 bytes. Presence forces spawn-before-ack ordering: you cannot ack an intent you never spawned a subagent for. It is also what a later cancellation is addressed to, so it must identify the ACTUAL subagent."
+              "Opaque handle identifying the subagent working this intent — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 bytes. The server checks presence and size only — it does not verify that the id names a real spawn — so pass the id of the subagent you actually spawned. It is also what a later cancellation is addressed to, so it must identify the ACTUAL subagent."
           },
           status: %{
             type: "string",
@@ -5256,8 +5256,8 @@ defmodule Platform.Federation.ToolSurface do
   # ── intent_ack (task 019f70b8 stage 3) ────────────────────────────────
   # The runtime-facing half of the meeting intent queue's ack contract.
   # Shares `validate_subagent_id/1` with task_ack verbatim — same three-way
-  # error envelope, same 128-byte cap — because it is the same promise:
-  # you cannot ack work you never spawned.
+  # error envelope, same 128-byte cap — because it is the same contract:
+  # requires a subagent_id; does not verify it (task 01a0ac55).
   #
   # ORDERING IS LOAD-BEARING. The subagent_id is validated BEFORE the queue
   # is touched, and a rejected ack records only a counter in the queue

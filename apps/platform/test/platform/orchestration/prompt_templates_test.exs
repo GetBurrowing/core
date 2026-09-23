@@ -944,10 +944,9 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     # runtime receives. Two things in this body are load-bearing beyond
     # prose quality:
     #
-    #   * AC15's ack preamble is asserted CHARACTER-FOR-CHARACTER. It is the
-    #     mechanism that makes "acked but never spawned" structurally
-    #     impossible for intents the way it already is for tasks, and a
-    #     helpful paraphrase would quietly relax it.
+    #   * AC15's ack preamble is asserted CHARACTER-FOR-CHARACTER. intent_ack,
+    #     like task_ack, requires a subagent_id; does not verify it (task
+    #     01a0ac55). A helpful paraphrase would quietly relax the wording.
     #   * The `## Cancellation` wire shape. Stage 4 shipped the cancel as
     #     `Endpoint.broadcast(topic, "intent_cancelled", %{...})` — a named
     #     channel event with a MAP payload — because `runtime:<runtime_id>`

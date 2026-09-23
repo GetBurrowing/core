@@ -82,7 +82,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       assert task_ack.parameters.task_id.required == true
       assert task_ack.parameters.stage_id.required == false
 
-      # task 019f6c73: subagent_id closes the "acked but never spawned" defect.
+      # task 019f6c73 / 01a0ac55: task_ack requires a subagent_id; does not verify it.
       assert Map.has_key?(task_ack.parameters, :subagent_id),
              "task_ack must expose subagent_id in its parameters schema"
 
