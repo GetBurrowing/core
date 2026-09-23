@@ -491,7 +491,24 @@ defmodule Platform.Meetings.TranscriptTelemetryTest do
       # The ceiling is SayRegistry's own, read from it rather than restated:
       # a second copy of the number is a second number that can drift.
       cutoff = System.monotonic_time(:millisecond) - SayRegistry.ttl_ms()
-      assert SayRegistry.frames_sweep(cutoff) == 0, "a fresh mark is not past the ttl"
+
+      # The table is named and process-wide: rows left by the same beam's
+      # other tests share it, so the raw sweep count is not a safe absolute
+      # to pin. Bind it (foreign rows may legitimately be swept) and let the
+      # room-scoped check below carry the weight: THIS room's freshly
+      # delivered mark must still be present because it is not past the ttl.
+      _swept = SayRegistry.frames_sweep(cutoff)
+
+      # Room-scoped lookup mirroring take_delivered_frame/2: exactly one
+      # `{meeting_id, agent_id}` row carries this room's fresh mark, and it
+      # must still be newer than the cutoff.
+      assert [{_meeting_id, at_ms}] =
+               :ets.select(:meeting_transcript_frames, [
+                 {{{:"$1", agent.id}, %{room_name: ctx.room_name, at_ms: :"$2"}}, [],
+                  [{{:"$1", :"$2"}}]}
+               ])
+
+      assert at_ms > cutoff
 
       # `>= 1` rather than `== 1`: the table is named and process-wide, so
       # marks from other tests in the same run share it. What this pins is
