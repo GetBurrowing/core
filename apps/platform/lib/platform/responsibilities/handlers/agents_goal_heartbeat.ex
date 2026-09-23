@@ -174,6 +174,28 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   a claim nobody measured. It renders `drive_instruction(:unavailable)`,
   which says the roster could not be read.
 
+  ### The drive follows the goal's direction
+
+  Task `01a0caa5`: "pick the open item ... and work it" is the right
+  prod for a goal that shrinks a count and the wrong one for a goal that
+  grows one (milv's job-board backlog has no open item to pick). The
+  gather reads `goal_direction/1` from the goal text -- a CLOSED,
+  word-bounded match, not a parser -- and passes it to
+  `drive_instruction/2`, and the context carries it as `goal_direction`:
+
+    * close words only (close, reduce, shrink and their listed forms) --
+      `:close`, the original "open item" wording, byte for byte;
+    * grow words only (grow, increase, populate and their listed forms)
+      -- `:grow`, which asks for the single item to ADD;
+    * neither family, or both -- `:neutral`, which asks for the single
+      action; a conflict is not guessed.
+
+  Only the action sentence changes; the solo, roster and unavailable
+  framing are shared. The direction reads the goal, not the measurement
+  slot, so an uncounted goal gets it too. `{{drive}}` is rendered in code
+  and substituted into the `agents.goal_heartbeat.v1` row, which carries
+  no drive text of its own, so no prompt-template migration is needed.
+
   ## Where the last beat's claim is read
 
   Each beat asks the leader to end its reply with a "Next:" line, and the
@@ -525,8 +547,16 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
     leader_ids = leader_ids(space)
     {delegates, roster_error?} = delegate_roster(leader_ids)
 
+    # THE GOAL DIRECTION (task `01a0caa5`), read from the goal TEXT, so it
+    # applies to measured and uncounted goals alike. It picks the drive's
+    # action sentence only; see "The drive follows the goal's direction"
+    # in the moduledoc.
+    direction = goal_direction(goal)
+
     drive_text =
-      if roster_error?, do: drive_instruction(:unavailable), else: drive_instruction(delegates)
+      if roster_error?,
+        do: drive_instruction(:unavailable, direction),
+        else: drive_instruction(delegates, direction)
 
     prior_claim = prior_claim(space, leader_ids, since)
 
@@ -536,6 +566,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
       leader: leader_slot(space),
       delegates: delegates,
       roster_error: roster_error?,
+      goal_direction: direction,
       drive_text: drive_text,
       prior_claim: prior_claim,
       prior_claim_text: prior_claim_instruction(prior_claim)
@@ -696,24 +727,127 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
                        "moves the measurement and work it this turn. Report what you picked " <>
                        "and what changed."
 
+  # The `:grow` and `:neutral` variants (task `01a0caa5`). The solo
+  # prefix, the unavailable prefix and the "Agents you can delegate to: "
+  # roster line are shared with the `:close` strings above word for word;
+  # only the action sentence changes. None of these says "open item": a
+  # goal that grows a count has no open item to pick.
+  @grow_solo_drive "You are the only agent working this goal. There is no one to delegate " <>
+                     "to; this is yours. Pick the single item to add that most moves the " <>
+                     "measurement toward the goal and add it this turn. Report what you " <>
+                     "added and what changed."
+
+  @grow_delegate_drive "Pick the single item to add that most moves the measurement toward " <>
+                         "the goal. Assign it to one of these agents by creating or assigning " <>
+                         "a task, or add it yourself this turn. Report what you picked, who " <>
+                         "has it, and what changed.\n" <>
+                         "Agents you can delegate to: "
+
+  @grow_unavailable_drive "The delegate roster could not be read this hour, so it is not " <>
+                            "known whether anyone else can take work. Pick the single item to " <>
+                            "add that most moves the measurement toward the goal and add it " <>
+                            "this turn. Report what you added and what changed."
+
+  @neutral_solo_drive "You are the only agent working this goal. There is no one to delegate " <>
+                        "to; this is yours. Pick the single action that most moves the " <>
+                        "measurement toward the goal and take it this turn. Report what you " <>
+                        "did and what changed."
+
+  @neutral_delegate_drive "Pick the single action that most moves the measurement toward " <>
+                            "the goal. Assign it to one of these agents by creating or " <>
+                            "assigning a task, or take it yourself this turn. Report what you " <>
+                            "picked, who has it, and what changed.\n" <>
+                            "Agents you can delegate to: "
+
+  @neutral_unavailable_drive "The delegate roster could not be read this hour, so it is not " <>
+                               "known whether anyone else can take work. Pick the single " <>
+                               "action that most moves the measurement toward the goal and " <>
+                               "take it this turn. Report what you did and what changed."
+
   @doc """
-  The drive paragraph for a delegate roster (task `01a0ca24`).
+  The direction a goal asks the measurement to move (task `01a0caa5`).
+
+  A small CLOSED word match on the downcased goal, word-bounded, in the
+  same discipline as `measurable_kind/1`: no open parser and no stemming
+  beyond the listed forms.
+
+    * `:grow` -- a grow word (grow, grows, growing, grown, increase,
+      increases, increasing, populate, populated, populating) and no
+      close word;
+    * `:close` -- a close word (close, closes, closing, closed, reduce,
+      reduces, reducing, shrink, shrinks, shrinking) and no grow word;
+    * `:neutral` -- both families (a conflict is not guessed), neither,
+      or a non-binary input such as a `missing?: true` goal slot or `nil`.
+  """
+  @spec goal_direction(String.t() | term()) :: :grow | :close | :neutral
+  def goal_direction(goal) when is_binary(goal) do
+    down = String.downcase(goal)
+
+    grow? =
+      Regex.match?(
+        ~r/\b(?:grow|grows|growing|grown|increase|increases|increasing|populate|populated|populating)\b/u,
+        down
+      )
+
+    close? =
+      Regex.match?(
+        ~r/\b(?:close|closes|closing|closed|reduce|reduces|reducing|shrink|shrinks|shrinking)\b/u,
+        down
+      )
+
+    case {grow?, close?} do
+      {true, false} -> :grow
+      {false, true} -> :close
+      _ -> :neutral
+    end
+  end
+
+  def goal_direction(_goal), do: :neutral
+
+  @doc """
+  The drive paragraph for a delegate roster (task `01a0ca24`), in the
+  `:close` direction. Equivalent to `drive_instruction(roster, :close)`.
+  """
+  @spec drive_instruction([%{agent_id: String.t(), name: String.t()}] | :unavailable) ::
+          String.t()
+  def drive_instruction(roster), do: drive_instruction(roster, :close)
+
+  @doc """
+  The drive paragraph for a delegate roster and a goal direction (tasks
+  `01a0ca24`, `01a0caa5`).
 
   `[]` renders the solo instruction -- and ONLY `[]` does. A non-empty
   roster renders the delegate drive followed by `Name (agent_id)` entries
   joined with ", " in the roster's order (which is
   `Delegation.eligible_agents/0`'s name order). `:unavailable` is the
   roster-read-failed case: it claims neither solitude nor a roster.
-  """
-  @spec drive_instruction([%{agent_id: String.t(), name: String.t()}] | :unavailable) ::
-          String.t()
-  def drive_instruction([]), do: @solo_drive
 
-  def drive_instruction(roster) when is_list(roster) do
-    @delegate_drive <> Enum.map_join(roster, ", ", fn d -> "#{d.name} (#{d.agent_id})" end)
+  `direction` (see `goal_direction/1`) picks the action sentence only:
+  `:close` is the original "open item ... work it" wording, byte for
+  byte; `:grow` asks for an item to add; `:neutral` asks for an action.
+  """
+  @spec drive_instruction(
+          [%{agent_id: String.t(), name: String.t()}] | :unavailable,
+          :grow | :close | :neutral
+        ) :: String.t()
+  def drive_instruction([], direction), do: drive_text(direction, :solo)
+
+  def drive_instruction(roster, direction) when is_list(roster) do
+    drive_text(direction, :delegate) <>
+      Enum.map_join(roster, ", ", fn d -> "#{d.name} (#{d.agent_id})" end)
   end
 
-  def drive_instruction(:unavailable), do: @unavailable_drive
+  def drive_instruction(:unavailable, direction), do: drive_text(direction, :unavailable)
+
+  defp drive_text(:close, :solo), do: @solo_drive
+  defp drive_text(:close, :delegate), do: @delegate_drive
+  defp drive_text(:close, :unavailable), do: @unavailable_drive
+  defp drive_text(:grow, :solo), do: @grow_solo_drive
+  defp drive_text(:grow, :delegate), do: @grow_delegate_drive
+  defp drive_text(:grow, :unavailable), do: @grow_unavailable_drive
+  defp drive_text(:neutral, :solo), do: @neutral_solo_drive
+  defp drive_text(:neutral, :delegate), do: @neutral_delegate_drive
+  defp drive_text(:neutral, :unavailable), do: @neutral_unavailable_drive
 
   @doc """
   The space this heartbeat speaks for: the earliest-created space that
