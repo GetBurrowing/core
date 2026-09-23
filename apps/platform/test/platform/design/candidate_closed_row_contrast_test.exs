@@ -438,7 +438,7 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
       # this file measures against, and a fade on BOTH already reds twice.
       alpha = composite_alpha(ctx.closed_rule, ctx.rules, Map.fetch!(ctx.slots, selector))
       painted = painted(W.composite(resolve!(tokens, token), alpha, ground))
-      got = W.contrast(painted, row_bg)
+      got = W.contrast_painted(painted, row_bg)
 
       assert got >= @aa_text,
              "#{theme}: #{description} via #{selector} -> #{token} measures #{fmt(got)} " <>
@@ -473,7 +473,7 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
     tokens = Map.fetch!(ctx.tokens, theme)
 
     token = property_token!(ctx.css, ".candidate-closed__summary", "color")
-    got = W.contrast(painted(resolve!(tokens, token)), ground)
+    got = W.contrast_painted(painted(resolve!(tokens, token)), ground)
 
     assert got >= @aa_text,
            "#{theme}: the `N CLOSED` disclosure label via --cc-stage -> #{token} measures " <>
@@ -484,7 +484,10 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
 
   defp contrast(ctx, theme, fg_token, bg_token) do
     tokens = Map.fetch!(ctx.tokens, theme)
-    W.contrast(painted(resolve!(tokens, fg_token)), painted(resolve!(tokens, bg_token)))
+
+    # The PAINTED ratio: both endpoints are already quantized by `painted/1`,
+    # so re-quantizing is a no-op — the call NAMES the quantity it means.
+    W.contrast_painted(painted(resolve!(tokens, fg_token)), painted(resolve!(tokens, bg_token)))
   end
 
   # ── the ground behind a closed row ────────────────────────────────────────
@@ -720,14 +723,15 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
   # THE PAINTED QUANTITY. The compositor rounds every colour to 8 bits per
   # channel before it reaches a pixel, so that is where this file rounds too.
   #
-  # This is NOT a free choice. `WcagContrast`'s moduledoc documents a
-  # float-through convention and says it is "the convention the figures already
-  # recorded in app.css were computed under". That is true of the figures it
-  # names -- the `.chip-soft` alpha ceilings, which are declaration-derived --
-  # and NOT true of the figures on this rail, which `app.css` labels "MEASURED
-  # on the real rendered row in a browser (painted pixels, not palette
-  # arithmetic)". Both conventions live in one stylesheet and which one applies
-  # depends on how the figure was produced.
+  # This is NOT a free choice. `WcagContrast` documents a float-through
+  # convention for `contrast/2` and scopes it: it reproduces the figures the
+  # moduledoc names -- the `.chip-soft` alpha ceilings, which are
+  # declaration-derived -- and NOT the figures on this rail, which `app.css`
+  # labels "MEASURED on the real rendered row in a browser (painted pixels,
+  # not palette arithmetic)". Both conventions live in one stylesheet and
+  # which one applies depends on how the figure was produced;
+  # `WcagContrast.contrast_painted/2` is the named mechanism for the painted
+  # quantity.
   #
   # Measured, on the three conversion-involved anchors below:
   #

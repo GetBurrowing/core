@@ -21,9 +21,10 @@ defmodule Platform.Design.WcagContrast do
   to the nearest `#rrggbb` before measuring, or carry the float straight into the
   luminance sum. The two answers differ in the third decimal of a contrast ratio.
 
-  This module carries the float. That is not a taste call: it is the convention the
-  figures already recorded in `app.css` were computed under, and the match is exact
-  rather than close. The `.chip-soft` alpha-ceiling table reads
+  `contrast/2` carries the float. That is not a taste call: it is the convention the
+  figures this module names were computed under, and the match is exact rather than
+  close. The `.chip-soft` alpha-ceiling table — figures `app.css` derives from its
+  declarations, not from a render — reads
 
       neutral 4.87868930, success 3.23613436, warning 2.21457697, error 3.89478250
 
@@ -31,6 +32,54 @@ defmodule Platform.Design.WcagContrast do
   tone tokens. Quantizing the tint first gives 4.88756921 / 3.23171346 / 2.21779607 /
   3.90669772 — wrong in the third decimal, four times over. The chip fill table's
   light `primary` cell (1.0666) reproduces the same way and not the other.
+
+  The claim does NOT generalise past those declaration-derived figures. `app.css`
+  records some figures as PAINTED-pixel measurements, and those were computed under
+  the OTHER convention. Two candidate-rail blocks say so in their own words:
+
+  * "The closed row that leads somewhere" (`app.css` ~line 6630): "MEASURED on the
+    real rendered row in a browser (painted pixels, not palette arithmetic)".
+  * "The closed row" (`app.css` ~line 7051): "MEASURED on the rendered rail in
+    Chrome 152 (painted pixels sampled from a screenshot...)" — which adds "the
+    corrected values reproduce from the tokens alone under the painted convention —
+    quantize to 8 bits at each composite".
+
+  The four anchors recorded there are 6.87 (neutral, light), 1.99 (neutral, dark),
+  5.39 (spent foreground, light) and 3.78 (title-dead, light). Reproduced in this
+  module's own math against the `--cc-bg-closed` grounds `#F4F5F7` / `#12151C`:
+
+  | anchor | float-through | quantized to 8 bits | `app.css` records |
+  |---|---|---|---|
+  | neutral light: `oklch(45% 0.01 0)` on `#F4F5F7` | 6.8579 | 6.8674 | 6.87 |
+  | neutral dark: `oklch(40% 0.01 0)` on `#12151C` | 1.9724 | 1.9853 | 1.99 |
+  | spent fg light: `color-mix(in oklch, neutral 90%, white)` on `#F4F5F7` | 5.4101 | 5.3932 | 5.39 |
+  | title-dead light: `#767D8D` on `#F4F5F7` | 3.7833 | 3.7833 | 3.78 |
+
+  The dark anchor is the DARK theme's neutral — `oklch(40% 0.01 0)`, `app.css`
+  ~line 238 — not the light 45% one; pairing against 45% "disproves" the table.
+  Float-through misses every conversion-involved row by MORE than 0.005;
+  quantize-to-8-bit reproduces every row within 0.005.
+
+  A painted-pixel reading is ALWAYS hex-to-hex: the compositor quantizes the ground to
+  8 bits before anything can sample it, so a screenshot read cannot see the float
+  between steps. That quantity has its own name here — `contrast_painted/2`.
+
+  ## How to tell a convention gap from a converter fault
+
+  Two anchors settle which side is broken:
+
+  * an exact converter clause: 21.0 white over black, 1.0 self-contrast,
+    `oklch(100% 0 0)` → `#FFFFFF`;
+  * a pure-hex anchor that must reproduce EXACTLY: `#767D8D` on `#F4F5F7` is
+    bit-identical under both conventions, because with both endpoints already 8-bit
+    sRGB there is nothing to convert or round.
+
+  An exact clause plus a pure-hex anchor reproducing exactly, while conversion-
+  involved anchors miss by a few ten-thousandths, is conclusive that the converter is
+  sound and the gap is the convention: measure the painted quantity with
+  `contrast_painted/2`. If the pure-hex anchor misses too, that is a real fault.
+  `candidate_closed_row_contrast_test.exs` splits its anchors into exactly these two
+  groups, and each failure message names which response it wants — the worked pattern.
 
   Where both endpoints of a pair are hex literals — which is most of the primary
   sweep — the convention makes no difference at all, because there is nothing to
@@ -185,6 +234,21 @@ defmodule Platform.Design.WcagContrast do
     lb = luminance(b)
     (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
   end
+
+  @doc """
+  The WCAG contrast ratio of the PAINTED quantity: both endpoints are quantized to
+  8-bit sRGB — `to_hex/1` then `hex/1` — before the ratio is computed, so the value
+  is hex-to-hex. That is what a painted-pixel read measures: the compositor writes
+  an 8-bit buffer before anything can sample it, so a figure `app.css` records from
+  a screenshot cannot carry the float between steps.
+
+  Reach for it when reproducing a figure `app.css` labels painted ("MEASURED ... in
+  a browser", "painted pixels"), such as the candidate-rail anchors 6.87 / 1.99 /
+  5.39 / 3.78. `contrast/2` keeps float-through semantics; the two agree exactly
+  when both endpoints are already 8-bit sRGB.
+  """
+  @spec contrast_painted(color(), color()) :: float()
+  def contrast_painted(a, b), do: contrast(hex(to_hex(a)), hex(to_hex(b)))
 
   @doc """
   The band of WCAG relative luminances a colour must sit in to clear `floor`:1

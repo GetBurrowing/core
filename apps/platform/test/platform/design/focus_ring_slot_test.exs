@@ -62,14 +62,17 @@ defmodule Platform.Design.FocusRingSlotTest do
   `#F2F2F2`.
 
   `WcagContrast` carries floats through an `oklch()` conversion rather than
-  quantizing to 8-bit first, which is the convention the figures already
-  recorded in `app.css` were computed under (see that module's `@moduledoc`).
-  It matters here: quantizing light `--color-base-200` to `#F2F2F2` before
-  measuring gives 4.1990:1 rather than 4.1847:1, and light `--color-base-300`
-  gives 3.2661:1 rather than 3.2747:1. Both conventions clear the 3:1 floor, so
-  nothing about the decision turns on it, but the pinned figures below are the
-  float-through ones and a reader comparing them against a quantize-first
-  calculator should expect the third decimal to disagree.
+  quantizing to 8-bit first. That float-through convention belongs to the
+  declaration-derived figures, e.g. the `.chip-soft` alpha ceilings; the figures
+  `app.css` labels painted-pixel ("MEASURED ... in a browser") are hex-to-hex,
+  and `WcagContrast.contrast_painted/2` is the named mechanism for that
+  quantity. It matters here: quantizing light `--color-base-200` to `#F2F2F2`
+  before measuring gives 4.1990:1 rather than 4.1847:1, and light
+  `--color-base-300` gives 3.2661:1 rather than 3.2747:1. Both conventions
+  clear the 3:1 floor, so nothing about the decision turns on it, but the
+  pinned figures below are the float-through ones and a reader comparing them
+  against a quantize-first calculator should expect the third decimal to
+  disagree.
 
   ## What this test must not touch
 
