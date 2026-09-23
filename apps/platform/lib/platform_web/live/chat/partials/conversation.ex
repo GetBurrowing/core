@@ -133,6 +133,11 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # `Sidebar.first_goal_offered?/1` holds. With `@goal_panel` nil it is the
   # strip's empty-and-admin state: the same line, carrying the invitation.
   attr(:goal_invite?, :boolean, default: false)
+  # Task 01a0cef1: the editor's project options, `{label, value}` pairs from
+  # `Sidebar.goal_scope_options/1`, and the inline refusal of a scope the
+  # channel's org cannot see (`:unknown_project`, else nil).
+  attr(:goal_scope_options, :list, default: [])
+  attr(:goal_scope_error, :atom, default: nil)
 
   @doc """
   The conversation `<header>` — space title, meeting entry, search, the
@@ -515,7 +520,20 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                The handler's only `goal in [nil, ""]` branch is the
                install-level first-goal scope gate (task 01a0ca99), not a
                second write path. --%>
-          <form phx-submit="save_goal" class="flex items-center gap-2" data-role="agents-goal-form">
+          <%!-- THE PROJECT SELECT (task 01a0cef1, Saru's canvas "Design
+               direction: choosing the project a goal counts") sits on the
+               goal's own line: input, select, Save, Cancel on ONE row from
+               `sm:` up. Below `sm` the form wraps and the input takes the
+               full width (`max-sm:basis-full`), so the select drops to its
+               own line with the pencil's `max-sm:min-h-11` tap target. No
+               label beyond `aria-label`; base tokens only, `--color-primary`
+               stays on Save. The scope's READING state is the existing
+               "open tasks in <name>" measurement clause, not new markup. --%>
+          <form
+            phx-submit="save_goal"
+            class="flex flex-wrap items-center gap-2 sm:flex-nowrap"
+            data-role="agents-goal-form"
+          >
             <input
               type="text"
               name="goal"
@@ -524,13 +542,37 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
               aria-label="Goal"
               placeholder="Close backlog items"
               phx-mounted={JS.focus()}
-              class="input input-bordered input-sm min-w-0 flex-1"
+              class="input input-bordered input-sm min-w-0 flex-1 max-sm:basis-full"
             />
+            <select
+              name="goal_project_id"
+              aria-label="Project"
+              class="select select-bordered select-sm sm:shrink-0 max-sm:min-h-11"
+              data-role="agents-goal-scope"
+            >
+              <option value="" selected={goal_scope_value(@active_space) == ""}>All projects</option>
+              <option
+                :for={{label, value} <- @goal_scope_options}
+                value={value}
+                selected={goal_scope_value(@active_space) == value}
+              >
+                {label}
+              </option>
+            </select>
             <button type="submit" class="btn btn-sm btn-primary">Save</button>
             <button type="button" phx-click="cancel_goal_edit" class="btn btn-sm btn-ghost">
               Cancel
             </button>
           </form>
+          <%!-- The refusal renders INLINE under the form, in `--color-error`,
+               and nowhere else: not a flash, not a warning. --%>
+          <span
+            :if={@goal_scope_error == :unknown_project}
+            class="text-xs text-error"
+            data-role="agents-goal-scope-error"
+          >
+            That project is not available in this channel's org.
+          </span>
         <% else %>
           <%!-- EMPTY + ADMIN (task 01a0ca99): the invitation occupies the
                line the goal will occupy, at the goal sentence's `text-sm`,
@@ -1473,6 +1515,11 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # Wrappers, not qualified calls — see "WHY THE TWO MASK CALLS ARE WRAPPED"
   # in the moduledoc. Same name, same arity, same call text at the call site,
   # so no line grows and no interpolation reflows into a `truncate` span.
+  # The goal space's stored scope as the select's value: "" (All projects)
+  # when the key is absent.
+  defp goal_scope_value(%{metadata: %{"goal_project_id" => id}}) when is_binary(id), do: id
+  defp goal_scope_value(_space), do: ""
+
   defp space_mask(assigns), do: ChatLive.space_mask(assigns)
   defp masked_space_name(assigns, name), do: ChatLive.masked_space_name(assigns, name)
   defp space_nav_target(space), do: ChatLive.space_nav_target(space)

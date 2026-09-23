@@ -421,7 +421,19 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # Both sides started from 2,266. 01a0ca8b pinned 2,283; 01a0ca99 pinned
   # 2,273. The merged tree was RE-MEASURED by this file's `code_line_count/1`
   # rule on the merged chat_live.ex (2,290), not computed as a sum of deltas.
-  @chat_live_code_line_count 2290
+  #
+  # ── 2026-09-23, task 01a0cef1 stage 2: +10 (2,290 -> 2,300) ──────────────
+  #
+  # The goal editor's project select: `:goal_scope_options` and
+  # `:goal_scope_error` seeded in mount and reset in `assign_active_space/2`
+  # (+4), `edit_goal` assigning the options (+3 after `mix format`), and
+  # `save_goal` threading `goal_project_id` into `Sidebar.save_goal/3` with
+  # its `:unknown_project` branch (+3). The option list and the write live
+  # in `Platform.Chat.Sidebar` / `AgentsGoalHeartbeat`.
+  #
+  # RE-DERIVED from the guard's own counting rule on this tree (2,300), not by
+  # adding a remembered delta to a remembered pin.
+  @chat_live_code_line_count 2300
 
   @doc """
   Count the CODE lines of a source file.

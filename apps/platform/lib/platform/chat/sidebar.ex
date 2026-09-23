@@ -783,6 +783,64 @@ defmodule Platform.Chat.Sidebar do
   def goal_panel(_space), do: nil
 
   @doc """
+  The goal editor's project options for `space` (task `01a0cef1`), as
+  `{label, value}` pairs: `AgentsGoalHeartbeat.goal_scope_projects/1` by
+  name. "All projects" is NOT in the list; the form renders it first.
+
+  When the stored `goal_project_id` is not an offered project (a legacy
+  server-set value, or a project archived or deleted since), it is
+  appended as an extra option under its project name, or "Unavailable
+  project" when it no longer resolves. The select then shows the stored
+  value rather than silently reading "All projects", and an untouched
+  Save round-trips it, which `put_goal_scope/2` accepts as unchanged.
+  """
+  @spec goal_scope_options(Chat.Space.t() | nil) :: [{String.t(), String.t()}]
+  def goal_scope_options(%Chat.Space{} = space) do
+    options = Enum.map(AgentsGoalHeartbeat.goal_scope_projects(space), &{&1.name, &1.id})
+    current = (space.metadata || %{})["goal_project_id"]
+
+    if current in [nil, ""] or Enum.any?(options, &(elem(&1, 1) == current)),
+      do: options,
+      else: options ++ [{legacy_scope_label(space), current}]
+  end
+
+  def goal_scope_options(_space), do: []
+
+  defp legacy_scope_label(space) do
+    case AgentsGoalHeartbeat.goal_scope(space) do
+      {:project, project} -> project.name
+      _ -> "Unavailable project"
+    end
+  end
+
+  @doc """
+  Save `space`'s goal text and its project scope in ONE update (task
+  `01a0cef1`).
+
+  The space is RE-READ with `Chat.get_space/1` before its metadata is
+  merged: the LiveView's `active_space` can be older than the heartbeat's
+  last `record_measurement/2` write, and merging onto that stale map would
+  clobber the baseline under `metadata["goal_heartbeat"]`. The scope is
+  resolved by `AgentsGoalHeartbeat.put_goal_scope/2`; an
+  `{:error, :unknown_project}` refusal writes NOTHING, including the goal
+  text, so a refused save is refused whole. `{:error, :not_found}` when the
+  space no longer exists.
+
+  Takes no user: the admin gate stays `can_edit_goal?` in the LiveView,
+  as for `first_goal_offered?/1`.
+  """
+  @spec save_goal(Chat.Space.t(), String.t(), term()) ::
+          {:ok, Chat.Space.t()}
+          | {:error, :unknown_project | :not_found}
+          | {:error, Ecto.Changeset.t()}
+  def save_goal(%Chat.Space{id: id}, goal, raw_scope) do
+    with %Chat.Space{} = fresh <- Chat.get_space(id) || {:error, :not_found},
+         {:ok, metadata} <- AgentsGoalHeartbeat.put_goal_scope(fresh, raw_scope) do
+      Chat.update_space(fresh, %{goal: goal, metadata: metadata})
+    end
+  end
+
+  @doc """
   Whether `space` may be offered its FIRST goal.
 
   True only when ALL hold: the space is a non-archived `kind: "channel"`

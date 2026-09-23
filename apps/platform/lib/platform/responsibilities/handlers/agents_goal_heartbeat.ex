@@ -31,10 +31,20 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   with work that had nothing to do with the goal.
 
   The scope is `chat_spaces.metadata["goal_project_id"]` on the goal
-  space: a project UUID string. It is NOT a column (no migration), and
-  nothing in the UI writes it. Saving the goal text (`save_goal` writes
-  only `goal`) and every beat's write (`Map.put` on the existing map)
-  leave it in place. Set it server-side, e.g. from a remote console:
+  space: a project UUID string. It is NOT a column (no migration). The
+  goal editor writes it through `Platform.Chat.Sidebar.save_goal/3` (task
+  `01a0cef1`), which re-reads the space and writes goal text and scope in
+  ONE update; the value it may write is computed by `put_goal_scope/2`
+  against `goal_scope_projects/1`, the live projects the channel's org can
+  see (`Platform.Tenancy.scope/2`, `:root_all` for a root-org channel,
+  `{:orgs, [org_id]}` for a tenant-org channel, nothing for a space with
+  no org). A project outside that list is refused as
+  `{:error, :unknown_project}` and nothing is written; an UNCHANGED value
+  passes through without validation, so a legacy server-set scope
+  survives an unrelated goal-text edit. The org is enforced at WRITE time
+  only: `goal_scope/1` below still does not check it. Every beat's write
+  (`Map.put` on the existing map) leaves the key in place. It can also be
+  set server-side, e.g. from a remote console:
 
       space = Platform.Chat.get_space(space_id)
 
@@ -337,6 +347,8 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   alias Platform.Tasks
   alias Platform.Tasks.Project
   alias Platform.Tasks.Task, as: TaskSchema
+  alias Platform.Tenancy
+  alias Platform.Tenancy.Org
 
   @key "agents.goal_heartbeat"
   @feature "agents"
@@ -956,6 +968,74 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
       {:project, project}
     else
       _ -> :unknown
+    end
+  end
+
+  @doc """
+  The projects `space`'s goal may be scoped to (task `01a0cef1`): the
+  live (not archived, not deletion-scheduled) projects the channel's org
+  can see, ordered by name.
+
+  Visibility goes through `Platform.Tenancy.scope/2`, the one choke point,
+  rather than a hand-rolled `where`. A root-org channel reads `:root_all`,
+  mirroring `Tenancy.visibility/1`'s ruling that sub-orgs are filtering
+  mechanisms; a tenant-org channel reads `{:orgs, [org.id]}`. A space whose
+  `org_id` is nil (or names no org) fails closed to `[]`. The live-only
+  filter matches `resolve_scope/1`, so no option offered here is one
+  `measure/2` would read as `:unknown`.
+  """
+  @spec goal_scope_projects(Space.t() | nil) :: [Project.t()]
+  def goal_scope_projects(%Space{org_id: org_id}) do
+    vis =
+      case Tenancy.get_org(org_id) do
+        %Org{} = org -> if Tenancy.tier(org) == :root, do: :root_all, else: {:orgs, [org.id]}
+        nil -> :none
+      end
+
+    from(p in Project,
+      where: is_nil(p.archived_at) and is_nil(p.deletion_scheduled_at),
+      order_by: [asc: p.name]
+    )
+    |> Tenancy.scope(vis)
+    |> Repo.all()
+  end
+
+  def goal_scope_projects(_space), do: []
+
+  @doc """
+  The metadata map to write for a goal-editor scope submission `raw`
+  (task `01a0cef1`), or `{:error, :unknown_project}`.
+
+    * `nil` or `""` -- the key is removed (install-wide).
+    * `raw` equal to the stored value -- metadata unchanged, NOT
+      re-validated, so a legacy server-set scope the admin never touched
+      survives a goal-text edit even when it is not an offered option.
+    * otherwise -- cast with `Platform.UUID.cast/1` FIRST, then accepted
+      only when it names one of `goal_scope_projects/1`. Anything else
+      (non-UUID, unknown, foreign-org, archived, deletion-scheduled) is
+      refused. Never a silent save, never a fallback to install-wide.
+
+  It never touches `metadata["goal_heartbeat"]`: the baseline reset on a
+  scope change is `previous_measurement/3`'s project comparison.
+  """
+  @spec put_goal_scope(Space.t(), term()) :: {:ok, map()} | {:error, :unknown_project}
+  def put_goal_scope(%Space{} = space, raw) do
+    metadata = space.metadata || %{}
+
+    cond do
+      raw in [nil, ""] ->
+        {:ok, Map.delete(metadata, @scope_key)}
+
+      raw == Map.get(metadata, @scope_key) ->
+        {:ok, metadata}
+
+      true ->
+        with {:ok, id} <- Platform.UUID.cast(raw),
+             true <- Enum.any?(goal_scope_projects(space), &(&1.id == id)) do
+          {:ok, Map.put(metadata, @scope_key, id)}
+        else
+          _ -> {:error, :unknown_project}
+        end
     end
   end
 

@@ -443,6 +443,8 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:goal_panel, nil)
       |> assign(:goal_edit, false)
       |> assign(:goal_invite?, false)
+      |> assign(:goal_scope_options, [])
+      |> assign(:goal_scope_error, nil)
       |> assign(:archived_channels, archived_channels)
       # Collapse state for the sidebar's "Archived" group (task 019e95ea
       # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
@@ -1261,14 +1263,18 @@ defmodule PlatformWeb.ChatLive do
   # below is an install-level SCOPE gate (task 01a0ca99), not a second write
   # path: a first goal is refused unless `Sidebar.first_goal_offered?/1` holds.
   def handle_event("edit_goal", _params, socket) do
-    {:noreply, assign(socket, :goal_edit, socket.assigns.can_edit_goal?)}
+    %{can_edit_goal?: editable?, active_space: space} = socket.assigns
+    options = if editable?, do: Sidebar.goal_scope_options(space), else: []
+
+    {:noreply,
+     assign(socket, goal_edit: editable?, goal_scope_error: nil, goal_scope_options: options)}
   end
 
   def handle_event("cancel_goal_edit", _params, socket) do
     {:noreply, assign(socket, :goal_edit, false)}
   end
 
-  def handle_event("save_goal", %{"goal" => goal}, socket) do
+  def handle_event("save_goal", %{"goal" => goal} = params, socket) do
     space = socket.assigns.active_space
 
     cond do
@@ -1285,7 +1291,14 @@ defmodule PlatformWeb.ChatLive do
         {:noreply, put_flash(socket, :error, "A first goal cannot be set on this channel.")}
 
       true ->
-        case Chat.update_space(space, %{goal: goal}) do
+        # No `goal_project_id` key (an old client) keeps the CURRENT scope:
+        # the stored value passes through `put_goal_scope/2` as unchanged.
+        scope = Map.get(params, "goal_project_id", (space.metadata || %{})["goal_project_id"])
+
+        case Sidebar.save_goal(space, goal, scope) do
+          {:error, :unknown_project} ->
+            {:noreply, assign(socket, :goal_scope_error, :unknown_project)}
+
           {:ok, updated} ->
             # RE-DERIVE, never carry forward. `goal_panel/1` recomputes the
             # measurement from the SAVED goal, so a goal that can no longer
@@ -4984,6 +4997,8 @@ defmodule PlatformWeb.ChatLive do
     # a different space's goal would save this space's text onto that one.
     |> assign(:goal_panel, Sidebar.goal_panel(space))
     |> assign(:goal_edit, false)
+    |> assign(:goal_scope_options, [])
+    |> assign(:goal_scope_error, nil)
     # `and` short-circuits: non-admins never run the predicate's query.
     |> assign(
       :goal_invite?,

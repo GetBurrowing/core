@@ -735,4 +735,196 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       refute strip =~ ~r/#[0-9a-fA-F]{3,8}\b/
     end
   end
+
+  describe "the goal editor's project select (task 01a0cef1 stage 2)" do
+    # Fixture (seeded orgs: A = "soylent", B = "wayne_tech"): a channel S in
+    # org A with goal "Close backlog items"; P1 (A: 2 open + 1 done), P2 (A:
+    # 5 open), PF (B: 3 open). No migration seeds projects or tasks, so the
+    # install-wide open count is 2 + 5 + 3 = 10.
+    @scope_goal "Close backlog items"
+
+    defp scope_fixture(conn, role) do
+      {conn, user} = authenticated_conn(conn)
+      enable_flag()
+
+      case role do
+        :admin -> make_fabrikam_admin(user)
+        :member -> fabrikam_member(user)
+      end
+
+      a = Platform.Tenancy.get_org_by_slug!("soylent")
+      b = Platform.Tenancy.get_org_by_slug!("wayne_tech")
+      n = System.unique_integer([:positive])
+
+      p1 = scope_project!("P1 #{n}", a)
+      p2 = scope_project!("P2 #{n}", a)
+      pf = scope_project!("PF #{n}", b)
+      for _ <- 1..2, do: scope_task!(p1, "backlog")
+      scope_task!(p1, "done")
+      for _ <- 1..5, do: scope_task!(p2, "in_progress")
+      for _ <- 1..3, do: scope_task!(pf, "backlog")
+
+      space = create_space(name: "agents-scope-#{n}", goal: @scope_goal, org_id: a.id)
+      add_user(space, user)
+
+      %{conn: conn, space: space, p1: p1, p2: p2, pf: pf}
+    end
+
+    # A root-org member who is NOT an admin: sees the space, `fabrikam_admin?/1`
+    # is false, so a refusal is the admin gate and not visibility.
+    defp fabrikam_member(user) do
+      %Platform.Tenancy.OrgMembership{}
+      |> Platform.Tenancy.OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id,
+        role: "member"
+      })
+      |> Repo.insert!()
+    end
+
+    defp scope_project!(name, org) do
+      {:ok, project} = Platform.Tasks.create_project(%{name: name, org_id: org.id})
+      project
+    end
+
+    defp scope_task!(project, status) do
+      {:ok, _} =
+        Platform.Tasks.create_task(%{project_id: project.id, title: "t", status: status})
+    end
+
+    defp scope_of(space), do: Repo.reload!(space).metadata["goal_project_id"]
+
+    defp nodes(html, selector), do: html |> Floki.parse_document!() |> Floki.find(selector)
+
+    defp number(html),
+      do: html |> nodes(~s([data-role="agents-goal-number"])) |> Floki.text() |> String.trim()
+
+    defp clause(html),
+      do: html |> nodes(~s([data-role="agents-goal-measurement"])) |> Floki.text()
+
+    defp open_editor(view), do: render_click(view, "edit_goal", %{})
+
+    defp option_texts(html),
+      do: html |> nodes(~s([data-role="agents-goal-scope"] option)) |> Enum.map(&Floki.text/1)
+
+    test "(a) the select lists All projects then org A's projects, and the saved scope is counted",
+         %{conn: conn} do
+      f = scope_fixture(conn, :admin)
+      {:ok, view, _html} = live_at(f.conn, "/chat/#{f.space.id}")
+
+      html = open_editor(view)
+      texts = option_texts(html) |> Enum.map(&String.trim/1)
+      assert texts == ["All projects", f.p1.name, f.p2.name]
+      refute Enum.member?(texts, f.pf.name)
+
+      html =
+        view
+        |> form(~s([data-role="agents-goal-form"]))
+        |> render_submit(%{goal: @scope_goal, goal_project_id: f.p1.id})
+
+      assert scope_of(f.space) == f.p1.id
+      assert number(html) == "2"
+      assert clause(html) =~ "in #{f.p1.name}"
+    end
+
+    test "(b) a non-admin's forced save is refused and writes nothing; the admin's succeeds",
+         %{conn: conn} do
+      f = scope_fixture(conn, :member)
+      {:ok, view, _html} = live_at(f.conn, "/chat/#{f.space.id}")
+
+      html =
+        render_submit(view, "save_goal", %{"goal" => "Hijack", "goal_project_id" => f.p1.id})
+
+      assert html =~ "You cannot edit this goal."
+      refute Map.has_key?(Repo.reload!(f.space).metadata, "goal_project_id")
+      assert Repo.reload!(f.space).goal == @scope_goal
+
+      # Positive control: the same payload from an admin on the same space.
+      {admin_conn, admin} = authenticated_conn(build_conn())
+      make_fabrikam_admin(admin)
+      add_user(f.space, admin)
+      {:ok, admin_view, _html} = live_at(admin_conn, "/chat/#{f.space.id}")
+
+      render_submit(admin_view, "save_goal", %{
+        "goal" => @scope_goal,
+        "goal_project_id" => f.p1.id
+      })
+
+      assert scope_of(f.space) == f.p1.id
+    end
+
+    test "(c) a foreign-org project is refused inline and writes nothing; P1 is then accepted",
+         %{conn: conn} do
+      f = scope_fixture(conn, :admin)
+      {:ok, view, _html} = live_at(f.conn, "/chat/#{f.space.id}")
+      open_editor(view)
+      before = Repo.reload!(f.space)
+
+      html =
+        render_submit(view, "save_goal", %{"goal" => "Changed", "goal_project_id" => f.pf.id})
+
+      [error] = nodes(html, ~s([data-role="agents-goal-scope-error"]))
+
+      assert Floki.text(error) |> String.trim() ==
+               "That project is not available in this channel's org."
+
+      assert Floki.attribute(error, "class") |> Enum.join() =~ "text-error"
+      refute html =~ "text-warning"
+      # The form stays open.
+      assert nodes(html, ~s([data-role="agents-goal-form"])) != []
+      after_refusal = Repo.reload!(f.space)
+      assert after_refusal.goal == before.goal
+      assert after_refusal.metadata == before.metadata
+
+      html =
+        render_submit(view, "save_goal", %{"goal" => @scope_goal, "goal_project_id" => f.p1.id})
+
+      assert scope_of(f.space) == f.p1.id
+      assert nodes(html, ~s([data-role="agents-goal-scope-error"])) == []
+    end
+
+    test "(d) All projects removes the key and the count is install-wide", %{conn: conn} do
+      f = scope_fixture(conn, :admin)
+      {:ok, _} = Chat.update_space(f.space, %{metadata: %{"goal_project_id" => f.p1.id}})
+      {:ok, view, html} = live_at(f.conn, "/chat/#{f.space.id}")
+      assert number(html) == "2"
+
+      html =
+        render_submit(view, "save_goal", %{"goal" => @scope_goal, "goal_project_id" => ""})
+
+      refute Map.has_key?(Repo.reload!(f.space).metadata, "goal_project_id")
+      assert number(html) == "10"
+      assert clause(html) =~ "open tasks"
+      refute clause(html) =~ "open tasks in "
+    end
+
+    test "(e) a submit without the goal_project_id key keeps the current scope", %{conn: conn} do
+      f = scope_fixture(conn, :admin)
+      {:ok, _} = Chat.update_space(f.space, %{metadata: %{"goal_project_id" => f.p2.id}})
+      {:ok, view, _html} = live_at(f.conn, "/chat/#{f.space.id}")
+
+      html = render_submit(view, "save_goal", %{"goal" => "Close backlog items today"})
+
+      assert Repo.reload!(f.space).goal == "Close backlog items today"
+      assert scope_of(f.space) == f.p2.id
+      assert number(html) == "5"
+    end
+
+    test "(f) a legacy scope outside the list stays selected and round-trips", %{conn: conn} do
+      f = scope_fixture(conn, :admin)
+      {:ok, _} = Chat.update_space(f.space, %{metadata: %{"goal_project_id" => f.pf.id}})
+      {:ok, view, _html} = live_at(f.conn, "/chat/#{f.space.id}")
+
+      html = open_editor(view)
+      [selected] = nodes(html, ~s([data-role="agents-goal-scope"] option[selected]))
+      assert Floki.attribute(selected, "value") == [f.pf.id]
+      assert Floki.text(selected) |> String.trim() == f.pf.name
+
+      view
+      |> form(~s([data-role="agents-goal-form"]))
+      |> render_submit(%{goal: @scope_goal})
+
+      assert scope_of(f.space) == f.pf.id
+    end
+  end
 end
