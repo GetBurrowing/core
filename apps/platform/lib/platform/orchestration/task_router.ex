@@ -3366,10 +3366,12 @@ defmodule Platform.Orchestration.TaskRouter do
       elapsed_ms_since_dispatch: elapsed_ms
     })
 
+    # The sentence carries only what the router measured (no ack within N seconds).
+    # A cause belongs in this text only after someone measures it (task 01a0a3fc).
     sentence =
       "Executor never acked the dispatch. No `task_ack` runtime event received within " <>
-        "#{div(elapsed_ms, 1_000)}s of dispatch — the runtime likely dropped before " <>
-        "the agent spawned. Manual intervention required."
+        "#{div(elapsed_ms, 1_000)}s of dispatch. The cause is not known to the router. " <>
+        "Manual intervention required."
 
     stamp_blocked_reason(state.task_id, sentence)
 

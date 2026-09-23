@@ -1177,6 +1177,18 @@ defmodule Platform.Orchestration.TaskRouterTest do
       reason = stamped.metadata["blocked_reason"]
       assert is_binary(reason) and reason != ""
       assert String.contains?(reason, "Executor never acked")
+
+      # The sentence states only the measurement, never a guessed cause (task 01a0a3fc).
+      refute reason =~ "likely"
+      refute reason =~ "dropped"
+      refute reason =~ "spawned"
+      assert reason =~ ~r/within \d+s of dispatch/
+
+      # The three-word ban lets any OTHER guessed cause through ("the agent probably
+      # crashed"), so pin the whole sentence, anchored at both ends.
+      assert reason =~
+               ~r/\AExecutor never acked the dispatch\. No `task_ack` runtime event received within \d+s of dispatch\. The cause is not known to the router\. Manual intervention required\.\z/
+
       assert {:ok, _, _} = DateTime.from_iso8601(stamped.metadata["blocked_reason_at"])
 
       # The chat post and the metadata carry the same sentence.

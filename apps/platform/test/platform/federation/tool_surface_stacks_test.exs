@@ -2905,6 +2905,107 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
 
       assert view.stack == %{landed_at: nil, blocked_reason: nil, blocked_reason_at: nil}
       assert is_nil(view.paused_reason)
+      assert is_nil(view.blocked_reason) and is_nil(view.blocked_reason_at)
+    end
+  end
+
+  # ── Task 01a0a3fc stage 1: `blocked_reason` / `blocked_reason_at` at the TOP
+  # level of `serialize_task/1` for EVERY task ──
+  #
+  # `Tasks.stamp_blocked_reason/2` writes string keys into the `metadata`
+  # JSONB for any task the router escalates, but until this stage the MCP
+  # surface emitted them only inside the `stack` sub-map, which is `nil` for
+  # a non-member. Every stamp here goes through the real
+  # `Tasks.stamp_blocked_reason/2`; every read goes through
+  # `ToolSurface.execute/3`. Absent-value cases assert the KEY IS PRESENT with
+  # a nil value (`Map.has_key?`), never a `refute` that a dropped key would
+  # also satisfy.
+
+  describe "blocked_reason at top level for every task (01a0a3fc)" do
+    test "task_get on a stamped NON-stack task returns the stamp at the top level" do
+      project = create_project()
+      {:ok, lone} = Tasks.create_task(%{project_id: project.id, title: "Lone"})
+      {:ok, _} = Tasks.stamp_blocked_reason(lone, "No ack in 300s.")
+
+      {:ok, view} = ToolSurface.execute("task_get", %{"task_id" => lone.id}, %{})
+
+      assert view.stack_id == nil
+      assert view.stack == nil
+      assert view.status == "blocked"
+      assert view.blocked_reason == "No ack in 300s."
+      assert {:ok, _, _} = DateTime.from_iso8601(view.blocked_reason_at)
+      refute Map.has_key?(view, :metadata)
+      assert view.blocked_reason == Tasks.get_task_record(lone.id).metadata["blocked_reason"]
+    end
+
+    test "task_list rows carry the same top-level stamp for a NON-stack task" do
+      project = create_project()
+      {:ok, lone} = Tasks.create_task(%{project_id: project.id, title: "Lone"})
+      {:ok, _} = Tasks.stamp_blocked_reason(lone, "No ack in 300s.")
+
+      # No status filter: `do_task_list/2` applies no default status filter,
+      # so a `blocked` task is listed by project_id alone.
+      {:ok, %{tasks: rows}} =
+        ToolSurface.execute("task_list", %{"project_id" => project.id}, %{})
+
+      row = Enum.find(rows, &(&1.id == lone.id))
+      assert %{} = row
+      assert row.stack == nil
+      assert row.status == "blocked"
+      assert row.blocked_reason == "No ack in 300s."
+      assert {:ok, _, _} = DateTime.from_iso8601(row.blocked_reason_at)
+      refute Map.has_key?(row, :metadata)
+    end
+
+    test "a never-blocked non-stack task has both keys PRESENT with nil values" do
+      project = create_project()
+      {:ok, clean} = Tasks.create_task(%{project_id: project.id, title: "Clean"})
+
+      {:ok, view} = ToolSurface.execute("task_get", %{"task_id" => clean.id}, %{})
+
+      assert Map.has_key?(view, :blocked_reason) and view.blocked_reason == nil
+      assert Map.has_key?(view, :blocked_reason_at) and view.blocked_reason_at == nil
+    end
+
+    test "a non-stack task whose metadata column is NULL serializes without raising" do
+      project = create_project()
+      {:ok, lone} = Tasks.create_task(%{project_id: project.id, title: "Old row"})
+
+      import Ecto.Query, only: [from: 2]
+      {1, _} = Repo.update_all(from(t in Task, where: t.id == ^lone.id), set: [metadata: nil])
+      assert is_nil(Tasks.get_task_record(lone.id).metadata)
+
+      assert {:ok, view} = ToolSurface.execute("task_get", %{"task_id" => lone.id}, %{})
+      assert Map.has_key?(view, :blocked_reason) and is_nil(view.blocked_reason)
+      assert Map.has_key?(view, :blocked_reason_at) and is_nil(view.blocked_reason_at)
+    end
+
+    test "a stamped stack member reads the same values at the top level and in `stack`" do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-top"))
+      member = member_in_stack!(project, stack_id, position: 1, status: "in_progress")
+      {:ok, _} = Tasks.stamp_blocked_reason(member, "Waiting on predecessor #1 to land.")
+
+      {:ok, view} = ToolSurface.execute("task_get", %{"task_id" => member.id}, %{})
+
+      assert is_binary(view.blocked_reason) and is_binary(view.blocked_reason_at)
+      assert view.blocked_reason == view.stack.blocked_reason
+      assert view.blocked_reason_at == view.stack.blocked_reason_at
+    end
+
+    test "the stamp persists after a real unblock transition and is not gated on status" do
+      project = create_project()
+      {:ok, lone} = Tasks.create_task(%{project_id: project.id, title: "Unblocked"})
+      {:ok, _} = Tasks.stamp_blocked_reason(lone, "No ack in 300s.")
+
+      # `blocked -> backlog` is a valid edge in `@valid_task_transitions`.
+      {:ok, _} = Tasks.transition_task_status(Tasks.get_task_record(lone.id), "backlog")
+
+      {:ok, view} = ToolSurface.execute("task_get", %{"task_id" => lone.id}, %{})
+
+      assert view.status != "blocked"
+      assert view.blocked_reason == "No ack in 300s."
+      assert {:ok, _, _} = DateTime.from_iso8601(view.blocked_reason_at)
     end
   end
 

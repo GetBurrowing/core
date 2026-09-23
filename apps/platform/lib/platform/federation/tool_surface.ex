@@ -1716,7 +1716,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Task object with id, title, description, status, priority, project_id, epic_id, and sponsor (nil or %{id, name, email} per ADR 0042).",
+          "Task object with id, title, description, status, priority, project_id, epic_id, and sponsor (nil or %{id, name, email} per ADR 0042). Also `paused_reason` (the rollup-pause stamp map, or nil); `blocked_reason` (the escalation sentence last stamped when the orchestration layer moved this task to blocked, or nil); and `blocked_reason_at` (ISO-8601, or nil). The blocked stamp PERSISTS after unblock, so read it together with `status` and `blocked_reason_at`.",
         limitations: "Returns nil if task not found",
         when_to_use: "When you need to check the current state of a specific task"
       },
@@ -1856,7 +1856,8 @@ defmodule Platform.Federation.ToolSurface do
             "number of tasks matching the filters, counted in the database, independent of `limit`; `has_more` " <>
             "is true exactly when tasks matching the filters remain beyond this page. Read `has_more` rather " <>
             "than comparing `tasks` against `limit`. Each entry in `tasks` includes sponsor (nil or " <>
-            "%{id, name, email}) per ADR 0042. In the default summary detail, `description` is a truncated " <>
+            "%{id, name, email}) per ADR 0042, and the same `paused_reason` / `blocked_reason` / " <>
+            "`blocked_reason_at` fields as task_get. In the default summary detail, `description` is a truncated " <>
             "preview and every entry additionally carries `description_truncated` (boolean) and " <>
             "`description_length` (the original size in bytes).",
         limitations:
@@ -13206,12 +13207,24 @@ defmodule Platform.Federation.ToolSurface do
       # would widen the wire contract to every key any writer ever adds.
       stack_id: Map.get(task, :stack_id),
       paused_reason: metadata_map_field(task, "paused_reason"),
+      # Task 01a0a3fc stage 1. `Tasks.stamp_blocked_reason/2` stamps EVERY
+      # task the orchestration layer moves to `blocked`, stack member or not,
+      # but these two strings used to be emitted only inside the `stack`
+      # sub-map, which is `nil` for a non-member — so a non-stack task's
+      # explanation was written and unreadable. They are top-level for every
+      # task now. Deliberately NOT gated on `status`: nothing clears the stamp
+      # on unblock, so an unblocked task still returns its last stamp, and a
+      # reader pairs it with `status` and `blocked_reason_at`.
+      blocked_reason: metadata_string_field(task, "blocked_reason"),
+      blocked_reason_at: metadata_string_field(task, "blocked_reason_at"),
       # Task 01a05394-8300 stage 1. `stack_position` plus a CURATED `stack`
       # sub-map (`nil` for a non-member): `landed_at` is the
       # `merged_into_rollup_at` stamp — the actual release threshold — and
       # `blocked_reason`/`blocked_reason_at` are `Tasks.stamp_blocked_reason/2`'s
-      # strings. Curated, not the `metadata` blob: emitting the blob would
-      # widen the wire contract to every key any writer ever adds.
+      # strings, DUPLICATED there from the top level (task 01a0a3fc) for
+      # back-compat with callers that already read `stack.blocked_reason`.
+      # Curated, not the `metadata` blob: emitting the blob would widen the
+      # wire contract to every key any writer ever adds.
       stack_position: Map.get(task, :stack_position),
       stack: serialize_task_stack(task),
       inserted_at: task.inserted_at,
