@@ -274,6 +274,29 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     """
   )
 
+  attr(:ask_floor_holders, :map,
+    default: %{},
+    doc: """
+    `agent_id => display_name` for every agent whose floor is CURRENTLY
+    claimed by someone, meeting-wide (task 01a0cf5c stage 1,
+    `Platform.Meetings.AskFloor`). Drives the \"Held by <name>\" cue and
+    the visual disable on every OTHER agent's hold-to-talk row — a row
+    where `aid == @pressed_agent_id` is THIS viewer's own hold and never
+    reads as held-by-other, however this map answers.
+
+    The hold-to-talk `<button>` itself carries `phx-update=\"ignore\"`
+    (the hook owns its DOM), so it is patched from this assign only on
+    its FIRST render — correct for a viewer who joins mid-meeting, but a
+    press that lands on an ALREADY-mounted button cannot repaint the
+    button's own attributes. The wrapping element below is NOT ignored,
+    so `class`/`aria-disabled` on it stay live for the whole session;
+    the button's own `disabled` attribute is a same-render baseline, not
+    the mechanism this depends on for correctness — the real backstop is
+    `AskFloor.claim/5` refusing the press server-side regardless of what
+    the client shows.
+    """
+  )
+
   def participant_rail(assigns) do
     {humans, agents} = MeetingLive.partition_participants(assigns.participants)
     now = assigns[:now] || DateTime.utc_now()
@@ -453,11 +476,25 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  `agent_activity_avatar/1` renders it internally. --%>
             <% info = agent_row_info(assigns, p) %>
             <% aid = agent_id_of(p) %>
+            <%!-- Task 01a0cf5c stage 1. `aid != @pressed_agent_id` is
+                 what tells THIS viewer's own hold apart from someone
+                 else's: `@ask_floor_holders` carries every held agent
+                 meeting-wide, including the one THIS viewer is
+                 currently holding, and that row must keep showing
+                 "Talking…" below rather than being disabled out from
+                 under the person actually pressing it. --%>
+            <% held_by = if is_binary(aid), do: Map.get(@ask_floor_holders, aid) %>
+            <% held_by_other? = is_binary(held_by) and aid != @pressed_agent_id %>
+            <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0: `--color-primary`
+                 is reserved for the veil's meter and this ring, nowhere
+                 else in the held state — so it fires only for the agent
+                 THIS viewer is holding, never for `held_by_other?`. --%>
             <.agent_activity_avatar
               state={info.ring_state}
               name={p.display_name || "Agent"}
               avatar_url={p.avatar_url}
               label={info.label}
+              held?={is_binary(aid) and aid == @pressed_agent_id}
             />
             <div class="min-w-0 flex-1">
               <div
@@ -524,55 +561,108 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  naming the agent. `phx-update="ignore"`: the hook owns the
                  waveform bars' inline transforms and this row re-renders on
                  every activity tick. The id carries `@id_prefix` so the
-                 desktop left rail and the People tab never collide. --%>
-            <button
+                 desktop left rail and the People tab never collide.
+
+                 WRAPPED in a plain `<div>` that does NOT carry
+                 `phx-update="ignore"` (task 01a0cf5c stage 1): the button
+                 itself is frozen after its first mount, so a press that
+                 claims this agent's floor from ANOTHER already-connected
+                 client can never repaint the button's own `class` or
+                 `disabled`. The wrapper can, and `pointer-events-none`
+                 there is what actually stops a mouse/touch press on an
+                 already-mounted button once someone else holds the floor —
+                 the button's own `disabled=` below is a same-render
+                 baseline for a viewer who joins AFTER the floor is already
+                 held (see `seed_ask_floor_holders/2` in `MeetingLive`), not
+                 the live mechanism. Either way `AskFloor.claim/5` is the
+                 real backstop: a keyboard Space/Enter reaching the server
+                 anyway (pointer-events does not block a keydown) is
+                 refused there and answered through
+                 `push_to_talk_rejected`, same as any other refusal. --%>
+            <div
               :if={@hold_to_talk? and is_binary(aid)}
-              id={"#{@id_prefix}-#{aid}"}
-              phx-hook="MeetingPushToTalk"
-              phx-update="ignore"
-              type="button"
-              data-role="meeting-agent-hold-to-talk"
-              data-agent-id={aid}
-              data-pressed="false"
-              aria-label={"Hold to talk to #{p.display_name || "this agent"}"}
-              title={"Hold to talk to #{p.display_name || "this agent"}"}
-              class={
-                [
-                  "group/ptt btn btn-xs btn-ghost min-h-11 flex-shrink-0 gap-1 px-1.5",
-                  # The shared touch utility (`touch-action: none`, no callout,
-                  # no selection) — the same class the old single button wore,
-                  # so a long press on a phone holds instead of raising the OS
-                  # text-selection menu and the hook's pointer capture is not
-                  # arming a control the browser has already claimed for
-                  # scrolling.
-                  "meeting-hold-target",
-                  "text-base-content/55",
-                  "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
-                  "data-[rejected=no-microphone]:text-error",
-                  "data-[rejected=microphone-muted]:text-error",
-                  "data-[rejected=pointer-lost]:text-error"
-                ]
-              }
+              class={["contents", held_by_other? && "opacity-50 pointer-events-none"]}
+              data-role="meeting-agent-hold-wrap"
+              aria-disabled={held_by_other?}
             >
-              <span class="hero-signal size-3.5" aria-hidden="true"></span>
-              <%!-- The waveform, hidden until the key is down. Twelve bars,
-                 scaled on the Y axis by the hook; `currentColor` keeps them
-                 on whatever token the button is wearing so the armed and
-                 refused states carry through without JS naming a colour. --%>
-              <span
-                class="flex h-3 items-center gap-px opacity-0 transition-opacity group-data-[pressed=true]/ptt:opacity-100"
-                data-role="meeting-agent-hold-waveform"
-                aria-hidden="true"
+              <button
+                id={"#{@id_prefix}-#{aid}"}
+                phx-hook="MeetingPushToTalk"
+                phx-update="ignore"
+                type="button"
+                disabled={held_by_other?}
+                data-role="meeting-agent-hold-to-talk"
+                data-agent-id={aid}
+                data-agent-name={p.display_name || "this agent"}
+                data-pressed="false"
+                aria-label={"Hold to talk to #{p.display_name || "this agent"}"}
+                title={"Hold to talk to #{p.display_name || "this agent"}"}
+                class={
+                  [
+                    "group/ptt btn btn-xs btn-ghost min-h-11 flex-shrink-0 gap-1 px-1.5",
+                    # The shared touch utility (`touch-action: none`, no callout,
+                    # no selection) — the same class the old single button wore,
+                    # so a long press on a phone holds instead of raising the OS
+                    # text-selection menu and the hook's pointer capture is not
+                    # arming a control the browser has already claimed for
+                    # scrolling.
+                    "meeting-hold-target",
+                    "text-base-content/55",
+                    "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
+                    "data-[rejected=no-microphone]:text-error",
+                    "data-[rejected=microphone-muted]:text-error",
+                    "data-[rejected=pointer-lost]:text-error",
+                    # `held-by-other` (task 01a0cf5c stage 1): the SERVER
+                    # refused because another presser already has this
+                    # agent's floor — see `MeetingPushToTalk._serverReject`.
+                    "data-[rejected=held-by-other]:text-error"
+                  ]
+                }
               >
+                <span class="hero-signal size-3.5" aria-hidden="true"></span>
+                <%!-- The waveform, hidden until the key is down. Twelve bars,
+                   scaled on the Y axis by the hook; `currentColor` keeps them
+                   on whatever token the button is wearing so the armed and
+                   refused states carry through without JS naming a colour. --%>
                 <span
-                  :for={_bar <- 1..12}
-                  data-ptt-bar
-                  class="h-full w-0.5 origin-center rounded-full bg-current opacity-70 transition-transform duration-75"
-                  style="transform: scaleY(0.08)"
+                  class="flex h-3 items-center gap-px opacity-0 transition-opacity group-data-[pressed=true]/ptt:opacity-100"
+                  data-role="meeting-agent-hold-waveform"
+                  aria-hidden="true"
                 >
+                  <span
+                    :for={_bar <- 1..12}
+                    data-ptt-bar
+                    class="h-full w-0.5 origin-center rounded-full bg-current opacity-70 transition-transform duration-75"
+                    style="transform: scaleY(0.08)"
+                  >
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+
+              <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0: an early
+                   release (<380ms held) is coached NEAR THE BUTTON, not
+                   centre stage, and nothing dims for it — the veil never
+                   opens for this case at all (see `HOLD_THRESHOLD_MS` in
+                   `meeting_push_to_talk.js`). `position:fixed` and its
+                   `top`/`left` are set from JS
+                   (`MeetingPushToTalk._showCoachTooltip`) off the
+                   button's own `getBoundingClientRect`, because this
+                   wrapper is `display: contents` and establishes no
+                   containing block a CSS-only position could anchor to.
+                   `phx-update="ignore"`, matching the button: the hook
+                   toggles `data-open` directly and a re-render (this row
+                   ticks on every activity update) must not wipe that. --%>
+              <div
+                id={"#{@id_prefix}-#{aid}-coach"}
+                phx-update="ignore"
+                class="pointer-events-none fixed z-50 max-w-56 rounded-lg bg-base-300 px-2.5 py-1.5 text-xs text-base-content/60 opacity-0 shadow-lg transition-opacity duration-150 data-[open=true]:opacity-100"
+                data-role="meeting-agent-hold-coach"
+                data-open="false"
+                role="status"
+              >
+                Hold it down and talk. Let go when you are done.
+              </div>
+            </div>
 
             <%!-- The visible held cue, server-driven so it names WHICH agent
                  is being addressed while the key is down (per the mock's
@@ -584,6 +674,22 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               class="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
             >
               <span class="hero-signal size-3 animate-pulse" aria-hidden="true"></span> Talking…
+            </span>
+
+            <%!-- The OTHER side of the same cue: someone ELSE holds this
+                 agent's floor (task 01a0cf5c stage 1, canvas 01a0cf5e-9cb0
+                 — "a visible owner when the floor is taken... the second
+                 person's button must say so before they start talking,
+                 not after"). Named from `@ask_floor_holders`, which every
+                 connected client updates off the SAME room-topic broadcast
+                 that landed the claim, so this appears everywhere at once,
+                 not only for whoever tries to press next. --%>
+            <span
+              :if={held_by_other?}
+              data-role="meeting-agent-held-by"
+              class="inline-flex flex-shrink-0 items-center gap-1 truncate rounded-full bg-base-300 px-1.5 py-0.5 text-[10px] font-medium text-base-content/60"
+            >
+              Held by {held_by}
             </span>
 
             <%!-- REACHABILITY, a different fact from the activity above:
@@ -614,6 +720,89 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           </li>
         </ul>
       </section>
+
+      <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0 ("Design direction:
+           hold to ask"). The dimmed veil and centred "Asking <agent>…"
+           card, ONE per rendered rail (not one per agent row — a viewer
+           can only be holding one button at a time). Entirely client-
+           driven by `MeetingAskFloorVeil`, off the `meeting:push-to-talk-*`
+           window events `MeetingPushToTalk` dispatches, NOT off a
+           LiveView assign: the 380ms early-release threshold and the
+           live meter have to be exact to the millisecond, which a round
+           trip through the server cannot promise. `phx-update="ignore"`,
+           same reasoning as the hold button itself.
+
+           The veil DIMS, it does not black out (`bg-[#171b25]/55` — the
+           dark `--color-base-100` value the canvas names, at partial
+           alpha, not the app's live theme token, because this is a scrim
+           over live video and has to read the same regardless of the
+           viewer's light/dark setting). `fixed inset-0`, so it covers
+           the room (rails AND the video stage) regardless of where in
+           the DOM this happens to sit — `ParticipantRail` only owns the
+           rail, never the stage, so nothing shy of `fixed` could reach
+           both. `pointer-events-none` throughout: this is choreography,
+           not a modal, and the pointer is already captured on the held
+           button (see `meeting_push_to_talk.js`'s pointer-capture
+           notes), so nothing here needs to intercept a click.
+
+           The card surface is `bg-base-300`, one step up from the room
+           so it reads as raised, per the canvas's palette. The label and
+           (in stage 3) the coaching-adjacent copy are utility weight
+           (`text-xs` at `/60`); the meter is `bg-primary` — the ONE other
+           place `--color-primary` appears in this state, alongside the
+           held agent's own avatar ring above.
+
+           The meter is 12 bars painted by `MeetingAskFloorVeil` off the
+           SAME measured RMS level `MeetingPushToTalk.sample()` already
+           computed for the button's own waveform (`meeting:push-to-talk-
+           level`), reusing `paintBars` from `./lib/ptt_waveform` rather
+           than a second `AnalyserNode` or a duration-filling progress
+           bar — the canvas is explicit that a bar which fills to 100%
+           and stops is the wrong reading here.
+
+           The transcript line is scaffolding for stage 3 (OUT OF SCOPE
+           here — "no live transcript text yet"): the empty node reserves
+           the card's shape so stage 3 can wire live text into it without
+           relayout, at the size/colour the canvas specifies for that
+           text ahead of time (`text-base text-base-content`, one step up
+           from the chat body's `text-sm`, no mono/display font — "it is
+           speech, not data"). --%>
+      <div
+        :if={@hold_to_talk?}
+        id={"#{@id_prefix}-ask-veil"}
+        phx-hook="MeetingAskFloorVeil"
+        phx-update="ignore"
+        class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-[#171b25]/55 opacity-0 transition-opacity duration-150 data-[open=true]:opacity-100"
+        data-role="meeting-ask-veil"
+        data-open="false"
+        aria-hidden="true"
+      >
+        <div
+          class="flex w-[calc(100%-2rem)] max-w-sm flex-col gap-3 rounded-2xl bg-base-300 p-4 shadow-xl"
+          data-role="meeting-ask-card"
+        >
+          <span
+            class="text-xs font-medium text-base-content/60"
+            data-role="meeting-ask-label"
+          >
+            Asking…
+          </span>
+          <p
+            class="min-h-10 text-base text-base-content"
+            data-role="meeting-ask-transcript"
+          >
+          </p>
+          <div class="flex h-6 items-center gap-1" data-role="meeting-ask-meter">
+            <span
+              :for={_bar <- 1..12}
+              data-ptt-bar
+              class="h-full w-1 origin-center rounded-full bg-primary opacity-70 transition-transform duration-75"
+              style="transform: scaleY(0.08)"
+            >
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
     """
   end

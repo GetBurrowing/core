@@ -110,6 +110,16 @@ defmodule Platform.Application do
            # no PubSub and no DB, so its position here is only about
            # existing before the first meeting can open a window.
            Platform.Meetings.PressWindow,
+           # Per-agent ask-floor ownership (task 01a0cf5c stage 1) — owns
+           # the :meeting_ask_floor table. Same shape as PressWindow: pure
+           # ETS lifecycle owner plus a stuck-claim timer, reusing
+           # PressWindow.max_hold_ms/0 rather than a second constant.
+           # Must start after PressWindow (reads its max_hold_ms/0, a
+           # module-attribute read with no runtime process dependency,
+           # but ordering keeps the two press-adjacent modules visibly
+           # paired here) and after PubSub (its stuck-claim timeout can
+           # broadcast on a room topic).
+           Platform.Meetings.AskFloor,
            # In-flight `meeting_say` utterances (task 01a06672 stage 1) —
            # owns the :meeting_say_registry table. Same shape as PressWindow:
            # ETS lifecycle owner plus a ttl sweep, no PubSub and no DB.

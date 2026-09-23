@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import MeetingPushToTalk from "../../js/hooks/meeting_push_to_talk.js"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import MeetingPushToTalk, { HOLD_THRESHOLD_MS } from "../../js/hooks/meeting_push_to_talk.js"
 
 /**
  * Tests for the `MeetingPushToTalk` hook (task 01a03f4e stage 5).
@@ -47,6 +47,16 @@ function fakeEl() {
     },
     querySelectorAll(sel) {
       return sel === "[data-ptt-bar]" ? bars : []
+    },
+    // No real DOM tree in this harness — a hook that calls `closest` (the
+    // coaching tooltip lookup, task 01a0cf5c stage 2) gets `null` here
+    // unless a specific test overrides it, exactly like a real button
+    // with no matching ancestor would.
+    closest() {
+      return null
+    },
+    getBoundingClientRect() {
+      return { left: 0, top: 0, width: 0, height: 0 }
     },
     fire(type, event = {}) {
       ;(listeners[type] || []).forEach((fn) => fn(event))
@@ -150,15 +160,23 @@ function mountHook(room, { samples = loudSamples() } = {}) {
 
   installAudio(samples)
 
+  // Recorded by name so a test can simulate the SERVER pushing an event
+  // (task 01a0cf5c stage 1's `push_to_talk_rejected`) without a real
+  // LiveView socket — `mounted()` registers via `this.handleEvent(name,
+  // cb)`, exactly like a real hook would.
+  const serverHandlers = {}
+
   const hook = Object.assign(Object.create(MeetingPushToTalk), {
     el,
     pushEvent: (name, payload) => pushed.push([name, payload]),
     pushEventTo: () => {},
-    handleEvent: () => {},
+    handleEvent: (name, cb) => {
+      serverHandlers[name] = cb
+    },
   })
 
   hook.mounted()
-  return { hook, el, pushed }
+  return { hook, el, pushed, serverHandlers }
 }
 
 let dispatched = []
@@ -504,5 +522,223 @@ describe("pointer capture on touch", () => {
 
     el.fire("pointerleave", {})
     expect(hook.pressed()).toBe(false)
+  })
+})
+
+// ── A refusal that arrives from the SERVER, after the press already
+// looked accepted locally (task 01a0cf5c stage 1) ─────────────────────────
+
+describe("a server-side refusal (held-by-other)", () => {
+  it("tears down an in-progress press and marks it rejected, same as a client-side refusal", () => {
+    const { hook, el, serverHandlers } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+
+    el.fire("pointerdown", { button: 0 })
+    expect(hook.pressed()).toBe(true)
+    hook.sample()
+    expect(hook.peakLevel()).toBeGreaterThan(0)
+
+    // The server answers AFTER the local press already looked accepted —
+    // mic live, waveform moving, `data-pressed="true"`.
+    serverHandlers["push_to_talk_rejected"]({ agent_id: "agent-123", reason: "held-by-other" })
+
+    expect(hook.pressed()).toBe(false)
+    expect(el.dataset.pressed).toBe("false")
+    expect(hook.lastRejection()).toBe("held-by-other")
+    expect(el.dataset.rejected).toBe("held-by-other")
+
+    // The analyser is torn down — sampling after the refusal measures
+    // nothing, exactly like the pointer-lost case.
+    hook.sample()
+    expect(hook.levels()).toEqual([])
+
+    // Announced through the SAME window event every other refusal uses.
+    expect(dispatched.map((e) => e.type)).toContain("meeting:push-to-talk-rejected")
+    expect(dispatched[dispatched.length - 1].detail).toEqual({ reason: "held-by-other" })
+  })
+
+  it("is ignored when the payload names a DIFFERENT agent than this control", () => {
+    const { hook, el, serverHandlers } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+
+    el.fire("pointerdown", { button: 0 })
+    expect(hook.pressed()).toBe(true)
+
+    // A rejection meant for a DIFFERENT agent's row — every
+    // `MeetingPushToTalk` instance on the page receives every server
+    // push, so the payload's `agent_id` is what narrows this to the
+    // right button.
+    serverHandlers["push_to_talk_rejected"]({ agent_id: "some-other-agent", reason: "held-by-other" })
+
+    expect(hook.pressed()).toBe(true)
+    expect(hook.lastRejection()).toBe(null)
+  })
+
+  it("is ignored for a control with no agent id (untargeted press has no floor to lose)", () => {
+    const { hook, serverHandlers } = mountHook(roomWith([micPublication()]))
+    // No `data-agent-id` set — an untargeted control.
+
+    serverHandlers["push_to_talk_rejected"]({ agent_id: "agent-123", reason: "held-by-other" })
+
+    expect(hook.lastRejection()).toBe(null)
+  })
+})
+
+// ── The hold-threshold events (task 01a0cf5c stage 2) ─────────────────────
+//
+// The veil/card/tooltip choreography (design canvas 01a0cf5e-9cb0) is
+// driven entirely by these window events, on client-side timing a
+// LiveView round trip cannot promise to the millisecond. See
+// `meeting_ask_floor_veil.js`'s moduledoc for the consumer side.
+
+describe("the hold-threshold events", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("exposes the threshold that gates the veil/coaching-tooltip split", () => {
+    expect(HOLD_THRESHOLD_MS).toBe(380)
+  })
+
+  it("dispatches `armed` immediately on press, and `held` only once the threshold elapses while still held", () => {
+    vi.useFakeTimers()
+    const { el } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+    el.dataset.agentName = "Atlas"
+
+    el.fire("pointerdown", { button: 0 })
+
+    const armed = dispatched.find((e) => e.type === "meeting:push-to-talk-armed")
+    expect(armed).toBeTruthy()
+    expect(armed.detail).toEqual({ agentId: "agent-123", agentName: "Atlas" })
+    // Not yet — the threshold has not elapsed.
+    expect(dispatched.map((e) => e.type)).not.toContain("meeting:push-to-talk-held")
+
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS)
+
+    const held = dispatched.find((e) => e.type === "meeting:push-to-talk-held")
+    expect(held).toBeTruthy()
+    expect(held.detail).toEqual({ agentId: "agent-123", agentName: "Atlas" })
+  })
+
+  it("an early release (<380ms) dispatches `early-release`, and `held` never fires even after the threshold would have elapsed", () => {
+    vi.useFakeTimers()
+    const { el } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS - 50)
+    el.fire("pointerup", {})
+
+    // Time keeps passing after release — a bug that forgot to clear the
+    // pending timer would still fire `held` late, opening the veil for
+    // a press that already ended.
+    vi.advanceTimersByTime(1000)
+
+    expect(dispatched.map((e) => e.type)).toContain("meeting:push-to-talk-early-release")
+    expect(dispatched.map((e) => e.type)).not.toContain("meeting:push-to-talk-held")
+    expect(dispatched.map((e) => e.type)).not.toContain("meeting:push-to-talk-ended")
+  })
+
+  it("a hold that crosses the threshold and then releases dispatches `ended`, not `early-release`", () => {
+    vi.useFakeTimers()
+    const { el } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 20)
+    el.fire("pointerup", {})
+
+    expect(dispatched.map((e) => e.type)).toContain("meeting:push-to-talk-ended")
+    expect(dispatched.map((e) => e.type)).not.toContain("meeting:push-to-talk-early-release")
+  })
+
+  it("a server rejection before the threshold clears the pending timer — no late `held` arrives", () => {
+    vi.useFakeTimers()
+    const { el, serverHandlers } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+
+    el.fire("pointerdown", { button: 0 })
+    serverHandlers["push_to_talk_rejected"]({ agent_id: "agent-123", reason: "held-by-other" })
+
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 100)
+
+    expect(dispatched.map((e) => e.type)).not.toContain("meeting:push-to-talk-held")
+  })
+
+  it("dispatches the measured level on every sample, tagged with the agent id — the SAME level painted on the button's own bars", () => {
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+
+    el.fire("pointerdown", { button: 0 })
+    hook.sample()
+
+    const levelEvents = dispatched.filter((e) => e.type === "meeting:push-to-talk-level")
+    expect(levelEvents.length).toBe(1)
+    expect(levelEvents[0].detail.agentId).toBe("agent-123")
+    expect(levelEvents[0].detail.level).toBe(hook.peakLevel())
+    expect(levelEvents[0].detail.level).toBeGreaterThan(0)
+  })
+})
+
+// ── The early-release coaching tooltip (task 01a0cf5c stage 2) ────────────
+//
+// "Near the button, not centre stage" per the design canvas — positioned
+// off the button's own `getBoundingClientRect` because the wrapping
+// element it lives in is `display: contents` and gives CSS nothing to
+// anchor a `position: relative` against.
+
+describe("the coaching tooltip", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("positions itself off the button's own bounding rect on an early release, and auto-hides", () => {
+    vi.useFakeTimers()
+
+    const tip = { dataset: {}, style: {} }
+    const wrap = {
+      querySelector(sel) {
+        return sel === '[data-role="meeting-agent-hold-coach"]' ? tip : null
+      },
+    }
+
+    const { el } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+    el.closest = (sel) => (sel === '[data-role="meeting-agent-hold-wrap"]' ? wrap : null)
+    el.getBoundingClientRect = () => ({ left: 100, top: 40, width: 20, height: 20 })
+
+    el.fire("pointerdown", { button: 0 })
+    el.fire("pointerup", {}) // released immediately — well under the threshold
+
+    expect(tip.dataset.open).toBe("true")
+    expect(tip.style.left).toBe("110px")
+    expect(tip.style.top).toBe("32px")
+
+    vi.advanceTimersByTime(2600)
+
+    expect(tip.dataset.open).toBe("false")
+  })
+
+  it("never opens on a hold that crosses the threshold", () => {
+    vi.useFakeTimers()
+
+    const tip = { dataset: {}, style: {} }
+    const wrap = {
+      querySelector(sel) {
+        return sel === '[data-role="meeting-agent-hold-coach"]' ? tip : null
+      },
+    }
+
+    const { el } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+    el.closest = () => wrap
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 0, height: 0 })
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 20)
+    el.fire("pointerup", {})
+
+    expect(tip.dataset.open).toBeUndefined()
   })
 })

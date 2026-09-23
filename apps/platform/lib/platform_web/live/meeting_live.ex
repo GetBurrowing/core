@@ -263,6 +263,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Chat.CanvasDocument
   alias Platform.Meetings
   alias Platform.Meetings.Archive
+  alias Platform.Meetings.AskFloor
   alias Platform.Meetings.CandidateEvents
   alias Platform.Meetings.Candidates
   alias Platform.Meetings.Countdown
@@ -1039,7 +1040,7 @@ defmodule PlatformWeb.MeetingLive do
                 # first presence delta after mount added a SECOND
                 # registration on the same topic (task `01a02c4e` stage 4).
                 case Meetings.get_active_room(meeting.chat_space_id) do
-                  %{id: room_id} -> subscribe_room_once(socket, room_id)
+                  %{id: room_id} -> subscribe_room_once(socket, room_id, meeting.id)
                   _ -> socket
                 end
               else
@@ -3687,16 +3688,42 @@ defmodule PlatformWeb.MeetingLive do
     socket =
       with %{id: meeting_id} <- socket.assigns[:meeting],
            identity when is_binary(identity) <- press_identity(socket) do
-        PressCard.open(meeting_id, identity,
-          speaker: socket.assigns[:display_name],
-          room_id: socket.assigns[:meeting].chat_space_id,
-          target_agent_id: agent_id
-        )
+        case claim_ask_floor(socket, meeting_id, agent_id, identity) do
+          {:error, {:held_by, _holder}} ->
+            # Somebody else already has this agent's floor (task
+            # 01a0cf5c stage 1). No window opens and no card is written —
+            # refuse through the SAME `data-rejected` slot the hook
+            # already renders `no-microphone` / `microphone-muted` /
+            # `pointer-lost` through, so the presser sees it said no
+            # before anything else happens.
+            push_event(socket, "push_to_talk_rejected", %{
+              "agent_id" => agent_id,
+              "reason" => "held-by-other"
+            })
 
-        # Only reflect the held state once the press actually opened a
-        # card — a viewer with no `press_identity` (a guest) opens nothing,
-        # so a "Talking to…" cue for them would be a lie.
-        assign(socket, :pressed_agent_id, agent_id)
+          _claimed_or_untargeted ->
+            socket =
+              case PressCard.open(meeting_id, identity,
+                     speaker: socket.assigns[:display_name],
+                     room_id: socket.assigns[:meeting].chat_space_id,
+                     target_agent_id: agent_id
+                   ) do
+                {:ok, %{intent: intent}} ->
+                  # Task 01a0cf5c stage 3: start listening for THIS
+                  # press's own speech the instant the card exists —
+                  # see `start_ask_transcript_tracking/4` for why the
+                  # topic is the CANONICAL one, not a per-room mirror.
+                  start_ask_transcript_tracking(socket, meeting_id, identity, agent_id, intent)
+
+                {:error, _reason} ->
+                  socket
+              end
+
+            # Only reflect the held state once the press actually opened
+            # a card — a viewer with no `press_identity` (a guest) opens
+            # nothing, so a "Talking to…" cue for them would be a lie.
+            assign(socket, :pressed_agent_id, agent_id)
+        end
       else
         _ -> socket
       end
@@ -3708,13 +3735,33 @@ defmodule PlatformWeb.MeetingLive do
   # words are still in the transcriber's buffer, and
   # `PressWindow.release/3` leaves a grace period open for exactly that
   # reason.
+  #
+  # `:pressed_agent_id` is read BEFORE it is cleared below — it is this
+  # socket's only record of which agent's floor (if any) this press
+  # claimed, since the release event carries no payload of its own.
+  #
+  # This handler fires for EVERY release the JS hook produces — a real
+  # (>=380ms) hold AND an early one (`meeting_push_to_talk.js`'s
+  # `endPress/0` pushes it unconditionally either way, the 380ms split
+  # is client-side choreography only). So `release_ask_floor/4` below
+  # already closes the ask-floor loop for both paths in one place; nothing
+  # about the 380ms threshold is visible here to gate on, and nothing
+  # needs to be (task 01a0cf5c stage 3 — "close the loop on stage 1").
   def handle_event("push_to_talk_release", _params, socket) do
+    agent_id = socket.assigns[:pressed_agent_id]
+
     with %{id: meeting_id} <- socket.assigns[:meeting],
          identity when is_binary(identity) <- press_identity(socket) do
       PressWindow.release(meeting_id, identity)
+      release_ask_floor(socket, meeting_id, agent_id, identity)
     end
 
-    {:noreply, assign(socket, :pressed_agent_id, nil)}
+    socket =
+      socket
+      |> resolve_ask_outcome_on_release()
+      |> assign(:pressed_agent_id, nil)
+
+    {:noreply, socket}
   end
 
   # The rail freezes its order while a pointer is over it (task 01a0740e
@@ -4104,6 +4151,71 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, refresh_participants(socket)}
   end
 
+  # Per-agent ask-floor ownership (task 01a0cf5c stage 1). Fired on the
+  # room topic the instant a press claims an agent ANYWHERE in the
+  # meeting, before anything is said — the design canvas (01a0cf5e-9cb0)
+  # requires the second presser's button to say so before they start
+  # talking, not after. `AskFloor` is keyed on the TARGET agent, unlike
+  # `PressWindow` (keyed on the presser), so every connected client —
+  # not only the presser — needs this broadcast to know an agent's
+  # button is spoken for. `ParticipantRail` reads `:ask_floor_holders`
+  # to disable and label every OTHER agent's row; the presser's OWN row
+  # still reads `:pressed_agent_id` for its "Talking…" cue, so the two
+  # never collide for the person actually holding the floor.
+  def handle_info({:ask_floor_taken, %{agent_id: agent_id, display_name: display_name}}, socket) do
+    holders = Map.put(socket.assigns[:ask_floor_holders] || %{}, agent_id, display_name)
+    {:noreply, assign(socket, :ask_floor_holders, holders)}
+  end
+
+  # The explicit-release and stuck-claim-timeout paths both land here —
+  # `AskFloor.release/3` broadcasts it from `push_to_talk_release`
+  # (`claim_ask_floor/4`'s counterpart, `release_ask_floor/4`), and
+  # `AskFloor` broadcasts it itself when a dropped socket's claim goes
+  # stale. Either way the agent's button should un-freeze; this clause
+  # does not need to know which case it is.
+  def handle_info({:ask_floor_released, %{agent_id: agent_id}}, socket) do
+    holders = Map.delete(socket.assigns[:ask_floor_holders] || %{}, agent_id)
+    {:noreply, assign(socket, :ask_floor_holders, holders)}
+  end
+
+  # Live transcript feed for the held card's veil (task 01a0cf5c stage
+  # 3). Only reached while THIS socket is actively tracking a press
+  # (`start_ask_transcript_tracking/4`) — see that function for why the
+  # subscription is the PER-ROOM `meeting:transcript_chunk:<room_name>`
+  # topic, keyed off `Meetings.room_name_for_space/1`, and never the
+  # global one `IntentClassifier` holds.
+  #
+  # `Platform.Meetings.IntentClassifier` is the other reader of this
+  # exact broadcast shape and this clause mirrors its verdict logic on
+  # purpose (`stamp_press_window_source/1`): a segment belongs to THIS
+  # press iff its own `participant_identity` is the identity this
+  # socket pressed with AND `PressWindow.claim/3` — called with that
+  # SAME identity, at the ARRIVAL instant, exactly like the classifier
+  # — says the window covers it. The `meeting_id` match below is belt
+  # and braces (the room subscription already scopes this to one
+  # space); anything that fails to match — a stale broadcast for a
+  # PRIOR meeting in this same room, another speaker's segment, a
+  # segment arriving outside the window — is a silent no-op here, same
+  # as it is for the classifier.
+  def handle_info({:transcript_chunk, payload}, socket) when is_map(payload) do
+    identity = socket.assigns[:ask_transcript_identity]
+    meeting = socket.assigns[:meeting]
+
+    socket =
+      with true <- is_binary(identity),
+           %{id: meeting_id} <- meeting,
+           ^meeting_id <- Map.get(payload, :meeting_id),
+           segment when is_map(segment) <- Map.get(payload, :segment),
+           ^identity <- segment_participant_identity(segment),
+           {:ok, _window} <- PressWindow.claim(meeting_id, identity, DateTime.utc_now()) do
+        claim_ask_transcript_segment(socket, segment)
+      else
+        _ -> socket
+      end
+
+    {:noreply, socket}
+  end
+
   # AUDIT FINDING, task 01a02c4e stage 3 — this clause is new behaviour, not a
   # refactor. `Chat.remove_participant/1` broadcasts `{:participant_left,
   # deleted}` on `chat:space:<id>` (`chat.ex:1556`). Before this stage
@@ -4192,9 +4304,9 @@ defmodule PlatformWeb.MeetingLive do
   def handle_info({:meeting_presence_update, _payload}, socket) do
     socket =
       case socket.assigns[:meeting] do
-        %{chat_space_id: space_id} when is_binary(space_id) ->
+        %{id: meeting_id, chat_space_id: space_id} when is_binary(space_id) ->
           case Meetings.get_active_room(space_id) do
-            %{id: room_id} -> subscribe_room_once(socket, room_id)
+            %{id: room_id} -> subscribe_room_once(socket, room_id, meeting_id)
             _ -> socket
           end
 
@@ -4477,7 +4589,14 @@ defmodule PlatformWeb.MeetingLive do
   # card's `acts_at` — deriving the new list from the payload would mean
   # reimplementing `open_for_meeting/1`'s predicate in the view, where it
   # could disagree with the sweeper's.
-  def handle_info({:candidate_event, %{meeting_id: meeting_id}}, socket) do
+  #
+  # This is ALSO the "crumble" signal for the ask-floor veil (task
+  # 01a0cf5c stage 3): `resolve_ask_outcome_on_candidate_closed/2` below
+  # fires the client's crumble transition off this SAME broadcast, not a
+  # client-side guess — see its doc for why.
+  def handle_info({:candidate_event, %{meeting_id: meeting_id} = event}, socket) do
+    socket = resolve_ask_outcome_on_candidate_closed(socket, event)
+
     if socket.assigns[:meeting] && socket.assigns.meeting.id == meeting_id do
       {:noreply, assign_candidate_board(socket, meeting_id)}
     else
@@ -4853,10 +4972,38 @@ defmodule PlatformWeb.MeetingLive do
 
   # Mirror ChatLive's terminate hook so a tab-close mid-meeting
   # broadcasts the "left" event and the mini-bar doesn't ghost.
+  #
+  # Task 01a0cf5c stage 3 audit: a dropped socket — tab close, browser
+  # crash, navigating away — is a hold-to-ask exit path with no
+  # `push_to_talk_release` event to carry it, exactly like the tab-close
+  # this hook already exists for. Without this, a held floor would sit
+  # locked for `AskFloor.stuck_claim_ms/0` (mirrors
+  # `PressWindow.max_hold_ms/0`, two minutes) before the stuck-claim
+  # timer evicts it on its own — correct as a backstop, wrong as the
+  # ONLY path, since every other viewer's button stays frozen the whole
+  # time for a press that is already gone. Releasing here, using the
+  # exact same `release_ask_floor/4` the explicit release path calls,
+  # closes that gap immediately instead of waiting out the backstop.
+  # `PressWindow.release/3` is released alongside it for the same
+  # reason: a disconnect mid-press must not leave the presser's speech
+  # window claiming segments nobody is still holding a button for.
   @impl true
   def terminate(_reason, socket) do
+    release_held_ask_floor_on_terminate(socket)
     MeetingHooks.on_terminate(socket)
     maybe_broadcast_guest_leave(socket)
+    :ok
+  end
+
+  defp release_held_ask_floor_on_terminate(socket) do
+    agent_id = socket.assigns[:pressed_agent_id]
+
+    with %{id: meeting_id} <- socket.assigns[:meeting],
+         identity when is_binary(identity) <- press_identity(socket) do
+      PressWindow.release(meeting_id, identity)
+      release_ask_floor(socket, meeting_id, agent_id, identity)
+    end
+
     :ok
   end
 
@@ -5236,7 +5383,7 @@ defmodule PlatformWeb.MeetingLive do
 
     socket =
       case Meetings.get_active_room(meeting.chat_space_id) do
-        %{id: room_id} -> subscribe_room_once(socket, room_id)
+        %{id: room_id} -> subscribe_room_once(socket, room_id, meeting.id)
         _ -> socket
       end
 
@@ -5270,7 +5417,15 @@ defmodule PlatformWeb.MeetingLive do
   #
   # Switching rooms releases the previous topic first: without that the pid
   # would keep receiving events from a room it left.
-  defp subscribe_room_once(socket, room_id) when is_binary(room_id) do
+  #
+  # `meeting_id` is a THIRD, explicit argument (every call site now
+  # passes it) rather than read off `socket.assigns[:meeting]` — the
+  # mount call site (the one that matters most, since it is where a
+  # viewer joining an already-live meeting first needs to see who
+  # already holds what) calls this BEFORE `:meeting` lands in assigns,
+  # so reading the assign here would silently skip seeding on the one
+  # call site where seeding matters most.
+  defp subscribe_room_once(socket, room_id, meeting_id) when is_binary(room_id) do
     case socket.assigns[:subscribed_room_id] do
       ^room_id ->
         socket
@@ -5278,9 +5433,34 @@ defmodule PlatformWeb.MeetingLive do
       previous ->
         if is_binary(previous), do: MeetingsPubSub.unsubscribe_room(previous)
         MeetingsPubSub.subscribe_room(room_id)
-        assign(socket, :subscribed_room_id, room_id)
+
+        socket
+        |> assign(:subscribed_room_id, room_id)
+        |> seed_ask_floor_holders(
+          meeting_id || (socket.assigns[:meeting] && socket.assigns.meeting.id)
+        )
     end
   end
+
+  # `:ask_floor_holders` is otherwise only ever UPDATED incrementally by
+  # the `:ask_floor_taken` / `:ask_floor_released` room-topic clauses
+  # above, which only fire for presses/releases that happen AFTER this
+  # pid subscribes. A viewer joining mid-meeting — or reconnecting after
+  # a room switch — would see every already-held agent as free until the
+  # NEXT press anywhere, which is exactly the stale-owner gap this stage
+  # exists to close. Re-derived in full from `AskFloor.list_meeting/1`
+  # each time this pid (re)subscribes, rather than trusted to have
+  # tracked every event correctly.
+  defp seed_ask_floor_holders(socket, meeting_id) when is_binary(meeting_id) do
+    holders =
+      meeting_id
+      |> AskFloor.list_meeting()
+      |> Map.new(&{&1.agent_id, &1.display_name})
+
+    assign(socket, :ask_floor_holders, holders)
+  end
+
+  defp seed_ask_floor_holders(socket, _meeting_id), do: socket
 
   # Ensure a live meeting room + guest participant row exist so both the
   # guest's OWN LV (which subscribed above) and any authenticated
@@ -5941,6 +6121,274 @@ defmodule PlatformWeb.MeetingLive do
   # default downstream).
   defp pressed_agent_id_param(%{"agent_id" => id}) when is_binary(id) and id != "", do: id
   defp pressed_agent_id_param(_params), do: nil
+
+  # Attempt to claim `agent_id`'s floor for a per-agent press (task
+  # 01a0cf5c stage 1). An UNTARGETED press (`agent_id` nil — no
+  # `data-agent-id` on the control that fired it) has no floor to
+  # claim: `PressCard.open/3`'s own default-target resolution stands,
+  # exactly as it did before per-agent hold-to-talk existed.
+  #
+  # On a successful (or idempotent-repeat) claim this ALSO broadcasts
+  # `:ask_floor_taken` on the meeting's room topic — every OTHER
+  # connected client needs to know before anything is said, per the
+  # design canvas (01a0cf5e-9cb0). The stuck-claim timeout's own
+  # `:ask_floor_released` broadcast lives inside `AskFloor` itself (it
+  # fires with no LiveView process involved), but this one is ordinary
+  # request/response and belongs with every other room-topic publish
+  # this module already owns.
+  defp claim_ask_floor(_socket, _meeting_id, nil, _identity), do: :untargeted
+
+  defp claim_ask_floor(socket, meeting_id, agent_id, identity) do
+    room_id = socket.assigns[:subscribed_room_id]
+
+    case AskFloor.claim(meeting_id, agent_id, identity, socket.assigns[:display_name], room_id) do
+      {:ok, holder} = ok ->
+        if is_binary(room_id) do
+          MeetingsPubSub.broadcast_room(
+            room_id,
+            {:ask_floor_taken, %{agent_id: agent_id, display_name: holder.display_name}}
+          )
+        end
+
+        ok
+
+      error ->
+        error
+    end
+  end
+
+  # The other half of `claim_ask_floor/4`: release `agent_id`'s floor
+  # and broadcast `:ask_floor_released` so every other client's button
+  # un-freezes immediately, not on the next re-render. A release for a
+  # `nil` agent_id (an untargeted press never claimed a floor to begin
+  # with) is a no-op, and a release this socket does not actually hold
+  # (`AskFloor.release/3` checks identity) is left alone rather than
+  # broadcast — nothing changed, so nothing to tell anyone.
+  defp release_ask_floor(_socket, _meeting_id, nil, _identity), do: :ok
+
+  defp release_ask_floor(socket, meeting_id, agent_id, identity) do
+    case AskFloor.release(meeting_id, agent_id, identity) do
+      :ok ->
+        case socket.assigns[:subscribed_room_id] do
+          room_id when is_binary(room_id) ->
+            MeetingsPubSub.broadcast_room(room_id, {:ask_floor_released, %{agent_id: agent_id}})
+
+          _ ->
+            :ok
+        end
+
+      _not_held_or_missing ->
+        :ok
+    end
+  end
+
+  # ── Live transcript feed + release outcome for the ask-floor veil ────────
+  # (task 01a0cf5c stage 3)
+  #
+  # Wires the veil's transcript slot onto the segment stream that
+  # already exists for exactly this purpose
+  # (`Platform.Meetings.IntentClassifier` subscribes to the same
+  # broadcast for the same reason: `PressWindow.claim/3` is only true
+  # about a window at the instant a segment ARRIVES, not seconds later
+  # once a debounce or a model call has run). This module does not
+  # build a second transcription path — it reads the one the classifier
+  # already reads, and decides nothing the classifier does not already
+  # decide the same way for its own purpose.
+  #
+  # ## The PER-ROOM topic, never the canonical one
+  #
+  # `Platform.Meetings.PubSub.subscribe_transcript_chunk/0` (no
+  # argument) is the GLOBAL, cross-org topic every appended segment in
+  # the whole install broadcasts on — `IntentClassifier` may hold it
+  # because it is a supervised singleton no human sits behind, and
+  # `test/platform/regression/pubsub_topic_inventory_audit_test.exs`
+  # asserts, by name, that nothing else does: a per-USER process (this
+  # LiveView) subscribing to it would mean any viewer holding a press
+  # anywhere receives every OTHER meeting's speech, across orgs, for as
+  # long as the button is held. That is the leak this module must not
+  # reopen.
+  #
+  # `subscribe_transcript_chunk/1` (per room) is the correct, scoped
+  # subscription — but the id it is keyed on is `Transcript.room_id`,
+  # the LIVEKIT room NAME (`MeetingAgentController`'s
+  # `params["room_name"] || room_sid`), which is NOT
+  # `Platform.Meetings.Room.id` (the UUID this LiveView tracks as
+  # `:subscribed_room_id` for the ask-floor broadcasts above — a
+  # different id space entirely). `Platform.Meetings.room_name_for_space/1`
+  # is the one function that derives the LiveKit room name from
+  # `meeting.chat_space_id` (`"space-<chat_space_id>"`, the same string
+  # every room this meeting could ever open is named with — federation's
+  # tool surface and `MeetingHooks` both derive it the same way), so
+  # that — not `:subscribed_room_id` — is what this subscribes with.
+  defp start_ask_transcript_tracking(socket, meeting_id, identity, agent_id, intent) do
+    candidate_id =
+      case Candidates.get_by_intent_id(intent.id) do
+        %{id: id} -> id
+        _ -> nil
+      end
+
+    room_name = Meetings.room_name_for_space(socket.assigns.meeting.chat_space_id)
+
+    socket =
+      if socket.assigns[:ask_transcript_room_name] do
+        socket
+      else
+        :ok = MeetingsPubSub.subscribe_transcript_chunk(room_name)
+        socket
+      end
+
+    socket
+    |> assign(:ask_transcript_room_name, room_name)
+    |> assign(:ask_transcript_identity, identity)
+    |> assign(:ask_transcript_meeting_id, meeting_id)
+    |> assign(:ask_transcript_agent_id, agent_id)
+    |> assign(:ask_transcript_candidate_id, candidate_id)
+    |> assign(:ask_transcript_claimed?, false)
+    |> assign(:ask_transcript_released?, false)
+  end
+
+  defp stop_ask_transcript_tracking(socket) do
+    case socket.assigns[:ask_transcript_room_name] do
+      room_name when is_binary(room_name) ->
+        MeetingsPubSub.unsubscribe_transcript_chunk(room_name)
+
+      _ ->
+        :ok
+    end
+
+    socket
+    |> assign(:ask_transcript_room_name, nil)
+    |> assign(:ask_transcript_identity, nil)
+    |> assign(:ask_transcript_meeting_id, nil)
+    |> assign(:ask_transcript_agent_id, nil)
+    |> assign(:ask_transcript_candidate_id, nil)
+    |> assign(:ask_transcript_claimed?, false)
+    |> assign(:ask_transcript_released?, false)
+  end
+
+  # A segment claimed by THIS socket's own press window. Marks the
+  # press as having claimed at least one segment (what
+  # `resolve_ask_outcome_on_release/1` reads to decide the fly
+  # transition immediately versus waiting), and — for a FINAL segment
+  # only — pushes the text into the veil's transcript slot. Interim
+  # (non-final) segments still count as a claim, matching
+  # `PressWindow`'s own counter exactly (the classifier does not filter
+  # them either), but are not displayed: the transcriber revises interim
+  # text as it finalises, and echoing every revision would make the
+  # card visibly rewrite itself mid-sentence.
+  defp claim_ask_transcript_segment(socket, segment) do
+    socket = assign(socket, :ask_transcript_claimed?, true)
+
+    socket =
+      if Map.get(segment, "final") == true do
+        text = segment_text(segment)
+
+        if text != "" do
+          push_event(socket, "meeting_ask_transcript_chunk", %{
+            "agent_id" => socket.assigns[:ask_transcript_agent_id],
+            "text" => text
+          })
+        else
+          socket
+        end
+      else
+        socket
+      end
+
+    # A late claim landing AFTER the button was already released (still
+    # inside `PressWindow.release_grace_ms/0`) is exactly the case
+    # `resolve_ask_outcome_on_release/1` left pending rather than
+    # guessing about. Now it is known: at least one segment was claimed,
+    # so the outcome is "fly" — resolve it the instant that becomes
+    # true rather than waiting for the grace timer to expire and prove
+    # a negative that is no longer true.
+    if socket.assigns[:ask_transcript_released?] do
+      push_ask_outcome(socket, "fly")
+    else
+      socket
+    end
+  end
+
+  # Read at the moment the key comes up (task 01a0cf5c stage 3's release
+  # outcome). Two cases:
+  #
+  #   * At least one segment already claimed — the outcome is known NOW
+  #     ("fly"), so resolve it immediately rather than waiting on
+  #     nothing.
+  #   * Nothing claimed yet — this does NOT mean the press was empty. A
+  #     trailing segment can still arrive and be claimed during
+  #     `PressWindow.release_grace_ms/0` (the same grace that covers the
+  #     transcriber's finalisation lag), and `PressWindow` itself will
+  #     not decide "empty" until that grace elapses. So this branch
+  #     marks the press released and otherwise does nothing — the
+  #     outcome resolves later, either from a late claim above (fly) or
+  #     from the server's own empty-press close, in
+  #     `resolve_ask_outcome_on_candidate_closed/2` below (crumble).
+  defp resolve_ask_outcome_on_release(socket) do
+    cond do
+      is_nil(socket.assigns[:ask_transcript_identity]) ->
+        socket
+
+      socket.assigns[:ask_transcript_claimed?] ->
+        push_ask_outcome(socket, "fly")
+
+      true ->
+        assign(socket, :ask_transcript_released?, true)
+    end
+  end
+
+  # The crumble half. Fires off the SAME broadcast `PressCard.close_
+  # silent/1` produces when `PressWindow`'s release-grace timer finds
+  # nothing was claimed (`reason: :unclassified`) — the identical path
+  # `Platform.Meetings.CandidateSweeper`'s backstop reaper takes for the
+  # same condition, so either producer of "empty press" resolves the
+  # veil the same way. Deliberately NOT derived from this socket's own
+  # claimed-segment count: that count can race a trailing segment still
+  # in flight, which is precisely the guess the stage's own spec forbids
+  # ("rather than guessing client-side from segment counts that could
+  # race").
+  defp resolve_ask_outcome_on_candidate_closed(socket, %{
+         candidate_id: candidate_id,
+         kind: :closed,
+         detail: detail
+       }) do
+    tracked_id = socket.assigns[:ask_transcript_candidate_id]
+
+    if is_binary(tracked_id) and tracked_id == candidate_id and
+         Map.get(detail, "reason") == "unclassified" do
+      push_ask_outcome(socket, "crumble")
+    else
+      socket
+    end
+  end
+
+  defp resolve_ask_outcome_on_candidate_closed(socket, _event), do: socket
+
+  defp push_ask_outcome(socket, outcome) when outcome in ["fly", "crumble"] do
+    socket =
+      push_event(socket, "meeting_ask_outcome", %{
+        "agent_id" => socket.assigns[:ask_transcript_agent_id],
+        "candidate_id" => socket.assigns[:ask_transcript_candidate_id],
+        "outcome" => outcome
+      })
+
+    stop_ask_transcript_tracking(socket)
+  end
+
+  # The segment's `participant_identity` and nothing else — same
+  # accessor shape as `IntentClassifier`'s (segments arrive with
+  # string keys from `MeetingAgentController.normalize_segment/1`).
+  defp segment_participant_identity(segment) when is_map(segment) do
+    Map.get(segment, "participant_identity") || Map.get(segment, :participant_identity)
+  end
+
+  defp segment_participant_identity(_segment), do: nil
+
+  defp segment_text(segment) when is_map(segment) do
+    Map.get(segment, "text") || Map.get(segment, :text) || ""
+  end
+
+  defp segment_text(_segment), do: ""
 
   defp apply_candidate_stop(socket, candidate) do
     result =

@@ -169,8 +169,28 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
     """
   )
 
+  attr(:held?, :boolean,
+    default: false,
+    doc: """
+    True when THIS viewer is currently holding this agent's push-to-talk
+    floor (task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0). Overrides the
+    ring's colour with `border-primary`, regardless of what `state`
+    would otherwise paint it — the canvas reserves `--color-primary` for
+    the veil's meter and this ring, nowhere else in the held state. Only
+    the ring changes: the face, the corner glyph and the word under the
+    name are unaffected, so a held agent that is also, say, `:delayed`
+    still shows that.
+    """
+  )
+
   def agent_activity_avatar(assigns) do
-    assigns = assign(assigns, :meta, meta(assigns.state))
+    meta = meta(assigns.state)
+    ring_class = if assigns.held?, do: "border-primary", else: meta.ring
+
+    assigns =
+      assigns
+      |> assign(:meta, meta)
+      |> assign(:ring_class, ring_class)
 
     ~H"""
     <span
@@ -191,11 +211,12 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
       <span
         class={[
           "pointer-events-none absolute inset-0 rounded-full border-2",
-          @meta.ring,
+          @ring_class,
           motion_class(@meta.motion)
         ]}
         aria-hidden="true"
         data-role="agent-activity-ring"
+        data-ask-floor-held={@held?}
       >
       </span>
       <span

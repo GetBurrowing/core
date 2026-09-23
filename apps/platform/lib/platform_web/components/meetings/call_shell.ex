@@ -483,6 +483,11 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     doc: "Forwarded to the rail: the agent this viewer is currently holding, or nil."
   )
 
+  attr(:ask_floor_holders, :map,
+    default: %{},
+    doc: "Forwarded to the rail: agent_id => display_name for every held floor, meeting-wide."
+  )
+
   attr(:invite_rows, :list,
     default: [],
     doc: """
@@ -738,6 +743,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               hold_to_talk?={@hold_to_talk?}
               id_prefix={@hold_to_talk_id_prefix}
               pressed_agent_id={@pressed_agent_id}
+              ask_floor_holders={@ask_floor_holders}
             />
             {render_slot(@people_extra)}
             <.invite_section

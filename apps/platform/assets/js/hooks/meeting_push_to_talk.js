@@ -1,4 +1,5 @@
 import { Track } from "livekit-client"
+import { paintBars } from "./lib/ptt_waveform"
 
 /**
  * MeetingPushToTalk — the press-to-address-an-agent control, and the
@@ -47,6 +48,15 @@ import { Track } from "livekit-client"
 
 const SILENCE = 128 // getByteTimeDomainData's zero point
 const BAR_COUNT = 12
+
+// Task 01a0cf5c stage 2, design canvas 01a0cf5e-9cb0: a release before
+// this many milliseconds have elapsed is coached ("Hold it down and
+// talk...") near the button, not treated as a real ask — and the veil
+// never opens for it at all. `MeetingAskFloorVeil` (`meeting_ask_floor_
+// veil.js`) waits for the `meeting:push-to-talk-held` event below before
+// showing anything, so a hold that never reaches this threshold never
+// produces that event and the veil path simply never runs.
+const HOLD_THRESHOLD_MS = 380
 
 const MeetingPushToTalk = {
   mounted() {
@@ -101,11 +111,28 @@ const MeetingPushToTalk = {
     }
 
     this._bind()
+
+    // A server-side refusal (task 01a0cf5c stage 1): another presser
+    // already holds THIS agent's floor. Everything up to this point in
+    // `beginPress` is client-only evidence (a live mic), so the press
+    // already looked accepted — waveform running, `data-pressed="true"`
+    // — by the time the server answers. `push_to_talk_press` is pushed
+    // to EVERY hook instance on the page (one per agent row), so the
+    // `agent_id` in the payload is what narrows this to the one button
+    // actually being refused; every other instance's press (if any) is
+    // untouched.
+    this.handleEvent("push_to_talk_rejected", (payload) => {
+      const agentId = this.el && this.el.dataset ? this.el.dataset.agentId : null
+      if (!payload || payload.agent_id !== agentId) return
+      this._serverReject(payload.reason)
+    })
   },
 
   destroyed() {
     this._unbind()
     this._teardownAnalyser()
+    this._clearHoldThresholdTimer()
+    this._clearCoachTimer()
   },
 
   // ── Public, for tests and for the rest of the page ──────────────────────
@@ -156,8 +183,39 @@ const MeetingPushToTalk = {
     this._rejection = null
     this._pressed = true
     this._levels = []
+    this._heldLongEnough = false
     this.el.dataset.pressed = "true"
     this.pushEvent("push_to_talk_press", this._pressPayload())
+
+    // Task 01a0cf5c stage 2: announce the press immediately so
+    // `MeetingAskFloorVeil` knows WHO is being addressed, before it
+    // knows whether this will turn into a real hold or an early
+    // release — see `HOLD_THRESHOLD_MS` above.
+    this._dispatch("meeting:push-to-talk-armed", {
+      agentId: this._agentId(),
+      agentName: this._agentName(),
+    })
+    this._scheduleHoldThreshold()
+  },
+
+  _scheduleHoldThreshold() {
+    this._clearHoldThresholdTimer()
+    this._holdThresholdTimer = setTimeout(() => {
+      this._holdThresholdTimer = null
+      if (!this._pressed) return
+      this._heldLongEnough = true
+      this._dispatch("meeting:push-to-talk-held", {
+        agentId: this._agentId(),
+        agentName: this._agentName(),
+      })
+    }, HOLD_THRESHOLD_MS)
+  },
+
+  _clearHoldThresholdTimer() {
+    if (this._holdThresholdTimer) {
+      clearTimeout(this._holdThresholdTimer)
+      this._holdThresholdTimer = null
+    }
   },
 
   // Per-agent hold-to-talk: the control sits on a specific agent's row
@@ -174,11 +232,33 @@ const MeetingPushToTalk = {
   endPress() {
     if (!this._pressed) return
 
+    // Read BEFORE clearing — `_clearHoldThresholdTimer` below cancels
+    // the pending `:held` timeout, but does not tell us whether it had
+    // already fired.
+    const heldLongEnough = this._heldLongEnough
+
+    this._clearHoldThresholdTimer()
     this._pressed = false
+    this._heldLongEnough = false
     this.el.dataset.pressed = "false"
     this._teardownAnalyser()
     this._paintBars(0)
     this.pushEvent("push_to_talk_release", {})
+
+    // Task 01a0cf5c stage 2: an early release (never crossed
+    // `HOLD_THRESHOLD_MS`, so `meeting:push-to-talk-held` never fired
+    // and the veil never opened) gets the coaching tooltip, near THIS
+    // button, instead of `MeetingAskFloorVeil`'s centred card closing —
+    // there is nothing for it to close.
+    if (heldLongEnough) {
+      this._dispatch("meeting:push-to-talk-ended", { agentId: this._agentId() })
+    } else {
+      this._showCoachTooltip()
+      this._dispatch("meeting:push-to-talk-early-release", {
+        agentId: this._agentId(),
+        agentName: this._agentName(),
+      })
+    }
   },
 
   // ── Pointer capture ────────────────────────────────────────────────────
@@ -228,18 +308,32 @@ const MeetingPushToTalk = {
   // explain itself; the one thing it must never do is look like a press
   // that worked.
   _reject(reason) {
+    // A rejection can land before the hold-threshold timer would have
+    // fired (a server refusal is typically near-instant) or, in
+    // principle, after — either way there is now no press for it to
+    // resolve, so the timer must not fire later against stale state.
+    this._clearHoldThresholdTimer()
+    this._heldLongEnough = false
     this._rejection = reason
     this._pressed = false
     this._levels = []
     this.el.dataset.pressed = "false"
     this.el.dataset.rejected = reason
     this._paintBars(0)
+    this._dispatch("meeting:push-to-talk-rejected", { reason })
+  },
 
-    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-      window.dispatchEvent(
-        new CustomEvent("meeting:push-to-talk-rejected", { detail: { reason } })
-      )
-    }
+  // The SERVER's refusal (task 01a0cf5c stage 1, `held-by-other`):
+  // unlike `_reject`, this fires AFTER `beginPress` already succeeded
+  // locally — the mic was live, the analyser started, the waveform is
+  // moving — so it has to unwind that state too, not just skip starting
+  // it. Renders through the exact same `data-rejected` slot `_reject`
+  // does, so the template needs no second case to handle a refusal that
+  // arrived a moment later than the others.
+  _serverReject(reason) {
+    this._teardownAnalyser()
+    this._paintBars(0)
+    this._reject(reason)
   },
 
   // ── Microphone lookup ──────────────────────────────────────────────────
@@ -338,6 +432,10 @@ const MeetingPushToTalk = {
 
     this._levels.push(level)
     this._paintBars(level)
+    // Task 01a0cf5c stage 2: the SAME measured level, broadcast so
+    // `MeetingAskFloorVeil` can paint the centred card's meter off it
+    // without opening a second `AnalyserNode` on the same track.
+    this._dispatch("meeting:push-to-talk-level", { agentId: this._agentId(), level })
     this._scheduleSample()
   },
 
@@ -374,18 +472,83 @@ const MeetingPushToTalk = {
   // Bars are scaled, never recoloured: colour is carried by the semantic
   // token classes in the template, and a hook that wrote colours would
   // put a second palette in JS where the theme cannot reach it.
+  //
+  // The actual math lives in `./lib/ptt_waveform` (task 01a0cf5c stage
+  // 2) so `MeetingAskFloorVeil`'s card meter can reuse the IDENTICAL
+  // formula off the `meeting:push-to-talk-level` event above, rather
+  // than a second implementation that could silently drift from this
+  // one.
   _paintBars(level) {
-    if (!this._bars || this._bars.length === 0) return
+    paintBars(this._bars, level)
+  },
 
-    const count = this._bars.length
+  // ── Reporting who/what, for the veil and the coaching tooltip ────────────
 
-    for (let i = 0; i < count; i++) {
-      // A little shape either side of centre so the meter reads as a
-      // waveform rather than a single block.
-      const distance = Math.abs(i - (count - 1) / 2) / ((count - 1) / 2 || 1)
-      const weight = 1 - distance * 0.55
-      const scaled = Math.max(0.08, Math.min(1, level * weight * 2.2))
-      this._bars[i].style.transform = `scaleY(${scaled.toFixed(3)})`
+  _agentId() {
+    return this.el && this.el.dataset ? this.el.dataset.agentId || null : null
+  },
+
+  _agentName() {
+    return this.el && this.el.dataset ? this.el.dataset.agentName || "" : ""
+  },
+
+  _dispatch(name, detail) {
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent(name, { detail }))
+    }
+  },
+
+  // ── The early-release coaching tooltip (task 01a0cf5c stage 2) ───────────
+  //
+  // Per the design-direction canvas (01a0cf5e-9cb0): rendered NEAR THE
+  // BUTTON, not centre stage, and the veil never runs for this case at
+  // all — it lives entirely inside THIS button's own row, as the
+  // sibling `[data-role="meeting-agent-hold-coach"]` element
+  // `ParticipantRail` renders next to the button, positioned here via
+  // `getBoundingClientRect` rather than CSS because the wrapping
+  // element is `display: contents` and establishes no containing block
+  // of its own.
+  _coachTooltip() {
+    if (this._coachEl !== undefined) return this._coachEl
+
+    const wrap =
+      this.el && typeof this.el.closest === "function"
+        ? this.el.closest('[data-role="meeting-agent-hold-wrap"]')
+        : null
+
+    this._coachEl =
+      wrap && typeof wrap.querySelector === "function"
+        ? wrap.querySelector('[data-role="meeting-agent-hold-coach"]')
+        : null
+
+    return this._coachEl
+  },
+
+  _showCoachTooltip() {
+    const tip = this._coachTooltip()
+    if (!tip || !this.el || typeof this.el.getBoundingClientRect !== "function") return
+
+    const rect = this.el.getBoundingClientRect()
+    tip.style.position = "fixed"
+    tip.style.left = `${rect.left + rect.width / 2}px`
+    tip.style.top = `${rect.top - 8}px`
+    tip.style.transform = "translate(-50%, -100%)"
+    tip.dataset.open = "true"
+
+    this._clearCoachTimer()
+    this._coachTimer = setTimeout(() => this._hideCoachTooltip(), 2600)
+  },
+
+  _hideCoachTooltip() {
+    this._clearCoachTimer()
+    const tip = this._coachTooltip()
+    if (tip) tip.dataset.open = "false"
+  },
+
+  _clearCoachTimer() {
+    if (this._coachTimer) {
+      clearTimeout(this._coachTimer)
+      this._coachTimer = null
     }
   },
 
@@ -419,5 +582,5 @@ const MeetingPushToTalk = {
   },
 }
 
-export { BAR_COUNT }
+export { BAR_COUNT, HOLD_THRESHOLD_MS }
 export default MeetingPushToTalk

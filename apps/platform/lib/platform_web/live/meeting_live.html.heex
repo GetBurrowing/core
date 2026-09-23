@@ -1304,6 +1304,7 @@
                 hold_to_talk?={true}
                 id_prefix="meeting-left-ptt"
                 pressed_agent_id={assigns[:pressed_agent_id]}
+                ask_floor_holders={assigns[:ask_floor_holders] || %{}}
               />
             </div>
           </section>
@@ -2374,6 +2375,7 @@
               hold_to_talk?={@mobile_viewport?}
               hold_to_talk_id_prefix="meeting-people-ptt"
               pressed_agent_id={assigns[:pressed_agent_id]}
+              ask_floor_holders={assigns[:ask_floor_holders] || %{}}
               participants={assigns[:participants] || []}
               agents_by_id={assigns[:agents_by_id] || %{}}
               meeting={@meeting}
