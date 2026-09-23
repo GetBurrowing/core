@@ -271,13 +271,17 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   @doc "Show the canvases panel."
   @spec show_panel(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def show_panel(socket) do
-    # `refresh_explorer/1` here as well as in `"canvas_panel_toggle"`: a canvas
-    # message can open this panel without the toggle ever being clicked, and an
-    # explorer opened that way would render whatever groups were last loaded —
-    # in the worst case the previous space's, because `load_for_space/2`
-    # deliberately leaves them empty.
+    # `refresh_unindexed_count/1` and `refresh_explorer/1` here as well as in
+    # `"canvas_panel_toggle"`: a canvas message can open this panel without the
+    # toggle ever being clicked (`"canvas_create"` in `chat_live.ex`, while the
+    # drawer is closed), and a panel opened that way would otherwise render
+    # whatever the count and the explorer's groups were last loaded as — in the
+    # worst case the previous space's, because `load_for_space/2` deliberately
+    # leaves the explorer empty. See the refresh-point lists above
+    # `refresh_unindexed_count/1` and `refresh_explorer/1`.
     socket
     |> assign(:show_canvases, true)
+    |> refresh_unindexed_count()
     |> refresh_explorer()
   end
 
@@ -1020,16 +1024,22 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     Map.new(canvases, fn canvas -> {canvas.id, canvas} end)
   end
 
-  # ── The partial-index count's refresh path (task 01a07402 stage 6) ────────
+  # ── The partial-index count's refresh path (task 01a07402 stage 6,
+  #    extended by task 01a078a1) ─────────────────────────────────────────
   #
   # `:canvas_unindexed_count` drives the "older canvases are still being
   # indexed" line in `Conversation.canvases_drawer/1`. It is recomputed at
-  # exactly THREE moments, and this is the list:
+  # exactly FOUR moments, and this is the list:
   #
   #   1. Space entry — `load_for_space/2`, inline, because `:active_space` is
   #      not assigned yet at that point and the id arrives as an argument.
-  #   2. Drawer open — the `"canvas_panel_toggle"` handler, via this function.
-  #   3. Each (300ms-debounced) search — the `"canvas_search"` handler.
+  #   2. Drawer open via the toggle — the `"canvas_panel_toggle"` handler, via
+  #      this function.
+  #   3. Drawer open via `show_panel/1` — the OTHER open path, reached today
+  #      only by `"canvas_create"` in `chat_live.ex`. Without this, creating a
+  #      canvas while the drawer is closed opens it showing a count computed at
+  #      the last space entry or toggle, stale in either direction.
+  #   4. Each (300ms-debounced) search — the `"canvas_search"` handler.
   #
   # NOT in the render path, deliberately. `CanvasSearchIndex.unindexed_count/1`
   # is a `COUNT` over `chat_canvases` LEFT JOINed against `chat_canvas_search`;

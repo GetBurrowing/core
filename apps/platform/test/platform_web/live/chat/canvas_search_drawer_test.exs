@@ -566,6 +566,73 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
     end
   end
 
+  # ── the closed-drawer canvas_create path (task 01a078a1) ──────────────────
+  #
+  # `CanvasHooks.show_panel/1` is a SECOND drawer-open entry point, reached
+  # only by the `"canvas_create"` handler in `chat_live.ex` when a canvas is
+  # created while the drawer is still closed. `open_drawer/3` above (and
+  # `reopen_drawer/1`) drive the drawer through `"canvas_panel_toggle"`,
+  # which already recomputes `:canvas_unindexed_count` itself — a test built
+  # on either of those cannot tell a fixed `show_panel/1` from one that never
+  # refreshes the count, because both produce identical output. These two
+  # tests drive `"canvas_create"` directly via `render_submit/3` on a view
+  # whose `:show_canvases` is still false, and never touch `#new-canvas-form`
+  # (which only exists in the DOM once the drawer is already open).
+
+  defp create_canvas_closed_drawer(view) do
+    render_submit(view, "canvas_create", %{
+      "canvas" => %{"title" => "Closed-drawer canvas #{System.unique_integer([:positive])}"}
+    })
+  end
+
+  describe "show_panel/1 via the closed-drawer canvas_create path" do
+    test "the count RISES to non-zero between space entry and the create, and the create picks it up",
+         %{conn: conn, user: user, space: space, author: author} do
+      # Indexed at seed time (`canvas_persist_sync` is true in setup), so
+      # `load_for_space/2` computes 0 on entry.
+      seed = canvas(space, author, "Quarterly Notes", "an already-indexed canvas")
+
+      view = enter_space(conn, user, space)
+
+      # Sanity: the drawer really is closed at this point, so the assertions
+      # below are about the closed-drawer path and not a drawer already open.
+      refute has_element?(view, ~s([data-role="canvas-search-input"]))
+
+      # The count changes AFTER space entry.
+      deindex!(seed)
+      assert CanvasSearchIndex.unindexed_count([space.id]) == 1
+
+      html = create_canvas_closed_drawer(view)
+
+      assert query_all(html, @indexing_selector) != [],
+             "show_panel/1 must recompute :canvas_unindexed_count on the " <>
+               "closed-drawer canvas_create path; a stale (zero) count " <>
+               "leaves the line dark when it should warn"
+    end
+
+    test "the count FALLS to zero between space entry and the create, and the create picks it up",
+         %{conn: conn, user: user, space: space, author: author} do
+      # Unindexed at entry, so `load_for_space/2` computes 1.
+      stale = deindex!(canvas(space, author, "Ancient Board", "awaiting the backfill"))
+
+      view = enter_space(conn, user, space)
+
+      refute has_element?(view, ~s([data-role="canvas-search-input"]))
+
+      # The real backfill entry point, so this tracks what actually clears the
+      # count rather than a synthetic index-row insert.
+      assert :ok = CanvasSearchBackfill.index_one(Repo.reload!(stale))
+      assert CanvasSearchIndex.unindexed_count([space.id]) == 0
+
+      html = create_canvas_closed_drawer(view)
+
+      assert query_all(html, @indexing_selector) == [],
+             "show_panel/1 must recompute :canvas_unindexed_count on the " <>
+               "closed-drawer canvas_create path; a stale (non-zero) count " <>
+               "leaves the line lit after the backfill already finished"
+    end
+  end
+
   # ── blank query restores list mode ────────────────────────────────────────
 
   describe "a blank query" do

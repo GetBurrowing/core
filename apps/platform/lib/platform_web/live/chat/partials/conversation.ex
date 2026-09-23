@@ -1373,7 +1373,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                watch a backfill.
 
                The count behind it is deliberately NOT recomputed in the render
-               path; `CanvasHooks.refresh_unindexed_count/1` names the three
+               path; `CanvasHooks.refresh_unindexed_count/1` names the four
                moments it is recomputed at and what stays stale between them.
 
                KNOWN LIMIT, ticket `01a077b2-8882`: `unindexed_count/1` counts
