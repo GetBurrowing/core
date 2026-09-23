@@ -41,6 +41,13 @@ defmodule Platform.Chat.Attachments.ToolHandlersTest do
     %{space: space, participant: participant}
   end
 
+  defp stored_files(root) do
+    root
+    |> Path.join("**/*")
+    |> Path.wildcard()
+    |> Enum.filter(&File.regular?/1)
+  end
+
   defp context(participant, extra \\ %{}) do
     Map.merge(%{agent_participant_id: participant.id}, extra)
   end
@@ -127,6 +134,50 @@ defmodule Platform.Chat.Attachments.ToolHandlersTest do
 
       assert payload.recoverable == false
       assert payload.error =~ "not a participant"
+    end
+
+    # Task 01a0cbe0 stage 2: with no agent_id in context, require_member/2 used
+    # to authorize on the mere presence of a participant id, for any space_id.
+    test "agent_id-less context: refuses a participant of another space, persisting nothing",
+         %{root: root} do
+      %{participant: home_participant} = setup_space()
+      %{space: foreign} = setup_space()
+
+      args = %{
+        "space_id" => foreign.id,
+        "filename" => "cross.bin",
+        "content_type" => "application/octet-stream",
+        "data_base64" => Base.encode64(:crypto.strong_rand_bytes(64))
+      }
+
+      assert {:error, payload} = ToolHandlers.upload_inline(args, context(home_participant))
+
+      assert payload.recoverable == false
+      assert payload.error =~ "is not a participant in space #{inspect(foreign.id)}"
+
+      assert Repo.aggregate(
+               from(a in Attachment, where: a.space_id == ^foreign.id),
+               :count
+             ) == 0
+
+      assert stored_files(root) == []
+    end
+
+    test "agent_id-less context: positive control uploads into the participant's own space",
+         %{root: root} do
+      %{space: home, participant: home_participant} = setup_space()
+
+      args = %{
+        "space_id" => home.id,
+        "filename" => "same.bin",
+        "content_type" => "application/octet-stream",
+        "data_base64" => Base.encode64(:crypto.strong_rand_bytes(64))
+      }
+
+      assert {:ok, result} = ToolHandlers.upload_inline(args, context(home_participant))
+      assert %Attachment{space_id: space_id} = Repo.get(Attachment, result.id)
+      assert space_id == home.id
+      assert length(stored_files(root)) == 1
     end
   end
 

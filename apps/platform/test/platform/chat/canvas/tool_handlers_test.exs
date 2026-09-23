@@ -255,6 +255,57 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert payload.recoverable == true
       assert payload.error =~ "document invalid"
     end
+
+    # Task 01a0cbe0 stage 2: the space came from args and the participant id
+    # from context, and nothing compared the two. A participant of HOME could
+    # name FOREIGN and write a canvas plus its message there.
+    test "refuses a participant of another space, writing nothing into the named space" do
+      %{participant: home_participant} = setup_space()
+      %{space: foreign} = setup_space()
+
+      args = %{
+        "space_id" => foreign.id,
+        "title" => "Cross-space write",
+        "document" => valid_document()
+      }
+
+      assert {:error, payload} =
+               ToolHandlers.create(args, %{agent_participant_id: home_participant.id})
+
+      assert payload.recoverable == false
+      assert payload.error =~ "is not a participant in space #{inspect(foreign.id)}"
+      assert payload.space_id == foreign.id
+
+      assert Repo.aggregate(
+               from(c in Platform.Chat.Canvas, where: c.space_id == ^foreign.id),
+               :count
+             ) == 0
+
+      assert Repo.aggregate(
+               from(m in Platform.Chat.Message, where: m.space_id == ^foreign.id),
+               :count
+             ) == 0
+    end
+
+    test "positive control: the same participant creates in its own space" do
+      %{space: home, participant: home_participant} = setup_space()
+
+      args = %{
+        "space_id" => home.id,
+        "title" => "Same-space write",
+        "document" => valid_document()
+      }
+
+      assert {:ok, result} =
+               ToolHandlers.create(args, %{agent_participant_id: home_participant.id})
+
+      on_exit(fn -> CanvasServer.stop(result.canvas_id) end)
+
+      assert Repo.aggregate(
+               from(c in Platform.Chat.Canvas, where: c.space_id == ^home.id),
+               :count
+             ) == 1
+    end
   end
 
   # Task 019fb01b stage 3 gated this read. Every case below used to pass a `%{}`

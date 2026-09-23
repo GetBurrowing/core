@@ -1818,6 +1818,26 @@ defmodule Platform.Chat do
     end
   end
 
+  @doc """
+  Strict lookup of a participant row by its own id, scoped to `space_id`.
+  Returns the row only when participant `participant_id` belongs to space
+  `space_id`, otherwise `nil`.
+
+  Use this to VERIFY a caller-supplied participant id against the space it is
+  about to write into (task 01a0cbe0): a participant id from another space is
+  a refusal, not a re-attribution. A malformed id and an absent one are the
+  same outcome, `nil`, exactly as in `get_agent_participant/2`.
+  """
+  @spec get_space_participant(binary(), binary()) :: Participant.t() | nil
+  def get_space_participant(space_id, participant_id) do
+    # Both columns are :binary_id, so either being malformed raises.
+    if Platform.UUID.valid?(space_id) and Platform.UUID.valid?(participant_id) do
+      Repo.get_by(Participant, id: participant_id, space_id: space_id)
+    else
+      nil
+    end
+  end
+
   # ── Messages ────────────────────────────────────────────────────────────────
 
   @doc """

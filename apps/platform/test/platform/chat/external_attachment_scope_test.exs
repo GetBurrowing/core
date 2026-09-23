@@ -204,7 +204,7 @@ defmodule Platform.Chat.ExternalAttachmentScopeTest do
         slug: "m9-agent-#{System.unique_integer([:positive])}"
       })
 
-    _p_a_agent = add_agent(a.id, agent.id)
+    p_a_agent = add_agent(a.id, agent.id)
     agent_runtime = %AgentRuntime{agent_id: agent.id}
 
     %{
@@ -217,7 +217,8 @@ defmodule Platform.Chat.ExternalAttachmentScopeTest do
       att_a: att_a,
       att_b: att_b,
       att_legacy: att_legacy,
-      agent_runtime: agent_runtime
+      agent_runtime: agent_runtime,
+      p_a_agent: p_a_agent
     }
   end
 
@@ -390,10 +391,13 @@ defmodule Platform.Chat.ExternalAttachmentScopeTest do
     test "regression: agent context (no :user_id) is unaffected by the user-principal branch",
          ctx do
       # An agent participant of A using the loose agent context still authorizes.
+      # The id must be a REAL participant of A: since task 01a0cbe0 a context
+      # participant id is verified against the target space, so a random UUID
+      # is (correctly) refused.
       assert {:ok, _result} =
                ToolHandlers.upload_start(
                  presign_args(ctx.a.id),
-                 %{agent_participant_id: Ecto.UUID.generate()}
+                 %{agent_participant_id: ctx.p_a_agent.id}
                )
     end
   end

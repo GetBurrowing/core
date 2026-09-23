@@ -30,8 +30,10 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   taken at its word.
 
   `canvas.create` is the one tool here with no canvas to gate. It writes a NEW
-  canvas and requires an `agent_participant_id`, which a caller can only hold by
-  already being a participant of the target space. `canvas.list_kinds` and
+  canvas and requires the context's `agent_participant_id` to be a participant
+  row of the target space; a participant id from any other space is refused
+  (task 01a0cbe0 stage 2 — before it, a space_id in args was never compared
+  with the participant's space). `canvas.list_kinds` and
   `canvas.template` return the static kind registry and the starter templates
   and touch no canvas row at all.
 
@@ -64,8 +66,20 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   @spec create(map(), map()) :: {:ok, map()} | {:error, map()}
   def create(args, context) do
     space_id = Map.get(args, "space_id") || Map.get(context, :space_id)
-    participant_id = Map.get(context, :agent_participant_id) || Map.get(context, :participant_id)
     agent_id = Map.get(context, :agent_id)
+
+    # A context participant id is honoured only when that participant row
+    # belongs to the space being written (task 01a0cbe0 stage 2). Resolving
+    # space_id from args while trusting a participant id from ANOTHER space let
+    # a caller write a canvas and its message into a space it is not in. A
+    # mismatch resolves to nil, so the `not is_binary(participant_id)` branch
+    # below refuses it with the existing not-a-participant contract.
+    participant_id =
+      space_participant_id(
+        space_id,
+        Map.get(context, :agent_participant_id) || Map.get(context, :participant_id)
+      )
+
     raw_document = Map.get(args, "document") || Map.get(args, "initial_state")
     document = decode_if_string(raw_document)
     title = Map.get(args, "title")
@@ -453,6 +467,13 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   # Some MCP clients (and some LLM providers) serialize nested object
   # arguments as JSON strings. Accept either shape transparently so callers
   # don't have to know the wire encoding their gateway chose.
+  defp space_participant_id(space_id, participant_id) do
+    case Chat.get_space_participant(space_id, participant_id) do
+      %Platform.Chat.Participant{id: id} -> id
+      nil -> nil
+    end
+  end
+
   defp decode_if_string(s) when is_binary(s) do
     case Jason.decode(s) do
       {:ok, decoded} when is_map(decoded) or is_list(decoded) -> decoded

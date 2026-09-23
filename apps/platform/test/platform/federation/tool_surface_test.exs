@@ -5526,6 +5526,69 @@ defmodule Platform.Federation.ToolSurfaceTest do
       end)
     end
 
+    # ── send_media: a context participant from ANOTHER space (task 01a0cbe0) ──
+    #
+    # Before this task the writer was `context.agent_participant_id ||
+    # lookup`, so a non-nil context value was trusted without checking it
+    # against `args["space_id"]`. The message landed in FOREIGN and one file was
+    # written. The changeset accepts any non-nil participant_id, so absence of a
+    # Message row is NOT the detector here: the refusal string and the empty
+    # attachments root are.
+
+    test "send_media refuses a context participant that belongs to another space, before any storage write" do
+      agent = create_agent()
+      good = create_space()
+      foreign = create_space()
+      create_participant(foreign.id)
+
+      good_participant =
+        create_participant(good.id, %{participant_type: "agent", participant_id: agent.id})
+
+      with_send_media_fixture(fn tmp_path, root ->
+        assert {:error, error} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   send_media_args(foreign.id, tmp_path),
+                   %{
+                     space_id: foreign.id,
+                     agent_id: agent.id,
+                     agent_participant_id: good_participant.id
+                   }
+                 )
+
+        assert error.error == "Access denied: agent is not a participant in space #{foreign.id}"
+        assert error.recoverable == false
+        assert stored_files(root) == []
+
+        assert Repo.aggregate(
+                 from(m in Platform.Chat.Message, where: m.space_id == ^foreign.id),
+                 :count
+               ) == 0
+      end)
+    end
+
+    test "send_media honours a context participant that belongs to the target space" do
+      agent = create_agent()
+      space = create_space()
+
+      participant =
+        create_participant(space.id, %{participant_type: "agent", participant_id: agent.id})
+
+      with_send_media_fixture(fn tmp_path, root ->
+        assert {:ok, result} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   send_media_args(space.id, tmp_path),
+                   %{space_id: space.id, agent_id: agent.id, agent_participant_id: participant.id}
+                 )
+
+        message = Repo.get!(Platform.Chat.Message, result.message_id)
+        assert message.space_id == space.id
+        assert message.participant_id == participant.id
+        assert [_file] = stored_files(root)
+      end)
+    end
+
     # ── react ───────────────────────────────────────────────────────────
 
     test "react adds an emoji reaction to a message" do
@@ -5658,6 +5721,46 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.recoverable == false
       assert error.suggestion == "Use space_list to find spaces the agent has access to"
       assert Chat.list_reactions(message.id) == []
+    end
+
+    # Task 01a0cbe0. The message-belongs-to-space check constrains the MESSAGE,
+    # not the PARTICIPANT: a message genuinely in FOREIGN passes it, and before
+    # this task a GOOD participant in the context then reacted in FOREIGN.
+    test "react refuses a context participant that belongs to another space" do
+      agent = create_agent()
+      good = create_space()
+      foreign = create_space()
+      author = create_participant(foreign.id)
+
+      good_participant =
+        create_participant(good.id, %{participant_type: "agent", participant_id: agent.id})
+
+      {:ok, message} =
+        Chat.post_message(%{
+          space_id: foreign.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "hello"
+        })
+
+      assert {:error, error} =
+               ToolArguments.dispatch(
+                 "react",
+                 %{"space_id" => foreign.id, "message_id" => message.id, "emoji" => "👍"},
+                 %{
+                   space_id: foreign.id,
+                   agent_id: agent.id,
+                   agent_participant_id: good_participant.id
+                 }
+               )
+
+      assert error.error == "Access denied: agent is not a participant in space #{foreign.id}"
+      assert error.recoverable == false
+
+      assert Repo.aggregate(
+               from(r in Platform.Chat.Reaction, where: r.message_id == ^message.id),
+               :count
+             ) == 0
     end
 
     # Migrated to dispatch/3 in 019fa609 stage 4. The empty-string emoji is
@@ -9009,6 +9112,37 @@ defmodule Platform.Federation.ToolSurfaceTest do
                  "design_critique_request",
                  %{"canvas_id" => canvas.id},
                  %{space_id: foreign.id, agent_id: agent.id, agent_participant_id: nil}
+               )
+
+      assert error.error == "Access denied: agent is not a participant in space #{foreign.id}"
+      assert error.recoverable == false
+      refute_receive {:outbound, _}
+      assert Chat.list_messages(foreign.id, limit: 10) == []
+    end
+
+    # Task 01a0cbe0: a non-nil context participant is verified against
+    # `context.space_id`, not trusted. The positive control is "lands the
+    # critique in a named space the caller participates in" above.
+    test "refuses a context participant that belongs to another space, before dispatch" do
+      %{canvas: canvas} = critique_wiring()
+      critique_stub!(critique_issues_json())
+      agent = create_agent()
+      good = create_space()
+      foreign = create_space()
+      create_participant(foreign.id)
+
+      good_participant =
+        create_participant(good.id, %{participant_type: "agent", participant_id: agent.id})
+
+      assert {:error, error} =
+               ToolArguments.dispatch(
+                 "design_critique_request",
+                 %{"canvas_id" => canvas.id},
+                 %{
+                   space_id: foreign.id,
+                   agent_id: agent.id,
+                   agent_participant_id: good_participant.id
+                 }
                )
 
       assert error.error == "Access denied: agent is not a participant in space #{foreign.id}"

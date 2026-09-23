@@ -281,9 +281,11 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
       # M9 (rbac-external-users): a USER-principal presign must be authorized on
       # real membership BEFORE any pending row is reserved or URL minted — no
       # signed upload URL for a space the requester is not in. Checked AHEAD of
-      # the agent branch precisely because `assert_agent_in_space/2` has a loose
-      # fallback (authorizes on the mere presence of *a* participant_id) that
-      # would otherwise green-light a user principal for any space.
+      # the agent branch because `assert_agent_in_space/2`'s agent_id-less
+      # fallback authorizes on a context participant id. That fallback now
+      # verifies the participant row belongs to `space_id` (task 01a0cbe0 stage
+      # 2), but it is still a participant check, not a user-membership check,
+      # so a user principal must not be decided by it.
       #
       # The presign path is agent-context today; this is forward-hardening for
       # user-principal presigns so "no URL for a non-member space" is a property
@@ -333,9 +335,16 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
         match?(%Platform.Chat.Participant{}, Chat.get_agent_participant(space_id, agent_id))
 
       _ ->
-        # Fall back to the loose check used by upload paths, which only
-        # requires *a* participant_id to be present in the context.
-        is_binary(Map.get(context, :agent_participant_id) || Map.get(context, :participant_id))
+        # No agent_id: fall back to the context participant id, and require
+        # that participant row to belong to `space_id` (task 01a0cbe0 stage 2).
+        # Before, the mere presence of *a* participant id authorized any space.
+        match?(
+          %Platform.Chat.Participant{},
+          Chat.get_space_participant(
+            space_id,
+            Map.get(context, :agent_participant_id) || Map.get(context, :participant_id)
+          )
+        )
     end
   end
 

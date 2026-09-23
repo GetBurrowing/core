@@ -1180,6 +1180,32 @@ defmodule Platform.ChatTest do
     end
   end
 
+  describe "get_space_participant/2 (task 01a0cbe0)" do
+    test "returns the participant row when it belongs to the space" do
+      space = create_space()
+      p = create_participant(space.id)
+
+      assert %Chat.Participant{id: id, space_id: space_id} =
+               Chat.get_space_participant(space.id, p.id)
+
+      assert id == p.id
+      assert space_id == space.id
+    end
+
+    test "returns nil for a participant of ANOTHER space" do
+      good = create_space()
+      foreign = create_space()
+      p = create_participant(good.id)
+
+      assert Chat.get_space_participant(foreign.id, p.id) == nil
+    end
+
+    test "returns nil for an unknown participant id" do
+      space = create_space()
+      assert Chat.get_space_participant(space.id, Ecto.UUID.generate()) == nil
+    end
+  end
+
   # ── UUID boundary (task 019fa129 stage 4) ────────────────────────────────
   #
   # THE LOAD-BEARING INPUT IS THE 16-CHARACTER ONE. Do not prune these as
@@ -1226,6 +1252,18 @@ defmodule Platform.ChatTest do
       # EITHER being malformed raises. Assert both positions.
       assert Chat.get_agent_participant(space.id, @slug_16) == nil
       assert Chat.get_agent_participant(@slug_16, Ecto.UUID.generate()) == nil
+    end
+
+    test "get_space_participant/2 returns nil when either id is malformed" do
+      space = create_space()
+      p = create_participant(space.id)
+
+      # Both columns are :binary_id: assert both positions, with the
+      # 16-character input that clears a cast-only guard (see above).
+      for bad <- ["higgins", @slug_16, ""] do
+        assert Chat.get_space_participant(space.id, bad) == nil
+        assert Chat.get_space_participant(bad, p.id) == nil
+      end
     end
 
     test "unpin_message/3 reports :not_found for a malformed message id" do

@@ -176,8 +176,9 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
          "derivation follows private helpers instead of stopping at the body."},
     "canvas.create" =>
       {:creates_only,
-       "Writes a new canvas into a space, and requires an agent_participant_id " <>
-         "the caller can only hold by already being in that space. Reads no " <>
+       "Writes a new canvas into a space, and requires the context's " <>
+         "agent_participant_id to be a participant row OF that space " <>
+         "(Chat.get_space_participant/2, task 01a0cbe0 stage 2). Reads no " <>
          "existing canvas, so there is nothing for a read gate to protect."},
     "canvas.list_kinds" =>
       {:no_canvas_row,

@@ -3382,9 +3382,7 @@ defmodule Platform.Federation.ToolSurface do
     space_id = Map.get(args, "space_id")
     content = Map.get(args, "content", "")
 
-    participant_id =
-      Map.get(context, :agent_participant_id) ||
-        get_agent_participant_id_for_space(space_id, context)
+    participant_id = resolve_space_participant_id(space_id, context)
 
     # This participation check IS the authorization barrier for send_media
     # (task 01a0ac54). The Message changeset's `validate_required([:participant_id])`
@@ -3501,10 +3499,7 @@ defmodule Platform.Federation.ToolSurface do
     # invite the Designer into, any space it can name (task 01a0ac54 sweep).
     # No `space_id` keeps today's path: the landing resolves from `task_id`.
     if is_binary(space_id) and space_id != "" and
-         is_nil(
-           Map.get(context, :agent_participant_id) ||
-             get_agent_participant_id_for_space(space_id, context)
-         ) do
+         is_nil(resolve_space_participant_id(space_id, context)) do
       {:error, space_write_denied(space_id)}
     else
       request_design_critique(args, context)
@@ -7751,9 +7746,7 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       _message ->
-        participant_id =
-          Map.get(context, :agent_participant_id) ||
-            get_agent_participant_id_for_space(space_id, context)
+        participant_id = resolve_space_participant_id(space_id, context)
 
         if is_nil(participant_id) do
           {:error, space_write_denied(space_id)}
@@ -13911,6 +13904,26 @@ defmodule Platform.Federation.ToolSurface do
       recoverable: false,
       suggestion: "Use space_list to find spaces the agent has access to"
     }
+  end
+
+  # The writer for a space-scoped write (`send_media`, `react`,
+  # `design_critique_request`). A non-nil `context.agent_participant_id` is
+  # honoured ONLY if that participant row belongs to `space_id`; a participant
+  # from another space resolves to nil, and the caller's
+  # `is_nil -> space_write_denied/1` branch refuses it (task 01a0cbe0). A
+  # mismatch deliberately does NOT fall back to the agent_id lookup: it is a
+  # refusal, not a re-attribution. A nil context value keeps the agent_id path.
+  defp resolve_space_participant_id(space_id, context) do
+    case Map.get(context, :agent_participant_id) do
+      nil ->
+        get_agent_participant_id_for_space(space_id, context)
+
+      participant_id ->
+        case is_binary(space_id) && Chat.get_space_participant(space_id, participant_id) do
+          %Chat.Participant{id: id} -> id
+          _ -> nil
+        end
+    end
   end
 
   defp get_agent_participant_id_for_space(space_id, context) do
