@@ -926,7 +926,20 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # dropdown is on that path. That independence is why the two deltas compose
   # to exactly 649 and the CI `Check surface line budgets` step (shell budget
   # 653) still passes at 649.
-  @shell_line_count 649
+  #
+  # RAISED 649 -> 652 (+3), 2026-09-23, task 01a0cef1 stage 2 (`?sort=`).
+  # ARITHMETIC: 649 + 1 + 1 + 1 = 652, and every line is in
+  # `handle_params/3`:
+  #   +1 `new_sort = BoardData.decode_sort(params["sort"])`
+  #   +1 the blank line `mix format` puts before a multi-line assignment
+  #   +1 `changed?` now compares a {sponsor, sort} pair and wraps to two lines
+  # The sponsor/sort comment above it was rewritten in place (5 lines -> 5),
+  # and `{:detail_closed}` swapped `~p"/tasks"` for
+  # `BoardData.tasks_path(socket.assigns)` on the same line (+0). The path
+  # logic itself lives in `BoardData.tasks_path/2`, not here. 652 is inside
+  # the 653 budget in `scripts/surface-budgets.txt`, so the budget is not
+  # raised.
+  @shell_line_count 652
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

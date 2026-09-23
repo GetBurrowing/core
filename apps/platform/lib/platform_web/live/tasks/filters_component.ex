@@ -25,6 +25,11 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   shell's `handle_params/3` decodes it, which is what the shell handler did
   before the move. The current value arrives as a read-only attr.
 
+  `:board_sort` (task 01a0cef1 stage 2) is the same shape, for the same
+  reason: `?sort=updated` is decoded by `handle_params/3`, the value arrives
+  here read-only, and the control's two options are `patch` links built by
+  `BoardData.tasks_path/2`, so the sort needs no event at all.
+
   Five events, and the plan's count of five is right for once:
   `filter_search`, `filter_by_status`, `filter_scope`,
   `filter_toggle_sponsor`, `filter_clear`.
@@ -66,7 +71,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   use PlatformWeb, :live_component
 
   alias Platform.Tenancy
-  alias PlatformWeb.Tasks.TaskDisplay
+  alias PlatformWeb.Tasks.{BoardData, SortControl, TaskDisplay}
 
   @impl true
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
@@ -152,7 +157,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
            SLUG, a plain string (`"fabrikam"`, `"soylent"`, etc) that stays a
            string all the way through `parse_scope/2` into `@scope_filter`. The
            shell narrows the kanban render via
-           `desktop_column_items_for_scope/4` once it mirrors the value. --%>
+           `desktop_column_items_for_scope/6` once it mirrors the value. --%>
       <nav
         id="tasks-scope-rail"
         aria-label="Filter tasks by sub-org scope"
@@ -268,6 +273,17 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
           <span>My work</span>
         </button>
       </nav>
+
+      <%!-- Sort control (task 01a0cef1 stage 2). A SIBLING of the scope rail,
+           not a chip inside it: the rail narrows the set and scrolls, this
+           reorders it and never scrolls (`shrink-0`). See `SortControl`. --%>
+      <SortControl.sort_control
+        id="board-sort-control"
+        role="board-sort-control"
+        board_sort={@board_sort}
+        sponsor_filter={@sponsor_filter}
+        class="hidden lg:inline-flex shrink-0"
+      />
     </div>
     """
   end
@@ -347,14 +363,13 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   # a share-a-URL loader and a click loader end up in the same state. Going
   # back to `:all` DROPS the `?sponsor` param entirely to preserve the
   # canonical URL (a `?sponsor=all` URL is never emitted).
+  #
+  # The path comes from `BoardData.tasks_path/2` so the toggle PRESERVES the
+  # current `?sort=` (task 01a0cef1 stage 2); a fixed path here would drop it.
   def handle_event("filter_toggle_sponsor", _params, socket) do
-    path =
-      case socket.assigns[:sponsor_filter] do
-        :mine -> ~p"/tasks"
-        _ -> ~p"/tasks?sponsor=mine"
-      end
+    next = if socket.assigns[:sponsor_filter] == :mine, do: :all, else: :mine
 
-    {:noreply, push_patch(socket, to: path)}
+    {:noreply, push_patch(socket, to: BoardData.tasks_path(next, socket.assigns[:board_sort]))}
   end
 
   # Clearing the project/epic breadcrumb is shell work (it re-queries epics

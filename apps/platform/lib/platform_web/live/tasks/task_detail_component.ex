@@ -50,7 +50,8 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
     * `send(self(), {:detail_flash, kind, message})`
     * `send(self(), {:detail_refresh})` — board + selected-task reload
-    * `send(self(), {:detail_closed})` — teardown + `push_patch(~p"/tasks")`
+    * `send(self(), {:detail_closed})` — teardown + a patch back to
+      `BoardData.tasks_path/1`, which keeps `?sponsor=` and `?sort=`
     * `send(self(), {:detail_task_transitioned, task})`
 
   `:detail_epoch` is a shell-owned counter bumped by

@@ -7,12 +7,33 @@ defmodule PlatformWeb.Tasks.BoardData do
   `[{%Stack{}, board_data}]` into the render maps, and the in-memory
   search narrowing. No `Repo`, no socket, no assigns.
 
+  ## List order (task 01a0cef1)
+
+  Every rendered board list is ordered by `sort_items/3` — the mobile
+  section list (`group_board_items/3`), the search-narrowed desktop buckets
+  (`bucket_tasks_by_desktop_column/2`) and the desktop kanban column merge
+  (`BoardComponent.desktop_column_items/5`). The default mode, `:priority`,
+  is priority rank (`Platform.Tasks.Task.priority_rank/1`), then newest
+  `inserted_at`, then id descending. `:updated` is `updated_at` descending,
+  then id descending — the board's pre-task-01a0cef1 recency order.
+
+  The ordering lives HERE and not in the queries on purpose: the in-memory
+  re-sorts run after `Platform.Tasks.list_all_tasks/1` /
+  `list_by_status/1` return, so a query-level `ORDER BY` would be
+  overwritten and never reach the page.
+
+  Stack MEMBER rows inside an expanded stack card are not a list order: the
+  component sorts them by `stack_position` (dependency order) and
+  `sort_items/3` does not touch them.
+
   Split out from `PlatformWeb.TasksLive` so both writers of those maps —
   `BoardHooks.refresh_board/1` (DB-backed) and
   `BoardHooks.rebuild_board_shapes/1` (search-narrowed) — share one
   implementation, and so `BoardComponent` can read the column constants
   without depending on the shell.
   """
+
+  use PlatformWeb, :verified_routes
 
   alias Platform.Tasks.{Epic, Stack, Task}
 
@@ -74,6 +95,124 @@ defmodule PlatformWeb.Tasks.BoardData do
     "done" => ~w(done cancelled)
   }
 
+  @sort_modes [:priority, :updated]
+
+  @spec sort_modes() :: [:priority | :updated]
+  def sort_modes, do: @sort_modes
+
+  @doc """
+  Decode a `?sort=` value. `"updated"` selects `:updated`; anything else —
+  `nil`, `"priority"`, `"bogus"` — is the default `:priority`.
+  """
+  @spec decode_sort(term()) :: :priority | :updated
+  def decode_sort("updated"), do: :updated
+  def decode_sort(_other), do: :priority
+
+  @doc """
+  The board URL for a sponsor filter and a sort mode — the ONE builder for
+  every patch back to `/tasks` (task 01a0cef1 stage 2), so no patch can drop
+  a param the other control set.
+
+  Defaults emit nothing (`:all`, `:priority`), exactly as `?sponsor=all` is
+  never emitted, so the canonical URL stays `/tasks`. Keys come out in a
+  fixed order, sponsor then sort:
+
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority)
+      "/tasks"
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated)
+      "/tasks?sponsor=mine&sort=updated"
+  """
+  @spec tasks_path(:all | :mine | nil, :priority | :updated | nil) :: String.t()
+  def tasks_path(sponsor_filter, board_sort) do
+    query =
+      Enum.reject(
+        [sponsor: sponsor_filter == :mine && "mine", sort: board_sort == :updated && "updated"],
+        fn {_key, value} -> value == false end
+      )
+
+    # `URI.encode_query/1` keeps the keyword order; `~p"/tasks?#{query}"`
+    # does NOT (it emits `sort` before `sponsor`), and the fixed order is
+    # what keeps `assert_patched` strings and shared URLs stable.
+    if query == [], do: ~p"/tasks", else: ~p"/tasks" <> "?" <> URI.encode_query(query)
+  end
+
+  @doc """
+  `tasks_path/2` read off a socket's assigns (`:sponsor_filter`,
+  `:board_sort`), so a shell call site stays one line. An absent assign is
+  the default.
+  """
+  @spec tasks_path(map()) :: String.t()
+  def tasks_path(%{} = assigns), do: tasks_path(assigns[:sponsor_filter], assigns[:board_sort])
+
+  @doc """
+  Order a board list of `%Task{}` and `%Stack{}` items. A TOTAL order: the id
+  is the last key, so items that tie on every other key come out the same
+  way whatever order they went in.
+
+    * `:priority` — `{priority rank asc, inserted_at desc, id desc}`. A
+      `%Stack{}` has no priority of its own; it ranks as its BEST
+      (lowest-rank) member, read from `stack_board_data[stack.id].members`,
+      and a stack with no ranked member ranks 4 (with unknown/nil
+      priorities, after `"low"`). A stack's newest-key is its own
+      `inserted_at`.
+    * `:updated` — `{updated_at desc, id desc}`.
+
+  Timestamps compare as integer microseconds, never by term order on
+  `%DateTime{}` structs.
+  """
+  @spec sort_items([%Task{} | %Stack{}], :priority | :updated, map() | nil) ::
+          [%Task{} | %Stack{}]
+  def sort_items(items, mode, stack_board_data \\ %{}) when mode in @sort_modes do
+    stack_board_data = stack_board_data || %{}
+
+    items
+    |> Enum.map(&{sort_key(&1, mode, stack_board_data), sort_id(&1), &1})
+    |> Enum.sort(fn {key_a, id_a, _}, {key_b, id_b, _} ->
+      key_a < key_b or (key_a == key_b and id_a >= id_b)
+    end)
+    |> Enum.map(&elem(&1, 2))
+  end
+
+  defp sort_key(item, :priority, stack_board_data),
+    do: {item_rank(item, stack_board_data), -timestamp_us(item.inserted_at)}
+
+  defp sort_key(item, :updated, _stack_board_data), do: {-timestamp_us(item.updated_at)}
+
+  defp item_rank(%Task{priority: priority}, _stack_board_data), do: Task.priority_rank(priority)
+
+  defp item_rank(%Stack{id: id}, stack_board_data) do
+    case stack_board_data |> Map.get(id, %{}) |> member_list() do
+      [] -> 4
+      members -> members |> Enum.map(&member_rank/1) |> Enum.min()
+    end
+  end
+
+  defp item_rank(_item, _stack_board_data), do: 4
+
+  defp member_list(board_data) when is_map(board_data) do
+    case Map.get(board_data, :members) do
+      members when is_list(members) -> members
+      _ -> []
+    end
+  end
+
+  defp member_list(_board_data), do: []
+
+  defp member_rank(%Task{priority: priority}), do: Task.priority_rank(priority)
+  defp member_rank(_member), do: 4
+
+  # `nil` timestamps (unsaved structs) read as the epoch: oldest, so last in
+  # a descending key.
+  defp timestamp_us(%DateTime{} = dt), do: DateTime.to_unix(dt, :microsecond)
+
+  defp timestamp_us(%NaiveDateTime{} = ndt),
+    do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_unix(:microsecond)
+
+  defp timestamp_us(_other), do: 0
+
+  defp sort_id(%{id: id}) when is_binary(id), do: id
+  defp sort_id(_item), do: ""
+
   @spec kanban_columns() :: [{String.t(), String.t()}]
   def kanban_columns, do: @kanban_columns
 
@@ -82,9 +221,9 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   @doc """
   Bucket `%Task{}` and `%Stack{}` into MOBILE kanban columns (5-bucket
-  shape — backlog absorbs planning + blocked + forming). Sorted within
-  each column by `updated_at` descending so stacks interleave with
-  standalone tasks per ADR 0041 acceptance criterion 1.
+  shape — backlog absorbs planning + blocked + forming). Each column is
+  ordered by `sort_items/3` in `mode` (default `:priority`), with stacks
+  interleaved among standalone tasks per ADR 0041 acceptance criterion 1.
 
   `stack_entries` is the `[{%Stack{}, board_data}, ...]` shape returned
   by `Stacks.list_stacks_with_members/1`. Only the `%Stack{}` is placed
@@ -98,8 +237,11 @@ defmodule PlatformWeb.Tasks.BoardData do
   Discriminate-by-`__struct__`: a column entry is either `%Task{}` or
   `%Stack{}`. The template pattern-matches `case item.__struct__`.
   """
-  def group_board_items(tasks, stack_entries) do
+  def group_board_items(tasks, stack_entries, mode \\ :priority) do
     standalone_tasks = Enum.filter(tasks, &is_nil(&1.stack_id))
+
+    stack_board_data =
+      Map.new(stack_entries, fn {stack, board_data} -> {stack.id, board_data} end)
 
     Enum.reduce(@mobile_columns, %{}, fn {col_key, _label}, acc ->
       statuses = Map.get(@mobile_column_statuses, col_key, [])
@@ -110,9 +252,7 @@ defmodule PlatformWeb.Tasks.BoardData do
         |> Enum.map(&elem(&1, 0))
         |> Enum.filter(&(&1.status in statuses))
 
-      merged =
-        (col_tasks ++ col_stacks)
-        |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+      merged = sort_items(col_tasks ++ col_stacks, mode, stack_board_data)
 
       Map.put(acc, col_key, merged)
     end)
@@ -152,15 +292,15 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   @doc """
   In-memory equivalent of `Platform.Tasks.list_by_status/1`'s bucket shape
-  (atom keys, `updated_at` desc within each bucket) so a search-filtered
-  `:columns` map is indistinguishable downstream.
+  (atom keys) for a search-filtered `:columns` map, each bucket ordered by
+  `sort_items/3` in `mode` (default `:priority`).
   """
-  def bucket_tasks_by_desktop_column(tasks) do
+  def bucket_tasks_by_desktop_column(tasks, mode \\ :priority) do
     Map.new(@desktop_column_statuses, fn {col_key, statuses} ->
       bucket =
         tasks
         |> Enum.filter(&(&1.status in statuses))
-        |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+        |> sort_items(mode)
 
       {String.to_existing_atom(col_key), bucket}
     end)
@@ -195,7 +335,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   member's `id`/`title`** (task 01a06df3 stage 1).
 
   Member-aware by construction: a stacked task is suppressed from the flat
-  column list (`group_board_items/2` drops `stack_id != nil`) and a
+  column list (`group_board_items/3` drops `stack_id != nil`) and a
   `stack_pending` member has no desktop/mobile column to land in at all, so
   the parent stack card is the *only* place a member can render. Matching on
   `stack.id`/`stack.name` alone therefore hid a real member from a query on

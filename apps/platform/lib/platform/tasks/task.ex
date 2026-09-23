@@ -211,6 +211,26 @@ defmodule Platform.Tasks.Task do
 
   def statuses, do: @statuses
   def priorities, do: @priorities
+
+  @doc """
+  Sort rank for a priority value, by MEANING: `"critical"` 0, `"high"` 1,
+  `"medium"` 2, `"low"` 3, anything else 4.
+
+  Never compare the priority strings themselves: alphabetical order is
+  critical, high, low, medium, which puts low above medium.
+
+  "Anything else" is reachable. The changeset's `validate_inclusion` refuses
+  values outside `priorities/0`, but the `tasks.priority` column is nullable
+  with no check constraint, so `nil` and unknown strings (e.g. `"urgent"`)
+  arrive through `insert_all`/`update_all`. They rank after `"low"` rather
+  than raising.
+  """
+  @spec priority_rank(term()) :: 0..4
+  def priority_rank("critical"), do: 0
+  def priority_rank("high"), do: 1
+  def priority_rank("medium"), do: 2
+  def priority_rank("low"), do: 3
+  def priority_rank(_other), do: 4
   def phases, do: @phases
 
   @deletable_statuses ~w(backlog planning blocked done stack_pending cancelled)

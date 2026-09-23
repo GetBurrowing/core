@@ -15,7 +15,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   This module owns:
 
     * Assigns: `:all_tasks`, `:stacks`, `:stack_board_data`, `:columns`,
-      `:desktop_stacks_by_column`, `:board_items`, `:expanded_stacks`,
+      `:desktop_stacks_by_column`, `:board_items`, `:board_sort`,
+      `:expanded_stacks`,
       `:review_counts`, `:pending_plan_count`, `:scope_counts`,
       `:scope_counts_db`, `:visible_task_count`,
       `:review_request_subscriptions`
@@ -30,6 +31,16 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   `BoardComponent` takes every board map as an attr and LiveView diffs
   attrs on the parent's re-render. `send_update/2` IS used for the stack
   panel, whose state belongs to `StacksComponent` and is not an attr.
+
+  ## List order
+
+  `:board_sort` (`:priority` | `:updated`, see `BoardData.sort_items/3`) is
+  read by both writers of the board shapes and defaults to `:priority` when
+  absent, so `refresh_board/1` assigns it on the first mount and the shell
+  needs no mount line of its own. `:columns` is still loaded with
+  `Tasks.list_by_status/1`'s `updated_at desc` query order, but that is NOT
+  the rendered order: `BoardComponent.desktop_column_items/5` re-sorts every
+  desktop column through `BoardData.sort_items/3`.
 
   ## Usage
 
@@ -137,14 +148,16 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
     stack_entries = Stacks.list_stacks_with_members(stack_filters)
     {stack_board_data, stacks} = BoardData.split_stack_entries(stack_entries)
+    board_sort = board_sort(socket)
 
     socket
+    |> assign(:board_sort, board_sort)
     |> assign(:all_tasks, tasks)
     |> assign(:stacks, stacks)
     |> assign(:stack_board_data, stack_board_data)
     |> assign(:columns, Tasks.list_by_status(opts))
     |> assign(:desktop_stacks_by_column, BoardData.group_desktop_stacks(stack_entries))
-    |> assign(:board_items, BoardData.group_board_items(tasks, stack_entries))
+    |> assign(:board_items, BoardData.group_board_items(tasks, stack_entries, board_sort))
     # Per ADR 0041 acceptance criterion 3, any list refetch collapses
     # ephemeral expansion. `refresh_board/1` is the common funnel for
     # project / epic / filter changes AND every PubSub board event, so
@@ -173,6 +186,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   """
   def rebuild_board_shapes(socket) do
     q = BoardData.normalize_search(socket.assigns.task_search_query)
+    board_sort = board_sort(socket)
     agent_names = socket.assigns.agent_names
 
     tasks =
@@ -220,13 +234,18 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       end
 
     socket
-    |> assign(:columns, BoardData.bucket_tasks_by_desktop_column(tasks))
+    |> assign(:board_sort, board_sort)
+    |> assign(:columns, BoardData.bucket_tasks_by_desktop_column(tasks, board_sort))
     |> assign(:desktop_stacks_by_column, BoardData.group_desktop_stacks(stack_entries))
-    |> assign(:board_items, BoardData.group_board_items(tasks, stack_entries))
+    |> assign(:board_items, BoardData.group_board_items(tasks, stack_entries, board_sort))
     |> assign(:scope_counts, scope_counts)
     |> assign(:visible_task_count, length(tasks))
     |> expand_member_matched_stacks(stack_entries, q)
   end
+
+  # The active list order; `:priority` until something (the stage-2 `?sort=`
+  # decode) assigns otherwise.
+  defp board_sort(socket), do: socket.assigns[:board_sort] || :priority
 
   # Task 01a06df3 stage 2: a member the search FOUND must be visible without a
   # further click. Matching the parent stack (stage 1) only gets its card onto

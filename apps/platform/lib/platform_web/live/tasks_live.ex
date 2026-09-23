@@ -186,15 +186,18 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_params(params, _url, socket) do
-    # Stage-2 of task 019f3f22: `?sponsor=mine` is the authoritative source
-    # of truth for the "Sponsored by me" filter — decoded here so both
-    # push_patch toggles and direct URL loads (share-a-URL, refresh) land in
-    # the same state. Any other value resolves to `:all` so we can't hang on
-    # malformed input.
+    # `?sponsor=mine` (task 019f3f22) and `?sort=updated` (task 01a0cef1) are
+    # the authoritative source for the sponsor filter and the board order —
+    # decoded here so patches and direct URL loads (share-a-URL, refresh) land
+    # in the same state. Any other value is the default (`:all`, `:priority`);
+    # every patch back here is built by `BoardData.tasks_path/2`.
     new_filter = decode_sponsor_param(params)
-    changed? = new_filter != socket.assigns[:sponsor_filter]
+    new_sort = BoardData.decode_sort(params["sort"])
 
-    socket = assign(socket, :sponsor_filter, new_filter)
+    changed? =
+      {new_filter, new_sort} != {socket.assigns[:sponsor_filter], socket.assigns[:board_sort]}
+
+    socket = assign(socket, sponsor_filter: new_filter, board_sort: new_sort)
     socket = if changed?, do: BoardHooks.refresh_board(socket), else: socket
 
     {:noreply, socket |> assign(:selected_task, nil) |> assign(:show_detail, false)}
@@ -384,7 +387,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:selected_task_canvases, [])
      |> BoardHooks.refresh_board()
      |> bump_detail_epoch()
-     |> push_patch(to: ~p"/tasks")}
+     |> push_patch(to: BoardData.tasks_path(socket.assigns))}
   end
 
   # ── StacksComponent (stage 3) ──────────────────────────────────────────

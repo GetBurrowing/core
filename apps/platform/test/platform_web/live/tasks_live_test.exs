@@ -4289,7 +4289,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
   #
   # `.badge-outline` alone is NOT the status chip: `priority_badge_class/1`
-  # also emits `badge-outline` for medium/high/low priorities. Every status
+  # also emits `badge-outline` for high priority (medium/low are
+  # `badge-ghost` since task 01a0cef1 stage 3). Every status
   # selector below therefore excludes `.badge-sm`, which only the priority
   # badge carries — otherwise the refute counts the wrong span and the
   # positive control passes for the wrong reason.

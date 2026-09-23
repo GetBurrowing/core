@@ -102,10 +102,14 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
     {status_label(status), "badge badge-outline"}
   end
 
+  # Mark the exception, not the rule (task 01a0cef1 stage 3). The board is
+  # ordered by priority, so colour on every card repeats what position
+  # already says: only critical (filled error) and high (outlined error)
+  # carry colour. Medium, low and anything unranked share the neutral ghost
+  # badge; `badge-success` is the product's healthy token and is never a
+  # priority colour.
   def priority_badge_class("critical"), do: "badge badge-error badge-sm"
   def priority_badge_class("high"), do: "badge badge-error badge-outline badge-sm"
-  def priority_badge_class("medium"), do: "badge badge-warning badge-outline badge-sm"
-  def priority_badge_class("low"), do: "badge badge-success badge-outline badge-sm"
   def priority_badge_class(_), do: "badge badge-ghost badge-sm"
 
   def assignee_name(%Task{assignee_type: "agent", assignee_id: id}, agent_names)

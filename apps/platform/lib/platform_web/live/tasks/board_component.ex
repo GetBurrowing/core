@@ -63,6 +63,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   alias Platform.Tasks
   alias Platform.Tasks.{Stack, Task}
   alias PlatformWeb.Tasks.BoardData
+  alias PlatformWeb.Tasks.SortControl
 
   import PlatformWeb.Tasks.StackStyles,
     only: [member_node_class: 1, member_parked_reason: 2, stack_member_action_label: 1]
@@ -295,54 +296,74 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       >
         <%!-- T6 status-filter pill nav (PR #328). Counts are derived from
            `@board_items` so stack cards contribute to the per-pill
-           total — `@columns` is task-only and would undercount. --%>
-        <nav
-          id="tasks-status-filter-pills"
-          phx-hook="TasksStatusFilter"
-          class="flex items-center gap-2 overflow-x-auto px-3 py-2 border-b border-base-content/10 shrink-0"
-          style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
-          aria-label="Filter tasks by status"
+           total — `@columns` is task-only and would undercount.
+
+           The row also carries the mobile sort control (task 01a0cef1
+           stage 2), trailing and OUTSIDE the scrolling nav: the pills
+           scroll, the sort never does, and an `overflow-x-auto` ancestor
+           would clip its menu. --%>
+        <div
+          data-role="tasks-status-filter-row"
+          class="flex items-center gap-2 pr-3 border-b border-base-content/10 shrink-0"
         >
-          <button
-            :for={{col_key, col_label} <- @mobile_columns}
-            type="button"
-            phx-click="filter_by_status"
-            phx-target="#tasks-filters"
-            phx-value-status={col_key}
-            aria-pressed={@active_status_filter == col_key}
-            class={[
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
-              "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
-              if @active_status_filter == col_key do
-                "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
-              else
-                "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
-              end
-            ]}
+          <nav
+            id="tasks-status-filter-pills"
+            phx-hook="TasksStatusFilter"
+            class="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-3 py-2"
+            style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
+            aria-label="Filter tasks by status"
           >
-            <span class={["size-1.5 rounded-full", status_dot_class(col_key)]} aria-hidden="true">
-            </span>
-            {col_label}
-            <span
-              :if={length(Map.get(@board_items, col_key, [])) > 0}
+            <button
+              :for={{col_key, col_label} <- @mobile_columns}
+              type="button"
+              phx-click="filter_by_status"
+              phx-target="#tasks-filters"
+              phx-value-status={col_key}
+              aria-pressed={@active_status_filter == col_key}
               class={[
-                "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
-                if(@active_status_filter == col_key,
-                  do: "bg-primary-content/20 text-primary-content",
-                  else: "bg-base-300 text-base-content/70"
-                )
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
+                "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
+                if @active_status_filter == col_key do
+                  "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
+                else
+                  "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+                end
               ]}
             >
-              {length(Map.get(@board_items, col_key, []))}
-            </span>
-          </button>
-        </nav>
+              <span class={["size-1.5 rounded-full", status_dot_class(col_key)]} aria-hidden="true">
+              </span>
+              {col_label}
+              <span
+                :if={length(Map.get(@board_items, col_key, [])) > 0}
+                class={[
+                  "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
+                  if(@active_status_filter == col_key,
+                    do: "bg-primary-content/20 text-primary-content",
+                    else: "bg-base-300 text-base-content/70"
+                  )
+                ]}
+              >
+                {length(Map.get(@board_items, col_key, []))}
+              </span>
+            </button>
+          </nav>
+          <SortControl.sort_control
+            id="mobile-board-sort-control"
+            role="mobile-board-sort-control"
+            board_sort={@board_sort}
+            sponsor_filter={@sponsor_filter}
+            mobile?={true}
+            class="inline-flex shrink-0"
+          />
+        </div>
 
         <%!-- T7 mobile section list, rebased on top of T6's pill filter.
            Iterates `@mobile_columns` for ordering + only renders the
            active-filter section. Items come from `@board_items` so
-           stack cards interleave with standalone tasks (sorted by
-           `updated_at`, ADR 0041). Stack cards include the stage-3
+           stack cards interleave with standalone tasks (ordered by
+           `BoardData.sort_items/3` in `@board_sort`, priority first by
+           default; ADR 0041, task 01a0cef1). Member rows inside a stack
+           card stay in `stack_position` (dependency) order. Stack cards include the stage-3
            expansion contract (`stack-member-mobile-#{id}` rows + dep
            annotations). Empty-state checks also use `@board_items`. --%>
         <div class="flex-1 overflow-y-auto px-3 pb-24">
@@ -780,14 +801,15 @@ defmodule PlatformWeb.Tasks.BoardComponent do
          board overflows horizontally; the user scrolls inside the
          board container.
 
-         Items per column come from `desktop_column_items/3` which
+         Items per column come from `desktop_column_items/5` which
          merges `@columns` (task-only, atom-keyed from
          `Platform.Tasks.list_by_status/1`) with
          `@desktop_stacks_by_column` (stack-only, string-keyed),
-         interleaved by `updated_at` desc per ADR 0041.
+         interleaved per ADR 0041 and ordered by
+         `BoardData.sort_items/3` in `@board_sort` (task 01a0cef1).
 
-         Stage 3 (2026-05-19): `desktop_column_items_for_scope/4`
-         wraps `desktop_column_items/3` with the active scope-rail
+         Stage 3 (2026-05-19): `desktop_column_items_for_scope/6`
+         wraps `desktop_column_items/5` with the active scope-rail
          selection — `:all` and `:fabrikam` are passthrough today; the
          other four scopes render empty until `tasks.org_id` lands. --%>
       <%!-- Stage-2 of task 019f3f22 (ADR-0042 sponsor visibility):
@@ -869,7 +891,9 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                   @columns,
                   @desktop_stacks_by_column,
                   col_key,
-                  @scope_filter
+                  @scope_filter,
+                  @board_sort,
+                  @stack_board_data
                 )
               )}
             </span>
@@ -883,7 +907,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
              only tasks carry `draggable="true"` and the KanbanDragDrop
              hook's drag handlers. --%>
           <div class="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-            <%= for item <- desktop_column_items_for_scope(@columns, @desktop_stacks_by_column, col_key, @scope_filter) do %>
+            <%= for item <- desktop_column_items_for_scope(@columns, @desktop_stacks_by_column, col_key, @scope_filter, @board_sort, @stack_board_data) do %>
               <%= case item.__struct__ do %>
                 <% Platform.Tasks.Stack -> %>
                   <% board_data =
@@ -1394,7 +1418,9 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                   @columns,
                   @desktop_stacks_by_column,
                   col_key,
-                  @scope_filter
+                  @scope_filter,
+                  @board_sort,
+                  @stack_board_data
                 ) == []
               }
               variant={:minimal}
@@ -1561,17 +1587,21 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   defp tasks_in_column(_columns, _col_key), do: []
 
   # Merge tasks (from `@columns`, atom-keyed) and stacks (from
-  # `@desktop_stacks_by_column`, string-keyed) into a single `updated_at`-desc
-  # list for one desktop kanban column. Mirrors `BoardData.group_board_items/2`'s
-  # per-column sort so stacks and standalone tasks interleave by recency
-  # (ADR 0041 acceptance criterion 1).
+  # `@desktop_stacks_by_column`, string-keyed) into one list for one desktop
+  # kanban column, ordered by `BoardData.sort_items/3` in `board_sort`
+  # (`:priority` by default; task 01a0cef1). Mirrors
+  # `BoardData.group_board_items/3`'s per-column sort so stacks and standalone
+  # tasks interleave (ADR 0041 acceptance criterion 1). `stack_board_data` is
+  # how a `%Stack{}` gets a priority: it ranks as its best member. This
+  # re-sort is what the desktop board renders — `@columns` arrives in
+  # `list_by_status/1`'s `updated_at desc` query order and is overridden here.
   #
   # Stack-member tasks (`stack_id != nil`) are suppressed here — they render
   # only under their parent stack card, never as their own column entry.
   # `Platform.Tasks.list_by_status/1` doesn't pre-filter stack members (it
   # serves the wider task set), so the filter lives in this render-shaping
   # layer.
-  defp desktop_column_items(columns, stacks_by_column, col_key) do
+  defp desktop_column_items(columns, stacks_by_column, col_key, board_sort, stack_board_data) do
     tasks =
       columns
       |> tasks_in_column(col_key)
@@ -1579,23 +1609,22 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
     stacks = Map.get(stacks_by_column || %{}, col_key, [])
 
-    (tasks ++ stacks)
-    |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+    BoardData.sort_items(tasks ++ stacks, board_sort || :priority, stack_board_data)
   end
 
-  # Stage-3 wrapper: filters `desktop_column_items/3` through the active
+  # Stage-3 wrapper: filters `desktop_column_items/5` through the active
   # scope-rail selection. `:all` is the unfiltered passthrough. `"fabrikam"` also
   # returns the full list today because every task folds under :fabrikam until
   # `tasks.org_id` lands (the same contract `count_by_scope/0` encodes). The
   # other scopes return an empty list today; once MT/RBAC ships this helper
   # becomes the single seam to swap in real per-task scope filtering.
-  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, :all) do
-    desktop_column_items(columns, stacks_by_column, col_key)
+  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, :all, sort, data) do
+    desktop_column_items(columns, stacks_by_column, col_key, sort, data)
   end
 
-  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope)
+  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope, sort, data)
        when scope in [:fabrikam, "fabrikam"] do
-    desktop_column_items(columns, stacks_by_column, col_key)
+    desktop_column_items(columns, stacks_by_column, col_key, sort, data)
   end
 
   # Any OTHER org — not just the five that used to be listed here by atom.
@@ -1604,13 +1633,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # not fabrikam" rather than on a membership list that a new tenant falls out
   # of. Falling out of it silently returned the FULL board under the other
   # clause below, i.e. a new org's chip would have shown every Fabrikam task.
-  defp desktop_column_items_for_scope(_columns, _stacks_by_column, _col_key, scope)
+  defp desktop_column_items_for_scope(_columns, _stacks_by_column, _col_key, scope, _sort, _data)
        when is_binary(scope) or scope in [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne] do
     []
   end
 
-  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, _other) do
-    desktop_column_items(columns, stacks_by_column, col_key)
+  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, _other, sort, data) do
+    desktop_column_items(columns, stacks_by_column, col_key, sort, data)
   end
 
   # True when every kanban column resolves to an empty item list through the
@@ -1619,14 +1648,26 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # multiple filters are active.
   #
   # Stage-3 of task 019f487e invariant note (do NOT re-derive this):
-  # `desktop_column_items_for_scope/4` merges tasks with stacks from
+  # `desktop_column_items_for_scope/6` merges tasks with stacks from
   # `desktop_stacks_by_column`, which `BoardHooks.refresh_board/1` already
   # narrows by `:sponsor_user_id`. The empty-state signal therefore reflects
   # tasks-AND-stacks visibility because both halves flow through the same
   # filtered pipeline.
   defp board_columns_empty?(kanban_columns, columns, stacks_by_column, scope_filter) do
+    # Emptiness only: the list order is irrelevant here, so no sort mode or
+    # stack board data is threaded through.
     Enum.all?(kanban_columns, fn {col_key, _label} ->
-      desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope_filter) == []
+      items =
+        desktop_column_items_for_scope(
+          columns,
+          stacks_by_column,
+          col_key,
+          scope_filter,
+          :priority,
+          %{}
+        )
+
+      items == []
     end)
   end
 
