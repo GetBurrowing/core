@@ -262,6 +262,21 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     end
   end
 
+  defmodule ModelNullStringProvider do
+    @moduledoc false
+    # ModelNullProvider with the role spelled as the STRING "null".
+    # `normalise_target_role/1` folds JSON null onto this same string, so
+    # both spellings must reach the addressee gate as one value.
+    def chat(_c, _m, _o) do
+      {:ok,
+       %{
+         content:
+           ~s({"intent": "action_items", "target_role": "null", ) <>
+             ~s("confidence": 0.9, "evidence_quote": "write that up"})
+       }}
+    end
+  end
+
   defmodule UncitedProvider do
     @moduledoc false
     # A routable answer with a BLANK citation: the citation gate's
@@ -442,6 +457,50 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       assert demoted.demoted_from == "action_items"
       assert demoted.demotion_reason == :blank
       assert is_nil(demoted.addressee_nulled_from)
+    end
+
+    # Task 01a0919d. An off-roster ask whose model answer ALREADY routes to
+    # nobody has nothing for the gate to rewrite: no marker, no event. The
+    # OffRosterProvider tests above are the anti-vacuity partner — the
+    # same Harper chunk with a real role still gets both.
+
+    test "an off-roster ask the model already routed to nobody (JSON null) is not marked or counted" do
+      attach_off_roster_telemetry!()
+
+      assert {:ok, decision} =
+               decide("Harper, can you write that up?", @roster, ModelNullProvider)
+
+      assert decision.intent == "action_items"
+      assert decision.target_role == "null"
+      assert decision.evidence_quote == "write that up"
+      assert is_nil(decision.addressee_nulled_from)
+      assert is_nil(decision.demoted_from)
+      assert is_nil(decision.demotion_reason)
+
+      refute_receive {:off_roster_addressee, _, _}, 100
+    end
+
+    test "an off-roster ask the model already routed to nobody (string \"null\") is not marked or counted" do
+      attach_off_roster_telemetry!()
+
+      assert {:ok, decision} =
+               decide("Harper, can you write that up?", @roster, ModelNullStringProvider)
+
+      assert decision.intent == "action_items"
+      assert decision.target_role == "null"
+      assert decision.evidence_quote == "write that up"
+      assert is_nil(decision.addressee_nulled_from)
+      assert is_nil(decision.demoted_from)
+      assert is_nil(decision.demotion_reason)
+
+      refute_receive {:off_roster_addressee, _, _}, 100
+    end
+
+    test "a model-null answer to an off-roster ask equals the model-null answer to an unaddressed ask" do
+      {:ok, off_roster} = decide("Harper, can you write that up?", @roster, ModelNullProvider)
+      {:ok, unaddressed} = decide("Can somebody write that up?", @roster, ModelNullProvider)
+
+      assert off_roster == unaddressed
     end
   end
 end

@@ -100,7 +100,9 @@ defmodule Platform.Meetings.IntentAddressee do
   `"null"`, the one spelling of nobody), and marks the row with
   `addressee_nulled_from: <the role it overwrote>`. `demoted_from` and
   `demotion_reason` stay nil. `verdict/3`'s own return shape is
-  unchanged: `:ok | {:off_roster, name}`.
+  unchanged: `:ok | {:off_roster, name}`. An answer whose role is already
+  `"null"` is left untouched: it gets no `addressee_nulled_from` and no
+  `off_roster_addressee` event, because nothing was rewritten.
 
   Once a row has been classified, "no role" is stored in `target_role`
   as the string `"null"`, never SQL NULL, on both the queue row and

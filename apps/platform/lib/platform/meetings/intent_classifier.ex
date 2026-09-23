@@ -1861,7 +1861,7 @@ defmodule Platform.Meetings.IntentClassifier do
             confidence = confidence * 1.0
             quote_text = Map.get(decoded, "evidence_quote", "")
 
-            case gate_verdict(intent, quote_text, chunk_text, roster) do
+            case gate_verdict(intent, target_role, quote_text, chunk_text, roster) do
               :ok ->
                 # The quote is CARRIED, not just judged. `decide/1` already
                 # advertises an `:evidence_quote` key (put_new below), and it
@@ -1898,7 +1898,10 @@ defmodule Platform.Meetings.IntentClassifier do
                 # `addressee_nulled_from` is the ONE key that separates
                 # this row from a model that said null itself: non-nil
                 # iff the gate rewrote the role, carrying the role it
-                # overwrote. Persisting it to `meeting_candidates` /
+                # overwrote. It is never "null": an answer whose role is
+                # already `@no_target_role` has nothing to rewrite, so
+                # `addressee_verdict/5` passes it down the `:ok` branch
+                # with no marker and no event (task 01a0919d). Persisting it to `meeting_candidates` /
                 # `IntentQueue.Server.@writable_fields` is out of scope
                 # here (no column exists; ticket 01a0910f-ab00 owns the
                 # "null"-string persistence question).
@@ -1989,16 +1992,23 @@ defmodule Platform.Meetings.IntentClassifier do
   # leading vocative, and a quote that is blank or fabricated is not a
   # span of anything — reading a vocative out of it would be reading a
   # vocative out of the model's imagination.
-  defp gate_verdict(intent, quote_text, chunk_text, roster) do
+  defp gate_verdict(intent, target_role, quote_text, chunk_text, roster) do
     with :ok <- evidence_verdict(intent, quote_text, chunk_text) do
-      addressee_verdict(intent, quote_text, chunk_text, roster)
+      addressee_verdict(intent, target_role, quote_text, chunk_text, roster)
     end
   end
 
   # A decline addresses nobody by definition; there is nothing to gate.
-  defp addressee_verdict("off_topic", _quote_text, _chunk_text, _roster), do: :ok
+  defp addressee_verdict("off_topic", _target_role, _quote_text, _chunk_text, _roster),
+    do: :ok
 
-  defp addressee_verdict(_intent, quote_text, chunk_text, roster) do
+  # An answer that already routes to nobody has nothing to rewrite, so
+  # there is no marker and no event: the row takes the `:ok` branch and is
+  # byte-identical to the model's own null answer. Exact match, like
+  # `IntentDispatcher.no_target_role?/1` and `IntentRouting` (task 01a0919d).
+  defp addressee_verdict(_intent, @no_target_role, _quote_text, _chunk_text, _roster), do: :ok
+
+  defp addressee_verdict(_intent, _target_role, quote_text, chunk_text, roster) do
     case IntentAddressee.verdict(chunk_text, quote_text, roster) do
       :ok -> :ok
       {:off_roster, _name} -> {:null_role, :off_roster_addressee}
