@@ -706,8 +706,11 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
         assert html =~ ~r/id="#{id}"[^>]*min-h-\[44px\]/
       end
 
+      # Task 01a08e0d stage 2 pulled the title onto its own full-width line
+      # (no longer a `flex-1` sibling of the marker/badge row), but it still
+      # carries `min-w-0 truncate` — that's the contract this test protects.
       assert html =~
-               ~r/id="stack-member-#{failing.id}".*?flex-1 min-w-0 text-xs leading-snug truncate/s
+               ~r/id="stack-member-#{failing.id}".*?block w-full min-w-0 truncate text-xs leading-snug/s
 
       # The marker is a `<span>` on the mobile row, which is itself a
       # `<button>`: a nested button is invalid HTML and browsers reparent it.

@@ -517,38 +517,61 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                             ]}>
                               {stack_position_glyph(member.stack_position)}
                             </span>
-                            <div class="flex min-w-0 flex-wrap items-center gap-2">
-                              <span class="flex-1 min-w-0 text-xs leading-snug truncate">
-                                {member.title}
-                              </span>
-                              <span
-                                :if={member_action_label}
-                                class="badge badge-warning badge-xs gap-1 whitespace-nowrap shrink-0"
-                                data-role="stack-member-mobile-action"
-                                data-action-reason={member_action_reason_attr}
-                              >
-                                <span class="hero-eye size-3"></span>
-                                {member_action_label}
-                              </span>
-                              <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, mobile half.
-                                 Same compact marker as the desktop member row; the
-                                 `data-role` MUST differ because the two boards share
-                                 ONE DOM (`lg:hidden` / `hidden lg:grid` — CSS
-                                 visibility, not presence), so a shared value
-                                 double-matches every selector. The component emits no
-                                 `id` at all, so `data-role` is the only thing to
-                                 split.
-                                 It renders as a `<span>`, never a `<button>`: this
+                            <div class="flex min-w-0 flex-col gap-1">
+                              <%!-- Task 01a08e0d stage 3, mobile half. Mirrors stage
+                                 2's desktop restructure: the title used to share a
+                                 `flex flex-wrap items-center gap-2` row with three
+                                 shrink-0 siblings (the action badge, the
+                                 planning-step marker and the status badge), so under
+                                 `frontend/ui-ux.md`'s truncation rule the title
+                                 (`flex-1 min-w-0 truncate`) yielded to them. Pulling
+                                 the title onto its own full-width line and moving
+                                 the three siblings into a second "meta" row beneath
+                                 it stops them from competing with the title for
+                                 space. `block w-full` replaces `flex-1` on the span
+                                 because it is no longer a flex item — `truncate`
+                                 needs a block-level box, which the flex-item context
+                                 used to provide for free. Mobile carries one more
+                                 shrink-0 sibling than desktop (the action badge),
+                                 but every element on this line stays a `<span>`: this
                                  row IS a `<button>` on mobile, and a nested button is
                                  invalid HTML that browsers reparent. --%>
-                              <.planning_step_extension
-                                task={member}
-                                variant={:compact}
-                                data_role="mobile-stack-member-planning-step"
-                              />
-                              <span class={"#{member_status_class} badge-xs whitespace-nowrap shrink-0"}>
-                                {member_status_label}
+                              <span
+                                class="block w-full min-w-0 truncate text-xs leading-snug"
+                                title={member.title}
+                              >
+                                {member.title}
                               </span>
+                              <div class="flex flex-wrap items-center gap-2">
+                                <span
+                                  :if={member_action_label}
+                                  class="badge badge-warning badge-xs gap-1 whitespace-nowrap shrink-0"
+                                  data-role="stack-member-mobile-action"
+                                  data-action-reason={member_action_reason_attr}
+                                >
+                                  <span class="hero-eye size-3"></span>
+                                  {member_action_label}
+                                </span>
+                                <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, mobile half.
+                                   Same compact marker as the desktop member row; the
+                                   `data-role` MUST differ because the two boards share
+                                   ONE DOM (`lg:hidden` / `hidden lg:grid` — CSS
+                                   visibility, not presence), so a shared value
+                                   double-matches every selector. The component emits no
+                                   `id` at all, so `data-role` is the only thing to
+                                   split.
+                                   It renders as a `<span>`, never a `<button>`: this
+                                   row IS a `<button>` on mobile, and a nested button is
+                                   invalid HTML that browsers reparent. --%>
+                                <.planning_step_extension
+                                  task={member}
+                                  variant={:compact}
+                                  data_role="mobile-stack-member-planning-step"
+                                />
+                                <span class={"#{member_status_class} badge-xs whitespace-nowrap shrink-0"}>
+                                  {member_status_label}
+                                </span>
+                              </div>
                             </div>
                             <div
                               :if={member_dep_text}
@@ -1038,35 +1061,51 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           ]}>
                             {stack_position_glyph(member.stack_position)}
                           </span>
-                          <div class="flex min-w-0 items-center gap-2">
-                            <span class="flex-1 min-w-0 text-xs leading-snug truncate">
+                          <div class="flex min-w-0 flex-col gap-1">
+                            <%!-- Task 01a08e0d stage 2, desktop half. The title used to
+                               share a `flex items-center gap-2` row with the compact
+                               planning-step marker and the status badge — both
+                               `shrink-0`, so under `frontend/ui-ux.md`'s truncation
+                               rule the title (`flex-1 min-w-0 truncate`) yielded to
+                               them and a long title rendered as ~38px of usable width,
+                               a redaction rather than a truncation. Pulling the title
+                               onto its own full-width line and moving the marker +
+                               badge into a second "meta" row beneath it stops the
+                               shrink-0 siblings from competing with the title for
+                               space. `block w-full` replaces `flex-1` on the span
+                               because it is no longer a flex item — `truncate`
+                               (overflow:hidden + text-overflow:ellipsis) needs a
+                               block-level box to take effect, which the flex-item
+                               context used to provide for free. --%>
+                            <span
+                              class="block w-full min-w-0 truncate text-xs leading-snug"
+                              title={member.title}
+                            >
                               {member.title}
                             </span>
-                            <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, desktop half.
-                               COMPACT, not the fused strip: this row is a ~44px line
-                               already carrying a position glyph, a truncated title, a
-                               status badge and a dependency annotation, so the marker
-                               is a single icon INSIDE the badge cluster rather than a
-                               band above the row (a band would overlap the absolutely
-                               positioned glyph at `left-1 top-2`).
-                               `variant={:compact}` is failure-only — `failed` and
-                               member 7's `no_ui_surface_contradicted`. `complete` and
-                               the active cursor are suppressed here and remain on the
-                               member's own detail panel; a fifth chip on every row of
-                               every expanded stack is the noise that gets a feature
-                               turned off.
-                               The component's compact root is `shrink-0`, so under
-                               `frontend/ui-ux.md`'s truncation rule the TITLE
-                               (`flex-1 min-w-0 truncate`) is what yields, never the
-                               marker. --%>
-                            <.planning_step_extension
-                              task={member}
-                              variant={:compact}
-                              data_role="stack-member-planning-step"
-                            />
-                            <span class={"#{status_class} badge-xs whitespace-nowrap shrink-0"}>
-                              {status_label}
-                            </span>
+                            <div class="flex items-center gap-2">
+                              <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, desktop half.
+                                 COMPACT, not the fused strip: this row is a ~44px line
+                                 already carrying a position glyph, a truncated title, a
+                                 status badge and a dependency annotation, so the marker
+                                 is a single icon INSIDE the badge cluster rather than a
+                                 band above the row (a band would overlap the absolutely
+                                 positioned glyph at `left-1 top-2`).
+                                 `variant={:compact}` is failure-only — `failed` and
+                                 member 7's `no_ui_surface_contradicted`. `complete` and
+                                 the active cursor are suppressed here and remain on the
+                                 member's own detail panel; a fifth chip on every row of
+                                 every expanded stack is the noise that gets a feature
+                                 turned off. --%>
+                              <.planning_step_extension
+                                task={member}
+                                variant={:compact}
+                                data_role="stack-member-planning-step"
+                              />
+                              <span class={"#{status_class} badge-xs whitespace-nowrap shrink-0"}>
+                                {status_label}
+                              </span>
+                            </div>
                           </div>
                           <div
                             :if={dep_text}

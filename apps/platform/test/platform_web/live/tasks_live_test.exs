@@ -2094,7 +2094,11 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "stack-member-mobile-", "expansion must render the mobile member rows"
       assert html =~ "min-h-[44px]"
 
-      assert html =~ "flex-1 min-w-0 text-xs leading-snug truncate",
+      # Task 01a08e0d stage 3 pulled the title onto its own full-width line
+      # (no longer a `flex-1` sibling of the action badge/marker/status-badge
+      # meta row), but it still carries `min-w-0 truncate` — that's the
+      # contract this test protects.
+      assert html =~ "block w-full min-w-0 truncate text-xs leading-snug",
              "mobile member title span must carry `truncate min-w-0` for 375px"
     end
 
