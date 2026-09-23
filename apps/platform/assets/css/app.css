@@ -5121,6 +5121,84 @@ body, .font-fabrikam {
   }
 }
 
+/* ── Meeting stage-mode swap (task 01a0cf5d stage 1) ───────────────────
+   CSS only — no wiring yet. `.stage-mode--enter` / `.stage-mode--leave`
+   are meant for whatever future handler swaps `data-stage-mode` content
+   (see `set_stage_mode` / `data-role="meeting-stage-body"` in
+   meeting_live.ex / meeting_live.html.heex): add `--leave` to the
+   outgoing subtree, `--enter` to the incoming one, and let them overlap
+   briefly. This file does not touch the mode-switcher buttons' own
+   outline styling (separate bug, task 01a0cf5d-48ce-7001-baee-c53d9fad1fce).
+
+   Two sources, ported rather than invented:
+
+   1. The mock, `audit/mocks/meetings/Meeting_Desktop.html` — removed
+      from the repo at db9ca908 after being committed at 88dee5bc; read
+      via `git show 88dee5bc:audit/mocks/meetings/Meeting_Desktop.html`.
+      Its `.stage{transition:opacity .28s}` (line 36) is DEAD CODE:
+      `setMode()` (~line 1055) does a raw `innerHTML` swap and never
+      toggles the class/style that rule needs, so there is no working
+      mechanism there to port. The one entrance pattern that actually
+      fires is `.card{animation:cin .3s ease-out both}` /
+      `@keyframes cin{from{opacity:0;transform:translateY(-6px)
+      scale(.97)}to{opacity:1;transform:none}}` on activity-feed cards —
+      a plain `animation`, not a `transition`, which is why it plays on
+      any DOM insertion. `stage-mode-in` below reuses that exact
+      transform shape. `cubic-bezier(.4,0,.2,1)` is also a real value
+      from the file, just used elsewhere (rail collapse, `.expl` width,
+      `.stage.canvasmode .doc{left:...}`) rather than on `cin` itself
+      (which uses plain `ease-out`); both keyframes below use it in
+      place of `cin`'s own easing because the canvas below asks for one
+      curve reused everywhere, and this is the mock's only real curve.
+
+   2. Canvas 01a0cf5f-377e-7001-8b14-6e714606d24a ("Design direction:
+      the mode switch transition") for everything the mock is silent on:
+      one mechanism for all three mode pairs; the stage box itself never
+      resizes, moves, or changes background/border; leaving content only
+      fades (opacity, no transform, no colour — video tiles are usually
+      what's leaving, and animating them away costs real information);
+      arriving content fades in AND rises a few px then settles; ~150ms
+      total, split asymmetrically because the arriving content is what
+      the viewer should track — leaving stays short (60ms) so a
+      mid-sentence face doesn't visibly fade, arriving gets the longer
+      share (120ms) to read as unmistakable motion; mode buttons flip
+      active state on click, not when the animation ends (that's a
+      handler concern, not this file's).
+
+   No `pointer-events: none` here, deliberately — the canvas requires
+   content stay interactive from the first frame. No separate
+   `prefers-reduced-motion` rule either: the universal one above (line
+   609) already forces every animation/transition duration to 0.01ms,
+   which collapses both keyframes to an instant swap — the same posture
+   the mock's own media query (line 151) takes. */
+.stage-mode--enter {
+  animation: stage-mode-in 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.stage-mode--leave {
+  animation: stage-mode-out 60ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes stage-mode-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes stage-mode-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 /* ── Sectioned channel rail (chat plan v2 Stage 2) ─────────────────────
    Per-section container + header + row affordances. The rail is desktop
    only; mobile uses the existing flat browser overlay (see

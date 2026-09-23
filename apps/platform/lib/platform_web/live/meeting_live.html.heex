@@ -1430,9 +1430,11 @@
                  renderer so the meeting's surface stays visually
                  consistent with how a canvas appears in chat. --%>
                 <div
-                  class="flex h-full w-full flex-col items-center"
+                  id="meeting-stage-canvas"
+                  class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col items-center"
                   data-placeholder="center-stage"
                   data-canvas-id={@meeting_canvas.id}
+                  phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
                   <%!-- Canvas picker (task 019ff704 stage 3).
 
@@ -1503,9 +1505,11 @@
                  surface a single CTA that mints one in the bound chat
                  space and assigns it as the active meeting canvas. --%>
                 <div
-                  class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/50"
+                  id="meeting-stage-canvas-empty"
+                  class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/50"
                   data-placeholder="center-stage"
                   data-empty-state="canvas"
+                  phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
                   <span class="hero-rectangle-stack size-10 text-base-content/40"></span>
                   <p class="mt-2 text-sm font-medium text-base-content/70">No canvas yet</p>
@@ -1531,9 +1535,11 @@
                  the `data-coming-soon="whiteboard"` marker is gone on
                  purpose, and its absence is asserted in meeting_live_test. --%>
                 <div
-                  class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/40"
+                  id="meeting-stage-whiteboard-fallback"
+                  class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/40"
                   data-placeholder="center-stage"
                   data-whiteboard-fallback
+                  phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
                   <span class="hero-pencil-square size-10"></span>
                   <p class="mt-2 text-sm font-medium text-base-content/70">Whiteboard</p>
@@ -1553,9 +1559,10 @@
                 <div
                   id="meeting-screen-stage"
                   phx-hook="MeetingScreenShare"
-                  class="relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
+                  class="stage-mode--enter absolute inset-0 flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
                   data-placeholder="center-stage"
                   data-screen-share-active="false"
+                  phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
                   <%!-- Hook target: the JS attaches the <video> element here
                    when a screen-share track is found. Hidden until a
@@ -1619,13 +1626,15 @@
                  powers the bottom-strip tiles, so identity strings are
                  kept in sync via `gallery_identity/1`. --%>
                 <div
-                  class="flex h-full w-full flex-col"
+                  id="meeting-stage-gallery"
+                  class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col"
                   data-placeholder="center-stage"
                   data-gallery-tile-count={
                     length(
                       gallery_participants(assigns[:participants] || [], @speaking_identities)
                     )
                   }
+                  phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
                   <%= if gallery_participants(assigns[:participants] || [], @speaking_identities) == [] do %>
                     <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/40">

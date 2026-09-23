@@ -1500,6 +1500,53 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       refute_push_event(view, "meeting_stage_mode_changed", %{})
     end
+
+    # Stage 3 regression (task 01a0cf5d): pins stage 2's wiring so a later
+    # edit to meeting_live.html.heex can't silently drop the transition
+    # wrapper and quietly go back to a hard cut. `Phoenix.LiveViewTest`
+    # never runs a browser or CSS, so this can't prove the animation
+    # actually PLAYS — that proof is the CDP evidence recorded on the task
+    # (real remove+insert with a ~60ms deferred removal, verified for
+    # Gallery->Screen and Screen->Canvas, plus a rapid-mash and a
+    # presence-update-mid-gallery run that showed no stacked/duplicate
+    # nodes and no animation restart). What this test pins is the markup
+    # CONTRACT the browser-side proof depends on: each stage-mode branch
+    # root keeps its stable `id`, its `stage-mode--enter` class (a CSS
+    # `animation`, so it autoplays on a genuine DOM insert — app.css), and
+    # a `phx-remove` bound to `JS.transition("stage-mode--leave", time:
+    # 60)` so LiveView holds the outgoing root mounted long enough for the
+    # leave animation to play before actually removing it.
+    test "every stage-mode branch root keeps its stable id, enter class, and phx-remove leave wiring",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # {branch id, mode to click to reach it (nil = already there on
+      # mount), a marker substring unique to that branch's own content so
+      # we know we matched the right node and not a same-named sibling}.
+      branches = [
+        {"meeting-stage-gallery", nil, "data-gallery-tile-count"},
+        {"meeting-screen-stage", "screen", "data-screen-share-active"},
+        {"meeting-stage-canvas-empty", "canvas", ~s(data-empty-state="canvas")},
+        {"meeting-stage-whiteboard-fallback", "whiteboard", "data-whiteboard-fallback"}
+      ]
+
+      for {id, mode, marker} <- branches do
+        rendered =
+          case mode do
+            nil -> html
+            mode -> view |> element(~s([data-stage-mode-button="#{mode}"])) |> render_click()
+          end
+
+        assert rendered =~ marker,
+               "expected #{id}'s own marker (#{marker}) in the rendered HTML for mode=#{mode || "gallery (default)"}"
+
+        assert rendered =~ ~r/id="#{id}"[^>]*class="[^"]*\bstage-mode--enter\b[^"]*"/,
+               "#{id} lost its stage-mode--enter animation class — the entrance transition would silently stop firing"
+
+        assert rendered =~ ~r/id="#{id}"[^>]*phx-remove="[^"]*stage-mode--leave[^"]*"/,
+               "#{id} lost its phx-remove stage-mode--leave wiring — the exit transition would silently stop firing (hard cut on the way out)"
+      end
+    end
   end
 
   describe "Canvas mode renderer" do
