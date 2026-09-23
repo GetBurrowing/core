@@ -21,7 +21,12 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   alias Platform.Meetings.AgentActivity
   alias PlatformWeb.Components.Meetings.ParticipantRail
 
-  @heading_type "text-[11px] font-semibold uppercase tracking-widest text-base-content/50"
+  # `/60`, not `/50` — task 01a0cf5d stage 3 raised both headings' label
+  # opacity together after a CDP-measured contrast failure (3.89:1 against
+  # the rail's actual painted background in the light theme, under the
+  # 4.5:1 AA floor for 11px text). See `participant_rail.ex`'s comment at
+  # the humans heading for the measurement.
+  @heading_type "text-[11px] font-semibold uppercase tracking-widest text-base-content/60"
 
   defp human(name, id) do
     %{
@@ -214,6 +219,26 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert html =~ "In this call"
       assert html =~ "No people yet."
     end
+
+    # task 01a0cf5d stage 3: same measured failure as the section
+    # headings — `/50` on this rendered 11px sub-line is 3.89:1 in the
+    # light theme against the rail's actual painted background, under
+    # the 4.5:1 AA floor. `/60` clears both themes.
+    test "the guest sub-line is /60, not the failing /50" do
+      html = rail([human("Priyanka (guest)", "u-1")])
+
+      assert html =~ "via guest link"
+
+      [node] =
+        html
+        |> Floki.parse_fragment!()
+        |> Floki.find(~s([data-role="participant-via-guest-link"]))
+
+      class = node |> Floki.attribute("class") |> List.first()
+
+      assert class =~ "text-base-content/60"
+      refute class =~ "text-base-content/50"
+    end
   end
 
   describe "the agent row's three signals" do
@@ -346,6 +371,26 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert row =~ "Idle"
       assert row =~ ~s(data-role="agent-activity-avatar")
       assert row =~ "opacity-45", "the idle face is not dimmed"
+    end
+
+    # task 01a0cf5d stage 3: Idle is the state most agent rows sit in most
+    # of the time (the moduledoc calls it "the common case"), and its word
+    # was the one place `/50` sat on rendered TEXT rather than a ring or a
+    # glyph. Measured against the rail's actual painted background, `/50`
+    # is 3.89:1 in the light theme at 11px — under the 4.5:1 AA floor for
+    # text this size. `/60` clears both themes.
+    test "the idle word is /60, not the failing /50" do
+      row = agent_row(four_state_rail(), "a-idle")
+
+      [word_node] =
+        row
+        |> Floki.parse_fragment!()
+        |> Floki.find(~s([data-role="agent-activity-word"]))
+
+      class = word_node |> Floki.attribute("class") |> List.first()
+
+      assert class =~ "text-base-content/60"
+      refute class =~ "text-base-content/50"
     end
 
     # A DIFFERENT fact from the activity: is this agent connected. It
@@ -623,6 +668,44 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       # Line two: its own node, carrying the reason.
       [reason_node] = Floki.find(parsed, ~s([data-role="agent-activity-delay-reason"]))
       assert Floki.text([reason_node]) |> String.trim() == "waiting on GitHub"
+    end
+
+    # ── Avatar stays pinned to the name, however tall the row grows ──────
+    #
+    # task 01a0cf5d stage 3: a CDP capture with a realistic long `:delayed`
+    # reason (the kind `AgentDelayReason` actually produces) showed the
+    # row's `items-center` centering the 28px avatar in the whole grown
+    # row — 45px away from the name at 312px, not beside it. `:delayed` is
+    # the only state whose reason line is unbounded (it deliberately never
+    # truncates), so it is the only row whose opening `<li>` tag now
+    # carries `items-start`; every other state's row is short enough that
+    # centering never mattered and stays as it was.
+    test ":delayed opens its <li> with items-start, not items-center" do
+      t0 = ~U[2026-01-01 00:00:00Z]
+      activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
+
+      row =
+        [agent("Octavius", "a-1")]
+        |> rail_for_meeting("m-delayed-align-#{System.unique_integer([:positive])}",
+          agent_activity: activity,
+          now: DateTime.add(t0, 12, :second),
+          delays: %{"a-1" => Delayed.new!("waiting on GitHub")}
+        )
+        |> agent_row("a-1")
+
+      [opening_tag] = Regex.run(~r/<li\b[^>]*>/, row)
+
+      assert opening_tag =~ "items-start"
+      refute opening_tag =~ "items-center"
+    end
+
+    test "an ordinary (non-delayed) row keeps items-center" do
+      row = four_state_rail() |> agent_row("a-think")
+
+      [opening_tag] = Regex.run(~r/<li\b[^>]*>/, row)
+
+      assert opening_tag =~ "items-center"
+      refute opening_tag =~ "items-start"
     end
 
     # TRUNCATION ORDER — "the reason is the point, so it truncates LAST".

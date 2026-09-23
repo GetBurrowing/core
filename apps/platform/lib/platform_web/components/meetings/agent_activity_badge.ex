@@ -458,10 +458,24 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   # surface is a tile corner where every agent would otherwise carry a
   # caption — which is why the word there is gated on the GLYPH rather
   # than on the word being present.
+  # `text` is `/60`, not the `/50` every other quiet token on this rail
+  # uses for a GLYPH or a RING (a `:has(non-text UI component)`, 3:1 under
+  # WCAG 1.4.11). This is the one place `/50` sat on rendered TEXT at
+  # 11px: `ParticipantRail` prints `meta(:idle).text` as the word under an
+  # agent's name (`agent_activity_badge/1` never does — idle's empty
+  # glyph gates the word out on that surface), and Idle is the state most
+  # rows are in most of the time (moduledoc: "the common case"). Measured
+  # against the rail's actual painted background
+  # (`--color-base-200`, 40% over the shell's own `--color-base-200`,
+  # which composites to the same colour): black-on-`#F2F2F2` `/50` is
+  # 3.89:1 in the light theme, under the 4.5:1 AA floor for text this
+  # size; `/60` measures 5.53:1 light and 6.44:1 dark. Scoped to this one
+  # state's text slot — sibling states already sit on `info`/`error`/
+  # `success` at full opacity and were never at risk.
   defp meta(:idle),
     do: %{
       ring: "border-base-content/25 text-transparent",
-      text: "text-base-content/50",
+      text: "text-base-content/60",
       glyph: "",
       word: "Idle",
       face_dim: true,

@@ -337,6 +337,15 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       |> assign(:muted, assigns[:muted_identities] || MapSet.new())
       |> assign(:camera_off, assigns[:camera_off_identities] || MapSet.new())
 
+    # Precomputed HERE, not with a `<% info = agent_row_info(assigns, p) %>`
+    # inside the `<li>` as before, because the row's OWN class attribute
+    # now needs `info.delay_reason` — see `agent_row_shape_class/1` below
+    # — and a HEEx tag's attributes are evaluated before any `<% %>` block
+    # inside its body. Composed once per agent from the same `assigns` the
+    # inline call used, so nothing about how a row is computed changes.
+    agents_with_info = Enum.map(agents, &{&1, agent_row_info(assigns, &1), agent_id_of(&1)})
+    assigns = assign(assigns, :agents_with_info, agents_with_info)
+
     ~H"""
     <div data-component="participant-rail" class="flex flex-col">
       <%!-- Held-state announcement. A persistent `aria-live` region whose
@@ -363,9 +372,19 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
              unconditional (it has an empty state), so a heading that
              hid with the list would leave "No people yet." floating
              under nothing. --%>
+        <%!-- The icon stays `/50` — it is a decorative glyph, WCAG 1.4.11's
+             3:1 non-text floor, which `/50` clears on both themes (4.70:1
+             dark, 3.89:1 light). The LABEL is rendered text at 11px and
+             needs the 4.5:1 text floor; `/50` measured 3.89:1 against the
+             rail's actual painted background in the light theme (painted
+             via canvas, not read off the `--color-base-200` token comment,
+             which is `oklch(96% 0 0)` blended under this section's own
+             `bg-base-200/40` — the two composite to the same colour). `/60`
+             clears both themes (5.53:1 light, 6.44:1 dark) and is the same
+             tone the sub-line and the delay-reason text already use. --%>
         <div class="flex items-center gap-1.5 px-2 pb-1.5" data-role="humans-heading">
           <span class="hero-users size-3.5 text-base-content/50"></span>
-          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/60">
             In this call
           </span>
         </div>
@@ -400,9 +419,14 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                    sub-line so hosts can visually distinguish invited
                    guests from account-holding humans without reading
                    the suffix. --%>
+              <%!-- `/60`, not `/50` — measured against the rail's actual
+                   painted background, `/50` is 3.89:1 in the light theme at
+                   this 11px size, under the 4.5:1 AA text floor; `/60` is
+                   5.53:1 light / 6.44:1 dark. See the humans-heading note
+                   above for how this was measured. --%>
               <div
                 :if={MeetingLive.via_guest_link?(p)}
-                class="truncate text-[11px] text-base-content/50"
+                class="truncate text-[11px] text-base-content/60"
                 data-role="participant-via-guest-link"
               >
                 via guest link
@@ -441,20 +465,26 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
         data-section="agents"
         class="border-t border-edge px-2 pb-2 pt-2"
       >
+        <%!-- Same pairing and the same `/60` reasoning as the humans
+             heading above: the icon stays `/50` (a non-text glyph, 3:1
+             floor), the label is `/60` (rendered text, 4.5:1 floor). --%>
         <div class="flex items-center gap-1.5 px-2 pb-1.5">
           <span class="hero-cpu-chip size-3.5 text-base-content/50"></span>
-          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/60">
             Agents
           </span>
         </div>
 
         <ul class="flex flex-col gap-0.5" role="list">
           <li
-            :for={p <- @agents}
+            :for={{p, info, aid} <- @agents_with_info}
             data-participant-id={p.id}
             data-participant-identity={MeetingLive.gallery_identity(p)}
             data-participant-type="agent"
-            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs min-h-11 hover:bg-base-300/40 transition-colors"
+            class={[
+              "group flex gap-2 rounded-lg px-2 py-1.5 text-xs min-h-11 hover:bg-base-300/40 transition-colors",
+              agent_row_align_class(info)
+            ]}
           >
             <%!-- ONE construction for all four states.
 
@@ -474,15 +504,19 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  would give them two initials over the seeded human
                  palette and stamp them `data-avatar-kind="human"`.
                  `agent_activity_avatar/1` renders it internally. --%>
-            <% info = agent_row_info(assigns, p) %>
-            <% aid = agent_id_of(p) %>
             <%!-- Task 01a0cf5c stage 1. `aid != @pressed_agent_id` is
                  what tells THIS viewer's own hold apart from someone
                  else's: `@ask_floor_holders` carries every held agent
                  meeting-wide, including the one THIS viewer is
                  currently holding, and that row must keep showing
                  "Talking…" below rather than being disabled out from
-                 under the person actually pressing it. --%>
+                 under the person actually pressing it.
+
+                 `info`/`aid` are already bound above via the
+                 `agents_with_info` destructure (task 01a0cf5d stage 3) —
+                 not re-derived here — because the row's own class
+                 attribute needs `info.delay_reason` before any `<% %>`
+                 block in the body would run. --%>
             <% held_by = if is_binary(aid), do: Map.get(@ask_floor_holders, aid) %>
             <% held_by_other? = is_binary(held_by) and aid != @pressed_agent_id %>
             <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0: `--color-primary`
@@ -1040,6 +1074,36 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       end
     end)
   end
+
+  # ── Row alignment (task 01a0cf5d stage 3) ────────────────────────────────
+  #
+  # The rail is 312px, wider than the mock's 224px, and the row's own type
+  # sizes already meet or exceed the mock's — so "too small to read" is not
+  # a width or font problem. Rendering the rail with REAL roster data (a
+  # long agent name, a long `:delayed` reason) surfaced the actual defect:
+  # `items-center` on a row whose two fixed-size ends (the 28px avatar, the
+  # media-slot cluster) sit either side of a text column that can grow well
+  # past them.
+  #
+  # `:delayed` is the ONLY state with an unbounded second line — the reason
+  # clause deliberately never truncates (see the template's TRUNCATION
+  # ORDER note) — so it is the only row that can balloon. Captured via CDP
+  # at 312px with `Delayed.new!/1`'s realistic long-form text ("waiting on
+  # GitHub for a workflow run that has been queued for several minutes
+  # now"): the row grew to 130.6px, and `items-center` placed the avatar's
+  # top edge 51.3px into it — dead centre of a paragraph, 45px away from
+  # the name it identifies. The state lives ON the face precisely so a
+  # viewer can read who-is-doing-what at a glance; centred alignment on a
+  # tall row breaks that exact pairing, which reads as illegible even
+  # though every character is full-size and full-contrast.
+  #
+  # Scoped to the one state that can grow: an ordinary row (name + one
+  # working line) is at or near `min-h-11` regardless of alignment, so
+  # `items-start` vs `items-center` there is a few px, not a defect.
+  defp agent_row_align_class(%{delay_reason: reason}) when is_binary(reason),
+    do: "items-start"
+
+  defp agent_row_align_class(_info), do: "items-center"
 
   # ── One composed row ────────────────────────────────────────────────────
   #

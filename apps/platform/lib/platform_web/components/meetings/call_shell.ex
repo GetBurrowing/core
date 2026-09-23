@@ -1172,12 +1172,14 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   slot(:before_leave,
     doc: """
     Surface-specific controls rendered between Share and Leave.
-    `/meetings` passes its push-to-talk button here (task 01a03f4e
-    stage 5, re-homed in the merge with #910); the quickmeet has no
-    push-to-talk producer and passes nothing. A slot rather than an
-    attr because the button carries its own hook, id and
-    `phx-update="ignore"` subtree, none of which this component should
-    know about.
+    `/meetings` used to pass its push-to-talk button here (task
+    01a03f4e stage 5, re-homed in the merge with #910); push-to-talk
+    moved to the participant rail (per-agent hold-to-talk) and this
+    slot now carries `/meetings`' captions toggle instead (task
+    01a0cf5d stage 2, relocated from the top bar). The quickmeet has
+    no captions producer and passes nothing. A slot rather than an
+    attr because the button carries its own event handling and state,
+    none of which this component should know about.
     """
   )
 

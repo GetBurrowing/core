@@ -522,12 +522,84 @@
          while `[data-role="meeting-controls"]` keeps `flex-shrink-0` and its
          44px touch targets. Acceptance bar: no horizontal PAGE scroll at
          390px, every control reachable, and no element at width 0. --%>
-      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-200/60 px-3 sm:gap-3">
-        <%!-- Meeting name. `grow basis-[50%] min-w-0` replaces the old
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-200/60 px-3 sm:gap-3 lg:grid lg:grid-cols-[1fr_auto_1fr]">
+        <%!-- `lg:grid lg:grid-cols-[1fr_auto_1fr]` (task 01a0cf5d stage 1,
+           item 2) makes this bar centre the stage-mode switcher on ITSELF,
+           not on whatever space its two neighbours happen to leave over —
+           `left`, `[data-role="meeting-header-start"]` below, and `right`,
+           `[data-role="meeting-header-end"]` further down, get an EQUAL 1fr
+           share each, and the switcher (unwrapped, the sole item left in
+           the middle) sits in the `auto` column between them, which is by
+           construction equidistant from both edges. This is `lg:`-only
+           (β‰₯1024px): below `lg` the header stays `display:flex` and every
+           child renders EXACTLY as it did before this ticket — see why
+           below.
+
+           THE TWO WRAPPERS ARE `display:contents` BELOW `lg`, NOT
+           `display:flex`. A `contents` box has no box of its own: its
+           children become direct flex children of THIS header, precisely
+           as if the wrapper were not there. That is deliberate and
+           load-bearing — below `lg` this bar must be byte-for-byte the
+           pre-ticket layout (title's `grow basis-[60%]`, `roster_readout`,
+           the identity badges, `[data-role="meeting-controls"]`'s
+           `flex-shrink-0`, all resolving against the FULL bar width, same
+           as `main`), because that layout is the one measured and fixed at
+           390px by task 019fbaac and this ticket has no mandate to
+           re-litigate it. At `lg:` and up the wrappers switch to real
+           `lg:flex` boxes and become the grid's two `1fr` items instead.
+
+           TRIED AND REJECTED, TWICE, before landing on grid — recorded so a
+           future edit does not re-walk the same dead ends. Both were
+           measured with a real browser at real widths, not reasoned about
+           in the abstract:
+
+           1. Flexbox "holy grail": both side clusters wrapped in
+              `flex-1` (`flex: 1 1 0%`, unconditionally, no `lg:` gate) so
+              they are forced to equal width. This DOES centre the switcher
+              and DOES let it shrink via `flex-shrink`, but forcing equal
+              width is exactly wrong for THIS bar's two sides: the left
+              carries five things including a CTA button, the right carries
+              two icon buttons, and equal width means the light side donates
+              none of its slack to the heavy one. Measured at 700px: the
+              left region's forced allocation (130.97px) was narrower than
+              `[data-role="meeting-controls"]`'s own irreducible content
+              (124.125px, `flex-shrink-0` by original design and not this
+              ticket's to touch) plus the still-visible `roster_readout`
+              ahead of it, and `meeting-controls` overflowed its region by
+              118px, into and past the centre control.
+
+           2. `position:absolute`, `lg:`-gated exactly as the grid is now.
+              This DOES take the switcher out of the row's box-sizing
+              negotiation so neither side is squeezed — but an absolutely
+              positioned box is ALSO invisible to the flex layout algorithm,
+              so `title`'s `grow` (unaware the centre is now spoken for)
+              kept expanding to fill the space the switcher used to occupy
+              in-flow. Measured at exactly 1024px, the `lg` boundary: title
+              grew to 486.75px and visually painted underneath the centred
+              switcher's opaque panel — the exact overlap this rework exists
+              to remove, just relocated from 700px to 1024px. `display:grid`
+              does not have this failure mode: grid tracks are mutually
+              exclusive regions by construction, so `title`'s `grow` is
+              bounded by its OWN `1fr` track and physically cannot reach the
+              `auto` centre track next to it.
+
+           The centre column being bare `auto` (not `minmax(0,max-content)`,
+           which was tried during the flex-shrink investigation for a
+           different reason) is safe here specifically BECAUSE this is
+           `lg:`-gated: measured at every tested width from 1024px to
+           1280px, the switcher's natural 390px fits inside the `auto`
+           column with room to spare on both `1fr` sides, so the "does an
+           `auto` track shrink under pressure" question that mattered at
+           700px never arises in the range this rule actually applies to. --%>
+        <div
+          class="contents lg:flex lg:min-w-0 lg:items-center lg:gap-3"
+          data-role="meeting-header-start"
+        >
+          <%!-- Meeting name. `grow basis-[50%] min-w-0` replaces the old
            auto-width box + `flex-1` spacer pair: same right-alignment for
            everything after it, but the title now has a proportional share of
            the line instead of being the residue of everyone else's. --%>
-        <%!-- `basis-[60%] sm:basis-[50%]` (task 01a05b14 stage 5): the
+          <%!-- `basis-[60%] sm:basis-[50%]` (task 01a05b14 stage 5): the
            live pill below sits INSIDE this box, so below `sm` the box
            needs a larger share of the line or the pill eats the name.
            Measured at 390x844: 50% put the name at 43px (truncated),
@@ -535,7 +607,7 @@
            the difference into its scroll port — which is exactly the
            mechanism the bar's own comment above says should take the
            squeeze. Still a percentage of the line, per that comment. --%>
-        <%!-- SHRINK WEIGHT, and why it is conditional (task 01a0740d stage 2).
+          <%!-- SHRINK WEIGHT, and why it is conditional (task 01a0740d stage 2).
 
            A SECOND state pill can now sit in this box, and the box's width is
            basis-driven: its content growing does not make it any wider. So the
@@ -564,17 +636,17 @@
            `basis` is untouched, so a long meeting name still truncates rather
            than overflowing the page: the h1 keeps `min-w-0 truncate` and this
            box's hypothetical size does not follow its content. --%>
-        <div
-          class={[
-            "flex min-w-0 grow basis-[60%] items-center gap-2 sm:basis-[50%]",
-            if(@room_recording?, do: "shrink-[0.2] sm:shrink", else: "shrink")
-          ]}
-          data-role="meeting-title"
-        >
-          <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
-          <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
+          <div
+            class={[
+              "flex min-w-0 grow basis-[60%] items-center gap-2 sm:basis-[50%]",
+              if(@room_recording?, do: "shrink-[0.2] sm:shrink", else: "shrink")
+            ]}
+            data-role="meeting-title"
+          >
+            <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
+            <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
 
-          <%!-- `● meeting live` (task 01a05b14 stage 5, approved target
+            <%!-- `● meeting live` (task 01a05b14 stage 5, approved target
              embed 1 `.pill`): 10px, fully rounded, on the `success` slot
              — Saru's "live audio right now" colour. Rendered ONLY while
              `@room_live?` is true, and that assign is OBSERVED, not
@@ -590,16 +662,16 @@
              EVERY width. Only the leading "meeting " yields below `sm`,
              where the title, this pill, the count and the controls all
              compete for one 390px line. --%>
-          <span
-            :if={@room_live?}
-            class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-success/40 bg-success/15 px-2 py-0.5 text-[10px] font-medium leading-4 text-success"
-            data-role="meeting-live-pill"
-          >
-            <span class="size-1.5 rounded-full bg-success" aria-hidden="true"></span>
-            <span><span class="sr-only sm:not-sr-only">meeting </span>live</span>
-          </span>
+            <span
+              :if={@room_live?}
+              class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-success/40 bg-success/15 px-2 py-0.5 text-[10px] font-medium leading-4 text-success"
+              data-role="meeting-live-pill"
+            >
+              <span class="size-1.5 rounded-full bg-success" aria-hidden="true"></span>
+              <span><span class="sr-only sm:not-sr-only">meeting </span>live</span>
+            </span>
 
-          <%!-- `● recording` (task 01a0740d stage 2, FE-7). Same 10px fully
+            <%!-- `● recording` (task 01a0740d stage 2, FE-7). Same 10px fully
              rounded pill as the live one above it, on the DESTRUCTIVE slot.
 
              THE SLOT IS THE POINT OF THE TICKET. A red dot is the recording
@@ -644,19 +716,19 @@
                  it is shape only. Nothing here depends on it to be seen — the
                  filled dot and the word carry the indicator, which is the rule
                  this theme's invisible `border-base-300` (1.0478:1) taught. --%>
-          <span
-            :if={@room_recording?}
-            class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-error/40 bg-error/10 px-2 py-0.5 text-[10px] font-medium leading-4 text-base-content"
-            data-role="meeting-recording-pill"
-            role="status"
-            aria-label="This meeting is being recorded"
-          >
-            <span class="size-1.5 rounded-full bg-error" aria-hidden="true"></span>
-            <span>rec<span class="sr-only sm:not-sr-only">ording</span></span>
-          </span>
-        </div>
+            <span
+              :if={@room_recording?}
+              class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-error/40 bg-error/10 px-2 py-0.5 text-[10px] font-medium leading-4 text-base-content"
+              data-role="meeting-recording-pill"
+              role="status"
+              aria-label="This meeting is being recorded"
+            >
+              <span class="size-1.5 rounded-full bg-error" aria-hidden="true"></span>
+              <span>rec<span class="sr-only sm:not-sr-only">ording</span></span>
+            </span>
+          </div>
 
-        <%!-- `N people · M agents` (task 01a05b14 stage 5, approved target
+          <%!-- `N people · M agents` (task 01a05b14 stage 5, approved target
            embed 1 `.mini`): 11px, muted, right-aligned by the growing
            title before it. Derived from `MeetingLive.roster_count/1`,
            which is `partition_participants/1` — the SAME split the rail's
@@ -669,9 +741,9 @@
            is NOT the reveal-over-persistence pattern the mute badge
            note below bans — that rule protects STATE, and a count is
            not state. The live pill above is state and stays. --%>
-        <.roster_readout participants={@participants} />
+          <.roster_readout participants={@participants} />
 
-        <%!-- Guest identity badge (task 019f498d stage 4). Only rendered on
+          <%!-- Guest identity badge (task 019f498d stage 4). Only rendered on
            the guest surface (`chrome_mode == :none`) so the guest can see
            which name others in the meeting see. Mirrors the badge in
            guest_meeting_live.html.heex:117-119 verbatim so stage 5's
@@ -685,7 +757,7 @@
            wrong noun — literally " (guest)" after an empty interpolation.
            `:state` is what actually distinguishes the two: the guest mount
            clause sets it, the account mount leaves it nil. --%>
-        <%!-- WIDTH: `max-w-[25%] min-w-0` + an inner `truncate`. This badge is
+          <%!-- WIDTH: `max-w-[25%] min-w-0` + an inner `truncate`. This badge is
            byte-identical markup to the member badge below, and it had the
            SAME defect first: a `badge` sets `white-space: nowrap`, so as a
            flex item its min-content width IS its full text width and it could
@@ -693,16 +765,16 @@
            paid. A guest on a phone has never been able to read the meeting
            name either; the member badge did not introduce this, it merely
            carried it to account holders. Fixed on BOTH surfaces. --%>
-        <span
-          :if={@chrome_mode == :none and @state == :in_meeting}
-          class="badge badge-ghost min-w-0 max-w-[25%] shrink gap-1 overflow-hidden text-xs"
-          data-role="guest-identity-badge"
-        >
-          <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
-          <span class="truncate">{@display_name} (guest)</span>
-        </span>
+          <span
+            :if={@chrome_mode == :none and @state == :in_meeting}
+            class="badge badge-ghost min-w-0 max-w-[25%] shrink gap-1 overflow-hidden text-xs"
+            data-role="guest-identity-badge"
+          >
+            <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
+            <span class="truncate">{@display_name} (guest)</span>
+          </span>
 
-        <%!-- Member identity badge (task 019fb955-f8b1 stage 5). Sibling of
+          <%!-- Member identity badge (task 019fb955-f8b1 stage 5). Sibling of
            the guest badge for the OTHER chrome-less surface: an invited
            external account on the `meet.` host, which reaches the general
            `mount/3` and so carries `@state == nil`. Same visual treatment,
@@ -712,29 +784,29 @@
            resolves; `member_display_name/1` returns nil when there is no
            account behind the mount, and a badge naming nobody is worse
            than no badge. --%>
-        <%!-- WIDTH: identical treatment to the guest badge above — see the
+          <%!-- WIDTH: identical treatment to the guest badge above — see the
            note there. Measured at 390x844 before this rework: this badge was
            125.9px and collapsed the meeting-title element to width 0 (390 →
            0/31, 430 → 0/71, 768 → 0/87.7 with the badge shown vs hidden;
            innocent at 1280, where 214.9/214.9 is unchanged). --%>
-        <span
-          :if={@chrome_mode == :none and is_nil(@state) and @display_name}
-          class="badge badge-ghost min-w-0 max-w-[25%] shrink gap-1 overflow-hidden text-xs"
-          data-role="member-identity-badge"
-        >
-          <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
-          <span class="truncate">{@display_name}</span>
-        </span>
+          <span
+            :if={@chrome_mode == :none and is_nil(@state) and @display_name}
+            class="badge badge-ghost min-w-0 max-w-[25%] shrink gap-1 overflow-hidden text-xs"
+            data-role="member-identity-badge"
+          >
+            <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
+            <span class="truncate">{@display_name}</span>
+          </span>
 
-        <%!-- Local-media controls + Join/Leave CTA. Visual treatment
+          <%!-- Local-media controls + Join/Leave CTA. Visual treatment
            mirrors meeting_bar_live.ex's mini-bar: hero-microphone /
            hero-video-camera glyphs, base-content/70 when active, error-
            toned when muted/off, base-content/40 when off. Each button
            pushes the matching MeetingHooks event — the LiveKit lifecycle
            lives there (see meeting_hooks.ex), no client-side state
            here. --%>
-        <div class="flex flex-shrink-0 items-center gap-1" data-role="meeting-controls">
-          <%!-- Agents-muted badge (task 019fbaac stage 3). State is
+          <div class="flex flex-shrink-0 items-center gap-1" data-role="meeting-controls">
+            <%!-- Agents-muted badge (task 019fbaac stage 3). State is
              VISIBLE, not merely settable.
 
              It lives here in the top bar rather than in the intents
@@ -800,33 +872,39 @@
              viewer waiting on a silenced agent.
 
              A lone amber eye-slash is still not colour on its own. --%>
-          <.chip
-            :if={@intent_muted?}
-            tone="warning"
-            class="gap-1 font-mono text-[10px]"
-            data-role="meeting-intent-mute-badge"
-            title="Agents are muted for this meeting"
-          >
-            <span class="hero-eye-slash size-3.5" aria-hidden="true"></span>
-            <span class="sr-only sm:not-sr-only">Agents muted</span>
-          </.chip>
+            <.chip
+              :if={@intent_muted?}
+              tone="warning"
+              class="gap-1 font-mono text-[10px]"
+              data-role="meeting-intent-mute-badge"
+              title="Agents are muted for this meeting"
+            >
+              <span class="hero-eye-slash size-3.5" aria-hidden="true"></span>
+              <span class="sr-only sm:not-sr-only">Agents muted</span>
+            </.chip>
 
-          <%!-- Mic / Camera / Share / Leave USED to sit here. Task
+            <%!-- Mic / Camera / Share / Leave USED to sit here. Task
              01a05b14 stage 2 moved `<CallShell.call_controls>` out of
              this bar and into a centred 46px row at the BOTTOM of the
              stage column (search `data-role="meeting-stage-controls"`
              below), which is where the approved canvas puts them.
 
              WHAT STAYED, DELIBERATELY: the stage-mode segmented
-             control, the captions toggle, the chat-panel toggle, the
-             call-rail toggle and the intent-mute chip. None of them
-             appear in the mockup, and none of them were removed --
-             they are real, handled features and a static drawing is
-             not evidence they should be deleted. The bar stops being
-             a control DUMP; it does not stop being a bar. If it still
-             overflows at 1280 with four fewer pills in it, that is a
-             separate pre-existing debt, not a regression from this
-             move.
+             control, the chat-panel toggle, the call-rail toggle and
+             the intent-mute chip. None of them appear in the mockup,
+             and none of them were removed -- they are real, handled
+             features and a static drawing is not evidence they should
+             be deleted. The bar stops being a control DUMP; it does
+             not stop being a bar. If it still overflows at 1280 with
+             four fewer pills in it, that is a separate pre-existing
+             debt, not a regression from this move.
+
+             The captions toggle did NOT stay: task 01a0cf5d stage 2
+             relocated it into the bottom control bar (search
+             `data-role="meeting-captions-toggle"` below), between
+             Share and Leave, per the approved `.ctrls` mock -- five
+             pills, not four. See the note at the new site for the
+             move's details.
 
              PUSH-TO-TALK MOVED TOO, in the merge with #910 (task
              01a03f4e stage 5 landed on main while this port was in
@@ -850,90 +928,39 @@
              the Share path would have died silently while every click
              still looked fine and `mix test` saw nothing. --%>
 
-          <%!-- Closed-captions toggle (task 019f3f17 stage 1). Only rendered
-             when the viewer is joined (mirrors the Leave-button gate
-             below) since captions come from the LiveKit transcription
-             stream, which only flows during an active session. Event name
-             `toggle_captions_meeting` retains the `_meeting` suffix from
-             its original role sidestepping a since-removed shell
-             `toggle_captions` handler (deleted by task 019f43da). The
-             MeetingCaptions JS hook + `meeting_live_test.exs` still
-             reference this name, so renaming would compound the blast
-             radius without changing behaviour.
-
-             STATE TREATMENT (task 01a0740e stage 1). Behaviour, event
-             name, `data-role`, `data-active` and ARIA are unchanged;
-             only the two colour states moved.
-
-             OFF was `text-base-content/40`. `/40` is what a DISABLED
-             control gets, so "captions work here and are off" and
-             "captions cannot work here" looked identical. Off is now
-             `/70`, and `/40` is reclaimed for genuinely-unavailable.
-             This ticket adds no unavailable state to this control, so
-             `/40` simply stops being used here — intended, not an
-             omission.
-
-             ON was `text-primary`. Every other control in this row is
-             already cyan, so brand colour read as one more action
-             rather than as state. It is now a PRESSED treatment:
-             `bg-base-300` as a filled ground (base-300 is the raised
-             surface over this header's `bg-base-200/60`) with
-             `base-content` as the foreground, so the button looks
-             depressed rather than tinted. Semantic slots only.
-
-             NOT DONE, deliberately: a visible text label. The canvas
-             notes the glyph is unlabelled, but this bar already
-             overflows at 375px (scrollWidth 391 vs clientWidth 375,
-             measured — which is why a sibling control is
-             `hidden sm:inline-flex`). Adding width here breaks a real
-             thing to improve a lesser one. The discoverability fix
-             shipped is the state treatment only. --%>
-          <%= if @in_meeting do %>
-            <button
-              type="button"
-              phx-click="toggle_captions_meeting"
-              aria-label={if @captions_visible, do: "Hide captions", else: "Show captions"}
-              aria-pressed={to_string(@captions_visible)}
-              title={if @captions_visible, do: "Hide captions", else: "Show captions"}
-              data-role="meeting-captions-toggle"
-              data-active={to_string(@captions_visible)}
-              class={[
-                "btn btn-sm btn-ghost btn-square min-h-11",
-                if(@captions_visible,
-                  do: "bg-base-300 text-base-content shadow-inner",
-                  else: "text-base-content/70"
-                )
-              ]}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                class="size-4"
-              >
-                <path d="M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5zm5 3a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1H7zm7 0a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1h-2z" />
-              </svg>
-            </button>
-          <% end %>
-
-          <%!-- Leave is `call_controls`' own button (above), gated by the
+            <%!-- Leave is `call_controls`' own button (above), gated by the
              same `@in_meeting` it always was. Only the Join CTA is left
              here, because there is no shared component for "you have not
              joined yet". --%>
-          <%= if not @in_meeting do %>
-            <button
-              type="button"
-              phx-click="meeting_join"
-              data-role="meeting-join"
-              class="btn btn-sm btn-primary min-h-11 gap-1.5"
-              title="Join meeting"
-            >
-              <span class="hero-video-camera size-4"></span>
-              <span class="hidden sm:inline">Join meeting</span>
-            </button>
-          <% end %>
+            <%= if not @in_meeting do %>
+              <button
+                type="button"
+                phx-click="meeting_join"
+                data-role="meeting-join"
+                class="btn btn-sm btn-primary min-h-11 gap-1.5"
+                title="Join meeting"
+              >
+                <span class="hero-video-camera size-4"></span>
+                <span class="hidden sm:inline">Join meeting</span>
+              </button>
+            <% end %>
+          </div>
         </div>
 
+        <%!-- CENTRE grid item at `lg:` (task 01a0cf5d stage 1, item 2 — see
+           the header's own comment above for the two rejected alternatives
+           and their measurements). Unwrapped, on purpose: below `lg` it is
+           a plain flex child in its original document position, exactly as
+           on `main`. At `lg:` and up it is simply the third top-level child
+           of the header's `grid-cols-[1fr_auto_1fr]`, which is what makes
+           it the `auto` column — no positioning classes of its own are
+           needed for the centring, because grid track placement does that
+           by construction. `min-w-0 shrink overflow-x-auto` below are
+           UNCHANGED from before this ticket at every width: below `lg`
+           they do the same job they always did (the control is a normal
+           flex child); at `lg:` `shrink` is inert (nothing squeezes an
+           `auto` grid track that already fits, per the header comment's
+           measurements) but costs nothing left in place. --%>
         <%!-- Stage-mode segmented control (ADR 0042). Four hero-icon buttons;
            clicking one pushes `set_stage_mode` with the target mode and
            the LV swaps `@current_stage_mode`. The active button gets the
@@ -1006,6 +1033,23 @@
           aria-label="Stage mode"
           data-stage-mode-control="active"
         >
+          <%!-- ONE outline, not two (task 01a0cf5d stage 1, item 1). The
+             mock (`.modes` in Meeting_Desktop.html, attachment
+             01a0c6f1-3839-7001-86f2-c97d9b05c5b5) puts the border on the
+             GROUP container only — `.modes` carries
+             `border:1px solid var(--base-300)`, and `.modes button` itself
+             carries none. This markup used to stack a second `border-edge`
+             on every individual button on top of the container's, doubling
+             the outline exactly as the ticket described. `border-edge`
+             lives on the container div above; it is deliberately absent
+             from the per-button class list below.
+
+             Left untouched: the separate `:focus-visible` ring (app.css /
+             daisyUI) that outlines whichever button has keyboard focus.
+             That is a different rule for a different state and was never
+             part of this resting-state double border — removing it here
+             would delete an accessibility signal a screenshot of the
+             resting control cannot show was missing. --%>
           <button
             :for={mode <- @stage_modes}
             type="button"
@@ -1022,7 +1066,7 @@
             data-stage-mode-button={mode}
             data-active={to_string(@current_stage_mode == mode)}
             class={[
-              "join-item btn btn-sm relative min-h-11 gap-1.5 border-edge",
+              "join-item btn btn-sm relative min-h-11 gap-1.5",
               if(@current_stage_mode == mode,
                 do: "bg-base-200 text-primary",
                 else: "btn-ghost text-base-content/60"
@@ -1056,7 +1100,18 @@
           </button>
         </div>
 
-        <%!-- Chat toggle. RE-POINTED, not deleted (task 01a084bf stage 3).
+        <%!-- RIGHT grid item at `lg:` (task 01a0cf5d stage 1, item 2 — see
+           the header's own comment for the two rejected alternatives).
+           `contents` below `lg` (these two buttons stay plain, unwrapped
+           flex children at the tail of the SAME single row the meeting name
+           opens, exactly as on `main`); `lg:flex ... lg:justify-end` at
+           `lg:` and up makes this box the grid's trailing `1fr` item, with
+           its content pushed flush to the bar's right edge inside it. --%>
+        <div
+          class="contents lg:flex lg:min-w-0 lg:items-center lg:justify-end lg:gap-3"
+          data-role="meeting-header-end"
+        >
+          <%!-- Chat toggle. RE-POINTED, not deleted (task 01a084bf stage 3).
            It used to open `#meeting-chat-drawer`, which was
            `lg:!hidden` — so this control was `lg:hidden` too, on the
            reasoning that the desktop right column was always visible.
@@ -1075,21 +1130,21 @@
            Hero-icon only (no emoji) per the intent-panel-host
            greppability + the e2e_behavior validation refusing emoji
            codepoints. --%>
-        <button
-          :if={@shell?}
-          type="button"
-          phx-click="toggle_chat_panel"
-          aria-label="Toggle chat panel"
-          aria-expanded={to_string(@active_meeting_tab == "chat" and not @chat_panel_collapsed)}
-          aria-controls="meeting-call-rail-pane"
-          title="Toggle chat panel"
-          class="btn btn-sm btn-ghost btn-square text-base-content/60"
-          data-role="chat-panel-toggle"
-        >
-          <span class="hero-chat-bubble-left-right size-5"></span>
-        </button>
+          <button
+            :if={@shell?}
+            type="button"
+            phx-click="toggle_chat_panel"
+            aria-label="Toggle chat panel"
+            aria-expanded={to_string(@active_meeting_tab == "chat" and not @chat_panel_collapsed)}
+            aria-controls="meeting-call-rail-pane"
+            title="Toggle chat panel"
+            class="btn btn-sm btn-ghost btn-square text-base-content/60"
+            data-role="chat-panel-toggle"
+          >
+            <span class="hero-chat-bubble-left-right size-5"></span>
+          </button>
 
-        <%!-- Call-rail toggle (task 01a05b14 stage 6). Mobile-only, for
+          <%!-- Call-rail toggle (task 01a05b14 stage 6). Mobile-only, for
            the same reason as its sibling above: at `lg` the rail is an
            in-flow column and this would be a no-op.
 
@@ -1099,18 +1154,19 @@
            any of those exist now that the left rail is gone, so gating
            this would leave a guest on a phone with a bare video grid
            and no way to reach them. --%>
-        <button
-          type="button"
-          phx-click="toggle_call_rail"
-          aria-label="Toggle call panel"
-          aria-expanded={to_string(@call_rail_open)}
-          aria-controls="meeting-call-rail"
-          title="Toggle call panel"
-          class="btn btn-sm btn-ghost btn-square text-base-content/60 lg:hidden"
-          data-role="call-rail-toggle"
-        >
-          <span class="hero-user-group size-5"></span>
-        </button>
+          <button
+            type="button"
+            phx-click="toggle_call_rail"
+            aria-label="Toggle call panel"
+            aria-expanded={to_string(@call_rail_open)}
+            aria-controls="meeting-call-rail"
+            title="Toggle call panel"
+            class="btn btn-sm btn-ghost btn-square text-base-content/60 lg:hidden"
+            data-role="call-rail-toggle"
+          >
+            <span class="hero-user-group size-5"></span>
+          </button>
+        </div>
       </header>
 
       <%!-- ── Body: left rail + center stage + chat panel ─────────────────── --%>
@@ -1914,12 +1970,13 @@
             <% end %>
           </div>
 
-          <%!-- THE CONTROL BAR (task 01a05b14 stage 2). A centred 46px
-             row at the bottom of the stage column, four pills, nothing
-             else in it -- `.ctrls` in the approved canvas. Moved here
-             from the top bar; see the note at the old site for why
-             every id and `data-role` is byte-identical and why the
-             other header controls stayed put.
+          <%!-- THE CONTROL BAR (task 01a05b14 stage 2, captions joined it in
+             01a0cf5d stage 2). A centred 46px row at the bottom of the
+             stage column, five pills, nothing else in it -- `.ctrls` in
+             the approved canvas: Mute, Camera, Share, Captions, Leave.
+             Moved here from the top bar; see the note at the old site
+             for why every id and `data-role` is byte-identical and why
+             the other header controls stayed put.
 
              `w-full` + the component's own `justify-center` is what
              makes it CENTRED under the tiles rather than left-packed,
@@ -1954,7 +2011,59 @@
             leave_role="meeting-leave"
             share_id="meeting-share-btn-desktop"
             share_hook="MeetingShareButton"
-          />
+          >
+            <%!-- Closed-captions toggle (task 019f3f17 stage 1; relocated
+             from the top bar into this slot, between Share and Leave, by
+             task 01a0cf5d stage 2 -- the mock's `.ctrls` row puts Captions
+             fourth of five). Only rendered when the viewer is joined
+             (mirrors the Leave-button gate) since captions come from the
+             LiveKit transcription stream, which only flows during an
+             active session. Event name `toggle_captions_meeting` retains
+             the `_meeting` suffix from its original role sidestepping a
+             since-removed shell `toggle_captions` handler (deleted by
+             task 019f43da). The MeetingCaptions JS hook +
+             `meeting_live_test.exs` still reference this name, so
+             renaming would compound the blast radius without changing
+             behaviour.
+
+             STATE TREATMENT (task 01a0740e stage 1), unchanged by the
+             move. OFF is `text-base-content/70` (not `/40`, which is
+             reserved for genuinely-unavailable — this control has no
+             unavailable state). ON is a PRESSED treatment, `bg-base-300`
+             as a filled ground with `base-content` as the foreground, so
+             the button looks depressed rather than tinted, matching the
+             sibling pills in this row. Behaviour, event name,
+             `data-role`, `data-active` and ARIA are byte-identical to the
+             top-bar version this replaces -- this is a relocation, not a
+             rewrite. --%>
+            <:before_leave :if={@in_meeting}>
+              <button
+                type="button"
+                phx-click="toggle_captions_meeting"
+                aria-label={if @captions_visible, do: "Hide captions", else: "Show captions"}
+                aria-pressed={to_string(@captions_visible)}
+                title={if @captions_visible, do: "Hide captions", else: "Show captions"}
+                data-role="meeting-captions-toggle"
+                data-active={to_string(@captions_visible)}
+                class={[
+                  "btn btn-sm btn-ghost btn-square min-h-11",
+                  if(@captions_visible,
+                    do: "bg-base-300 text-base-content shadow-inner",
+                    else: "text-base-content/70"
+                  )
+                ]}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  class="size-4"
+                >
+                  <path d="M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5zm5 3a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1H7zm7 0a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1h-2z" />
+                </svg>
+              </button>
+            </:before_leave>
+          </CallShell.call_controls>
 
           <%!-- THE PEEK SPACER (task 01a07410 stage 3). While a countdown
              is live below `lg`, the shut rail sheet's handle peeks 2.75rem

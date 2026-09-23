@@ -7865,6 +7865,11 @@ defmodule PlatformWeb.MeetingLiveTest do
     # The controls LEFT the header; the header's OTHER controls did
     # not. A static mockup omitting them is not evidence they should
     # be deleted, and each of these has a live handler behind it.
+    #
+    # `meeting-captions-toggle` is deliberately NOT in this list: task
+    # 01a0cf5d stage 2 relocated it out of the header into the stage
+    # bar too, alongside Mute/Camera/Share/Leave. See "the stage bar
+    # gained a fifth pill: Captions" below for where it landed instead.
     test "the header keeps the controls the mockup does not depict", %{
       conn: conn,
       meeting: meeting
@@ -7872,7 +7877,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
       html = render_click(view, "meeting_join", %{})
 
-      for role <- ~w(chat-panel-toggle call-rail-toggle meeting-captions-toggle) do
+      for role <- ~w(chat-panel-toggle call-rail-toggle) do
         assert count(html, ~s(header [data-role="#{role}"])) == 1,
                "#{role} was collateral damage of the move"
       end
@@ -7880,6 +7885,29 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert count(html, ~s(header [data-stage-mode-button])) > 0 or
                count(html, ~s(header [phx-click="set_stage_mode"])) > 0,
              "the stage-mode segmented control left the header"
+    end
+
+    # Task 01a0cf5d stage 2 — Captions joins the bottom control bar.
+    test "the stage bar gained a fifth pill: Captions, between Share and Leave",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = render_click(view, "meeting_join", %{})
+
+      bar = ~s([data-role="meeting-stage-controls"])
+      toggle = ~s([data-role="meeting-captions-toggle"])
+
+      # It's inside the stage bar now, and gone from the header.
+      assert count(html, ~s(#{bar} #{toggle})) == 1
+      assert count(html, ~s(header #{toggle})) == 0
+
+      # Order within the bar matches the approved `.ctrls` mock: Mute,
+      # Camera, Share, Captions, Leave.
+      share_at = :binary.match(html, ~s(data-role="meeting-screen-share")) |> elem(0)
+      captions_at = :binary.match(html, ~s(data-role="meeting-captions-toggle")) |> elem(0)
+      leave_at = :binary.match(html, ~s(data-role="meeting-leave")) |> elem(0)
+
+      assert share_at < captions_at
+      assert captions_at < leave_at
     end
 
     # MUTATION-COUNT GUARD SUBJECT, part 1 of 7. Seven
@@ -8706,7 +8734,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting
     } do
       # `?no_autojoin=true` short-circuits the auto-join, so :in_meeting
-      # stays false and the CC toggle stays out of the top bar. Captions
+      # stays false and the CC toggle stays out of the stage bar (task
+      # 01a0cf5d stage 2 relocated it there from the top bar). Captions
       # come from the LiveKit session; there's nothing to render before
       # a join.
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
