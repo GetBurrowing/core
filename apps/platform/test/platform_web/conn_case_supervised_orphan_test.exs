@@ -44,8 +44,10 @@
 #     measures **10 011 supervised children still alive and queued for the
 #     single sandbox connection** at the instant a test body returns. A
 #     blocker child holds the connection so the orphan is PROVABLY queued at
-#     teardown (`await_queued/2` waits for it to be parked inside
-#     `DBConnection`), which is what turns a race into a construction.
+#     teardown, which is what turns a race into a construction. "Parked" here
+#     means exactly one thing, checked by `parked?/3`: the orphan is blocked in
+#     `DBConnection.Holder.checkout_call/5` AND is an entry in the wait queue
+#     of the `DBConnection.Ownership.Proxy` whose connection the blocker holds.
 #
 # ## Measured at the defect, not the amplifier
 #
@@ -105,8 +107,8 @@
 # ## The two queued cases, and what separates them
 #
 # Task 01a08b49 stage 3 splits the queued shape in two. They are the SAME
-# construction — a supervised orphan provably parked inside `DBConnection` at
-# the moment the test body returns — and they differ in exactly one variable,
+# construction — a supervised orphan provably parked (`parked?/3`: waiting in
+# the queue of the proxy the blocker holds) at the moment the test body returns — and they differ in exactly one variable,
 # whether the drain is given long enough to wait for it. That is what makes the
 # pair a measurement of stage 2's drain rather than of two unrelated
 # situations:
@@ -307,6 +309,15 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   # orphans are parked, not after a sleep). Deliberately a real number rather
   # than omitting the tag and inheriting the helper's 5_000 default: the two
   # cases should differ by a value that is visible in both of them.
+  #
+  # What this case detects is the drain CALL being present, not this deadline
+  # being long. Measured on moon (task 01a08d52-4b42 stage 1), on both this
+  # branch and the origin/main it was cut from: with this constant set to 50
+  # the file stays GREEN (branch 3 of 3, main 2 of 2), because the blocker
+  # releases within milliseconds of the orphans parking and the writes finish
+  # inside 50 ms anyway. With ConnCase's `drain_own_or_warn/2` call deleted it
+  # goes RED on `class == :inserted` (2 of 2 on each). Do not cite a short
+  # value here as a mutant this case kills.
   @drained_drain_timeout_ms 2_000
 
   # A releasable blocker must not be able to hang the suite if the test body
@@ -377,37 +388,45 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
     # same breath.
     send(blocker, {:watch, self(), [emitter, classifier]})
 
-    # Positive control 3, UNCHANGED in what it proves: both orphans were seen
-    # inside DBConnection while the connection was still held, so this is the
-    # queued shape and not a write that simply had time to finish. Only the
-    # observer moved — the blocker takes the reading instead of this process, so
-    # that the reading and the release cannot drift apart. `{:gave_up, _}` or
-    # `:dead` still mean the case has stopped constructing the shape and is
-    # measuring nothing, which is a finding and not something to loosen.
+    # Positive control 3. What it proves, and nothing wider: while the blocker
+    # held the connection, EACH orphan was observed (a) blocked in
+    # `DBConnection.Holder.checkout_call/5` and (b) present as an entry in the
+    # wait queue of the `DBConnection.Ownership.Proxy` the blocker's own
+    # checkout came from. That is the queued shape, and not a write that simply
+    # had time to finish. The blocker takes the reading instead of this
+    # process, so that the reading and the release cannot drift apart.
+    # `{:gave_up, _}` or `:dead` mean the case has stopped constructing the
+    # shape and is measuring nothing, which is a finding and not something to
+    # loosen.
     #
-    # KNOWN LIMIT OF THIS CONTROL, measured rather than suspected, and NOT
-    # introduced by the restructure — it is equally true of the version this
-    # replaced, verified by running the mutation against both:
+    # Where it rests (db_connection 2.9.0, pinned in mix.lock): the proxy
+    # serves a checkout at once when it has no client and enqueues it ONLY in
+    # the `handle_info({:db_connection, from, {:checkout, ...}}, state)` clause
+    # reached when some other client holds the connection (`:queue.in({now,
+    # from}, queue)`, `lib/db_connection/ownership/proxy.ex:129-133`, after the
+    # `client: nil` clause at :122-127). So (b) cannot hold for an uncontended
+    # checkout, whatever the timing. (a) alone can — `checkout_call/5`
+    # (`lib/db_connection/holder.ex:288-309`) is also the frame for the moment
+    # between an uncontended request's `send` and the proxy's reply — which is
+    # why it is a conjunction and (a) only rules out a stale queue entry.
     #
-    #   Mutation: make the blocker hold NO connection at all (swap its
-    #   `Platform.Repo.transaction/1` for a plain function call). The
-    #   construction then has no blocker, both orphans get the connection
-    #   immediately and their writes simply succeed. Expected: this control goes
-    #   red, because nothing was ever parked. Actual: the whole file stays GREEN
-    #   (`5 tests, 0 failures`) on both this version and the stage-3 one.
+    # The mutation this control used to survive, and the readings on the
+    # narrowed predicate (task 01a08d52-4b42 stage 1, moon): make the blocker
+    # hold NO connection (swap its `Platform.Repo.transaction/1` for a plain
+    # call).
     #
-    # The reason is `do_await_queued/2`'s predicate: it asks whether the process
-    # is anywhere inside `DBConnection`, which is true of a process actively
-    # USING a connection as well as one parked waiting for one. So this control
-    # proves "reached DBConnection while the blocker was nominally holding",
-    # not "was blocked on a connection it could not get".
-    #
-    # That means DRAINED does not currently distinguish "the drain saved the
-    # write" from "the write happened to land" as strongly as the header claims.
-    # It is recorded here rather than fixed because narrowing the predicate (to
-    # a parked `DBConnection.Holder.checkout` frame, say) changes what BOTH
-    # queued cases assert and is a decision about what this file proves, not a
-    # cleanup. Do not credit this control with more than the line above.
+    #   * Old predicate — "any frame containing `DBConnection`", which a
+    #     process mid-query matches as readily as one waiting: whole file
+    #     GREEN, `2 tests, 0 failures`.
+    #   * Now: RED 5 of 5 at `await_holding/1`, on the lookup guard —
+    #     `{:no_held_connection, nil, _}`, the blocker has no `%DBConnection{}`
+    #     to take a proxy from.
+    #   * With a proxy supplied anyway (a `Platform.Repo.checkout/1` released
+    #     before the plain call, so the guard passes and the proxy has no
+    #     client): RED 3 of 3 on THIS assertion, `{:not_parked, pid, :dead}` —
+    #     the first orphan polled was served without queueing and had finished
+    #     before (b) ever held. The same run with `parked?/3` forced to `true`
+    #     is GREEN (2 of 2), so it is the predicate that fails it.
     #
     # Positive control 2 (a supervised child reaching the connection through
     # `$callers`) is NOT repeated here: this case's own `:inserted` outcome is a
@@ -422,9 +441,14 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
            `{:not_parked, pid, :dead}` means the orphan died before it could be
            seen parked — on a loaded runner that is the residency budget having
            already dropped its request, i.e. the construction destroyed itself.
-           `{:not_parked, pid, {:gave_up, _}}` means it never reached
-           DBConnection at all. Neither is grounds for widening a deadline;
-           both mean this case measured nothing.
+           `{:not_parked, pid, {:gave_up, %{current_function: _, queue_length: _}}}`
+           means it was never seen both blocked in
+           `DBConnection.Holder.checkout_call/5` and queued on the blocker's
+           proxy — with `queue_length: 0` the blocker was not making anyone
+           wait. `{:not_parked, pid, {:proxy_unreadable, _}}` means the proxy's
+           state could not be read in the shape this file expects. None of
+           these is grounds for widening a deadline; all mean this case
+           measured nothing.
            """
 
     {:queued, spread_ms} = verdict
@@ -551,8 +575,8 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   end
 
   # As `start_blocker/1`, but it holds the connection until it has SEEN the pids
-  # it was given parked inside DBConnection, and then lets go — detection and
-  # release being the same event in one process.
+  # it was given parked (`parked?/3`) on the proxy serving that connection, and
+  # then lets go — detection and release being the same event in one process.
   #
   # Why not a blocker the test process releases (which is what this replaced):
   # QUEUED-DRAINED needs the hold to outlast the parked-ness confirmation, so
@@ -573,12 +597,22 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
       Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
         {:ok, verdict} =
           Platform.Repo.transaction(fn ->
-            send(parent, {:holding, self()})
+            # Taken from the connection THIS process holds, so the queue polled
+            # below is the one a request for that connection has to wait in.
+            lookup = held_connection_proxy()
+            send(parent, {:holding, self(), lookup})
 
-            receive do
-              {:watch, ^parent, pids} -> await_all_parked(pids)
-            after
-              @blocker_safety_ms -> {:never_asked_to_watch, @blocker_safety_ms}
+            case lookup do
+              {:ok, proxy} ->
+                receive do
+                  {:watch, ^parent, pids} -> await_all_parked(pids, proxy)
+                after
+                  @blocker_safety_ms -> {:never_asked_to_watch, @blocker_safety_ms}
+                end
+
+              {:error, why} ->
+                # `await_holding/1` has already flunked the test on this.
+                {:proxy_lookup_failed, why}
             end
           end)
 
@@ -592,8 +626,8 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
     await_holding(pid)
   end
 
-  # Every pid parked inside DBConnection, plus the SPREAD between the first and
-  # last to get there. Two bounds, measuring two different things:
+  # Every pid parked (`parked?/3`) on `proxy`, plus the SPREAD between the first
+  # and last to get there. Two bounds, measuring two different things:
   #
   #   * `@arrival_deadline_ms` — how long they may take to enter the queue at
   #     all. Nothing is at risk during this; an unqueued request has no
@@ -606,11 +640,11 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   # Returning the spread rather than asserting it here keeps the mechanism in
   # the helper and the judgement at the call site, where the failure message can
   # say which of the two things went wrong.
-  defp await_all_parked(pids) do
+  defp await_all_parked(pids, proxy) do
     deadline = System.monotonic_time(:millisecond) + @arrival_deadline_ms
 
     Enum.reduce_while(pids, [], fn pid, stamps ->
-      case do_await_queued(pid, deadline) do
+      case do_await_queued(pid, proxy, deadline) do
         :queued -> {:cont, [System.monotonic_time(:millisecond) | stamps]}
         other -> {:halt, {:not_parked, pid, other}}
       end
@@ -622,10 +656,26 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   end
 
   # Rendezvous from INSIDE the transaction, so the connection is provably held
-  # before the caller continues.
+  # before the caller continues. Also where the proxy lookup's guard fails the
+  # test: this runs in the TEST process, so a flunk here is the test's failure
+  # and not a crashed child the test only notices as a timeout.
   defp await_holding(pid) do
     receive do
-      {:holding, ^pid} -> :ok
+      {:holding, ^pid, {:ok, _proxy}} ->
+        :ok
+
+      {:holding, ^pid, {:error, why}} ->
+        flunk("""
+        The blocker could not name the DBConnection.Ownership.Proxy serving the
+        connection it holds, so positive control 3 has nothing to poll.
+        Observed: #{inspect(why, limit: 12)}
+
+        `{:no_held_connection, _}` means there was no `%DBConnection{}` in the
+        blocker's process dictionary, i.e. it is not inside a checkout at all.
+        Any other reason means this file's reading of db_connection's internals
+        no longer matches the installed version. Do not fall back to a weaker
+        "is it parked?" check; fix the lookup.
+        """)
     after
       5_000 -> flunk("blocker never acquired the sandbox connection")
     end
@@ -633,33 +683,98 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
     pid
   end
 
-  defp do_await_queued(pid, deadline) do
-    case Process.info(pid, :current_stacktrace) do
-      nil ->
-        :dead
+  # The frame a process sits in while it waits for the proxy to hand it a
+  # connection: the private `receive` in `DBConnection.Holder.checkout_call/5`
+  # (db_connection 2.9.0 `lib/db_connection/holder.ex:288-309`).
+  @parked_frame {DBConnection.Holder, :checkout_call, 5}
 
-      {:current_stacktrace, stacktrace} ->
-        rendered = inspect(stacktrace)
+  # The `DBConnection.Ownership.Proxy` serving the connection the CALLING
+  # process holds. Must be called from inside a checkout (here, the blocker's
+  # `Platform.Repo.transaction/1`).
+  #
+  # Derivation, logged once on moon before this was relied on (task
+  # 01a08d52-4b42 stage 1): ecto_sql 3.13.5 keeps the checked-out
+  # `%DBConnection{}` in the process dictionary under `{Ecto.Adapters.SQL,
+  # adapter_meta.pid}` (`put_conn/2`, `lib/ecto/adapters/sql.ex:1499-1501`), and
+  # its `pool_ref` record (`Record.defrecord(:pool_ref, [:pool, ...])`,
+  # `lib/db_connection/holder.ex:12`) carries in `:pool` the process that handed
+  # the connection over — under the sandbox, the proxy. Observed: `pool_ref`'s
+  # pool alive, initial call `{DBConnection.Ownership.Proxy, :init, 1}`, its
+  # state's `client` the blocker, and a queued orphan present in its `queue`.
+  #
+  # Every check that can fail returns `{:error, reason}` naming what was
+  # observed and the installed db_connection version, and `await_holding/1`
+  # flunks on it. There is deliberately no fallback: a lookup that quietly
+  # degraded to "not queued" or to the old frame match would make control 3
+  # vacuous again after a library upgrade.
+  defp held_connection_proxy do
+    meta = Ecto.Adapter.lookup_meta(Platform.Repo.get_dynamic_repo())
 
-        cond do
-          String.contains?(rendered, "DBConnection") ->
-            :queued
+    with {:conn, %DBConnection{pool_ref: {:pool_ref, proxy, _, _, _, _}}} <-
+           {:conn, Process.get({Ecto.Adapters.SQL, meta.pid})},
+         true <- is_pid(proxy) and Process.alive?(proxy),
+         {DBConnection.Ownership.Proxy, :init, 1} <- :proc_lib.translate_initial_call(proxy),
+         {:ok, _waiting} <- proxy_wait_queue(proxy) do
+      {:ok, proxy}
+    else
+      {:conn, other} -> {:error, {:no_held_connection, other, db_connection_vsn()}}
+      false -> {:error, {:proxy_not_alive, db_connection_vsn()}}
+      {:error, _} = error -> error
+      initial_call -> {:error, {:not_an_ownership_proxy, initial_call, db_connection_vsn()}}
+    end
+  end
 
-          System.monotonic_time(:millisecond) > deadline ->
-            {:gave_up, rendered}
+  # The proxy's wait queue, oldest first, as `{sent_at, {caller_pid, lock}}`
+  # entries (`:queue.in({now, from}, queue)` with `from = {self(), lock}` from
+  # `checkout_call/5`). `:sys.get_state/1` is db_connection's internal state,
+  # not an API; a shape change is reported, never read as an empty queue.
+  defp proxy_wait_queue(proxy) do
+    case :sys.get_state(proxy) do
+      %{queue: queue} ->
+        if :queue.is_queue(queue),
+          do: {:ok, :queue.to_list(queue)},
+          else: {:error, {:unrecognised_proxy_queue, queue, db_connection_vsn()}}
 
-          true ->
-            # Yield, and this is a correctness fix rather than a margin. The
-            # loop used to spin with no sleep at all, calling `Process.info/2`,
-            # `inspect/1` and `String.contains?/2` as fast as a scheduler would
-            # allow — so on a saturated runner it competed with, and therefore
-            # DELAYED, the very processes it was waiting to see parked. The
-            # instrument was generating the latency it then charged to the
-            # residency budget. 1 ms of detection lag against a 100 ms budget is
-            # noise; the contention was not.
-            Process.sleep(1)
-            do_await_queued(pid, deadline)
-        end
+      other ->
+        {:error, {:unrecognised_proxy_state, other, db_connection_vsn()}}
+    end
+  catch
+    :exit, reason -> {:error, {:proxy_unreadable, reason, db_connection_vsn()}}
+  end
+
+  defp db_connection_vsn, do: {:db_connection, Application.spec(:db_connection, :vsn)}
+
+  # True only when `pid` is queued on the proxy the blocker holds: blocked in
+  # `@parked_frame` AND an entry in that proxy's wait queue. See positive
+  # control 3's comment for why each half is needed.
+  defp parked?(pid, frame, waiting) do
+    frame == @parked_frame and Enum.any?(waiting, &match?({_sent_at, {^pid, _lock}}, &1))
+  end
+
+  defp do_await_queued(pid, proxy, deadline) do
+    with {:current_function, frame} <- Process.info(pid, :current_function),
+         {:ok, waiting} <- proxy_wait_queue(proxy) do
+      cond do
+        parked?(pid, frame, waiting) ->
+          :queued
+
+        System.monotonic_time(:millisecond) > deadline ->
+          {:gave_up, %{current_function: frame, queue_length: length(waiting)}}
+
+        true ->
+          # Yield, and this is a correctness fix rather than a margin. The
+          # loop used to spin with no sleep at all, as fast as a scheduler
+          # would allow — so on a saturated runner it competed with, and
+          # therefore DELAYED, the very processes it was waiting to see parked.
+          # The instrument was generating the latency it then charged to the
+          # residency budget. 1 ms of detection lag against a 100 ms budget is
+          # noise; the contention was not.
+          Process.sleep(1)
+          do_await_queued(pid, proxy, deadline)
+      end
+    else
+      nil -> :dead
+      {:error, why} -> {:proxy_unreadable, why}
     end
   end
 
