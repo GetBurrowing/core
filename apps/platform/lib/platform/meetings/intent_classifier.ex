@@ -312,6 +312,7 @@ defmodule Platform.Meetings.IntentClassifier do
   # row written by
   # `20260902140000_force_update_intent_classify_prompt_unmerge_intent_and_target`;
   # this attribute is only reached when that row is ABSENT.
+  # Task 01a08fa5 stage 1 removed the old closing sentence that demoted an unaddressed ask; off-roster name -> null target.
   @fallback_intent_prompt """
   You are a meeting intent classifier. Given a transcript chunk, classify the intent and identify the target role.
 
@@ -335,7 +336,7 @@ defmodule Platform.Meetings.IntentClassifier do
 
   # Agents available in this org
 
-  These are the ONLY agents that can be addressed. If the utterance names one of them (by name or by slug), the `target_role` is that agent's role key. If you cannot name the agent role being asked, there is no intent to report.
+  These are the ONLY agents that can be addressed. If the utterance names one of them (by name or by slug), the `target_role` is that agent's role key. A name or slug that does NOT appear in this list is a person, not an agent: `target_role` is `null` and question 1's intent stands unchanged.
 
   {{agent_roster}}
 
@@ -1573,8 +1574,11 @@ defmodule Platform.Meetings.IntentClassifier do
   # block; both callers derive from this one read so they cannot drift.
   #
   # A lookup failure yields `[]`, which renders the empty-roster
-  # sentinel — "nobody can be addressed, so every utterance is
-  # off_topic" — exactly as before. Note that `[]` is a KNOWN empty
+  # sentinel — "no agent can be addressed, so question 2's answer is
+  # `null`; question 1's intent still stands" — exactly as for a
+  # known-empty roster. (Task 01a08fa5 stage 2 rewrote it; it used to
+  # end by naming off_topic as the verdict for every utterance, which demoted every real ask
+  # in an org with no roles.) Note that `[]` is a KNOWN empty
   # roster and gates normally; only a `nil` roster is inert, and this
   # function never returns one.
   defp agent_roster_entries do
@@ -1597,14 +1601,16 @@ defmodule Platform.Meetings.IntentClassifier do
   pinned in its config. A harness with its own copy of this formatting would be
   scoring a prompt production never sends — and the empty-roster sentinel below
   is not incidental text, it is the sentence that tells the model there is
-  nobody to address.
+  nobody to address. It says so as a question-2 fact only: the target is
+  `null` and question 1's intent still stands. It must never name `off_topic`
+  as the verdict — an org with no roles still has real asks.
   """
   @spec format_agent_roster([
           %{role_key: String.t(), agent_slug: String.t(), agent_name: String.t()}
         ]) ::
           String.t()
   def format_agent_roster([]) do
-    "(no agents are assigned to roles in this org — no agent can be addressed, so every utterance is off_topic)"
+    "(no agents are assigned to roles in this org — no agent can be addressed, so question 2's answer is `null`; question 1's intent still stands, and an ask with no agent to route to keeps its intent)"
   end
 
   def format_agent_roster(roster) when is_list(roster) do

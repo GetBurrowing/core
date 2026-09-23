@@ -2752,9 +2752,11 @@ defmodule Platform.Meetings.IntentClassifierTest do
   # so an utterance naming one by its proper noun ("Octavius") was
   # unresolvable. These cases assert the roster reaches the rendered
   # prompt, and that an EMPTY roster renders the explicit no-agents
-  # literal rather than a blank section — a blank leaves the model's
-  # "if you cannot name the agent role being asked" instruction
-  # operating on an empty page, which is exactly today's defect.
+  # literal rather than a blank section — a blank leaves the model
+  # deciding agent-or-person against an empty page. (The fallback's old
+  # "if you cannot name the agent role being asked, there is no intent to
+  # report" sentence was removed by task 01a08fa5 stage 1; the block
+  # "fallback roster rule agrees with the seeded row" pins its absence.)
   describe "classify_and_enqueue — agent roster in the prompt" do
     setup do
       agent = create_agent!(%{slug: "intent-agent-roster"})
@@ -2807,7 +2809,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
       prompt = capture_roster_prompt!("room-roster-empty")
 
       assert prompt =~
-               "(no agents are assigned to roles in this org — no agent can be addressed, so every utterance is off_topic)"
+               "(no agents are assigned to roles in this org — no agent can be addressed, so question 2's answer is `null`; question 1's intent still stands, and an ask with no agent to route to keeps its intent)"
 
       refute prompt =~ "# Agents available in this org\n\n\n"
     end
@@ -2886,6 +2888,187 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       refute prompt =~ "{{agent_roster}}",
              "the marker must be interpolated, not rendered literally"
+    end
+  end
+
+  # ── Fallback roster rule agrees with the seeded row (task 01a08fa5 stage 1)
+  #
+  # The inline fallback is served whenever `render_template/2` returns
+  # `{:error, :not_found}` — row absent, or ANY raise inside render. Its
+  # roster paragraph used to end "If you cannot name the agent role being
+  # asked, there is no intent to report.", which re-merged the two
+  # questions the row keeps apart. These cases render the fallback through
+  # the real pipeline and pin it to the row by NAMED RULES and exemplars
+  # (full-text equality is not honest: the fallback is a condensed body
+  # with different markers).
+  describe "classify_and_enqueue — fallback roster rule agrees with the seeded row" do
+    @forbidden_fallback_phrases [
+      "there is no intent to report",
+      "Detection and addressing are ONE question",
+      "every utterance is off_topic",
+      "OR the request is aimed at a person"
+    ]
+
+    # Each confirmed a literal substring of BOTH the fallback attribute and
+    # the 20260911030000 row body when chosen.
+    @shared_rule_sentences [
+      "TWO questions, asked in this order. Do not merge them.",
+      "THE DEFAULT ANSWER IS `off_topic`",
+      "These are the ONLY agents that can be addressed.",
+      "If the ask is aimed at a PERSON, or at nobody in particular, the answer"
+    ]
+
+    @unaddressed_exemplars [
+      "Nah, I'm gonna get Harper in here.",
+      "Try, can you try that link just to see what happened?",
+      "But I would just say, like, send it to us."
+    ]
+
+    # `- "<utterance>" -> `<intent>`[, `target_role: <role>`]`. Functions,
+    # not module attributes: a compiled regex cannot be stored in a module
+    # attribute on OTP 28.
+    defp exemplar_line,
+      do:
+        ~r/^\s*- "(?<utt>[^"]+)"\s+->\s+`(?<intent>[a-z_]+)`(?:,\s+`target_role:\s+(?<role>[a-z_]+)`)?/m
+
+    # A bare `- "<utterance>"` bullet — the fallback lists its off_topic
+    # exemplars this way, under a header that names them `off_topic`.
+    defp bare_exemplar_line, do: ~r/^\s*- "(?<utt>[^"]+)"\s*$/m
+
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-fallback-rule"})
+      assign_intent_role!(agent)
+      roster_agent = create_agent!(%{slug: "saru-fallback", name: "Saru"})
+      {:ok, _} = Roles.assign_role("designer", roster_agent.id)
+      %{agent: agent}
+    end
+
+    defp capture_fallback_prompt!(room_id) do
+      force_fallback_prompt!()
+      _ = attach_recorder!(:template_fallback, :fallback_rule)
+      prompt = capture_roster_prompt!(room_id)
+
+      assert_receive {:fallback_rule, %{count: 1}, %{room_id: ^room_id, slug: @prompt_slug}},
+                     1_000
+
+      prompt
+    end
+
+    defp parse_exemplars(body) do
+      exemplar_line()
+      |> Regex.scan(body, capture: :all_names)
+      # :all_names orders captures alphabetically: intent, role, utt.
+      |> Map.new(fn [intent, role, utt] ->
+        {utt, {intent, if(role == "", do: nil, else: role)}}
+      end)
+    end
+
+    defp parse_bare_exemplars(body) do
+      bare_exemplar_line()
+      |> Regex.scan(body, capture: :all_names)
+      |> List.flatten()
+    end
+
+    test "the rendered fallback keeps an unaddressed ask's intent and carries no demotion rule" do
+      prompt = capture_fallback_prompt!("room-fallback-rule")
+
+      assert prompt =~ "- \"Saru\" (slug `saru-fallback`) serves the `designer` role",
+             "the roster must be rendered, so the empty-roster sentinel is not in this render"
+
+      assert prompt =~ "An unaddressed ask KEEPS its intent and takes `target_role: null`"
+      assert prompt =~ "If the ask is aimed at a PERSON, or at nobody in particular, the answer"
+
+      for phrase <- @forbidden_fallback_phrases do
+        refute prompt =~ phrase,
+               "the rendered fallback must not contain #{inspect(phrase)}"
+      end
+    end
+
+    # Task 01a08fa5 stage 2. The empty-roster sentinel is interpolated into
+    # `{{agent_roster}}` in BOTH the fallback and the row, so it is the one
+    # piece of roster text an org with NO roles sees. It used to end "so
+    # every utterance is off_topic", which demoted every real ask there.
+    test "an empty roster renders a sentinel that keeps the intent, not an off_topic verdict" do
+      # Undo this block's designer assignment: no role is assigned at all.
+      :ok = Roles.unassign_role("designer")
+      assert Roles.assigned_agents() == []
+
+      prompt = capture_fallback_prompt!("room-fallback-empty-roster")
+
+      assert prompt =~ "(no agents are assigned to roles in this org",
+             "the roster is empty, so the sentinel must be what fills {{agent_roster}}"
+
+      for phrase <- @forbidden_fallback_phrases do
+        refute prompt =~ phrase,
+               "the rendered empty-roster fallback must not contain #{inspect(phrase)}"
+      end
+
+      assert prompt =~
+               "no agent can be addressed, so question 2's answer is `null`; question 1's intent still stands"
+
+      refute prompt =~ "# Agents available in this org\n\n\n"
+    end
+
+    test "format_agent_roster([]) never names off_topic as the verdict" do
+      sentinel = IntentClassifier.format_agent_roster([])
+
+      refute sentinel =~ "every utterance is off_topic",
+             "the empty-roster sentinel must not say \"every utterance is off_topic\", got #{inspect(sentinel)}"
+
+      refute sentinel =~ "off_topic",
+             "the empty-roster sentinel must not name off_topic at all, got #{inspect(sentinel)}"
+
+      assert sentinel =~ "question 2's answer is `null`"
+      assert sentinel =~ "question 1's intent still stands"
+      assert sentinel =~ ~r/^\(.+\)$/, "the sentinel stays a parenthetical literal"
+    end
+
+    test "drift guard: named rules and exemplars agree between the fallback and the seeded row" do
+      # Read the row the classifier actually serves BEFORE the fallback
+      # capture deletes it.
+      assert %{content: row} = PromptTemplates.get_template_by_slug(@prompt_slug)
+
+      fallback = capture_fallback_prompt!("room-fallback-drift")
+
+      for {label, body} <- [fallback: fallback, row: row] do
+        for sentence <- @shared_rule_sentences do
+          assert body =~ sentence, "#{label} body must contain #{inspect(sentence)}"
+        end
+
+        for phrase <- @forbidden_fallback_phrases do
+          refute body =~ phrase, "#{label} body must not contain #{inspect(phrase)}"
+        end
+      end
+
+      fallback_exemplars = parse_exemplars(fallback)
+      row_exemplars = parse_exemplars(row)
+
+      assert map_size(fallback_exemplars) >= 3,
+             "the exemplar regex must parse the fallback's table, got #{inspect(fallback_exemplars)}"
+
+      for {utt, classification} <- fallback_exemplars do
+        assert Map.fetch(row_exemplars, utt) == {:ok, classification},
+               "fallback exemplar #{inspect(utt)} -> #{inspect(classification)} must match the row, " <>
+                 "which has #{inspect(Map.get(row_exemplars, utt))}"
+      end
+
+      for utt <- @unaddressed_exemplars,
+          {label, parsed} <- [fallback: fallback_exemplars, row: row_exemplars] do
+        assert Map.get(parsed, utt) == {"action_items", "null"},
+               "#{label} must classify #{inspect(utt)} as action_items / target_role null, " <>
+                 "got #{inspect(Map.get(parsed, utt))}"
+      end
+
+      bare = parse_bare_exemplars(fallback)
+
+      assert length(bare) >= 3,
+             "the fallback's off_topic exemplars must parse, got #{inspect(bare)}"
+
+      for utt <- bare do
+        assert Map.get(row_exemplars, utt) == {"off_topic", nil},
+               "fallback off_topic exemplar #{inspect(utt)} must be off_topic in the row, " <>
+                 "which has #{inspect(Map.get(row_exemplars, utt))}"
+      end
     end
   end
 
