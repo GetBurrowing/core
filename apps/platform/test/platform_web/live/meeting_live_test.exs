@@ -8657,6 +8657,50 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ ~s(data-role="meeting-captions")
     end
 
+    test "the caption host carries data-meeting-id for the stall signal (task 01a0cf5c stage 2)",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      html = render_hook(view, "meeting_captions_hydrate", %{"visible" => true})
+
+      assert html =~ ~s(data-meeting-id="#{meeting.id}")
+    end
+
+    test "meeting_captions_stalled logs a low-cardinality warning naming the meeting and elapsed time",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      # Sent by `MeetingCaptions._reportStall` once per stall episode, not
+      # once per tick — asserting the handler is a plain no-render ack
+      # plus a log line, not new UI state.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          render_hook(view, "meeting_captions_stalled", %{
+            "meeting_id" => meeting.id,
+            "elapsed_ms" => 17_000
+          })
+        end)
+
+      assert log =~ "STALLED"
+      assert log =~ meeting.id
+      assert log =~ "elapsed_ms=17000"
+    end
+
+    test "meeting_captions_stalled falls back to the socket's own meeting id when the client omits it",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          render_hook(view, "meeting_captions_stalled", %{"elapsed_ms" => 17_000})
+        end)
+
+      assert log =~ meeting.id
+    end
+
     test "CC toggle button is hidden when the viewer isn't joined", %{
       conn: conn,
       meeting: meeting

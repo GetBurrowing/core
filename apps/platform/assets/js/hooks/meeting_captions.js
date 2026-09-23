@@ -52,16 +52,32 @@ import ClientState from "../client_state"
 const MAX_LINES = 2
 const HIDE_AFTER_MS = 5000
 
-// ── Stall window (task 01a0740e stage 2) ─────────────────────────────
+// ── Stall window (task 01a0740e stage 2, retuned task 01a0cf5c stage 2) ──
 //
 // How long speech may continue with NO caption arriving before the bar
 // admits it is not receiving.
 //
-// CHOSEN, NOT MEASURED. Nobody has instrumented this deployment's real
-// transcriber finalisation lag, so this number is a judgement call and
-// this comment is the honest record of that — the same thing
-// `Platform.Meetings.PressWindow`'s moduledoc does for its own grace
-// value. If it proves twitchy in a real room, this is the dial.
+// CHOSEN, NOT MEASURED, same as before — but no longer chosen blind.
+// Task 01a0cf5c stage 1 diagnosed a production false alarm: a real
+// `meeting-transcriber` round trip landed at ~8s under load, well inside
+// what a human on the call would call "still working", and the old
+// 6000ms window read that as a dead pipeline. Production logs/DB were not
+// reachable to confirm the exact incident room's `meeting_transcripts`
+// rows, so this is still a judgement call — just one anchored to an
+// observed ~8s round trip instead of nothing. 12000ms clears that
+// observation with a 4s margin on its own, same as `Platform.Meetings.
+// PressWindow`'s moduledoc is the honest record for its own grace value.
+// If it proves twitchy in a real room, this is the dial.
+//
+// This number is no longer the only thing standing between a slow
+// transcriber and a false alarm, either. Stage 2 layered the
+// STALL_CONFIRM_MS re-check below on top of it, and stage 3 added a
+// telemetry signal (`_reportStall`, one call per episode) so a REAL
+// future outage leaves a record instead of relying on this comment's
+// judgement call being right forever. See `docs/contracts/
+// meeting-transcript-frame.md` for the triage steps ("nothing is being
+// transcribed" reports) this task added, including why the browser UI
+// was and remains ruled out from the stale-channel-plugin failure mode.
 //
 // FLOOR, and it is load-bearing: it MUST stay greater than
 // HIDE_AFTER_MS. Below that an ordinary conversational pause — the
@@ -76,7 +92,22 @@ const HIDE_AFTER_MS = 5000
 // speaking window must be SUSTAINED for the whole STALL_AFTER_MS, so a
 // momentary level spike cannot trip it. No heuristic is layered on top
 // of that; a cleverer detector here would be guessing.
-const STALL_AFTER_MS = 6000
+const STALL_AFTER_MS = 12000
+
+// ── Confirmation re-check (task 01a0cf5c stage 2) ────────────────────
+//
+// A single timeout crossing is not the stall condition any more — it is
+// the CANDIDATE. `_armStallTimer` treats a STALL_AFTER_MS crossing as "go
+// look again in STALL_CONFIRM_MS", and only renders the notice if speech
+// is STILL sustained (no `meeting:speaking` false->true/off transition,
+// no caption) at that second checkpoint. A transcriber that is merely
+// slow finishes and clears the candidate before the confirm fires; a
+// genuinely dead one is still silent at the confirm check and the notice
+// still renders — later, but reliably. This is layered on top of the
+// STALL_AFTER_MS raise above rather than instead of it: the raise
+// absorbs the specific ~8s round trip already observed, the confirm
+// window absorbs the NEXT one nobody has measured yet.
+const STALL_CONFIRM_MS = 5000
 
 // ── Caption palette — THEME-INVARIANT BY INTENT (task 01a0740e stage 1) ──
 //
@@ -158,7 +189,14 @@ const MeetingCaptions = {
     // Stall detection state. `_speaking` is the last thing the SFU told
     // us about audio levels, NOT anything the transcriber said.
     this._stallTimer = null
+    this._confirmTimer = null
     this._speaking = false
+
+    // Room/meeting identifier for the stall signal (task 01a0cf5c stage
+    // 2), read once from the host's dataset rather than threaded through
+    // every event — `meeting_live.html.heex` stamps `data-meeting-id`
+    // on this same element.
+    this._meetingId = this.el.dataset ? this.el.dataset.meetingId : undefined
 
     this._boundOnCaption = this._onCaption.bind(this)
     document.addEventListener("meeting:caption", this._boundOnCaption)
@@ -323,15 +361,25 @@ const MeetingCaptions = {
    * Arm the sustained-speech countdown.
    *
    * Restarted by exactly two things: speech STARTING (false -> true), and
-   * a caption ARRIVING. So when it fires, both halves of the rule hold at
-   * once — speech has been continuous for the full window (there has been
-   * no false -> true transition inside it) and no caption landed in that
-   * window. The stall claim is therefore only ever made on positive
-   * evidence that speech is occurring while no transcript arrives, and
-   * never in a silent room. That asymmetry is the point of the feature.
+   * a caption ARRIVING. So when the STALL_AFTER_MS leg fires, both halves
+   * of the rule hold at once — speech has been continuous for the full
+   * window (there has been no false -> true transition inside it) and no
+   * caption landed in that window. The stall claim is therefore only ever
+   * made on positive evidence that speech is occurring while no
+   * transcript arrives, and never in a silent room. That asymmetry is the
+   * point of the feature.
    *
    * The "sustained for the full window" requirement is also the whole
    * hot-mic mitigation described at STALL_AFTER_MS.
+   *
+   * task 01a0cf5c stage 2: a STALL_AFTER_MS crossing no longer renders
+   * directly. It arms a SECOND, shorter countdown (STALL_CONFIRM_MS) and
+   * only renders if speech is still sustained (no caption, no
+   * speaking->false transition — both of which call `_clearStallTimer`,
+   * which now clears this leg too) when THAT fires. One timeout crossing
+   * used to be enough to declare a dead pipeline; now two are required,
+   * a fixed STALL_AFTER_MS + STALL_CONFIRM_MS apart, before the viewer is
+   * told anything is wrong.
    */
   _armStallTimer() {
     this._clearStallTimer()
@@ -339,7 +387,11 @@ const MeetingCaptions = {
     this._stallTimer = setTimeout(() => {
       this._stallTimer = null
       if (!this._speaking) return
-      this._renderStall()
+      this._confirmTimer = setTimeout(() => {
+        this._confirmTimer = null
+        if (!this._speaking) return
+        this._renderStall()
+      }, STALL_CONFIRM_MS)
     }, STALL_AFTER_MS)
   },
 
@@ -347,6 +399,10 @@ const MeetingCaptions = {
     if (this._stallTimer) {
       clearTimeout(this._stallTimer)
       this._stallTimer = null
+    }
+    if (this._confirmTimer) {
+      clearTimeout(this._confirmTimer)
+      this._confirmTimer = null
     }
   },
 
@@ -371,6 +427,34 @@ const MeetingCaptions = {
     this._clearHideTimer()
     this.el.classList.remove("opacity-0", "pointer-events-none")
     this.el.innerHTML = STALL_MARKUP
+    this._reportStall()
+  },
+
+  /**
+   * The stall signal (task 01a0cf5c stage 2).
+   *
+   * Fired exactly once per stall EPISODE, right here at the point the bar
+   * enters state 3 — never per tick, never per re-render. `_renderStall`
+   * is only reachable via the STALL_AFTER_MS + STALL_CONFIRM_MS timer
+   * chain in `_armStallTimer`, and that chain is fully torn down by
+   * `_clearStallTimer` the moment a caption arrives or speech stops, so
+   * one episode can only ever produce one call here — a second episode
+   * needs a fresh speaking transition to rearm the chain at all.
+   *
+   * `pushEvent` reaches `MeetingLive`, which logs it server-side
+   * (`handle_event("meeting_captions_stalled", ...)`), because a
+   * browser-console line does not survive to be read after the fact —
+   * which is exactly the gap this closes: today nobody can tell a real
+   * future outage from a false one after it happened. Payload is
+   * intentionally low-cardinality: a meeting id and a duration, no
+   * per-tick data.
+   */
+  _reportStall() {
+    if (typeof this.pushEvent !== "function") return
+    this.pushEvent("meeting_captions_stalled", {
+      meeting_id: this._meetingId || null,
+      elapsed_ms: STALL_AFTER_MS + STALL_CONFIRM_MS,
+    })
   },
 
   _resetHideTimer() {
@@ -476,7 +560,8 @@ const MeetingCaptionsPersist = {
 }
 
 export default MeetingCaptions
-// The two timing constants are exported so the vitest suite can pin the
-// FLOOR invariant (STALL_AFTER_MS > HIDE_AFTER_MS) directly instead of
-// duplicating the numbers and drifting from them.
-export { MeetingCaptionsPersist, HIDE_AFTER_MS, STALL_AFTER_MS }
+// The timing constants are exported so the vitest suite can pin the
+// FLOOR invariant (STALL_AFTER_MS > HIDE_AFTER_MS) and the two-stage
+// confirmation window directly instead of duplicating the numbers and
+// drifting from them.
+export { MeetingCaptionsPersist, HIDE_AFTER_MS, STALL_AFTER_MS, STALL_CONFIRM_MS }

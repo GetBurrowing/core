@@ -2818,6 +2818,33 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # Caption-stall signal (task 01a0cf5c stage 2). Fired once per stall
+  # episode by the `MeetingCaptions` hook's `_reportStall`, the moment the
+  # bar enters state 3 (STALLED) — never per tick, never per re-render.
+  #
+  # WHY THIS EXISTS: the production incident that opened task 01a0cf5c
+  # could not be root-caused with confidence because nothing durable
+  # recorded when the bar told a viewer their captions were broken versus
+  # merely late. A browser console line does not survive to be read after
+  # the fact. This is a low-cardinality operator log line, not a new
+  # assign and not a broadcast — VIEWER-LOCAL, same posture as
+  # `meeting_speaking_update` below, for the same reason: each connected
+  # client's captions state is its own.
+  def handle_event("meeting_captions_stalled", params, socket) do
+    meeting_id =
+      Map.get(params, "meeting_id") || (socket.assigns[:meeting] && socket.assigns.meeting.id)
+
+    elapsed_ms = Map.get(params, "elapsed_ms")
+
+    Logger.warning(
+      "Meeting captions bar entered the STALLED state: sustained speech with " <>
+        "no caption arriving for the confirmation window. meeting_id=" <>
+        to_string(meeting_id) <> " elapsed_ms=" <> to_string(elapsed_ms)
+    )
+
+    {:noreply, socket}
+  end
+
   # Active speakers reported by the viewer's own LiveKit client via the
   # `MeetingRoom` hook. VIEWER-LOCAL presentation state: not persisted, not
   # broadcast. Each connected client runs its own LiveKit room and reports

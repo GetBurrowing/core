@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import MeetingCaptions, {
   HIDE_AFTER_MS,
   STALL_AFTER_MS,
+  STALL_CONFIRM_MS,
 } from "../../js/hooks/meeting_captions.js"
 
 /**
@@ -126,7 +127,13 @@ function newHook() {
   hook._hideTimer = null
   // Stall-detector state, same field set `mounted()` installs.
   hook._stallTimer = null
+  hook._confirmTimer = null
   hook._speaking = false
+  hook._meetingId = "meeting-under-test"
+  // `pushEvent` is a real LiveView hook method this test double stands in
+  // for, so the stall-signal cases (task 01a0cf5c stage 2) can assert on
+  // what `_reportStall` sent without a live socket.
+  hook.pushEvent = vi.fn()
   // The bar starts hidden, exactly as `mounted()` leaves it. Without this
   // the opacity assertions in the stall cases would pass vacuously against
   // a host that was never hidden in the first place.
@@ -337,7 +344,15 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
     expect(captionLineCount(hook)).toBe(1) // reachability: a line was drawn
 
     speaking(hook, ["user:harper"])
+
+    // Crossing STALL_AFTER_MS alone is only the CANDIDATE (task 01a0cf5c
+    // stage 2) — the bar must not have said anything yet.
     vi.advanceTimersByTime(STALL_AFTER_MS + 1)
+    expect(stalled(hook)).toBe(false)
+
+    // The confirmation re-check fires STALL_CONFIRM_MS later, with speech
+    // still sustained the whole time. THAT is what renders the notice.
+    vi.advanceTimersByTime(STALL_CONFIRM_MS)
 
     // THE ASSERTION THAT MATTERS: the last caption is not still on screen
     // looking current next to a notice saying nothing is being transcribed.
@@ -358,6 +373,15 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
     expect(hook.el.innerHTML).toContain("text-warning")
     expect(hook.el.innerHTML).not.toContain("text-error")
     expect(hook.el.innerHTML).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+
+    // The stall signal (task 01a0cf5c stage 2): fired exactly once, at
+    // the point the bar entered state 3, carrying a meeting id and an
+    // elapsed duration — not a per-tick payload.
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1)
+    expect(hook.pushEvent).toHaveBeenCalledWith("meeting_captions_stalled", {
+      meeting_id: "meeting-under-test",
+      elapsed_ms: STALL_AFTER_MS + STALL_CONFIRM_MS,
+    })
   })
 
   // ── CASE 2 — a silent room NEVER stalls ─────────────────────────────
@@ -414,7 +438,7 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
   it("clears the stall the moment a caption arrives, without the pre-stall line", () => {
     caption(hook, { id: "a", text: "pre-stall utterance", final: true })
     speaking(hook, ["user:harper"])
-    vi.advanceTimersByTime(STALL_AFTER_MS + 1)
+    vi.advanceTimersByTime(STALL_AFTER_MS + STALL_CONFIRM_MS + 1)
     expect(stalled(hook)).toBe(true) // reachability
 
     caption(hook, { id: "b", text: "fresh utterance", final: true })
@@ -424,6 +448,10 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
     expect(hook.el.innerHTML).not.toContain("pre-stall utterance")
     expect(captionLineCount(hook)).toBe(1)
     expect(hook.el.classList.has("opacity-0")).toBe(false)
+
+    // Recovering does not re-fire the stall signal — it only ever fires
+    // on ENTERING state 3, once for this one episode.
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1)
   })
 
   // ── CASE 4 — idle-gap staleness ─────────────────────────────────────
@@ -480,5 +508,145 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
     vi.advanceTimersByTime(STALL_AFTER_MS * 5)
     expect(hook.el.innerHTML).toBe("")
     expect(hook.el.innerHTML).not.toMatch(/listening/i)
+  })
+})
+
+describe("MeetingCaptions — slow-but-alive vs. genuinely-dead transcriber (task 01a0cf5c)", () => {
+  // Diagnosis (stage 1) for the production incident where Harper saw the
+  // literal STALL_COPY live. Working hypothesis (backend confirmation was
+  // unreachable from that environment — see task 01a0cf5c stage 1 notes):
+  // the `meeting-transcriber` worker was alive but slower than the old
+  // 6000ms STALL_AFTER_MS under load, not dead, with the specific round
+  // trip observed at ~8s.
+  //
+  // Fix (stage 2), two layers, matching the two "and/or" options in the
+  // ticket: STALL_AFTER_MS raised 6000ms -> 12000ms (clears the observed
+  // ~8s with margin on its own), AND a confirmation re-check
+  // (STALL_CONFIRM_MS) so a single timeout crossing is never sufficient —
+  // the sustained-speech-with-no-caption condition has to hold at a
+  // SECOND checkpoint too. These cases pin both layers separately so a
+  // future change to one can't silently lean on the other to stay green.
+  let hook
+
+  function speaking(h, identities) {
+    h._onSpeaking({ detail: { identities } })
+  }
+
+  const stalled = (h) => h.el.innerHTML.includes('data-role="caption-stall"')
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    installDocumentStub()
+    hook = newHook()
+  })
+
+  afterEach(() => {
+    hook._clearHideTimer()
+    hook._clearStallTimer()
+    vi.useRealTimers()
+    delete globalThis.document
+  })
+
+  // CASE (i) — was RED via `it.fails` at diagnosis; now the fixed,
+  // green behaviour. The exact incident shape: a caption merely late,
+  // landing at ~8s, must not trip the false STALLED state a genuinely
+  // dead pipeline would.
+  it("does not falsely stall when a caption is merely delayed to ~8s, not dead", () => {
+    speaking(hook, ["user:harper"])
+
+    // ~8s, sustained speech, nothing yet. Below the new STALL_AFTER_MS
+    // (12000ms) on its own, so the candidate timer has not even fired —
+    // this is the production incident's own number, held fixed rather
+    // than expressed relative to STALL_AFTER_MS, so a future retune that
+    // creeps the threshold back down is still caught here.
+    vi.advanceTimersByTime(8000)
+    expect(stalled(hook)).toBe(false)
+
+    // The delayed-but-alive transcriber's caption lands.
+    caption(hook, { id: "delayed", text: "finally arrived", final: true })
+    expect(stalled(hook)).toBe(false)
+    expect(hook.el.innerHTML).toContain("finally arrived")
+    expect(hook.pushEvent).not.toHaveBeenCalled()
+  })
+
+  // CASE (i-b) — the confirmation re-check itself, isolated from the ~8s
+  // incident number so it stays meaningful under a future STALL_AFTER_MS
+  // retune. A caption landing AFTER the STALL_AFTER_MS candidate
+  // crossing but BEFORE the STALL_CONFIRM_MS re-check must still cancel
+  // the notice — "sustained across a confirmation re-check", not "a
+  // single timeout crossing", is the rule now.
+  it("a caption landing during the confirmation window cancels the candidate stall", () => {
+    speaking(hook, ["user:harper"])
+
+    vi.advanceTimersByTime(STALL_AFTER_MS + 1)
+    expect(stalled(hook)).toBe(false) // candidate only, not yet confirmed
+
+    // One tick shy of the confirm deadline (armed at STALL_AFTER_MS,
+    // confirm fires STALL_CONFIRM_MS after that; +1 already elapsed).
+    vi.advanceTimersByTime(STALL_CONFIRM_MS - 2)
+    caption(hook, { id: "delayed", text: "just in time", final: true })
+
+    expect(stalled(hook)).toBe(false)
+    expect(hook.el.innerHTML).toContain("just in time")
+    expect(hook.pushEvent).not.toHaveBeenCalled()
+  })
+
+  // CASE (ii) — GREEN before and after the stage-2 fix. Speech never lets
+  // up and no caption is EVER delivered — the genuinely-dead-pipeline
+  // reading (hypothesis (a) in task 01a0cf5c). Whatever stage 2 does to
+  // tolerate a slow-but-alive transcriber (cases (i)/(i-b) above), it
+  // must not do so by disarming the detector outright: a real outage
+  // still has to surface, eventually, as the stalled notice — and the
+  // stall signal must still fire so the incident is recorded.
+  it("still raises the stall when speech continues indefinitely and no caption ever arrives", () => {
+    speaking(hook, ["user:harper"])
+
+    // Far past any reasonable "still working" grace period, sustained
+    // the whole time, with nothing ever arriving.
+    vi.advanceTimersByTime(STALL_AFTER_MS * 20)
+
+    expect(stalled(hook)).toBe(true)
+    expect(hook.el.innerHTML).toContain(
+      "Captions stopped. Nothing is being transcribed."
+    )
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1)
+    expect(hook.pushEvent).toHaveBeenCalledWith("meeting_captions_stalled", {
+      meeting_id: "meeting-under-test",
+      elapsed_ms: STALL_AFTER_MS + STALL_CONFIRM_MS,
+    })
+  })
+
+  // CASE (iii) — the telemetry contract itself: ONE call per episode, not
+  // one per tick. `still raises the stall...` above only ever advances
+  // the fake clock in a SINGLE jump, which would pass just as happily
+  // against a `setInterval`-based re-firing implementation, since one big
+  // `advanceTimersByTime` call drains a repeating timer's queue without
+  // distinguishing "fired once" from "fired many times and only the last
+  // call was asserted". This case walks the clock forward in many small
+  // increments, well past the point the notice renders, and pins the
+  // call count at every step — a future rewrite that reschedules
+  // `_reportStall` on a recurring timer (e.g. to "refresh" the notice)
+  // would be caught here even though the single-jump case above could not
+  // see it.
+  it("does not re-fire the stall signal on every tick while the outage continues", () => {
+    speaking(hook, ["user:harper"])
+
+    const episodeMs = STALL_AFTER_MS + STALL_CONFIRM_MS
+    let elapsed = 0
+    while (elapsed < episodeMs) {
+      vi.advanceTimersByTime(500)
+      elapsed += 500
+      expect(hook.pushEvent).toHaveBeenCalledTimes(elapsed >= episodeMs ? 1 : 0)
+    }
+    expect(stalled(hook)).toBe(true)
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1)
+
+    // Keep ticking well past the point the notice rendered. Nothing
+    // arrives, speech never stops — a periodic re-fire would show up as
+    // additional calls here.
+    for (let i = 0; i < 30; i++) {
+      vi.advanceTimersByTime(1000)
+    }
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1)
   })
 })
