@@ -120,6 +120,8 @@ defmodule Platform.Meetings.MeetingCandidate do
 
     field(:assigned_agent_id, :binary_id)
     field(:assigned_agent_slug, :string)
+
+    # Classified "no role" is the string "null" (`IntentClassifier.no_target_role/0`: the enum names null, normalise_target_role/1 folds JSON null onto it, build_dedupe_key/3 hashes it), never SQL NULL; SQL NULL = not yet classified (record_heard/1 skeleton or push-to-talk card).
     field(:target_role, :string)
 
     field(:task_id, :binary_id)

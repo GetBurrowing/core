@@ -102,6 +102,16 @@ defmodule Platform.Meetings.IntentAddressee do
   `demotion_reason` stay nil. `verdict/3`'s own return shape is
   unchanged: `:ok | {:off_roster, name}`.
 
+  Once a row has been classified, "no role" is stored in `target_role`
+  as the string `"null"`, never SQL NULL, on both the queue row and
+  `meeting_candidates`; a SQL NULL there means the row has not been
+  classified yet (a heard-chunk skeleton from `Candidates.record_heard/1`,
+  or a push-to-talk card), and the string is deliberate because
+  the prompt's closed `target_role` enum names `null` as a value,
+  `normalise_target_role/1` folds a JSON `null` answer onto the same
+  string so both spellings share one dedupe key, and
+  `build_dedupe_key/3` hashes the role.
+
   ## What this does not reach
 
   A vocative buried mid-utterance with no comma (`"so then Harper file a
