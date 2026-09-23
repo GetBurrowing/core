@@ -153,7 +153,7 @@ defmodule Platform.Chat.AgentResponder do
     result =
       with {:ok, response} <-
              chat_module().chat(agent_body(context.user_message, context.attachments),
-               history: context.history,
+               history: Enum.map(context.history, &built_in_history_entry/1),
                space_id: context.message.space_id,
                participant_id: context.agent_participant.id
              ),
@@ -262,7 +262,7 @@ defmodule Platform.Chat.AgentResponder do
               author: author_name,
               attachments: context.attachments
             },
-            history: context.history,
+            history: Enum.map(context.history, &external_history_entry/1),
             context: bundle,
             tools: tools
           }
@@ -861,19 +861,26 @@ defmodule Platform.Chat.AgentResponder do
     # The last branch is the one that must NOT change: a genuinely empty
     # message is not a message, and turning every one into an
     # "attachments: 0" turn would be the mirror-image defect.
-    cond do
-      trimmed != "" ->
-        %{role: role, content: history_content(trimmed, message, role), attachments: attachments}
+    #
+    # The entry is INTERNAL: raw content (no `Name: ` prefix), the raw name
+    # snapshot and a never-blank `author`. Each dispatch path projects it to
+    # the shape its consumer reads — see `built_in_history_entry/1` and
+    # `external_history_entry/1` (task 01a0a7b2).
+    body =
+      cond do
+        trimmed != "" -> trimmed
+        attachments != [] -> describe_attachments(attachments)
+        true -> nil
+      end
 
-      attachments != [] ->
-        %{
-          role: role,
-          content: history_content(describe_attachments(attachments), message, role),
-          attachments: attachments
-        }
-
-      true ->
-        nil
+    if body do
+      %{
+        role: role,
+        author: history_author(message),
+        author_display_name: message.author_display_name,
+        content: body,
+        attachments: attachments
+      }
     end
   end
 
@@ -930,12 +937,52 @@ defmodule Platform.Chat.AgentResponder do
     end)
   end
 
-  defp history_content(content, %Message{author_display_name: name}, "user")
-       when is_binary(name) and name != "" do
+  defp history_content(content, name, "user") when is_binary(name) and name != "" do
     "#{name}: #{content}"
   end
 
-  defp history_content(content, _message, _role), do: content
+  defp history_content(content, _name, _role), do: content
+
+  # Who wrote a history turn, for a federated runtime that renders it as
+  # `${author}: ${content}` (the Claude Code channel plugin's
+  # `makeEmitAttention`). Never nil and never blank: a missing author renders
+  # as the literal `undefined` on that side, which is the defect this fixes
+  # (task 01a0a7b2). The snapshot wins; the participant type is the fallback.
+  defp history_author(%Message{author_display_name: name, author_participant_type: type}) do
+    if is_binary(name) and String.trim(name) != "",
+      do: name,
+      else: history_author_fallback(type)
+  end
+
+  defp history_author_fallback("system"), do: "System"
+  defp history_author_fallback("agent"), do: "Agent"
+  defp history_author_fallback("user"), do: "User"
+  defp history_author_fallback(_type), do: "Unknown"
+
+  # The built-in provider path (`Platform.Agents.QuickAgent.chat/2`) sees only
+  # `content`, so the author stays folded into it exactly as before this
+  # change: `Name: ` for a user-role turn with a non-blank snapshot, nothing
+  # otherwise. No `author` key reaches QuickAgent, and the key must never be
+  # called `name` — OpenAI's normaliser forwards `name` to the provider.
+  defp built_in_history_entry(%{
+         role: role,
+         author_display_name: name,
+         content: content,
+         attachments: attachments
+       }) do
+    %{role: role, content: history_content(content, name, role), attachments: attachments}
+  end
+
+  # The federated payload: structured `author`, UNPREFIXED content. The
+  # plugin adds the `author: ` itself, so a prefix here would double it.
+  defp external_history_entry(%{
+         role: role,
+         author: author,
+         content: content,
+         attachments: attachments
+       }) do
+    %{role: role, author: author, content: content, attachments: attachments}
+  end
 
   # The agent-less `build_external_signal/2` shim was deleted in task 01a01041
   # stage 2: it only delegated here with `agent: nil`, and the single call site
