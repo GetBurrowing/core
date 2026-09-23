@@ -55,7 +55,7 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
 
       # The mechanism, asserted rather than assumed: the child's `$callers`
       # names the process that STARTED it, and does not name this test.
-      callers = callers_of(foreign)
+      callers = callers_of_live(foreign)
 
       assert foreign_parent in callers,
              "$callers of the foreign child does not name its starter — the filter's " <>
@@ -89,13 +89,35 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
     end
 
     test "INCLUDES its own child: blocks until that child exits" do
-      {:ok, mine} =
-        Task.Supervisor.start_child(@supervisor, fn -> Process.sleep(@own_work_ms) end)
+      test_pid = self()
 
-      assert self() in callers_of(mine),
+      # Held on `receive`, not `Process.sleep/1`: the child must be PROVABLY alive
+      # when its dictionary is read, or a slow read sees a dead pid and blames
+      # `$callers` seeding for a test-lifetime race. The `:own_started` handshake
+      # also proves `Task.Supervised.noreply/4` has already run `put_callers/1` —
+      # `start_child/2` returns before the child is scheduled at all.
+      {:ok, mine} =
+        Task.Supervisor.start_child(@supervisor, fn ->
+          send(test_pid, {:own_started, self()})
+
+          receive do
+            :release -> :ok
+          after
+            @hold_ms -> :ok
+          end
+        end)
+
+      ref = Process.monitor(mine)
+      assert_receive {:own_started, ^mine}, 5_000
+
+      assert self() in callers_of_live(mine),
              "$callers of a child started by this test does not name this test — " <>
                "`Task.Supervisor.start_child/2` did not seed the caller chain and the " <>
                "filter cannot work"
+
+      # Released on a timer rather than by sleeping, so the child still runs for
+      # `@own_work_ms` from here and the `elapsed` floor below keeps its meaning.
+      Process.send_after(mine, :release, @own_work_ms)
 
       {elapsed, result} =
         timed(fn -> SandboxHelpers.await_own_supervised_writes(self(), timeout: 5_000) end)
@@ -113,6 +135,8 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
 
       refute Process.alive?(mine),
              "the drain returned :ok while this test's own child was still alive"
+
+      assert_receive {:DOWN, ^ref, :process, ^mine, _}, 5_000
     end
 
     test "INCLUDES a grandchild: ownership is the whole $callers chain, not its head" do
@@ -121,14 +145,24 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
       {:ok, child} =
         Task.Supervisor.start_child(@supervisor, fn ->
           {:ok, grandchild} =
-            Task.Supervisor.start_child(@supervisor, fn -> Process.sleep(@own_work_ms) end)
+            Task.Supervisor.start_child(@supervisor, fn ->
+              send(test_pid, {:grandchild_started, self()})
+
+              receive do
+                :release -> :ok
+              after
+                @hold_ms -> :ok
+              end
+            end)
 
           send(test_pid, {:grandchild, grandchild})
         end)
 
       assert_receive {:grandchild, grandchild}, 5_000
+      ref = Process.monitor(grandchild)
+      assert_receive {:grandchild_started, ^grandchild}, 5_000
 
-      chain = callers_of(grandchild)
+      chain = callers_of_live(grandchild)
 
       assert test_pid in chain,
              "a grandchild's $callers does not contain the test pid, so a transitive " <>
@@ -138,6 +172,8 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
       refute hd(chain) == test_pid,
              "the grandchild's $callers HEAD is the test pid, so this test does not " <>
                "actually exercise the transitive case: #{inspect(chain)}"
+
+      Process.send_after(grandchild, :release, @own_work_ms)
 
       {elapsed, result} =
         timed(fn -> SandboxHelpers.await_own_supervised_writes(test_pid, timeout: 5_000) end)
@@ -150,6 +186,7 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
 
       refute Process.alive?(grandchild)
       refute Process.alive?(child)
+      assert_receive {:DOWN, ^ref, :process, ^grandchild, _}, 5_000
     end
 
     test "a timeout is REPORTED, not swallowed, and names the still-running count" do
@@ -203,8 +240,10 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
       refute bare in Task.Supervisor.children(@supervisor),
              "a bare-spawn process is under #{inspect(@supervisor)}, which cannot happen"
 
-      assert callers_of(bare) == [],
-             "a bare-spawn process carries $callers: #{inspect(callers_of(bare))}"
+      bare_callers = callers_of_live(bare)
+
+      assert bare_callers == [],
+             "a bare-spawn process carries $callers: #{inspect(bare_callers)}"
 
       assert :ok = SandboxHelpers.await_own_supervised_writes(test_pid, timeout: 200)
       assert Process.alive?(bare)
@@ -243,6 +282,8 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
       spawn(fn ->
         {:ok, child} =
           Task.Supervisor.start_child(@supervisor, fn ->
+            send(test_pid, {:foreign_started, self()})
+
             receive do
               :release -> :ok
             after
@@ -260,6 +301,7 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
       end)
 
     assert_receive {:foreign_child, ^parent, child}, 5_000
+    assert_receive {:foreign_started, ^child}, 5_000
     {parent, child}
   end
 
@@ -270,7 +312,17 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
     await_death(parent)
   end
 
-  defp callers_of(pid) do
+  # Reads `:"$callers"` from a process that MUST be alive. The two ways of
+  # getting nothing back are different facts and must not share a message:
+  #
+  #   * alive, no `$callers` key -> `[]`, and the caller's assertion reports
+  #     that the chain was not seeded (true only because every caller first
+  #     handshakes with the child, so its fun — and `put_callers/1` before it —
+  #     has provably run);
+  #   * dead -> `flunk/1` here. A dead pid's dictionary is unreadable, which
+  #     says nothing about seeding; it means the test let its subject exit
+  #     before reading it.
+  defp callers_of_live(pid) do
     case Process.info(pid, :dictionary) do
       {:dictionary, dict} ->
         case List.keyfind(dict, :"$callers", 0) do
@@ -279,7 +331,13 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
         end
 
       nil ->
-        []
+        flunk("""
+        #{inspect(pid)} is DEAD, so its $callers could not be read.
+
+        This is a test-lifetime race — the process exited before this test read
+        its dictionary. It is NOT evidence that `$callers` was unseeded; hold the
+        process on `receive` until after the read.
+        """)
     end
   end
 
