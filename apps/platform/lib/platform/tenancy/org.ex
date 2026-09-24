@@ -37,6 +37,16 @@ defmodule Platform.Tenancy.Org do
     field(:color_hue, :integer)
     field(:color_chroma, :float)
 
+    # OKLCH lightness of the org's FILL (the dot and the active pill), 0..1
+    # exclusive. NULL means the runtime path's default, 72%. Only the six
+    # shipped orgs carry one: they shipped at hand-picked fills (65-80%) that
+    # no rule reproduces, and since task 01a09333-d374 stage 5 they are
+    # coloured from this row. The admin form never writes it, and there is
+    # no edit path; one that changes an org's hue must clear this too, or
+    # the hand-picked lightness carries over onto a hue it was never
+    # measured for.
+    field(:color_lightness, :float)
+
     field(:archived_at, :utc_datetime_usec)
     field(:deletion_scheduled_at, :utc_datetime_usec)
 
@@ -48,7 +58,8 @@ defmodule Platform.Tenancy.Org do
 
   `color_hue` is bounded to 0..359 here AND by the `orgs_color_hue_range`
   CHECK constraint; the two are separate guards, and only the constraint
-  survives a raw insert that bypasses this changeset.
+  survives a raw insert that bypasses this changeset. `color_lightness` is
+  bounded to (0, 1) the same two ways (`orgs_color_lightness_range`).
 
   Slugs are lowercase, must start with a letter, and may contain letters,
   digits, hyphens, and underscores. Matches the convention used by
@@ -62,6 +73,7 @@ defmodule Platform.Tenancy.Org do
       :parent_org_id,
       :color_hue,
       :color_chroma,
+      :color_lightness,
       :archived_at,
       :deletion_scheduled_at
     ])
@@ -70,10 +82,15 @@ defmodule Platform.Tenancy.Org do
       message: "must start with a lowercase letter and contain only [a-z0-9_-]"
     )
     |> validate_number(:color_hue, greater_than_or_equal_to: 0, less_than: 360)
+    |> validate_number(:color_lightness, greater_than: 0, less_than: 1)
     |> unique_constraint(:slug)
     |> check_constraint(:color_hue,
       name: :orgs_color_hue_range,
       message: "must be between 0 and 359"
+    )
+    |> check_constraint(:color_lightness,
+      name: :orgs_color_lightness_range,
+      message: "must be between 0 and 1, exclusive"
     )
     |> foreign_key_constraint(:parent_org_id)
   end

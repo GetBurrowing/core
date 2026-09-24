@@ -279,6 +279,21 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
       assert Tenancy.scope_slug_entries(nil) == []
     end
 
+    test "a list swatch uses the org's stored fill lightness, else the 72% default" do
+      # Task 01a09333-d374 stage 5: the six shipped orgs carry the fill
+      # lightness they shipped at (paragon 80%), because the runtime path
+      # now paints them from their rows. The list swatch has to agree with
+      # the rail, so it reads the same column.
+      assert PlatformWeb.AdminOrgsLive.org_fill(%Org{
+               color_hue: 95,
+               color_chroma: 0.16,
+               color_lightness: 0.80
+             }) == "oklch(80% 0.16 95)"
+
+      assert PlatformWeb.AdminOrgsLive.org_fill(%Org{color_hue: 95, color_chroma: 0.16}) ==
+               "oklch(72% 0.16 95)"
+    end
+
     test "an org created with NO hue stores no chroma either", %{conn: conn} do
       # The other half. A chroma without a hue is a stored value that means
       # nothing — nothing reads it, and `scope_slug_entries/1` would hand a
@@ -357,48 +372,61 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
         |> render_change()
 
       ramp = ScopeColor.derive(162, 0.15)
-      worst = PlatformWeb.AdminOrgsLive.worst_cell(ramp.fill, ramp.label_light, :light)
+      worst = ramp.worst_light
 
       # Both theme grounds, not one: no single value clears AA on both.
       assert html =~ ~s(data-ground="light")
       assert html =~ ~s(data-ground="dark")
 
-      # The figure shown is the worst cell. This used to be asserted as
-      # `worst.contrast < ramp.contrast_light` — the panel's figure strictly
-      # below the solver's — and that inequality WAS the defect: the solver
-      # targeted the tuned rest-over-base-100 cell, the panel printed the
-      # worst of four, and the gap between them is why the panel printed
-      # 3.74 where the clause wanted 4.50. They are now equal by
-      # construction, so the discriminating comparison moved to the cell the
-      # solver used to aim at.
+      # The figure shown is the solver's own worst cell, read off the ramp.
+      # The panel used to recompute it from a private cell table, and the
+      # gap between the two tables is why it printed 3.74 where the clause
+      # wanted 4.50. Since task 01a09333-d374 each surface has its own tint
+      # and label, so the discriminating comparison is the OTHER surface's
+      # cell: it reads more generously, and its figure is not on the page.
+      # Without that, a panel printing the best cell and calling it the
+      # worst would pass.
       assert html =~ "#{PlatformWeb.AdminOrgsLive.format_contrast(worst.contrast)}:1"
       assert worst.contrast == ramp.contrast_light
 
-      tuned =
-        ScopeColor.contrast(
-          ramp.label_light,
-          ScopeColor.composite_ground(ramp.fill, 0.12, "oklch(100% 0 0)")
-        )
-
-      # The tuned cell reads MORE generously than the printed figure, and the
-      # generous number is not on the page. Without this the assertion above
-      # passes for a panel that prints the best cell and calls it the worst.
-      assert tuned > worst.contrast
-      refute html =~ "#{PlatformWeb.AdminOrgsLive.format_contrast(tuned)}:1"
+      [better] = Enum.reject(ramp.cells.light, &(&1.surface == worst.surface))
+      assert better.contrast > worst.contrast
+      refute html =~ "#{PlatformWeb.AdminOrgsLive.format_contrast(better.contrast)}:1"
 
       # And the printed figure clears the bar with margin, which is the whole
-      # point of the change: a panel that prints an honest worst-case number
-      # is only useful if that number passes.
+      # point: a panel that prints an honest worst-case number is only
+      # useful if that number passes.
       assert worst.contrast >= 4.5
       assert ramp.floor_light >= 4.5
 
-      # A bare number is not interpretable — the cell must be named beside it.
+      # A bare number is not interpretable: the cell is named beside it.
       assert html =~ worst.cell
 
-      # The three machine values come from the server, not from JS.
+      # Every chip is painted with the bytes it was measured on: its OPAQUE
+      # tint and its own label, one per surface per theme. No alpha tint is
+      # left in the preview to composite in the browser.
+      [preview] =
+        Regex.run(~r/data-role="org-color-preview".*data-role="org-color-derived"/s, html)
+
+      refute preview =~ "color-mix"
+
+      for theme <- [:light, :dark], cell <- ramp.cells[theme] do
+        assert preview =~ "background-color:#{cell.tint}",
+               "#{theme} #{cell.cell}: tint not painted"
+
+        assert preview =~ "color:#{cell.label}", "#{theme} #{cell.cell}: label not painted"
+      end
+
+      assert count_matches(html, ~s(data-role="preview-surface")) == 4
+
+      # The machine values come from the server, not from JS.
       assert html =~ ramp.fill
-      assert html =~ ramp.label_light
-      assert html =~ ramp.label_dark
+
+      for field <-
+            [:tint_light_100, :tint_light_200, :tint_dark_100, :tint_dark_200] ++
+              [:label_light_100, :label_light_200, :label_dark_100, :label_dark_200] do
+        assert html =~ Map.fetch!(ramp, field), "#{field} is not printed"
+      end
     end
 
     test "no hue on the ring renders the below-AA branch, in either theme", %{conn: conn} do

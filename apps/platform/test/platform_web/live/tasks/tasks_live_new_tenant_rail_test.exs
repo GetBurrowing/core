@@ -252,4 +252,42 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
       assert chips == [@new_slug]
     end
   end
+
+  describe "the shipped orgs reach the runtime colour path from their rows (task 01a09333-d374 stage 5)" do
+    # End to end across the seam stage 5 changed: the migration's row values
+    # (hue, chroma AND fill lightness) -> `Tenancy.scope_slug_entries/1` ->
+    # the emitted `<style>` rule -> a chip carrying the matching
+    # `data-scope` and the var-path classes. The byte-level gate on the
+    # emitted values is `ScopeColorStylesShippedSixTest`; this is the proof
+    # that the page actually reads the row.
+    test "sxi and wayne_tech are coloured from their rows at their shipped fills", %{conn: conn} do
+      {conn, user} = member_conn(conn, ["fabrikam", "sxi", "wayne_tech", "paragon"])
+
+      entries = Tenancy.scope_slug_entries(user)
+      sxi = Enum.find(entries, &(&1.slug == "sxi"))
+      assert %{hue: 162, chroma: 0.15, lightness: 0.7} = sxi
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render(view)
+
+      # The fill at the SHIPPED lightness, not the 72% default: paragon's
+      # 80% is the one furthest from it.
+      assert html =~ ~s|[data-scope="sxi"]{--scope-fill:oklch(70% 0.15 162);|
+      assert html =~ ~s|[data-scope="wayne_tech"]{--scope-fill:oklch(68% 0.15 240);|
+      assert html =~ ~s|[data-scope="paragon"]{--scope-fill:oklch(80% 0.16 95);|
+
+      # The painted pre-move tint for sxi on the page ground, byte for byte.
+      assert html =~ ~r/\[data-scope="sxi"\]\{[^}]*--scope-tint-100:#e3f7f0;/
+
+      for slug <- ~w(sxi wayne_tech paragon) do
+        assert html =~ ~s(data-scope="#{slug}" class=),
+               "no #{slug} chip element carries data-scope"
+      end
+
+      # And none of the retired per-slug classes is emitted for them.
+      refute html =~ ~r/[\s"]bg-sxi[\s"]/
+      refute html =~ "text-sxi-label"
+      refute html =~ ~r/[\s"]border-wayne-tech[\s"]/
+    end
+  end
 end

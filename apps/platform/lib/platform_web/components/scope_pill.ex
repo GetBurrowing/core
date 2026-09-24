@@ -28,6 +28,13 @@ defmodule PlatformWeb.Components.ScopePill do
   * Non-clickable — renders as a `<span>` at 0.55 opacity (Marlowe approved
     2026-05-18) so context is still visible but no affordance. At `:compact`
     size the floor is 0.70 — the smaller chip needs more signal, not less.
+    The opacity is on the chip ROOT, so it composites the LABEL as well as
+    the fill: in light theme this variant's label reads 2.11-2.26:1
+    (2.69-2.88 at compact) where the clickable chip reads 4.55-4.67. Below
+    AA in 47 of the 48 slug/surface/theme/size cells, each one measured in
+    `ScopePillStaticOpacityTest`. Marlowe's 2026-09-13 ruling moved the six
+    pills' colours and said nothing about this opacity; changing it is her
+    call, not an executor's.
   * Active — full-saturation fill + check icon (filtered-to-this-scope). At
     `:compact` size the check icon is dropped (illegible at ~12px); the dot is
     kept and the full-saturation fill alone signals "filtered".
@@ -43,8 +50,9 @@ defmodule PlatformWeb.Components.ScopePill do
     existing call sites render byte-identically.
   * `:compact` — `px-1.5 py-px`, **no border**, `size-1.5` dot, label truncates
     at `max-w-20`. For message rows and card chrome where space is tight. A 1px
-    border ring repeated down a list reads as noise, so compact drops it; the
-    background fill + dot carry the scope signal.
+    border repeated down a list costs 2px per chip in both axes, so compact
+    has none. Its edge is an inset box-shadow instead (see "Edge and
+    hover").
 
   ### Compact + touch targets
 
@@ -68,56 +76,110 @@ defmodule PlatformWeb.Components.ScopePill do
   Use of Color). Screen readers get scope context via `aria-label` even
   on the non-clickable variant.
 
-  ## Scope-color centralization
+  ## Scope colour: one path, from the org row
 
-  Scope → color tokens are centralized in two places:
+  Every chip, for every org, takes the same slug-agnostic classes:
+  `.scope-tint` / `.scope-text` / `.scope-edge` (or their `-200` spellings,
+  see "Surface" below) / `.scope-dot` / `.scope-active`. They read custom
+  properties that `PlatformWeb.Components.ScopeColorStyles` emits into a
+  server-rendered `<style>` block, one declaration set per org with a
+  `color_hue`, keyed on the chip's `data-scope`. A custom property resolves
+  at RENDER time, so a brand-new org is coloured on its next page load with
+  no deploy (task 01a09287 stage 5).
 
-    * `Platform.Tenancy.scope_color/1` returns the Tailwind text-color
-      utility (`text-fabrikam`, `text-soylent`, …) for any scope slug. This is
-      the full-saturation token, reserved for the dot and other non-label use.
-    * `apps/platform/assets/css/app.css` defines the matching `bg-*`,
-      `border-*`, `bg-*-active`, `bg-*-dot`, `hover:bg-*/22`, and the
-      AA-tuned `text-*-label` utilities — all anchored to the same scope
-      `oklch(...)` hue/chroma.
+  ### How the six shipped orgs got here (task 01a09333-d374 stage 5)
 
-  The non-active chip label uses `text-<slug>-label` (theme-aware, darker in
-  light mode) rather than `scope_color/1`, so the colored label clears WCAG
-  1.4.3 AA (≥4.5:1) on the 12% `bg-<slug>` tint. `scope_color/1` itself is
-  unchanged — it has a second consumer (`inheritance_pill.ex`) and is not
-  pill-specific.
+  Until stage 5 there were two paths. The six shipped slugs (fabrikam, soylent,
+  wayne-tech, sxi, paragon, cyberdyne) kept hand-authored build-time
+  utilities in `app.css` (`bg-<slug>` at 12%, `text-<slug>-label`,
+  `border-<slug>` at 30%, `bg-<slug>-active`, `hover:bg-<slug>/22`), chosen
+  by an explicit six-slug branch here, because their labels were
+  solved against one contrast cell of four and moving them was a brand
+  call. Marlowe ruled on 2026-09-13 that they move. They now take the var
+  path like every other org, coloured from their rows (hue, chroma and, for
+  these six, the fill lightness they shipped at), and the chip-only
+  utilities are deleted from `app.css` in the same change, so no chip can
+  carry both class sets and leave the cascade to decide.
 
-  This component was previously inlining `bg-[oklch(...)]` arbitrary-value
-  classes; Stage 2 of Working surfaces plan v4 retired that pattern in
-  favor of the named utilities. The public `:scope` attr API is unchanged.
+  Two per-slug utilities survive in `app.css` because things other than
+  this chip use them: `text-<slug>` (`Platform.Tenancy.scope_color/1`,
+  read by the inheritance pill, files, recovery and the tasks sidebar) and
+  `bg-<slug>-dot` (`ChatLive.section_dot_class/1`, the chat rail's section
+  dots). This component no longer emits either.
 
-  ### Two colour paths, and which slug gets which (task 01a09287 stage 5)
+  ## Surface (task 01a09333-d374)
 
-  Everything above describes the BUILD-TIME path, and it now applies to
-  exactly six slugs. A Tailwind utility is a literal rule compiled into the
-  stylesheet, so `.bg-<slug>` exists only for a slug somebody hand-wrote
-  into `app.css` — which meant standing up a tenant needed a CSS rebuild and
-  a deploy, and an org created at runtime rendered grey.
+  A chip's tint and label are solved per surface, because one label cannot
+  clear AA on both grounds a chip sits on. The `:surface` attr names the
+  ground at the CALL SITE: `:base_100` (the default: the chat pane and the
+  page ground) wears `.scope-tint` / `.scope-text`, and `:base_200` (the
+  chat rail) wears `.scope-tint-200` / `.scope-text-200`. Each pair reads
+  the matching opaque `--scope-tint-*` / `--scope-label-*` slots.
 
-  So there are two paths:
+  **That AA solve is the CLICKABLE chip's, and only the clickable chip's.**
+  It names one variant of two. The non-clickable `<span>` carries
+  `opacity-55` (`opacity-70` at compact), which composites the label toward
+  the ground along with the tint: light theme 2.11-2.26:1 at `:default` and
+  2.69-2.88 at `:compact`, dark theme 2.29-3.49 and 2.93-5.10.
+  `ScopePillStaticOpacityTest` computes each of those 48 cells from the
+  shipped opacity and pins the figure. Every cell LOSES contrast to the
+  opacity and 47 of the 48 land below AA (the exception is paragon on the
+  dark rail at compact, 5.10:1, down from 9.44:1). Not disputed, and NOT
+  this component's to change: the opacity is Marlowe-approved (2026-05-18)
+  and the ruling is open. Read "Non-clickable" under "Variants" before
+  proposing a number.
 
-    * **legacy / build-time** — the six slugs in `@legacy_css_slugs`, which
-      keep the `bg-<slug>` / `text-<slug>-label` / `border-<slug>` /
-      `bg-<slug>-active` / `bg-<slug>-dot` utilities described above. They
-      stay because their labels were solved against one contrast cell of
-      four and re-solving them moves every shipped org's colour on every
-      install — a brand call, filed as task 01a09333-d374.
-    * **runtime / var-driven** — every other slug takes the slug-agnostic
-      `.scope-tint` / `.scope-text` / `.scope-border` / `.scope-dot` /
-      `.scope-active` / `.scope-tint-hover` rules, which read custom
-      properties that `PlatformWeb.Components.ScopeColorStyles` emits into a
-      server-rendered `<style>` block, one declaration set per org with a
-      `color_hue`. A custom property resolves at RENDER time, so a
-      brand-new org is coloured on its next page load with no deploy.
+  The surface is a property of the call site, deliberately NOT inherited
+  from the DOM. An ambient `[data-surface]` wrapper would make contrast a
+  property of the container again, which is the defect this task exists to
+  remove, and a missed wrapper would fail silently while the chip still
+  looked legible. A declared attr is visible in the diff that adds a call
+  site, and `ScopePillTest` pins every call site's declaration.
 
-  The split is an explicit branch and not a reliance on the cascade: a chip
-  carrying both class sets would match both rules at equal specificity and
-  the winner would be a function of their ORDER in `app.css`, which is not a
-  decision anybody would have made on purpose.
+  Call sites as of stage 3:
+
+    * `live/chat/partials/rail.ex`, the hidden-channels drawer group label:
+      `:base_200` (the rail `<aside>` carries `bg-base-200`; the drawer sets
+      no fill of its own).
+    * `live/chat/partials/conversation.ex`, the mobile and desktop chat
+      header pills: `:base_100` (the `<header>` sets no background and
+      inherits the shell's `bg-base-100`).
+    * `live/tasks/filters_component.ex`, the task-filter scope chips:
+      `:base_100` (they sit in `page_header/1`'s `bg-base-100` `<header>`).
+
+  Since stage 5 the six shipped orgs take the declared surface like any
+  other org. The chat rail and the chat header reach ONLY those six
+  (`sub_org_scope_atom/1` and `section_scope_atom/1` are closed six-name
+  maps), so stage 5 is when those two declarations took effect.
+
+  ## Edge and hover (task 01a09333-d374 stage 4)
+
+  A chip's fill measures 1.07-1.14:1 against its ground, so the chip's shape
+  comes from its edge. On the var path the edge is `--scope-edge-100` /
+  `-200`, solved by `ScopeColor` to 3:1 against the page ground with a
+  one-byte margin (WCAG 1.4.11):
+
+    * `:default` colours its existing 1px border: `.scope-edge` /
+      `.scope-edge-200`.
+    * `:compact` has no border, so the edge is an inset 1px box-shadow at
+      zero layout cost: `.scope-edge-inset` / `.scope-edge-inset-200`.
+
+  Hover lives on the edge, never on the fill, and never changes a width.
+  A clickable, non-active chip also carries `.scope-edge-hover` (or
+  `.scope-edge-inset-hover`, `-200` on the rail), which swaps the edge to
+  `--scope-edge-hover-*` on `:hover` and on `:focus-visible`. The compact
+  focus rule keeps the standard focus ring alongside the inset edge,
+  because both are box-shadows. The active chip keeps its own 2px ring and
+  takes no edge class.
+
+  The 3:1 figure is for the chip as solved. A non-clickable chip still
+  carries `opacity-55` (`opacity-70` at compact), which composites its edge
+  toward the ground along with its label: fabrikam's solved edge paints at
+  about 1.8:1 there (2.2:1 at compact), and its label at 2.21:1 (2.83:1 at
+  compact). That opacity is Marlowe-approved (2026-05-18) and its conflict
+  with the contrast rules is an open decision on the design canvas; neither
+  stage 4 nor stage 6 changed it. Stage 6 measured the label cost it had
+  left unmeasured (`ScopePillStaticOpacityTest`, 48 cells).
 
   ### `data-scope` is a leak surface
 
@@ -236,6 +298,17 @@ defmodule PlatformWeb.Components.ScopePill do
       "When true, applies the active-filter visual treatment (full saturation, check-icon, soft outer ring). Used by parent LVs to signal the current filter."
   )
 
+  attr(:surface, :atom,
+    default: :base_100,
+    values: [:base_100, :base_200],
+    doc: """
+    The ground this chip sits on, declared by the CALL SITE: `:base_100` (the
+    chat pane and the page ground) or `:base_200` (the chat rail). Selects
+    which per-surface tint and label pair the chip wears. Never inferred from
+    the DOM; see "Surface" in the moduledoc.
+    """
+  )
+
   def scope_pill(assigns) do
     assigns = assign(assigns, :clickable, resolve_clickable(assigns))
 
@@ -251,6 +324,7 @@ defmodule PlatformWeb.Components.ScopePill do
           propagated_to: @propagated_to,
           role: :source,
           size: @size,
+          surface: @surface,
           label: @label,
           aria_label: propagated_aria(display_label(@label, @scope), @propagated_to),
           title: propagated_title(display_label(@label, @scope), @propagated_to)
@@ -264,6 +338,7 @@ defmodule PlatformWeb.Components.ScopePill do
             propagated_to: @propagated_to,
             role: :source,
             size: @size,
+            surface: @surface,
             event: @event,
             target: @target,
             label: @label
@@ -276,6 +351,7 @@ defmodule PlatformWeb.Components.ScopePill do
             propagated_to: @propagated_to,
             role: :target,
             size: @size,
+            surface: @surface,
             event: @event,
             target: @target,
             label: nil
@@ -290,6 +366,7 @@ defmodule PlatformWeb.Components.ScopePill do
         propagated_to: nil,
         role: :single,
         size: @size,
+        surface: @surface,
         event: @event,
         target: @target,
         label: @label,
@@ -329,6 +406,9 @@ defmodule PlatformWeb.Components.ScopePill do
       # itself must stay the real atom — the chip's colour classes and its
       # `scope_label/1` fallback are both keyed on it.
       |> Map.put_new(:value, nil)
+      # Declared by the call site and threaded through `scope_pill/1`; the
+      # default only covers a map built without it.
+      |> Map.put_new(:surface, :base_100)
 
     ~H"""
     <%= if @clickable do %>
@@ -342,9 +422,9 @@ defmodule PlatformWeb.Components.ScopePill do
         title={@title}
         class={[
           chip_base_classes(@size),
-          chip_color_classes(@scope, @active, @size),
+          chip_color_classes(@active, @size, @surface),
           "focus-visible-ring cursor-pointer",
-          not @active && chip_hover_classes(@scope),
+          not @active && chip_hover_classes(@size, @surface),
           @size == :compact && "scope-pill-hit-expand"
         ]}
         aria-label={@aria_label || aria_label(display_label(@label, @scope), @active)}
@@ -358,7 +438,7 @@ defmodule PlatformWeb.Components.ScopePill do
         title={@title}
         class={[
           chip_base_classes(@size),
-          chip_color_classes(@scope, @active, @size),
+          chip_color_classes(@active, @size, @surface),
           if(@size == :compact, do: "opacity-70", else: "opacity-55")
         ]}
         aria-label={@aria_label || aria_label_static(display_label(@label, @scope))}
@@ -375,7 +455,7 @@ defmodule PlatformWeb.Components.ScopePill do
       <.icon name="hero-check" class="size-[13px]" />
     <% else %>
       <span
-        class={["inline-block rounded-full", dot_size(@size), scope_dot(@scope)]}
+        class={["inline-block rounded-full scope-dot", dot_size(@size)]}
         aria-hidden="true"
       />
     <% end %>
@@ -398,87 +478,63 @@ defmodule PlatformWeb.Components.ScopePill do
 
   # ── Color mapping ───────────────────────────────────────────────────
   #
-  # Resolves to the named utility classes defined in `app.css` (and
-  # surfaced as text-utilities by `Platform.Tenancy.scope_color/1`). The
-  # oklch literals themselves live in `app.css`; if you need to change a
-  # scope color, edit it there.
+  # One path for every org (task 01a09333-d374 stage 5): the slug-agnostic
+  # `.scope-*` utilities in `app.css`, reading the custom properties
+  # `PlatformWeb.Components.ScopeColorStyles` emits per org. The colour
+  # itself lives on the org ROW, never here and never in a per-slug CSS
+  # block, which is why none of these functions takes the scope.
+
+  # Resting chip. The label is solved against exactly the opaque tint it
+  # sits on (WCAG 1.4.3, >=4.5:1 with a one-byte margin), per surface.
   #
-  # Default (`active: false`) chip uses the 12% color-mix bg, the AA-tuned
-  # `text-<slug>-label` text (WCAG 1.4.3 ≥4.5:1 on the tint; darker than
-  # `scope_color/1`'s full-saturation `text-<slug>`), and the 30% color-mix
-  # border. Active chip uses the full-saturation `bg-<slug>-active` (which
-  # also bakes in the contrast-safe text and shadow ring).
-
-  # The six slugs that HAVE hand-authored blocks in app.css. Everything else
-  # takes the slug-agnostic `.scope-*` utilities, which read the custom
-  # properties `PlatformWeb.Components.ScopeColorStyles` emits at render
-  # time.
+  # These classes are the same on both variants, so the solved figure is NOT.
+  # It is what the CLICKABLE chip paints. The non-clickable `<span>` wraps
+  # the identical classes in `opacity-55` (`opacity-70` at compact), which
+  # composites label and tint alike toward the ground and leaves the label
+  # at 2.11-2.26:1 in light theme (2.69-2.88 compact): below AA in 47 of 48
+  # cells. That opacity is Marlowe-approved and this stage did not touch it;
+  # the figures are computed and pinned in `ScopePillStaticOpacityTest`.
+  # Quote the 4.5 figure about the clickable chip only.
   #
-  # This is a fallback list, not an allowlist: a slug that is missing from it
-  # is coloured, not crashed. The split exists so the six shipped orgs render
-  # byte-identically to what they render today — their app.css labels were
-  # solved against one cell of four and moving them is a brand call filed as
-  # task 01a09333-d374, not a thing to do by accident while wiring a call
-  # site. It is deliberately NOT expressed as "whichever rule the cascade
-  # happens to pick": both `.scope-tint` and `.bg-fabrikam` would match a fabrikam
-  # chip carrying both class sets, and which one won would then be a
-  # function of their order in app.css. Choosing here makes it a decision.
-  @legacy_css_slugs ~w(fabrikam soylent wayne-tech sxi paragon cyberdyne)
+  # The edge is not optional: a scope chip's FILL carries only 1.07-1.14
+  # contrast against the surface behind it, so the chip's shape comes from
+  # its edge, solved to 3:1 against the page ground (task 01a09333-d374
+  # stage 4). `:default` colours the 1px border `chip_base_classes/1`
+  # already sets; `:compact` has no border (one would grow the chip 2px in
+  # both axes) and draws the edge as an inset 1px box-shadow instead.
+  defp chip_color_classes(false, :compact, surface),
+    do: var_tint_classes(surface) ++ [surfaced("scope-edge-inset", surface)]
 
-  defp legacy_css?(scope), do: slug(scope) in @legacy_css_slugs
+  defp chip_color_classes(false, _default, surface),
+    do: var_tint_classes(surface) ++ [surfaced("scope-edge", surface)]
 
-  defp chip_color_classes(scope, false, :compact) do
-    # Compact drops the border — bg fill + dot carry the signal.
-    # Label text uses the AA-tuned `text-<slug>-label` token (darker than
-    # `scope_color/1`'s `text-<slug>`) so it clears WCAG 1.4.3 on the tint.
-    if legacy_css?(scope) do
-      [
-        "bg-#{slug(scope)}",
-        "text-#{slug(scope)}-label"
-      ]
-    else
-      ["scope-tint", "scope-text"]
-    end
-  end
+  # The active pill is the full-saturation fill on every surface, so the
+  # surface does not reach it.
+  defp chip_color_classes(true, _size, _surface), do: "scope-active"
 
-  defp chip_color_classes(scope, false, _default) do
-    # See the :compact clause above — `text-<slug>-label` is the AA-safe
-    # label color on the 12% `bg-<slug>` tint (vs scope_color/1's full-sat
-    # `text-<slug>`, which is reserved for the dot / active fill).
-    #
-    # `.scope-border` is not optional on the var path: a scope chip's FILL
-    # carries only 1.067-1.143 contrast against the surface behind it, so
-    # the chip's edge comes from the border and the label, not the fill.
-    if legacy_css?(scope) do
-      [
-        "bg-#{slug(scope)}",
-        "text-#{slug(scope)}-label",
-        "border-#{slug(scope)}"
-      ]
-    else
-      ["scope-tint", "scope-text", "scope-border"]
-    end
-  end
+  # The per-surface pair: an opaque tint and the label solved against
+  # exactly that tint (`ScopeColorStyles`' `--scope-tint-*` /
+  # `--scope-label-*`).
+  defp var_tint_classes(surface),
+    do: [surfaced("scope-tint", surface), surfaced("scope-text", surface)]
 
-  defp chip_color_classes(scope, true, _size) do
-    if legacy_css?(scope),
-      do: "bg-#{slug(scope)}-active",
-      else: "scope-active"
-  end
+  # Every colour class comes in a base-100 spelling and a `-200` spelling
+  # that reads the base-200 slot. One function names the pair, so a new slot
+  # cannot pick up a surface suffix by a different rule.
+  defp surfaced(class, :base_100), do: class
+  defp surfaced(class, :base_200), do: class <> "-200"
 
-  # Hover state — bump default 12% bg to 22% color-mix on the button variant only.
-  defp chip_hover_classes(scope) do
-    if legacy_css?(scope),
-      do: "hover:bg-#{slug(scope)}/22",
-      else: "scope-tint-hover"
-  end
-
-  # Dot color — full saturation, redundant-signal-beyond-color cue.
-  defp scope_dot(scope) do
-    if legacy_css?(scope),
-      do: "bg-#{slug(scope)}-dot",
-      else: "scope-dot"
-  end
+  # Hover state, on clickable non-active chips only: on the EDGE, never the
+  # fill (task 01a09333-d374 stage 4). A 22% fill cannot be tuned back to a
+  # legible label. The hover class swaps the edge colour for
+  # `--scope-edge-hover-*`, a solved value one step darker, at CONSTANT
+  # width: `.scope-active` already owns the 2px box-shadow ring, a 2px hover
+  # border would reflow the rail row, and compact has no border to widen.
+  # The rules are plain `:hover` / `:focus-visible` selectors in `app.css`,
+  # not a Tailwind `hover:` variant, because Tailwind gates `hover:` behind
+  # `@media (hover: hover)`.
+  defp chip_hover_classes(:compact, surface), do: surfaced("scope-edge-inset-hover", surface)
+  defp chip_hover_classes(_default, surface), do: surfaced("scope-edge-hover", surface)
 
   # The `data-scope` attribute value: the org's SLUG AS STORED, because that
   # is what `ScopeColorStyles` keys its `[data-scope="…"]{…}` rules on. NOT
@@ -510,11 +566,16 @@ defmodule PlatformWeb.Components.ScopePill do
   # So: an explicit `@value` is authoritative. Failing that, a caller who has
   # OVERRIDDEN the visible label has renamed this chip, and spelling its true
   # slug one attribute over contradicts the rename — emit nothing. Only an
-  # un-renamed chip gets its own scope. Suppression costs those two chat
-  # surfaces their colour while masking is on; they route through
-  # `sub_org_scope_atom/1`, a closed six-name map that returns nil for any
-  # org created after this code was written, so they cannot reach the
-  # runtime colour path at all and there is nothing to lose.
+  # un-renamed chip gets its own scope.
+  #
+  # Suppression costs a masked chip its colour, because every colour rule is
+  # keyed on `data-scope`. Since task 01a09333-d374 stage 5 that includes
+  # the six shipped orgs, on the chat rail and header (no `data-scope`) and
+  # on the tasks rail (a placeholder `data-scope` no rule names). Before
+  # stage 5 those six kept their colour under masking through per-slug class
+  # names (`bg-wayne-tech`), which the mask sweep tolerated because it strips
+  # `class`. Those names are retired, so a masked chip is uncoloured on
+  # every surface and no spelling of the real org is anywhere in it.
   #
   # `label` is `false` (not nil) when a caller writes `@mask_names? && …`
   # with masking off, which is why the guard is `is_binary/1` and not a nil
@@ -531,27 +592,6 @@ defmodule PlatformWeb.Components.ScopePill do
   # Dot diameter — compact uses a smaller dot to match the tighter chrome.
   defp dot_size(:compact), do: "size-1.5"
   defp dot_size(_default), do: "size-2"
-
-  # Atom slug → kebab-case fragment used in the Tailwind utility class names
-  # (e.g. :wayne_tech → "wayne-tech" so we get `bg-wayne-tech`).
-  defp slug(:fabrikam), do: "fabrikam"
-  defp slug(:soylent), do: "soylent"
-  defp slug(:wayne_tech), do: "wayne-tech"
-  defp slug(:sxi), do: "sxi"
-  defp slug(:paragon), do: "paragon"
-  defp slug(:cyberdyne), do: "cyberdyne"
-
-  # TOTAL from task 01a09287 stage 2 on. These clauses used to cover exactly
-  # six atoms, so a seventh org reached the renderer and raised
-  # `FunctionClauseError` — a crash, on a surface whose whole job is to
-  # tolerate arbitrary org slugs. A slug with no `bg-<slug>` utility in
-  # app.css renders an unstyled chip; that is a cosmetic gap, not an outage,
-  # and the colour-token wiring is the follow-on stage.
-  #
-  # `String.to_existing_atom/1` is NOT how the binary clause is implemented,
-  # on purpose: it raises for precisely the new org this clause exists for.
-  defp slug(scope) when is_binary(scope), do: String.replace(scope, "_", "-")
-  defp slug(scope), do: scope |> to_string() |> String.replace("_", "-")
 
   # ── Labels ─────────────────────────────────────────────────────────
 

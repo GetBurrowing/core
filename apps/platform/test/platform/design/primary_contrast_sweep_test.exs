@@ -309,11 +309,13 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   those 37 sites; this module measures the class, and a green run of it is a claim
   about the class only.
 
-  **A sixth, smaller drift, reported not fixed.** `--color-base-200` in the light
-  theme is declared `oklch(96% 0 0)`, which renders `#F2F2F2`, while its own trailing
-  comment claims `#F5F5F5`. F2 is measured against the value that ships (`#F2F2F2`,
-  1.5913); against the value the comment claims it would read 1.6396. Same class of
-  defect as the one this task closed, in a different slot.
+  **A sixth, smaller drift, reported here and fixed later.** `--color-base-200` in
+  the light theme is declared `oklch(96% 0 0)`, which renders `#F2F2F2`, while its
+  own trailing comment claimed `#F5F5F5`. F2 is measured against the value that
+  ships (`#F2F2F2`, 1.5913); against the value the comment claimed it would read
+  1.6396. Same class of defect as the one this task closed, in a different slot.
+  Task 01a09333-d374 stage 6 corrected the comment. Every figure in this module
+  was already measured against the declaration, so none of them moved.
 
   ## Mutation results (run by hand, 2026-09-06, recorded here for the next reader)
 
@@ -1066,8 +1068,9 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       ratio = W.contrast(declared_color!(body, "color", l.tokens), l.base_200)
 
       # Measured against what --color-base-200 actually renders, oklch(96% 0 0)
-      # = #F2F2F2. Its own trailing comment claims #F5F5F5, which would give
-      # 4.2941. That comment drift is reported, not fixed here.
+      # = #F2F2F2. Its own trailing comment claimed #F5F5F5 until task
+      # 01a09333-d374 stage 6 corrected it; reading the comment would have
+      # given 4.2941, so this figure is what it always was.
       assert_ratio("F2 (.code-block-expand on light --color-base-200)", ratio, 4.1847)
 
       # Still (c). --color-interactive was derived against pure WHITE, where it

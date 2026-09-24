@@ -1300,13 +1300,15 @@ defmodule Platform.Tenancy do
   conversion safe; entries are STRINGS end to end, so no conversion — and no
   allowlist — is needed. Adding a tenant is a row, not a deploy.
 
-      [%{slug: "fabrikam", label: "Fabrikam", hue: 264, chroma: 0.17}, ...]
+      [%{slug: "sxi", label: "SXI", hue: 162, chroma: 0.15, lightness: 0.7}, ...]
 
   `label` is the org's own `name`, NOT `@scope_labels`: a map keyed on six
   compiled atoms cannot name a seventh org, and the row already carries the
   name an admin typed. `hue` is `nil` when the org has no colour set (the
   caller decides the fallback); `chroma` falls back to #{@default_chroma},
   the mid-range value `Platform.Tenancy.ScopeColor` is tuned around.
+  `lightness` is the org's fill lightness, or `nil` for the solver's
+  default; only the six shipped orgs carry one (task 01a09333-d374 stage 5).
 
   > #### Never convert a slug to an atom {: .error}
   >
@@ -1316,19 +1318,63 @@ defmodule Platform.Tenancy do
   > invisible against a seeded database. Keep this pipeline on binaries.
   """
   @spec scope_slug_entries(map() | nil) :: [
-          %{slug: String.t(), label: String.t(), hue: integer() | nil, chroma: float()}
+          %{
+            slug: String.t(),
+            label: String.t(),
+            hue: integer() | nil,
+            chroma: float(),
+            lightness: float() | nil
+          }
         ]
   def scope_slug_entries(viewer) do
     viewer
     |> list_active_tenants_for_user()
-    |> Enum.map(fn %Org{} = org ->
-      %{
-        slug: org.slug,
-        label: org.name,
-        hue: org.color_hue,
-        chroma: org.color_chroma || @default_chroma
-      }
-    end)
+    |> Enum.map(&scope_entry/1)
+  end
+
+  @doc """
+  The orgs whose scope COLOUR a page may need: every active org the viewer
+  can see anywhere, in the same entry shape as `scope_slug_entries/1`.
+
+  Feeds `PlatformWeb.Components.ScopeColorStyles`, and is deliberately wider
+  than `scope_slug_entries/1`, which is the Tasks rail's list: that one
+  narrows a root member who is not an admin to the orgs they belong to,
+  while chat shows every root member every org's channels (`visibility/1`
+  is `:root_all` for them), with a scope chip in the channel header and
+  the rail drawer. Since task 01a09333-d374 stage 5 a chip's colour comes
+  ONLY from a rule this list emits, so a colour list narrower than the
+  chip's reach renders those chips uncoloured. Before stage 5 the six
+  shipped orgs hid that gap behind per-slug CSS classes.
+
+  Emitting an org the viewer can already see names nothing new: the rule
+  carries the org's slug and colour, both already on screen for them.
+  """
+  @spec scope_color_entries(map() | nil) :: [
+          %{
+            slug: String.t(),
+            label: String.t(),
+            hue: integer() | nil,
+            chroma: float(),
+            lightness: float() | nil
+          }
+        ]
+  def scope_color_entries(viewer) do
+    Org
+    |> where([o], is_nil(o.archived_at))
+    |> scope(visibility(viewer), field: :id)
+    |> Repo.all()
+    |> sort_by_tenant_priority(& &1.slug)
+    |> Enum.map(&scope_entry/1)
+  end
+
+  defp scope_entry(%Org{} = org) do
+    %{
+      slug: org.slug,
+      label: org.name,
+      hue: org.color_hue,
+      chroma: org.color_chroma || @default_chroma,
+      lightness: org.color_lightness
+    }
   end
 
   @doc """

@@ -57,9 +57,10 @@ defmodule Platform.Design.FocusRingSlotTest do
 
   Ratios come from `Platform.Design.WcagContrast` over the declarations parsed
   out of the stylesheet. No resolved colour is typed at a call site, and the
-  comments in `app.css` are deliberately not a source: they are known to drift,
-  light `--color-base-200` being commented `#F5F5F5` while it renders
-  `#F2F2F2`.
+  comments in `app.css` are deliberately not a source: they are known to drift.
+  The worked example was light `--color-base-200`, commented `#F5F5F5` while it
+  rendered `#F2F2F2`; task 01a09333-d374 stage 6 corrected that comment, and
+  not one ratio below moved, because none of them was reading it.
 
   `WcagContrast` carries floats through an `oklch()` conversion rather than
   quantizing to 8-bit first. That float-through convention belongs to the

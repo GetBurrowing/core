@@ -23,9 +23,10 @@ defmodule Platform.MaskAssertions do
   without breaking what it identifies, and each is invisible on a screen share
   — which is this feature's entire threat model:
 
-    * `class` — the scope-colour utilities are named after the org slug
-      (`bg-wayne-tech`, `text-wayne-tech-label`). CSS class names cannot be
-      re-generated per session.
+    * `class` — some scope-colour utilities are named after the org slug
+      (`text-wayne-tech`, `bg-wayne-tech-dot`; the chip's own per-slug classes
+      were retired in task 01a09333-d374 stage 5). CSS class names cannot
+      be re-generated per session.
     * `phx-value-scope` — the scope pill's event payload. It IS the filter
       argument; mask it and the pill filters by nothing.
     * `href` — a channel URL carries its slug, and the address bar shows it

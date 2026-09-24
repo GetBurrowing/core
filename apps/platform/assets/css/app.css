@@ -75,7 +75,15 @@
   color-scheme: "light";
   /* Fabrikam surfaces */
   --color-base-100: oklch(100% 0 0);          /* #FFFFFF */
-  --color-base-200: oklch(96% 0 0);           /* #F5F5F5 */
+  /* #F2F2F2, not #F5F5F5. The comment read #F5F5F5 from this line's first
+     commit until task 01a09333-d374 stage 6; oklch(96% 0 0) paints
+     242,242,242, three per channel darker, verified by painting the
+     declaration on two independent rigs. Four modules had already recorded
+     the discrepancy and worked around it by measuring the declaration
+     instead (scope_color.ex, focus_ring_slot_test.exs,
+     primary_contrast_sweep_test.exs, and the note further down this block);
+     none of them could fix it from where they stood. */
+  --color-base-200: oklch(96% 0 0);           /* #F2F2F2 */
   --color-base-300: oklch(88% 0 0);           /* #D7D7D7 */
   /* Border/edge slot. Byte-identical to --color-base-300 above, and that
      identity is deliberate: light --color-base-100 is pure white, so the
@@ -99,8 +107,10 @@
      Every ratio above was computed from this file's own declarations by
      test/platform/design/focus_ring_slot_test.exs through
      Platform.Design.WcagContrast; none is copied from another comment, because
-     the comments in this file are known to drift (light --color-base-200 is
-     commented #F5F5F5 and renders #F2F2F2).
+     the comments in this file are known to drift (light --color-base-200 was
+     commented #F5F5F5 while it rendered #F2F2F2, from its first commit until
+     task 01a09333-d374 stage 6 corrected the comment above; the figures here
+     were always measured against the declaration, so none of them moved).
 
      Must be named --focus-ring, never --color-focus-ring — see the
      @theme inline block below for why a --color-* name here breaks. The
@@ -332,33 +342,22 @@
 }
 
 /* ──────────────────────────────────────────────────────
-   Sub-org scope colors — the canonical design-system mapping for the 5
-   sub-org scopes (Fabrikam, Soylent, Wayne-Tech, SXI, Paragon). These utility
-   classes replace the inline `bg-[oklch(...)]` arbitrary-value classes
-   that scope_pill.ex used to carry, and are referenced by `Platform.Tenancy.scope_color/1`.
+   Sub-org scope colors. Every scope chip, for every org, is coloured by
+   the slug-agnostic `.scope-*` rules below, reading custom properties that
+   `PlatformWeb.Components.ScopeColorStyles` emits per org from its row.
 
-   Each scope ships a coordinated set of utilities:
-
-     - text-<slug>          — full-saturation text color (e.g. labels).
-     - bg-<slug>            — 12% color-mix background (chip default state).
-     - bg-<slug>-active     — full-saturation background (chip active state).
-     - border-<slug>        — 30% color-mix border (chip default state).
-     - bg-<slug>-dot        — full-saturation background, used for the
-                              redundant-signal-beyond-color dot.
-     - hover:bg-<slug>/22   — 22% color-mix hover state (chip default state).
-
-   Active-state pills need a contrast-safe text color over the
-   full-saturation fill; Fabrikam / SXI / Paragon take the dark text
-   token, Soylent / Wayne-Tech take the light text token. This mirrors
-   the existing logic in scope_pill.ex.
-
-   oklch literals are byte-identical to the values previously inlined in
-   scope_pill.ex (Stage 2 of Working surfaces plan v4). See
-   `Platform.Tenancy.scope_color/1` for the slug → class mapping.
+   Until task 01a09333-d374 stage 5 the six shipped orgs (fabrikam, soylent,
+   wayne-tech, sxi, paragon, cyberdyne) had their own hand-authored chip
+   utilities here: `bg-<slug>` (12% alpha), `bg-<slug>-active`,
+   `border-<slug>` (30% alpha), `hover:bg-<slug>/22` and
+   `text-<slug>-label`. Stage 5 moved the six onto the var path and deleted
+   those, so no chip can carry both class sets. Two per-slug utilities
+   remain at the end of this layer because non-chip code uses them; see
+   the note there.
    ────────────────────────────────────────────────────── */
 @layer utilities {
   /* ── Runtime scope colours (var-driven) ───────────────────────────────
-     These six rules are slug-AGNOSTIC: they read custom properties that
+     These rules are slug-AGNOSTIC: they read custom properties that
      `PlatformWeb.Components.ScopeColorStyles` emits into a server-rendered
      <style> block, one declaration set per active org. That is the whole
      point — a Tailwind utility is a literal rule baked at BUILD time, so
@@ -367,138 +366,115 @@
      property is resolved at RENDER time, so a brand-new org is coloured on
      its next page load. (Task 01a09287 stage 3.)
 
-     An org with no colour set emits no declarations, so `--scope-fill` and
-     `--scope-label` are unset and these rules fall through to the call
-     site's existing `text-muted` behaviour. */
-  .scope-text { color: var(--scope-label); }
+     An org with no colour set emits no declarations, so every `--scope-*`
+     property is unset and these rules fall through to the call site's
+     existing `text-muted` behaviour.
+
+     Per-surface pairs (task 01a09333-d374 stage 3). A chip's tint and label
+     are OPAQUE `#rrggbb` values solved per theme and per surface:
+     `.scope-tint` / `.scope-text` read the base-100 pair, and
+     `.scope-tint-200` / `.scope-text-200` read the base-200 pair. Which
+     pair a chip wears is declared at its CALL SITE (`ScopePill`'s `surface`
+     attr), never inferred from the container, so there is no ambient
+     `[data-surface]` rule here on purpose. The tint is painted as given:
+     nothing composites it at render time, so the label's contrast is the
+     figure the solver measured.
+
+     The label decision, recorded when the six shipped orgs had their own
+     label tokens and kept since: the full-saturation fill is tuned for the
+     dot and the active pill, NOT for label text on the chip's tint, where
+     it dips below AA (e.g. soylent ~3.0:1 light). So the label darkens
+     only the LABEL: same hue + chroma as the fill, lower L, so the pill
+     label meets AA while preserving the scope hue. Since task
+     01a09333-d374 that rule applies per surface: each org has one label
+     per theme per surface (`--scope-label-100` / `-200`), each solved
+     against the opaque tint it actually sits on, and only L differs
+     between them. The dot and the active pill stay at full saturation. */
+  .scope-text { color: var(--scope-label-100); }
+  .scope-text-200 { color: var(--scope-label-200); }
   .scope-fill { background-color: var(--scope-fill); }
-  .scope-tint { background-color: color-mix(in oklch, var(--scope-fill) 12%, transparent); }
-  .scope-tint-hover:hover { background-color: color-mix(in oklch, var(--scope-fill) 22%, transparent); }
-  .scope-border { border-color: color-mix(in oklch, var(--scope-fill) 30%, transparent); }
+  .scope-tint { background-color: var(--scope-tint-100); }
+  .scope-tint-200 { background-color: var(--scope-tint-200); }
   .scope-dot { background-color: var(--scope-fill); }
   .scope-active { background-color: var(--scope-fill); color: var(--scope-active-content); box-shadow: 0 0 0 2px color-mix(in oklch, var(--scope-fill) 30%, transparent); }
 
-  /* The alphas above are 12% / 22% / 30% because that is what the six
-     hand-authored blocks below use, and `Platform.Tenancy.ScopeColor.cells/1`
-     names the same 12% / 22% as the two states it solves the label against.
-     Three places, one set of numbers: if you change one, change all three or
-     the picker prints a figure the browser does not paint. */
+  /* Edge (task 01a09333-d374 stage 4). The chip's fill is 1.07-1.14:1
+     against its ground, so the edge is what gives a chip its shape. Each
+     `--scope-edge-*` value is solved server-side to 3:1 against the page
+     ground it lands on (WCAG 1.4.11), with a one-byte margin, and emitted
+     as opaque `#rrggbb`. The old 30% alpha border measured 1.17-1.41:1.
+       - default size: colours the 1px border the chip already has.
+       - compact: has no border, so the edge is an INSET 1px box-shadow,
+         which costs no width and no height.
 
-  /* ── LEGACY, deploy-bound: the per-slug blocks below ───────────────────
-     Everything from here to the end of this layer is the build-time path
-     the rules above replace. Each `.text-<slug>` / `.bg-<slug>` block only
-     exists for a slug that was hand-written into this file, which is
-     exactly the deploy dependency this task removes. They are kept for
-     this stage because the call sites still reference them. Stage 5 wired
-     `scope_pill.ex` to the `.scope-*` rules above for every slug EXCEPT
-     these six, which is why they are still here rather than deleted: their
-     labels were solved against one cell of four (see `ScopeColor`'s
-     moduledoc) and re-solving them moves every shipped org's colour on
-     every install. That is a brand call, filed as task 01a09333-d374, and
-     until it is taken the six render byte-identically to what they render
-     today. Do NOT add a seventh slug here — set the org's `color_hue`
-     instead, and `ScopePill` will route it to the var path automatically. */
+     Hover is on the EDGE, never on the fill, and never changes a width:
+     `.scope-active` already owns the 2px box-shadow ring, a 2px hover
+     border would reflow the rail row, and compact has no border to widen.
+     `--scope-edge-hover-*` is its own solved value (one solver step darker
+     in L), so nothing here derives it with `color-mix` or relative colour
+     syntax. Plain `:hover` / `:focus-visible` selectors on purpose: a
+     Tailwind `hover:` variant compiles inside `@media (hover: hover)` and
+     never fires on touch. The compact `:focus-visible` rule repeats the
+     standard `.focus-visible-ring` shadow after the inset edge, because
+     both are box-shadows and this rule (same specificity, later in the
+     file) would otherwise drop the focus ring; `ScopePillTest` pins the two
+     together. The edge var there carries a `transparent` fallback: a chip
+     whose `--scope-edge-*` is unset (an org with no colour, or a masked
+     chip with no `data-scope`) would otherwise make the whole `box-shadow`
+     invalid at computed-value time, and the ring would go with it.
 
-  /* ─ fabrikam ─ orange ─ */
+     `.scope-tint-hover` (a 22% alpha fill) was retired in stage 3: a 22%
+     fill cannot be tuned back to a legible label. The 30% alpha on
+     `.scope-active` above is the active ring, which carries no label. */
+  .scope-edge { border-color: var(--scope-edge-100); }
+  .scope-edge-200 { border-color: var(--scope-edge-200); }
+  .scope-edge-inset { box-shadow: inset 0 0 0 1px var(--scope-edge-100); }
+  .scope-edge-inset-200 { box-shadow: inset 0 0 0 1px var(--scope-edge-200); }
+  .scope-edge-hover:hover,
+  .scope-edge-hover:focus-visible { border-color: var(--scope-edge-hover-100); }
+  .scope-edge-hover-200:hover,
+  .scope-edge-hover-200:focus-visible { border-color: var(--scope-edge-hover-200); }
+  .scope-edge-inset-hover:hover { box-shadow: inset 0 0 0 1px var(--scope-edge-hover-100); }
+  .scope-edge-inset-hover-200:hover { box-shadow: inset 0 0 0 1px var(--scope-edge-hover-200); }
+  .scope-edge-inset-hover:focus-visible {
+    box-shadow:
+      inset 0 0 0 1px var(--scope-edge-hover-100, transparent),
+      0 0 0 2px var(--color-base-100),
+      0 0 0 4px var(--color-focus-ring);
+  }
+  .scope-edge-inset-hover-200:focus-visible {
+    box-shadow:
+      inset 0 0 0 1px var(--scope-edge-hover-200, transparent),
+      0 0 0 2px var(--color-base-100),
+      0 0 0 4px var(--color-focus-ring);
+  }
+
+  /* ── Two per-slug utilities that are NOT chip classes ──────────────────
+     Kept after task 01a09333-d374 stage 5 deleted every per-slug CHIP
+     utility, because code other than the scope chip reads them:
+       - `.text-<slug>` is `Platform.Tenancy.scope_color/1`'s answer, used
+         by the inheritance pill, the files and recovery pages, and the
+         tasks sidebar dots and filter breadcrumb.
+       - `.bg-<slug>-dot` is `ChatLive.section_dot_class/1`'s answer, the
+         chat rail's section-header dot.
+     Both are the org's full-saturation fill, the same value its row now
+     carries (hue, chroma, fill lightness) and `--scope-fill` emits, and
+     `ScopePillTest` holds each one to the values the stage 5 migration
+     writes to that row. They are a second copy of
+     that fill and a candidate for the var path in their own right; do not
+     add a seventh slug here. Set the org's `color_hue` instead. */
   .text-fabrikam { color: oklch(72% 0.16 50); }
-  .bg-fabrikam { background-color: oklch(72% 0.16 50 / 12%); }
-  .bg-fabrikam-active { background-color: oklch(72% 0.16 50); color: oklch(15% 0 0); box-shadow: 0 0 0 2px oklch(72% 0.16 50 / 30%); }
-  .border-fabrikam { border-color: oklch(72% 0.16 50 / 30%); }
   .bg-fabrikam-dot { background-color: oklch(72% 0.16 50); }
-  .hover\:bg-fabrikam\/22:hover { background-color: oklch(72% 0.16 50 / 22%); }
-
-  /* ─ soylent ─ purple ─ */
   .text-soylent { color: oklch(65% 0.20 295); }
-  .bg-soylent { background-color: oklch(65% 0.20 295 / 12%); }
-  .bg-soylent-active { background-color: oklch(65% 0.20 295); color: oklch(98% 0 0); box-shadow: 0 0 0 2px oklch(65% 0.20 295 / 30%); }
-  .border-soylent { border-color: oklch(65% 0.20 295 / 30%); }
   .bg-soylent-dot { background-color: oklch(65% 0.20 295); }
-  .hover\:bg-soylent\/22:hover { background-color: oklch(65% 0.20 295 / 22%); }
-
-  /* ─ wayne-tech ─ blue ─ */
   .text-wayne-tech { color: oklch(68% 0.15 240); }
-  .bg-wayne-tech { background-color: oklch(68% 0.15 240 / 12%); }
-  .bg-wayne-tech-active { background-color: oklch(68% 0.15 240); color: oklch(98% 0 0); box-shadow: 0 0 0 2px oklch(68% 0.15 240 / 30%); }
-  .border-wayne-tech { border-color: oklch(68% 0.15 240 / 30%); }
   .bg-wayne-tech-dot { background-color: oklch(68% 0.15 240); }
-  .hover\:bg-wayne-tech\/22:hover { background-color: oklch(68% 0.15 240 / 22%); }
-
-  /* ─ sxi ─ green ─ */
   .text-sxi { color: oklch(70% 0.15 162); }
-  .bg-sxi { background-color: oklch(70% 0.15 162 / 12%); }
-  .bg-sxi-active { background-color: oklch(70% 0.15 162); color: oklch(15% 0 0); box-shadow: 0 0 0 2px oklch(70% 0.15 162 / 30%); }
-  .border-sxi { border-color: oklch(70% 0.15 162 / 30%); }
   .bg-sxi-dot { background-color: oklch(70% 0.15 162); }
-  .hover\:bg-sxi\/22:hover { background-color: oklch(70% 0.15 162 / 22%); }
-
-  /* ─ paragon ─ yellow ─ */
   .text-paragon { color: oklch(80% 0.16 95); }
-  .bg-paragon { background-color: oklch(80% 0.16 95 / 12%); }
-  .bg-paragon-active { background-color: oklch(80% 0.16 95); color: oklch(15% 0 0); box-shadow: 0 0 0 2px oklch(80% 0.16 95 / 30%); }
-  .border-paragon { border-color: oklch(80% 0.16 95 / 30%); }
   .bg-paragon-dot { background-color: oklch(80% 0.16 95); }
-  .hover\:bg-paragon\/22:hover { background-color: oklch(80% 0.16 95 / 22%); }
-
-  /* ─ cyberdyne ─ magenta ─ */
   .text-cyberdyne { color: oklch(66% 0.19 340); }
-  .bg-cyberdyne { background-color: oklch(66% 0.19 340 / 12%); }
-  .bg-cyberdyne-active { background-color: oklch(66% 0.19 340); color: oklch(15% 0 0); box-shadow: 0 0 0 2px oklch(66% 0.19 340 / 30%); }
-  .border-cyberdyne { border-color: oklch(66% 0.19 340 / 30%); }
   .bg-cyberdyne-dot { background-color: oklch(66% 0.19 340); }
-  .hover\:bg-cyberdyne\/22:hover { background-color: oklch(66% 0.19 340 / 22%); }
-
-  /* ── Scope-pill LABEL text (WCAG 1.4.3 AA, ≥4.5:1) ────────────────────
-     The full-saturation `text-<slug>` token above is tuned for the
-     full-saturation dot / active fill, NOT for label text sitting on the
-     12% `bg-<slug>` tint. On that tint the colored label dipped below AA
-     (e.g. soylent ~3.0:1 light). These `text-<slug>-label` tokens darken
-     the LABEL only — same hue + chroma as `text-<slug>`, lower L — so the
-     pill label meets AA while preserving the scope hue. Used solely by the
-     non-active scope_pill chip (see scope_pill.ex `chip_color_classes/3`,
-     active:false). The dot (`bg-<slug>-dot`) stays full saturation as the
-     WCAG 1.4.1 redundant-color cue, and `bg-<slug>-active` keeps its own
-     baked contrast text. `Platform.Tenancy.scope_color/1` is unchanged.
-
-     LIGHT base = the BASE rule below (12% tint over base-100 #FFFFFF).
-     DARK base  = [data-theme=dark] override (12% tint over base-100 #171b25);
-     only soylent is nudged (0.65→0.67 L) to clear AA in dark.
-
-     Measured contrast (label text vs composited 12% tint over base-100):
-       LIGHT (over #FFFFFF):  fabrikam 4.61 · soylent 4.66 · wayne-tech 4.66 · sxi 4.56 · paragon 4.65 · cyberdyne 4.61
-       DARK  (over #171b25):  fabrikam 5.51 · soylent 4.56 · wayne-tech 5.11 · sxi 5.71 · paragon 7.31 · cyberdyne 4.62
-     All twelve ≥ 4.5:1, and the light row above is CONFIRMED, not stale.
-     (Recomputed via OKLCH→sRGB→WCAG; cyberdyne added 2026-08-14.)
-
-     Re-verified 2026-09-11 (task 01a09287 stage 3) against Chrome 152 itself:
-     `oklch(51% 0.15 162)` has a NEGATIVE linear-sRGB red channel (-0.041996),
-     i.e. it is outside the sRGB gamut, and Chrome resolves it by CLIPPING
-     that channel to 0, painting rgb(0,127,74). Clip-then-encode reproduces
-     Chrome byte-for-byte on all four sxi probes, and gives sxi light 4.56 —
-     the figure recorded above.
-
-     NOTE FOR ANYONE RECOMPUTING THESE: recompute with
-     `Platform.Tenancy.ScopeColor` and you will get the table above. Its
-     private `encode/1` used to apply the sRGB transfer function to `abs(x)`,
-     so a negative channel came back POSITIVE (0.2266 here, not 0) and its
-     `max(0.0)` clamp never fired; that reported sxi light as 4.37 and read
-     as an AA failure that does not exist. Roughly half of the hue circle is
-     out of gamut at these chromas, so that was not a corner case — task
-     01a09287 stage 4 changed it to clip, and 4.37 is withdrawn.
-     cyberdyne uses half-percent L (55.5% / 67.5%) because whole-percent
-     steps at hue 340 overshoot the 4.56–4.66 band in light. */
-  .text-fabrikam-label     { color: oklch(55% 0.16 50); }
-  .text-soylent-label { color: oklch(55% 0.20 295); }
-  .text-wayne-tech-label { color: oklch(52% 0.15 240); }
-  .text-sxi-label      { color: oklch(51% 0.15 162); }
-  .text-paragon-label { color: oklch(54% 0.16 95); }
-  .text-cyberdyne-label { color: oklch(55.5% 0.19 340); }
-
-  [data-theme=dark] .text-fabrikam-label     { color: oklch(72% 0.16 50); }
-  [data-theme=dark] .text-soylent-label { color: oklch(67% 0.20 295); }
-  [data-theme=dark] .text-wayne-tech-label { color: oklch(68% 0.15 240); }
-  [data-theme=dark] .text-sxi-label      { color: oklch(70% 0.15 162); }
-  [data-theme=dark] .text-paragon-label { color: oklch(80% 0.16 95); }
-  [data-theme=dark] .text-cyberdyne-label { color: oklch(67.5% 0.19 340); }
 }
 
 /* ──────────────────────────────────────────────────────

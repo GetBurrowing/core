@@ -261,45 +261,50 @@ defmodule PlatformWeb.AdminOrgsLive do
     |> assign(:preview, %{
       ramp: ramp,
       grounds: [
-        %{
-          key: :light,
-          name: "Light theme",
-          panel_style: "background-color:#ffffff",
-          chip_text: ramp.label_light,
-          worst: worst_cell(ramp.fill, ramp.label_light, :light)
-        },
-        %{
-          key: :dark,
-          name: "Dark theme",
-          panel_style: "background-color:#171b25",
-          chip_text: ramp.label_dark,
-          worst: worst_cell(ramp.fill, ramp.label_dark, :dark)
-        }
+        preview_ground(ramp, :light, "Light theme"),
+        preview_ground(ramp, :dark, "Dark theme")
       ]
     })
     |> assign(:hue_conflicts, conflicts_for(socket.assigns.orgs, hue))
   end
 
   @doc """
-  The WORST of the four cells a label lands in, for one theme.
+  One theme's half of the preview: every cell the solver solved for that
+  theme, and the worst of them.
 
   Design ruling, task 01a09287: the panel prints the worst cell and names
-  it. An operator does not need a contrast table — they need to know
-  whether the colour holds everywhere it will appear, and a bare number
-  invites a best-case reading of a value that is only true in one of four
-  places.
+  it. An operator does not need a contrast table; they need to know whether
+  the colour holds everywhere it will appear, and a bare number invites a
+  best-case reading of a value that is only true in one place.
 
-  A THIN DELEGATION, on purpose. This function used to carry its own copy of
-  the surface and tint tables while `ScopeColor` solved against one cell of
-  the four — so the panel printed the worst of four and the solver hit the
-  best of four, and the gap between the two definitions showed up here as a
-  flat 3.74-3.81 at every hue on the circle in light. A shortfall that does
-  not move with hue is a constant offset between two tables, not a property
-  of any colour. The tables now live in `ScopeColor.cells/1`, which is also
-  what the solver walks against, so the number this prints is the number the
-  solver met and the two cannot drift apart again.
+  EVERYTHING here is read off the ramp, and nothing is recomputed. This
+  panel used to carry its own copy of the cell table while `ScopeColor`
+  solved against a different one, so it printed the worst of four while the
+  solver hit the best of four, and the gap between the two definitions
+  showed up as a flat 3.74-3.81 at every hue on the circle in light. A
+  shortfall that does not move with hue is a constant offset between two
+  tables, not a property of any colour. `ScopeColor.cells/1` is the one
+  enumeration, `derive/2` solves every cell in it, and this prints
+  `worst_light` / `worst_dark` from that solve, so the number an operator
+  approves is the number the solver met.
+
+  Each cell is painted with the exact bytes it was measured on: its surface,
+  its opaque tint and its label. `panel_style` is the theme's `base-100`,
+  read from the same cells.
   """
-  defdelegate worst_cell(fill, label, theme), to: ScopeColor
+  def preview_ground(ramp, theme, name) do
+    cells = Map.fetch!(ramp.cells, theme)
+    pane = Enum.find(cells, &(&1.surface == "base-100"))
+
+    %{
+      key: theme,
+      name: name,
+      panel_style: "background-color:#{pane.color}",
+      text_color: pane.label,
+      cells: cells,
+      worst: if(theme == :light, do: ramp.worst_light, else: ramp.worst_dark)
+    }
+  end
 
   @doc false
   def format_contrast(value), do: :erlang.float_to_binary(value * 1.0, decimals: 2)
@@ -307,12 +312,15 @@ defmodule PlatformWeb.AdminOrgsLive do
   @doc """
   The list-row swatch colour for an org, from its own stored hue.
 
-  Uses the org's `color_chroma` when it has one so the swatch matches what
-  the rail paints for the six migrated orgs, and #{@chroma} otherwise —
-  the same fallback `Tenancy.scope_slug_entries/1` applies.
+  Uses the org's `color_chroma` when it has one, and #{@chroma} otherwise —
+  the same fallback `Tenancy.scope_slug_entries/1` applies — and the org's
+  `color_lightness` when it has one, so the swatch matches what the rail
+  paints for the six shipped orgs (paragon's fill is 80%, not the 72%
+  default; task 01a09333-d374 stage 5).
   """
   def org_fill(%{color_hue: hue} = org) when is_integer(hue) do
-    ScopeColor.derive(hue, org.color_chroma || @chroma).fill
+    lightness = Map.get(org, :color_lightness) || ScopeColor.default_fill_lightness()
+    ScopeColor.derive(hue, org.color_chroma || @chroma, lightness).fill
   end
 
   defp picked_hue(params) do

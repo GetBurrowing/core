@@ -225,8 +225,11 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
                `scope_pill_label/3` returns the placeholder, and while it is
                off this hands over the real org name rather than leaving the
                pill to guess from a six-entry map. --%>
+          <%!-- `surface` is declared, not inherited (task 01a09333-d374):
+               these chips sit in `page_header/1`'s `bg-base-100` header. --%>
           <.scope_pill
             scope={entry.slug}
+            surface={:base_100}
             active={@scope_filter == entry.slug}
             event="filter_scope"
             target={@myself}

@@ -1712,9 +1712,13 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                      placeholder is passed IN; `scope_pill` holds no mask table
                      of its own, because a second copy drifts and the copy that
                      drifts is the one nobody is looking at. --%>
+                <%!-- `surface` is declared, not inherited (task 01a09333-d374):
+                     this drawer sets no fill, so the chip sits on the rail
+                     `<aside>`'s `bg-base-200`. --%>
                 <.scope_pill
                   :if={scope}
                   scope={scope}
+                  surface={:base_200}
                   clickable={false}
                   label={@mask_names? && bucket_label}
                 />

@@ -343,39 +343,55 @@
             data-role="preview-ground"
             data-ground={ground.key}
           >
-            <div
-              class="inline-flex items-center gap-2 rounded-full px-2.5 py-1"
-              style={"background-color:color-mix(in oklch, #{@preview.ramp.fill} 12%, transparent)"}
-            >
-              <span
-                class="size-2 rounded-full"
-                style={"background-color:#{@preview.ramp.fill}"}
+            <%!-- One chip per surface the solver solved: the chat pane
+                 (base-100) and the scope rail (base-200). Each is painted
+                 with the exact bytes it was measured on, its surface, its
+                 OPAQUE tint and its own label, so nothing here composites
+                 in the browser and the chip an operator looks at is the
+                 chip the figure below describes. --%>
+            <div class="flex flex-wrap items-center gap-2">
+              <div
+                :for={cell <- ground.cells}
+                class="rounded-lg p-1.5"
+                style={"background-color:#{cell.color}"}
+                title={cell.surface}
+                data-role="preview-surface"
+                data-ground={ground.key}
+                data-surface={cell.surface}
               >
-              </span>
-              <span
-                class="text-xs font-medium"
-                style={"color:#{ground.chip_text}"}
-                data-role="preview-chip-label"
-              >
-                {if @org_form[:name].value in [nil, ""],
-                  do: "New org",
-                  else: @org_form[:name].value}
-              </span>
+                <div
+                  class="inline-flex items-center gap-2 rounded-full px-2.5 py-1"
+                  style={"background-color:#{cell.tint}"}
+                >
+                  <span
+                    class="size-2 rounded-full"
+                    style={"background-color:#{@preview.ramp.fill}"}
+                  >
+                  </span>
+                  <span
+                    class="text-xs font-medium"
+                    style={"color:#{cell.label}"}
+                    data-role="preview-chip-label"
+                  >
+                    {if @org_form[:name].value in [nil, ""],
+                      do: "New org",
+                      else: @org_form[:name].value}
+                  </span>
+                </div>
+              </div>
             </div>
 
-            <%!-- The WORST cell, named. A chip label sits on the fill
-                 composited over a surface and BOTH vary — rest 12% or
-                 hovered 22%, over base-100 or base-200 — so there are four
-                 cells per theme and only the first was ever tuned. Printing
-                 the best one, or printing four, both invite an operator to
+            <%!-- The WORST cell, named. Each surface has its own tint and
+                 its own label, so there are two cells per theme. Printing
+                 the better one, or printing both, invites an operator to
                  read the number they like. --%>
-            <p class="mt-2 font-mono text-[11px]" style={"color:#{ground.chip_text}"}>
+            <p class="mt-2 font-mono text-[11px]" style={"color:#{ground.text_color}"}>
               <span data-role="preview-contrast" data-ground={ground.key}>
                 {format_contrast(ground.worst.contrast)}:1
               </span>
-              <span class="opacity-70">on the {ground.worst.cell}</span>
+              <span class="opacity-70">worst: {ground.worst.cell}</span>
             </p>
-            <p class="font-mono text-[11px]" style={"color:#{ground.chip_text}"}>
+            <p class="font-mono text-[11px]" style={"color:#{ground.text_color}"}>
               <span :if={ground.worst.contrast >= 4.5} class="opacity-70">
                 {ground.name} · worst cell clears AA 4.5:1
               </span>
@@ -392,36 +408,38 @@
         </div>
 
         <%!-- This copy used to tell the operator that a figure under 4.5 was
-             expected, because the solver targeted the rest-over-base-100 cell
-             while this panel printed the worst of four. Task 01a09287 stage 5
-             pointed the solver at the same four cells the panel reads
-             (`ScopeColor.cells/1` is now the one enumeration), so every hue
-             on the circle clears 4.5 in both themes and the apology is no
-             longer true. Leaving it would have taught an operator to accept a
-             failing figure as normal — worse than no copy at all.
+             expected, because the solver and this panel read different cell
+             tables. Task 01a09287 stage 5 made `ScopeColor.cells/1` the one
+             enumeration, and task 01a09333-d374 gave each surface its own
+             opaque tint and its own label, solved against that tint alone.
+             Every hue on the circle clears 4.5 with margin in both themes,
+             so an apology here would teach an operator to accept a failing
+             figure as normal.
 
-             The six shipped orgs are NOT solved through this path: they keep
-             their hand-authored `app.css` tokens, all six of which are below
-             4.5 at their worst cell. Re-solving them moves every existing
-             org's label on every install — a brand call, filed as
-             01a09333-d374. --%>
+             The six shipped orgs are NOT solved through this path yet: they
+             keep their hand-authored `app.css` tokens until the retrofit in
+             task 01a09333-d374. --%>
         <p class="text-[11px] text-base-content/60" data-role="preview-worst-cell-note">
-          Figures are the worst of four cells per theme — chip at rest (12%) or hovered
-          (22%), over base-100 or base-200 — and the solver targets that worst cell, with
-          margin for a one-byte rounding difference. Every hue clears 4.5 in both themes;
-          if one does not, that is a bug in the solver and not a reason to pick again.
+          Each theme shows the chip on the chat pane (base-100) and on the scope rail
+          (base-200). Each surface gets its own solid tint and its own label, solved
+          against that tint with margin for a one-byte rounding difference, and the
+          figure is the worse of the two. Every hue clears 4.5 in both themes; if one
+          does not, that is a bug in the solver and not a reason to pick again.
         </p>
 
-        <%!-- The three values that actually get written into the runtime
-             `<style>` block, in mono because they are machine values an
-             operator may paste into a bug report. --%>
+        <%!-- The solved values, in mono because they are machine values an
+             operator may paste into a bug report. `fill` stays first: it is
+             what the ring's hue test reads out of this block. --%>
         <div
           class="rounded-lg bg-base-200 p-3 font-mono text-[11px] leading-relaxed text-base-content/60"
           data-role="org-color-derived"
         >
           <div>fill {@preview.ramp.fill}</div>
-          <div>label light {@preview.ramp.label_light}</div>
-          <div>label dark {@preview.ramp.label_dark}</div>
+          <div :for={ground <- @preview.grounds}>
+            <div :for={cell <- ground.cells} data-role="org-color-derived-cell">
+              {ground.key} {cell.surface}: tint {cell.tint} · label {cell.label}
+            </div>
+          </div>
         </div>
       </div>
 

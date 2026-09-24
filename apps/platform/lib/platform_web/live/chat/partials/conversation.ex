@@ -201,8 +201,12 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                  in the chat header at the top of the phone screen, which is
                  the MOST visible surface in a mirrored window. The label
                  override reaches the pill's `aria-label` too. --%>
+            <%!-- `surface` is declared, not inherited (task 01a09333-d374):
+                 the `<header>` sets no fill, so this sits on the shell's
+                 `bg-base-100`. --%>
             <.scope_pill
               scope={mobile_header_scope}
+              surface={:base_100}
               size={:compact}
               clickable={true}
               active={@scope_filter == mobile_header_scope}
@@ -246,8 +250,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                currently-selected filter. --%>
           <% header_scope = !@external? && @active_space_scope %>
           <span :if={header_scope} class="chat-header-scope-pill">
+            <%!-- Declared surface, as on the mobile pill above. --%>
             <.scope_pill
               scope={header_scope}
+              surface={:base_100}
               clickable={true}
               active={@scope_filter == header_scope}
               label={
