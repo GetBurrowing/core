@@ -138,7 +138,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
         id="stack-detail-panel"
         data-role="stack-detail-panel"
         data-stack-id={@selected_stack.id}
-        class="fixed top-0 left-0 md:left-auto right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] z-30 flex w-full max-w-full md:max-w-lg flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
+        class="fixed top-0 left-0 md:left-auto right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] z-30 flex w-full max-w-full md:max-w-lg lg:max-w-[min(60vw,60rem)] flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
       >
         <%!-- Head/app bar. On mobile the chrome is a back arrow + Stack
            tag + overflow kebab (matching the mock's `.detail-appbar`).

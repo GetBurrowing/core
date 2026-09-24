@@ -50,7 +50,7 @@
        clear both to land flush with the visible nav top. --%>
   <div
     :if={@show_detail && @selected_skill}
-    class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-2xl flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
+    class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-2xl lg:max-w-[min(60vw,60rem)] flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
   >
     <div class="flex items-center justify-between border-b border-edge px-4 py-3">
       <h2 class="text-sm font-semibold truncate">{@selected_skill.name}</h2>

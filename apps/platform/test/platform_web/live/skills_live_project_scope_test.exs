@@ -138,6 +138,31 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
     assert foreign.name in options
   end
 
+  # Drawer width. Not a project-scope concern, but this is the only test that
+  # mounts the skill-detail surface, so extending it is cheaper than a second
+  # LiveView mount. The panel carries no `id` and no `data-role`, so it is
+  # selected by the class recipe that is unique to it on this page.
+  test "the skill detail panel carries the shared desktop width cap", %{conn: conn} do
+    %{fabrikam_org_id: fabrikam_org_id, skill: skill} = seed()
+    user = user!("member", fabrikam_org_id)
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    {:ok, _view, html} = live(conn, "/skills/#{skill.slug}")
+
+    panel_tag = Regex.run(~r/<div[^>]*class="fixed top-0[^"]*max-w-2xl[^"]*"[^>]*>/, html)
+    refute is_nil(panel_tag), "expected the skill detail panel container to render"
+    [panel_tag] = panel_tag
+
+    # Full-bleed on a phone; the base `max-w-2xl` still governs below `lg`.
+    assert panel_tag =~ "w-full"
+    assert panel_tag =~ "max-w-2xl"
+
+    # The shared cap above 1024px. `min(60vw,60rem)` is 234px on a 390px
+    # phone, so the `lg:` prefix is what keeps mobile full-bleed — asserted
+    # here as a literal so dropping the prefix fails this test.
+    assert panel_tag =~ "lg:max-w-[min(60vw,60rem)]"
+  end
+
   test "an already-attached project drops out of the picker", %{conn: conn} do
     %{fabrikam_org_id: fabrikam_org_id, own: own, skill: skill} = seed()
     user = user!("member", fabrikam_org_id)

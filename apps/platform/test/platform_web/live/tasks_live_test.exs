@@ -5,6 +5,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
   import Ecto.Query
   import Phoenix.LiveViewTest
+  import Platform.OpenTag
 
   alias Platform.Accounts
   alias Platform.Accounts.User
@@ -6257,6 +6258,53 @@ defmodule PlatformWeb.TasksLiveTest do
       # breakpoint, so a single container carrying both is the invariant.
       assert html =~ "max-w-lg"
       assert html =~ ~s|data-role="detail-title"|
+
+      # Above `lg` (1024px) the panel widens to the shared desktop cap.
+      # The base `max-w-lg` above must survive: `min(60vw,60rem)` resolves
+      # to 234px on a 390px phone, so an unprefixed cap would shrink the
+      # mobile drawer from full-bleed to a third of the screen. Assert the
+      # cap on the panel's own open tag rather than on the whole document,
+      # so a match somewhere else on the page cannot stand in for it.
+      panel_tag = Regex.run(~r/<div[^>]*class="fixed top-0[^"]*max-w-lg[^"]*"[^>]*>/, html)
+      refute is_nil(panel_tag), "expected the task detail panel container to render"
+      [panel_tag] = panel_tag
+      assert panel_tag =~ "w-full"
+      assert panel_tag =~ "lg:max-w-[min(60vw,60rem)]"
+    end
+
+    test "the rendered description container stays uncapped so wide content can break out",
+         %{conn: conn} do
+      description =
+        String.duplicate("A long paragraph of continuous prose that has to wrap. ", 8) <>
+          "\n\n| Stage | Status | Owner | Updated |\n" <>
+          "| --- | --- | --- | --- |\n" <>
+          "| One | passed | marlowe | today |\n"
+
+      project = create_project()
+      task = create_task(project, %{title: "Wide Content", description: description})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # The reading-measure cap lives in app.css and applies to the
+      # text-flow CHILDREN (`.task-markdown > :is(p, ul, ol, …)`), never to
+      # this container. Capping the container instead is the obvious-looking
+      # move and it is wrong: it squeezes tables and code blocks to the same
+      # 70ch, and that wide content is the reason the drawer was widened at
+      # all. A CSS rule is not reachable from ExUnit, so this guards the half
+      # that is: a later edit swapping `max-w-none` for an arbitrary cap
+      # would silently kill the table breakout, and fails here instead.
+      container_tag = Regex.run(~r/<div[^>]*data-role="description-rendered"[^>]*>/, html)
+      refute is_nil(container_tag), "expected the rendered description container to render"
+      [container_tag] = container_tag
+
+      assert container_tag =~ "task-markdown"
+      assert container_tag =~ "max-w-none"
+      refute container_tag =~ "max-w-["
+
+      # The table itself still renders, so the container really is holding
+      # content that must not be capped.
+      assert html =~ "<table"
     end
   end
 
@@ -9469,15 +9517,12 @@ defmodule PlatformWeb.TasksLiveTest do
       stacks_click(view, "stack_open_detail", %{"id" => stack.id})
     end
 
-    # Helper: extract the opening tag for a single element by its
-    # data-role, so we can assert on the full attribute cluster
-    # regardless of attribute order.
-    defp open_tag_for(html, role) do
-      case Regex.run(~r/<[a-zA-Z]+[^>]*data-role="#{role}"[^>]*>/, html) do
-        [tag] -> tag
-        _ -> nil
-      end
-    end
+    # `open_tag_for/2` returns the opening tag for a single element by its
+    # data-role, so assertions can read the whole attribute cluster whatever
+    # order the renderer put it in. It moved verbatim to `Platform.OpenTag`
+    # in task 019f5eb3 stage 3 and is imported at the top of this module.
+    # The drawer width parity guard needed the same reader, and one shared
+    # reader beats a second copy of the regex.
 
     test "panel container carries mobile takeover + desktop slide-in classes",
          %{conn: conn, stack: stack} do
@@ -9507,6 +9552,11 @@ defmodule PlatformWeb.TasksLiveTest do
       # `md:max-w-lg` constrains width.
       assert tag =~ "md:left-auto"
       assert tag =~ "md:max-w-lg"
+
+      # Above `lg` the stack panel lands on the same desktop cap as the
+      # task detail and skills drawers. The `md:` step above survives, so
+      # tablet width is unchanged and the phone stays full-bleed.
+      assert tag =~ "lg:max-w-[min(60vw,60rem)]"
     end
 
     test "panel container adopts PR #335's bottom-nav clearance pattern",

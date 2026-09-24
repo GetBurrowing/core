@@ -944,7 +944,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
              which left visible dead space below content. --%>
       <div
         :if={@show_detail && @selected_task}
-        class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-lg flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
+        class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-lg lg:max-w-[min(60vw,60rem)] flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
       >
         <div class="flex items-center justify-between border-b border-edge px-4 py-3">
           <%= cond do %>

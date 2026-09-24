@@ -816,6 +816,15 @@ html {
 .task-markdown blockquote { margin: 0.3em 0; }
 .task-markdown .code-block-wrapper pre { padding: 0.5em 0.75em; font-size: 0.75em; }
 
+/* Reading measure. The drawer widens to ~960px on desktop; an uncapped
+   paragraph there runs ~115 characters per line. Cap the text-flow
+   children at 70ch and leave tables, code blocks and images uncapped so
+   wide content still uses the full panel width. Direct children only, so
+   prose inside a table cell is not re-capped. */
+.task-markdown > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  max-width: 70ch;
+}
+
 /* ── Code Block Wrapper (Phase 2 — CodeBlock hook) ───────────────── */
 
 .code-block-wrapper {
