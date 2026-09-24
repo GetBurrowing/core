@@ -112,6 +112,28 @@ defmodule Platform.Mail.InboundTest do
     %{org_id: org_id, admin: admin!(org_id), space: space!()}
   end
 
+  # Gmail's plain `LIST "" "*"` shape; `case_fun` rewrites the flag case.
+  defp gmail_listed(case_fun) do
+    [
+      {"INBOX", ["\\HasNoChildren"]},
+      {"[Gmail]", ["\\Noselect", "\\HasChildren"]},
+      {"[Gmail]/All Mail", ["\\All", "\\HasNoChildren"]},
+      {"[Gmail]/Drafts", ["\\Drafts", "\\HasNoChildren"]},
+      {"[Gmail]/Important", ["\\HasNoChildren", "\\Important"]},
+      {"[Gmail]/Sent Mail", ["\\HasNoChildren", "\\Sent"]},
+      {"[Gmail]/Spam", ["\\HasNoChildren", "\\Junk"]},
+      {"[Gmail]/Starred", ["\\Flagged", "\\HasNoChildren"]},
+      {"[Gmail]/Trash", ["\\HasNoChildren", "\\Trash"]},
+      {"Jobs", ["\\HasNoChildren"]}
+    ]
+    |> Enum.map(fn {name, flags} -> {name, Enum.map(flags, case_fun)} end)
+  end
+
+  defp put_gmail_folders(host, case_fun) do
+    for {name, flags} <- gmail_listed(case_fun),
+        do: FakeClient.put_folder(host, name, flags: flags)
+  end
+
   # ── folder scope ──────────────────────────────────────────────────────────
 
   describe "folder scope" do
@@ -153,6 +175,66 @@ defmodule Platform.Mail.InboundTest do
       assert ["INBOX", "Support"] = account |> rows() |> Enum.map(& &1.folder) |> Enum.sort()
       assert length(chat_messages(ctx.space)) == 2
       refute Enum.any?(FakeClient.calls(host), &match?({:examine, "[Gmail]"}, &1))
+    end
+
+    # Measured on the fabrikam install 2026-09-24: an empty scope on imap.gmail.com
+    # read `[Gmail]/All Mail`, which holds sent mail, and posted the user's own
+    # outgoing message as received.
+    test "an empty scope skips RFC 6154 special-use folders (Gmail-shaped LIST)", ctx do
+      account = account!(ctx)
+      host = account.imap_host
+      FakeClient.start_server!(host)
+      put_gmail_folders(host, &Function.identity/1)
+
+      assert %{folders: ["INBOX", "[Gmail]/Important", "Jobs"]} = poll!(account)
+
+      for folder <- [
+            "[Gmail]/All Mail",
+            "[Gmail]/Sent Mail",
+            "[Gmail]/Drafts",
+            "[Gmail]/Spam",
+            "[Gmail]/Trash",
+            "[Gmail]/Starred",
+            "[Gmail]"
+          ] do
+        refute Enum.any?(FakeClient.calls(host), &match?({:examine, ^folder}, &1)), folder
+      end
+
+      FakeClient.deliver(host, "[Gmail]/All Mail", raw(message_id: "<sent-1@x.test>"))
+      FakeClient.deliver(host, "[Gmail]/Sent Mail", raw(message_id: "<sent-1@x.test>"))
+
+      assert %{ingested: 0} = poll!(account)
+      assert rows(account) == []
+      assert chat_messages(ctx.space) == []
+    end
+
+    test "special-use attributes match case-insensitively" do
+      listed = gmail_listed(&String.upcase/1) ++ gmail_listed(&String.downcase/1)
+      account = %Mail.Account{read_folders: []}
+
+      assert Inbound.select_folders(account, listed) ==
+               ["INBOX", "[Gmail]/Important", "Jobs", "INBOX", "[Gmail]/Important", "Jobs"]
+    end
+
+    test "INBOX is kept under an empty scope even if it carries a special-use flag" do
+      account = %Mail.Account{read_folders: []}
+
+      assert Inbound.select_folders(account, [{"INBOX", ["\\All"]}, {"Sent", ["\\Sent"]}]) ==
+               ["INBOX"]
+    end
+
+    test "an explicit scope still reads a special-use folder", ctx do
+      account = account!(ctx, %{"read_folders" => ["[Gmail]/Sent Mail"]})
+      host = account.imap_host
+      FakeClient.start_server!(host)
+      put_gmail_folders(host, &Function.identity/1)
+
+      assert %{folders: ["[Gmail]/Sent Mail"]} = poll!(account)
+
+      assert Inbound.select_folders(
+               %Mail.Account{read_folders: ["[Gmail]/All Mail"]},
+               gmail_listed(& &1)
+             ) == ["[Gmail]/All Mail"]
     end
 
     test "a configured folder the server does not list is skipped, never widened", ctx do

@@ -8,7 +8,9 @@ defmodule Platform.Mail.Account do
   only name the credential. See `Platform.Mail`.
 
   Defaults fail closed: `internal_only` is true and `read_enabled` is false.
-  An empty `read_folders` list means "all folders" once reading is on.
+  An empty `read_folders` list means "all folders except Sent, Drafts, Trash,
+  Junk/Spam and All Mail" (plus Starred/`\\Flagged` and `\\Archive`) once
+  reading is on; see `Platform.Mail.Inbound.select_folders/2`.
 
   ## Well-known ports pin the tls mode
 

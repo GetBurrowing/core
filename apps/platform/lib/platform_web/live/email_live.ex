@@ -1564,7 +1564,7 @@ defmodule PlatformWeb.EmailLive do
   defp on_off(_), do: "Off"
 
   defp read_scope_text(%Account{read_folders: folders}) when folders in [nil, []],
-    do: "Reading: all folders"
+    do: "Reading: all folders except Sent, Drafts, Trash, Junk/Spam and All Mail"
 
   defp read_scope_text(%Account{read_folders: folders}),
     do: "Reading: " <> Enum.join(folders, ", ")

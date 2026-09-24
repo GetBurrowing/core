@@ -17,7 +17,18 @@ defmodule Platform.Mail.Inbound do
     1. Folders: `account.read_folders` when non-empty — exactly those; a
        configured folder the server's LIST does not return is logged and
        skipped, never widened to "all". An empty list means every LISTed
-       folder without `\\Noselect`.
+       folder without `\\Noselect`, EXCEPT folders carrying an RFC 6154
+       special-use attribute in `@excluded_special_use` (`\\Sent`, `\\All`,
+       `\\Drafts`, `\\Trash`, `\\Junk`, `\\Flagged`, `\\Archive`), matched
+       case-insensitively. INBOX is never excluded. Gmail's `[Gmail]/All Mail`
+       holds every message including sent mail, so reading it posted the
+       user's own outgoing mail as received (fabrikam install, 2026-09-24). A
+       configured list is not filtered: naming `[Gmail]/Sent Mail` reads it.
+
+       The attributes come from a plain `LIST "" "*"` (no
+       `RETURN (SPECIAL-USE)`). Gmail includes them there; RFC 6154 lets a
+       server return them only on request, and such a server's special
+       folders are still read under an empty scope. No name-based fallback.
     2. Each folder is EXAMINEd (read-only). Nothing ever sets `\\Seen`, moves
        or deletes: `Platform.Mail.Imap.Client` has no such function.
     3. First contact with a folder records a cursor at its current maximum
@@ -274,7 +285,8 @@ defmodule Platform.Mail.Inbound do
 
   @doc false
   # Public for tests. Configured list → exactly those that LIST returned;
-  # empty → every selectable listed folder.
+  # empty → every selectable listed folder except the special-use ones in
+  # @excluded_special_use (INBOX always kept).
   @spec select_folders(Account.t(), [{String.t(), [String.t()]}]) :: [String.t()]
   def select_folders(%Account{read_folders: configured} = account, listed)
       when is_list(configured) and configured != [] do
@@ -298,7 +310,20 @@ defmodule Platform.Mail.Inbound do
   end
 
   def select_folders(%Account{}, listed) do
-    for {name, flags} <- listed, selectable?(flags), do: name
+    for {name, flags} <- listed,
+        selectable?(flags),
+        String.upcase(name) == "INBOX" or not excluded_special_use?(flags),
+        do: name
+  end
+
+  # RFC 6154 special-use attributes an EMPTY scope skips, downcased. `\All`
+  # (Gmail's All Mail) and `\Flagged` (Starred) duplicate messages that live
+  # elsewhere; `\Sent` and `\Drafts` are the user's own mail; `\Trash` and
+  # `\Junk` are discarded or spam; `\Archive` is filed-away mail.
+  @excluded_special_use ~w(\\sent \\all \\drafts \\trash \\junk \\flagged \\archive)
+
+  defp excluded_special_use?(flags) do
+    Enum.any?(flags, &(String.downcase(to_string(&1)) in @excluded_special_use))
   end
 
   # INBOX is case-insensitive in IMAP (RFC 3501 §5.1); every other name is not.
