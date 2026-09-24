@@ -138,6 +138,30 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
   # twelve are stated, not fixed — the original nine plus the three
   # `design.task_direction` declares (ADR-0046 stack member 7 stage 3).
   @unresolved_slots %{
+    "experiments" =>
+      "experiments.scientist assembles this itself in gather_context/1 " <>
+        "(task 01a0d415 stage 5) from the experimentation tables; no " <>
+        "ContextProviders clause exists and no other handler declares it",
+    "goals" =>
+      "experiments.scientist assembles this itself in gather_context/1 " <>
+        "(task 01a0d415 stage 5) from the experimentation tables; no " <>
+        "ContextProviders clause exists and no other handler declares it",
+    "guardrails" =>
+      "experiments.scientist assembles this itself in gather_context/1 " <>
+        "(task 01a0d415 stage 5) from the experimentation tables; no " <>
+        "ContextProviders clause exists and no other handler declares it",
+    "results" =>
+      "experiments.scientist assembles this itself in gather_context/1 " <>
+        "(task 01a0d415 stage 5) from the experimentation tables; no " <>
+        "ContextProviders clause exists and no other handler declares it",
+    "signals" =>
+      "experiments.scientist assembles this itself in gather_context/1 " <>
+        "(task 01a0d415 stage 5) from the experimentation tables; no " <>
+        "ContextProviders clause exists and no other handler declares it",
+    "surfaces" =>
+      "experiments.scientist assembles this itself in gather_context/1 " <>
+        "(task 01a0d415 stage 5) from the experimentation tables; no " <>
+        "ContextProviders clause exists and no other handler declares it",
     "goal" =>
       "agents.goal_heartbeat reads the goal straight off the chat space " <>
         "(chat_spaces.goal, task 01a0b491 stage 1) — there is no " <>

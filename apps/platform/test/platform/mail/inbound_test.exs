@@ -371,6 +371,74 @@ defmodule Platform.Mail.InboundTest do
     end
   end
 
+  # ── the ingest event (task 01a0d415 stage 3) ──────────────────────────────
+
+  describe "the ingest event" do
+    test "a new row returns 1 and broadcasts one ID-only event; a duplicate returns 0 and none",
+         ctx do
+      account = account!(ctx)
+      :ok = Inbound.subscribe()
+      mail = raw(message_id: "<event-#{System.unique_integer([:positive])}@x.test>")
+
+      assert Inbound.ingest(account, "INBOX", 1, 1, mail) == 1
+      assert_receive {:mail_inbound_ingested, payload}
+      assert Map.keys(payload) |> Enum.sort() == [:account_id, :id, :org_id]
+      assert [%InboundMessage{id: id}] = rows(account)
+      assert payload == %{id: id, account_id: account.id, org_id: ctx.org_id}
+
+      assert Inbound.ingest(account, "Support", 1, 2, mail) == 0
+      refute_receive {:mail_inbound_ingested, _}, 100
+    end
+
+    test "the payload carries no mail content", ctx do
+      account = account!(ctx)
+      :ok = Inbound.subscribe()
+
+      Inbound.ingest(
+        account,
+        "INBOX",
+        1,
+        1,
+        raw(subject: "SECRET-SUBJECT", body: "SECRET-BODY", from: "leak@example.test")
+      )
+
+      assert_receive {:mail_inbound_ingested, payload}
+      seen = inspect(payload)
+      refute seen =~ "SECRET"
+      refute seen =~ "leak@example.test"
+    end
+
+    test "the topic is mail:inbound" do
+      assert Inbound.topic() == "mail:inbound"
+    end
+  end
+
+  # ── Mail does not know Experiments (task 01a0d415 stage 3) ────────────────
+
+  describe "Mail publishes; it does not call Experiments" do
+    @mail_lib Path.expand("../../../lib/platform/mail", __DIR__)
+
+    # Supplementary to the behavioural guards (the ID-only payload above and
+    # the labeler's blinding canary). Shown to fire by adding an
+    # `alias Platform.Experiments.Signals.MailSource` line to inbound.ex.
+    test "no file under lib/platform/mail references Experiments" do
+      files = Path.wildcard(Path.join(@mail_lib, "**/*.ex")) ++ [@mail_lib <> ".ex"]
+
+      # Positive control: the scan reads the files it claims to.
+      assert Path.join(@mail_lib, "inbound.ex") in files
+      assert length(files) > 5
+
+      offenders =
+        for file <- files,
+            {line, n} <- file |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+            line =~ ~r/\bExperiments\b/,
+            do: "#{Path.relative_to(file, @mail_lib)}:#{n}: #{String.trim(line)}"
+
+      assert offenders == [],
+             "Mail must not reference Experiments:\n" <> Enum.join(offenders, "\n")
+    end
+  end
+
   # ── the channel post ──────────────────────────────────────────────────────
 
   describe "the channel post" do

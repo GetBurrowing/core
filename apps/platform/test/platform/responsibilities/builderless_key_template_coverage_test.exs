@@ -130,6 +130,12 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
     # handler grew its own `build_prompt/1` so the Router stops rendering
     # the seeded `design.critique.v1` body, which names the wrong agent.
     "design.spec_writer",
+    # Task 01a0d415 stage 3. `Providers.Experiments.build_prompt/1` returns
+    # `:no_build_prompt` on purpose: the Router never fires this key (null
+    # topic); the MailSubscriber drives the tool-less Labeler, which renders
+    # `experiments.labeler.v1` itself. The slug is seeded, so it is not in
+    # the no-row list below.
+    "experiments.label_signal",
     "meetings.attendance_followup",
     "meetings.intent_classify",
     "memory.daily_summary",

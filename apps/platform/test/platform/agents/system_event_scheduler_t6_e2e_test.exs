@@ -692,7 +692,11 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # on the runtime OWNER being a Fabrikam admin. Not a T6 concern — it adds no
     # schedule, no trigger and no historian surface
     # (+task_close_as_delivered -> 105)
-    @t6_baseline_tool_count 105
+    # bumped by task 01a0d415 stage 2 — the `experiments` bundle, 14
+    # `experiment_*` tools in a NEW bundle that is not a default grant. Not a
+    # T6 concern — it adds no schedule, no trigger and no historian surface
+    # (+14 experiment_* -> 119)
+    @t6_baseline_tool_count 119
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -254,12 +254,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/design/preplan_step.ex", :get, "Task", 2, :flagged_sibling_owned,
      "`resolve_task/1`: :705 takes `%Task{}.id` off a loaded struct; :706 takes a raw binary. Every public entry point that can reach :706 with a caller-supplied string — `settle/2`, `expire/2`, `audit_ui_prediction/2`, `annotate/3` — wraps its body in `rescue`/`catch`, and the only lib caller passing a binary (`tool_surface.ex:5954`, `plan_create`) reaches it only AFTER `Tasks.create_plan/1` accepted the same id in the enclosing transaction. `start/1` does not rescue, but TaskRouter calls it with a `%Task{}` struct. Sibling-owned — RECORD, DO NOT EDIT"},
     # ── Experiments (ADR-0048, task 019fe6b9) ──────────────────────────
-    {"platform/experiments.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "get_experiment/1's predicate. The id reaches this context from an agent or an MCP payload once the later stack members expose experiments, so the guard is what keeps a malformed id returning nil instead of raising Ecto.Query.CastError against Experiment's strict UUIDv7 primary key"},
+    {"platform/experiments.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "get_experiment/1's predicate: the id reaches this context from an agent or an MCP payload, so the guard is what keeps a malformed id returning nil instead of raising Ecto.Query.CastError against Experiment's strict UUIDv7 primary key. Task 01a0d415 stage 6 adds agent_names/1, which filters its id list through the same predicate before `a.id in ^ids`, so a malformed `proposed_by_agent_id` is dropped rather than raising in the where clause"},
     {"platform/experiments.ex", :get, "Experiment", 1, :safe_internal,
      "the sole Repo.get sits inside get_experiment/1, behind the Platform.UUID.valid?/1 guard counted above; the two entries fail together if either is removed"},
-    {"platform/experiments.ex", :get!, "Experiment", 1, :safe_internal,
-     "activate/2's Multi re-reads the experiment by `experiment.id` destructured off a loaded `%Experiment{}` whose PK was minted by Platform.Types.UUIDv7 autogenerate. It is re-read rather than reused precisely so a caller's stale preloaded :variants cannot decide the control guard — the id never leaves the struct"},
+    {"platform/experiments.ex", :get!, "Experiment", 3, :safe_internal,
+     "3 calls, all keyed by `experiment.id` destructured off a loaded `%Experiment{}`. activate/2's Multi re-reads the experiment by `experiment.id` destructured off a loaded `%Experiment{}` whose PK was minted by Platform.Types.UUIDv7 autogenerate. It is re-read rather than reused precisely so a caller's stale preloaded :variants cannot decide the control guard — the id never leaves the struct. Task 01a0d415 stage 2 adds start/2 and approve_launch/2, which re-read the same `experiment.id` under the start lock so the guardrail check judges the current row"},
     {"platform/experiments.ex", :get_by, "Experiment", 1, :safe_internal,
      "keyed `slug:`, a plain string column on experiments with no UUID type on either side of the comparison; get_experiment_by_slug/1 cannot raise a cast error"},
     {"platform/experiments.ex", :get_by, "PromptTemplate", 1, :safe_internal,
@@ -268,6 +268,39 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `slug:`, a plain string column — the value is `experiment.target_template_slug` off a loaded `%Experiment{}`, itself written only by Experiments.activate/2 from a template row it had just read. No UUID type on either side, and promote/2 folds a miss into {:error, :template_not_found} rather than raising"},
     {"platform/experiments/assignments.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "get_assignment/2's predicate. Its Repo.one pins `a.subject_id == ^subject_id` in the where clause, and the subject is caller-supplied — a task id today, a dispatch id once the later ADR-0048 members land — so a malformed binary would raise Ecto.Query.CastError from the where clause exactly as Repo.get/2 does. The guard folds it into the nil this function already returns for an unassigned subject"},
+    # ── Experimentation layer (task 01a0d415 stage 1) ──────────────────
+    {"platform/experiments/experiment.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "derive_org_from_project/1's predicate. `project_id` is a changeset field a caller can set from an agent or MCP payload; the guard keeps a malformed id from raising Ecto.Query.CastError in the Repo.get below, and the FK constraint reports it on write instead"},
+    {"platform/experiments/experiment.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,
+     "the sole Repo.get sits inside derive_org_from_project/1, behind the Platform.UUID.valid?/1 guard counted above; the two entries fail together if either is removed"},
+    {"platform/experiments/surfaces.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "latest_default_row/3's predicate. `org_id` arrives through resolve/4's `:org_id` option and current_default/3's argument, both caller-supplied; the guard folds a malformed id into the nil a missing history already returns"},
+    {"platform/experiments/surfaces/dispatch_prompt.ex", :get_by, "PromptTemplate", 1,
+     :safe_internal,
+     "keyed `slug:`, a plain string column with no UUID type on either side; control_payload/2 folds a miss into {:error, :template_not_found} rather than raising"},
+    {"platform/experiments/surfaces/dispatch_prompt.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "subject_attributes/1's predicate. Its Repo.one pins `t.id == ^task_id`, and the task id is the dispatch assign `task_id`, which several sites pass as an arbitrary string; the guard folds a malformed id into the empty attribute map"},
+    # ── Experiments over MCP (task 01a0d415 stage 2) ───────────────────
+    {"platform/experiments/guardrails.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "org_row/1's predicate. `org_id` is `experiment.org_id` today, but for_org/1 is public and the stage-6 guardrails panel passes a selected org from LiveView params; the guard folds a malformed id into the nil a missing org row already returns, and the Repo.one's `g.org_id == ^org_id` never sees it"},
+    {"platform/experiments/tools.ex", :platform_uuid_guard, "-", 6, :safe_internal,
+     "the MCP boundary's own guards: required_uuid/3 and optional_uuid/3 (every `experiment_id`, `subject_id`, `org_id`, `project_id` argument), maybe_where_org/2's filter, update_goal/4's `goal_id`, load_agent/1's `context.agent_id` and home_org/1's `metadata[\"org_id\"]`. Each folds a malformed value into the tool's not-found or invalid-arguments envelope before any Repo call"},
+    {"platform/experiments/tools.ex", :get, "Experiment", 1, :safe_internal,
+     "fetch/2's lookup; `experiment_id` is an MCP argument and reaches Repo.get only through required_uuid/3 (guard counted above)"},
+    {"platform/experiments/tools.ex", :get!, "Experiment", 1, :safe_internal,
+     "experiment_start's re-read after a pending result, keyed by `experiment.id` off the `%Experiment{}` fetch/2 just returned — a primary key the DB produced"},
+    {"platform/experiments/tools.ex", :get, "Goal", 1, :safe_internal,
+     "update_goal/4 guards `goal_id` (an MCP argument) with Platform.UUID.valid?/1 on the same line, counted above; a malformed id is the not-found envelope"},
+    {"platform/experiments/tools.ex", :get, "Agent", 1, :safe_internal,
+     "load_agent/1 reads `context.agent_id` only after Platform.UUID.valid?/1 on the same line (counted above), mirroring ToolSurface.load_agent/1's get_by_uuid"},
+    {"platform/experiments/tools.ex", :get, "Org", 1, :safe_internal,
+     "home_org/1 reads the agent's `metadata[\"org_id\"]` pin only behind `Platform.UUID.valid?(org_id) &&` in the same expression (counted above); a malformed pin is root-equivalent, as in ToolSurface.agent_home_org/1"},
+    {"platform/experiments/tools.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,
+     "tenancy/2's lookup; `project_id` is an MCP argument that reaches Repo.get only through optional_uuid/3 (guard counted above), and a missing project is the not-found envelope"},
+    # ── Blind labeler mail source (task 01a0d415 stage 3) ──────────────
+    {"platform/experiments/signals/mail_source.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "on_inbound/1's predicate. The id is the `id` of a {:mail_inbound_ingested, _} PubSub payload, which any process on the node may broadcast; the guard folds a malformed id into the [] an unknown id already returns, and the Repo.one's `m.id == ^inbound_id` never sees it"},
     # ── External agents ────────────────────────────────────────────────
     {"platform/external_agents.ex", :get_by, "Agent", 1, :safe_internal,
      "get_external_agent/1 checks Platform.UUID.valid?/1 before the id:-keyed get_by, which raises exactly like Repo.get/2 does. This is the spelling `git grep \"Repo.get(\"` cannot see"},
@@ -346,6 +379,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "both calls (the timer tick and the `:poll_now` call) reload the poller's `account_id`, its start arg, and both starters pass an `%Account{}` PK: `Inbound.sync_poller/1` (`account.id`) and `start_all_pollers/0` (ids off `Repo.all` of `mail_accounts`)"},
     {"platform/mail/mailbox.ex", :platform_uuid_guard, "-", 10, :safe_internal,
      "stage 4's Email module reads. The org id, account filter and message/project ids arrive from LiveView `params` (`?org=`, `?account=`, `/email/messages/:id`, the Add to files select) and each is guarded before it reaches `where:`: `inbound_query/2`, `deliveries_query/3`, `drafts_query/2`, `org_projects/1`, `org_channels/1` (org_id), `get_inbound/2` (org_id and id — two calls), `inbound_org_id/1` (id), `narrow_account/2` (account_id) and `fetch_org_project/2` (project_id). A malformed value narrows to nothing / nil rather than dropping the filter"},
+    {"platform_web/live/experiments_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "parse_project/1's predicate (task 01a0d415 stage 6). `project_id` comes from the create form's LiveView params; the guard turns a malformed id into the page's 'No such project.' flash before it reaches Experiment.changeset/2, whose own guard and FK constraint are the second line"},
     {"platform_web/live/email_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "`account_param/1` guards the `?account=` query param before it becomes the account filter; a malformed value is dropped to nil (all accounts), and `Mailbox.narrow_account/2` guards it again at the query"},
     {"platform/meetings.ex", :platform_uuid_guard, "-", 19, :safe_internal,
@@ -425,6 +460,9 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`participant_id` is derived deterministically from space_id by `system_participant_id/1`; `participant_type` is the literal \"agent\""},
     {"platform/orchestration/phase_runtime.ex", :get, "Agent", 1, :must_cast,
      "task 019fb977 moved this lookup out of `task_router_watcher.ex`, where it was :safe_internal because the id came off the `tasks.assignee_id` COLUMN (a `Platform.Types.UUIDv7` cast at write time). `PhaseRuntime.resolve/1` now prefers `phase_assignees[current_phase(task)][\"assignee_id\"]`, which lives inside a JSONB map that `Task.validate_phase_assignees/1` (`tasks/task.ex:348`) checks only the PHASE KEYS of — never the id shape. An MCP `task_update` carrying `%{\"execution\" => %{\"assignee_id\" => \"higgins\"}}` therefore reaches this call as a raw agent-supplied string. Guarded with `Platform.UUID.valid?/1`, returning the site's existing `{:error, :agent_not_found}` rather than raising `Ecto.Query.CastError` inside the router's dispatch path; covered by `phase_runtime_test.exs` \":agent_not_found — not a raise — for a malformed phase-entry id\""},
+    {"platform/orchestration/heartbeat_scheduler.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "experiment_subject/1's predicate (task 01a0d415 stage 4). The dispatch task's id is often a plain map field in callers and tests, and the resolver's assignment lookups pin `subject_id == ^id`; the guard folds a malformed id into `nil` (no subject, prompt unchanged) before any Repo call"},
     {"platform/orchestration/phase_runtime.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "the guard itself, paired with the `:get \"Agent\"` entry above: `Platform.UUID.valid?/1` is used as a BOOLEAN and the original string is passed on unchanged, which is the raise-exposed shape — safe here only because `valid?/1` is the strict 36-character check, not `Ecto.UUID.cast/1`, so a 16-byte binary cannot clear it and reach the strict `Platform.Types.UUIDv7` PK"},
     {"platform/orchestration/prompt_templates.ex", :get, "PromptTemplate", 1, :safe_internal,
@@ -879,7 +917,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     # not a boundary input. `promote/2` takes an `%Experiment{}` struct and
     # resolves the template by slug from it; no caller-supplied id reaches
     # this predicate, so no `Platform.UUID.valid?/1` guard applies.
-    "platform/experiments/promotion.ex" => 1,
+    # 1 → 2 for task 01a0d415 stage 2's `check_surface_cooldown/1`: pins
+    # surface_key/target (plain strings) and `d.org_id` from a loaded
+    # `%Experiment{}` — a value the DB produced, not a boundary input.
+    "platform/experiments/promotion.ex" => 2,
+    # 0 → 2 for task 01a0d415 stage 2's `Guardrails.for_org/1`: `org_row/1`
+    # pins `g.org_id == ^org_id` behind a `Platform.UUID.valid?/1` guard
+    # (inventory entry above); `install_row/0` pins nothing (`IS NULL`).
+    "platform/experiments/guardrails.ex" => 2,
     # 0 → 1 for task 019fe6b9's `get_variant/2`, the variant-blob read behind
     # `render_template/2`. Triaged by hand as this map asks: neither side of
     # the `where:` clause can raise a cast error. `v.experiment_id ==
@@ -891,6 +936,22 @@ defmodule Platform.RepoLookupBoundaryTest do
     # already in the database. No caller-supplied id reaches this predicate,
     # so no `Platform.UUID.valid?/1` guard applies.
     "platform/experiments.ex" => 1,
+    # 0 → 2 for task 01a0d415 stage 1's `Surfaces`. Triaged by hand:
+    # `latest_default_row/3` pins surface_key/target (plain strings) and
+    # `d.org_id == ^org_id`, which is caller-supplied and sits behind a
+    # `Platform.UUID.valid?/1` guard (inventory entry above).
+    # `variant_resolution/6` pins `v.experiment_id` off a loaded
+    # `%Experiment{}` and `v.slug` (a string read from an assignment row) —
+    # no boundary id reaches it.
+    "platform/experiments/surfaces.ex" => 2,
+    # 0 → 1 for task 01a0d415 stage 1's `DispatchPrompt.subject_attributes/1`:
+    # pins `t.id == ^task_id` behind a `Platform.UUID.valid?/1` guard
+    # (inventory entry above).
+    "platform/experiments/surfaces/dispatch_prompt.ex" => 1,
+    # 0 → 1 for task 01a0d415 stage 3's `MailSource.on_inbound/1`: pins
+    # `m.id == ^inbound_id` behind a `Platform.UUID.valid?/1` guard (inventory
+    # entry above).
+    "platform/experiments/signals/mail_source.ex" => 1,
     "platform/federation.ex" => 1,
     "platform/federation/tool_surface.ex" => 2,
     # 1 → 3 for task 01a091b7 stage 1: `Files.get_by_storage_key/1` and

@@ -156,7 +156,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # to the `task` bundle: the admin-delegated closure for work that
       # shipped without a plan cycle. A genuinely new tool, not a move, so
       # the total moves with it.
-      assert length(tools) == 105
+      # 119 as of task 01a0d415 stage 2, which added the `experiments` bundle:
+      # 14 genuinely new `experiment_*` tools, in a new bundle that is NOT a
+      # default grant (`tool_surface_experiments_test.exs` pins that).
+      assert length(tools) == 119
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names

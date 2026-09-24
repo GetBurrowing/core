@@ -37,12 +37,45 @@ defmodule Platform.Experiments.Assignments do
 
   `subject_type` stays generic (`"task"` today) so dispatch-level subjects
   work later without a migration.
+
+  ## Eligibility: tenancy columns, then the experiment's `assignment_policy`
+
+  `assign_once/3` takes the subject's attributes (`:project_id`, `:org_id`,
+  `:epic_id`, `:inserted_at`) and, for a NEW subject only, decides
+  eligibility before any row is written (task 01a0d415):
+
+    1. **Tenancy columns.** A subject whose `project_id` differs from a
+       non-null `experiment.project_id` is `:no_opinion`; for an org-wide
+       experiment (org set, project null) the same holds for `org_id`. A
+       subject that does not carry the attribute is not in scope. This is a column
+       check, not a policy key: tenancy is who the experiment is FOR.
+    2. **The policy chain.** A non-empty `assignment_policy` is built by
+       `Platform.Experiments.PolicySpec` into the existing policy modules
+       and asked for a decision:
+         * `{:ok, slug}` — the row is written with that variant.
+         * `{:excluded, reason}` — the row IS written, with
+           `excluded_reason` set and the control slug as `variant_slug`. The
+           subject was a candidate and was deliberately removed, so the
+           removal stays visible and is never deleted (ADR-0048 Decision 3).
+         * `:no_opinion` from the whole chain — NO row is written and
+           `assign_once/3` returns `:no_opinion`. The subject was never
+           eligible, and that is NOT an exclusion: writing an exclusion row for
+           it would record a removal from an experiment it was never in, for
+           every subject in the system the experiment was not about.
+    3. **An empty policy with null project and org is today's weighted
+       pick**, unchanged — every experiment that predates the policy column
+       resolves exactly as it did.
+
+  An EXISTING row still wins before any of this runs: eligibility is decided
+  once, at first touch, like the variant.
   """
 
   import Ecto.Query
 
   alias Platform.Experiments.Assignment
   alias Platform.Experiments.Experiment
+  alias Platform.Experiments.PolicySpec
+  alias Platform.Experiments.Subject
   alias Platform.Experiments.Variant
   alias Platform.Repo
 
@@ -50,7 +83,7 @@ defmodule Platform.Experiments.Assignments do
   A subject: anything an experiment can be applied to. Accepts a map with
   `subject_type`/`subject_id` (string or atom keys) or a `{type, id}` tuple.
   """
-  @type subject :: map() | {String.t(), String.t()}
+  @type subject :: map() | {String.t(), String.t()} | Subject.t()
 
   @doc """
   Returns the subject's assignment for this experiment, creating it only if
@@ -62,6 +95,21 @@ defmodule Platform.Experiments.Assignments do
   @spec assign_once(Experiment.t(), subject()) ::
           {:ok, Assignment.t()} | {:error, Ecto.Changeset.t()} | {:error, :no_variants}
   def assign_once(%Experiment{} = experiment, subject) do
+    assign_once(experiment, subject, subject_attributes(subject))
+  end
+
+  @doc """
+  `assign_once/2` with the subject's attributes, applying the experiment's
+  tenancy columns and `assignment_policy` to a NEW subject. See the
+  moduledoc. Returns `:no_opinion` (and writes nothing) when the subject is
+  not eligible.
+  """
+  @spec assign_once(Experiment.t(), subject(), map()) ::
+          {:ok, Assignment.t()}
+          | :no_opinion
+          | {:error, Ecto.Changeset.t()}
+          | {:error, :no_variants}
+  def assign_once(%Experiment{} = experiment, subject, attributes) when is_map(attributes) do
     {subject_type, subject_id} = subject_key(subject)
 
     case get_assignment(experiment, subject) do
@@ -71,8 +119,99 @@ defmodule Platform.Experiments.Assignments do
         {:ok, existing}
 
       nil ->
-        insert_assignment(experiment, subject_type, subject_id)
+        case eligibility(experiment, subject_type, subject_id, attributes) do
+          :weighted ->
+            insert_assignment(experiment, subject_type, subject_id)
+
+          {:ok, slug} ->
+            write_assignment(experiment, subject_type, subject_id, slug, nil)
+
+          {:excluded, reason} ->
+            write_assignment(
+              experiment,
+              subject_type,
+              subject_id,
+              Experiment.control_slug(),
+              reason
+            )
+
+          :no_opinion ->
+            :no_opinion
+
+          {:error, _} = error ->
+            error
+        end
     end
+  end
+
+  # Tenancy first — a column check, not a policy key — then the policy chain.
+  defp eligibility(experiment, subject_type, subject_id, attributes) do
+    cond do
+      out_of_scope?(experiment.project_id, attr(attributes, :project_id)) ->
+        :no_opinion
+
+      # A project scope already implies its org (the experiment changeset
+      # refuses a mismatch), so the org column is checked only for an
+      # org-wide experiment.
+      is_nil(experiment.project_id) and
+          out_of_scope?(experiment.org_id, attr(attributes, :org_id)) ->
+        :no_opinion
+
+      true ->
+        policy_decision(experiment, subject_type, subject_id, attributes)
+    end
+  end
+
+  defp out_of_scope?(nil, _subject_value), do: false
+  defp out_of_scope?(scope, subject_value), do: scope != subject_value
+
+  defp policy_decision(experiment, subject_type, subject_id, attributes) do
+    variants = list_variants(experiment)
+
+    case PolicySpec.parse(experiment.assignment_policy || %{},
+           experiment_id: experiment.id,
+           variants: variants
+         ) do
+      :none ->
+        :weighted
+
+      {:ok, {module, opts}} ->
+        subject = Subject.new(subject_type, subject_id, atomize_attributes(attributes))
+
+        case module.assign(subject, opts) do
+          {:ok, slug} = ok ->
+            if Enum.any?(variants, &(&1.slug == slug)),
+              do: ok,
+              else: {:error, {:unknown_variant, slug}}
+
+          other ->
+            other
+        end
+
+      {:error, reasons} ->
+        {:error, {:invalid_policy, reasons}}
+    end
+  end
+
+  defp attr(attributes, key), do: Map.get(attributes, key) || Map.get(attributes, to_string(key))
+
+  # Policies read atom keys. Only the four documented keys are carried, so a
+  # caller-supplied string never becomes an atom.
+  defp atomize_attributes(attributes) do
+    for key <- [:project_id, :org_id, :epic_id, :inserted_at],
+        value = attr(attributes, key),
+        not is_nil(value),
+        into: %{},
+        do: {key, value}
+  end
+
+  defp subject_attributes(%Subject{attributes: attributes}), do: attributes
+  defp subject_attributes(_subject), do: %{}
+
+  defp list_variants(%Experiment{id: experiment_id}) do
+    Repo.all(
+      from(v in Variant, where: v.experiment_id == ^experiment_id, order_by: [asc: v.slug])
+    )
   end
 
   @doc """
@@ -136,32 +275,37 @@ defmodule Platform.Experiments.Assignments do
         {:error, :no_variants}
 
       %Variant{slug: slug} ->
-        %Assignment{}
-        |> Assignment.changeset(%{
-          experiment_id: experiment.id,
-          subject_type: subject_type,
-          subject_id: subject_id,
-          variant_slug: slug,
-          assigned_at: DateTime.utc_now()
-        })
-        |> Repo.insert()
-        |> case do
-          {:ok, assignment} ->
-            {:ok, assignment}
+        write_assignment(experiment, subject_type, subject_id, slug, nil)
+    end
+  end
 
-          {:error, changeset} ->
-            # Someone else inserted between our read and our write. Their row
-            # is the assignment; ours never existed. Re-read and return
-            # theirs, so both callers agree on the variant.
-            #
-            # This depends on the constraint arriving as a changeset error
-            # rather than a raised Ecto.ConstraintError, which is why the
-            # index name is pinned explicitly in the migration — Ecto's
-            # derived name for those three columns exceeds Postgres's 63-byte
-            # identifier limit and would be truncated to something the
-            # schema's unique_constraint could not match.
-            requery_after_conflict(experiment, subject_type, subject_id, changeset)
-        end
+  defp write_assignment(experiment, subject_type, subject_id, slug, excluded_reason) do
+    %Assignment{}
+    |> Assignment.changeset(%{
+      experiment_id: experiment.id,
+      subject_type: subject_type,
+      subject_id: subject_id,
+      variant_slug: slug,
+      assigned_at: DateTime.utc_now(),
+      excluded_reason: excluded_reason
+    })
+    |> Repo.insert()
+    |> case do
+      {:ok, assignment} ->
+        {:ok, assignment}
+
+      {:error, changeset} ->
+        # Someone else inserted between our read and our write. Their row
+        # is the assignment; ours never existed. Re-read and return
+        # theirs, so both callers agree on the variant.
+        #
+        # This depends on the constraint arriving as a changeset error
+        # rather than a raised Ecto.ConstraintError, which is why the
+        # index name is pinned explicitly in the migration — Ecto's
+        # derived name for those three columns exceeds Postgres's 63-byte
+        # identifier limit and would be truncated to something the
+        # schema's unique_constraint could not match.
+        requery_after_conflict(experiment, subject_type, subject_id, changeset)
     end
   end
 
@@ -205,6 +349,9 @@ defmodule Platform.Experiments.Assignments do
       weighted_pick(rest, remaining - weight)
     end
   end
+
+  defp subject_key(%Subject{type: subject_type, id: subject_id}),
+    do: {subject_type, subject_id}
 
   defp subject_key({subject_type, subject_id}), do: {to_string(subject_type), subject_id}
 

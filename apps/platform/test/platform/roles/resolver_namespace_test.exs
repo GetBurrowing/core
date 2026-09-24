@@ -98,7 +98,8 @@ defmodule Platform.Roles.ResolverNamespaceTest do
         |> MapSet.new()
 
       # 7 -> 8: `agents_leader` (task 01a0b491 stage 1).
-      assert MapSet.size(role_keys) == 8
+      # 8 -> 9: `scientist` (task 01a0d415 stage 3).
+      assert MapSet.size(role_keys) == 9
       refute Enum.empty?(bundled_keys)
 
       assert MapSet.disjoint?(role_keys, bundled_keys),

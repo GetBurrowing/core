@@ -93,7 +93,9 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.ArchitectureReviewPlan,
     Platform.Responsibilities.Handlers.ArchitectureAuditDiff,
     Platform.Responsibilities.Handlers.ArchitectureCronSweep,
-    Platform.Responsibilities.Handlers.AgentsGoalHeartbeat
+    Platform.Responsibilities.Handlers.AgentsGoalHeartbeat,
+    Platform.Responsibilities.Handlers.ExperimentsLabelSignal,
+    Platform.Responsibilities.Handlers.ExperimentsScientist
   ]
 
 # Meeting-triage guardrails (task 019f5e2b-8d29). Two independent caps:

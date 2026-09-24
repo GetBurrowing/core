@@ -161,7 +161,15 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `:delivery_reference_required`. Neither is tolerated absent, and
   # `delivery_reference` may not be: a closure with no checkable reference
   # is the free-text close this tool exists to prevent.
-  @surveyed_required_count 152
+  # 169 with the `experiments` bundle's 17 declarations (task 01a0d415
+  # stage 2): `experiment_id` on get/variant_add/start/stop/conclude/results/
+  # signals_list/exclude/promote (9), `surface_key` + `surface_target` +
+  # `name` on create (3), `slug` + `payload` on variant_add (2), `subject_id`
+  # + `reason` on exclude (2), `variant` on promote (1). All HONEST: each is
+  # read under its declared key only, in `Platform.Experiments.Tools`, with
+  # no alias and no context fallback, and an absent or blank value is the
+  # `missing_<param>` refusal envelope before any read or write.
+  @surveyed_required_count 169
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

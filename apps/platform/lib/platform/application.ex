@@ -184,6 +184,7 @@ defmodule Platform.Application do
       |> maybe_add_candidate_sweeper()
       |> maybe_add_security_sweeper()
       |> maybe_add_space_purger()
+      |> maybe_add_experiments_mail_subscriber()
       |> maybe_add_container_purger()
       |> maybe_add_file_purger()
       |> maybe_add_catalog_emitter()
@@ -357,6 +358,21 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_space_purger, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Chat.SpacePurger)
+    else
+      children
+    end
+  end
+
+  # Experiments MailSubscriber (task 01a0d415 stage 3): turns Mail.Inbound's
+  # ID-only ingest event into labelled experiment signals, reconciling missed
+  # rows on start. Needs Repo, PubSub and Platform.TaskSupervisor, so it goes
+  # ahead of the Endpoint like the SpacePurger. Disabled in config/test.exs —
+  # a DB-touching subscriber would otherwise fire on every mail test outside
+  # the sandbox; its tests start it with start_supervised/1.
+  defp maybe_add_experiments_mail_subscriber(children) do
+    if Application.get_env(:platform, :start_experiments_mail_subscriber, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Experiments.Signals.MailSubscriber)
     else
       children
     end

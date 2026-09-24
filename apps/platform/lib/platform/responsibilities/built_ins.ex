@@ -69,7 +69,9 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.ArchitectureReviewPlan,
       Handlers.ArchitectureAuditDiff,
       Handlers.ArchitectureCronSweep,
-      Handlers.AgentsGoalHeartbeat
+      Handlers.AgentsGoalHeartbeat,
+      Handlers.ExperimentsLabelSignal,
+      Handlers.ExperimentsScientist
     ]
   end
 end

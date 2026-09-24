@@ -36,11 +36,14 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   `:check_no_ack` / `:check_safety_net` timers from.
   """
 
+  alias Platform.Experiments.Subject, as: ExperimentSubject
+  alias Platform.Experiments.Surfaces, as: ExperimentSurfaces
   alias Platform.Orchestration.Diagnostics
   alias Platform.Orchestration.DispatchPhase
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Orchestration.ProviderGuidance
+  alias Platform.Security.ExternalContent
   alias Platform.Tasks.BranchFreshness
   alias Platform.Tasks.BranchReconciler
   alias Platform.Tasks.ReviewRequest
@@ -337,20 +340,25 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
     }
 
-    case PromptTemplates.render_template("dispatch.planning", assigns) do
-      {:ok, rendered} ->
-        rendered
+    prompt =
+      case PromptTemplates.render_template("dispatch.planning", assigns) do
+        {:ok, rendered} ->
+          rendered
 
-      {:error, :not_found} ->
-        derived_or_hardcoded("dispatch.planning", assigns, fn ->
-          hardcoded_dispatch_planning(
-            task,
-            provider_guidance,
-            previous_rejection_reason,
-            parent_plans
-          )
-        end)
-    end
+        {:error, :not_found} ->
+          derived_or_hardcoded("dispatch.planning", assigns, fn ->
+            hardcoded_dispatch_planning(
+              task,
+              provider_guidance,
+              previous_rejection_reason,
+              parent_plans
+            )
+          end)
+      end
+
+    # After the case, so the served row, the derived default and the
+    # hardcoded last resort all pass through the one helper.
+    append_experiment_directive(prompt, "planner.stage_budget", "dispatch.planning", task)
   end
 
   # DERIVE, don't restate (task 019ff10f stage 1).
@@ -375,6 +383,112 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # back, and a derived body is byte-identical to the happy-path body for an
   # unmodified row, so those post-processors see exactly the input they were
   # written against.
+  # ── Experiment directives (task 01a0d415 stage 4) ───────────────────────
+  #
+  # THE one code path by which a non-prompt experiment surface reaches a
+  # dispatch prompt. `planning_prompt/2` and `in_progress_prompt/4` call it on
+  # whatever body their render produced — the served row, the derived
+  # default or the hardcoded last resort — so no branch can skip it or carry
+  # a second copy.
+  #
+  # The block is APPENDED rather than interpolated through a template
+  # placeholder, so running an experiment never needs a template edit.
+  #
+  # Three properties, each pinned by
+  # `heartbeat_scheduler_experiment_surfaces_test.exs`:
+  #
+  #   * `:none`, a control payload (the surface renders it as nil) and any
+  #     failure all return `prompt` ITSELF — not a copy with whitespace
+  #     added. An out-of-scope render is byte-identical to a render with no
+  #     experiment at all, because the surface is resolved on every render
+  #     and only the experiment's scope keeps it off unrelated tasks.
+  #   * It never raises (the ADR-0048 posture: observational machinery never
+  #     breaks a dispatch). A raising resolver is logged and the prompt goes
+  #     out unchanged.
+  #   * Stickiness is the resolver's: an existing assignment wins whatever
+  #     the experiment's status, so a stop never changes an in-flight task's
+  #     block, and every re-dispatch of the task renders the same block.
+  #
+  # `:experiments_surface_resolver` (default `Platform.Experiments.Surfaces`)
+  # is a TEST SEAM for the raising-resolver case; no config file sets it.
+  @doc false
+  @spec append_experiment_directive(String.t(), String.t(), String.t(), map()) :: String.t()
+  def append_experiment_directive(prompt, surface_key, target, task) when is_binary(prompt) do
+    case experiment_directive_block(surface_key, target, task) do
+      block when is_binary(block) -> prompt <> block
+      nil -> prompt
+    end
+  end
+
+  defp experiment_directive_block(surface_key, target, task) do
+    with %ExperimentSubject{} = subject <- experiment_subject(task),
+         surface when not is_nil(surface) <- ExperimentSurfaces.get(surface_key),
+         true <- function_exported?(surface, :render_directive, 1),
+         resolver =
+           Application.get_env(:platform, :experiments_surface_resolver, ExperimentSurfaces),
+         {:ok, payload} <-
+           resolution_payload(
+             resolver.resolve(surface_key, target, subject, org_id: task_org_id(task))
+           ),
+         text when is_binary(text) and text != "" <- surface.render_directive(payload) do
+      "\n\n## Experiment directive (#{surface_key})\n\n" <>
+        ExternalContent.escape_mentions(text) <> "\n"
+    else
+      _ -> nil
+    end
+  rescue
+    error ->
+      log_directive_failure(surface_key, task, error)
+      nil
+  catch
+    kind, reason ->
+      log_directive_failure(surface_key, task, {kind, reason})
+      nil
+  end
+
+  defp resolution_payload({:variant, _experiment, _slug, %{} = payload}), do: {:ok, payload}
+  defp resolution_payload({:default, %{} = payload}), do: {:ok, payload}
+  defp resolution_payload(_resolution), do: :none
+
+  # Built from the task already in hand; policies read only these
+  # attributes (subject.ex moduledoc). A nil value is left out rather than
+  # passed, so the resolver can fill it (see `Surfaces.with_attributes/3`).
+  defp experiment_subject(task) do
+    with id when is_binary(id) <- contract_id(task, :id),
+         true <- Platform.UUID.valid?(id) do
+      attributes =
+        [
+          project_id: Map.get(task, :project_id),
+          epic_id: Map.get(task, :epic_id),
+          inserted_at: Map.get(task, :inserted_at),
+          org_id: task_org_id(task)
+        ]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new()
+
+      ExperimentSubject.new("task", id, attributes)
+    else
+      _ -> nil
+    end
+  end
+
+  defp task_org_id(task) do
+    case Map.get(task, :project) do
+      %Ecto.Association.NotLoaded{} -> nil
+      %{} = project -> Map.get(project, :org_id)
+      _ -> nil
+    end
+  end
+
+  defp log_directive_failure(surface_key, task, reason) do
+    Logger.error(
+      "[HeartbeatScheduler] experiment directive for #{surface_key} skipped, prompt unchanged " <>
+        "(task=#{inspect(contract_id(task, :id))}, reason=#{inspect(reason)})"
+    )
+  rescue
+    _ -> :ok
+  end
+
   defp derived_or_hardcoded(slug, assigns, last_resort) when is_function(last_resort, 0) do
     case PromptTemplates.render_default(slug, assigns) do
       {:ok, rendered} -> rendered
@@ -452,7 +566,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           end)
       end
 
-    enrich_in_progress_prompt(prompt, task, stage)
+    prompt
+    |> enrich_in_progress_prompt(task, stage)
+    |> append_experiment_directive("mail.draft.generator", "dispatch.in_progress", task)
   end
 
   # `dispatch.in_review` and `dispatch.review_e2e` share one assigns body — they

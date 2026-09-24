@@ -70,12 +70,23 @@ defmodule Platform.Experiments.Metric do
     whose `n` is ambiguous is very nearly as bad as one with no `n` at all,
     because a reader who cannot tell what was counted cannot tell whether
     there was enough of it.
+
+    `pending` (task 01a0d415) counts subjects still inside an outcome
+    metric's observation window. They are in NEITHER the value nor `n` —
+    they have not had the chance to produce an outcome, and scoring them as
+    non-responses would bias the rate toward zero. It defaults to 0 for
+    every metric with no window; `n` stays enforced.
     """
 
-    @type t :: %__MODULE__{value: float(), n: non_neg_integer(), unit: atom()}
+    @type t :: %__MODULE__{
+            value: float(),
+            n: non_neg_integer(),
+            unit: atom(),
+            pending: non_neg_integer()
+          }
 
     @enforce_keys [:value, :n, :unit]
-    defstruct [:value, :n, :unit]
+    defstruct [:value, :n, :unit, pending: 0]
   end
 
   @type result :: {:ok, Result.t()} | :insufficient_data

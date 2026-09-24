@@ -68,6 +68,7 @@ defmodule Platform.Responsibilities.Providers do
   alias Platform.Responsibilities.Providers.Agents
   alias Platform.Responsibilities.Providers.Architecture
   alias Platform.Responsibilities.Providers.Design
+  alias Platform.Responsibilities.Providers.Experiments
   alias Platform.Responsibilities.Providers.Meetings
   alias Platform.Responsibilities.Providers.Memory
   alias Platform.Responsibilities.Providers.Tasks
@@ -76,6 +77,7 @@ defmodule Platform.Responsibilities.Providers do
     "agents" => Agents,
     "architecture" => Architecture,
     "design" => Design,
+    "experiments" => Experiments,
     "meetings" => Meetings,
     "memory" => Memory,
     "tasks" => Tasks

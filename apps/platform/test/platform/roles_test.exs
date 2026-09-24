@@ -470,4 +470,60 @@ defmodule Platform.RolesTest do
       assert Roles.assigned_agents() == []
     end
   end
+
+  # ── scientist (task 01a0d415 stage 3) ───────────────────────────────
+
+  describe "the scientist role" do
+    test "roles_key_check accepts scientist and still rejects a non-roster key" do
+      # `setup` emptied `roles`, so this insert exercises the CHECK itself.
+      now = DateTime.utc_now()
+
+      assert {1, _} =
+               Repo.insert_all("roles", [
+                 %{
+                   key: "scientist",
+                   name: "Scientist",
+                   description: "d",
+                   icon: "hero-beaker",
+                   inserted_at: now,
+                   updated_at: now
+                 }
+               ])
+
+      # Positive control: the CHECK still closes the roster.
+      error =
+        assert_raise Postgrex.Error, fn ->
+          Repo.insert_all("roles", [
+            %{
+              key: "not_a_real_role",
+              name: "X",
+              description: "d",
+              icon: "hero-beaker",
+              inserted_at: now,
+              updated_at: now
+            }
+          ])
+        end
+
+      assert error.postgres.constraint == "roles_key_check"
+    end
+
+    test "the seed is idempotent and bundles both experiments keys" do
+      :ok = Platform.Roles.Seeds.seed_defaults()
+      :ok = Platform.Roles.Seeds.seed_defaults()
+
+      assert Repo.aggregate(from(r in Role, where: r.key == "scientist"), :count) == 1
+
+      assert Repo.aggregate(
+               from(rr in RoleResponsibility, where: rr.role_key == "scientist"),
+               :count
+             ) == 2
+
+      # Stage 3's labeler plus stage 5's goal loop (task 01a0d415).
+      assert Roles.bundle_for("scientist") == [
+               "experiments.label_signal",
+               "experiments.scientist"
+             ]
+    end
+  end
 end

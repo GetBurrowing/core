@@ -1,70 +1,110 @@
 defmodule PlatformWeb.ExperimentsLive do
   @moduledoc """
   `/control/experiments` — what we tried, what it cost, and what we are still
-  not entitled to claim. Task 019fe6ba, ADR-0048.
+  not entitled to claim. Task 019fe6ba, ADR-0048; results, guardrails, launch
+  approval and the human controls added by task 01a0d415 stage 6, following
+  the design-direction canvas on that task.
 
   One LiveView serves both the list (`:index`) and the detail (`:show`) with
   its four tabs; the tab is socket state, not a route, so switching tabs
   cannot lose the loaded experiment.
 
-  ## The result cell is the only thing on this page that may print a figure
+  ## The result cell is ONE unit
 
-  `result_cell/1` renders a figure TOGETHER WITH its basis — subjects,
-  measured count, stop rule, exclusions — from one template with one branch.
-  There is no second path to a number: no bare `{row.value}` anywhere in this
-  module, no tooltip carrying the basis, no footnote. Both branches of that
-  one `if` emit the basis block; only one of them emits a figure.
+  `result_cell/1` prints the figure and its sample size as one string in one
+  mono run — `18.4% · n=212` — at full ink on both halves. `n` is never a
+  caption, a tooltip or a grey sub-line: an adjacent qualifier is lost the
+  moment the value travels into a screenshot or a chat message, and these
+  values travel constantly.
 
-  That is the whole design. A footnote can be dropped by someone tidying a
-  cramped column and the number survives it, which is how the honesty rule
-  quietly stops holding while every test still passes. Here the number cannot
-  outlive its basis, because they are the same markup.
+  An arm that has not earned a figure prints WORDS in the same place —
+  `not enough data · n=3` — and draws no geometry at all. There is no
+  zero-width bar in that row's DOM, because a bar of length zero IS zero to
+  the eye whatever the label says. Only an earned row renders the
+  `data-role="evidence-bar"` element, and the unearned row sits on the flat
+  `bg-base-300` ground: the absence of chroma is the signal.
 
-  `PlatformWeb.ExperimentResults` refuses to carry `value` at all on a row
+  Exclusions sit on the row they changed: `(7 excluded)` is the summary of a
+  `<details>` that opens onto the reasons, read from `excluded_reason`.
+
+  `Platform.Experiments.Results` refuses to carry `value` at all on a row
   that has not cleared its stop rule, so the rule is enforced twice — once
-  where the data is built and once where it is drawn — and neither layer
-  trusts the other.
+  where the data is built and once where it is drawn.
 
   ## What this page will not draw
 
-  No lift against control, no projection, no "+8.9% projected". ADR-0048
-  names that shape specifically: it is how noise reads as measurement. Each
-  arm's figure stands alone with its own `n`.
+  No lift against control, no projection. Each arm's figure stands alone
+  with its own `n` (ADR-0048).
 
-  Results are drawn in body ink whatever they say. A regression is not
-  coloured as a failure and a win is not coloured as a success — an outcome
-  palette teaches the reader the verdict before they have read the sample
-  size, and the regression is usually the most instructive row here.
+  ## State chips differ in HUE
 
-  ## Lifecycle colour survives greyscale
+  Running is `badge-success`, Stopped `badge-warning`, Concluded
+  `badge-info`. Stopped and concluded mean opposite things to someone
+  deciding whether to promote, so they differ in hue, not in shade, and the
+  labels are sentence case: they are states, not labels shouting.
 
-  Status is carried by WEIGHT as well as hue — draft outline, running filled,
-  stopped outline, concluded filled — so the four states stay distinguishable
-  where hue does not reach. `stopped` and `concluded` are different terminal
-  states and both persist in the list; nothing here filters either out.
+  ## One primary button
+
+  Promote is the only `btn-primary` on the page, pinned to the right of each
+  earned row, so a reader scanning the column of figures cannot reach the
+  single irreversible action without passing the evidence. Every other
+  action is neutral.
+
+  ## Human controls (Rowan, 2026-09-24)
+
+  An admin can create, start, approve, stop (with feedback), conclude and
+  promote from this page. Every handler calls the same `Platform.Experiments`
+  context function the MCP tools call — there is no second write path.
+
+  Stop opens a small form whose feedback is written by
+  `Experiments.stop/3` together with who stopped it and when; the stopped
+  experiment shows all three, and the Scientist reads the feedback.
+
+  ## Guardrails
+
+  The panel edits the install-wide row or one org's row through
+  `Guardrails.save/3`, an upsert on the stage-1 `NULLS NOT DISTINCT` index.
+  Every control is pre-filled from the EFFECTIVE value (`Guardrails.for_org/1`):
+  with no stored row, the surface checkboxes show the built-in default, so
+  saving only a new `max_live` keeps today's surfaces rather than writing the
+  column default `[]` and refusing every surface to every agent.
+
+  The mail send path is a line of TEXT, not an unchecked box. A checkbox is
+  an invitation; this row states that the system does not do it.
+
+  Launch approval is OFF by default. The pending-approval UI appears only on
+  an experiment whose `approval_state` is `pending`, which happens only in an
+  org that turned `require_human_approval` on.
 
   ## Reads are member-visible, writes are admin-only, checked server-side
 
   These routes sit in `live_session :authenticated`, so any member can read
-  the page — that is deliberate, an experiment nobody can see is not evidence
-  anyone can act on. Every write handler re-checks `@fabrikam_admin?` ITSELF
-  before touching the context. Hiding a button is an affordance; a forged
-  event from a non-admin client is refused by the handler, not by the
-  template. Mirrors the pattern in `PlatformWeb.ChatLive`'s admin sidebar
-  mode.
+  the page. Every write handler re-checks `@fabrikam_admin?` ITSELF before
+  touching the context (`admin_only/2`). Hiding a button is an affordance; a
+  forged event from a non-admin client is refused by the handler.
   """
 
   use PlatformWeb, :live_view
 
+  alias Platform.Accounts
+  alias Platform.Accounts.User
   alias Platform.Experiments
   alias Platform.Experiments.Assignments
   alias Platform.Experiments.Experiment
+  alias Platform.Experiments.Guardrails
+  alias Platform.Experiments.MetricKind
   alias Platform.Experiments.Metrics
+  alias Platform.Experiments.Promotion
+  alias Platform.Experiments.Surfaces
   alias Platform.Orchestration.PromptTemplates
+  alias Platform.Tasks
+  alias Platform.Tenancy
   alias PlatformWeb.ExperimentResults
 
   @tabs ~w(results design assignments promotions)
   @default_tab "results"
+  @prompt_surface "dispatch.prompt"
+  @max_feedback 4000
 
   # Pre-filled rather than blank, and required. The results layer fails
   # closed: `ExperimentResults.min_subjects/1` returns nil for an absent or
@@ -78,17 +118,28 @@ defmodule PlatformWeb.ExperimentsLive do
     "slug" => "",
     "hypothesis" => "",
     "primary_metric" => "",
-    "min_subjects" => to_string(@default_min_subjects)
+    "min_subjects" => to_string(@default_min_subjects),
+    "surface" => @prompt_surface <> "::",
+    "org_id" => "",
+    "project_id" => ""
   }
 
   @impl true
   def mount(_params, _session, socket) do
+    user = socket.assigns[:current_user_record]
+
     {:ok,
      socket
      |> assign(:page_title, "Experiments")
      |> assign(:show_create, false)
+     |> assign(:show_stop_form, false)
      |> assign(:create_form, @empty_create_form)
-     |> assign(:metric_catalog, Metrics.catalog())}
+     |> assign(:metric_catalog, Metrics.catalog())
+     |> assign(:surface_options, surface_options())
+     # Org names are for the admin's pickers only; a member's panel shows the
+     # install-wide row and lists no foreign org (ADR-0042).
+     |> assign(:orgs, if(socket.assigns[:fabrikam_admin?], do: sorted_orgs(), else: []))
+     |> assign(:projects, Tasks.list_projects_for_user(user))}
   end
 
   @impl true
@@ -100,6 +151,7 @@ defmodule PlatformWeb.ExperimentsLive do
     socket
     |> assign(:experiment, nil)
     |> load_index()
+    |> assign_guardrails(socket.assigns[:guard_org_id])
   end
 
   defp apply_action(socket, :show, %{"slug" => slug}) do
@@ -119,17 +171,50 @@ defmodule PlatformWeb.ExperimentsLive do
   defp load_index(socket) do
     experiments = Experiments.list_experiments()
 
-    assign(socket, :rows, Enum.map(experiments, &{&1, ExperimentResults.headline_row(&1)}))
+    rows =
+      Enum.map(experiments, fn experiment ->
+        row = ExperimentResults.headline_row(experiment)
+        reasons = experiment |> Assignments.list_assignments() |> exclusion_reasons()
+        {experiment, row, Map.get(reasons, row.variant_slug, [])}
+      end)
+
+    socket
+    |> assign(:rows, rows)
+    |> assign(
+      :agent_names,
+      Experiments.agent_names(Enum.map(experiments, & &1.proposed_by_agent_id))
+    )
   end
 
   defp load_experiment(socket, experiment) do
+    assignments = Assignments.list_assignments(experiment)
+    rows = ExperimentResults.rows(experiment)
+
     socket
     |> assign(:experiment, experiment)
     |> assign(:page_title, experiment.name)
-    |> assign(:result_rows, ExperimentResults.rows(experiment))
+    |> assign(:result_rows, rows)
+    |> assign(:bar_widths, bar_widths(rows))
+    |> assign(:exclusions, exclusion_reasons(assignments))
     |> assign(:variants, Experiments.list_variants(experiment))
-    |> assign(:assignments, Assignments.list_assignments(experiment))
+    |> assign(:assignments, assignments)
     |> assign(:templates, PromptTemplates.list_templates())
+    |> assign(
+      :proposer_name,
+      proposer(Experiments.agent_names([experiment.proposed_by_agent_id]), experiment)
+    )
+    |> assign(:stopped_by, stopped_by_name(experiment))
+    |> assign(:org_name, org_name(experiment.org_id))
+    |> assign(:project_name, project_name(experiment.project_id))
+  end
+
+  defp assign_guardrails(socket, org_id) do
+    socket
+    |> assign(:guard_org_id, org_id)
+    |> assign(:guardrails, Guardrails.for_org(org_id))
+    |> assign(:guard_stored?, Guardrails.stored_row(org_id) != nil)
+    |> assign(:guard_live, Guardrails.live_count(org_id))
+    |> assign(:guard_surfaces, guardrail_surfaces())
   end
 
   @impl true
@@ -139,22 +224,21 @@ defmodule PlatformWeb.ExperimentsLive do
 
   def handle_event("select_tab", _params, socket), do: {:noreply, socket}
 
-  # ── WRITES. Every one re-checks `@fabrikam_admin?` server-side ──────────────
-  #
-  # The buttons below are hidden from non-admins, and that is an affordance
-  # only. A member who fires `activate` by name over the socket — which
-  # costs nothing and needs no button — reaches this code, so this code is
-  # where the refusal has to live. Each handler returns an error flash and
-  # touches no context function on the way out.
-
-  def handle_event("show_create", _params, socket) do
-    admin_only(socket, fn ->
-      {:noreply, socket |> assign(:show_create, true) |> assign(:create_form, @empty_create_form)}
-    end)
+  # A read: which row the panel shows. Members may switch it too; only the
+  # save below writes.
+  def handle_event("guardrails_scope", params, socket) do
+    case parse_scope_org(params["org_id"]) do
+      {:ok, org_id} -> {:noreply, assign_guardrails(socket, org_id)}
+      {:error, message} -> {:noreply, put_flash(socket, :error, message)}
+    end
   end
 
   def handle_event("hide_create", _params, socket) do
     {:noreply, assign(socket, :show_create, false)}
+  end
+
+  def handle_event("hide_stop", _params, socket) do
+    {:noreply, assign(socket, :show_stop_form, false)}
   end
 
   # Slug follows the name until someone edits the slug themselves, after
@@ -180,43 +264,63 @@ defmodule PlatformWeb.ExperimentsLive do
     {:noreply, assign(socket, :create_form, form)}
   end
 
+  # ── WRITES. Every one re-checks `@fabrikam_admin?` server-side ──────────────
+  #
+  # The buttons below are hidden from non-admins, and that is an affordance
+  # only. A member who fires an event by name over the socket — which costs
+  # nothing and needs no button — reaches this code, so this code is where
+  # the refusal has to live. Each handler returns an error flash and touches
+  # no context function on the way out.
+
+  def handle_event("show_create", _params, socket) do
+    admin_only(socket, fn ->
+      {:noreply, socket |> assign(:show_create, true) |> assign(:create_form, @empty_create_form)}
+    end)
+  end
+
   def handle_event("create_experiment", params, socket) do
     admin_only(socket, fn ->
-      # `stop_rule` was DROPPED here before this stage: the field could be
-      # rendered, submitted and silently vanish. The shape is exactly what
+      # `stop_rule` was DROPPED here once: the field could be rendered,
+      # submitted and silently vanish. The shape is exactly what
       # `ExperimentResults.min_subjects/1` reads — a string key over an
       # INTEGER value; the string "40" fails that guard and reads as no rule.
-      case parse_min_subjects(params["min_subjects"]) do
-        :error ->
-          {:noreply,
-           socket
-           |> assign(:create_form, merge_create_form(socket, params))
-           |> put_flash(:error, "Stop rule must be a whole number of subjects, greater than 0.")}
-
-        {:ok, min_subjects} ->
-          attrs = %{
+      with {:ok, min_subjects} <- parse_min_subjects(params["min_subjects"]),
+           {:ok, surface_attrs} <- parse_surface(params["surface"]),
+           {:ok, org_id} <- parse_scope_org(params["org_id"]),
+           {:ok, project_id} <- parse_project(params["project_id"]) do
+        attrs =
+          %{
             "slug" => params["slug"],
             "name" => params["name"],
             "hypothesis" => params["hypothesis"],
             "primary_metric" => params["primary_metric"],
-            "stop_rule" => %{"min_subjects" => min_subjects}
+            "stop_rule" => %{"min_subjects" => min_subjects},
+            "org_id" => org_id,
+            "project_id" => project_id
           }
+          |> Map.merge(surface_attrs)
 
-          case Experiments.create_experiment(attrs) do
-            {:ok, _experiment} ->
-              {:noreply,
-               socket
-               |> put_flash(:info, "Experiment created.")
-               |> assign(:show_create, false)
-               |> assign(:create_form, @empty_create_form)
-               |> load_index()}
+        case Experiments.create_experiment(attrs) do
+          {:ok, _experiment} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Experiment created as a draft.")
+             |> assign(:show_create, false)
+             |> assign(:create_form, @empty_create_form)
+             |> load_index()}
 
-            {:error, changeset} ->
-              {:noreply,
-               socket
-               |> assign(:create_form, merge_create_form(socket, params))
-               |> put_flash(:error, error_message(changeset))}
-          end
+          {:error, changeset} ->
+            {:noreply,
+             socket
+             |> assign(:create_form, merge_create_form(socket, params))
+             |> put_flash(:error, error_message(changeset))}
+        end
+      else
+        {:error, message} ->
+          {:noreply,
+           socket
+           |> assign(:create_form, merge_create_form(socket, params))
+           |> put_flash(:error, message)}
       end
     end)
   end
@@ -281,33 +385,210 @@ defmodule PlatformWeb.ExperimentsLive do
     end)
   end
 
-  def handle_event("stop", _params, socket) do
+  # A human start: `Experiments.start/2` with the user as actor, the same
+  # guarded launch the MCP `experiment_start` takes. A human is never sent to
+  # pending approval, and still meets `max_live` and `surface_busy`.
+  def handle_event("start", params, socket) do
     admin_only(socket, fn ->
-      case Experiments.stop(socket.assigns.experiment) do
-        {:ok, experiment} ->
-          {:noreply,
-           socket |> put_flash(:info, "Experiment stopped.") |> load_experiment(experiment)}
+      with_user(socket, fn user ->
+        with_experiment(socket, params, fn experiment ->
+          case Experiments.start(experiment, user) do
+            {:ok, %Experiment{} = running} ->
+              {:noreply, socket |> put_flash(:info, "Experiment running.") |> reload(running)}
 
-        {:error, changeset} ->
-          {:noreply, put_flash(socket, :error, error_message(changeset))}
+            {:ok, :pending_human_approval} ->
+              {:noreply,
+               socket |> put_flash(:info, "Awaiting human approval.") |> reload(experiment)}
+
+            {:error, reason} ->
+              {:noreply, put_flash(socket, :error, describe_error(reason))}
+          end
+        end)
+      end)
+    end)
+  end
+
+  def handle_event("approve_launch", params, socket) do
+    admin_only(socket, fn ->
+      with_user(socket, fn user ->
+        with_experiment(socket, params, fn experiment ->
+          case Experiments.approve_launch(experiment, user) do
+            {:ok, running} ->
+              {:noreply,
+               socket
+               |> put_flash(:info, "Launch approved. Experiment running.")
+               |> reload(running)}
+
+            {:error, reason} ->
+              {:noreply, put_flash(socket, :error, describe_error(reason))}
+          end
+        end)
+      end)
+    end)
+  end
+
+  def handle_event("show_stop", _params, socket) do
+    admin_only(socket, fn -> {:noreply, assign(socket, :show_stop_form, true)} end)
+  end
+
+  # Stop WITH feedback (Rowan, 2026-09-24): `Experiments.stop/3` records the
+  # feedback, who stopped it and when in the transition itself.
+  def handle_event("stop", params, socket) do
+    admin_only(socket, fn ->
+      with_user(socket, fn user ->
+        experiment = socket.assigns.experiment
+        feedback = params |> Map.get("feedback") |> blank_to_nil()
+
+        cond do
+          is_nil(experiment) ->
+            {:noreply, put_flash(socket, :error, "Open an experiment to stop it.")}
+
+          experiment.status not in ["running", "draft"] ->
+            {:noreply,
+             put_flash(socket, :error, "Only a running or draft experiment can be stopped.")}
+
+          is_binary(feedback) and String.length(feedback) > @max_feedback ->
+            {:noreply,
+             put_flash(socket, :error, "Feedback is at most #{@max_feedback} characters.")}
+
+          true ->
+            case Experiments.stop(experiment, user, feedback) do
+              {:ok, stopped} ->
+                {:noreply,
+                 socket
+                 |> put_flash(:info, "Experiment stopped.")
+                 |> assign(:show_stop_form, false)
+                 |> load_experiment(stopped)}
+
+              {:error, changeset} ->
+                {:noreply, put_flash(socket, :error, error_message(changeset))}
+            end
+        end
+      end)
+    end)
+  end
+
+  # Conclude and promote are separate events because they write DIFFERENT
+  # things: conclude is a terminal status, promote writes the winning arm
+  # as the surface's default. Neither implies the other, exactly as the MCP
+  # tools `experiment_conclude` and `experiment_promote` do not.
+  def handle_event("conclude", _params, socket) do
+    admin_only(socket, fn ->
+      experiment = socket.assigns.experiment
+
+      if experiment && experiment.status == "running" do
+        case Experiments.conclude(experiment) do
+          {:ok, concluded} ->
+            {:noreply,
+             socket |> put_flash(:info, "Experiment concluded.") |> load_experiment(concluded)}
+
+          {:error, changeset} ->
+            {:noreply, put_flash(socket, :error, error_message(changeset))}
+        end
+      else
+        {:noreply, put_flash(socket, :error, "Only a running experiment can be concluded.")}
       end
     end)
   end
 
-  # "Promote" concludes the experiment. It is a separate event name from
-  # `stop` because the two write DIFFERENT terminal statuses and both stay on
-  # the page — collapsing them onto one handler is the first step towards
-  # collapsing them onto one status.
+  def handle_event("promote", %{"variant" => variant_slug}, socket)
+      when is_binary(variant_slug) do
+    admin_only(socket, fn ->
+      with_user(socket, fn user ->
+        experiment = socket.assigns.experiment
+        row = Enum.find(socket.assigns[:result_rows] || [], &(&1.variant_slug == variant_slug))
+
+        cond do
+          is_nil(experiment) or is_nil(row) ->
+            {:noreply, put_flash(socket, :error, "No such arm to promote.")}
+
+          not row.earned? ->
+            {:noreply,
+             put_flash(socket, :error, "This arm has not earned a figure; nothing to promote.")}
+
+          true ->
+            opts = [
+              variant: variant_slug,
+              trigger: :manual,
+              actor_type: "user",
+              actor_id: user.id,
+              effect: row.value,
+              n: row.n
+            ]
+
+            case Promotion.promote(experiment, opts) do
+              {:ok, _promotion} ->
+                {:noreply,
+                 socket
+                 |> put_flash(:info, "Promoted #{variant_slug}.")
+                 |> reload(experiment)}
+
+              {:error, reason} ->
+                {:noreply, put_flash(socket, :error, describe_error(reason))}
+            end
+        end
+      end)
+    end)
+  end
+
   def handle_event("promote", _params, socket) do
     admin_only(socket, fn ->
-      case Experiments.conclude(socket.assigns.experiment) do
-        {:ok, experiment} ->
-          {:noreply,
-           socket |> put_flash(:info, "Experiment concluded.") |> load_experiment(experiment)}
+      {:noreply, put_flash(socket, :error, "Name the arm to promote.")}
+    end)
+  end
 
-        {:error, changeset} ->
-          {:noreply, put_flash(socket, :error, error_message(changeset))}
+  # Variants for a non-prompt surface. The payload is validated by the
+  # surface itself — the same `validate_payload/1` the MCP tool calls — and
+  # its error list is shown verbatim. Prompt variants are edited on
+  # `/admin/prompts/:slug`, as before.
+  def handle_event("add_variant", params, socket) do
+    admin_only(socket, fn ->
+      experiment = socket.assigns.experiment
+
+      with :ok <- variant_addable(experiment),
+           surface when not is_nil(surface) <- Surfaces.get(experiment.surface_key),
+           {:ok, slug} <- variant_slug(params["slug"]),
+           {:ok, raw} <- decode_payload(params["payload"]),
+           {:ok, payload} <- validate_payload(surface, raw),
+           {:ok, weight} <- parse_weight(params["weight"]),
+           {:ok, _variant} <-
+             Experiments.add_variant(experiment, %{
+               "slug" => slug,
+               "payload" => payload,
+               "weight" => weight
+             }) do
+        {:noreply, socket |> put_flash(:info, "Variant added.") |> load_experiment(experiment)}
+      else
+        nil ->
+          {:noreply, put_flash(socket, :error, "This experiment's surface is unknown.")}
+
+        {:error, %Ecto.Changeset{} = cs} ->
+          {:noreply, put_flash(socket, :error, error_message(cs))}
+
+        {:error, message} ->
+          {:noreply, put_flash(socket, :error, message)}
       end
+    end)
+  end
+
+  def handle_event("guardrails_save", params, socket) do
+    admin_only(socket, fn ->
+      with_user(socket, fn user ->
+        case parse_scope_org(params["org_id"]) do
+          {:error, message} ->
+            {:noreply, put_flash(socket, :error, message)}
+
+          {:ok, org_id} ->
+            case Guardrails.save(org_id, guardrail_attrs(params), user) do
+              {:ok, _row} ->
+                {:noreply,
+                 socket |> put_flash(:info, "Guardrails saved.") |> assign_guardrails(org_id)}
+
+              {:error, changeset} ->
+                {:noreply, put_flash(socket, :error, error_message(changeset))}
+            end
+        end
+      end)
     end)
   end
 
@@ -318,6 +599,37 @@ defmodule PlatformWeb.ExperimentsLive do
       fun.()
     else
       {:noreply, put_flash(socket, :error, "Only Fabrikam admins can change experiments.")}
+    end
+  end
+
+  # Approval, stop and guardrail writes record WHICH human acted, so a write
+  # with no user struct in hand is refused rather than recorded as nobody.
+  defp with_user(socket, fun) do
+    case socket.assigns[:current_user_record] do
+      %User{} = user -> fun.(user)
+      _ -> {:noreply, put_flash(socket, :error, "Sign in again to change experiments.")}
+    end
+  end
+
+  defp with_experiment(socket, params, fun) do
+    experiment =
+      case params do
+        %{"slug" => slug} when is_binary(slug) -> Experiments.get_experiment_by_slug(slug)
+        _ -> socket.assigns[:experiment]
+      end
+
+    case experiment do
+      %Experiment{} = experiment -> fun.(experiment)
+      nil -> {:noreply, put_flash(socket, :error, "No such experiment.")}
+    end
+  end
+
+  # After a write from either page, re-read what that page shows.
+  defp reload(socket, %Experiment{} = experiment) do
+    if socket.assigns[:experiment] do
+      load_experiment(socket, Experiments.get_experiment(experiment.id))
+    else
+      load_index(socket)
     end
   end
 
@@ -339,12 +651,155 @@ defmodule PlatformWeb.ExperimentsLive do
   defp parse_min_subjects(value) when is_binary(value) do
     case Integer.parse(String.trim(value)) do
       {n, ""} when n > 0 -> {:ok, n}
-      _ -> :error
+      _ -> stop_rule_error()
     end
   end
 
   defp parse_min_subjects(n) when is_integer(n) and n > 0, do: {:ok, n}
-  defp parse_min_subjects(_), do: :error
+  defp parse_min_subjects(_), do: stop_rule_error()
+
+  defp stop_rule_error,
+    do: {:error, "Stop rule must be a whole number of subjects, greater than 0."}
+
+  # `"<surface key>::<target>"`. The prompt surface with no target is the
+  # original flow: the target template is chosen at activation, which is
+  # also when its control is snapshotted.
+  defp parse_surface(nil), do: {:ok, %{}}
+  defp parse_surface(@prompt_surface <> "::"), do: {:ok, %{}}
+
+  defp parse_surface(value) when is_binary(value) do
+    with [key, target] <- String.split(value, "::", parts: 2),
+         surface when not is_nil(surface) <- Surfaces.get(key),
+         true <- target != "" and target in surface_targets(surface) do
+      {:ok, %{"surface_key" => key, "surface_target" => target}}
+    else
+      _ -> {:error, "Choose a registered surface."}
+    end
+  end
+
+  defp parse_surface(_), do: {:error, "Choose a registered surface."}
+
+  defp parse_scope_org(nil), do: {:ok, nil}
+  defp parse_scope_org(""), do: {:ok, nil}
+
+  defp parse_scope_org(id) when is_binary(id) do
+    case Tenancy.get_org(id) do
+      nil -> {:error, "No such org."}
+      org -> {:ok, org.id}
+    end
+  end
+
+  defp parse_scope_org(_), do: {:error, "No such org."}
+
+  defp parse_project(nil), do: {:ok, nil}
+  defp parse_project(""), do: {:ok, nil}
+
+  defp parse_project(id) when is_binary(id) do
+    if Platform.UUID.valid?(id), do: {:ok, id}, else: {:error, "No such project."}
+  end
+
+  defp parse_project(_), do: {:error, "No such project."}
+
+  defp variant_addable(%Experiment{status: "draft", surface_key: key})
+       when is_binary(key) and key != @prompt_surface,
+       do: :ok
+
+  defp variant_addable(_),
+    do: {:error, "Variants are added to a draft on a non-prompt surface only."}
+
+  defp variant_slug(slug) when is_binary(slug) do
+    slug = String.trim(slug)
+
+    cond do
+      slug == "" -> {:error, "Name the variant."}
+      slug == Experiment.control_slug() -> {:error, "The control arm is created at start."}
+      true -> {:ok, slug}
+    end
+  end
+
+  defp variant_slug(_), do: {:error, "Name the variant."}
+
+  defp decode_payload(raw) when is_binary(raw) do
+    case Jason.decode(raw) do
+      {:ok, map} when is_map(map) -> {:ok, map}
+      _ -> {:error, "Payload must be a JSON object."}
+    end
+  end
+
+  defp decode_payload(_), do: {:error, "Payload must be a JSON object."}
+
+  defp validate_payload(surface, raw) do
+    case surface.validate_payload(raw) do
+      {:ok, payload} -> {:ok, payload}
+      {:error, reasons} -> {:error, Enum.join(reasons, "; ")}
+    end
+  end
+
+  defp parse_weight(nil), do: {:ok, 1}
+  defp parse_weight(""), do: {:ok, 1}
+
+  defp parse_weight(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {n, ""} when n > 0 -> {:ok, n}
+      _ -> {:error, "Weight must be a whole number greater than 0."}
+    end
+  end
+
+  defp parse_weight(_), do: {:error, "Weight must be a whole number greater than 0."}
+
+  # Only the keys the form actually sent. `Guardrails.save/3` fills every
+  # absent one from the effective value, so a caller that sends only
+  # `max_live` changes only `max_live`. The panel always sends
+  # `allowed_surfaces[]` (a hidden blank keeps the key present when every box
+  # is unticked, which means "none", not "unchanged").
+  defp guardrail_attrs(params) do
+    %{}
+    |> put_present(params, "max_live", & &1)
+    |> put_present(params, "allowed_surfaces", fn list ->
+      list |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
+    end)
+    |> put_present(params, "require_human_approval", &(&1 in ["true", true]))
+    |> put_present(params, "allow_auto_promote", &(&1 in ["true", true]))
+  end
+
+  defp put_present(acc, params, key, fun) do
+    case Map.fetch(params, key) do
+      {:ok, value} -> Map.put(acc, key, fun.(value))
+      :error -> acc
+    end
+  end
+
+  defp blank_to_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp blank_to_nil(_), do: nil
+
+  defp describe_error(%Guardrails.Refusal{
+         code: :max_live_reached,
+         limit: limit,
+         current: current
+       }),
+       do: "Refused: #{current} of #{limit} live experiments already running in this scope."
+
+  defp describe_error(%Guardrails.Refusal{code: :surface_busy, surface: surface}),
+    do: "Refused: another running experiment on #{surface} overlaps this one's scope."
+
+  defp describe_error(%Guardrails.Refusal{message: message}) when is_binary(message),
+    do: "Refused: #{message}"
+
+  defp describe_error(%Promotion.Refusal{message: message}) when is_binary(message),
+    do: "Refused: #{message}"
+
+  defp describe_error(%Ecto.Changeset{} = changeset), do: error_message(changeset)
+  defp describe_error(:not_pending), do: "This experiment is not awaiting approval."
+  defp describe_error(:not_draft), do: "Only a draft can be started."
+  defp describe_error(:unknown_surface), do: "This experiment's surface is not registered."
+  defp describe_error(reason) when is_atom(reason), do: "Refused: #{reason}"
+  defp describe_error(reason), do: "Refused: #{inspect(reason)}"
 
   # The short form is what an `<option>` carries: a native option cannot wrap,
   # so every character in it is width the control has to find. The long form
@@ -370,6 +825,182 @@ defmodule PlatformWeb.ExperimentsLive do
     |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
     |> Enum.map_join("; ", fn {field, messages} -> "#{field} #{Enum.join(messages, ", ")}" end)
   end
+
+  # ── Derived display data ────────────────────────────────────────────────
+
+  defp sorted_orgs, do: Tenancy.list_orgs() |> Enum.sort_by(& &1.name)
+
+  defp surface_targets(surface) do
+    if Code.ensure_loaded?(surface) and function_exported?(surface, :targets, 0),
+      do: surface.targets(),
+      else: []
+  end
+
+  # Create-form options: the prompt surface (target chosen at activation)
+  # and one option per declared target of every other surface.
+  defp surface_options do
+    prompt = [{@prompt_surface <> "::", "#{@prompt_surface} (template chosen at activation)"}]
+
+    others =
+      for surface <- Surfaces.list(),
+          surface.key() != @prompt_surface,
+          not Guardrails.send_path?(surface.key()),
+          target <- surface_targets(surface) do
+        {"#{surface.key()}::#{target}", "#{surface.key()} at #{target}"}
+      end
+
+    prompt ++ others
+  end
+
+  # The checkboxes: registered surfaces ONLY, never a send path (the registry
+  # holds none, and the changeset would refuse one).
+  defp guardrail_surfaces do
+    Surfaces.list() |> Enum.map(& &1.key()) |> Enum.reject(&Guardrails.send_path?/1)
+  end
+
+  # `%{variant_slug => [{reason, count}]}` for excluded assignments.
+  defp exclusion_reasons(assignments) do
+    assignments
+    |> Enum.filter(& &1.excluded_reason)
+    |> Enum.group_by(& &1.variant_slug)
+    |> Map.new(fn {slug, rows} ->
+      reasons =
+        rows
+        |> Enum.frequencies_by(& &1.excluded_reason)
+        |> Enum.sort_by(fn {reason, count} -> {-count, reason} end)
+
+      {slug, reasons}
+    end)
+  end
+
+  # Bar length for EARNED rows only. A ratio is drawn at its own value; any
+  # other unit is drawn against the largest earned figure in the experiment,
+  # because a duration has no natural full scale. Unearned rows get no entry
+  # and no bar.
+  defp bar_widths(rows) do
+    earned = Enum.filter(rows, & &1.earned?)
+    top = earned |> Enum.map(&abs(&1.value || 0.0)) |> Enum.max(fn -> 0.0 end)
+
+    Map.new(earned, fn row ->
+      pct =
+        case row.unit do
+          :ratio -> (row.value || 0.0) * 100
+          _ when top > 0 -> abs(row.value || 0.0) / top * 100
+          _ -> 0.0
+        end
+
+      {row.variant_slug, (pct / 1) |> max(0.0) |> min(100.0) |> Float.round(1)}
+    end)
+  end
+
+  defp stopped_by_name(%Experiment{stopped_by_user_id: nil}), do: nil
+
+  defp stopped_by_name(%Experiment{stopped_by_user_id: id}) do
+    case Accounts.get_user(id) do
+      %User{name: name} when is_binary(name) and name != "" -> name
+      %User{email: email} -> email
+      nil -> "a user who no longer exists"
+    end
+  end
+
+  defp org_name(nil), do: nil
+
+  defp org_name(id) do
+    case Tenancy.get_org(id) do
+      nil -> nil
+      org -> org.name
+    end
+  end
+
+  defp project_name(nil), do: nil
+
+  defp project_name(id) do
+    case Tasks.get_project(id) do
+      nil -> nil
+      project -> project.name
+    end
+  end
+
+  defp window_days(%Experiment{observation_window_days: days}) when is_integer(days), do: days
+
+  defp window_days(%Experiment{metric_spec: %{"window_days" => days}}) when is_integer(days),
+    do: days
+
+  defp window_days(_), do: nil
+
+  defp proposer(agent_names, %Experiment{proposed_by_agent_id: id}) when is_binary(id),
+    do: Map.get(agent_names, id, "an agent")
+
+  defp proposer(_agent_names, _experiment), do: "a human"
+
+  defp can_start?(%Experiment{status: "draft", approval_state: state} = e) do
+    state != "pending" and is_binary(e.surface_key) and is_binary(e.surface_target)
+  end
+
+  defp can_start?(_), do: false
+
+  # The metric in words, from the spec when there is one.
+  defp metric_words(%Experiment{} = experiment, catalog) do
+    case MetricKind.parse(experiment.metric_spec) do
+      {:ok, Platform.Experiments.MetricKinds.OutcomeRate, params} ->
+        labels = params |> Map.get("labels", []) |> Enum.join(" or ")
+
+        "Share of subjects with a #{labels} signal within #{params["window_days"]} days of assignment"
+
+      {:ok, Platform.Experiments.MetricKinds.DurationBetween, params} ->
+        "Time from #{params["from_status"]} to #{params["to_status"]}"
+
+      {:ok, _registered, %{"slug" => slug}} ->
+        registered_words(slug, catalog)
+
+      :none ->
+        registered_words(experiment.primary_metric, catalog)
+
+      {:error, _} ->
+        "metric spec does not parse, so nothing is measured"
+    end
+  end
+
+  defp registered_words(nil, _catalog), do: "none set"
+
+  defp registered_words(slug, catalog) do
+    case Enum.find(catalog, &(&1.slug == slug)) do
+      nil -> "#{slug} (not a metric this platform can compute)"
+      metric -> "#{metric.label} (#{direction_short(metric.direction)})"
+    end
+  end
+
+  defp policy_words(policy) when policy in [nil, %{}],
+    do: "Weighted random pick across arms; no policy filter."
+
+  defp policy_words(policy), do: Jason.encode!(policy, pretty: true)
+
+  defp signal_words(nil), do: "None. This experiment reads no inbound signals."
+
+  defp signal_words(source) when source == %{},
+    do: "None. This experiment reads no inbound signals."
+
+  defp signal_words(%{"kind" => kind} = source) do
+    to = if source["to_address"], do: " to #{source["to_address"]}", else: ""
+
+    labels =
+      case source["labels"] do
+        [_ | _] = labels -> "; labels: #{Enum.join(labels, ", ")}"
+        _ -> ""
+      end
+
+    "#{kind}#{to}#{labels}"
+  end
+
+  defp signal_words(source), do: Jason.encode!(source)
+
+  defp variant_body(%Experiment{surface_key: key}, variant) when key in [nil, @prompt_surface],
+    do: variant.content || ""
+
+  defp variant_body(_experiment, variant), do: Jason.encode!(variant.payload || %{}, pretty: true)
+
+  defp format_dt(nil), do: "an unrecorded time"
+  defp format_dt(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
 
   @impl true
   def render(assigns) do
@@ -398,7 +1029,7 @@ defmodule PlatformWeb.ExperimentsLive do
           type="button"
           phx-click="show_create"
           data-role="new-experiment-button"
-          class="btn btn-sm btn-primary"
+          class="btn btn-sm btn-outline"
         >
           <span class="hero-plus size-4" aria-hidden="true"></span> New experiment
         </button>
@@ -406,8 +1037,8 @@ defmodule PlatformWeb.ExperimentsLive do
 
       <p class="text-sm text-base-content max-w-2xl">
         Every experiment ever run, including the ones that made things worse. A result appears
-        only once its arm has measured enough to have earned one — until then the cell says so
-        and states how far it has got.
+        only once its arm has measured enough to have earned one — until then the cell says so,
+        with the sample it has so far.
       </p>
 
       {create_panel(assigns)}
@@ -421,69 +1052,230 @@ defmodule PlatformWeb.ExperimentsLive do
       >
         <h2 class="text-sm font-semibold">No experiments yet.</h2>
         <p class="text-sm text-neutral max-w-md mx-auto">
-          An experiment runs one variant of a prompt against production traffic and reports
-          whether it helped — or says it does not know yet.
+          An experiment runs one variant against production traffic and reports whether it
+          helped — or says it does not know yet.
         </p>
         <button
           :if={@fabrikam_admin?}
           type="button"
           phx-click="show_create"
           data-role="empty-create-cta"
-          class="btn btn-sm btn-outline btn-primary"
+          class="btn btn-sm btn-outline"
         >
           Create the first one
         </button>
       </section>
 
-      <%!-- shrink-0: this is a scroll container inside a flex-col page, whose
-            min-height resolves to `auto` and therefore to 0. Without it the
-            whole list renders and parks off-panel at narrow viewports —
-            present in the DOM, invisible on the screen. --%>
-      <%!-- The METRIC column drops below `sm`, and only that one. At 390px all
-            four columns need ~44rem, which pushes RESULT — the entire point of
-            this page — off the right edge behind a horizontal scroll. The
-            metric name is the least load-bearing of the four and is repeated
-            on the detail page's Design tab; the result cell is the signature
-            element and may not be the column you cannot see. --%>
-      <section :if={@rows != []} class="bg-base-200 rounded-lg overflow-x-auto shrink-0">
-        <table class="table table-sm w-full min-w-[22rem]">
-          <thead>
-            <tr class="text-xs text-neutral uppercase">
-              <th>Experiment</th>
-              <th>Status</th>
-              <th class="hidden sm:table-cell">Metric</th>
-              <th>Result</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr :for={{experiment, row} <- @rows} id={"experiment-row-#{experiment.slug}"}>
-              <td class="align-top">
-                <.link
-                  navigate={~p"/control/experiments/#{experiment.slug}"}
-                  class="link link-hover font-medium"
-                >
-                  {experiment.name}
-                </.link>
-                <div class="text-xs text-neutral">{experiment.slug}</div>
-              </td>
-              <td class="align-top">{status_badge(%{status: experiment.status})}</td>
-              <td class="align-top text-xs hidden sm:table-cell">
-                {experiment.primary_metric || "—"}
-              </td>
-              <td class="align-top">
-                {result_cell(%{row: row, experiment: experiment})}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <%!-- Rows, not a table: at 375px a four-column table pushes RESULT —
+            the entire point of this page — behind a horizontal scroll. Each
+            row stacks below `sm`; the fused figure never wraps away from
+            its n (`whitespace-nowrap` inside `result_cell/1`). --%>
+      <section :if={@rows != []} class="space-y-2 shrink-0" data-role="experiment-list">
+        <div
+          :for={{experiment, row, reasons} <- @rows}
+          id={"experiment-row-#{experiment.slug}"}
+          data-role="experiment-row"
+          class={[
+            "rounded-lg p-4 flex flex-col gap-3 md:flex-row md:items-start",
+            if(row.earned?, do: "bg-base-200", else: "bg-base-300")
+          ]}
+        >
+          <div class="md:w-72 shrink-0 space-y-1 min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              {status_badge(%{status: experiment.status})}
+              {approval_badge(%{experiment: experiment})}
+            </div>
+            <.link
+              navigate={~p"/control/experiments/#{experiment.slug}"}
+              class="link link-hover font-medium break-words"
+            >
+              {experiment.name}
+            </.link>
+            <div class="text-xs text-base-content/70 break-all">
+              {experiment.surface_key || "dispatch.prompt"} · {experiment.slug}
+            </div>
+          </div>
+          <div class="flex-1 min-w-0">
+            {result_cell(%{row: row, experiment: experiment, reasons: reasons})}
+          </div>
+          <div
+            :if={experiment.approval_state == "pending"}
+            data-role="pending-approval"
+            class="md:w-56 shrink-0 space-y-2"
+          >
+            <p class="text-sm">
+              Awaiting human approval, proposed by
+              <span class="font-medium" data-role="proposed-by">
+                {proposer(@agent_names, experiment)}
+              </span>
+            </p>
+            <button
+              :if={@fabrikam_admin?}
+              type="button"
+              phx-click="approve_launch"
+              phx-value-slug={experiment.slug}
+              data-role="approve-launch-button"
+              class="btn btn-sm btn-neutral"
+            >
+              Approve launch
+            </button>
+          </div>
+        </div>
       </section>
+
+      {guardrails_panel(assigns)}
     </div>
+    """
+  end
+
+  # THE guardrails panel. Pre-filled from the EFFECTIVE value, so a save
+  # that changes one field changes one field — see the moduledoc.
+  defp guardrails_panel(assigns) do
+    ~H"""
+    <section
+      data-role="guardrails-panel"
+      class="bg-base-200 rounded-lg p-4 md:p-6 space-y-4 max-w-2xl shrink-0"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-sm font-semibold">Guardrails</h2>
+        <span class="text-xs text-base-content/70" data-role="guardrails-source">
+          {if @guard_stored?, do: "Stored for this scope", else: "Inherited; saving stores a row"}
+        </span>
+      </div>
+      <p class="text-sm text-base-content">
+        What an agent may do unattended. A human acting on this page is held to the live limit
+        and to one experiment per surface, and to nothing else here.
+      </p>
+
+      <form phx-change="guardrails_scope" data-role="guardrails-scope-form">
+        <label class="text-xs font-semibold text-base-content/70" for="guardrails-scope">
+          Scope
+        </label>
+        <select
+          id="guardrails-scope"
+          name="org_id"
+          data-role="guardrails-scope"
+          class="select select-sm select-bordered w-full max-w-sm"
+        >
+          <option value="" selected={is_nil(@guard_org_id)}>Install-wide</option>
+          <option :for={org <- @orgs} value={org.id} selected={@guard_org_id == org.id}>
+            {org.name}
+          </option>
+        </select>
+      </form>
+
+      <form
+        phx-submit="guardrails_save"
+        data-role="guardrails-form"
+        class="space-y-3"
+      >
+        <input type="hidden" name="org_id" value={@guard_org_id || ""} />
+        <dl class="divide-y divide-base-300 text-sm">
+          <div class="py-2 flex flex-wrap items-center justify-between gap-2">
+            <dt>Live experiments</dt>
+            <dd class="flex items-center gap-2">
+              <span class="font-mono whitespace-nowrap" data-role="guardrails-live">
+                {@guard_live} of {@guardrails.max_live} used
+              </span>
+              <input
+                :if={@fabrikam_admin?}
+                type="number"
+                name="max_live"
+                min="0"
+                step="1"
+                value={@guardrails.max_live}
+                aria-label="Maximum live experiments"
+                data-role="guardrails-max-live"
+                class="input input-sm input-bordered w-20 font-mono"
+              />
+            </dd>
+          </div>
+
+          <div class="py-2 space-y-2">
+            <dt>Surfaces in scope</dt>
+            <dd class="space-y-1" data-role="guardrails-surfaces">
+              <input :if={@fabrikam_admin?} type="hidden" name="allowed_surfaces[]" value="" />
+              <label :for={key <- @guard_surfaces} class="flex items-center gap-2 font-mono text-sm">
+                <input
+                  type="checkbox"
+                  name="allowed_surfaces[]"
+                  value={key}
+                  checked={key in (@guardrails.allowed_surfaces || [])}
+                  disabled={not @fabrikam_admin?}
+                  data-role="guardrails-surface"
+                  class="checkbox checkbox-sm"
+                />
+                {key}
+              </label>
+            </dd>
+          </div>
+
+          <%!-- TEXT, not an unchecked box. A checkbox is an invitation; this
+                row states that the system does not do it. --%>
+          <div
+            class="py-2 flex flex-wrap items-center justify-between gap-2"
+            data-role="mail-send-row"
+          >
+            <dt>Mail send path</dt>
+            <dd class="font-mono text-base-content/70">— not available —</dd>
+          </div>
+
+          <div class="py-2 flex items-center justify-between gap-2">
+            <dt><label for="guardrails-approval">Require human approval to launch</label></dt>
+            <dd>
+              <input
+                :if={@fabrikam_admin?}
+                type="hidden"
+                name="require_human_approval"
+                value="false"
+              />
+              <input
+                id="guardrails-approval"
+                type="checkbox"
+                name="require_human_approval"
+                value="true"
+                checked={@guardrails.require_human_approval == true}
+                disabled={not @fabrikam_admin?}
+                data-role="guardrails-approval"
+                class="checkbox checkbox-sm"
+              />
+            </dd>
+          </div>
+
+          <div class="py-2 flex items-center justify-between gap-2">
+            <dt><label for="guardrails-auto-promote">Allow agents to promote</label></dt>
+            <dd>
+              <input :if={@fabrikam_admin?} type="hidden" name="allow_auto_promote" value="false" />
+              <input
+                id="guardrails-auto-promote"
+                type="checkbox"
+                name="allow_auto_promote"
+                value="true"
+                checked={@guardrails.allow_auto_promote == true}
+                disabled={not @fabrikam_admin?}
+                data-role="guardrails-auto-promote"
+                class="checkbox checkbox-sm"
+              />
+            </dd>
+          </div>
+        </dl>
+
+        <div :if={@fabrikam_admin?} class="flex justify-end">
+          <button type="submit" data-role="guardrails-save" class="btn btn-sm btn-neutral">
+            Save guardrails
+          </button>
+        </div>
+        <p :if={not @fabrikam_admin?} class="text-xs text-base-content/70">
+          Only Fabrikam admins can change guardrails.
+        </p>
+      </form>
+    </section>
     """
   end
 
   # The create form. Submitting it makes a DRAFT and nothing else — no
   # assignments, no snapshot, no traffic — because `create_experiment/1`
-  # forces the status. Activation stays a separate, deliberate act.
+  # forces the status. Starting stays a separate, deliberate act.
   defp create_panel(assigns) do
     assigns =
       assign(
@@ -507,7 +1299,7 @@ defmodule PlatformWeb.ExperimentsLive do
         class="space-y-4"
       >
         <div>
-          <label class="text-xs font-semibold uppercase text-neutral" for="create-name">Name</label>
+          <label class="text-xs font-semibold text-base-content/70" for="create-name">Name</label>
           <input
             id="create-name"
             name="name"
@@ -519,7 +1311,7 @@ defmodule PlatformWeb.ExperimentsLive do
         </div>
 
         <div>
-          <label class="text-xs font-semibold uppercase text-neutral" for="create-slug">Slug</label>
+          <label class="text-xs font-semibold text-base-content/70" for="create-slug">Slug</label>
           <input
             id="create-slug"
             name="slug"
@@ -532,7 +1324,7 @@ defmodule PlatformWeb.ExperimentsLive do
         </div>
 
         <div>
-          <label class="text-xs font-semibold uppercase text-neutral" for="create-hypothesis">
+          <label class="text-xs font-semibold text-base-content/70" for="create-hypothesis">
             Hypothesis
           </label>
           <textarea
@@ -548,23 +1340,77 @@ defmodule PlatformWeb.ExperimentsLive do
           </p>
         </div>
 
+        <div>
+          <label class="text-xs font-semibold text-base-content/70" for="create-surface">
+            Surface
+          </label>
+          <select
+            id="create-surface"
+            name="surface"
+            data-role="create-surface"
+            class="select select-sm select-bordered w-full font-mono"
+          >
+            <option
+              :for={{value, label} <- @surface_options}
+              value={value}
+              selected={@create_form["surface"] == value}
+              data-role="surface-option"
+            >
+              {label}
+            </option>
+          </select>
+          <p class="text-xs text-neutral mt-1">
+            The decision point this experiment varies. Only registered surfaces are listed.
+          </p>
+        </div>
+
         <div class="grid gap-4 sm:grid-cols-2">
           <div>
-            <label class="text-xs font-semibold uppercase text-neutral" for="create-metric">
+            <label class="text-xs font-semibold text-base-content/70" for="create-org">Org</label>
+            <select
+              id="create-org"
+              name="org_id"
+              data-role="create-org"
+              class="select select-sm select-bordered w-full"
+            >
+              <option value="" selected={@create_form["org_id"] == ""}>Install-wide</option>
+              <option :for={org <- @orgs} value={org.id} selected={@create_form["org_id"] == org.id}>
+                {org.name}
+              </option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-base-content/70" for="create-project">
+              Project
+            </label>
+            <select
+              id="create-project"
+              name="project_id"
+              data-role="create-project"
+              class="select select-sm select-bordered w-full"
+            >
+              <option value="" selected={@create_form["project_id"] == ""}>Every project</option>
+              <option
+                :for={project <- @projects}
+                value={project.id}
+                selected={@create_form["project_id"] == project.id}
+              >
+                {project.name}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="text-xs font-semibold text-base-content/70" for="create-metric">
               Primary metric
             </label>
             <%!-- A PICKER, not free text. An unrecognised string resolves to
                   `:no_metric`, so a free-text box is a second way to create a
-                  silently inert experiment. Options come from the context
-                  registry, so a metric that exists here can be computed.
-
-                  The option carries LABEL + SHORT DIRECTION only. The
-                  description used to live here too, and a native `<option>`
-                  neither wraps nor truncates: the text measured 708px inside a
-                  302px control, and the popup sized itself to the content and
-                  spilled outside the panel. The description is not dropped —
-                  it moves below the control, where it is ordinary text that
-                  wraps. --%>
+                  silently inert experiment. The option carries LABEL + SHORT
+                  DIRECTION only: a native `<option>` neither wraps nor
+                  truncates, so the description moves below the control. --%>
             <select
               id="create-metric"
               name="primary_metric"
@@ -590,13 +1436,13 @@ defmodule PlatformWeb.ExperimentsLive do
               <span class="whitespace-nowrap">({direction_label(@selected_metric.direction)})</span>
             </p>
             <p class="text-xs text-neutral mt-2" data-role="metric-extension-note">
-              This list is every metric the platform can compute. To measure something else, add a
-              metric module under the experiments metrics directory and register it.
+              This list is every metric the platform can compute. Parameterised metrics (outcome
+              rates, durations) are set through the experiments MCP tools.
             </p>
           </div>
 
           <div>
-            <label class="text-xs font-semibold uppercase text-neutral" for="create-stop-rule">
+            <label class="text-xs font-semibold text-base-content/70" for="create-stop-rule">
               Stop rule
             </label>
             <div class="flex items-center gap-2">
@@ -629,7 +1475,7 @@ defmodule PlatformWeb.ExperimentsLive do
           >
             Cancel
           </button>
-          <button type="submit" data-role="create-submit" class="btn btn-sm btn-primary">
+          <button type="submit" data-role="create-submit" class="btn btn-sm btn-neutral">
             Create draft
           </button>
         </div>
@@ -643,18 +1489,133 @@ defmodule PlatformWeb.ExperimentsLive do
     <div class="space-y-6">
       <div class="space-y-2">
         <.link navigate={~p"/control/experiments"} class="text-xs link link-hover text-neutral">
-          ← All experiments
+          <span class="hero-arrow-left size-3" aria-hidden="true"></span> All experiments
         </.link>
         <div class="flex flex-wrap items-center gap-3">
-          <h1 class="text-xl font-bold">{@experiment.name}</h1>
+          <h1 class="text-xl font-bold break-words">{@experiment.name}</h1>
           {status_badge(%{status: @experiment.status})}
+          {approval_badge(%{experiment: @experiment})}
         </div>
         <p :if={@experiment.hypothesis} class="text-sm text-base-content max-w-2xl">
           {@experiment.hypothesis}
         </p>
+        <p class="text-sm text-base-content/80 flex flex-wrap gap-x-4 gap-y-1">
+          <span class="font-mono break-all" data-role="header-surface">
+            {@experiment.surface_key || "dispatch.prompt"}
+          </span>
+          <span :if={window_days(@experiment)} data-role="observation-window">
+            Window: {window_days(@experiment)} days
+          </span>
+        </p>
       </div>
 
-      <div role="tablist" class="tabs tabs-bordered">
+      <%!-- Controls. Neutral, all of them: Promote, on an earned row, is the
+            only primary action on this page. --%>
+      <div :if={@fabrikam_admin?} class="flex flex-wrap gap-2" data-role="experiment-controls">
+        <button
+          :if={can_start?(@experiment)}
+          type="button"
+          phx-click="start"
+          data-role="start-button"
+          class="btn btn-sm btn-neutral"
+        >
+          Start
+        </button>
+        <button
+          :if={@experiment.status == "running" and not @show_stop_form}
+          type="button"
+          phx-click="show_stop"
+          data-role="stop-button"
+          class="btn btn-sm btn-outline"
+        >
+          Stop
+        </button>
+        <button
+          :if={@experiment.status == "running"}
+          type="button"
+          phx-click="conclude"
+          data-role="conclude-button"
+          data-confirm="Conclude this experiment? It stops assigning and its result stands."
+          class="btn btn-sm btn-outline"
+        >
+          Conclude
+        </button>
+      </div>
+
+      <form
+        :if={@fabrikam_admin? and @show_stop_form and @experiment.status == "running"}
+        phx-submit="stop"
+        data-role="stop-form"
+        class="bg-base-200 rounded-lg p-4 space-y-3 max-w-2xl"
+      >
+        <label class="text-sm font-semibold" for="stop-feedback">Why are you stopping it?</label>
+        <textarea
+          id="stop-feedback"
+          name="feedback"
+          rows="3"
+          maxlength="4000"
+          data-role="stop-feedback-input"
+          class="textarea textarea-sm textarea-bordered w-full"
+          placeholder="What you saw and what should happen next. The Scientist reads this."
+        ></textarea>
+        <p class="text-xs text-base-content/70">
+          Stopping is not concluding: the question stays open, and subjects already assigned keep
+          their arm.
+        </p>
+        <div class="flex flex-wrap justify-end gap-2">
+          <button type="button" phx-click="hide_stop" class="btn btn-sm btn-ghost">Cancel</button>
+          <button type="submit" data-role="stop-submit" class="btn btn-sm btn-neutral">
+            Stop experiment
+          </button>
+        </div>
+      </form>
+
+      <section
+        :if={@experiment.status == "stopped"}
+        data-role="stop-record"
+        class="bg-base-200 rounded-lg p-4 space-y-1 max-w-2xl"
+      >
+        <p class="text-sm">
+          Stopped by
+          <span class="font-medium" data-role="stopped-by">{@stopped_by || "an agent"}</span>
+          on <span data-role="stopped-at">{format_dt(@experiment.stopped_at)}</span>
+        </p>
+        <%!-- A <pre> so the formatter cannot indent the text into the
+              rendered feedback; the human's own line breaks are kept. --%>
+        <pre
+          :if={@experiment.stop_feedback}
+          data-role="stop-feedback"
+          class="font-sans text-sm whitespace-pre-wrap break-words"
+        >{@experiment.stop_feedback}</pre>
+        <p :if={is_nil(@experiment.stop_feedback)} class="text-sm text-base-content/70">
+          No feedback was recorded.
+        </p>
+      </section>
+
+      <section
+        :if={@experiment.approval_state == "pending"}
+        data-role="pending-approval"
+        class="bg-base-200 rounded-lg p-4 space-y-2 max-w-2xl"
+      >
+        <p class="text-sm font-semibold">Awaiting human approval</p>
+        <p class="text-sm">
+          Proposed by <span class="font-medium" data-role="proposed-by">{@proposer_name}</span>.
+          It assigns no subjects until an admin approves the launch. Approval still has to pass
+          the live limit and the one-experiment-per-surface rule.
+        </p>
+        <button
+          :if={@fabrikam_admin?}
+          type="button"
+          phx-click="approve_launch"
+          phx-value-slug={@experiment.slug}
+          data-role="approve-launch-button"
+          class="btn btn-sm btn-neutral"
+        >
+          Approve launch
+        </button>
+      </section>
+
+      <div role="tablist" class="tabs tabs-bordered overflow-x-auto">
         <button
           :for={{tab, label} <- tabs()}
           role="tab"
@@ -669,49 +1630,132 @@ defmodule PlatformWeb.ExperimentsLive do
         </button>
       </div>
 
-      <section :if={@tab == "results"} class="space-y-4">
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <section :if={@tab == "results"} class="space-y-2">
+        <%!-- One row per arm: the state on the left, the figure and its n
+              fused in the middle, the only irreversible action pinned
+              right. An unearned row gets the flat base-300 ground and NO bar
+              element; an earned row draws the success bar. --%>
+        <div
+          :for={row <- @result_rows}
+          id={"result-#{row.variant_slug}"}
+          data-role="result-row"
+          data-earned={to_string(row.earned?)}
+          class={[
+            "rounded-lg p-4 flex flex-col gap-3 sm:flex-row sm:items-center",
+            if(row.earned?, do: "bg-base-200", else: "bg-base-300")
+          ]}
+        >
+          <div class="flex items-center gap-2 sm:w-48 shrink-0 min-w-0">
+            {status_badge(%{status: @experiment.status})}
+            <span class="text-sm font-medium break-all">{row.variant_slug}</span>
+          </div>
+          <div class="flex-1 min-w-0 space-y-2">
+            <div :if={row.earned?} class="h-2 rounded bg-base-300 overflow-hidden">
+              <div
+                data-role="evidence-bar"
+                class="h-2 rounded bg-success"
+                style={"width: #{Map.get(@bar_widths, row.variant_slug, 0.0)}%"}
+              >
+              </div>
+            </div>
+            {result_cell(%{
+              row: row,
+              experiment: @experiment,
+              reasons: Map.get(@exclusions, row.variant_slug, [])
+            })}
+          </div>
           <div
-            :for={row <- @result_rows}
-            id={"result-#{row.variant_slug}"}
-            class="bg-base-200 rounded-lg p-4 space-y-2"
+            :if={row.earned? and @fabrikam_admin? and @experiment.status != "draft"}
+            class="shrink-0 sm:ml-auto"
           >
-            <h2 class="text-sm font-semibold">{row.variant_slug}</h2>
-            {result_cell(%{row: row, experiment: @experiment})}
+            <button
+              type="button"
+              phx-click="promote"
+              phx-value-variant={row.variant_slug}
+              data-role="promote-button"
+              data-confirm={"Promote #{row.variant_slug}? It becomes the default for this surface."}
+              class="btn btn-sm btn-primary"
+            >
+              Promote
+            </button>
           </div>
         </div>
 
         <p :if={@result_rows == []} data-role="no-variants" class="text-sm text-neutral">
-          No variants yet. Activating this experiment snapshots the current prompt as the control.
+          No variants yet. Starting this experiment creates the control arm.
         </p>
       </section>
 
       <section :if={@tab == "design"} class="space-y-4">
         <dl class="grid gap-3 sm:grid-cols-2 text-sm">
           <div>
-            <dt class="text-xs text-neutral uppercase">Primary metric</dt>
-            <dd data-role="design-metric">{@experiment.primary_metric || "none set"}</dd>
+            <dt class="text-xs text-base-content/70">Surface</dt>
+            <dd data-role="design-surface" class="font-mono break-all">
+              {@experiment.surface_key || "dispatch.prompt (not bound yet)"}
+            </dd>
           </div>
           <div>
-            <dt class="text-xs text-neutral uppercase">Stop rule</dt>
+            <dt class="text-xs text-base-content/70">Target</dt>
+            <dd data-role="design-target" class="font-mono break-all">
+              {@experiment.surface_target || @experiment.target_template_slug || "not bound yet"}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-xs text-base-content/70">Org</dt>
+            <dd data-role="design-org">
+              {if @experiment.org_id, do: @org_name || "an org", else: "Install-wide"}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-xs text-base-content/70">Project</dt>
+            <dd data-role="design-project">
+              {if @experiment.project_id,
+                do: @project_name || "a project",
+                else: "Every project in scope"}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-xs text-base-content/70">Metric</dt>
+            <dd data-role="design-metric">{metric_words(@experiment, @metric_catalog)}</dd>
+          </div>
+          <div>
+            <dt class="text-xs text-base-content/70">Stop rule</dt>
             <dd data-role="design-stop-rule">{ExperimentResults.stop_rule_label(@experiment)}</dd>
           </div>
           <div>
-            <dt class="text-xs text-neutral uppercase">Target template</dt>
-            <dd data-role="design-target">{@experiment.target_template_slug || "not bound yet"}</dd>
+            <dt class="text-xs text-base-content/70">Observation window</dt>
+            <dd data-role="design-window">
+              {if window_days(@experiment),
+                do: "#{window_days(@experiment)} days",
+                else: "none; every subject counts once measured"}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-xs text-base-content/70">Signal source</dt>
+            <dd data-role="design-signal-source" class="break-words">
+              {signal_words(@experiment.signal_source)}
+            </dd>
+          </div>
+          <div class="sm:col-span-2">
+            <dt class="text-xs text-base-content/70">Assignment policy</dt>
+            <dd>
+              <pre
+                data-role="design-policy"
+                class="text-xs whitespace-pre-wrap break-all font-mono"
+              >{policy_words(@experiment.assignment_policy)}</pre>
+            </dd>
           </div>
         </dl>
 
-        <%!-- Activation is the consequential step, and the consequence is
-              stated BEFORE the button in the same words the other side of
-              the snapshot already uses on `/admin/prompts/:slug`. --%>
+        <%!-- Activation is the consequential step for a prompt experiment,
+              and the consequence is stated BEFORE the button. --%>
         <section
           :if={
-            is_nil(@experiment.target_template_slug) and @experiment.status == "draft" and
-              @fabrikam_admin?
+            is_nil(@experiment.target_template_slug) and is_nil(@experiment.surface_target) and
+              @experiment.status == "draft" and @fabrikam_admin?
           }
           data-role="activate-panel"
-          class="border border-primary/60 rounded-lg p-4 space-y-3 max-w-2xl"
+          class="border border-edge rounded-lg p-4 space-y-3 max-w-2xl"
         >
           <h2 class="text-sm font-semibold">Activate this experiment</h2>
 
@@ -723,7 +1767,7 @@ defmodule PlatformWeb.ExperimentsLive do
                 name="template_slug"
                 required
                 data-role="activate-template"
-                class="select select-sm select-bordered flex-1 max-w-sm font-mono"
+                class="select select-sm select-bordered flex-1 min-w-0 max-w-sm font-mono"
               >
                 <option value="" disabled selected>Choose a template</option>
                 <option :for={tmpl <- @templates} value={tmpl.slug} data-role="template-option">
@@ -738,11 +1782,63 @@ defmodule PlatformWeb.ExperimentsLive do
               dispatches render; it changes nothing this experiment has measured or will measure.
             </p>
 
-            <button type="submit" data-role="activate-button" class="btn btn-sm btn-primary">
+            <button type="submit" data-role="activate-button" class="btn btn-sm btn-neutral">
               Activate
             </button>
           </form>
         </section>
+
+        <form
+          :if={
+            @fabrikam_admin? and @experiment.status == "draft" and
+              @experiment.surface_key not in [nil, "dispatch.prompt"]
+          }
+          phx-submit="add_variant"
+          data-role="add-variant-form"
+          class="border border-edge rounded-lg p-4 space-y-3 max-w-2xl"
+        >
+          <h2 class="text-sm font-semibold">Add a variant</h2>
+          <div class="grid gap-3 sm:grid-cols-3">
+            <div class="sm:col-span-2">
+              <label class="text-xs text-base-content/70" for="variant-slug">Slug</label>
+              <input
+                id="variant-slug"
+                name="slug"
+                required
+                class="input input-sm input-bordered w-full font-mono"
+              />
+            </div>
+            <div>
+              <label class="text-xs text-base-content/70" for="variant-weight">Weight</label>
+              <input
+                id="variant-weight"
+                name="weight"
+                type="number"
+                min="1"
+                value="1"
+                class="input input-sm input-bordered w-full font-mono"
+              />
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-base-content/70" for="variant-payload">Payload (JSON)</label>
+            <textarea
+              id="variant-payload"
+              name="payload"
+              rows="3"
+              required
+              class="textarea textarea-sm textarea-bordered w-full font-mono"
+            >{"{}"}</textarea>
+            <p class="text-xs text-base-content/70">
+              Validated by the surface; its errors are shown as written.
+            </p>
+          </div>
+          <div class="flex justify-end">
+            <button type="submit" data-role="add-variant-submit" class="btn btn-sm btn-neutral">
+              Add variant
+            </button>
+          </div>
+        </form>
 
         <%!-- Draft only, and hiding it is an affordance: the refusal is in
               `Experiments.delete_experiment/1` and reaches a by-name event
@@ -759,21 +1855,21 @@ defmodule PlatformWeb.ExperimentsLive do
             <span class="hero-trash size-4" aria-hidden="true"></span> Delete draft
           </button>
           <p class="text-xs text-neutral mt-1">
-            Only a draft can be deleted. Once activated, an experiment's assignments are evidence
+            Only a draft can be deleted. Once started, an experiment's assignments are evidence
             and stay on this page.
           </p>
         </div>
 
-        <%!-- The editor is NOT reimplemented here. One editor over one
-              `prompt_templates` row; two would drift, and the drift surfaces
-              as "the experiment ran the wrong text". --%>
+        <%!-- The prompt editor is NOT reimplemented here. One editor over one
+              `prompt_templates` row; two would drift. --%>
         <p :if={@experiment.target_template_slug} class="text-sm">
           <.link
             navigate={~p"/admin/prompts/#{@experiment.target_template_slug}"}
             class="link link-hover"
             data-role="design-editor-link"
           >
-            Edit this prompt and its variants →
+            Edit this prompt and its variants
+            <span class="hero-arrow-right size-3" aria-hidden="true"></span>
           </.link>
         </p>
 
@@ -785,29 +1881,26 @@ defmodule PlatformWeb.ExperimentsLive do
             class="bg-base-200 rounded-lg p-3 space-y-1"
           >
             <div class="flex items-center justify-between gap-2">
-              <span class="text-sm font-medium">{variant.slug}</span>
+              <span class="text-sm font-medium break-all">{variant.slug}</span>
               <span class="text-xs text-neutral">weight {variant.weight}</span>
             </div>
-            <pre class="text-xs whitespace-pre-wrap text-base-content/80 max-h-40 overflow-y-auto">{variant.content}</pre>
+            <pre class="text-xs whitespace-pre-wrap break-all text-base-content/80 max-h-40 overflow-y-auto">{variant_body(@experiment, variant)}</pre>
           </div>
         </div>
       </section>
 
       <section :if={@tab == "assignments"} class="space-y-3">
-        <%!-- Rule 4: an excluded subject stays on this page with its reason.
-              There is no filter here and no "hide excluded" control — the
-              exclusion is part of the record, and a denominator that shrank
-              for reasons nobody can see is how a result quietly becomes
-              wrong. --%>
+        <%!-- An excluded subject stays on this page with its reason. There
+              is no filter and no "hide excluded" control. --%>
         <p class="text-sm text-base-content">
           {length(@assignments)} assigned, {excluded_count(@assignments)} excluded. Excluded
           subjects leave both sides of every ratio and stay listed here with the reason.
         </p>
 
         <section class="bg-base-200 rounded-lg overflow-x-auto shrink-0">
-          <table class="table table-sm w-full min-w-[36rem]">
+          <table class="table table-sm w-full min-w-[20rem]">
             <thead>
-              <tr class="text-xs text-neutral uppercase">
+              <tr class="text-xs text-neutral">
                 <th>Subject</th>
                 <th>Variant</th>
                 <th>Counted</th>
@@ -842,32 +1935,14 @@ defmodule PlatformWeb.ExperimentsLive do
 
       <section :if={@tab == "promotions"} class="space-y-3">
         <p class="text-sm text-base-content max-w-2xl">
-          Promoting an experiment concludes it. Nothing is promoted automatically and no
-          promotion is inferred from a result — a figure that cleared its stop rule is evidence
-          for a decision, not the decision.
+          Promoting an arm makes it this surface's default. It is done from the Results tab, on
+          an arm that has earned a figure, and never inferred from one: a figure that cleared its
+          stop rule is evidence for a decision, not the decision. Concluding is separate and
+          does not promote anything.
         </p>
 
-        <div :if={@fabrikam_admin?} class="flex flex-wrap gap-2">
-          <button
-            type="button"
-            phx-click="stop"
-            data-role="stop-button"
-            class="btn btn-sm btn-outline btn-warning"
-          >
-            Stop
-          </button>
-          <button
-            type="button"
-            phx-click="promote"
-            data-role="promote-button"
-            class="btn btn-sm btn-primary"
-          >
-            Conclude
-          </button>
-        </div>
-
         <p :if={not @fabrikam_admin?} data-role="admin-only-note" class="text-sm text-neutral">
-          Only Fabrikam admins can stop or conclude an experiment.
+          Only Fabrikam admins can start, stop, conclude or promote an experiment.
         </p>
       </section>
     </div>
@@ -875,20 +1950,16 @@ defmodule PlatformWeb.ExperimentsLive do
   end
 
   @doc """
-  THE result cell. A figure and its basis, or the honest absence and the same
-  basis — one component, one branch, no other path to a number on this page.
+  THE result cell: the figure and its `n` as ONE string in one mono run, or
+  the honest absence and the same `n`. See the moduledoc.
 
-  The two branches are deliberately symmetrical in size and weight:
-  `text-2xl font-semibold` either way, neutral rather than dimmed for the
-  unearned state. If "no effect yet" rendered smaller and greyer than a real
-  number, the page would reward the experiments that produced figures, and
-  that bias is the thing this design exists to fight.
-
-  Tabular numerals on the figure so digits line up between rows; the basis is
-  body face, because it is prose.
+  `reasons` is `[{excluded_reason, count}]` for this arm; when the arm has
+  exclusions the `(k excluded)` count is the summary of a `<details>` that
+  opens onto them.
   """
   attr :row, :map, required: true
   attr :experiment, :map, required: true
+  attr :reasons, :list, default: []
 
   def result_cell(assigns) do
     ~H"""
@@ -897,41 +1968,47 @@ defmodule PlatformWeb.ExperimentsLive do
       data-state={if @row.earned?, do: "measured", else: "insufficient"}
       class="space-y-1"
     >
-      <%= if @row.earned? do %>
-        <div data-role="result-figure" class="text-2xl font-semibold tabular-nums text-base-content">
-          {ExperimentResults.figure(@row)}
-        </div>
-      <% else %>
-        <div data-role="result-figure" class="text-2xl font-semibold text-neutral">
-          no effect yet
-        </div>
-      <% end %>
+      <div data-role="result-figure" class="font-mono text-[15px] leading-6 text-base-content">
+        <span class="whitespace-nowrap" data-role="result-fused">{fused(@row)}</span>
+        <details :if={@row.excluded > 0} data-role="result-exclusions" class="inline">
+          <summary class="inline cursor-pointer whitespace-nowrap list-none [&::-webkit-details-marker]:hidden">
+            ({@row.excluded} excluded)<span
+              class="hero-chevron-down size-3 align-middle"
+              aria-hidden="true"
+            ></span>
+          </summary>
+          <ul class="font-sans text-sm mt-1 space-y-0.5">
+            <li :for={{reason, count} <- @reasons} data-role="exclusion-reason">
+              {reason} <span class="font-mono">({count})</span>
+            </li>
+          </ul>
+        </details>
+      </div>
 
-      <%!-- The basis. Outside the branch above, so it renders in BOTH states
-            and cannot be separated from the figure by any edit that keeps
-            this component intact. --%>
-      <div data-role="result-basis" class="text-xs text-neutral space-y-0.5">
+      <div data-role="result-basis" class="text-xs text-base-content/70 space-y-0.5">
         <div>
-          {@row.subjects} subjects, {@row.n} measured; {ExperimentResults.stop_rule_label(@experiment)}
+          {@row.subjects} subjects assigned · {ExperimentResults.stop_rule_label(@experiment)}
         </div>
-        <div :if={@row.excluded > 0} data-role="result-exclusions">
-          {@row.excluded} excluded, counted in neither side
+        <div :if={@row.pending > 0} data-role="result-pending">
+          {@row.pending} pending, still inside the observation window; not counted as
+          non-responses
         </div>
         <div :if={ExperimentResults.confound(@row) != ""} data-role="result-confound">
           {ExperimentResults.confound(@row)}
-        </div>
-        <div :if={@row.earned?} data-role="result-unit">
-          {ExperimentResults.unit_label(@row.unit)}
         </div>
       </div>
     </div>
     """
   end
 
+  # The fused string. The earned branch is the only place on this page a
+  # figure is printed, and it is never printed without its n.
+  defp fused(%{earned?: true, n: n} = row), do: "#{ExperimentResults.figure(row)} · n=#{n}"
+  defp fused(%{n: n}), do: "not enough data · n=#{n}"
+
   @doc """
-  Lifecycle badge. Weight carries the state as much as hue does — outline
-  versus filled — so the four statuses stay apart in greyscale, and
-  `stopped` never reads as a dimmer `concluded`.
+  Lifecycle chip. States differ in HUE — Running success, Stopped warning,
+  Concluded info — and read in sentence case.
   """
   attr :status, :string, required: true
 
@@ -940,18 +2017,35 @@ defmodule PlatformWeb.ExperimentsLive do
     <span
       data-role="status-badge"
       data-status={@status}
-      class={["badge badge-sm", badge_class(@status)]}
+      class={["badge badge-sm font-medium", badge_class(@status)]}
     >
-      {@status}
+      {status_label(@status)}
     </span>
     """
   end
 
-  defp badge_class("draft"), do: "badge-outline"
-  defp badge_class("running"), do: "badge-info"
-  defp badge_class("stopped"), do: "badge-outline badge-warning font-semibold"
-  defp badge_class("concluded"), do: "badge-neutral"
-  defp badge_class(_), do: "badge-outline"
+  defp badge_class("draft"), do: "badge-ghost"
+  defp badge_class("running"), do: "badge-success"
+  defp badge_class("stopped"), do: "badge-warning"
+  defp badge_class("concluded"), do: "badge-info"
+  defp badge_class(_), do: "badge-ghost"
+
+  defp status_label(status) when is_binary(status), do: String.capitalize(status)
+  defp status_label(_), do: "Unknown"
+
+  attr :experiment, :map, required: true
+
+  defp approval_badge(assigns) do
+    ~H"""
+    <span
+      :if={@experiment.approval_state == "pending"}
+      data-role="approval-badge"
+      class="badge badge-sm badge-outline font-medium"
+    >
+      Awaiting human approval
+    </span>
+    """
+  end
 
   defp tabs do
     [
@@ -964,15 +2058,8 @@ defmodule PlatformWeb.ExperimentsLive do
 
   defp excluded_count(assignments), do: Enum.count(assignments, &(&1.excluded_reason != nil))
 
-  # The TAIL of the id, not the head.
-  #
-  # Subject ids are UUIDv7 and their leading hex digits are the high bits of a
-  # millisecond timestamp — constant across a ~65-second bucket. Subjects are
-  # assigned to an experiment in bursts, so a head-truncated id renders every
-  # row in an arm as the same string, and the assignments table stops
-  # distinguishing the subjects it exists to list. This repo has already been
-  # bitten by exactly that truncation once, in the `task_slug` prompt sample
-  # (task 019fb949); the tail is the random part.
+  # The TAIL of the id, not the head: UUIDv7 heads are millisecond-timestamp
+  # bits, constant across a burst of assignments (task 019fb949).
   defp short(nil), do: "—"
 
   defp short(id) do

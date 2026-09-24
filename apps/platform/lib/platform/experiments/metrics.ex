@@ -126,6 +126,35 @@ defmodule Platform.Experiments.Metrics do
     }
   }
 
+  @doc """
+  Computes an experiment's data-defined `metric_spec` for one variant
+  (task 01a0d415, see `Platform.Experiments.MetricKind`).
+
+  An EMPTY `metric_spec` falls back to the `registered` kind over
+  `primary_metric`, so every experiment written before metric specs existed
+  computes exactly what it computed before. Returns `:no_metric` when there is
+  neither, or `{:error, reasons}` for a spec that does not validate.
+  """
+  @spec compute_spec(Platform.Experiments.Experiment.t(), String.t()) ::
+          Platform.Experiments.MetricKind.result() | :no_metric | {:error, [String.t()]}
+  def compute_spec(%Platform.Experiments.Experiment{} = experiment, variant_slug) do
+    spec =
+      case experiment.metric_spec do
+        spec when is_map(spec) and map_size(spec) > 0 -> spec
+        _ -> registered_fallback(experiment.primary_metric)
+      end
+
+    case Platform.Experiments.MetricKind.parse(spec) do
+      {:ok, module, params} -> module.compute(experiment, variant_slug, params)
+      :none -> :no_metric
+      {:error, reasons} -> {:error, reasons}
+    end
+  end
+
+  defp registered_fallback(slug) do
+    if metric_module(slug), do: %{"kind" => "registered", "slug" => slug}, else: %{}
+  end
+
   @doc "The metric slugs this platform can compute, sorted."
   @spec known_metrics() :: [String.t()]
   def known_metrics, do: @registry |> Map.keys() |> Enum.sort()

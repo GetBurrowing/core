@@ -13,6 +13,11 @@ defmodule Platform.Roles.Seeds do
       `01a0b491` stage 1). No assignment is seeded: pinning an agent is
       a runtime `role_assignments` operation, so naming the first leader
       and reassigning later are the same operation.
+    * `scientist` — runs experiments and reads their signals (added in
+      task `01a0d415` stage 3). Its first bundle key,
+      `experiments.label_signal`, is the blind mail labeler; the second,
+      `experiments.scientist` (stage 5), is the six-hourly goal loop. No
+      assignment is seeded.
     * `architect` — cross-task architectural coherence checks (added
       in ADR-0044 stage 1, task `019f3da3`)
     * `designer` — visual design, critique, brand alignment
@@ -166,6 +171,21 @@ defmodule Platform.Roles.Seeds do
       icon: "hero-flag",
       bundle: [
         "agents.goal_heartbeat"
+      ]
+    },
+    %{
+      key: "scientist",
+      name: "Scientist",
+      description: "Runs experiments on the platform's decision points and reads their signals",
+      icon: "hero-beaker",
+      # Task 01a0d415 (the experimentation-layer ADR-0052). Stage 3 created the
+      # role with `experiments.label_signal`; stage 5 added
+      # `experiments.scientist`. Existing DBs pick the role up from
+      # `20260924190200_seed_scientist_role.exs` and the second bundle row
+      # from `20260924210100_seed_scientist_bundle.exs`.
+      bundle: [
+        "experiments.label_signal",
+        "experiments.scientist"
       ]
     }
   ]

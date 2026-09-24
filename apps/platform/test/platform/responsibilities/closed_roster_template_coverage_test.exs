@@ -108,6 +108,13 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "design.critique.v1",
     "design.spec_writer.v1",
     "design.task_direction.v1",
+    # Task 01a0d415 stage 3: `experiments.label_signal` (the scientist
+    # role's blind labeler) points at this slug, seeded by
+    # `20260924190000_seed_experiments_labeler_prompt.exs`.
+    "experiments.labeler.v1",
+    # Task 01a0d415 stage 5: `experiments.scientist` (the goal loop), seeded
+    # by `20260924210000_seed_experiments_scientist_prompt.exs`.
+    "experiments.scientist.v1",
     "meetings.action_items.v1",
     "meetings.attendance_followup.v1",
     "meetings.brief_worthy.v1",

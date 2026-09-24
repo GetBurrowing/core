@@ -224,6 +224,13 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       mode: :sweeper_only,
       owner: Platform.Security.Sweeper
     },
+    # Task 01a0d415 stage 3. Nothing broadcasts on it; the Experiments
+    # MailSubscriber drives `experiments.label_signal` from Mail.Inbound's
+    # own "mail:inbound" event, through the tool-less Labeler.
+    "platform.experiments.mail_subscriber_only" => %{
+      mode: :sweeper_only,
+      owner: Platform.Experiments.Signals.MailSubscriber
+    },
     "plan:submitted" => %{
       mode: :direct_fire,
       entry_point: {Platform.Tasks, :submit_plan_for_review, 1}
@@ -448,6 +455,21 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
 
       # Anti-vacuity for the exemption itself: the topic must really have rows.
       assert Enum.any?(event_topic_specs(), &(&1.topic == "platform.security.sweeper_only"))
+    end
+
+    test ":sweeper_only experiments key is the one the MailSubscriber's labeler resolves" do
+      owner = @topic_delivery["platform.experiments.mail_subscriber_only"].owner
+      assert Code.ensure_loaded?(owner) and function_exported?(owner, :start_link, 1)
+
+      keys =
+        event_topic_specs()
+        |> Enum.filter(&(&1.topic == "platform.experiments.mail_subscriber_only"))
+        |> Enum.map(& &1.key)
+
+      # Anti-vacuity: the topic really has a row, and it is exactly the key
+      # the Labeler asks Roles.assignee_for/1 about. A renamed key on either
+      # side would leave the labeler resolving nobody.
+      assert keys == [Platform.Experiments.Labeler.responsibility_key()]
     end
 
     test ":direct_fire topics name an exported lifecycle entry point" do

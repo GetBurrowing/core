@@ -78,7 +78,7 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings experiments)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -172,6 +172,10 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
   defp tools_for_bundle("files"), do: tag(files_tools(), "files")
   defp tools_for_bundle("meetings"), do: tag(meetings_tools(), "meetings")
+  # Task 01a0d415 stage 2: definitions in ExperimentTools, behaviour in Experiments.Tools.
+  defp tools_for_bundle("experiments"),
+    do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
+
   defp tools_for_bundle(_), do: []
 
   defp tag(tools, bundle), do: Enum.map(tools, &Map.put(&1, :bundle, bundle))
@@ -7126,6 +7130,10 @@ defmodule Platform.Federation.ToolSurface do
         err
     end
   end
+
+  # Every `experiment_*` tool (task 01a0d415 stage 2); no other tool name has this prefix.
+  def execute("experiment_" <> _ = tool, args, context),
+    do: Platform.Experiments.Tools.execute(tool, args, context)
 
   def execute(unknown_tool, _args, _context) do
     tool_names =

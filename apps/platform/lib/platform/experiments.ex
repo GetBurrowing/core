@@ -38,12 +38,47 @@ defmodule Platform.Experiments do
   `list_experiments/0` returns both. Nothing here filters `stopped` out or
   maps it onto `concluded`: an experiment that made things worse is a row
   worth keeping.
+
+  ## Starting under guardrails (task 01a0d415 stage 2)
+
+  `start/2` is the guarded launch every agent path takes (the MCP tool
+  `experiment_start`). Inside ONE transaction holding the start locks
+  (`Platform.Experiments.Guardrails.with_start_lock/2`) it re-reads the
+  experiment, runs `Guardrails.check(:start, …)`, and then either:
+
+    * launches it — for `dispatch.prompt` through the same snapshot as
+      `activate/2`; for any other surface by inserting the control variant
+      from the surface's `control_payload/2` — returning
+      `{:ok, %Experiment{status: "running"}}`; or
+    * when the org's guardrails have `require_human_approval` on and the
+      actor is an agent, sets `approval_state: "pending"`, leaves the status
+      `draft`, and returns `{:ok, :pending_human_approval}`. It never returns
+      `running` on that path.
+
+  Launch approval is OPT-IN (Rowan, 2026-09-24): under the built-in default an
+  agent's start launches. `approve_launch/2` takes a `%User{}` — there is no
+  agent-callable form and no MCP tool for it — and launches a pending
+  experiment through the same locks and the same `max_live` / `surface_busy`
+  checks: a human bypasses the approval, nothing else.
+
+  ## Stopping with feedback
+
+  `stop/3` records WHO stopped the experiment and WHY:
+  `stop(experiment, %User{}, feedback)` writes `stop_feedback`,
+  `stopped_by_user_id` and `stopped_at` in the same update that moves it to
+  `stopped`. An agent stop (MCP) goes through `stop/2` with only
+  `stop_feedback`, so `stopped_by_user_id` stays null and reads as "not a
+  human". Either way the status is `stopped`, never `concluded`.
   """
 
   import Ecto.Query
 
   alias Ecto.Multi
+  alias Platform.Accounts.User
+  alias Platform.Audit
   alias Platform.Experiments.Experiment
+  alias Platform.Experiments.Guardrails
+  alias Platform.Experiments.Surfaces
   alias Platform.Experiments.Variant
   alias Platform.Orchestration.PromptTemplate
   alias Platform.Repo
@@ -65,6 +100,24 @@ defmodule Platform.Experiments do
   @doc "Fetch an experiment by slug, or nil."
   @spec get_experiment_by_slug(String.t()) :: Experiment.t() | nil
   def get_experiment_by_slug(slug), do: Repo.get_by(Experiment, slug: slug)
+
+  @doc """
+  Display names for the agents that proposed experiments, keyed by agent id.
+  One query for the whole page; an id with no agent row is simply absent, so
+  the caller renders "an agent" rather than a raw UUID.
+  """
+  @spec agent_names([Ecto.UUID.t() | nil]) :: %{Ecto.UUID.t() => String.t()}
+  def agent_names(ids) when is_list(ids) do
+    case ids |> Enum.filter(&Platform.UUID.valid?/1) |> Enum.uniq() do
+      [] ->
+        %{}
+
+      ids ->
+        from(a in Platform.Agents.Agent, where: a.id in ^ids, select: {a.id, a.name})
+        |> Repo.all()
+        |> Map.new()
+    end
+  end
 
   @doc "List an experiment's variants."
   @spec list_variants(Experiment.t()) :: [Variant.t()]
@@ -171,18 +224,23 @@ defmodule Platform.Experiments do
   """
   @spec activate(Experiment.t(), PromptTemplate.t() | String.t()) ::
           {:ok, Experiment.t()} | {:error, Ecto.Changeset.t()}
-  def activate(%Experiment{} = experiment, %PromptTemplate{id: template_id}) do
-    activate_with_template_id(experiment, template_id)
+  def activate(experiment, template), do: activate(experiment, template, %{})
+
+  defp activate(%Experiment{} = experiment, %PromptTemplate{id: template_id}, extra) do
+    activate_with_template_id(experiment, template_id, extra)
   end
 
-  def activate(%Experiment{} = experiment, template_slug) when is_binary(template_slug) do
+  defp activate(%Experiment{} = experiment, template_slug, extra) when is_binary(template_slug) do
     case Repo.get_by(PromptTemplate, slug: template_slug) do
       nil -> {:error, missing_template_changeset(experiment, template_slug)}
-      %PromptTemplate{id: id} -> activate_with_template_id(experiment, id)
+      %PromptTemplate{id: id} -> activate_with_template_id(experiment, id, extra)
     end
   end
 
-  defp activate_with_template_id(experiment, template_id) do
+  # `extra` is merged into the running transition (stage 2's
+  # `approval_state: "approved"`); it can never override the status or the
+  # target, which are set after it.
+  defp activate_with_template_id(experiment, template_id, extra) do
     Multi.new()
     # Re-read the template INSIDE the transaction. Reading it earlier and
     # trusting the struct would leave a window in which the snapshot records
@@ -216,10 +274,12 @@ defmodule Platform.Experiments do
       # binding the target anywhere later would allow a running experiment
       # whose control is a snapshot of one template and whose target names
       # another.
-      |> Experiment.changeset(%{
-        status: "running",
-        target_template_slug: template.slug
-      })
+      |> Experiment.changeset(
+        Map.merge(extra, %{
+          status: "running",
+          target_template_slug: template.slug
+        })
+      )
     end)
     |> Repo.transaction()
     |> case do
@@ -249,9 +309,153 @@ defmodule Platform.Experiments do
   Distinct from `conclude/2` and NOT a synonym for it. A stopped experiment
   stays visible in `list_experiments/0`.
   """
-  @spec stop(Experiment.t(), map()) :: {:ok, Experiment.t()} | {:error, Ecto.Changeset.t()}
-  def stop(%Experiment{} = experiment, attrs \\ %{}) do
+  @spec stop(Experiment.t(), map() | User.t()) ::
+          {:ok, Experiment.t()} | {:error, Ecto.Changeset.t()}
+  def stop(experiment, attrs \\ %{})
+
+  def stop(%Experiment{} = experiment, %User{} = user), do: stop(experiment, user, nil)
+
+  def stop(%Experiment{} = experiment, attrs) when is_map(attrs) do
     update_status(experiment, "stopped", attrs)
+  end
+
+  @doc """
+  A HUMAN stop, with the reason in the human's words. Records
+  `stop_feedback`, `stopped_by_user_id` and `stopped_at` in the transition
+  itself. See the moduledoc.
+  """
+  @spec stop(Experiment.t(), User.t(), String.t() | nil) ::
+          {:ok, Experiment.t()} | {:error, Ecto.Changeset.t()}
+  def stop(%Experiment{} = experiment, %User{id: user_id}, feedback)
+      when is_nil(feedback) or is_binary(feedback) do
+    update_status(experiment, "stopped", %{stop_feedback: feedback, stopped_by_user_id: user_id})
+  end
+
+  @doc """
+  Launches a `draft` experiment under the guardrails. See the moduledoc.
+
+  `actor` is a `%User{}` (a human launch: no approval step) or an agent
+  (`%Platform.Agents.Agent{}` or `:agent`). Returns
+  `{:ok, %Experiment{}}` when it is now running, `{:ok,
+  :pending_human_approval}` when the org requires approval (idempotent: a
+  second agent start of a pending experiment answers the same), or
+  `{:error, %Guardrails.Refusal{} | :not_draft | :unknown_surface | term()}`.
+  """
+  @spec start(Experiment.t(), Guardrails.actor()) ::
+          {:ok, Experiment.t() | :pending_human_approval} | {:error, term()}
+  def start(%Experiment{} = experiment, actor) do
+    Guardrails.with_start_lock(experiment, fn ->
+      fresh = Repo.get!(Experiment, experiment.id)
+
+      with :ok <- ensure_draft(fresh),
+           :ok <- Guardrails.check(:start, fresh, actor) do
+        cond do
+          human?(actor) ->
+            extra =
+              if fresh.approval_state == "pending", do: %{approval_state: "approved"}, else: %{}
+
+            launch!(fresh, extra)
+
+          fresh.approval_state == "pending" ->
+            :pending_human_approval
+
+          Guardrails.for_org(fresh.org_id).require_human_approval ->
+            fresh
+            |> Experiment.changeset(%{approval_state: "pending"})
+            |> Repo.update()
+            |> case do
+              {:ok, _} -> :pending_human_approval
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+
+          true ->
+            launch!(fresh, %{})
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  @doc """
+  A human approves a pending launch. Takes a `%User{}` and nothing else —
+  there is no agent-callable form. Runs the same locks and `max_live` /
+  `surface_busy` checks as `start/2`; records a
+  `platform.experiments.launch_approved` audit event in the same
+  transaction. Returns `{:error, :not_pending}` for an experiment that is not
+  awaiting approval.
+  """
+  @spec approve_launch(Experiment.t(), User.t()) :: {:ok, Experiment.t()} | {:error, term()}
+  def approve_launch(%Experiment{} = experiment, %User{} = user) do
+    Guardrails.with_start_lock(experiment, fn ->
+      fresh = Repo.get!(Experiment, experiment.id)
+
+      with :ok <- ensure_draft(fresh),
+           :ok <- ensure_pending(fresh),
+           :ok <- Guardrails.check(:start, fresh, user) do
+        launched = launch!(fresh, %{approval_state: "approved"})
+
+        case Audit.record(%{
+               event_type: "platform.experiments.launch_approved",
+               action: "experiment_launch_approved",
+               actor_id: user.id,
+               actor_type: "user",
+               resource_type: "experiment",
+               resource_id: launched.id,
+               metadata: %{
+                 "experiment_id" => launched.id,
+                 "surface_key" => launched.surface_key,
+                 "proposed_by_agent_id" => launched.proposed_by_agent_id
+               }
+             }) do
+          {:ok, _event} -> launched
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp human?(%User{}), do: true
+  defp human?(_actor), do: false
+
+  defp ensure_draft(%Experiment{status: "draft"}), do: :ok
+  defp ensure_draft(%Experiment{}), do: {:error, :not_draft}
+
+  defp ensure_pending(%Experiment{approval_state: "pending"}), do: :ok
+  defp ensure_pending(%Experiment{}), do: {:error, :not_pending}
+
+  # Runs inside the caller's transaction; a failure rolls the whole start
+  # back with the reason.
+  defp launch!(%Experiment{surface_key: "dispatch.prompt"} = experiment, extra) do
+    case activate(experiment, experiment.surface_target || "", extra) do
+      {:ok, running} -> running
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp launch!(%Experiment{} = experiment, extra) do
+    with surface when not is_nil(surface) <- Surfaces.get(experiment.surface_key),
+         {:ok, payload} <-
+           surface.control_payload(experiment.surface_target, org_id: experiment.org_id),
+         {:ok, _control} <-
+           %Variant{}
+           |> Variant.control_changeset(%{
+             experiment_id: experiment.id,
+             payload: payload,
+             weight: 1
+           })
+           |> Repo.insert(),
+         {:ok, running} <-
+           experiment
+           |> Experiment.changeset(Map.merge(extra, %{status: "running"}))
+           |> Repo.update() do
+      running
+    else
+      nil -> Repo.rollback(:unknown_surface)
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   @doc """

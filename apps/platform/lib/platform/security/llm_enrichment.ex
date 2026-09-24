@@ -59,6 +59,7 @@ defmodule Platform.Security.LlmEnrichment do
   require Logger
 
   alias Platform.Agents.Agent
+  alias Platform.Agents.ToollessChat
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Roles
 
@@ -216,66 +217,22 @@ defmodule Platform.Security.LlmEnrichment do
 
   # ── provider call ─────────────────────────────────────────────────────
 
-  # Mirrors `Platform.Meetings.IntentClassifier.call_provider/5` in
-  # shape — pass a system prompt + user message with the raw finding
-  # JSON, take the first choice content. Errors return `:error` so
-  # the `with` chain drops to `{:noop, finding}`.
+  # Build the two messages (system prompt + the raw finding JSON) and hand
+  # them to `Platform.Agents.ToollessChat.call/4`, the body extracted from
+  # this function in task 01a0d415 stage 3. Errors return `:error` so the
+  # `with` chain drops to `{:noop, finding}`.
   defp call_provider(agent, prompt, finding, responsibility_key) do
-    provider = provider_module()
-
     messages = [
       %{role: "system", content: prompt},
       %{role: "user", content: safe_encode(finding)}
     ]
 
-    opts =
-      [
-        base_url: Map.get(agent, :base_url),
-        model: Map.get(agent, :model),
-        temperature: @default_temperature,
-        max_tokens: @default_max_tokens
-      ]
-      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-
-    credentials = agent_credentials(agent)
-
-    try do
-      case provider.chat(credentials, messages, opts) do
-        {:ok, %{content: content}} when is_binary(content) ->
-          {:ok, content}
-
-        {:ok, %{"content" => content}} when is_binary(content) ->
-          {:ok, content}
-
-        {:ok, other} ->
-          Logger.warning(
-            "[Security.LlmEnrichment] provider returned unexpected shape key=#{responsibility_key} shape=#{inspect(other)}"
-          )
-
-          :error
-
-        {:error, reason} ->
-          Logger.warning(
-            "[Security.LlmEnrichment] provider call failed key=#{responsibility_key} reason=#{inspect(reason)}"
-          )
-
-          :error
-      end
-    rescue
-      exception ->
-        Logger.warning(
-          "[Security.LlmEnrichment] provider raised key=#{responsibility_key} — #{Exception.message(exception)}"
-        )
-
-        :error
-    catch
-      kind, reason ->
-        Logger.warning(
-          "[Security.LlmEnrichment] provider caught key=#{responsibility_key} kind=#{inspect(kind)} reason=#{inspect(reason)}"
-        )
-
-        :error
-    end
+    ToollessChat.call(provider_module(), agent, messages,
+      temperature: @default_temperature,
+      max_tokens: @default_max_tokens,
+      log_tag: "[Security.LlmEnrichment]",
+      log_context: "key=#{responsibility_key}"
+    )
   end
 
   defp provider_module do
@@ -284,15 +241,6 @@ defmodule Platform.Security.LlmEnrichment do
       :security_llm_enrichment_provider,
       Platform.Agents.Providers.Ollama
     )
-  end
-
-  # Same "no auth by default" shape IntentClassifier uses — the Ollama
-  # provider inspects `:api_key` on the credentials map only.
-  defp agent_credentials(agent) do
-    case Map.get(agent, :vault_key) do
-      key when is_binary(key) and key != "" -> %{api_key: key}
-      _ -> %{}
-    end
   end
 
   # ── response parsing ─────────────────────────────────────────────────

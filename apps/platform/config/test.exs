@@ -140,6 +140,11 @@ config :platform, :task_router_watcher_reconcile, false
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_space_purger, false
 
+# Experiments MailSubscriber (task 01a0d415 stage 3): tests start it with
+# start_supervised/1 inside their own sandbox. Left on at boot it would label
+# every mail test's inbound row from outside every sandbox.
+config :platform, :start_experiments_mail_subscriber, false
+
 # Canvas body search backfill (task 01a07402 stage 3): tests call `run/1`
 # directly inside the DataCase sandbox. Left on at boot it would run against
 # the real test database from outside every sandbox, indexing rows the suite

@@ -195,6 +195,11 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_lifecycle_step_registry,
     :start_security_sweeper,
     :start_space_purger,
+    # Task 01a0d415 stage 3 — the Experiments MailSubscriber. Subscribes to
+    # "mail:inbound" and reconciles unsignalled inbound rows at start, both of
+    # which touch Repo from its own process and Task children. Tests
+    # start_supervised/1 it inside their sandbox.
+    :start_experiments_mail_subscriber,
     # Task 01a07402 stage 3 — the canvas body search backfill's boot-time
     # one-shot. A `Task`, not a ticker, but the same hazard: left on it would
     # run `CanvasSearchBackfill.run/1` from its own process at suite boot,

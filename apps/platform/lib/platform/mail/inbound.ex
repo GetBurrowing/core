@@ -66,6 +66,14 @@ defmodule Platform.Mail.Inbound do
   `Platform.Responsibilities.Router` fires no chat_pattern on it: inbound
   mail is untrusted outside input and must never summon, arm or route an
   agent. Suspicious injection patterns are logged (ids only, never the body).
+
+  ## Ingest event
+
+  After a NEWLY written row is posted, `ingest/5` broadcasts
+  `{:mail_inbound_ingested, %{id, account_id, org_id}}` on `"mail:inbound"`
+  (see `subscribe/0`). IDs only; a duplicate broadcasts nothing. Mail
+  publishes and does not know its listeners — nothing in `Platform.Mail`
+  calls a consumer (task 01a0d415 stage 3).
   """
 
   import Ecto.Query
@@ -84,6 +92,7 @@ defmodule Platform.Mail.Inbound do
   alias Platform.Security.ExternalContent
 
   @body_cap_bytes 32_768
+  @topic "mail:inbound"
   @line_cap 320
   @participant_display_name "Email (external)"
 
@@ -454,11 +463,56 @@ defmodule Platform.Mail.Inbound do
         inbound = Repo.get!(InboundMessage, row.id)
         log_suspicious(inbound, parsed)
         post(account, inbound, parsed)
+        broadcast_ingested(inbound)
         1
 
       {0, _} ->
         0
     end
+  end
+
+  @doc """
+  Subscribe the calling process to `#{@topic}`. Each NEWLY written inbound
+  row is announced once as `{:mail_inbound_ingested, %{id, account_id,
+  org_id}}`; a duplicate (the `{0, _}` insert) announces nothing.
+
+  The payload carries IDS ONLY — never the body, subject or addresses — so
+  no subscriber receives untrusted mail content by broadcast; a subscriber
+  that needs the row reads it. Delivery is PubSub's at-most-once: a
+  subscriber that must not miss a row reconciles against the table on start.
+  Mail knows nothing about who listens (task 01a0d415 stage 3).
+  """
+  @spec subscribe() :: :ok | {:error, term()}
+  def subscribe, do: Phoenix.PubSub.subscribe(Platform.PubSub, @topic)
+
+  @doc "The PubSub topic `subscribe/0` joins."
+  @spec topic() :: String.t()
+  def topic, do: @topic
+
+  # Mirrors `Platform.Mail.Outbox.nudge/0`'s broadcast, wrapped so a PubSub
+  # failure can never change `ingest/5`'s return value: the row is stored and
+  # posted whether or not anyone hears about it.
+  defp broadcast_ingested(%InboundMessage{} = inbound) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      @topic,
+      {:mail_inbound_ingested,
+       %{id: inbound.id, account_id: inbound.account_id, org_id: inbound.org_id}}
+    )
+  rescue
+    error ->
+      Logger.warning(
+        "[Mail.Inbound] ingest broadcast failed id=#{inbound.id} — #{Exception.message(error)}"
+      )
+
+      :error
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[Mail.Inbound] ingest broadcast caught id=#{inbound.id} kind=#{inspect(kind)} reason=#{inspect(reason)}"
+      )
+
+      :error
   end
 
   @doc """

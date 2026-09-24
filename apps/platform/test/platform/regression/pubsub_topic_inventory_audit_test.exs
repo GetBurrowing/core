@@ -191,6 +191,12 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # supervised Mail.Outbox singleton. A non-member learns only that SOME
     # org queued SOME mail at that moment.
     {"mail:outbox", :global},
+    # Task 01a0d415 stage 3. Payload is `{:mail_inbound_ingested, %{id,
+    # account_id, org_id}}` — IDs only, never body, subject or addresses — and
+    # the one subscriber is the supervised Experiments MailSubscriber, which
+    # re-reads the row itself. A non-member learns that an inbound mail row
+    # with that id exists in that org, and nothing of its content.
+    {"mail:inbound", :global},
     {"meeting:action_item_intent", :global},
     {"meeting:brief_worthy_intent", :global},
     {"meeting:decision_recorded_intent", :global},
@@ -274,6 +280,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # Sentinel. Four security.* handlers declare it and no publisher exists, by
     # design (ADR-0043): the sweeper fires them, not the Router.
     {"platform.security.sweeper_only", :global},
+    # Sentinel. `experiments.label_signal` declares it and no publisher exists,
+    # by design: Platform.Experiments.Signals.MailSubscriber drives the
+    # labeler, not the Router (task 01a0d415 stage 3).
+    {"platform.experiments.mail_subscriber_only", :global},
     {"(dynamic) entry.topic", :global}
   ]
 
