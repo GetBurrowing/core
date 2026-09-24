@@ -86,6 +86,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
   # `mix test --only isolated_beam` invocation in ci.yml. See the header.
   @moduletag :isolated_beam
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Audit.TelemetryHandler
   alias Platform.Telemetry.HandlerGuardian
 
@@ -105,9 +106,11 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
     action: "supervised_orphan_probe"
   }
 
-  # Long enough that the blocker is still holding the connection when ConnCase
-  # tears the owner down (teardown lands within milliseconds of the body
-  # returning), so the orphan is queued rather than served.
+  # Long enough that the blocker is still holding the connection when the owner
+  # is stopped — since task 01a0d0fc-4d92-7001-83a2-94b3316e4603 stage 2
+  # (2026-09-24) by the test BODY itself, immediately after the rendezvous — so
+  # the queued orphans are parked (killed as exits by the proxy disconnect)
+  # rather than served.
   @blocker_hold_ms 3_000
 
   # The LATE shape no longer sleeps a fixed interval. It used to
@@ -128,19 +131,69 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
   # `DBConnection.Ownership` proxy still resolves and still holds the blocker's
   # connection, so a write started in that gap parks and dies with the QUEUED
   # shape. LATE's real precondition is the PROXY's disconnect; the observable
-  # used for it is the BLOCKER's death, because the proxy kills the blocker's
+  # used for it was the BLOCKER's death, because the proxy kills the blocker's
   # transaction ("Client ... is still using a connection") as it disconnects.
-  # See `await_gate/1`. `@late_gate_ms` bounds only how long the orphan waits
-  # for that `:DOWN` before reporting `{:gate_never_fired, _}`.
+  #
+  # SUPERSEDED, 2026-09-24, task 01a0d0fc-4d92-7001-83a2-94b3316e4603 stage 2 —
+  # the paragraphs above are the measurements that produced the OLD gates; the
+  # measurements stand, the gates did not survive main-push CI. Both gates are
+  # replaced:
+  #
+  #   * CI run 35935904608 — the QUEUED shape read
+  #     `{:raise, DBConnection.ConnectionError, "...connection not available and
+  #     request was dropped from queue after 125ms..."}` instead of an exit. The
+  #     parked orphan's checkout sat in the proxy's wait queue past the
+  #     backpressure bound (`@queue_target` 50 → a 100 ms timeout, enforced on
+  #     the proxy's 1_000 ms poll: `DBConnection.Ownership.Proxy` drops waiters
+  #     older than `queue_target * 2`) while the owner was STILL ALIVE, because
+  #     the owner only died when the loaded teardown — the 50 ms drain give-up,
+  #     then `Sandbox.stop_owner/1` — got around to it. A queue drop is a RAISE,
+  #     `persist_or_skip/4` rescues it, nothing detaches, and the case measures
+  #     nothing. Fix (a): the test BODY stops the owner itself, immediately
+  #     after the rendezvous that proves the orphans parked — see the body.
+  #
+  #   * CI run 35931665349 — LATE failed on `assert reading.before == true`
+  #     with before == false. The old `{:after_down, blocker}` gate ordered
+  #     LATE's write after the owner's exit but NOT after the QUEUED orphan's
+  #     own detach → guardian-repair → re-attach cycle, which un-parks at the
+  #     same disconnect: LATE sampled while the queued cycle was still in
+  #     flight. Fix (b): the LATE EMITTER now awaits the QUEUED emitter's
+  #     explicit `{:emitted_done, :queued, _}` completion signal — sent after
+  #     that orphan records its reading, i.e. after its re-attach — bounded by
+  #     `@emitted_done_gate_ms` and timing out to `{:gate_never_fired, _}`
+  #     exactly as the old gate did. The LATE CLASSIFIER keeps
+  #     `{:after_down, blocker}`: the blocker's death is still what makes the
+  #     proxy resolve no owner.
+  #
+  # The class assertions are UNCHANGED by both fixes, and both classes are now
+  # deterministic rather than timed: with (a) the queued orphan is parked when
+  # the owner is killed (EXIT, detach, repair), and with (a)+(b) the late orphan
+  # writes into a proxy that has already disconnected
+  # (`DBConnection.OwnershipError` raise).
   @late_gate_ms 10_000
+
+  # Added 2026-09-24 (task 01a0d0fc-4d92-7001-83a2-94b3316e4603 stage 2, fixing
+  # main-push CI runs 35935904608 and 35931665349): bounds ONLY how long the
+  # LATE emitter waits for the QUEUED emitter's explicit
+  # `{:emitted_done, :queued, _}` completion signal — the rendezvous that
+  # replaces LATE's old `{:after_down, blocker}` gate (superseded; see
+  # `@late_gate_ms`). Not a tuned wall-clock race: a timeout here means the
+  # queued orphan's cycle itself never completed, which is a finding, and it
+  # surfaces as the same `{:gate_never_fired, _}` shape the old gate produced.
+  @emitted_done_gate_ms 10_000
 
   @queue_deadline_ms 2_000
   @report_deadline_ms 10_000
 
   # Small enough that ConnCase's scoped drain gives up while the blocker is
-  # still holding the connection, which is what keeps the orphans in flight at
-  # `stop_owner/1`. Not zero: the drain should be seen to RUN and report, not be
-  # switched off.
+  # still inside its transaction, which is what keeps the orphans in flight at
+  # the owner's death. Not zero: the drain should be seen to RUN and report, not
+  # be switched off. Since task 01a0d0fc stage 2 (2026-09-24) the owner's death
+  # happens IN THE BODY (see the rendezvous), before this drain runs — but the
+  # drain is UNTOUCHED and still gives up at this bound, because the late
+  # classifier is still gated on the blocker's `:DOWN`, which lands long after
+  # 50 ms. Removing the tag would not make the test stricter, it would
+  # dismantle the construction.
   @drain_timeout_ms 50
 
   # Its OWN namespace, deliberately not shared with the DRAINED file. The two
@@ -184,27 +237,56 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
 
     assert_receive {:control, {:ok, %{rows: [[1]]}}}, 5_000
 
+    # Positive control 4 — warm the orphan write path BEFORE any timed wait
+    # starts. One supervised `Platform.Audit.record/1` loads, VM-globally, every
+    # module that path needs (`Ecto.Repo.Schema`,
+    # `Platform.Audit.TelemetryHandler.persist_or_skip/4`, the Postgrex
+    # encoders), so `await_queued/2`'s `@queue_deadline_ms` window below
+    # measures queueing, not code loading. MEASURED, CI run 35929466252:
+    # without this, the queued orphan was still loading code when its 2_000 ms
+    # deadline expired and read `{:gave_up, %{current_function:
+    # {:code_server, :call, 1}, queue_length: 0}}`. The audit row this control
+    # writes is acceptable test data.
+    {:ok, _warmup} =
+      Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+        send(parent, {:warmup, Platform.Audit.record(@audit_attrs)})
+      end)
+
+    assert_receive {:warmup, {:ok, _event}}, 5_000
+
     # ── the blocker, started AFTER positive control 2 (which needs the
-    # connection the blocker is about to hold) and BEFORE LATE, which gates on
-    # its death ──
+    # connection the blocker is about to hold) and BEFORE LATE, whose
+    # classifier still gates on its death ──
     # Holds the single sandbox connection for `@blocker_hold_ms`, so the
-    # QUEUED orphans below park behind it. It is also what LATE waits for:
-    # when ConnCase's teardown stops the owner, the ownership proxy disconnects
-    # and kills this transaction, and only from then on does a new write
-    # resolve NO owner. Do not remove or move this as "unused by LATE".
+    # QUEUED orphans below park behind it. It is also what the LATE CLASSIFIER
+    # waits for: when the owner is stopped (in the body, after the rendezvous
+    # below), the ownership proxy disconnects and kills this transaction, and
+    # only from then on does a new write resolve NO owner. Do not remove or
+    # move this as "unused by LATE".
     {blocker, proxy} = start_blocker(@blocker_hold_ms)
     assert Process.alive?(blocker)
 
-    # ── LATE shape: waits for the blocker's `:DOWN`, then writes ──
-    # No fixed sleep, and not the owner's `:DOWN` either — see `@late_gate_ms`
-    # for both measurements. The reverted 3_500 ms falsifier passed only
-    # because it outlasts `@blocker_hold_ms` (3_000), i.e. it waited for the
-    # same event by accident.
-    spawn_emitter(:late, {:after_down, blocker}, nil)
+    # ── LATE shape: writes only after the QUEUED orphan's cycle is complete ──
+    # The emitter's gate is the queued emitter's explicit `{:emitted_done,
+    # :queued, _}` signal (added 2026-09-24, task 01a0d0fc stage 2, CI run
+    # 35931665349): the old `{:after_down, blocker}` gate ordered LATE after
+    # the owner's exit but not after the queued orphan's own repair, and LATE
+    # sampled `before == false` mid-cycle. No fixed sleep, and not the owner's
+    # `:DOWN` either — both were measured and falsified; see `@late_gate_ms`.
+    # The reverted 3_500 ms falsifier passed only because it outlasts
+    # `@blocker_hold_ms` (3_000), i.e. it waited for the same event by
+    # accident. The CLASSIFIER keeps `{:after_down, blocker}`: the blocker's
+    # death is still what makes the proxy resolve no owner.
+    late_emitter = spawn_emitter(:late, {:emitted_done, :queued}, nil)
     spawn_classifier(:late_class, {:after_down, blocker})
 
     # ── QUEUED shape: in flight when the owner goes away ──
-    emitter = spawn_emitter(:queued, 0, self())
+    # `notify` is a LIST: the test process (for `{:about_to_emit}`, the
+    # rendezvous below) and the late emitter (for `{:emitted_done, :queued,
+    # _}`, the signal LATE's gate awaits — by then the test process has usually
+    # already returned, since the queued cycle completes only after the owner
+    # is stopped, which the body does itself below).
+    emitter = spawn_emitter(:queued, 0, [self(), late_emitter])
     classifier = spawn_classifier(:queued_class, 0)
 
     assert_receive {:about_to_emit, ^emitter}, 5_000
@@ -227,6 +309,39 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
     # finding and not something to loosen.
     assert await_queued(emitter, proxy) == :queued
     assert await_queued(classifier, proxy) == :queued
+
+    # ── deterministic owner death (added 2026-09-24, task 01a0d0fc stage 2,
+    # fixing main-push CI run 35935904608) ──
+    # The rendezvous above has PROVEN both queued orphans are parked on the
+    # proxy's wait queue. The owner now dies HERE, within milliseconds of that
+    # rendezvous, instead of whenever the loaded teardown — the 50 ms drain
+    # give-up, then `Sandbox.stop_owner/1` — gets around to it. The owner's
+    # death is what disconnects the proxy (`DBConnection.Ownership.Proxy`'s
+    # handler for its owner monitor runs `shutdown("owner ... exited",
+    # state)`), and the disconnect is what turns the parked orphans' writes
+    # into EXITS. Leave the death to the teardown and the parked checkout can
+    # be dropped by queue backpressure first — the proxy drops waiters older
+    # than `queue_target * 2` (100 ms) on its 1_000 ms poll — and a drop is a
+    # RAISE that `persist_or_skip/4` rescues, so nothing detaches: CI run
+    # 35935904608 read exactly `{:raise, DBConnection.ConnectionError,
+    # "...request was dropped from queue after 125ms..."}`.
+    #
+    # CONDITIONAL on the owner still being alive, and this body site is the
+    # ONLY place that stops it before teardown. What the read of the sources
+    # found (2026-09-24): `Sandbox.stop_owner/1` is `GenServer.stop(pid)`
+    # (`deps/ecto_sql/.../sandbox.ex`, `stop_owner/1`), and `GenServer.stop/1`
+    # on an already-dead target EXITS `:noproc` — stopping an already-stopped
+    # owner is NOT a tolerated no-op. Verified with an isolated ExUnit probe: a
+    # test whose body stopped its own owner and whose `on_exit` then called
+    # `Sandbox.stop_owner/1` again failed with `** (EXIT) no process: the
+    # process is not alive...`. ConnCase's teardown therefore stops the owner
+    # conditionally now (`test/support/conn_case.ex`) — without that guard
+    # every run of this file fails in `on_exit`. The teardown's own drain is
+    # UNTOUCHED and still runs and gives up at `@drain_timeout_ms`: the late
+    # classifier is still gated on the blocker's `:DOWN`, which lands long
+    # after the drain's 50 ms, so the drain still exercises its timeout branch
+    # and the tag stays load-bearing.
+    if Process.alive?(owner), do: Sandbox.stop_owner(owner)
   end
 
   setup_all do
@@ -258,12 +373,26 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
   defp get_observation(key), do: :persistent_term.get({@observation_key, key}, :ABSENT)
 
   # Emits the audited event, then records whether `@handler_id` survived it,
-  # then restores. `gate` is `0` (emit now) or `{:after_down, pid}`.
+  # then restores. `gate` is `0` (emit now), `{:after_down, pid}`, or
+  # `{:emitted_done, key}`. `notify` is nil, a pid, or a LIST of pids: every
+  # recipient gets `{:about_to_emit, self()}` before the emission and
+  # `{:emitted_done, key, self()}` after the reading is recorded. The
+  # completion send was added 2026-09-24 (task 01a0d0fc stage 2, CI run
+  # 35931665349) and is the explicit rendezvous LATE's gate awaits, replacing
+  # the wall-clock ordering the old `{:after_down, blocker}` gate approximated.
+  # It deliberately goes out AFTER `put_observation/2` — a recipient un-gated
+  # by it must observe a handler that is attached and settled: the detach, the
+  # guardian's repair inside `:telemetry.execute/3`, and this orphan's own
+  # re-attach have all landed by then. The test-process recipient has usually
+  # already returned by then (the queued cycle completes only after the owner
+  # is stopped, which the body does itself), so the send to it is routinely
+  # dropped; the gate's consumer is passed in `notify` precisely so the signal
+  # reaches a LIVE recipient.
   defp spawn_emitter(key, gate, notify) do
     {:ok, pid} =
       Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
         await_gate(gate)
-        if notify, do: send(notify, {:about_to_emit, self()})
+        Enum.each(List.wrap(notify), &send(&1, {:about_to_emit, self()}))
 
         # Task 01a08b49 stage 1: since `Platform.Telemetry.HandlerGuardian` is
         # attached at boot, `after_emit` no longer distinguishes "the handler
@@ -297,6 +426,10 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
           restores_before: restores_before,
           restores_after: restores_after
         })
+
+        # The explicit completion signal, sent LAST so it cannot outrun the
+        # reading above. See spawn_emitter's doc.
+        Enum.each(List.wrap(notify), &send(&1, {:emitted_done, key, self()}))
       end)
 
     pid
@@ -337,13 +470,26 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
   end
 
   # `0` emits immediately (the QUEUED shape). `{:after_down, pid}` monitors
-  # `pid` and returns only once its `:DOWN` has arrived. The LATE shape passes
-  # the BLOCKER: its death is the ownership proxy's disconnect, which is the
-  # first moment a new write resolves no owner and raises `OwnershipError`.
+  # `pid` and returns only once its `:DOWN` has arrived. The LATE CLASSIFIER
+  # passes the BLOCKER: its death is the ownership proxy's disconnect, which is
+  # the first moment a new write resolves no owner and raises `OwnershipError`.
   # The sandbox OWNER's `:DOWN` was measured and is NOT sufficient — the proxy
-  # outlives the owner by ~500 ms while the blocker holds the connection, and
-  # a write in that gap parks and exits like the QUEUED shape. Bounded so a
-  # process that never exits surfaces as a distinct reading, not a hung orphan.
+  # outlives the owner while the blocker holds the connection, and a write in
+  # that gap parks and exits like the QUEUED shape. Bounded so a process that
+  # never exits surfaces as a distinct reading, not a hung orphan.
+  #
+  # `{:emitted_done, key}` — added 2026-09-24, task
+  # 01a0d0fc-4d92-7001-83a2-94b3316e4603 stage 2, fixing main-push CI runs
+  # 35935904608 and 35931665349. The LATE EMITTER gates on it: it waits for the
+  # QUEUED emitter's explicit `{:emitted_done, :queued, _}` message, which that
+  # emitter sends only after recording its reading — i.e. after its detach →
+  # guardian-repair → re-attach cycle has fully landed. The old
+  # `{:after_down, blocker}` gate ordered LATE after the owner's exit but not
+  # after the queued cycle, and CI run 35931665349 caught LATE sampling
+  # `before == false` mid-repair. A timeout here is NOT a tuned wall-clock
+  # degradation: it means the queued cycle itself never completed, and it
+  # surfaces as the same `{:gate_never_fired, _}` shape the `:after_down` gate
+  # produces.
   defp await_gate(0), do: :ok
 
   defp await_gate({:after_down, pid}) when is_pid(pid) do
@@ -353,6 +499,17 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
       {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
     after
       @late_gate_ms -> {:gate_never_fired, pid}
+    end
+  end
+
+  # The LATE EMITTER's gate: the queued emitter's own completion signal — an
+  # explicit rendezvous, not a process death and not a wall-clock span. See the
+  # doc above and `@emitted_done_gate_ms`.
+  defp await_gate({:emitted_done, key}) when is_atom(key) do
+    receive do
+      {:emitted_done, ^key, _queued_emitter} -> :ok
+    after
+      @emitted_done_gate_ms -> {:gate_never_fired, key}
     end
   end
 

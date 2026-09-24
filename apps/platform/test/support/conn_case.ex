@@ -139,7 +139,28 @@ defmodule PlatformWeb.ConnCase do
       end
 
       # LAST. Everything above needs a live connection.
-      Sandbox.stop_owner(owner)
+      #
+      # Conditional since task 01a0d0fc-4d92-7001-83a2-94b3316e4603 stage 2
+      # (2026-09-24). `Sandbox.stop_owner/1` is `GenServer.stop(pid)` (ecto_sql
+      # `lib/ecto/adapters/sql/sandbox.ex`), and `GenServer.stop/1` on an
+      # already-dead target EXITS `:noproc` — stopping an already-stopped owner
+      # is NOT a tolerated no-op. Verified with an isolated ExUnit probe: a test
+      # whose body stopped its own owner and whose `on_exit` then called
+      # `Sandbox.stop_owner/1` again failed with `** (EXIT) no process: the
+      # process is not alive...`.
+      #
+      # The supervised-orphan beyond-drain case
+      # (`conn_case_supervised_orphan_beyond_drain_test.exs`) now stops its
+      # owner IN THE TEST BODY, within milliseconds of the rendezvous that
+      # proves its orphans are parked on the ownership proxy's wait queue, so
+      # the proxy's disconnect — and therefore the queued orphans' exits —
+      # cannot be beaten by queue backpressure the way the loaded teardown's
+      # stop could (main-push CI run 35935904608: a parked checkout dropped as
+      # `{:raise, DBConnection.ConnectionError, "...request was dropped from
+      # queue after 125ms"}` before `stop_owner/1` ran). This teardown reaches
+      # that test's owner already dead. For every other test the owner is alive
+      # here and the guard changes nothing.
+      if Process.alive?(owner), do: Sandbox.stop_owner(owner)
     end)
 
     # `sandbox_owner` is the pid the test's writes resolve ownership through,
