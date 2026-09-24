@@ -1305,34 +1305,41 @@
                   This call has no meeting record, so no cards can form from it.
                 <% end %>
               </p>
-              <%!-- The intents bar rides WITH the cards (task 01a0693e): the
-                 producer watches the intent queue and the candidate cards in
-                 one place, as it did in the old Canvas pane's `:canvas_extra`.
-                 On mobile the same bar still renders inside the sheet's Canvas
-                 tab; this rail's `:if={not @mobile_viewport?}` keeps there from
-                 being two. --%>
-              <.intents_collapse
-                :if={@intents_visible?}
-                intents={@intents}
-                open={@intents_open}
-                expanded={@intents_expanded}
-                pending_cancels={@intent_pending_cancels}
-                reason_picker_id={@intent_reason_picker_id}
-                error={@intent_error}
-                muted={@intent_muted?}
-              />
+              <%!-- Task 01a0d3cd stage 3: the `.intents_collapse` bar (task
+                 01a0693e put it here, "rides WITH the cards") is REMOVED
+                 from this desktop left-rail placement — Harper's "lose the
+                 Intents area on the left side" was confirmed live against
+                 exactly this producer-console strip (lightning icon,
+                 "Producer" chip, target-role links, confidence readout —
+                 Dalton's `IntentsCollapse`, `@low_confidence_threshold`).
+                 This is a SUBTRACTION only: the component, its data, and
+                 its OTHER placement in `CallShell.call_rail`'s
+                 `:canvas_extra` slot (the mobile Canvas tab, gated on
+                 `@mobile_viewport?`) are untouched — that surface is
+                 Dalton's to fix separately. Do not re-add a render call
+                 here without re-confirming this is still what "Intents
+                 area" means. --%>
             </div>
           </section>
 
           <%!-- "In the room" agents below the cards, per the mock. Same
              `participant_rail` the right rail's People tab renders; the roster
-             is drawn from the same assigns, so the two stay in step. --%>
+             is drawn from the same assigns, so the two stay in step.
+
+             THIS HEADER ONLY (task 01a0d3cd stage 2, canvas 01a0d3cf-a424,
+             Type section) breaks from every other rail header's uppercase
+             `/50` treatment: Public Sans 12 medium, sentence case, not
+             tracked out. The canvas is explicit this is a deliberate
+             difference from "Cards" above it and from `participant_rail`'s
+             own internal section headings, not an inconsistency to fix
+             later — so those stay `text-[11px] uppercase tracking-[0.09em]`
+             untouched. --%>
           <section
             class="flex max-h-[45%] flex-shrink-0 flex-col border-t border-edge"
             data-role="meeting-left-rail-agents"
           >
             <div class="flex flex-shrink-0 items-center border-b border-edge px-3 py-2.5">
-              <span class="text-[11px] font-semibold uppercase tracking-[0.09em] text-base-content/50">
+              <span class="text-xs font-medium text-base-content/50">
                 In the room
               </span>
             </div>

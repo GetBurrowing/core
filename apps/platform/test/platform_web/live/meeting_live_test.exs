@@ -7793,6 +7793,37 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert rail_class =~ ~r/\blg:flex\b/
     end
 
+    # Task 01a0d3cd stage 2, canvas 01a0d3cf-a424 (Type section): "In the
+    # room" is a deliberate departure from every other rail header — Public
+    # Sans 12 medium, sentence case, NOT uppercase/tracked-out. The sibling
+    # "Cards" header directly above it keeps the old uppercase/tracked
+    # treatment, so this checks both sides of the split rather than just
+    # asserting the new class exists.
+    test "the left rail's 'In the room' header is sentence case, not uppercase/tracked",
+         %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      fragment = LazyHTML.from_fragment(html)
+
+      [agents_header] =
+        fragment
+        |> LazyHTML.query(~s([data-role="meeting-left-rail-agents"] > div > span))
+        |> LazyHTML.attribute("class")
+
+      assert agents_header =~ ~r/\bfont-medium\b/
+      refute agents_header =~ ~r/\buppercase\b/
+      refute agents_header =~ ~r/\btracking-/
+
+      # The "Cards" header right above it is untouched by this stage.
+      [cards_header] =
+        fragment
+        |> LazyHTML.query(~s([data-role="meeting-left-rail-cards"] > div > span:first-child))
+        |> LazyHTML.attribute("class")
+
+      assert cards_header =~ ~r/\buppercase\b/
+      assert cards_header =~ ~r/\btracking-/
+    end
+
     test "the controls are CallShell's, and Share keeps its hook", %{
       conn: conn,
       meeting: meeting
@@ -8211,6 +8242,39 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert vm.participant_id == agent.id
       assert vm.display_name == "Rail Bot"
       assert vm.avatar_url == "/agents/11111111/avatar?v=RAIL"
+    end
+
+    # Task 01a0d3cd stage 1 — pins the invariant `ParticipantRail.
+    # participant_rail/1`'s hold-to-talk gate leans on: `agent_id_of/1`
+    # there reads `%{participant_type: "agent", participant_id: id}` and
+    # requires `id` to be binary, or the per-agent Ask/hold-to-talk
+    # control silently disappears for that row (Harper's "I still don't
+    # see the ASK button" report). This is the ONE function that produces
+    # `participant_type: "agent"` for a live meeting roster row
+    # (`build_meeting_participants/1` maps every row through it), so if
+    # this invariant ever breaks here, it breaks the control for every
+    # real agent in every real meeting — not a fixture edge case.
+    test "meeting_participant_view_model never types a row 'agent' without a binary participant_id" do
+      agent = %Platform.Agents.Agent{
+        id: "33333333-3333-3333-3333-333333333333",
+        name: "Invariant Bot"
+      }
+
+      p = %MeetingParticipant{
+        id: "44444444-4444-4444-4444-444444444444",
+        agent_id: agent.id,
+        agent: agent,
+        user_id: nil,
+        user: nil,
+        display_name: nil,
+        metadata: %{}
+      }
+
+      vm = MeetingLive.meeting_participant_view_model(p)
+
+      assert vm.participant_type == "agent"
+      assert is_binary(vm.participant_id)
+      assert vm.participant_id == agent.id
     end
 
     test "resolve_identity/1 returns nil display_name for a genuinely-unknown row" do
@@ -9669,7 +9733,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # names.
       refute Platform.Roles.agent_id_for_role("meeting_producer")
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       refute html =~ ~s(data-role="intents-collapse")
       refute html =~ "intents-collapse"
@@ -9680,7 +9745,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "assigned meeting_producer renders the strip", %{conn: conn, meeting: meeting} do
       assign_producer!()
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert html =~ ~s(data-role="intents-collapse")
       assert html =~ "intents-collapse"
@@ -9694,7 +9760,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The bar shares the right rail with it; it does not displace it.
       assign_producer!()
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert html =~ ~s(data-role="intents-collapse")
       assert html =~ ~s(data-intent-panel-host="true")
@@ -9710,7 +9777,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
       refute html =~ ~s(data-role="intents-collapse")
 
       # Seed a row while the panel is invisible — the appointed producer
@@ -9732,7 +9800,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       assign_producer!()
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
       assert html =~ ~s(data-intent-id="#{row.id}")
 
       :ok = Platform.Roles.unassign_role("meeting_producer")
@@ -9750,7 +9819,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # of reach: a phx-click is a client-supplied message.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       render_click(view, "intent_remove", %{
         "intent_id" => row.id,
@@ -9780,7 +9850,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # are indistinguishable, and both are an empty strip.
       refute IntentQueue.running?(meeting.id)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert html =~ ~s(data-role="intents-empty")
       assert html =~ "Listening for intents"
@@ -9808,7 +9879,8 @@ defmodule PlatformWeb.MeetingLiveTest do
           dedupe_key: "stranger-#{System.unique_integer([:positive])}"
         })
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert html =~ ~s(data-intent-id="#{first.id}")
       assert html =~ ~s(data-intent-id="#{second.id}")
@@ -9824,7 +9896,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, first} = enqueue_intent(meeting, %{classified_intent: "alpha_intent"})
       {:ok, second} = enqueue_intent(meeting, %{classified_intent: "beta_intent"})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert :binary.match(html, ~s(data-intent-id="#{first.id}")) |> elem(0) <
                :binary.match(html, ~s(data-intent-id="#{second.id}")) |> elem(0)
@@ -9844,7 +9917,8 @@ defmodule PlatformWeb.MeetingLiveTest do
           {status, row}
         end
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       for {status, row} <- rows do
         assert html =~ ~s(data-intent-id="#{row.id}")
@@ -9877,7 +9951,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, spawn_failed} = enqueue_intent(meeting, %{classified_intent: "spawn_failed_intent"})
       {:ok, spawn_failed} = force_status(meeting, spawn_failed, :no_ack_spawn_failed)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert IntentsCollapse.status_tone(:timed_out) == "warning"
       assert IntentsCollapse.status_tone(:dispatch_failed) == "error"
@@ -9909,7 +9984,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "grouped_intent"})
       {:ok, row} = force_status(meeting, row, :timed_out)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert html =~ ~s(data-intent-group="error")
       assert html =~ ~s(data-intent-id="#{row.id}")
@@ -9929,7 +10005,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
       assert html =~ ~s(data-intent-count="0")
 
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "late_arrival"})
@@ -9958,7 +10035,8 @@ defmodule PlatformWeb.MeetingLiveTest do
           ] do
         {:ok, row} = enqueue_intent(meeting, %{classified_intent: "evented_#{status}"})
 
-        {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+        {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+        html = render_hook(view, "meeting_viewport", %{"below" => true})
         assert html =~ ~s(data-intent-status="queued")
 
         {:ok, _} = force_status(meeting, row, status)
@@ -9983,7 +10061,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # it rather than assume.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "raced_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       {:ok, _} = force_status(meeting, row, :cancelled_late)
 
@@ -9993,7 +10072,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "an event for a different meeting is ignored", %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       # Same topic shape, different meeting — the LV is only subscribed
       # to its own, but the guard is the thing that makes that safe when
@@ -10025,7 +10105,8 @@ defmodule PlatformWeb.MeetingLiveTest do
           subagent_id: "higgins.moon"
         })
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
       refute html =~ ~s(data-role="intents-expanded")
 
       html = render_click(view, "toggle_intents_expanded", %{})
@@ -10048,7 +10129,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # after the rail's closing markup, not nested inside it.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "overlay_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       html = render_click(view, "toggle_intents_expanded", %{})
       assert overlay_outside_rail?(html, "intents-expanded")
@@ -10064,7 +10146,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "toggled_intent"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
       assert html =~ ~s(data-role="intents-collapse-body")
 
       html = render_click(view, "toggle_intents_collapse", %{})
@@ -10107,7 +10190,8 @@ defmodule PlatformWeb.MeetingLiveTest do
         {:ok, row} = enqueue_intent(meeting, %{classified_intent: "control_#{status}"})
         {:ok, _} = force_status(meeting, row, status)
 
-        {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+        {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+        html = render_hook(view, "meeting_viewport", %{"below" => true})
 
         assert html =~ ~s(data-role="intent-remove" data-intent-id="#{row.id}") == removable,
                "#{status}: expected remove control presence #{removable}"
@@ -10127,7 +10211,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Tailwind `11` = 44px.
       {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "tappable_intent"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       for role <- ~w(intents-collapse-toggle intents-expand-toggle intent-remove intent-edit) do
         assert html =~ ~s(data-role="#{role}")
@@ -10157,7 +10242,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # line on the WIDEST viewport, truncating `visual_adjust` to "v.".
       {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "narrow_intent"})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       [row_tag] = Regex.run(~r/<li[^>]*data-role="intent-row"[^>]*>/, html)
       assert row_tag =~ "flex-col"
@@ -10172,7 +10258,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # control a phone user does not have.
       {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "persistent_intent"})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       for tag <- strip_button_tags(html) do
         refute tag =~ "group-hover:", "hover-revealed control: #{tag}"
@@ -10202,7 +10289,8 @@ defmodule PlatformWeb.MeetingLiveTest do
         if n <= 3, do: {:ok, _} = force_status(meeting, row, :dispatch_failed)
       end
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       [severity_tag] =
         Regex.run(~r/<span[^>]*data-role="intents-summary-severity"[^>]*>/, html)
@@ -10236,7 +10324,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "chip_yield_intent"})
       {:ok, _} = force_status(meeting, row, :timed_out)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       [chip_tag] = Regex.run(~r/<span[^>]*class="[^"]*chip-primary[^"]*"[^>]*>/, html)
 
@@ -10252,7 +10341,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, _row} = enqueue_intent(meeting, %{classified_intent: "benign_intent"})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       refute html =~ ~s(data-role="intents-summary-severity")
       assert html =~ ~s(data-role="intents-summary-tail")
@@ -10281,7 +10371,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, high} =
         enqueue_intent(meeting, %{classified_intent: "certain_intent", confidence: 0.96})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       low_readout = confidence_span(html, low.id)
       high_readout = confidence_span(html, high.id)
@@ -10313,7 +10404,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, under} =
         enqueue_intent(meeting, %{classified_intent: "under_threshold", confidence: 0.69})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert confidence_span(html, at.id) =~ ~s(data-low-confidence="false")
       assert confidence_span(html, under.id) =~ ~s(data-low-confidence="true")
@@ -10326,7 +10418,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, none} =
         enqueue_intent(meeting, %{classified_intent: "silent_intent", confidence: nil})
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       readout = confidence_span(html, none.id)
 
@@ -10344,7 +10437,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # would read as two different numbers.
       {:ok, low} = enqueue_intent(meeting, %{classified_intent: "shaky_row", confidence: 0.55})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
       html = render_click(view, "toggle_intents_expanded", %{})
 
       assert html =~ ~s(data-role="intents-expanded-table")
@@ -10382,7 +10476,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # BEFORE the mutation, not invented after it.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "picked_intent"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
       refute html =~ ~s(data-role="intent-reason-picker")
 
       html = render_click(view, "intent_reason_picker_toggle", %{"intent_id" => row.id})
@@ -10417,7 +10512,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       participant = join_space!(space, user)
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "pulled_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       html =
         render_click(view, "intent_remove", %{
@@ -10448,7 +10544,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "inflight_intent"})
       {:ok, _} = force_status(meeting, row, :dispatched)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       render_click(view, "intent_remove", %{
         "intent_id" => row.id,
@@ -10473,7 +10570,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _} = force_status(meeting, row, :dispatched, %{target_agent_id: agent.id})
       {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :working)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       html =
         render_click(view, "intent_remove", %{
@@ -10510,7 +10608,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "orphan_intent"})
       {:ok, _} = force_status(meeting, row, :dispatched)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       html =
         render_click(view, "intent_remove", %{"intent_id" => row.id, "reason" => "other"})
@@ -10528,7 +10627,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # which would let a crafted click leak atoms into the VM.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "safe_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       html =
         render_click(view, "intent_remove", %{
@@ -10557,7 +10657,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "mislabelled_intent"})
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
       refute html =~ ~s(data-role="intent-edit-modal")
 
       html = render_click(view, "intent_edit_open", %{"intent_id" => row.id})
@@ -10578,7 +10679,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       target = create_agent!()
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "wrong_label"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
       render_click(view, "intent_edit_open", %{"intent_id" => row.id})
 
       html =
@@ -10614,7 +10716,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _} = force_status(meeting, row, :dispatched, %{target_agent_id: agent.id})
       {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :working)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
       render_click(view, "intent_edit_open", %{"intent_id" => row.id})
 
       html =
@@ -10660,7 +10763,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # to learn from.
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "vague_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
       render_click(view, "intent_edit_open", %{"intent_id" => row.id})
 
       html =
@@ -10682,7 +10786,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "closing the modal mutates nothing", %{conn: conn, meeting: meeting} do
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "abandoned_intent"})
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
       render_click(view, "intent_edit_open", %{"intent_id" => row.id})
       html = render_click(view, "intent_edit_close", %{})
 
@@ -10705,7 +10810,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert html =~ ~s(data-role="meeting-intent-mute-toggle")
       assert html =~ ~s(data-muted="false")
@@ -10714,7 +10820,8 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "clicking the toggle mutes: the toggle flips, the badge appears, the ROW changes",
          %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
 
@@ -10738,7 +10845,8 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "clicking again unmutes: the toggle flips back, the badge goes, the ROW clears",
          %{conn: conn, meeting: meeting} do
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       # Mute first, and assert it took — otherwise the unmute half below
       # is satisfiable by a toggle that never did anything at all.
@@ -10762,7 +10870,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, _} = Meetings.set_intent_muted(meeting.id, true)
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       assert html =~ ~s(data-role="meeting-intent-mute-badge")
       assert html =~ ~s(data-muted="true")
@@ -10782,10 +10891,12 @@ defmodule PlatformWeb.MeetingLiveTest do
       # now and we want it to stop". A control that needs a page reload
       # does not solve it, so this test never reloads or re-mounts the
       # observing view — it only re-renders the one it already has.
-      {:ok, view_a, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view_a, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view_a, "meeting_viewport", %{"below" => true})
 
       {conn_b, _user_b} = authenticated_conn(build_conn())
-      {:ok, view_b, html_b} = live(conn_b, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view_b, _} = live(conn_b, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html_b = render_hook(view_b, "meeting_viewport", %{"below" => true})
 
       refute html_b =~ ~s(data-role="meeting-intent-mute-badge")
       pid_b = view_b.pid
@@ -10815,7 +10926,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {other, _space} = create_meeting(%{slug: "intent-mute-other", name: "Other"})
       on_exit(fn -> IntentQueue.stop(other.id) end)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
 
       # Presence half first: prove the view DOES react to its own
       # meeting, so the absence below is about the id guard and not
@@ -10835,7 +10947,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       :ok = Platform.Roles.unassign_role("meeting_producer")
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
       render_click(view, "toggle_intent_mute", %{})
 
       refute Meetings.intent_muted?(meeting.id)
@@ -10857,7 +10970,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # its siblings and makes the `overflow-x-auto` beside it inert, so
       # this asserts its absence the same way the Producer-chip test above
       # asserts the chip can yield.
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
 
       [control_tag] = Regex.run(~r/<div[^>]*data-stage-mode-control="active"[^>]*>/, html)
 

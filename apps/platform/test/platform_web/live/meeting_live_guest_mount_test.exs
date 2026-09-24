@@ -1090,6 +1090,11 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       {:ok, auth_view, _auth_html} =
         live(authenticated_meeting_conn(), ~p"/meetings/#{meeting.slug}?tab=canvas")
 
+      # Task 01a0d3cd stage 3 removed the desktop LEFT-RAIL placement of
+      # `.intents_collapse` (and its mute toggle); the bar — and this
+      # producer control — now only renders in the mobile Canvas tab.
+      render_hook(auth_view, "meeting_viewport", %{"below" => true})
+
       auth_view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
 
       # No reload, no re-mount, no navigation — the guest view we already
@@ -1128,6 +1133,11 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       # refute above is satisfiable by a fixture where nothing works.
       {:ok, auth_view, _} =
         live(authenticated_meeting_conn(), ~p"/meetings/#{meeting.slug}?tab=canvas")
+
+      # Task 01a0d3cd stage 3 removed the desktop LEFT-RAIL placement of
+      # `.intents_collapse` (and its mute toggle); the bar — and this
+      # producer control — now only renders in the mobile Canvas tab.
+      render_hook(auth_view, "meeting_viewport", %{"below" => true})
 
       auth_view |> element(~s([data-role="meeting-intent-mute-toggle"])) |> render_click()
       assert Meetings.intent_muted?(meeting.id)

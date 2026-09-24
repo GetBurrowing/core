@@ -67,6 +67,27 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     }
   end
 
+  # An agent row `agent_id_of/1` cannot resolve to a binary id (task
+  # 01a0d3cd stage 1). `MeetingLive.meeting_participant_view_model/1`
+  # never actually produces this shape for a real live participant — every
+  # branch that sets `participant_type: "agent"` also sets a binary
+  # `participant_id` — so this fixture exists only to prove the DEFENSIVE
+  # side of the fix: an agent row this malformed still renders in the
+  # roster (it is not filtered out — see `agent_row_info/2`'s `absent`
+  # default), and per Saru's canvas 01a0d3cf-a424 finding 2, its hold
+  # control must render disabled rather than vanish.
+  defp agent_with_unresolved_id(name) do
+    %{
+      id: "p-unresolved",
+      participant_id: nil,
+      participant_type: "agent",
+      display_name: name,
+      avatar_url: nil,
+      identity: nil,
+      attention_config: %{}
+    }
+  end
+
   defp rail(participants) do
     render_component(&ParticipantRail.participant_rail/1,
       participants: participants,
@@ -1125,6 +1146,110 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       region = Floki.find(frag, ~s([data-role="meeting-ptt-live-region"]))
       assert Floki.text(region) |> String.trim() == ""
+    end
+
+    # Task 01a0d3cd stage 1 — Harper's "I still don't see the ASK button"
+    # report. The gate used to be `@hold_to_talk? and is_binary(aid)`, so an
+    # agent row `agent_id_of/1` could not resolve dropped the control with
+    # ZERO trace: no disabled button, no DOM node, nothing a viewer or a
+    # test could tell apart from the control never having been built at
+    # all. Saru's canvas 01a0d3cf-a424 (finding 2) rules that a persistent
+    # control must render disabled at a boundary, never absent — this is
+    # the regression test for that rule, not for an achievable production
+    # state (see `agent_with_unresolved_id/1`'s comment: real agent rows
+    # always carry a binary id).
+    test "an agent row with no resolvable id still renders its hold control, disabled" do
+      html = hold_rail([agent_with_unresolved_id("Ghost")], hold_to_talk?: true)
+
+      [control] = hold_controls(html)
+
+      assert Floki.attribute(control, "disabled") == ["disabled"]
+      # No id to address a press to — the attribute is omitted rather than
+      # sent as the literal string "" (same nil-drops-the-attribute
+      # convention `camera_title(:unavailable)` uses elsewhere in this
+      # component).
+      assert Floki.attribute(control, "data-agent-id") == []
+      # Still keyboard-reachable in principle and still named for the
+      # agent — a screen reader hitting a disabled control is a
+      # legitimate outcome; hitting nothing at all is the bug.
+      [label] = Floki.attribute(control, "aria-label")
+      assert label =~ "Ghost"
+    end
+
+    test "a resolvable agent's control is never disabled by the id-fallback path" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      [control] = hold_controls(html)
+      assert Floki.attribute(control, "disabled") == []
+    end
+
+    # Task 01a0d3cd stage 2 — Saru's canvas 01a0d3cf-a424, finding 1: "Label
+    # the button ... the word is the fix". An icon-only ghost button reads
+    # as a status glyph, not a control; the visible word is what makes it
+    # legible as one.
+    test "the control carries a visible 'Ask' label, not an icon alone" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      [control] = hold_controls(html)
+
+      [label_node] = Floki.find(control, ~s([data-role="meeting-agent-hold-label"]))
+      assert Floki.text(label_node) |> String.trim() == "Ask"
+
+      [label_classes] = Floki.attribute(label_node, "class")
+      assert label_classes =~ "whitespace-nowrap"
+      assert label_classes =~ "shrink-0"
+    end
+
+    # Canvas palette table: rest state is `--color-primary` fill with a
+    # BLACK label (`text-primary-content`, pinned black in both themes —
+    # never `text-base-content`, which flips to near-white in dark and
+    # would be exactly the white-on-cyan the canvas rules out).
+    test "an enabled control's rest state is filled primary, black label, no ghost" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      [control] = hold_controls(html)
+
+      [classes] = Floki.attribute(control, "class")
+      assert classes =~ "bg-primary"
+      assert classes =~ "text-primary-content"
+      refute classes =~ "btn-ghost"
+    end
+
+    # Canvas palette table: disabled drops to `--color-base-300` fill /
+    # `--color-neutral` label, and the "Ask" word never disappears — this is
+    # the id-fallback disabled path from stage 1, now checked for colour too.
+    test "a disabled control drops to base-300/neutral fill and keeps its label" do
+      html = hold_rail([agent_with_unresolved_id("Ghost")], hold_to_talk?: true)
+      [control] = hold_controls(html)
+
+      [classes] = Floki.attribute(control, "class")
+      class_list = String.split(classes, " ")
+      assert "bg-base-300" in class_list
+      assert "text-neutral" in class_list
+      # The base fill is base-300, not primary — the only `bg-primary` on
+      # the disabled control is the pressed-state variant, which never
+      # fires because the button is `disabled`.
+      refute "bg-primary" in class_list
+
+      [label_node] = Floki.find(control, ~s([data-role="meeting-agent-hold-label"]))
+      assert Floki.text(label_node) |> String.trim() == "Ask"
+    end
+
+    # Same disabled treatment on the OTHER boundary that disables the
+    # control — another viewer already holds this agent's floor — so the
+    # colour rule is not accidentally coupled to the id-fallback path alone.
+    test "a control held by another viewer also drops to the disabled fill" do
+      html =
+        hold_rail([agent("Octavius", "oct-1")],
+          hold_to_talk?: true,
+          pressed_agent_id: "someone-else",
+          ask_floor_holders: %{"oct-1" => "Dalton"}
+        )
+
+      [control] = hold_controls(html)
+
+      assert Floki.attribute(control, "disabled") == ["disabled"]
+
+      [classes] = Floki.attribute(control, "class")
+      assert classes =~ "bg-base-300"
+      assert classes =~ "text-neutral"
     end
   end
 end

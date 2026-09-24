@@ -519,6 +519,18 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  block in the body would run. --%>
             <% held_by = if is_binary(aid), do: Map.get(@ask_floor_holders, aid) %>
             <% held_by_other? = is_binary(held_by) and aid != @pressed_agent_id %>
+            <%!-- Task 01a0d3cd stage 1 (Saru's canvas 01a0d3cf-a424, finding
+                 2: "render it disabled, never absent"). `aid` is `nil` only
+                 for a participant `agent_id_of/1` could not resolve to a
+                 binary id — unreachable today for a real agent row (every
+                 branch of `MeetingLive.meeting_participant_view_model/1`
+                 that sets `participant_type: "agent"` also sets a binary
+                 `participant_id`, so `aid` is always binary here in
+                 production; a bare test fixture is the only way to reach
+                 this), but the control used to vanish with zero trace on
+                 that branch instead of degrading. `agent_key` gives the
+                 DOM ids something stable to interpolate either way. --%>
+            <% agent_key = aid || "unresolved" %>
             <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0: `--color-primary`
                  is reserved for the veil's meter and this ring, nowhere
                  else in the held state — so it fires only for the agent
@@ -612,28 +624,54 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  real backstop: a keyboard Space/Enter reaching the server
                  anyway (pointer-events does not block a keydown) is
                  refused there and answered through
-                 `push_to_talk_rejected`, same as any other refusal. --%>
+                 `push_to_talk_rejected`, same as any other refusal.
+
+                 GATED ON `@hold_to_talk?` ALONE (task 01a0d3cd stage 1) —
+                 NOT `@hold_to_talk? and is_binary(aid)` as before. Harper's
+                 "I still don't see the ASK button" report (01a0d3cd) sent
+                 this rail's whole gating shape under review; Saru's
+                 direction (canvas 01a0d3cf-a424, finding 2) is explicit
+                 that a persistent control must render disabled at a
+                 boundary rather than disappear, because a control that
+                 vanishes silently is indistinguishable from one that was
+                 never built. `is_binary(aid)` is still live evidence — a
+                 real agent row always has one, per
+                 `MeetingLive.meeting_participant_view_model/1` — so it now
+                 only disables the button (`agent_key` covers the DOM ids)
+                 instead of removing the whole wrapper from the DOM. --%>
+            <% ask_disabled? = held_by_other? or not is_binary(aid) %>
             <div
-              :if={@hold_to_talk? and is_binary(aid)}
+              :if={@hold_to_talk?}
               class={["contents", held_by_other? && "opacity-50 pointer-events-none"]}
               data-role="meeting-agent-hold-wrap"
-              aria-disabled={held_by_other?}
+              aria-disabled={ask_disabled?}
             >
               <button
-                id={"#{@id_prefix}-#{aid}"}
+                id={"#{@id_prefix}-#{agent_key}"}
                 phx-hook="MeetingPushToTalk"
                 phx-update="ignore"
                 type="button"
-                disabled={held_by_other?}
+                disabled={ask_disabled?}
                 data-role="meeting-agent-hold-to-talk"
                 data-agent-id={aid}
                 data-agent-name={p.display_name || "this agent"}
                 data-pressed="false"
-                aria-label={"Hold to talk to #{p.display_name || "this agent"}"}
-                title={"Hold to talk to #{p.display_name || "this agent"}"}
+                aria-label={"Ask #{p.display_name || "this agent"}"}
+                title={"Ask #{p.display_name || "this agent"}"}
                 class={
                   [
-                    "group/ptt btn btn-xs btn-ghost min-h-11 flex-shrink-0 gap-1 px-1.5",
+                    # `btn` alone, no `btn-ghost`: Saru's direction (canvas
+                    # 01a0d3cf-a424) makes this the ONE filled, labelled
+                    # control in the rail — everything else stays quiet text
+                    # on `--color-base-200` so the Ask column is the thing a
+                    # viewer's eye catches without reading. No radius utility
+                    # here on purpose: `.btn`'s own `border-radius` already
+                    # resolves to `--radius-field` (10px), which is Marlowe's
+                    # no-pill rule and a DELIBERATE departure from the mock's
+                    # pill geometry — the mock's prominence and wording are
+                    # kept, its corner radius is not (canvas, "Signature
+                    # element" section).
+                    "group/ptt btn btn-xs min-h-11 flex-shrink-0 gap-1 px-2",
                     # The shared touch utility (`touch-action: none`, no callout,
                     # no selection) — the same class the old single button wore,
                     # so a long press on a phone holds instead of raising the OS
@@ -641,7 +679,24 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                     # arming a control the browser has already claimed for
                     # scrolling.
                     "meeting-hold-target",
-                    "text-base-content/55",
+                    # Rest vs. disabled fill (canvas palette table). Rest is
+                    # `--color-primary` (cyan) with a BLACK label — deliberately
+                    # `text-primary-content`, not `text-base-content`: this app's
+                    # own brand rule pairs `--color-primary` with
+                    # `--color-primary-content` specifically because the latter
+                    # is pinned black in BOTH themes (see `--color-primary-content`
+                    # doc in app.css), while `--color-base-content` flips to
+                    # near-white in the dark theme — which is exactly the
+                    # white-on-cyan the canvas rules out. Disabled drops to
+                    # `--color-base-300` fill / `--color-neutral` label, per the
+                    # same table, and never loses the "Ask" word.
+                    if(ask_disabled?,
+                      do: "bg-base-300 text-neutral",
+                      else: "bg-primary text-primary-content hover:bg-primary/90"
+                    ),
+                    # Held/pressed follows the EXISTING hold-to-talk ladder,
+                    # unchanged by this stage — only the rest/disabled base
+                    # above is new.
                     "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
                     "data-[rejected=no-microphone]:text-error",
                     "data-[rejected=microphone-muted]:text-error",
@@ -654,12 +709,38 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 }
               >
                 <span class="hero-signal size-3.5" aria-hidden="true"></span>
+                <%!-- The label (task 01a0d3cd stage 2, canvas 01a0d3cf-a424
+                     finding 1: "Label the button... the word is the fix").
+                     An icon-only ghost button in a column of avatars reads as
+                     a status glyph, not a control — this is what makes it
+                     legible as a button at all. Public Sans 13 medium,
+                     `shrink-0 whitespace-nowrap` so "Ask" never truncates or
+                     wraps at any rail width, per the canvas's Type section. --%>
+                <span
+                  class="shrink-0 whitespace-nowrap text-[13px] font-medium"
+                  data-role="meeting-agent-hold-label"
+                >
+                  Ask
+                </span>
                 <%!-- The waveform, hidden until the key is down. Twelve bars,
                    scaled on the Y axis by the hook; `currentColor` keeps them
                    on whatever token the button is wearing so the armed and
-                   refused states carry through without JS naming a colour. --%>
+                   refused states carry through without JS naming a colour.
+
+                   Task 01a0d3cd stage 4: `w-0 overflow-hidden` at rest,
+                   widening to `w-9` alongside the existing opacity fade on
+                   press. Before this it was full-width (`~35px`) and
+                   `opacity-0` ONLY — invisible but still laid out, every row,
+                   always. In this rail's fixed 256px width that stole over a
+                   third of the button's ~98px footprint from nothing, which
+                   is what was crushing `[data-role="participant-name"]` to a
+                   few px wide in the same row (found live via CDP against a
+                   real invited agent: the name rendered as an ellipsis of
+                   itself). The bars' own `scaleY` transforms
+                   (`ptt_waveform.js`) never read the container's width, so
+                   collapsing it costs nothing the hook depends on. --%>
                 <span
-                  class="flex h-3 items-center gap-px opacity-0 transition-opacity group-data-[pressed=true]/ptt:opacity-100"
+                  class="flex h-3 w-0 items-center gap-px overflow-hidden opacity-0 transition-[width,opacity] duration-75 group-data-[pressed=true]/ptt:w-9 group-data-[pressed=true]/ptt:opacity-100"
                   data-role="meeting-agent-hold-waveform"
                   aria-hidden="true"
                 >
@@ -687,7 +768,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                    toggles `data-open` directly and a re-render (this row
                    ticks on every activity update) must not wipe that. --%>
               <div
-                id={"#{@id_prefix}-#{aid}-coach"}
+                id={"#{@id_prefix}-#{agent_key}-coach"}
                 phx-update="ignore"
                 class="pointer-events-none fixed z-50 max-w-56 rounded-lg bg-base-300 px-2.5 py-1.5 text-xs text-base-content/60 opacity-0 shadow-lg transition-opacity duration-150 data-[open=true]:opacity-100"
                 data-role="meeting-agent-hold-coach"

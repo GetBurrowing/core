@@ -1069,7 +1069,33 @@ defmodule PlatformWeb.MeetingLive do
 
             socket
           else
-            socket
+            # Task 01a0d3cd stage 4: seed `:ask_floor_holders` here too,
+            # NOT only inside `subscribe_room_once/3` above (which only
+            # ever runs `if connected?(socket)`). Found live via CDP: a
+            # second viewer's disconnected static render (the plain HTTP
+            # GET every page load starts with, before the socket
+            # connects) skipped this entirely, so `@ask_floor_holders`
+            # was still its mount-time default when the per-agent hold
+            # button — `phx-update="ignore"` in `ParticipantRail`, by
+            # design so its own hook owns the DOM afterwards — got its
+            # ONE chance to bake `disabled`/`bg-base-300` into the
+            # button's initial HTML. The connected mount that follows
+            # DOES compute `held_by_other?` correctly (the row's
+            # non-ignored wrapper `<div>` dims right on cue), but
+            # `phx-update="ignore"` means that correction can never
+            # reach the button itself — so a viewer whose page load won
+            # the ordinary disconnected-then-connected race saw a
+            # bright, undisabled Ask button for an agent someone else
+            # was already holding, for the rest of that mount's life.
+            # `AskFloor.list_meeting/1` is a plain ETS read with no
+            # subscription side effect (see its own moduledoc: "used to
+            # seed a newly (re)subscribed client's view... so a viewer
+            # joining mid-meeting needs this to see an already-held
+            # agent as held from their FIRST RENDER" — that guarantee
+            # did not actually reach the disconnected render before
+            # this), so calling it unconditionally here costs nothing
+            # the connected branch does not already pay.
+            seed_ask_floor_holders(socket, meeting.id)
           end
 
         participants =

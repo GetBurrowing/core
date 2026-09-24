@@ -201,7 +201,15 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
     assert Regex.match?(@fixed_palette, ~s(<span class="bg-red-500">))
 
     # And it does use tokens, so "no hex" is not simply "no colour".
+    # Task 01a0d3cd stage 2 (canvas 01a0d3cf-a424): the rest-state fill is
+    # `--color-primary` with a `--color-primary-content` label — not
+    # `--color-base-content`, which flips to near-white in the dark theme
+    # and would be the white-on-cyan the canvas rules out. This fixture is
+    # a resolvable, un-held agent, so it renders in that rest state; the
+    # disabled fill's `--color-base-300` / `--color-neutral` pair is
+    # covered in `participant_rail_test.exs`, which reaches both boundaries
+    # that disable the control.
     assert markup =~ "primary"
-    assert markup =~ "base-content"
+    assert markup =~ "primary-content"
   end
 end
