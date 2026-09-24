@@ -469,7 +469,8 @@ defmodule Platform.Mail.InboundTest do
     # every time if poller_pid/1 reads the entry without checking liveness.
     test "a stopped poller is gone from poller_pid before the registry cleans up", ctx do
       account = account!(ctx)
-      assert Inbound.sync_poller(account) == :started
+      # create_account/4 already started it.
+      assert Inbound.sync_poller(account) == :running
       pid = Inbound.poller_pid(account.id)
       assert is_pid(pid)
 
@@ -491,12 +492,26 @@ defmodule Platform.Mail.InboundTest do
 
     test "archiving an account stops its poller", ctx do
       account = account!(ctx)
-      assert Inbound.sync_poller(account) == :started
+      # create_account/4 already started it.
+      assert Inbound.sync_poller(account) == :running
       pid = Inbound.poller_pid(account.id)
       ref = Process.monitor(pid)
 
       {:ok, _} = Mail.archive_account(ctx.admin, account)
       assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1_000
+    end
+
+    # Regression: create_account/4 never called sync_poller/1, so an account
+    # created with reading on while the app was running got no poller until a
+    # restart or an edit (prod, 2026-09-24: 0 cursors, 0 inbound rows).
+    test "creating a read-enabled account starts its poller", ctx do
+      account = account!(ctx)
+      assert is_pid(Inbound.poller_pid(account.id))
+    end
+
+    test "creating a send-only account starts no poller", ctx do
+      account = account!(ctx, %{"read_enabled" => false})
+      assert Inbound.poller_pid(account.id) == nil
     end
 
     test "an account without an imap_host never gets a poller", ctx do

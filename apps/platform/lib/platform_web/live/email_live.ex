@@ -26,9 +26,18 @@ defmodule PlatformWeb.EmailLive do
   Presentation hides the account controls from members; it is not the
   check. Every mutating `handle_event` calls an actor-taking `Platform.Mail`
   function (`create_account/4`, `update_account/3`, `replace_secret/4`,
-  `put_sender/3`, `delete_sender/3`, `archive_account/2`, `send_test/3`) or
-  `Platform.Mail.Mailbox.add_to_files/3`, and those re-check. A crafted
-  event from a member writes nothing.
+  `put_sender/3`, `delete_sender/3`, `archive_account/2`, `send_test/3`,
+  `refresh_inbound/2`) or `Platform.Mail.Mailbox.add_to_files/3`, and those
+  re-check. A crafted event from a member writes nothing.
+
+  ## Refresh
+
+  The inbox header's Refresh (org admins, when an account reads mail) runs
+  one immediate IMAP poll of every reading account through
+  `Platform.Mail.refresh_inbound/2`, in `start_async/3` so the LiveView is
+  never blocked on IMAP. Each poll goes through the account's poller
+  (`Platform.Mail.Inbound.poll_now/2`), so it cannot race the timer. The
+  flash names each account's outcome; error text is built from atoms only.
 
   ## Inbound mail is outside text
 
@@ -71,6 +80,7 @@ defmodule PlatformWeb.EmailLive do
   alias Platform.Mail.Account
   alias Platform.Mail.Dispatch
   alias Platform.Mail.Drafts
+  alias Platform.Mail.Inbound
   alias Platform.Mail.Mailbox
   alias Platform.Tenancy
 
@@ -110,6 +120,7 @@ defmodule PlatformWeb.EmailLive do
      |> assign(:form_error, nil)
      |> assign(:replacing, MapSet.new())
      |> assign(:test_results, %{})
+     |> assign(:refreshing, false)
      |> assign(:form, nil)
      |> assign(:form_account, nil)
      |> assign(:editor, nil)
@@ -691,6 +702,38 @@ defmodule PlatformWeb.EmailLive do
     end
   end
 
+  # Refresh: one immediate IMAP poll of every reading account, off the
+  # LiveView process. `Mail.refresh_inbound/2` re-checks the actor.
+  def handle_event("refresh_inbox", _params, %{assigns: %{refreshing: true}} = socket),
+    do: {:noreply, socket}
+
+  def handle_event("refresh_inbox", _params, socket) do
+    %{user: user, org_id: org_id} = socket.assigns
+
+    {:noreply,
+     socket
+     |> assign(:refreshing, true)
+     |> start_async(:refresh_inbox, fn -> Mail.refresh_inbound(user, org_id) end)}
+  end
+
+  @impl true
+  def handle_async(:refresh_inbox, {:ok, {:ok, results}}, socket) do
+    socket = socket |> assign(:refreshing, false) |> load_lists()
+
+    kind = if Enum.any?(results, &match?({_, {:error, _}}, &1)), do: :error, else: :info
+    {:noreply, put_flash(socket, kind, refresh_text(results))}
+  end
+
+  def handle_async(:refresh_inbox, {:ok, {:error, reason}}, socket) do
+    {:noreply,
+     socket |> assign(:refreshing, false) |> put_flash(:error, account_error_text(reason))}
+  end
+
+  def handle_async(:refresh_inbox, {:exit, _reason}, socket) do
+    {:noreply,
+     socket |> assign(:refreshing, false) |> put_flash(:error, "Refresh failed. Try again.")}
+  end
+
   defp single_sender_key(%Account{senders: [%{key: key}]}), do: key
   defp single_sender_key(_), do: nil
 
@@ -1227,6 +1270,40 @@ defmodule PlatformWeb.EmailLive do
   defp account_error_text(:sender_key_not_found), do: "That sender is not on this account."
   defp account_error_text(:invalid_secret), do: "Enter a value to replace the secret."
   defp account_error_text(reason), do: "Could not save: #{inspect(reason)}"
+
+  # Is there anything for Refresh to poll?
+  defp refreshable?(accounts), do: Enum.any?(accounts, &Inbound.eligible?/1)
+
+  @doc false
+  # The flash after Refresh: one clause per account. Error reasons are
+  # rendered from atoms only; any server text or other term in a reason is
+  # dropped, so nothing a server or the Vault returned is echoed.
+  def refresh_text([]), do: "No account is reading mail."
+
+  def refresh_text(results) do
+    Enum.map_join(results, " · ", fn
+      {account, {:ok, %{ingested: 0}}} -> "#{account.name}: no new mail"
+      {account, {:ok, %{ingested: 1}}} -> "#{account.name}: 1 new message"
+      {account, {:ok, %{ingested: n}}} -> "#{account.name}: #{n} new messages"
+      {account, {:ok, _}} -> "#{account.name}: checked"
+      {account, {:error, reason}} -> "#{account.name}: failed (#{refresh_reason(reason)})"
+    end)
+  end
+
+  defp refresh_reason(:secret_unavailable), do: "IMAP password missing or unreadable"
+  defp refresh_reason(:not_configured), do: "no IMAP password set"
+  defp refresh_reason(:timeout), do: "timed out"
+  defp refresh_reason({:no, _detail}), do: "server refused the login or command"
+  defp refresh_reason({:bad, _detail}), do: "server rejected a command"
+  defp refresh_reason(reason) when is_atom(reason), do: humanize_reason(reason)
+
+  defp refresh_reason({tag, inner}) when is_atom(tag) and is_atom(inner),
+    do: "#{humanize_reason(tag)}: #{humanize_reason(inner)}"
+
+  defp refresh_reason({tag, _}) when is_atom(tag), do: humanize_reason(tag)
+  defp refresh_reason(_), do: "poll failed"
+
+  defp humanize_reason(atom), do: atom |> Atom.to_string() |> String.replace("_", " ")
 
   defp changeset_text(%Ecto.Changeset{errors: errors}) do
     Enum.map_join(errors, "; ", fn {field, {message, opts}} ->

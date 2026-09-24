@@ -150,6 +150,70 @@ defmodule Platform.Mail.Inbound do
     end
   end
 
+  @poll_now_timeout 45_000
+
+  @doc """
+  Poll `account` once, now, and return the outcome (a manual refresh).
+
+  Starts the account's poller if it is eligible and none is running, then
+  asks that poller to poll, so the fetch is serialised with its timer rather
+  than racing it. When no poller can run (the module flag off or the inbound
+  supervisor not running) it polls in the calling process instead.
+
+  Options: `:timeout` for the poller call (default #{@poll_now_timeout} ms).
+  """
+  @spec poll_now(Account.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def poll_now(%Account{} = account, opts \\ []) do
+    if eligible?(account) do
+      _ = sync_poller(account)
+
+      case poller_pid(account.id) do
+        pid when is_pid(pid) -> call_poller(pid, Keyword.get(opts, :timeout, @poll_now_timeout))
+        nil -> poll_safely(account)
+      end
+    else
+      {:error, :not_eligible}
+    end
+  end
+
+  defp call_poller(pid, timeout) do
+    GenServer.call(pid, :poll_now, timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, _ -> {:error, :poller_unavailable}
+  end
+
+  @doc """
+  `poll/2`, with a raise or an exit inside it caught and logged. Every
+  outcome is `{:ok, summary}` or `{:error, reason}`; failures are logged as
+  `[Mail.Inbound]` warnings.
+  """
+  @spec poll_safely(Account.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def poll_safely(%Account{} = account, opts \\ []) do
+    case poll(account, opts) do
+      {:ok, _summary} = ok ->
+        ok
+
+      {:error, reason} = error ->
+        Logger.warning(
+          "[Mail.Inbound] poll failed account_id=#{account.id} reason=#{inspect(reason)}"
+        )
+
+        error
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[Mail.Inbound] poll raised account_id=#{account.id} error=#{Exception.message(error)}"
+      )
+
+      {:error, :poll_raised}
+  catch
+    :exit, reason ->
+      Logger.warning("[Mail.Inbound] poll exited account_id=#{account.id} #{inspect(reason)}")
+      {:error, :poll_exited}
+  end
+
   @doc "Start a poller for every eligible account. Run once at boot."
   @spec start_all_pollers() :: :ok
   def start_all_pollers do

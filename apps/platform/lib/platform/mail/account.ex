@@ -9,6 +9,16 @@ defmodule Platform.Mail.Account do
 
   Defaults fail closed: `internal_only` is true and `read_enabled` is false.
   An empty `read_folders` list means "all folders" once reading is on.
+
+  ## Well-known ports pin the tls mode
+
+  A port whose protocol is fixed refuses the mismatched mode, with the error
+  on the tls field: SMTP 465 is implicit TLS (not `"starttls"`) and 587 is
+  STARTTLS (not `"tls"`); IMAP 993 is implicit TLS (only `"tls"`) and 143 is
+  never `"tls"`. Every other port is unconstrained. Measured cause (fabrikam,
+  2026-09-24): smtp.gmail.com:465 with `"starttls"` failed every delivery
+  with `{:network_failure, ..., {:error, :closed}}`. The check reads the
+  merged fields, so an existing row with a bad pairing fails on its next edit.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -74,6 +84,7 @@ defmodule Platform.Mail.Account do
     |> validate_number(:smtp_port, greater_than: 0, less_than: 65_536)
     |> validate_number(:imap_port, greater_than: 0, less_than: 65_536)
     |> validate_number(:rate_limit_per_hour, greater_than: 0)
+    |> validate_port_tls()
     |> unique_constraint([:org_id, :name])
     |> check_constraint(:smtp_tls, name: :mail_accounts_smtp_tls_check)
     |> check_constraint(:imap_tls, name: :mail_accounts_imap_tls_check)
@@ -81,4 +92,24 @@ defmodule Platform.Mail.Account do
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:inbound_space_id)
   end
+
+  @smtp_pairing "must match the port: port 465 uses tls; port 587 uses starttls"
+  @imap_pairing "must match the port: port 993 uses tls; port 143 uses starttls or none"
+
+  defp validate_port_tls(changeset) do
+    smtp = {get_field(changeset, :smtp_port), get_field(changeset, :smtp_tls)}
+    imap = {get_field(changeset, :imap_port), get_field(changeset, :imap_tls)}
+
+    changeset
+    |> then(&if(smtp_mismatch?(smtp), do: add_error(&1, :smtp_tls, @smtp_pairing), else: &1))
+    |> then(&if(imap_mismatch?(imap), do: add_error(&1, :imap_tls, @imap_pairing), else: &1))
+  end
+
+  defp smtp_mismatch?({465, "starttls"}), do: true
+  defp smtp_mismatch?({587, "tls"}), do: true
+  defp smtp_mismatch?(_), do: false
+
+  defp imap_mismatch?({993, tls}), do: tls != "tls"
+  defp imap_mismatch?({143, "tls"}), do: true
+  defp imap_mismatch?(_), do: false
 end

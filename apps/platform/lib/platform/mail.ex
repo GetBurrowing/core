@@ -230,6 +230,17 @@ defmodule Platform.Mail do
 
         Repo.preload(account, :senders)
       end)
+      |> case do
+        {:ok, account} ->
+          # Starts the IMAP poller for a read-enabled account, after the
+          # commit so it never sees an uncommitted or rolled-back row. A no-op
+          # when the module flag is off.
+          _ = Platform.Mail.Inbound.sync_poller(account)
+          {:ok, account}
+
+        error ->
+          error
+      end
     else
       {:error, :unauthorized}
     end
@@ -291,6 +302,34 @@ defmodule Platform.Mail do
   end
 
   def replace_secret(_actor, %Account{}, _kind, _value), do: {:error, :invalid_secret}
+
+  @doc """
+  Poll every reading account of `org_id` now (the inbox Refresh button).
+
+  Refused unless `actor` may manage the org's accounts. Each eligible
+  account (`Platform.Mail.Inbound.eligible?/1`) is polled through
+  `Platform.Mail.Inbound.poll_now/2`; the result pairs each account with its
+  `{:ok, summary}` or `{:error, reason}`, in account-name order.
+  """
+  @spec refresh_inbound(any(), binary()) ::
+          {:ok, [{Account.t(), {:ok, map()} | {:error, term()}}]} | {:error, :unauthorized}
+  def refresh_inbound(actor, org_id) do
+    if can_manage_accounts?(actor, org_id) do
+      results =
+        org_id
+        |> list_accounts()
+        |> Enum.filter(&Platform.Mail.Inbound.eligible?/1)
+        |> Task.async_stream(&{&1, Platform.Mail.Inbound.poll_now(&1)},
+          max_concurrency: 4,
+          timeout: :infinity
+        )
+        |> Enum.map(fn {:ok, pair} -> pair end)
+
+      {:ok, results}
+    else
+      {:error, :unauthorized}
+    end
+  end
 
   @doc "Archive an account. Idempotent for an already-archived account."
   @spec archive_account(any(), Account.t()) :: {:ok, Account.t()} | {:error, term()}

@@ -265,4 +265,87 @@ defmodule Platform.Mail.AccountsTest do
       assert {:ok, _} = Mail.create_account(ctx.other_admin, ctx.other_org_id, attrs("ops"), %{})
     end
   end
+
+  # ── port / tls pairing ─────────────────────────────────────────────────
+  #
+  # Measured (fabrikam, 2026-09-24): smtp.gmail.com:465 with "starttls" failed
+  # every delivery with {:network_failure, _, {:error, :closed}}.
+
+  describe "port / tls pairing" do
+    defp pairing_errors(attrs) do
+      %Account{}
+      |> Account.changeset(Map.merge(%{"name" => "pairing"}, attrs))
+      |> Map.fetch!(:errors)
+      |> Keyword.take([:smtp_tls, :imap_tls])
+    end
+
+    for {port, tls} <- [{465, "starttls"}, {587, "tls"}] do
+      test "SMTP #{port} with #{tls} is refused on :smtp_tls" do
+        assert [smtp_tls: {message, _}] =
+                 pairing_errors(%{"smtp_port" => unquote(port), "smtp_tls" => unquote(tls)})
+
+        assert message =~ "port 465 uses tls; port 587 uses starttls"
+      end
+    end
+
+    for {port, tls} <- [{993, "starttls"}, {993, "none"}, {993, nil}, {143, "tls"}] do
+      test "IMAP #{port} with #{inspect(tls)} is refused on :imap_tls" do
+        assert [imap_tls: {message, _}] =
+                 pairing_errors(%{
+                   "smtp_tls" => "starttls",
+                   "imap_port" => unquote(port),
+                   "imap_tls" => unquote(tls)
+                 })
+
+        assert message =~ "port 993 uses tls"
+      end
+    end
+
+    # Positive controls: the check is not refusing everything.
+    for {port, tls} <- [{465, "tls"}, {587, "starttls"}, {2525, "starttls"}, {2525, "tls"}] do
+      test "SMTP #{port} with #{tls} is accepted" do
+        assert pairing_errors(%{"smtp_port" => unquote(port), "smtp_tls" => unquote(tls)}) == []
+      end
+    end
+
+    for {port, tls} <- [{993, "tls"}, {143, "starttls"}, {143, "none"}, {3143, "tls"}] do
+      test "IMAP #{port} with #{tls} is accepted" do
+        assert pairing_errors(%{
+                 "smtp_tls" => "starttls",
+                 "imap_port" => unquote(port),
+                 "imap_tls" => unquote(tls)
+               }) == []
+      end
+    end
+
+    test "create_account refuses the measured gmail pairing and writes nothing", ctx do
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Mail.create_account(
+                 ctx.admin,
+                 ctx.org_id,
+                 attrs("gmail-465", %{"smtp_host" => "smtp.gmail.com", "smtp_port" => 465}),
+                 %{smtp: "app-password"}
+               )
+
+      assert Keyword.has_key?(changeset.errors, :smtp_tls)
+      refute Enum.any?(Mail.list_accounts(ctx.org_id), &(&1.name == "gmail-465"))
+    end
+
+    test "an existing row with a bad pairing fails its next edit", ctx do
+      account = account!(ctx.admin, ctx.org_id, "legacy-465")
+
+      {1, _} =
+        Repo.update_all(
+          from(a in Account, where: a.id == ^account.id),
+          set: [smtp_port: 465]
+        )
+
+      account = Mail.get_account(ctx.org_id, account.id)
+
+      assert {:error, %Ecto.Changeset{errors: errors}} =
+               Mail.update_account(ctx.admin, account, %{"rate_limit_per_hour" => 10})
+
+      assert Keyword.has_key?(errors, :smtp_tls)
+    end
+  end
 end

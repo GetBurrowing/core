@@ -18,6 +18,8 @@ defmodule PlatformWeb.EmailLiveTest do
   alias Platform.Mail
   alias Platform.Mail.Account
   alias Platform.Mail.Delivery
+  alias Platform.Mail.Imap.FakeClient
+  alias Platform.Mail.Inbound
   alias Platform.Mail.InboundMessage
   alias Platform.Repo
   alias Platform.Security.ExternalContent
@@ -309,6 +311,108 @@ defmodule PlatformWeb.EmailLiveTest do
 
   # ── Add to files ────────────────────────────────────────────────────────
 
+  # ── Refresh ─────────────────────────────────────────────────────────────
+
+  describe "inbox refresh" do
+    setup ctx do
+      start_supervised!({Platform.Mail.Inbound.Supervisor, boot: false})
+
+      n = System.unique_integer([:positive])
+      host = "imap-refresh-#{n}.acme.test"
+      imap_pass = "imap-pass-#{n}"
+
+      {:ok, reader} =
+        Mail.create_account(
+          ctx.admin,
+          ctx.org_id,
+          %{
+            "name" => "reader-#{n}",
+            "smtp_tls" => "starttls",
+            "username" => "reader@acme.test",
+            "imap_host" => host,
+            "imap_port" => 993,
+            "imap_tls" => "tls",
+            "read_enabled" => true
+          },
+          %{imap: imap_pass}
+        )
+
+      %{reader: reader, host: host, imap_pass: imap_pass}
+    end
+
+    # A folder's first poll only records the cursor (mail already there is
+    # not ingested), so the baseline poll runs before the message arrives.
+    defp queue_mail!(reader, subject) do
+      host = reader.imap_host
+      FakeClient.start_server!(host)
+      FakeClient.put_folder(host, "INBOX")
+      assert {:ok, %{ingested: 0}} = Inbound.poll(reader, client: FakeClient)
+
+      FakeClient.deliver(
+        host,
+        "INBOX",
+        "From: Alice <alice@outside.test>\r\nTo: reader@acme.test\r\n" <>
+          "Subject: #{subject}\r\nMessage-ID: <#{System.unique_integer([:positive])}@x.test>" <>
+          "\r\n\r\nHello\r\n"
+      )
+    end
+
+    defp reader_rows(reader),
+      do: Repo.all(from(m in InboundMessage, where: m.account_id == ^reader.id))
+
+    test "Refresh polls now and the fetched message appears in the inbox",
+         %{conn: conn} = ctx do
+      queue_mail!(ctx.reader, "Refreshed arrival")
+
+      {:ok, view, html} = live(login(conn, ctx.admin), "/email")
+      refute html =~ "Refreshed arrival"
+      assert reader_rows(ctx.reader) == []
+      # The poll is asked of the account's own poller (create started it).
+      assert is_pid(Inbound.poller_pid(ctx.reader.id))
+
+      assert view |> element(~s([data-role="mail-refresh"])) |> render_click() =~ "Refreshing"
+      html = render_async(view)
+
+      assert [row] = reader_rows(ctx.reader)
+      assert has_element?(view, ~s([data-role="mail-inbox-row"][data-message-id="#{row.id}"]))
+      assert html =~ "Refreshed arrival"
+      assert html =~ "#{ctx.reader.name}: 1 new message"
+      refute has_element?(view, ~s([data-role="mail-refresh"][disabled]))
+    end
+
+    test "a failed poll flashes the account's error and never the secret",
+         %{conn: conn} = ctx do
+      # No fake server for the host: connect answers {:error, :unable_to_connect}.
+      {:ok, view, _html} = live(login(conn, ctx.admin), "/email")
+
+      view |> element(~s([data-role="mail-refresh"])) |> render_click()
+      html = render_async(view)
+
+      assert html =~ "#{ctx.reader.name}: failed (unable to connect)"
+      refute html =~ ctx.imap_pass
+    end
+
+    test "a member sees no Refresh and a crafted event polls nothing", %{conn: conn} = ctx do
+      queue_mail!(ctx.reader, "Not for members")
+
+      {:ok, view, _html} = live(login(conn, ctx.member), "/email")
+      refute has_element?(view, ~s([data-role="mail-refresh"]))
+
+      render_hook(view, "refresh_inbox", %{})
+      html = render_async(view)
+
+      assert html =~ "Only org admins"
+      assert reader_rows(ctx.reader) == []
+    end
+
+    test "no Refresh when no account reads mail", %{conn: conn} = ctx do
+      {:ok, _} = Mail.archive_account(ctx.admin, ctx.reader)
+
+      {:ok, view, _html} = live(login(conn, ctx.admin), "/email")
+      refute has_element?(view, ~s([data-role="mail-refresh"]))
+    end
+  end
+
   describe "add to files" do
     setup ctx do
       {:ok, project} =
@@ -530,6 +634,31 @@ defmodule PlatformWeb.EmailLiveTest do
       assert has_element?(view, ~s([data-role="mail-account-secret-replace"]))
       refute html =~ secret
       refute html =~ "•"
+    end
+
+    test "a port / tls mismatch is refused and the form shows why", %{conn: conn} = ctx do
+      {:ok, view, _html} = live(login(conn, ctx.admin), "/email/accounts/new")
+
+      view
+      |> form("#mail-account-form", %{
+        "account" => %{
+          "name" => "gmail",
+          "smtp_host" => "smtp.gmail.com",
+          "smtp_port" => "465",
+          "smtp_tls" => "starttls",
+          "username" => "someone@gmail.com",
+          "smtp_secret" => "app-password"
+        }
+      })
+      |> render_submit()
+
+      assert view
+             |> element(~s([data-role="mail-account-form-error"]))
+             |> render() =~ "port 465 uses tls; port 587 uses starttls"
+
+      refute Repo.exists?(
+               from(a in Account, where: a.org_id == ^ctx.org_id and a.name == "gmail")
+             )
     end
 
     test "edits toggles from the card and adds a sender", %{conn: conn} = ctx do

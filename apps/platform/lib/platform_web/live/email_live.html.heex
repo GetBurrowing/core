@@ -43,6 +43,22 @@
 
       <span class="flex-1" aria-hidden="true"></span>
 
+      <button
+        :if={@is_admin and @tab == "inbox" and is_nil(@editor) and refreshable?(@accounts)}
+        type="button"
+        phx-click="refresh_inbox"
+        disabled={@refreshing}
+        aria-busy={if(@refreshing, do: "true")}
+        class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+        data-role="mail-refresh"
+      >
+        <span
+          class={["hero-arrow-path size-4", @refreshing && "animate-spin"]}
+          aria-hidden="true"
+        >
+        </span>
+        {if(@refreshing, do: "Refreshing…", else: "Refresh")}
+      </button>
       <.link
         patch={email_path(assigns, "/email/accounts")}
         class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"

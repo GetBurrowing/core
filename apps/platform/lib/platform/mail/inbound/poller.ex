@@ -19,8 +19,6 @@ defmodule Platform.Mail.Inbound.Poller do
   """
   use GenServer, restart: :transient
 
-  require Logger
-
   alias Platform.Mail.Account
   alias Platform.Mail.Inbound
   alias Platform.Repo
@@ -58,25 +56,25 @@ defmodule Platform.Mail.Inbound.Poller do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp run_poll(account) do
-    case Inbound.poll(account) do
-      {:ok, _summary} ->
-        :ok
+  # A manual refresh (`Platform.Mail.Inbound.poll_now/2`). It runs in this
+  # process, so it is serialised with the timer's polls instead of racing
+  # them, and it leaves the timer's schedule alone.
+  @impl true
+  def handle_call(:poll_now, _from, %{account_id: account_id} = state) do
+    case Repo.get(Account, account_id) do
+      %Account{} = account ->
+        if Inbound.eligible?(account) do
+          {:reply, run_poll(account), state}
+        else
+          {:stop, :normal, {:error, :not_eligible}, state}
+        end
 
-      {:error, reason} ->
-        Logger.warning(
-          "[Mail.Inbound] poll failed account_id=#{account.id} reason=#{inspect(reason)}"
-        )
+      nil ->
+        {:stop, :normal, {:error, :not_found}, state}
     end
-  rescue
-    error ->
-      Logger.warning(
-        "[Mail.Inbound] poll raised account_id=#{account.id} error=#{Exception.message(error)}"
-      )
-  catch
-    :exit, reason ->
-      Logger.warning("[Mail.Inbound] poll exited account_id=#{account.id} #{inspect(reason)}")
   end
+
+  defp run_poll(account), do: Inbound.poll_safely(account)
 
   defp schedule(ms), do: Process.send_after(self(), :poll, ms)
 
