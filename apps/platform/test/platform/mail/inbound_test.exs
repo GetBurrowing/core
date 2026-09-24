@@ -463,6 +463,32 @@ defmodule Platform.Mail.InboundTest do
       assert Inbound.poller_pid(account.id) == nil
     end
 
+    # Regression (follow-up to #1084): the registry partition removes a dead
+    # poller's entry only when it handles the :EXIT, after terminate_child has
+    # returned. Suspending the partition holds that window open, so this fails
+    # every time if poller_pid/1 reads the entry without checking liveness.
+    test "a stopped poller is gone from poller_pid before the registry cleans up", ctx do
+      account = account!(ctx)
+      assert Inbound.sync_poller(account) == :started
+      pid = Inbound.poller_pid(account.id)
+      assert is_pid(pid)
+
+      partition = Module.concat(Platform.Mail.Inbound.Registry, "PIDPartition0")
+      :ok = :sys.suspend(partition)
+
+      try do
+        {:ok, _} = Mail.update_account(ctx.admin, account, %{"read_enabled" => false})
+        refute Process.alive?(pid)
+
+        assert [{^pid, _}] = Registry.lookup(Platform.Mail.Inbound.Registry, account.id),
+               "precondition: the dead poller's registry entry is still present"
+
+        assert Inbound.poller_pid(account.id) == nil
+      after
+        :sys.resume(partition)
+      end
+    end
+
     test "archiving an account stops its poller", ctx do
       account = account!(ctx)
       assert Inbound.sync_poller(account) == :started

@@ -109,13 +109,21 @@ defmodule Platform.Mail.Inbound do
     end
   end
 
-  @doc "The pid of `account_id`'s poller, or nil."
+  @doc """
+  The pid of `account_id`'s LIVE poller, or nil.
+
+  Resolved with `Registry.whereis_name/1`, which checks `Process.alive?/1`,
+  not `Registry.lookup/2`, which does not. A registry drops a dead process's
+  entry only when its partition process handles the `:EXIT` — asynchronously,
+  after `DynamicSupervisor.terminate_child/2` has already returned — so
+  `lookup/2` can hand back the poller `stop_poller/1` just killed.
+  """
   @spec poller_pid(binary()) :: pid() | nil
   def poller_pid(account_id) do
     if Process.whereis(Platform.Mail.Inbound.Registry) do
-      case Registry.lookup(Platform.Mail.Inbound.Registry, account_id) do
-        [{pid, _}] -> pid
-        [] -> nil
+      case Registry.whereis_name({Platform.Mail.Inbound.Registry, account_id}) do
+        pid when is_pid(pid) -> pid
+        :undefined -> nil
       end
     end
   end
