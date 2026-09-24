@@ -1066,15 +1066,25 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # `ToolSurface.resolve_ack_stage_id/2` rejects with `:no_running_stage`.
   # Leaving it here would just relocate the defect to the unseeded
   # environments this fallback exists to serve.
-  defp hardcoded_dispatch_planning(
-         task,
-         provider_guidance,
-         previous_rejection_reason,
-         parent_plans
-       ) do
+  #
+  # PUBLIC (`@doc false`) for one caller: the parity test in
+  # `dispatch_planning_experiment_surface_test.exs` (task 01a0d41e stage 2).
+  # `dispatch.planning` is a registered default, so `derived_or_hardcoded/3`
+  # answers from `render_default/2` and `dispatch_prompt/3` never reaches this
+  # body — a test that deletes the row and calls `dispatch_prompt/3` renders
+  # the DESCRIPTOR, and would stay green with an interpolation removed here.
+  @doc false
+  def hardcoded_dispatch_planning(
+        task,
+        provider_guidance,
+        previous_rejection_reason,
+        parent_plans
+      ) do
     previous_rejection_section = render_previous_rejection_section(previous_rejection_reason)
     upstream_plans_section = render_upstream_plans_section(parent_plans)
     no_ack_notice = PromptTemplates.planning_no_ack_notice()
+    experiment_surface_notice = PromptTemplates.planning_experiment_surface_notice()
+    ci_evidence_section = PromptTemplates.planning_ci_evidence_section()
 
     """
     #{no_ack_notice}
@@ -1149,6 +1159,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     This rule applies to itself: a planner that reads it and does not restate the ticket's
     binding constraints inside its stage descriptions has already lost them.
 
+    #{ci_evidence_section}
     ## Validation kinds
 
     Per-stage:
@@ -1209,6 +1220,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     input event, store the current textarea value keyed by space_id. On mounted(), restore any saved
     draft and push it to the server via compose_changed event. On compose_reset, delete the draft."
 
+    #{experiment_surface_notice}
     Aim for 3–7 total stages. Submit with plan_submit. Do not begin implementation until approved.
 
     The attention signal includes a `context` field with the full task hierarchy: project (name,

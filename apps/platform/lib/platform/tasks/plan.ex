@@ -106,7 +106,15 @@ defmodule Platform.Tasks.Plan do
   # Public accessor because a
   # guard that hardcodes its own copy of a list is how the class comes
   # back (member 4's rule); stage 4's tool boundary reads this.
-  @architecture_constraints ~w(module_boundary data_model cross_context_coupling duplicated_logic)
+  #
+  # `experiment_surface` (task 01a0d41e, ADR-0046 Amendment 2) is the one
+  # value with a narrower trigger than "expensive to undo": a LARGE
+  # feature that adds a measurable decision point and never considers an
+  # experiment surface. The three-condition rule lives in the
+  # `architecture.review_plan.v1` prompt, not here — this list only
+  # closes the vocabulary, for BOTH architect surfaces (plan verdict and
+  # stage audit).
+  @architecture_constraints ~w(module_boundary data_model cross_context_coupling duplicated_logic experiment_surface)
 
   # The closed set of CHANNELS a verdict can arrive through. See the
   # moduledoc section — these name the way in, never the outcome, and

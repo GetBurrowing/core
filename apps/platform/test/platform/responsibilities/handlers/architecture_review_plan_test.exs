@@ -875,6 +875,19 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       refute system =~ "additive"
       refute system =~ "do not block plan approval"
     end
+
+    # Task 01a0d41e. The system slot used to hand-list the four literals.
+    # It now derives the list and its count from the accessor, so it must
+    # not carry a hardcoded count that the next value would falsify.
+    test "system slot names experiment_surface and states the count it derives", %{
+      context: context
+    } do
+      {:ok, %{system: system}} = ArchitectureReviewPlan.build_prompt(context)
+
+      assert system =~ "experiment_surface"
+      assert system =~ "one of the 5 closed constraint values"
+      refute system =~ ~r/\bfour\b/i
+    end
   end
 
   # ── handle_output/3 ───────────────────────────────────────────────────────
@@ -1090,6 +1103,25 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
       verdict = verdict_row(ctx.plan.id)
       assert verdict["state"] == "rejected"
       assert [%{"constraint" => "module_boundary"}] = verdict["findings"]
+    end
+
+    # Task 01a0d41e. The second verdict surface checks the same accessor
+    # (`handle_output` drops a finding outside it). LITERAL, so removing
+    # the value from `Plan.architecture_constraints/0` turns this red: the
+    # finding is dropped and the gate falls open to `dispatch_failed`.
+    test "a reject citing \"experiment_surface\" resolves the gate as rejected", ctx do
+      output =
+        ~s({"verdict":"reject","summary":"Large feature, no experiment consideration.","findings":[{"stage_id":"#{ctx.stage.id}","constraint":"experiment_surface","detail":"Stage 1 hardcodes the ranking threshold; declare it as an experiment surface so click-through can be compared."}]})
+
+      assert :ok =
+               ArchitectureReviewPlan.handle_output(responsibility(), output, %{
+                 task_id: ctx.task.id,
+                 plan_id: ctx.plan.id
+               })
+
+      verdict = verdict_row(ctx.plan.id)
+      assert verdict["state"] == "rejected"
+      assert [%{"constraint" => "experiment_surface"}] = verdict["findings"]
     end
 
     # THE CLOSED VOCABULARY, ON THE SECOND SURFACE. The tool refuses a
@@ -1405,6 +1437,73 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlanTest do
 
       assert :ok = apply(@migration_module, :up, [])
       assert is_nil(PromptTemplates.get_template_by_slug("architecture.review_plan.v1"))
+    end
+  end
+
+  # ── task 01a0d41e: the experiment_surface force-update reaches live rows ──
+
+  describe "20260924170000_force_update_architect_templates_experiment_surface" do
+    @es_migration_path Path.join([
+                         __ENV__.file
+                         |> Path.dirname()
+                         |> Path.dirname()
+                         |> Path.dirname()
+                         |> Path.dirname()
+                         |> Path.dirname(),
+                         "priv/repo/migrations/20260924170000_force_update_architect_templates_experiment_surface.exs"
+                       ])
+
+    @es_migration_module Platform.Repo.Migrations.ForceUpdateArchitectTemplatesExperimentSurface
+
+    setup do
+      unless Code.ensure_loaded?(@es_migration_module) do
+        Code.require_file(@es_migration_path)
+      end
+
+      :ok = PromptTemplates.seed_defaults()
+      :ok
+    end
+
+    test "overwrites both architect rows still carrying the four-constraint body" do
+      stale = "Four things, and only these four."
+
+      for slug <- ["architecture.review_plan.v1", "architecture.audit_diff.v1"] do
+        template = PromptTemplates.get_template_by_slug(slug)
+        assert template, "seed_defaults/0 should have created #{slug}"
+
+        {:ok, _} =
+          PromptTemplates.update_template(template, %{content: stale, description: "four"})
+      end
+
+      assert :ok = apply(@es_migration_module, :up, [])
+
+      review = PromptTemplates.get_template_by_slug("architecture.review_plan.v1")
+      assert review.content =~ "experiment_surface"
+      assert review.content =~ "not experimentable because"
+      assert review.description =~ "experiment_surface"
+
+      audit = PromptTemplates.get_template_by_slug("architecture.audit_diff.v1")
+      assert audit.content =~ "experiment_surface"
+      refute audit.content == stale
+
+      # INSERT-only seed: re-seeding does not repair a stale row, which is
+      # the whole reason the migration exists.
+      {:ok, _} = PromptTemplates.update_template(review, %{content: stale})
+      :ok = PromptTemplates.seed_defaults()
+      assert PromptTemplates.get_template_by_slug("architecture.review_plan.v1").content == stale
+    end
+
+    test "skips cleanly when the rows do not exist" do
+      for slug <- ["architecture.review_plan.v1", "architecture.audit_diff.v1"] do
+        case PromptTemplates.get_template_by_slug(slug) do
+          nil -> :ok
+          template -> {:ok, _} = PromptTemplates.delete_template(template)
+        end
+      end
+
+      assert :ok = apply(@es_migration_module, :up, [])
+      assert is_nil(PromptTemplates.get_template_by_slug("architecture.review_plan.v1"))
+      assert is_nil(PromptTemplates.get_template_by_slug("architecture.audit_diff.v1"))
     end
   end
 

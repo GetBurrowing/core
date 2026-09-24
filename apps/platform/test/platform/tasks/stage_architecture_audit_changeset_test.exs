@@ -435,6 +435,37 @@ defmodule Platform.Tasks.StageArchitectureAuditChangesetTest do
       end
     end
 
+    # Task 01a0d41e. One vocabulary for both architect surfaces
+    # (`stage.ex` `validate_audit_finding/2` reads the same accessor), so
+    # the value the plan verdict gained is a legal audit finding too.
+    # LITERAL: the loop above cannot see the value disappear.
+    test "accepts an \"experiment_surface\" finding; the near-miss \"experiment\" is rejected",
+         ctx do
+      accepted =
+        Stage.architecture_audit_changeset(ctx.stage, %{
+          architecture_audit: %{
+            pending_audit(ctx)
+            | "findings" => [
+                finding(
+                  "experiment_surface",
+                  "The stage hardcodes the threshold the plan declared as a surface; read it from the surface."
+                )
+              ]
+          }
+        })
+
+      assert accepted.valid?
+
+      near_miss =
+        Stage.architecture_audit_changeset(ctx.stage, %{
+          architecture_audit: %{pending_audit(ctx) | "findings" => [finding("experiment")]}
+        })
+
+      refute near_miss.valid?
+      assert [msg | _] = errors_on(near_miss).architecture_audit
+      assert msg =~ "invalid constraint"
+    end
+
     # VACUITY CONTROL H, RUN — short-circuited the blank check so any
     # detail passes: 1/17 failed, this one, inside the
     # `for blank <- ["", "   ", "\\n"]` loop. A whitespace-only detail is

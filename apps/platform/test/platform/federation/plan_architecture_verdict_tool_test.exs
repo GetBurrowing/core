@@ -238,6 +238,70 @@ defmodule Platform.Federation.PlanArchitectureVerdictToolTest do
         assert verdict_state(gated) == "rejected"
       end
     end
+
+    # Task 01a0d41e. LITERAL on purpose: the loop above iterates the
+    # accessor, so it keeps passing when `experiment_surface` is removed
+    # from it. This test names the string and goes red when it is.
+    test "\"experiment_surface\" is accepted, rejects the plan, and the reason counts 5 constraints",
+         %{project: project} do
+      {_task, gated, stage} = gated_fixture(project)
+
+      assert {:ok, result} =
+               call(
+                 reject_args(gated, stage, %{
+                   "findings" => [
+                     %{
+                       "stage_id" => stage.id,
+                       "constraint" => "experiment_surface",
+                       "detail" =>
+                         "Stage 1 hardcodes the summariser model; declare it as an experiment surface so digest open rate can be compared."
+                     }
+                   ]
+                 })
+               )
+
+      assert result.state == "rejected"
+      assert verdict_state(gated) == "rejected"
+      assert [%{"constraint" => "experiment_surface"}] = stored_verdict(gated)["findings"]
+
+      reloaded = Repo.get!(Plan, gated.id)
+      assert reloaded.status == "rejected"
+      assert reloaded.rejection_reason =~ "experiment_surface"
+      assert reloaded.rejection_reason =~ "one of the 5 architecture constraints"
+    end
+
+    # POSITIVE CONTROL for the test above: the closed set did not become a
+    # prefix match. The near-misses a model is likeliest to write are still
+    # refused, the gate stays pending, and the refusal lists all five.
+    test "the near-misses \"experiment\" and \"experimentation\" are still refused",
+         %{project: project} do
+      {_task, gated, stage} = gated_fixture(project)
+
+      for near_miss <- ["experiment", "experimentation"] do
+        assert {:error, refusal} =
+                 call(
+                   reject_args(gated, stage, %{
+                     "findings" => [
+                       %{
+                         "stage_id" => stage.id,
+                         "constraint" => near_miss,
+                         "detail" => "Declare the model as an experiment surface."
+                       }
+                     ]
+                   })
+                 )
+
+        assert refusal.code == :invalid_constraint
+
+        for allowed <-
+              ~w(module_boundary data_model cross_context_coupling duplicated_logic experiment_surface) do
+          assert refusal.error =~ allowed
+        end
+
+        assert verdict_state(gated) == "pending"
+        assert Tasks.architecture_gate_open?(gated)
+      end
+    end
   end
 
   # ── GUARD: an unactionable reject cannot be sent ──────────────────────

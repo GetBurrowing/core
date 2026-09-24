@@ -313,6 +313,40 @@ Each interacts differently with decision 8's replacement rule and with its state
 
 ---
 
+## Amendment 2 — experiment_surface (2026-09-24, task 01a0d41e)
+
+The closed architect vocabulary in `### Architect prompt contract` gains a fifth value, `experiment_surface`. Its trigger is narrower than the other four. They share one test, *expensive to undo later*. This one names a missing consideration: a large feature adds a tunable decision point, and nobody asked whether it should be measurable. Experiment surfaces themselves are defined by `0048-experimentation-substrate.md`, and task 01a0d415 is extending them. This amendment does not touch that ADR, `lib/platform/experiments/**` or any surface registry. It only lets the architect say a surface was never considered.
+
+### 1. One vocabulary, both surfaces
+
+`Platform.Tasks.Plan.architecture_constraints/0` stays the only definition of the list. Both architect surfaces read it: the plan verdict (`plan_architecture_verdict` and the `handle_output` path) and the stage audit (`stage_architecture_audit` and `Stage.architecture_audit_changeset/2`). So `experiment_surface` is also a legal stage-audit finding. At diff time it applies only when the shipped stage hardcodes a decision point that the plan declared as a surface. Every prompt and tool description that names the vocabulary or its size derives both from the accessor, except the prompt's per-value bullet list, which is prose by nature and is pinned by tests that loop over the accessor.
+
+### 2. The three-condition rule
+
+The architect may reject with `experiment_surface` only when all three of these hold:
+
+1. **The plan is a large feature.** The sibling-task block reads `[scope: stack]`, or the plan has 3 or more stages, or it adds a new user-visible capability.
+2. **It introduces a decision point with a plausible measurable outcome**: a model, prompt, budget, threshold or generator.
+3. **Nothing considers it.** Neither the task intent nor any stage mentions an experiment surface or an experimental consideration, and none explicitly argues why none applies.
+
+The finding's `detail` must name the decision point **and** the metric it would move. The prompt enforces this, not code. The verdict tool checks only that `detail` is non-blank, and a semantic check on free text would be a second classifier nobody asked for.
+
+### 3. Exclusions
+
+The value is never used for bug fixes, refactors or infra/config changes. It is also never used for a plan that already declares a surface or gives any explicit "not experimentable because ..." reason. **The architect does not grade the quality of that reason.** Disagreement goes in `summary` with a pass. A reject over a judgement call about a stated reason is one the planner cannot resolve by changing structure. Under the rejection streak, that turns into a replan loop and then an escalation. The architect also remains the first of four gates, so the costs of a wrong reject and a wrong pass are no more symmetric here than anywhere else.
+
+### 4. The absence rule
+
+The architect's plan summary is truncated. `responsibilities/context_providers.ex` cuts each stage description at 600 characters and the task intent at 1200 (`String.slice/3`, so graphemes, not bytes), and truncated text ends in `…`. Condition 3 is a claim of absence, and absence read from a truncated copy is not evidence. Before rejecting for absence, the architect reads the full plan with `plan_get`, which is in the same `plan` bundle as the verdict tool. Planners are asked to put the declaration in the first line of stage 1, where it survives the cut. If the architect cannot read the full plan, it passes and says so.
+
+### 5. Why a prompt-only change fails
+
+Teaching the rule in the prompt without widening the vocabulary does not produce a weak version of the feature. It produces **none**. The closed set is enforced at the tool boundary (`validate_verdict_finding/2`), so a reject citing `experiment_surface` is refused with `invalid_constraint`. A refused verdict does not resolve the gate: the plan stays at `pending_review` and the deadline keeps running. When the deadline expires, the gate **falls open** (decision 7) and the plan proceeds with no verdict. An architect following the prompt would turn every correct `experiment_surface` finding into an expired gate. That is the same outcome as no review, and it looks like an unresponsive architect. The vocabulary and the prompt have to change together.
+
+The template bodies reach existing deployments through `20260924170000_force_update_architect_templates_experiment_surface.exs`, because `seed_defaults/0` only inserts.
+
+---
+
 ## Implementation order
 
 1. Fix `fire_trigger/3` return contract *(prerequisite)*

@@ -3274,6 +3274,47 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       refute content =~ "does NOT block plan approval"
     end
 
+    # Task 01a0d41e, ADR-0046 Amendment 2. LITERAL assertions: the loop in
+    # the test above iterates the accessor and so cannot tell whether the
+    # prompt teaches the RULE, only whether it names the value.
+    test "content teaches the experiment_surface three-condition rule" do
+      content = PromptTemplates.default_content_for_slug("architecture.review_plan.v1")
+      flat = String.replace(content, ~r/\s+/, " ")
+
+      assert flat =~ "## experiment_surface: a large feature with no experiment consideration"
+      assert flat =~ "ONLY when ALL THREE of these hold"
+      assert flat =~ "[scope: stack]"
+      assert flat =~ "3 or more stages"
+      assert flat =~ "decision point"
+      assert flat =~ "metric"
+      assert flat =~ "enforced by this prompt, not by code"
+      assert flat =~ "not experimentable because"
+      assert flat =~ "Do not grade the quality of that reason"
+      assert flat =~ "plan_get"
+      assert flat =~ ~s("detail": "needs an experiment")
+
+      # The fast pass survives, amended rather than deleted.
+      assert flat =~ "Bias toward pass"
+      assert flat =~ "no new module, no new context, no new table"
+
+      # No count of the constraints survives to be falsified by the next value.
+      refute flat =~ "Four things, and only these four"
+      refute flat =~ "one of the four constraints"
+      refute flat =~ "one of the four listed above"
+    end
+
+    test "descriptor description derives the constraint count and list" do
+      descriptor =
+        Enum.find(
+          PromptTemplates.default_templates(),
+          &(&1.slug == "architecture.review_plan.v1")
+        )
+
+      assert descriptor.description =~ "the 5 closed `constraint` values"
+      assert descriptor.description =~ "experiment_surface"
+      refute descriptor.description =~ ~r/\bfour\b/
+    end
+
     test "seed_defaults seeds architecture.review_plan.v1 into the DB" do
       :ok = PromptTemplates.seed_defaults()
 
@@ -3336,6 +3377,19 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       # "dispatch fires" across a newline).
       assert content =~ "reviewer" and
                (content =~ "dispatch fires" or content =~ "does NOT block")
+    end
+
+    # Task 01a0d41e. The audit enumeration is derived from the accessor, so
+    # this is LITERAL: it goes red if the value leaves the accessor, and it
+    # pins the one diff-time clause that narrows it.
+    test "content lists experiment_surface with its diff-time clause" do
+      flat =
+        "architecture.audit_diff.v1"
+        |> PromptTemplates.default_content_for_slug()
+        |> String.replace(~r/\s+/, " ")
+
+      assert flat =~ "`experiment_surface`"
+      assert flat =~ "hardcodes a decision point that the plan declared as an experiment surface"
     end
 
     test "seed_defaults seeds architecture.audit_diff.v1 into the DB" do

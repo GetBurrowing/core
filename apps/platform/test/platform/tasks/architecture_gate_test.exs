@@ -375,7 +375,7 @@ defmodule Platform.Tasks.ArchitectureGateTest do
                ~w(pending passed rejected expired dispatch_failed human_override)
 
       assert Plan.architecture_constraints() ==
-               ~w(module_boundary data_model cross_context_coupling duplicated_logic)
+               ~w(module_boundary data_model cross_context_coupling duplicated_logic experiment_surface)
     end
   end
 

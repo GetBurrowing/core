@@ -2970,8 +2970,10 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "Return the architect's verdict on a plan whose architecture gate is open (ADR-0046). " <>
             "The plan is HELD at pending_review until this call lands or the gate deadline expires. " <>
-            "Reject ONLY for one of the four closed constraint values — module_boundary, data_model, " <>
-            "cross_context_coupling, duplicated_logic. There is no representable value for a taste, " <>
+            "Reject ONLY for one of the #{length(Plan.architecture_constraints())} closed constraint values — " <>
+            "#{Enum.join(Plan.architecture_constraints(), ", ")}. `experiment_surface` applies only to a " <>
+            "LARGE feature that adds a measurable decision point and never considers an experiment " <>
+            "surface; its `detail` must name the decision point and the metric. There is no representable value for a taste, " <>
             "naming or style objection: say it in `summary` and pass.",
         parameters: %{
           plan_id: %{
@@ -3012,7 +3014,7 @@ defmodule Platform.Federation.ToolSurface do
             "`missing_summary` (summary absent or blank), " <>
             "`missing_findings` (verdict \"reject\" with no findings), " <>
             "`malformed_finding` (a finding is not an object, or its `detail` is blank), " <>
-            "`invalid_constraint` (a finding's `constraint` is outside the four allowed values — " <>
+            "`invalid_constraint` (a finding's `constraint` is outside the #{length(Plan.architecture_constraints())} allowed values — " <>
             "this is where a style objection is refused), " <>
             "`foreign_stage_id` (a finding's `stage_id` is present but is not a stage of this plan — " <>
             "note an ABSENT or null `stage_id` is not an error, it is a plan-level finding), " <>
@@ -3072,7 +3074,7 @@ defmodule Platform.Federation.ToolSurface do
           "Refusals carry a `code`: `stage_not_found` (unknown stage_id), " <>
             "`missing_summary` (summary absent or blank), " <>
             "`malformed_finding` (a finding is not an object, or its `detail` is blank), " <>
-            "`invalid_constraint` (a finding's `constraint` is outside the four allowed " <>
+            "`invalid_constraint` (a finding's `constraint` is outside the #{length(Plan.architecture_constraints())} allowed " <>
             "values — this is where a style objection is refused), " <>
             "`audit_not_open` (no audit fire was ever recorded for this stage — nothing " <>
             "is waiting on you), " <>
@@ -13039,7 +13041,7 @@ defmodule Platform.Federation.ToolSurface do
       :invalid_verdict,
       "verdict must be \"pass\" or \"reject\" (got #{inspect(verdict)}).",
       true,
-      "There is no third value. If you have a concern that is not one of the four architectural constraints, pass and put it in `summary`."
+      "There is no third value. If you have a concern that is not one of the #{length(Plan.architecture_constraints())} architectural constraints, pass and put it in `summary`."
     )
   end
 

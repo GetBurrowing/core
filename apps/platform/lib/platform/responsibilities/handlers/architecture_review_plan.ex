@@ -306,12 +306,20 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   def build_prompt(context) when is_map(context) do
     user = render_instruction(context)
 
+    # The vocabulary and its count are READ from the accessor, never
+    # re-listed. Until task 01a0d41e this slot carried a hand-written copy
+    # of the four literals, which would have kept telling the architect
+    # "four" after the tool started accepting a fifth.
+    constraints = Plan.architecture_constraints()
+
     system =
       "You are the Architect on the Suite plan-review path (ADR-0044, gated by " <>
         "ADR-0046). The plan is HELD at `pending_review` until you return a verdict, " <>
         "and you must return one: `pass` or `reject`, via `plan_architecture_verdict`. " <>
-        "Reject ONLY for `module_boundary`, `data_model`, `cross_context_coupling` or " <>
-        "`duplicated_logic` — never for taste, naming or style. Bias toward pass; a " <>
+        "Reject ONLY for one of the #{length(constraints)} closed constraint values — " <>
+        Enum.map_join(constraints, ", ", &"`#{&1}`") <>
+        " — never for taste, naming or style. `experiment_surface` carries a narrower " <>
+        "three-condition rule, stated in the instructions below. Bias toward pass; a " <>
         "wrong reject costs a full replan cycle, a wrong pass still has the human " <>
         "reviewer, the reviewing agent and CI behind it. Cite tasks by id and ADRs by " <>
         "FILENAME — `docs/decisions/` reuses numbers across different ADRs, so a number " <>

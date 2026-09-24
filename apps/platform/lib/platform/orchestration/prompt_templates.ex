@@ -475,6 +475,57 @@ defmodule Platform.Orchestration.PromptTemplates do
   @spec planning_no_ack_notice() :: String.t()
   def planning_no_ack_notice, do: @planning_no_ack_notice
 
+  # The planner's half of the architect's `experiment_surface` constraint
+  # (task 01a0d41e stage 2, ADR-0046 Amendment 2). Same single-source shape
+  # as `@planning_no_ack_notice`: the `dispatch.planning` descriptor and
+  # `HeartbeatScheduler.hardcoded_dispatch_planning/4` both interpolate it,
+  # so the two routes cannot drift. No mustache placeholders.
+  @planning_experiment_surface_notice """
+  ## Experiment surface (large features only)
+
+  If this task is a LARGE FEATURE (a stack member, a plan of 3 or more stages, or a new user-visible capability) AND it introduces a decision point with a measurable outcome (a model, prompt, budget, threshold or generator), make the FIRST LINE of stage 1's description one of:
+
+  - `Experiment surface: <decision point>, variants configurable as data; metric: <what it moves>`
+  - `Not experimentable because: <reason>`
+
+  The architect rejects a large-feature plan that does neither, with constraint `experiment_surface`. Bug fixes, refactors and infra/config changes are exempt and need no line. Surfaces are defined in `0048-experimentation-substrate.md` (being extended by task 01a0d415).
+
+  Why the FIRST line: the architect reviews a plan summary that truncates each stage description to its first 600 characters. A declaration placed later in a stage can be cut away, and the plan then reads as having none.
+  """
+
+  @doc """
+  The planning dispatch's experiment-surface instruction (task 01a0d41e).
+
+  Shared by the `dispatch.planning` template body and the hardcoded
+  planning fallback in `HeartbeatScheduler` so the two routes stay
+  byte-identical. It is the planner-side counterpart of the architect's
+  `experiment_surface` constraint in `Platform.Tasks.Plan.architecture_constraints/0`.
+  """
+  @spec planning_experiment_surface_notice() :: String.t()
+  def planning_experiment_surface_notice, do: @planning_experiment_surface_notice
+
+  # Operator guidance first written straight into the live `dispatch.planning`
+  # row on 2026-09-10 (prompt_template_update, updated_by `dalton`) and never
+  # carried into this descriptor. Task 01a0d41e stage 2 found it while reading
+  # the live rows before a force-update, which would otherwise have deleted it
+  # on both installs. Folded in byte-for-byte from the live row (fabrikam and milv
+  # identical) and shared with `HeartbeatScheduler.hardcoded_dispatch_planning/4`
+  # like the notices above. Edit it HERE; a row-only edit is lost to the next
+  # force-update migration for this slug.
+  @planning_ci_evidence_section """
+  ## CI evidence: what actually triggers a run (verified 2026-09-11)
+
+  `.github/workflows/ci.yml` on Startup-Suite/core triggers on `push` to `main`, `feat/**` and `stack/**`, and on `pull_request`. A push to `task/<uuid>` never starts a CI run. So a stage whose evidence is "a concluded CI run id on the task branch" cannot be satisfied until a pull request exists from that branch; the deploy stage opens the real PR, so if an implementation stage needs CI runs before deploy, say in the stage description that the executor opens a DRAFT PR from the task branch (not marked ready, auto-merge not armed) to obtain them. Local test evidence comes from the executor's own rig, not from CI: for Rowan-owned agents that is moon per the `moon-test-rig-for-suite-core` skill (from hive `~/cron/moon-mix-test.sh <branch> -- <paths>`; from any other Rowan-owned box `ssh dev@build-host.local /srv/dev/bin/core-test.sh <branch> -- <paths>`, since the hive wrapper does not exist elsewhere); for other runtimes their own rig; never hive. Name the rig by runtime in stage text, not by one script path. Also: consecutive pushes within a minute supersede each other's runs (each run concludes `cancelled`), so controls that need concluded runs must be pushed one at a time and watched to conclusion.
+  """
+
+  @doc """
+  The `## CI evidence: what actually triggers a run` section of the planning
+  dispatch. Shared by the `dispatch.planning` descriptor and the hardcoded
+  planning fallback so the two routes stay byte-identical.
+  """
+  @spec planning_ci_evidence_section() :: String.t()
+  def planning_ci_evidence_section, do: @planning_ci_evidence_section
+
   # Federation preamble — canonical block of Claude Code guidance that used
   # to be duplicated across every dispatch template (task 019f5e2a stage 1
   # of the meeting-to-tasks-pipeline stack). Consolidates six sections that
@@ -802,6 +853,8 @@ defmodule Platform.Orchestration.PromptTemplates do
   defp do_default_templates do
     task_ack_preamble = @task_ack_preamble
     planning_no_ack_notice = @planning_no_ack_notice
+    planning_experiment_surface_notice = @planning_experiment_surface_notice
+    planning_ci_evidence_section = @planning_ci_evidence_section
 
     # NOTE (task 01a01041 stage 2): a `skills_reference = "## Skill discovery …"`
     # local used to be built here and never interpolated, which the compiler
@@ -900,6 +953,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         This rule applies to itself: a planner that reads it and does not restate the ticket's binding constraints inside its stage descriptions has already lost them.
 
+        #{planning_ci_evidence_section}
         ## Validation kinds
 
         Per-stage validations (attach to the implementation stage they protect):
@@ -964,6 +1018,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         4. Keep the screenshot-canvas evidence instruction on UI-rendering stages (no `manual_approval` — planners never create one); the design stage is additive, not a replacement.
 
+        #{planning_experiment_surface_notice}
         Submit the plan with plan_submit when complete. Do not begin implementation until the plan is approved.
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
@@ -1908,9 +1963,10 @@ defmodule Platform.Orchestration.PromptTemplates do
           "Sent to the architect agent when a plan is submitted for review (ADR-0044, " <>
             "gated by ADR-0046). The plan is HELD at `pending_review` until the architect " <>
             "returns a verdict through `plan_architecture_verdict` or the gate deadline " <>
-            "expires (silence falls open). Rejection is limited to the four closed " <>
-            "`constraint` values — module_boundary, data_model, cross_context_coupling, " <>
-            "duplicated_logic — and explicitly not to taste, naming or style.",
+            "expires (silence falls open). Rejection is limited to the " <>
+            "#{length(Platform.Tasks.Plan.architecture_constraints())} closed `constraint` " <>
+            "values — #{Enum.join(Platform.Tasks.Plan.architecture_constraints(), ", ")} — " <>
+            "and explicitly not to taste, naming or style.",
         variables: [
           "plan_summary",
           "sibling_tasks",
@@ -1926,8 +1982,8 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         ## Reject only for what is expensive to undo later
 
-        Four things, and only these four. They are the exact `constraint` values the
-        verdict tool accepts:
+        These things, and only these. They are the exact `constraint` values the verdict
+        tool accepts:
 
         - `module_boundary` — the plan puts code on the wrong side of a module boundary,
           or invents a boundary that already exists somewhere else.
@@ -1937,9 +1993,45 @@ defmodule Platform.Orchestration.PromptTemplates do
           internals instead of going through its public surface.
         - `duplicated_logic` — the plan builds a second implementation of something that
           already exists, or that a sibling task listed below is building right now.
+        - `experiment_surface` — a LARGE feature adds a decision point with a measurable
+          outcome and never considers an experiment surface. Its rule is narrower than
+          the others: all three conditions in its own section below must hold.
 
         Every one of these is cheap to change while the plan is text and expensive to
         change after the code lands. That is the whole test.
+
+        ## experiment_surface: a large feature with no experiment consideration
+
+        Reject with `experiment_surface` ONLY when ALL THREE of these hold. Two of three
+        is a pass.
+
+        1. **The plan is a LARGE FEATURE.** The sibling-task block below reads
+           `[scope: stack]`, OR the plan has 3 or more stages, OR it adds a new
+           user-visible capability.
+        2. **It introduces a decision point with a plausible measurable outcome** — a
+           model, a prompt, a budget, a threshold or a generator — where another value
+           would plausibly move a number somebody watches.
+        3. **Nothing in the plan considers it.** Neither the task intent nor any stage
+           mentions an experiment surface or an experimental consideration, or explicitly
+           argues why none applies.
+
+        The finding's `detail` MUST name the decision point AND the metric it would move.
+        This is enforced by this prompt, not by code — the verdict tool accepts any
+        non-blank `detail` — so the check is yours. If you cannot name both, you do not
+        have a finding.
+
+        NEVER use `experiment_surface` for a bug fix, a refactor, or an infra/config
+        change. NEVER use it for a plan that already declares a surface, or that gives ANY
+        explicit "not experimentable because ..." reason. Do not grade the quality of that
+        reason: if you disagree with it, say so in `summary` and pass. A reject over a
+        judgement call is one the planner cannot resolve, and the replan loop escalates.
+
+        **Check absence against the FULL plan.** The plan summary below is truncated:
+        stage descriptions and the task intent are cut at a fixed length, and truncated
+        text ends in `…`. Planners are asked to put the declaration in the first line of
+        stage 1, but it can still sit past the cut. Before rejecting for ABSENCE, read the
+        full plan with `plan_get` and confirm the declaration really is missing. If you
+        cannot read the full plan, pass and say so in `summary`.
 
         ## Explicitly NOT for taste, naming, or stylistic preference
 
@@ -1955,9 +2047,15 @@ defmodule Platform.Orchestration.PromptTemplates do
         A one-line fix, a copy change, a config value, a hotfix: **pass it.**
 
         Concretely: when the plan introduces no new module, no new context, no new table
-        and no new cross-context call, **pass** — unless one of the four constraints
-        above is CONCRETELY violated and you can name the stage where it happens. If you
-        cannot name the stage, you do not have a finding; you have a feeling. Pass.
+        and no new cross-context call, **pass** — unless one of the constraints above is
+        CONCRETELY violated and you can name the stage where it happens. If you cannot
+        name the stage, you do not have a finding; you have a feeling. Pass.
+
+        The one exception to that structural test is `experiment_surface`: a large
+        feature can add no module and no table and still add an unconsidered decision
+        point, so for it the three conditions in its section are the test. The fast pass
+        still covers everything small — a one-line fix, a copy change, a config value or
+        a hotfix is never a large feature.
 
         Bias toward pass, and here is why the costs are not symmetric: a wrong reject
         costs a full replan cycle — the planner rewrites, resubmits, and you review it
@@ -1967,7 +2065,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         ## Also report — but do not usually reject
 
         These three go in `summary`. Escalate one to a `reject` **only** when it crosses
-        one of the four constraints above; a collision with a sibling task is information
+        one of the constraints above; a collision with a sibling task is information
         for the human reviewer, not automatically an architectural fault.
 
         1. **In-flight collisions** (`collision`). Does this plan touch a file or
@@ -2022,7 +2120,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         several stages with no single one at fault. Such a finding reaches the planner
         labelled `(plan-wide)`. Do NOT downgrade a plan-level architectural objection to
         a `pass` with a note in `summary` — `summary` is not a rejection, the plan
-        proceeds, and the defect ships. If it is one of the four constraints, reject with
+        proceeds, and the defect ships. If it is one of the constraints above, reject with
         a stage-less finding.
 
         A `detail` states WHAT TO CHANGE, not what is wrong. Good:
@@ -2050,7 +2148,20 @@ defmodule Platform.Orchestration.PromptTemplates do
         than better. If you cannot say what to change, you are not rejecting — you are
         commenting, and comments go in `summary` with a `pass`.
 
-        A `reject` whose `constraint` is not one of the four listed above is REFUSED at
+        An `experiment_surface` finding, good — it names the decision point and the metric:
+
+        ```json
+        {
+          "constraint": "experiment_surface",
+          "detail": "Stages 2-4 add the meeting-digest feature and stage 2 hardcodes the summariser model and its 4k-token budget; no stage mentions an experiment surface. Declare the model and budget as an experiment surface (or state why it is not experimentable) so digest open rate and cost per digest can be compared across variants."
+        }
+        ```
+
+        Bad — `{"constraint": "experiment_surface", "detail": "needs an experiment"}`. It
+        names no decision point and no metric, so the planner cannot tell what to expose
+        or what it would be measured by.
+
+        A `reject` whose `constraint` is not one of the values listed above is REFUSED at
         the tool boundary, as is a finding whose `stage_id` is PRESENT but does not
         belong to this plan. An omitted `stage_id` is accepted — it is how you say
         "plan-wide" — so never invent or guess an id to satisfy the shape.
@@ -2237,9 +2348,12 @@ defmodule Platform.Orchestration.PromptTemplates do
         "no drift, no new deps, no memory-pattern reintroduction" so Rowan sees the
         architect ran and had nothing to flag. Silence is ambiguous; an explicit clean
         result is not. `findings` is OPTIONAL — omit it entirely on a clean stage. Each
-        finding's `constraint` must be one of `module_boundary`, `data_model`,
-        `cross_context_coupling`, `duplicated_logic`; there is deliberately no value for a
-        taste, naming or style objection, so say that in `summary` instead. Each `detail`
+        finding's `constraint` must be one of
+        #{Enum.map_join(Platform.Tasks.Plan.architecture_constraints(), ", ", &"`#{&1}`")};
+        there is deliberately no value for a taste, naming or style objection, so say that
+        in `summary` instead. At diff time `experiment_surface` applies only when the
+        shipped stage hardcodes a decision point that the plan declared as an experiment
+        surface. Each `detail`
         must state WHAT TO CHANGE, not merely what is wrong.
 
         The tool posts your annotation to the task's execution space AND records the audit
