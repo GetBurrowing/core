@@ -1466,6 +1466,70 @@ defmodule Platform.Tasks.TaskTest do
       end
     end
 
+    # Task 01a0cf21 stage 6: an email config must name its account, sender
+    # key and at least one recipient — a config missing any of them could
+    # only fail at deploy time, so it is refused at write time.
+    test "changeset accepts a complete email config", %{project: project} do
+      for recipients <- [
+            %{"recipients" => ["a@example.test"]},
+            %{"recipient_user_ids" => [Ecto.UUID.generate()]}
+          ] do
+        config =
+          Map.merge(
+            %{
+              "strategy" => "email",
+              "account_id" => Ecto.UUID.generate(),
+              "sender_key" => "reports",
+              "subject" => "Weekly"
+            },
+            recipients
+          )
+
+        changeset =
+          Task.changeset(%Task{}, %{
+            project_id: project.id,
+            title: "Email deploy",
+            deploy_target_config: config
+          })
+
+        assert changeset.valid?, inspect(errors_on(changeset))
+      end
+    end
+
+    test "changeset refuses an email config missing account, sender key or recipients",
+         %{project: project} do
+      complete = %{
+        "strategy" => "email",
+        "account_id" => Ecto.UUID.generate(),
+        "sender_key" => "reports",
+        "recipients" => ["a@example.test"]
+      }
+
+      for broken <- [
+            Map.delete(complete, "account_id"),
+            Map.put(complete, "account_id", ""),
+            Map.delete(complete, "sender_key"),
+            Map.put(complete, "sender_key", "  "),
+            Map.delete(complete, "recipients"),
+            Map.put(complete, "recipients", []),
+            Map.put(complete, "recipients", [""]),
+            Map.put(complete, "recipients", "a@example.test"),
+            Map.put(complete, "subject", 42),
+            %{"strategy" => "email"}
+          ] do
+        changeset =
+          Task.changeset(%Task{}, %{
+            project_id: project.id,
+            title: "Broken email deploy",
+            deploy_target_config: broken
+          })
+
+        refute changeset.valid?, "expected #{inspect(broken)} to be refused"
+        assert %{deploy_target_config: [msg]} = errors_on(changeset)
+        assert msg =~ "account_id"
+      end
+    end
+
     test "changeset accepts nil (default) explicitly", %{project: project} do
       changeset =
         Task.changeset(%Task{}, %{

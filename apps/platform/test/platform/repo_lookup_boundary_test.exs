@@ -311,6 +311,43 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/lifecycle/runs.ex", :get, "StepRun", 1, :safe_internal,
      "task 019fe1b6 stage 4 — `Runs.settle/2` resolves a run row to update it in place when a non-awaited step settles after its edge reported. The id is the `lifecycle_step_runs` PK exposed as `:run_id` on `Executor.run_edge/3`'s summary; every caller holds it because `record/1` returned it in the same process. It is deliberately UNGUARDED by `Platform.UUID.valid?/1`: the function's contract already answers `{:error, :not_found}` for an unknown id, and a guard would fold a malformed id into that same answer, hiding a caller bug as an ordinary miss. `Repo.get/2` on the strict `Platform.Types.UUIDv7` PK raises for a non-uuid, which is the louder and correct signal for a handle that can only come from this system"},
     # ── Meetings ───────────────────────────────────────────────────────
+    # ── Email module (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6) ──────
+    # Stages 1-3 landed these without classifying them; stage 4 records them
+    # together with its own `mailbox.ex` / `email_live.ex` sites.
+    {"platform/mail.ex", :get, "Account", 3, :safe_internal,
+     "two sit behind Platform.UUID.valid?/1 on the same value in the same `with` (`get_account/2` checks org_id AND id; `fetch_account_by_id/1`, the first step of `resolve_sender/3`, checks account_id, which arrives from a draft row or an MCP/deploy payload); the third, `authorize_manage/2`, reads `id` off an `%Account{}` struct the caller already loaded through one of those guarded getters — a `mail_accounts` UUIDv7 PK"},
+    {"platform/mail.ex", :get_by, "Sender", 2, :safe_internal,
+     "both keyed `account_id:` read off an already-loaded `%Account{}` struct (a `mail_accounts` PK) plus `key:`, a `:string` column that cannot raise a cast error; `fetch_sender/2` additionally requires `is_binary(key)` in its head"},
+    {"platform/mail.ex", :platform_uuid_guard, "-", 4, :safe_internal,
+     "`list_accounts/1` (org_id), `get_account/2` (org_id and id — two calls) and `fetch_account_by_id/1` (account_id): each guards a value that arrives from a LiveView param, a draft row or an MCP/deploy payload before it reaches `where:` or `Repo.get/2`, and folds a malformed one into the function's existing miss (`[]`, `nil`, `{:error, :account_not_found}`)"},
+    {"platform/mail/deliverer.ex", :get, "Delivery", 1, :safe_internal,
+     "`deliver/1`'s id is the `mail_deliveries` PK that `Dispatch.record/6` generated in-process with `Platform.Types.UUIDv7.generate/0` and committed before calling it — the send path's only caller, pinned by `single_sender_guard_test.exs`"},
+    {"platform/mail/deliverer.ex", :get!, "Account", 1, :safe_internal,
+     "`delivery.account_id` is a NOT NULL FK column read off the `%Delivery{}` row `deliver/1` just loaded, so it is a canonical uuid by construction; `get!` is deliberate — a delivery whose account row is gone is a broken invariant, and it raises inside the rescue envelope that records `failed`"},
+    {"platform/mail/deliverer.ex", :get_by, "Sender", 1, :safe_internal,
+     "keyed `account_id:` (the delivery row's NOT NULL FK column) and `key:` (the row's `sender_key`, a `:string` column) — both columns off a loaded `%Delivery{}`"},
+    {"platform/mail/dispatch.ex", :get, "Account", 1, :safe_internal,
+     "`rate_usage/1` reads `id` off an `%Account{}` struct its caller already loaded (the account card and the confirm pane both read it from `Platform.Mail.list_accounts/1` / `get_account/2`) — a `mail_accounts` UUIDv7 PK"},
+    {"platform/mail/dispatch.ex", :get, "Draft", 1, :safe_internal,
+     "`fetch_draft/1` guards the draft id with Platform.UUID.valid?/1 in the same `with` — the id arrives from a LiveView event or an agent tool call — and a malformed one returns `{:error, :draft_not_found}`"},
+    {"platform/mail/dispatch.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "`fetch_draft/1`'s guard, recorded above: `dispatch/3`'s draft_id is caller-supplied"},
+    {"platform/mail/drafts.ex", :platform_uuid_guard, "-", 12, :safe_internal,
+     "stage 5's draft writes and reads. Every id reaches this module from a boundary — the `mail_draft_create` / `mail_draft_update` MCP payload (org_id, draft_id, account_id, to_user_ids, on_behalf_of_user_id, task_id) or a LiveView `/email/drafts/:id` path segment — and each is guarded before it reaches `where:`: `get/2` (org_id and id — two calls), `org_people/1` (org_id), `agent_exists?/1` (the agent id off the caller's context), `fetch_org/1` (org_id), `fetch_draft/1` (draft_id), `check_on_behalf_of/2`, `check_task/2`, and the three batch readers `users_by_id/1`, `names_by_id/2`, `titles_by_id/1`, which drop a malformed id from the `in ^ids` list instead of raising. A malformed value becomes the function's existing miss (`nil`, `[]`, `{:error, :draft_not_found}`, a named refusal). Count 11 -> 12 with task 01a0cf21 stage 6: `system_stage_id/1` guards the `stage_id` `create_system/2` accepts from `Platform.Deploy.Email` (a `stages.id` PK off the injected deploy stage) before it is written to the draft, refusing a malformed one as `{:invalid, _}` rather than persisting it"},
+    {"platform/mail/inbound.ex", :get, "Space", 1, :safe_internal,
+     "`usable_space/1` is called only with `account.inbound_space_id`, a `belongs_to` FK column on the loaded `%Account{}`; the nil case has its own clause first"},
+    {"platform/mail/inbound.ex", :get!, "InboundMessage", 1, :safe_internal,
+     "`row.id` is the PK `ingest/5` generated with `Platform.Types.UUIDv7.generate/0` a few lines earlier and just inserted"},
+    {"platform/mail/inbound.ex", :get_by, "FolderCursor", 1, :safe_internal,
+     "keyed `account_id:` off the loaded `%Account{}` being polled and `folder:`, a `:string` column holding the IMAP folder name"},
+    {"platform/mail/inbound.ex", :get_by, "Participant", 1, :safe_internal,
+     "`space_id` is off a `%Space{}` `usable_space/1` just loaded; `participant_id` is built by `email_participant_id/1` from a sha256 hex digest formatted 8-4-4-4-12, so it is uuid-shaped by construction; `participant_type` is the literal \"system\""},
+    {"platform/mail/inbound/poller.ex", :get, "Account", 1, :safe_internal,
+     "the poller's `account_id` is its start arg, and both starters pass an `%Account{}` PK: `Inbound.sync_poller/1` (`account.id`) and `start_all_pollers/0` (ids off `Repo.all` of `mail_accounts`)"},
+    {"platform/mail/mailbox.ex", :platform_uuid_guard, "-", 10, :safe_internal,
+     "stage 4's Email module reads. The org id, account filter and message/project ids arrive from LiveView `params` (`?org=`, `?account=`, `/email/messages/:id`, the Add to files select) and each is guarded before it reaches `where:`: `inbound_query/2`, `deliveries_query/3`, `drafts_query/2`, `org_projects/1`, `org_channels/1` (org_id), `get_inbound/2` (org_id and id — two calls), `inbound_org_id/1` (id), `narrow_account/2` (account_id) and `fetch_org_project/2` (project_id). A malformed value narrows to nothing / nil rather than dropping the filter"},
+    {"platform_web/live/email_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "`account_param/1` guards the `?account=` query param before it becomes the account filter; a malformed value is dropped to nil (all accounts), and `Mailbox.narrow_account/2` guards it again at the query"},
     {"platform/meetings.ex", :platform_uuid_guard, "-", 19, :safe_internal,
      "cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups, resolve_agent/1, claim_router_dispatch/1 (019fa56b-c81f stage 2), whose transcript_id arrives inside a meeting:finished PubSub payload and must answer {:error, :no_such_transcript} rather than raise on the Router's dispatch path, and get_invite/1 (019fb954 stage 4), whose invite_id arrives inside a SIGNED GUEST TOKEN PAYLOAD — a signature proves who minted the payload, not that its ids are uuids, and a fabricated id must never be what decides whether a capability was revoked. Count 13 -> 14 with 019fb955 stage 4: `ensure_delivery_invitee/2` guards `invite.user_id` before the `Repo.get_by(Platform.Chat.Participant, ...)` recorded below. The classification is unchanged because the guard, not the caller, is what makes the lookup safe — `InviteDelivery.deliver/2` takes an %Invite{} STRUCT, so nothing upstream of the guard proves the field came out of the column. Count 14 -> 15 with 019fb955 stage 2: `invited_to_space?/2` guards its `space_id` before the `Repo.exists?` join, because that argument arrives off a session assign / a join-seam caller and the column is uuid — an unguarded bad value raises Ecto.Query.CastError out of an access predicate whose contract is a boolean, which fails the gate OPEN by crashing the caller instead of denying. Count 15 -> 16 at this stack's rollup merge, for `intent_muted?/1` (019fbaac stage 1, landed on main independently), whose meeting_id arrives inside a meeting:transcript_chunk PubSub payload and is legitimately nil whenever the chunk's space has no meeting — it is read per transcript chunk from the singleton IntentClassifier GenServer, so a raise there stops classification for every room on the node at once. Count 16 -> 17 with task 019fcfcf stage 1: `get_whiteboard/1`, whose meeting_id arrives unresolved from the whiteboard tab's mount/params path, and whose contract is `%Whiteboard{} | nil` — an empty board is the ordinary starting state, so a malformed id must answer nil rather than raise Ecto.Query.CastError out of a read whose miss is already meaningful. Count 17 -> 18 with task 01a00066 stage 1: `meeting_live?/1`, whose meeting id arrives from an inbox row's `source_id` column and whose contract is a boolean — an unresolvable id answers `true` (still live, so the caller never dismisses a row on ambiguity) instead of raising. Count 18 -> 19 with task 01a0740d-e5ce-7001-812e-aa79a5392aed stage 1: `live_recording_for_room/1`, whose room_id reaches it from a LiveView assign and from a `{:recording_updated, _}` broadcast payload, and whose contract is `%Recording{} | nil`. Note this is NOT the same shape as the two unguarded transcript reads recorded in the Repo.one map below: `meeting_transcripts.room_id` is a `:string` column holding the LiveKit room NAME, whereas `meeting_recordings.room_id` is a `belongs_to(:room)` on a `:binary_id` FK, so `where: r.room_id == ^room_id` here raises the same Ecto.Query.CastError `Repo.get/2` would. It backs a consent indicator in the call header, so a malformed id must read as `nil` (nothing is recording) rather than take the header render down"},
     {"platform/meetings.ex", :get_by, "Whiteboard", 1, :safe_internal,
@@ -697,6 +734,23 @@ defmodule Platform.RepoLookupBoundaryTest do
     # unindexed there" instead of raising `Ecto.Query.CastError` inside a
     # page render.
     "platform/chat/canvas_search_index.ex" => 1,
+    # Task 01a0cf21 (Email module). dispatch.ex: 0 → 2 — `recent_count/1`
+    # (`account_id` off a locked `%Account{}`) and `lock_draft!/1` (the draft
+    # id `fetch_draft/1` already guarded). mailbox.ex: 0 → 6 — three
+    # `count(...)` reads and `get_inbound/2` / `inbound_org_id/1` /
+    # `fetch_org_project/2`, every pinned id behind Platform.UUID.valid?/1
+    # (recorded in @inventory).
+    "platform/mail/dispatch.ex" => 2,
+    # Task 01a0cf21 stage 5. drafts.ex: 0 → 2 — `get/2` and `fetch_draft/1`,
+    # each pinning an id behind Platform.UUID.valid?/1 in the same
+    # expression (recorded in @inventory).
+    "platform/mail/drafts.ex" => 2,
+    "platform/mail/mailbox.ex" => 6,
+    # Task 01a0cf21 stage 6. outbox.ex: 0 → 1 — `pending_test_pass/1`, whose
+    # `stage_id` is read off a `%Delivery{}` row the Outbox just claimed and
+    # delivered (a snapshot column `Dispatch.enqueue/3` wrote from the
+    # injected deploy stage's PK, validated by `Drafts.create_system/2`).
+    "platform/mail/outbox.ex" => 1,
     # 10 → 11 for task 019fa1cc stage 3's `pending_bytes_in_range/4`.
     # Triaged by hand: the new call is `Repo.one` over a subquery of
     # `per_day_bytes_query/4`, whose `where:` clause pins only two
@@ -802,6 +856,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # is reachable. No `Platform.UUID.valid?/1` guard applies.
     "platform/chat/sidebar.ex" => 1,
     "platform/deploy/project_files.ex" => 3,
+    # Task 01a0cf21 stage 6. deploy/email.ex: 0 → 1 — `test_pass_validation/1`,
+    # the same shape as project_files.ex's: `stage_id` is `deploy_stage.id` off
+    # the `%Stage{}` `PlanEngine.inject_deploy_stage/4` just created.
+    "platform/deploy/email.ex" => 1,
     # 0 → 1 for task 019fe6b9 stage 2's `get_assignment/2` (ADR-0048).
     # Triaged by hand as this map asks: the `where:` clause pins
     # `a.experiment_id == ^experiment_id`, destructured off a loaded

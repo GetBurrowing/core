@@ -1,0 +1,1100 @@
+<div class="flex h-full min-h-0 w-full bg-base-100" data-role="mail-module">
+  <%!-- LIST: header, tabs, rows. --%>
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div class="flex flex-wrap items-center gap-3 border-b border-edge px-4 py-3">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        Email
+      </h1>
+
+      <form
+        phx-change="filter"
+        class="flex flex-wrap items-center gap-2"
+        id="mail-filter-form"
+      >
+        <select
+          :if={length(@orgs) > 1}
+          name="org"
+          class="select select-bordered select-sm"
+          aria-label="Organization"
+          data-role="mail-org-picker"
+        >
+          <option :for={org <- @orgs} value={org.id} selected={org.id == @org_id}>
+            {org.name}
+          </option>
+        </select>
+        <input :if={length(@orgs) <= 1} type="hidden" name="org" value={@org_id} />
+
+        <select
+          name="account"
+          class="select select-bordered select-sm max-w-[16rem] font-mono"
+          aria-label="Account"
+          data-role="mail-account-filter"
+        >
+          <option value="" selected={is_nil(@account_filter)}>All accounts</option>
+          <option
+            :for={account <- @accounts}
+            value={account.id}
+            selected={account.id == @account_filter}
+          >
+            {dispatch_address(account)}
+          </option>
+        </select>
+      </form>
+
+      <span class="flex-1" aria-hidden="true"></span>
+
+      <.link
+        patch={email_path(assigns, "/email/accounts")}
+        class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+        data-role="mail-open-accounts"
+      >
+        <span class="hero-at-symbol size-4" aria-hidden="true"></span> Accounts
+      </.link>
+      <.link
+        patch={email_path(assigns, "/email/drafts/new")}
+        class="btn btn-primary btn-sm hidden md:inline-flex"
+        data-role="mail-new-email"
+      >
+        <span class="hero-pencil-square size-4" aria-hidden="true"></span> New email
+      </.link>
+    </div>
+
+    <nav
+      class="flex gap-1 overflow-x-auto border-b border-edge px-4 py-2"
+      aria-label="Mail folders"
+      data-role="mail-tabs"
+    >
+      <.link
+        :for={
+          {tab, label} <- [
+            {"inbox", "Inbox"},
+            {"drafts", "Drafts"},
+            {"sent", "Sent"},
+            {"refused", "Refused"}
+          ]
+        }
+        patch={tab_path(assigns, tab)}
+        class={[
+          "btn btn-sm min-h-11 lg:min-h-8",
+          if(@tab == tab, do: "btn-active", else: "btn-ghost")
+        ]}
+        aria-current={if(@tab == tab, do: "page")}
+        data-role={"mail-tab-#{tab}"}
+      >
+        {label}
+        <span :if={Map.has_key?(@counts, tab)} class="text-xs text-base-content/60">
+          {@counts[tab]}
+        </span>
+      </.link>
+    </nav>
+
+    <%!-- EDITOR: replaces the list while a draft is open. --%>
+    <div
+      :if={@editor}
+      class="flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)]"
+    >
+      <.form
+        for={%{}}
+        as={:draft}
+        id="mail-draft-editor"
+        phx-change="editor_change"
+        phx-submit="save_draft"
+        class="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4"
+        data-role="mail-draft-editor"
+      >
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content">
+            {if(@editor.draft_id, do: "Draft", else: "New email")}
+          </h2>
+          <span
+            class="rounded-full border border-edge px-2 py-0.5 text-xs text-base-content/60"
+            data-role="mail-draft-drafted-by"
+          >
+            {editor_drafted_by(@editor)}
+          </span>
+        </div>
+
+        <label class="flex flex-col gap-1 text-xs text-base-content/60">
+          From
+          <select
+            name="draft[from]"
+            class="select select-bordered select-sm w-full font-mono text-base-content"
+            data-role="mail-draft-from"
+          >
+            <option value="" selected={@editor.from == ""}>Choose a dispatch address</option>
+            <option
+              :for={{account, sender} <- @senders}
+              value={"#{account.id}:#{sender.key}"}
+              selected={@editor.from == "#{account.id}:#{sender.key}"}
+            >
+              {sender.address} — {account.name} / {sender.key}{if account.internal_only,
+                do: " (internal only)"}
+            </option>
+          </select>
+          <span :if={@senders == []} class="text-xs text-base-content/60">
+            This org has no account with Send on. An org admin can add one under Accounts.
+          </span>
+        </label>
+
+        <fieldset class="flex flex-col gap-2">
+          <legend class="text-xs text-base-content/60">To</legend>
+          <ul
+            :if={@editor_recipients != []}
+            class="flex flex-col divide-y divide-edge rounded-box border border-edge"
+          >
+            <li
+              :for={recipient <- @editor_recipients}
+              class="flex items-center gap-2 px-3 py-1.5 text-sm"
+              data-role="mail-draft-recipient"
+            >
+              <span class="min-w-0 flex-1 break-all text-base-content">
+                {recipient.address || "(unknown user)"}
+                <span :if={recipient.name} class="text-xs text-base-content/60">
+                  {recipient.name}
+                </span>
+              </span>
+              <span
+                :if={internal_only?(@editor_account) and recipient.outside?}
+                class="shrink-0 text-xs font-medium text-warning"
+                data-role="mail-draft-recipient-outside"
+              >
+                Outside the org
+              </span>
+              <button
+                type="button"
+                phx-click="remove_recipient"
+                phx-value-kind={recipient.kind}
+                phx-value-recipient={recipient.value}
+                class="btn btn-ghost btn-xs min-h-11 lg:min-h-6"
+                aria-label={"Remove #{recipient.address || "recipient"}"}
+                data-role="mail-draft-recipient-remove"
+              >
+                <span class="hero-x-mark size-4" aria-hidden="true"></span>
+              </button>
+            </li>
+          </ul>
+          <p
+            :for={recipient <- outside_blocking(assigns)}
+            class="text-sm text-base-content"
+            data-role="mail-draft-outside-note"
+          >
+            <span class="break-all font-medium">{recipient.address || "(unknown user)"}</span>
+            is outside this org. This account only sends to internal recipients.
+          </p>
+
+          <div class="flex flex-col gap-2 sm:flex-row">
+            <input
+              type="text"
+              name="draft[new_address]"
+              value={@editor.new_address}
+              placeholder="Add an email address"
+              autocomplete="off"
+              class="input input-bordered input-sm w-full min-w-0 text-base-content sm:flex-1"
+              aria-label="Add an email address"
+              data-role="mail-draft-new-address"
+            />
+            <button
+              type="button"
+              phx-click="add_address"
+              class="btn btn-sm min-h-11 lg:min-h-8"
+              data-role="mail-draft-add-address"
+            >
+              Add
+            </button>
+            <select
+              name="draft[add_user_id]"
+              class="select select-bordered select-sm min-w-0 sm:max-w-[16rem]"
+              aria-label="Add a person from this org"
+              data-role="mail-draft-add-person"
+            >
+              <option value="">Add a person…</option>
+              <option :for={person <- people_choices(@people, @editor)} value={person.id}>
+                {person.name || person.email} ({person.email})
+              </option>
+            </select>
+          </div>
+          <p
+            :if={@editor.address_error}
+            class="text-xs text-error"
+            data-role="mail-draft-address-error"
+          >
+            {@editor.address_error}
+          </p>
+        </fieldset>
+
+        <label class="flex flex-col gap-1 text-xs text-base-content/60">
+          Subject
+          <input
+            type="text"
+            name="draft[subject]"
+            value={@editor.subject}
+            phx-debounce="300"
+            class="input input-bordered input-sm text-sm text-base-content"
+            data-role="mail-draft-subject"
+          />
+        </label>
+
+        <%!-- Plain text, escaped: a textarea's content is never parsed as
+             HTML or markdown, so an agent-written body shows exactly as it
+             will be sent. --%>
+        <label class="flex flex-col gap-1 text-xs text-base-content/60">
+          Body <textarea
+            name="draft[body]"
+            rows="12"
+            phx-debounce="300"
+            class="textarea textarea-bordered w-full font-sans text-sm leading-relaxed text-base-content"
+            data-role="mail-draft-body"
+          >{@editor.body}</textarea>
+        </label>
+
+        <p :if={@editor.error} class="text-sm text-error" data-role="mail-draft-error">
+          {@editor.error}
+        </p>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="submit" class="btn btn-sm min-h-11 lg:min-h-8" data-role="mail-draft-save">
+            Save draft
+          </button>
+          <button
+            type="button"
+            phx-click="discard_draft"
+            data-confirm={if(@editor.draft_id, do: "Discard this draft?")}
+            class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+            data-role="mail-draft-discard"
+          >
+            Discard
+          </button>
+          <span class="flex-1" aria-hidden="true"></span>
+          <button
+            :if={@editor_reviewable?}
+            type="button"
+            phx-click="review"
+            class="btn btn-primary btn-sm min-h-11 lg:min-h-8"
+            data-role="mail-review-and-send"
+          >
+            Review &amp; send…
+          </button>
+          <span
+            :if={!@editor_reviewable?}
+            class="text-xs text-base-content/60"
+            data-role="mail-review-unavailable"
+          >
+            {review_blocked_text(assigns)}
+          </span>
+        </div>
+      </.form>
+    </div>
+
+    <div :if={!@editor} class="flex-1 overflow-y-auto" data-role="mail-list">
+      <%!-- INBOX --%>
+      <div :if={@tab == "inbox"}>
+        <.link
+          :for={message <- @rows}
+          patch={email_path(assigns, "/email/messages/#{message.id}")}
+          class={[
+            "flex flex-col gap-0.5 border-b border-edge px-4 py-3 hover:bg-base-200 sm:flex-row sm:items-baseline sm:gap-3",
+            @selected_message && @selected_message.id == message.id && "bg-base-200"
+          ]}
+          data-role="mail-inbox-row"
+          data-message-id={message.id}
+        >
+          <span class="truncate text-sm font-medium text-base-content sm:w-48 sm:shrink-0">
+            {message.from_address || "(unknown sender)"}
+          </span>
+          <span class="min-w-0 flex-1 truncate text-sm text-base-content/60">
+            <span class="font-medium text-base-content">{message.subject || "(no subject)"}</span>
+            <span :if={snippet(message.text_body) != ""}>
+              — {snippet(message.text_body)}
+            </span>
+          </span>
+          <span class="shrink-0 text-xs text-base-content/60">
+            {list_time(message.received_at)}
+          </span>
+        </.link>
+        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-base-content/60">
+          No mail has been read for this org yet. Turn on Read mail for an account to fill the Inbox.
+        </p>
+      </div>
+
+      <%!-- DRAFTS: open drafts, newest first; a row opens the editor. --%>
+      <div :if={@tab == "drafts"}>
+        <.link
+          :for={draft <- @rows}
+          patch={email_path(assigns, "/email/drafts/#{draft.id}")}
+          class="flex flex-col gap-0.5 border-b border-edge px-4 py-3 hover:bg-base-200 sm:flex-row sm:items-baseline sm:gap-3"
+          data-role="mail-draft-row"
+          data-draft-id={draft.id}
+        >
+          <span class="truncate text-sm text-base-content sm:w-48 sm:shrink-0">
+            {draft_recipients_preview(draft)}
+          </span>
+          <span class="min-w-0 flex-1 truncate text-sm font-medium text-base-content">
+            {draft.subject || "(no subject)"}
+          </span>
+          <span class="shrink-0 text-xs text-base-content/60" data-role="mail-draft-row-meta">
+            {drafted_by_text(@provenance[draft.id])} · {list_time(draft.updated_at)}
+          </span>
+        </.link>
+        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-base-content/60">
+          No drafts.
+        </p>
+      </div>
+
+      <%!-- SENT --%>
+      <div :if={@tab == "sent"}>
+        <div
+          :for={delivery <- @rows}
+          class="flex flex-col gap-0.5 border-b border-edge px-4 py-3 sm:flex-row sm:items-baseline sm:gap-3"
+          data-role="mail-sent-row"
+          data-status={delivery.status}
+        >
+          <span class="truncate text-sm text-base-content sm:w-48 sm:shrink-0">
+            {Enum.join(delivery.recipients || [], ", ")}
+          </span>
+          <span class="min-w-0 flex-1 truncate text-sm font-medium text-base-content">
+            {delivery.subject || "(no subject)"}
+          </span>
+          <span
+            class={[
+              "shrink-0 text-xs",
+              if(delivery.status == "failed", do: "text-error", else: "text-base-content/60")
+            ]}
+            data-role="mail-sent-status"
+          >
+            {status_text(delivery, @accounts)} · {list_time(delivery.inserted_at)}
+          </span>
+        </div>
+        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-base-content/60">
+          Nothing sent yet.
+        </p>
+      </div>
+
+      <%!-- REFUSED --%>
+      <div :if={@tab == "refused"}>
+        <div
+          :for={delivery <- @rows}
+          class="flex flex-col gap-1 border-b border-edge px-4 py-3"
+          data-role="mail-refused-row"
+        >
+          <div class="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
+            <span class="truncate text-sm text-base-content sm:w-48 sm:shrink-0">
+              {Enum.join(delivery.recipients || [], ", ")}
+            </span>
+            <span class="min-w-0 flex-1 truncate text-sm font-medium text-base-content">
+              {delivery.subject || "(no subject)"}
+            </span>
+            <span class="shrink-0 text-xs text-base-content/60">
+              {list_time(delivery.inserted_at)}
+            </span>
+          </div>
+          <p class="text-xs text-error" data-role="mail-refused-reason">
+            Refused: {refused_reason(delivery)}
+            <span :if={refused_addresses(delivery) != []} class="font-mono">
+              — {Enum.join(refused_addresses(delivery), ", ")}
+            </span>
+          </p>
+        </div>
+        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-base-content/60">
+          Nothing has been refused.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <%!-- DETAIL PANE: one node at every width. Below lg it covers the list
+       full-width with a Back control; at lg it is the right-hand aside. --%>
+  <aside
+    :if={@pane}
+    class="fixed inset-0 z-40 flex min-h-0 flex-col bg-base-100 lg:static lg:z-auto lg:w-[30rem] lg:shrink-0 lg:border-l lg:border-edge"
+    data-role="mail-detail-pane"
+  >
+    <div class="flex items-center gap-2 border-b border-edge px-4 py-3">
+      <button
+        :if={@pane == :confirm}
+        type="button"
+        phx-click="back_to_edit"
+        class="btn btn-ghost btn-sm min-h-11 lg:hidden"
+        data-role="mail-detail-back"
+      >
+        <span class="hero-arrow-left size-4" aria-hidden="true"></span> Back
+      </button>
+      <.link
+        :if={@pane != :confirm}
+        patch={
+          if(@pane in [:account, :new_account],
+            do: email_path(assigns, "/email/accounts"),
+            else: list_path(assigns)
+          )
+        }
+        class="btn btn-ghost btn-sm min-h-11 lg:hidden"
+        data-role="mail-detail-back"
+      >
+        <span class="hero-arrow-left size-4" aria-hidden="true"></span> Back
+      </.link>
+      <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content">
+        <%= case @pane do %>
+          <% :message -> %>
+            {@selected_message.subject || "(no subject)"}
+          <% :accounts -> %>
+            Mail accounts
+          <% :new_account -> %>
+            Add account
+          <% :account -> %>
+            Edit account
+          <% :confirm -> %>
+            {if(@send_result, do: "Send result", else: "Send this email?")}
+        <% end %>
+      </h2>
+      <button
+        :if={@pane == :confirm}
+        type="button"
+        phx-click="back_to_edit"
+        class="btn btn-ghost btn-sm btn-square hidden lg:inline-flex"
+        aria-label="Close"
+      >
+        <span class="hero-x-mark size-4" aria-hidden="true"></span>
+      </button>
+      <.link
+        :if={@pane != :confirm}
+        patch={list_path(assigns)}
+        class="btn btn-ghost btn-sm btn-square hidden lg:inline-flex"
+        aria-label="Close"
+      >
+        <span class="hero-x-mark size-4" aria-hidden="true"></span>
+      </.link>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
+      <%!-- CONFIRM: the last screen before an irreversible send. --%>
+      <div
+        :if={@pane == :confirm and @confirm}
+        class="flex flex-col gap-4"
+        data-role="mail-confirm"
+      >
+        <div class="flex flex-col gap-1 rounded-box border border-edge p-3">
+          <span class="text-xs text-base-content/60">From</span>
+          <span
+            class="break-all font-mono text-sm font-semibold text-base-content"
+            data-role="mail-confirm-from"
+          >
+            {@confirm.sender.address}
+          </span>
+          <span class="text-xs text-base-content/60">
+            {@confirm.account.name} / {@confirm.sender.key}
+          </span>
+        </div>
+
+        <div class="flex flex-col gap-1 rounded-box border border-edge p-3">
+          <span class="text-xs text-base-content/60">To</span>
+          <ul class="flex max-h-64 flex-col gap-1 overflow-y-auto" data-role="mail-confirm-to">
+            <li
+              :for={recipient <- @confirm.recipients}
+              class="flex flex-wrap items-baseline gap-x-2 text-sm text-base-content"
+              data-role="mail-confirm-recipient"
+            >
+              <span class="break-all">{recipient.address || "(unknown user)"}</span>
+              <span
+                :if={recipient.outside?}
+                class="text-xs font-medium text-warning"
+                data-role="mail-confirm-recipient-outside"
+              >
+                Outside the org
+              </span>
+            </li>
+          </ul>
+          <span class="text-xs text-base-content/60" data-role="mail-confirm-count">
+            {recipient_count_text(length(@confirm.recipients))}
+          </span>
+          <span
+            :if={@confirm.removed_external > 0}
+            class="text-xs text-base-content/60"
+            data-role="mail-confirm-removed"
+          >
+            {removed_text(@confirm.removed_external)}
+          </span>
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <span class="text-xs text-base-content/60">Subject</span>
+          <p class="break-words text-sm text-base-content" data-role="mail-confirm-subject">
+            {@confirm.draft.subject || "(no subject)"}
+          </p>
+        </div>
+        <%!-- Exactly the body that will be sent, as escaped plain text. --%>
+        <pre
+          class="max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-box bg-base-200 p-3 font-sans text-sm text-base-content"
+          data-role="mail-confirm-body"
+        >{@confirm.draft.body || ""}</pre>
+
+        <div class="flex flex-col gap-1 rounded-box border border-edge p-3">
+          <span class="text-xs text-base-content/60">Recorded before sending</span>
+          <span class="text-sm text-base-content" data-role="mail-confirm-recorded">
+            {recorded_text(@confirm, @user)}
+          </span>
+        </div>
+
+        <p class="text-xs text-base-content/60" data-role="mail-confirm-rate">
+          Sending can't be undone. This account: {elem(@confirm.rate, 0)} of {elem(
+            @confirm.rate,
+            1
+          )} sends used this hour.
+        </p>
+
+        <p
+          :if={confirm_blocker(@confirm)}
+          class="text-sm text-base-content"
+          data-role="mail-confirm-refusal"
+        >
+          {confirm_blocker(@confirm)}
+        </p>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            :if={is_nil(confirm_blocker(@confirm))}
+            type="button"
+            phx-click="send"
+            phx-disable-with="Sending…"
+            class="btn btn-primary btn-sm min-h-11 lg:min-h-8"
+            data-role="mail-confirm-send"
+          >
+            Send now
+          </button>
+          <button
+            type="button"
+            phx-click="back_to_edit"
+            class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+            data-role="mail-confirm-back"
+          >
+            Back to edit
+          </button>
+        </div>
+      </div>
+
+      <%!-- SEND RESULT: the delivery status words, never "Sent"/"Delivered". --%>
+      <div
+        :if={@pane == :confirm and @send_result}
+        class="flex flex-col gap-3"
+        data-role="mail-send-result"
+      >
+        <p
+          class={[
+            "text-sm",
+            if(elem(@send_result, 0) == :error, do: "text-error", else: "text-base-content")
+          ]}
+          role="status"
+          data-role="mail-delivery-status"
+        >
+          {elem(@send_result, 1)}
+        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <.link
+            :if={elem(@send_result, 2)}
+            patch={tab_path(assigns, elem(@send_result, 2))}
+            class="btn btn-sm min-h-11 lg:min-h-8"
+          >
+            {if(elem(@send_result, 2) == "sent", do: "Open Sent", else: "Open Refused")}
+          </.link>
+          <button
+            :if={@editor}
+            type="button"
+            phx-click="back_to_edit"
+            class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+          >
+            Back to edit
+          </button>
+        </div>
+      </div>
+
+      <%!-- MESSAGE --%>
+      <div :if={@pane == :message} class="flex flex-col gap-4" data-role="mail-message-detail">
+        <p
+          class="flex items-center gap-1.5 text-xs text-base-content/60"
+          data-role="mail-external-label"
+        >
+          <span class="hero-envelope size-3.5 shrink-0" aria-hidden="true"></span>
+          External email — not from a Suite member
+        </p>
+
+        <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+          <dt class="text-base-content/60">From</dt>
+          <dd class="break-all text-base-content">
+            {@selected_message.from_address || "(unknown sender)"}
+          </dd>
+          <dt class="text-base-content/60">To</dt>
+          <dd class="break-all text-base-content">
+            {Enum.join(@selected_message.to_addresses || [], ", ")}
+          </dd>
+          <dt class="text-base-content/60">Date</dt>
+          <dd class="text-base-content">{full_time(@selected_message.received_at)}</dd>
+          <dt class="text-base-content/60">Subject</dt>
+          <dd class="break-words text-base-content">
+            {@selected_message.subject || "(no subject)"}
+          </dd>
+          <dt class="text-base-content/60">Message-ID</dt>
+          <dd class="break-all font-mono text-xs text-base-content" data-role="mail-message-id">
+            {@selected_message.message_id_header || "(none)"}
+          </dd>
+          <dt class="text-base-content/60">Account</dt>
+          <dd class="break-all font-mono text-xs text-base-content">
+            {account_label(@accounts, @selected_message.account_id)}
+          </dd>
+        </dl>
+
+        <.link
+          :if={chat_post_path(@selected_message)}
+          navigate={chat_post_path(@selected_message)}
+          class="link text-sm"
+          data-role="mail-channel-post"
+        >
+          Open the channel post
+        </.link>
+
+        <%!-- Escaped plain text only: HEEx escapes the value, nothing
+             parses markdown, HTML or mentions here. --%>
+        <pre
+          class="whitespace-pre-wrap break-words rounded-box bg-base-200 p-3 font-sans text-sm text-base-content"
+          data-role="mail-message-body"
+        >{@selected_message.text_body || ""}</pre>
+
+        <div class="flex flex-col gap-2 border-t border-edge pt-4">
+          <%= if @selected_file do %>
+            <p class="text-sm text-base-content" data-role="mail-in-files">
+              <span class="hero-document-text size-4 align-text-bottom" aria-hidden="true"></span>
+              In files:
+              <.link navigate={"/files/#{@selected_file.project_id}"} class="link">
+                {@selected_file.name}
+              </.link>
+            </p>
+          <% else %>
+            <form
+              phx-submit="add_to_files"
+              class="flex flex-wrap items-end gap-2"
+              id="mail-add-to-files-form"
+            >
+              <label class="flex min-w-0 flex-1 flex-col gap-1 text-xs text-base-content/60">
+                Project
+                <select
+                  name="project_id"
+                  class="select select-bordered select-sm w-full"
+                  data-role="mail-add-to-files-project"
+                  disabled={@projects == []}
+                >
+                  <option :for={project <- @projects} value={project.id}>{project.name}</option>
+                </select>
+              </label>
+              <button
+                type="submit"
+                class="btn btn-sm min-h-11 lg:min-h-8"
+                disabled={@projects == []}
+                data-role="mail-add-to-files"
+              >
+                <span class="hero-document-plus size-4" aria-hidden="true"></span> Add to files
+              </button>
+            </form>
+            <p :if={@projects == []} class="text-xs text-base-content/60">
+              This org has no projects to add files to.
+            </p>
+          <% end %>
+          <p :if={@add_error} class="text-xs text-error" data-role="mail-add-to-files-error">
+            {@add_error}
+          </p>
+        </div>
+      </div>
+
+      <%!-- ACCOUNTS --%>
+      <div :if={@pane == :accounts} class="flex flex-col gap-3" data-role="mail-accounts-pane">
+        <p class="text-sm text-base-content/60">
+          Accounts this org sends and reads mail from. Passwords live in the Vault and are never shown here.
+        </p>
+
+        <div
+          :for={account <- @accounts}
+          class="flex flex-col gap-2 rounded-box border border-edge bg-base-100 p-3"
+          data-role="mail-account-card"
+          data-account-id={account.id}
+        >
+          <p class="break-all font-mono text-sm font-semibold text-base-content">
+            {dispatch_address(account)}
+          </p>
+          <p class="text-xs text-base-content/60">
+            {account.name} · SMTP {account.smtp_host || "(no host)"}:{account.smtp_port ||
+              "default"} · {if account.imap_host,
+              do: "IMAP #{account.imap_host}:#{account.imap_port || "default"}",
+              else: "No IMAP"}
+          </p>
+
+          <ul
+            class="flex flex-col divide-y divide-edge text-sm"
+            data-role="mail-account-capabilities"
+          >
+            <li
+              :for={
+                {flag, label} <- [
+                  {"send_enabled", "Send"},
+                  {"internal_only", "Internal recipients only"},
+                  {"read_enabled", "Read mail"}
+                ]
+              }
+              class="flex items-center justify-between gap-2 py-1.5"
+            >
+              <span class="text-base-content">{label}</span>
+              <button
+                :if={@is_admin}
+                type="button"
+                phx-click="toggle_account_flag"
+                phx-value-id={account.id}
+                phx-value-flag={flag}
+                class="btn btn-ghost btn-xs min-h-11 lg:min-h-6"
+                aria-pressed={to_string(Map.fetch!(account, String.to_existing_atom(flag)))}
+                data-role={"mail-account-toggle-#{flag}"}
+              >
+                {on_off(Map.fetch!(account, String.to_existing_atom(flag)))}
+              </button>
+              <span :if={!@is_admin} class="text-base-content/60">
+                {on_off(Map.fetch!(account, String.to_existing_atom(flag)))}
+              </span>
+            </li>
+          </ul>
+
+          <p class="text-xs text-base-content/60" data-role="mail-account-read-scope">
+            <%= if account.read_enabled do %>
+              {read_scope_text(account)}<span :if={channel_name(account.inbound_space_id)}> · posts to #{channel_name(account.inbound_space_id)}</span>
+            <% else %>
+              Not reading mail
+            <% end %>
+          </p>
+          <p class="text-xs text-base-content/60">{rate_text(account)}</p>
+
+          <div :if={@is_admin} class="flex flex-wrap items-center gap-2">
+            <.link
+              patch={email_path(assigns, "/email/accounts/#{account.id}")}
+              class="btn btn-sm min-h-11 lg:min-h-8"
+              data-role="mail-account-edit"
+            >
+              Edit
+            </.link>
+            <.test_send_control account={account} />
+          </div>
+          <.test_send_result result={@test_results[account.id]} />
+        </div>
+
+        <p :if={@accounts == []} class="text-sm text-base-content/60">
+          This org has no mail accounts yet.
+        </p>
+
+        <.link
+          :if={@is_admin}
+          patch={email_path(assigns, "/email/accounts/new")}
+          class="btn btn-sm min-h-11 lg:min-h-8 self-start"
+          data-role="mail-account-add"
+        >
+          <span class="hero-plus size-4" aria-hidden="true"></span> Add account
+        </.link>
+        <p :if={!@is_admin} class="text-xs text-base-content/60">
+          Only org admins can add or change mail accounts.
+        </p>
+      </div>
+
+      <%!-- ACCOUNT FORM (admins only; the route bounces members) --%>
+      <div :if={@pane in [:account, :new_account] and @form} class="flex flex-col gap-4">
+        <div
+          :if={@form_account}
+          class="flex flex-col gap-2 rounded-box border border-edge p-3"
+          data-role="mail-senders"
+        >
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
+            Senders
+          </p>
+          <div
+            :for={sender <- @form_account.senders}
+            class="flex items-center gap-2 text-sm"
+            data-role="mail-sender-row"
+          >
+            <span class="font-medium text-base-content">{sender.key}</span>
+            <span class="min-w-0 flex-1 truncate font-mono text-base-content">
+              {sender.address}
+            </span>
+            <button
+              type="button"
+              phx-click="delete_sender"
+              phx-value-key={sender.key}
+              class="btn btn-ghost btn-xs min-h-11 lg:min-h-6"
+              aria-label={"Remove sender #{sender.key}"}
+            >
+              <span class="hero-x-mark size-4" aria-hidden="true"></span>
+            </button>
+          </div>
+          <form
+            phx-submit="add_sender"
+            class="grid grid-cols-1 gap-2 sm:grid-cols-3"
+            id="mail-add-sender-form"
+          >
+            <input
+              type="text"
+              name="sender[key]"
+              placeholder="Sender key"
+              class="input input-bordered input-sm"
+              aria-label="Sender key"
+            />
+            <input
+              type="email"
+              name="sender[address]"
+              placeholder="From address"
+              class="input input-bordered input-sm font-mono"
+              aria-label="From address"
+            />
+            <input
+              type="text"
+              name="sender[display_name]"
+              placeholder="Display name"
+              class="input input-bordered input-sm"
+              aria-label="Display name"
+            />
+            <button
+              type="submit"
+              class="btn btn-sm min-h-11 lg:min-h-8 sm:col-span-3 sm:justify-self-start"
+            >
+              Add sender
+            </button>
+          </form>
+        </div>
+
+        <.form
+          for={@form}
+          id="mail-account-form"
+          phx-change="validate_account"
+          phx-submit="save_account"
+          class="flex flex-col gap-3"
+          data-role="mail-account-form"
+        >
+          <label class="flex flex-col gap-1 text-xs text-base-content/60">
+            Account name
+            <input
+              type="text"
+              name="account[name]"
+              value={@form[:name].value}
+              class="input input-bordered input-sm text-base-content"
+              required
+            />
+          </label>
+
+          <fieldset class="flex flex-col gap-1">
+            <legend class="text-xs text-base-content/60">
+              Outgoing (SMTP) host · port · security
+            </legend>
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_5rem_7rem]">
+              <input
+                type="text"
+                name="account[smtp_host]"
+                value={@form[:smtp_host].value}
+                class="input input-bordered input-sm col-span-2 sm:col-span-1"
+                aria-label="SMTP host"
+              />
+              <input
+                type="number"
+                name="account[smtp_port]"
+                value={@form[:smtp_port].value}
+                class="input input-bordered input-sm"
+                aria-label="SMTP port"
+              />
+              <select
+                name="account[smtp_tls]"
+                class="select select-bordered select-sm"
+                aria-label="SMTP security"
+              >
+                <option
+                  :for={mode <- tls_modes()}
+                  value={mode}
+                  selected={@form[:smtp_tls].value == mode}
+                >
+                  {tls_label(mode)}
+                </option>
+              </select>
+            </div>
+          </fieldset>
+
+          <label class="flex flex-col gap-1 text-xs text-base-content/60">
+            Username
+            <input
+              type="text"
+              name="account[username]"
+              value={@form[:username].value}
+              class="input input-bordered input-sm text-base-content"
+              autocomplete="off"
+            />
+          </label>
+
+          <.secret_field
+            kind="smtp"
+            label="Password"
+            account={@form_account}
+            replacing={@replacing}
+          />
+
+          <.flag_field form={@form} field={:send_enabled} label="Send" />
+
+          <.flag_field form={@form} field={:read_enabled} label="Read mail (IMAP)" />
+
+          <div
+            :if={checked?(@form, :read_enabled)}
+            class="flex flex-col gap-3 border-l-2 border-edge pl-3"
+          >
+            <fieldset class="flex flex-col gap-1">
+              <legend class="text-xs text-base-content/60">
+                Incoming (IMAP) host · port · security
+              </legend>
+              <div class="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_5rem_7rem]">
+                <input
+                  type="text"
+                  name="account[imap_host]"
+                  value={@form[:imap_host].value}
+                  class="input input-bordered input-sm col-span-2 sm:col-span-1"
+                  aria-label="IMAP host"
+                />
+                <input
+                  type="number"
+                  name="account[imap_port]"
+                  value={@form[:imap_port].value}
+                  class="input input-bordered input-sm"
+                  aria-label="IMAP port"
+                />
+                <select
+                  name="account[imap_tls]"
+                  class="select select-bordered select-sm"
+                  aria-label="IMAP security"
+                >
+                  <option
+                    :for={mode <- tls_modes()}
+                    value={mode}
+                    selected={@form[:imap_tls].value == mode}
+                  >
+                    {tls_label(mode)}
+                  </option>
+                </select>
+              </div>
+            </fieldset>
+
+            <.secret_field
+              kind="imap"
+              label="IMAP password"
+              account={@form_account}
+              replacing={@replacing}
+            />
+
+            <fieldset class="flex flex-col gap-1" data-role="mail-account-read-scope-field">
+              <legend class="text-xs text-base-content/60">Folders to read</legend>
+              <label class="flex items-center gap-2 text-sm text-base-content">
+                <input
+                  type="radio"
+                  name="account[read_scope]"
+                  value="all"
+                  checked={@form[:read_scope].value != "chosen"}
+                  class="radio radio-sm"
+                /> All folders
+              </label>
+              <label class="flex items-center gap-2 text-sm text-base-content">
+                <input
+                  type="radio"
+                  name="account[read_scope]"
+                  value="chosen"
+                  checked={@form[:read_scope].value == "chosen"}
+                  class="radio radio-sm"
+                /> Only these folders
+              </label>
+              <input
+                :if={@form[:read_scope].value == "chosen"}
+                type="text"
+                name="account[read_folders]"
+                value={@form[:read_folders].value}
+                placeholder="INBOX, Support"
+                class="input input-bordered input-sm"
+                aria-label="Folders, comma separated"
+              />
+            </fieldset>
+          </div>
+          <%!-- Keep the IMAP values when Read mail is switched off in the
+               form, so switching it back on does not wipe them. --%>
+          <div :if={!checked?(@form, :read_enabled)}>
+            <input type="hidden" name="account[imap_host]" value={@form[:imap_host].value} />
+            <input type="hidden" name="account[imap_port]" value={@form[:imap_port].value} />
+            <input type="hidden" name="account[imap_tls]" value={@form[:imap_tls].value} />
+            <input type="hidden" name="account[read_scope]" value={@form[:read_scope].value} />
+            <input type="hidden" name="account[read_folders]" value={@form[:read_folders].value} />
+          </div>
+
+          <label class="flex flex-col gap-1 text-xs text-base-content/60">
+            Post incoming mail to
+            <select
+              name="account[inbound_space_id]"
+              class="select select-bordered select-sm text-base-content"
+              data-role="mail-account-inbound-space"
+            >
+              <option value="">Do not post</option>
+              <option
+                :for={space <- @channels}
+                value={space.id}
+                selected={@form[:inbound_space_id].value == space.id}
+              >
+                #{space.name}
+              </option>
+            </select>
+          </label>
+
+          <div class="flex flex-col gap-1">
+            <.flag_field form={@form} field={:internal_only} label="Internal recipients only" />
+            <p class="text-xs text-base-content/60">Internal = members of this org.</p>
+          </div>
+
+          <label class="flex flex-col gap-1 text-xs text-base-content/60">
+            Rate limit per hour
+            <input
+              type="number"
+              min="1"
+              name="account[rate_limit_per_hour]"
+              value={@form[:rate_limit_per_hour].value}
+              class="input input-bordered input-sm w-32 text-base-content"
+            />
+          </label>
+
+          <p :if={@form_error} class="text-sm text-error" data-role="mail-account-form-error">
+            {@form_error}
+          </p>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="submit" class="btn btn-primary btn-sm min-h-11 lg:min-h-8">Save</button>
+            <span class="flex-1" aria-hidden="true"></span>
+            <button
+              :if={@form_account}
+              type="button"
+              phx-click="archive_account"
+              phx-value-id={@form_account.id}
+              data-confirm="Remove this mail account? It stops sending and reading mail."
+              class="btn btn-ghost btn-sm min-h-11 lg:min-h-8 text-error"
+              data-role="mail-account-remove"
+            >
+              Remove
+            </button>
+          </div>
+        </.form>
+        <%!-- Outside the account form: a form nested in a form is dropped by
+             the HTML parser, and its button would submit save_account. --%>
+        <div :if={@form_account} class="flex flex-col gap-2 border-t border-edge pt-3">
+          <.test_send_control account={@form_account} label="Send test email" />
+          <.test_send_result result={@test_results[@form_account.id]} />
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <%!-- Mobile FAB: New email. Same position math as the Tasks "+" and the
+       Files upload FAB so it clears the safe area and the bottom nav. --%>
+  <.link
+    :if={is_nil(@pane) and is_nil(@editor)}
+    patch={email_path(assigns, "/email/drafts/new")}
+    class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg md:hidden"
+    aria-label="New email"
+    data-role="mail-new-email-fab"
+  >
+    <span class="hero-pencil-square size-6" aria-hidden="true"></span>
+  </.link>
+</div>

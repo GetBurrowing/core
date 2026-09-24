@@ -1025,3 +1025,75 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
   end
 end
+
+defmodule PlatformWeb.Components.IconRailMailFlagTest do
+  @moduledoc """
+  The Email destination is gated by `Platform.Mail.Config.enabled?/0` (task
+  01a0cf21-29ba-7001-8690-3c59d6cb17c6 stage 4): flag off, no Email tile
+  anywhere the rail's list reaches; flag on, one Email tile in Working.
+
+  A separate module because it flips `:mail_enabled` in application env,
+  which the async `IconRailTest` above must never observe.
+  """
+  use ExUnit.Case, async: false
+
+  import Phoenix.Component
+  import Phoenix.LiveViewTest
+  import PlatformWeb.Components.IconRail
+
+  defp with_mail(enabled) do
+    previous = Application.fetch_env(:platform, :mail_enabled)
+    Application.put_env(:platform, :mail_enabled, enabled)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:platform, :mail_enabled, value)
+        :error -> Application.delete_env(:platform, :mail_enabled)
+      end
+    end)
+  end
+
+  defp render_rail(is_fabrikam_user) do
+    assigns = %{is_fabrikam_user: is_fabrikam_user}
+
+    rendered_to_string(~H"""
+    <.icon_rail current_path="/chat" is_fabrikam_user={@is_fabrikam_user} sidebar_collapsed={false} />
+    <.bottom_rail current_path="/chat" />
+    """)
+  end
+
+  test "flag off: no Email destination in the list or the rendered rails" do
+    with_mail(false)
+
+    for fabrikam? <- [false, true] do
+      refute Enum.any?(destinations(is_fabrikam_user: fabrikam?), &(&1.key == :email))
+      html = render_rail(fabrikam?)
+      # Positive control: the rail rendered its other Working tiles.
+      assert html =~ ~s(data-destination="meetings")
+      refute html =~ ~s(data-destination="email")
+      refute html =~ ~s(href="/email")
+    end
+  end
+
+  test "flag on: exactly one Email destination, in Working, for members and Fabrikam users" do
+    with_mail(true)
+
+    for fabrikam? <- [false, true] do
+      assert [email] = Enum.filter(destinations(is_fabrikam_user: fabrikam?), &(&1.key == :email))
+      assert email.cluster == :working
+      assert email.path == "/email"
+      assert email.hero_icon == "hero-envelope"
+      refute email.fabrikam_only?
+
+      html = render_rail(fabrikam?)
+      doc = LazyHTML.from_fragment(html)
+      assert doc |> LazyHTML.query(~s([data-destination="email"])) |> Enum.count() == 1
+    end
+  end
+
+  test "enabled?/1 treats an entry without a predicate as on" do
+    assert enabled?(%{key: :chat})
+    assert enabled?(%{key: :x, enabled?: fn -> true end})
+    refute enabled?(%{key: :x, enabled?: fn -> false end})
+  end
+end

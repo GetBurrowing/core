@@ -58,7 +58,7 @@ defmodule Platform.Tasks.Task do
   # stage 2). Mirrors the dispatch-side registration in
   # `DeployStageBuilder`/`HeartbeatScheduler`; keep in sync when adding
   # new strategies.
-  @deploy_target_config_strategies ~w(pr_merge docker_deploy skill_driven manual project_files)
+  @deploy_target_config_strategies ~w(pr_merge docker_deploy skill_driven manual project_files email)
   def deploy_target_config_strategies, do: @deploy_target_config_strategies
 
   # ADR-0046 planning sub-phases (task 019f9b28-ab82 member 4).
@@ -632,6 +632,23 @@ defmodule Platform.Tasks.Task do
     case get_change(changeset, :deploy_target_config) do
       nil ->
         changeset
+
+      # The email strategy (task 01a0cf21 stage 6) names its account, sender
+      # key and recipients here; a config missing any of them could only
+      # fail at deploy time, so it is refused at write time instead. Shape
+      # only — the account and sender are resolved against the task's org
+      # by `Platform.Deploy.Email` when the deploy runs.
+      %{"strategy" => "email"} = config ->
+        if Platform.Deploy.Email.valid_config?(config) do
+          changeset
+        else
+          add_error(
+            changeset,
+            :deploy_target_config,
+            "email config must name an account_id, a sender_key and at least one " <>
+              "recipient (recipients or recipient_user_ids)"
+          )
+        end
 
       %{"strategy" => strategy} when is_binary(strategy) ->
         if strategy in @deploy_target_config_strategies do

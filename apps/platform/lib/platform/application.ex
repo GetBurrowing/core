@@ -174,6 +174,8 @@ defmodule Platform.Application do
       |> maybe_add_meeting_historian_handler()
       |> maybe_add_meeting_notifier()
       |> maybe_add_meetings_sender_seed()
+      |> maybe_add_mail_inbound()
+      |> maybe_add_mail_outbox()
       |> maybe_add_meeting_intent_classifier()
       |> maybe_add_meeting_intent_dispatcher()
       |> maybe_add_stall_registry()
@@ -285,6 +287,32 @@ defmodule Platform.Application do
             restart: :transient
           )
         ]
+    else
+      children
+    end
+  end
+
+  # Email IMAP pollers (task 01a0cf21 stage 3). Mirrors
+  # `maybe_add_meetings_sender_seed/1`: gated on `Platform.Mail.Config.enabled?/0`,
+  # the one place the flag is read. Off → no supervisor, no poller, no IMAP
+  # connection. Appended, so it starts after `Platform.Repo`. Public (and
+  # `@doc false`) so a test can assert the flag-off child list directly.
+  @doc false
+  def maybe_add_mail_inbound(children) do
+    if Platform.Mail.Config.enabled?() do
+      children ++ [Platform.Mail.Inbound.Supervisor]
+    else
+      children
+    end
+  end
+
+  # Email outbox (task 01a0cf21 stage 6): hands `queued` deliveries — the
+  # email deploy strategy's, recorded inside the plan engine's transaction —
+  # to SMTP after commit. Same gate and shape as `maybe_add_mail_inbound/1`.
+  @doc false
+  def maybe_add_mail_outbox(children) do
+    if Platform.Mail.Config.enabled?() do
+      children ++ [Platform.Mail.Outbox]
     else
       children
     end

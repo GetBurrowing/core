@@ -1066,6 +1066,63 @@ defmodule Platform.Tenancy do
 
   defp member_of_by_id?(_, _), do: false
 
+  @doc """
+  Is the user an ADMIN of this specific org, as a non-external member?
+
+  True iff an `org_memberships` row for `(user, org_id)` has `role == "admin"`
+  AND `external == false`. Nothing else confers it:
+
+    * an external admin (`role: "admin", external: true`) is not an org admin;
+    * a Fabrikam root admin (`fabrikam_admin?/1`) who holds no admin row in THIS org is
+      not an org admin of it — there is no root bypass here, by design (task
+      01a0cf21 stage 1, where the requester settled mail-account management
+      as org-admins-only).
+
+  Takes an org id (UUID string) only, not a slug. Returns `false` for unknown
+  users, unknown orgs, non-UUID ids, or non-string input — never raises.
+  """
+  @spec org_admin?(any(), any()) :: boolean()
+  def org_admin?(%{id: user_id}, org_id) when is_binary(user_id) and is_binary(org_id) do
+    internal_membership_exists?(user_id, org_id, "admin")
+  end
+
+  def org_admin?(_, _), do: false
+
+  @doc """
+  Is the user a NON-EXTERNAL member of this org, at any role?
+
+  True iff an `org_memberships` row for `(user, org_id)` has
+  `external == false`. Unlike `member_of?/2` this excludes external users, and
+  takes an org id (UUID string) only. Returns `false` for anything it cannot
+  resolve — never raises.
+  """
+  @spec internal_member?(any(), any()) :: boolean()
+  def internal_member?(%{id: user_id}, org_id) when is_binary(user_id) and is_binary(org_id) do
+    internal_membership_exists?(user_id, org_id, :any)
+  end
+
+  def internal_member?(_, _), do: false
+
+  defp internal_membership_exists?(user_id, org_id, role) do
+    if uuid?(user_id) and uuid?(org_id) do
+      query =
+        from(m in OrgMembership,
+          where: m.user_id == ^user_id and m.org_id == ^org_id and m.external == false,
+          select: 1
+        )
+
+      query =
+        case role do
+          :any -> query
+          role when is_binary(role) -> where(query, [m], m.role == ^role)
+        end
+
+      Repo.exists?(query)
+    else
+      false
+    end
+  end
+
   # Platform.UUID.valid?/1, NOT a bare Ecto.UUID.cast/1. `member_of?/2`
   # resolves an org SLUG or a uuid, and its uuid branch pins the ORIGINAL
   # value (`where: o.id == ^org_id`) against Org's strict UUIDv7 key. A bare

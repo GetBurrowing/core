@@ -226,6 +226,14 @@ if config_env() != :test do
     chat_attachments_root: System.get_env("CHAT_ATTACHMENTS_ROOT", "/data/platform/chat_uploads")
 end
 
+# Email module (task 01a0cf21 stage 2): Platform.Mail.Mailer sends over SMTP.
+# Relay, port, TLS mode, username and password are NOT configured here — each
+# send passes them as deliver/2 overrides built from the resolved mail account
+# and its Vault secret. :test keeps the recording adapter from test.exs.
+if config_env() != :test do
+  config :platform, Platform.Mail.Mailer, adapter: Swoosh.Adapters.SMTP
+end
+
 # :attachment_signing_key is set by dev.exs/test.exs for local envs; prod
 # must read it from an env var and fail fast if unset.
 if config_env() == :prod do

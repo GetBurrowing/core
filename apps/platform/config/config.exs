@@ -16,6 +16,17 @@ config :platform, Platform.Repo,
   migration_primary_key: [name: :id, type: :binary_id],
   migration_foreign_key: [type: :binary_id]
 
+# Email module (task 01a0cf21 stage 2): the only adapter in use is SMTP, which
+# needs no HTTP client, so Swoosh must not look for one.
+config :swoosh, :api_client, false
+
+# Email module IMAP read path (task 01a0cf21 stage 3). Polling interval per
+# account; IDLE is deferred. `client` is the Platform.Mail.Imap.Client impl.
+config :platform, Platform.Mail.Inbound,
+  poll_ms: 60_000,
+  initial_delay_ms: 1_000,
+  client: Platform.Mail.Imap.WireClient
+
 # Responsibilities Registry boot flag (ADR-0041 M1 stage 4) — default
 # on. Disabled in config/test.exs so DataCase-sandboxed tests own their
 # own per-case instance.

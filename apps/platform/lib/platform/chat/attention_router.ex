@@ -5,6 +5,9 @@ defmodule Platform.Chat.AttentionRouter do
 
   ## Routing logic (agents)
 
+  0. **Inbound email** (`metadata["source"] == "email_inbound"`) — no agent
+     decision in any space kind, ahead of every rule below. See
+     `email_inbound?/1`.
   1. **Execution spaces** — `log_only` messages are silently skipped.
   2. **DM spaces** — always route to the single agent participant (`:directed`).
   3. **Single @mention** — set mentioned agent as active (mutex) and route.
@@ -357,12 +360,39 @@ defmodule Platform.Chat.AttentionRouter do
   # Deliberately role-KEY driven, never a per-role branch: the guard has to
   # hold for every key in `Platform.Roles.Role` (ADR 0043's security guard and
   # ADR 0044's architect included) the moment they stamp the metadata.
+  #
+  # Inbound email (task 01a0cf21 stage 3) is checked FIRST, ahead of the
+  # role-scoped branch and of every activity branch: an `email_inbound`
+  # message is untrusted outside text and yields NO agent decision — no
+  # :directed (DM), no :mention / :multi_mention, no :active_agent to the
+  # mutex holder (ADR 0027 rule 5), no execution-assignee fallback, and it
+  # never touches `ActiveAgentStore`. Its metadata also carries
+  # `skip_mention_scan`, and `Platform.Mail.Inbound` escapes every `@[` in
+  # the content; this clause is what holds when an agent is already armed.
+  # A later step may emit its own reason for addressed mail (e.g.
+  # `:email_addressed`); it must be a deliberate new branch here, not a
+  # fall-through into activity routing. Human routing is unchanged.
   defp route_agents(%Space{} = space, %Message{} = message, agent_recipients) do
-    case role_scoped_dispatch_role(message) do
-      nil -> route_agents_by_activity(space, message, agent_recipients)
-      role_key -> route_role_scoped(space, message, agent_recipients, role_key)
+    cond do
+      email_inbound?(message) ->
+        []
+
+      role_key = role_scoped_dispatch_role(message) ->
+        route_role_scoped(space, message, agent_recipients, role_key)
+
+      true ->
+        route_agents_by_activity(space, message, agent_recipients)
     end
   end
+
+  @doc """
+  True for a message posted by the Email module's inbound poller
+  (`metadata["source"] == "email_inbound"`, task 01a0cf21 stage 3). Such a
+  message never produces an agent routing decision.
+  """
+  @spec email_inbound?(Message.t()) :: boolean()
+  def email_inbound?(%Message{metadata: %{"source" => "email_inbound"}}), do: true
+  def email_inbound?(_), do: false
 
   defp route_role_scoped(%Space{} = space, %Message{} = message, agent_recipients, role_key) do
     case Roles.agent_id_for_role(role_key) do

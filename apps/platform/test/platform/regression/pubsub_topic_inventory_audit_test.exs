@@ -117,7 +117,7 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
   # in order to change the topic safely; the full payload-and-subscriber table
   # lives in the stage-2 classification posted to the task's execution space.
   #
-  # 25 global, 10 space, 6 user, 5 task, 2 project, 1 org, 1 runtime,
+  # 26 global, 10 space, 6 user, 5 task, 2 project, 1 org, 1 runtime,
   # 1 resource, 1 not-a-topic.
   @topics [
     # ── space ──
@@ -186,6 +186,11 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # The six classified-intent topics are global on purpose: the
     # Responsibilities Router subscribes once at boot and cannot subscribe to a
     # topic whose name embeds a runtime meeting id.
+    # Task 01a0cf21 stage 6. Payload is the bare atom `:mail_outbox_nudge` —
+    # no delivery id, no address, no body — and the one subscriber is the
+    # supervised Mail.Outbox singleton. A non-member learns only that SOME
+    # org queued SOME mail at that moment.
+    {"mail:outbox", :global},
     {"meeting:action_item_intent", :global},
     {"meeting:brief_worthy_intent", :global},
     {"meeting:decision_recorded_intent", :global},

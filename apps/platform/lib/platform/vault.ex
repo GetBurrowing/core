@@ -241,28 +241,69 @@ defmodule Platform.Vault do
         {:error, :not_found}
 
       cred ->
-        case check_access(cred, accessor, :use) do
-          :ok ->
-            now = DateTime.utc_now()
+        use_credential(cred, slug, accessor)
+    end
+  end
 
-            {:ok, updated} =
-              cred
-              |> Credential.changeset(%{last_used_at: now})
-              |> Repo.update()
+  @doc """
+  Retrieve and decrypt a credential by slug, **refusing an ambiguous slug**.
 
-            :telemetry.execute(
-              [:platform, :vault, :credential_used],
-              %{system_time: System.system_time()},
-              %{credential_id: cred.id, slug: slug, accessor: accessor}
-            )
+  Same options, same `:use` authorization, same access-log row, the same
+  `last_used_at` bump and the same `[:platform, :vault, :credential_used]`
+  telemetry as `get/2`. The one difference is target selection: `get/2`
+  takes whichever row the planner returns first when a slug matches more than
+  one credential, while `get_unique/2` resolves exactly as `rotate/3` does and
+  returns `{:error, :ambiguous_slug}` for two or more matches — decrypting
+  nothing, bumping nothing, and logging a warning that names the matching
+  scopes (never a value).
 
-            log_access(cred, accessor, "use", %{})
+  Pass `:scope` to name the credential exactly. New callers that hold a scope
+  should use this instead of `get/2`; `get/2` itself is unchanged because a
+  read that starts failing is a different blast radius (task 019f9cb8 tracks
+  tightening it).
 
-            {:ok, updated.encrypted_data}
+  ## Options
 
-          {:error, :access_denied} ->
-            deny(cred, slug, accessor)
-        end
+    * `:accessor`     - `{accessor_type, accessor_id}` tuple identifying the requester
+    * `:scope`        - `{scope_type, scope_id}` naming the credential exactly
+    * `:workspace_id` - workspace context (used to narrow the lookup)
+  """
+  @spec get_unique(String.t(), keyword()) ::
+          {:ok, binary()} | {:error, :not_found | :ambiguous_slug | :access_denied}
+  def get_unique(slug, opts \\ []) do
+    accessor = Keyword.get(opts, :accessor)
+
+    case resolve_one_by_slug(slug, opts) do
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, :ambiguous_slug} -> refuse_ambiguous(slug, opts, "read")
+      {:ok, cred} -> use_credential(cred, slug, accessor)
+    end
+  end
+
+  # The granted/denied tail shared by get/2 and get_unique/2. Target selection
+  # is the caller's; everything after it must stay identical between the two.
+  defp use_credential(%Credential{} = cred, slug, accessor) do
+    case check_access(cred, accessor, :use) do
+      :ok ->
+        now = DateTime.utc_now()
+
+        {:ok, updated} =
+          cred
+          |> Credential.changeset(%{last_used_at: now})
+          |> Repo.update()
+
+        :telemetry.execute(
+          [:platform, :vault, :credential_used],
+          %{system_time: System.system_time()},
+          %{credential_id: cred.id, slug: slug, accessor: accessor}
+        )
+
+        log_access(cred, accessor, "use", %{})
+
+        {:ok, updated.encrypted_data}
+
+      {:error, :access_denied} ->
+        deny(cred, slug, accessor)
     end
   end
 
@@ -301,7 +342,8 @@ defmodule Platform.Vault do
       `{:error, :ambiguous_slug}` and nothing is mutated.
 
   `get/2` and `delete/2` still resolve by slug alone and carry the same
-  ambiguity; both accept `:scope` to narrow, but neither refuses. Tightening
+  ambiguity; both accept `:scope` to narrow, but neither refuses.
+  `get_unique/2` is the refusing read. Tightening
   those is separate work — a read that starts failing is a different blast
   radius from a write that hits the wrong row.
 
@@ -323,7 +365,7 @@ defmodule Platform.Vault do
         {:error, :not_found}
 
       {:error, :ambiguous_slug} ->
-        refuse_ambiguous(slug, opts)
+        refuse_ambiguous(slug, opts, "rotate")
 
       {:ok, credential} ->
         case check_access(credential, accessor, :rotate) do
@@ -337,10 +379,11 @@ defmodule Platform.Vault do
   end
 
   # Names the slug and the scopes it was found at so an operator mid-incident
-  # can see why the rotation refused and which `:scope` to pass. The new value
-  # is NOT in scope here and must never be — a rotation log line is exactly
-  # where a plaintext secret would go unnoticed.
-  defp refuse_ambiguous(slug, opts) do
+  # can see why the call refused and which `:scope` to pass. `verb` is the
+  # caller's ("rotate", "read"). No value — new or stored — is in scope here
+  # and none must ever be: a refusal log line is exactly where a plaintext
+  # secret would go unnoticed.
+  defp refuse_ambiguous(slug, opts, verb) do
     scopes =
       slug
       |> slug_query(opts)
@@ -350,8 +393,8 @@ defmodule Platform.Vault do
       |> Enum.join(", ")
 
     Logger.warning(
-      "vault: refusing to rotate #{slug} — the slug matches more than one credential " <>
-        "(#{scopes}). Pass :scope to name the one you mean. Nothing was changed."
+      "vault: refusing to #{verb} #{slug} — the slug matches more than one credential " <>
+        "(#{scopes}). Pass :scope to name the one you mean. Nothing was read or changed."
     )
 
     {:error, :ambiguous_slug}

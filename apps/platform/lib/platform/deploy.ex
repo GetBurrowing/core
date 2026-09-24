@@ -18,13 +18,20 @@ defmodule Platform.Deploy do
     * `"project_files"` — writes an exported Markdown copy of a
       deliverable canvas into a target project's files space. See
       `Platform.Deploy.ProjectFiles`.
+    * `"email"` — mails the deliverable from a named org mail account and
+      sender. Runs inside the plan engine's transaction, so it only QUEUES
+      the send (`Platform.Mail.Dispatch.enqueue/3`); `Platform.Mail.Outbox`
+      delivers after commit and resolves `test_pass`. See
+      `Platform.Deploy.Email`.
 
   ## Adding a strategy
 
   1. Add a `dispatch/3` clause below that pattern-matches on the
      strategy `"type"`.
   2. Register the strategy in `Platform.Tasks.DeployStageBuilder`
-     (stage_def + `@valid_strategy_types`).
+     (stage_def + `@valid_strategy_types`), and in
+     `Platform.Tasks.Task`'s `@deploy_target_config_strategies` if it reads
+     `task.deploy_target_config`.
   3. Add the deploy-stage instructions branch in
      `Platform.Orchestration.HeartbeatScheduler.deploy_strategy_instructions/3`
      so the agent (if any) knows the platform is auto-executing.
@@ -41,6 +48,7 @@ defmodule Platform.Deploy do
 
   require Logger
 
+  alias Platform.Deploy.Email
   alias Platform.Deploy.ProjectFiles
   alias Platform.Tasks.{Stage, Task}
 
@@ -73,6 +81,25 @@ defmodule Platform.Deploy do
     :exit, reason ->
       Logger.error(
         "[Deploy.dispatch] project_files handler exited for task #{task.id}: #{inspect(reason)}"
+      )
+
+      :ok
+  end
+
+  def dispatch(%Task{} = task, %{"type" => "email"} = _strategy, %Stage{} = deploy_stage) do
+    _ = Email.execute(task, deploy_stage)
+    :ok
+  rescue
+    e ->
+      Logger.error(
+        "[Deploy.dispatch] email handler crashed for task #{task.id}: " <> Exception.message(e)
+      )
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.error(
+        "[Deploy.dispatch] email handler exited for task #{task.id}: #{inspect(reason)}"
       )
 
       :ok

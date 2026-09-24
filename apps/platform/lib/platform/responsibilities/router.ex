@@ -875,6 +875,12 @@ defmodule Platform.Responsibilities.Router do
         # responsibilities are for product spaces.
         :ok
 
+      Platform.Chat.AttentionRouter.email_inbound?(message) ->
+        # Inbound email (task 01a0cf21 stage 3) is untrusted outside text:
+        # a pattern in a stranger's email body must not fire a
+        # responsibility dispatch, any more than it may route an agent.
+        :ok
+
       not is_binary(message.content) or message.content == "" ->
         :ok
 

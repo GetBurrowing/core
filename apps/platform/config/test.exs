@@ -226,6 +226,27 @@ config :platform, :start_meeting_intent_dispatcher, false
 # it on flip it per-test with `Application.put_env` + `on_exit` restore.
 config :platform, :meetings_enabled, false
 
+# Email module master switch (task 01a0cf21 stage 1). Same reasoning as
+# :meetings_enabled above: without the injected key `Mail.Config.enabled?/0`
+# reads `MAIL_ENABLED` from the host. Tests that need the module on flip it
+# with `Application.put_env` + `on_exit` restore in async: false modules.
+config :platform, :mail_enabled, false
+
+# Email send path (task 01a0cf21 stage 2): tests never reach SMTP. The
+# recording adapter sends `{:mail_test_adapter, email, config}` to the calling
+# process so a test can assert WHICH relay and username a send used;
+# `config/runtime.exs` skips the SMTP adapter under :test.
+config :platform, Platform.Mail.Mailer, adapter: Platform.Mail.TestAdapter
+
+# Email read path (task 01a0cf21 stage 3): tests never reach an IMAP server.
+# The in-memory fake lives in test/support/fake_imap_client.ex. A poller that
+# a test starts waits an hour before its first tick unless the test says
+# otherwise, so lifecycle tests do not race a poll.
+config :platform, Platform.Mail.Inbound,
+  poll_ms: 3_600_000,
+  initial_delay_ms: 3_600_000,
+  client: Platform.Mail.Imap.FakeClient
+
 # LiveKit webhook signature enforcement (task 019f3312 stage 2): tests
 # keep this off so the ~28 existing controller tests don't need to mint
 # a JWT per payload. The signature-verification plug's own test file

@@ -64,6 +64,13 @@ defmodule Platform.Tasks.StageResponsibilityRetiredTest do
   # written to avoid the word entirely so these are the only two.
   @trigger_tree_literals ["responsibility_unfilled", "responsibility_not_registered"]
 
+  # Not exempted, because it is not in the file: the Email module's
+  # `mail_draft_create` / `mail_draft_update` tools (task 01a0cf21 stage 5)
+  # take a `responsibility` argument — the delivery-row attribution on
+  # `Platform.Mail.Draft`, a different concept from the retired stage-level
+  # one — and are defined in `Platform.Federation.MailDraftTools` so this
+  # file-level refute keeps its full strength over the plan surface.
+
   defp app_root, do: Mix.Project.project_file() |> Path.dirname()
 
   defp repo_root, do: app_root() |> Path.join("../..") |> Path.expand()

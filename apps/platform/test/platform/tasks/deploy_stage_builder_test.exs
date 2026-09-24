@@ -279,6 +279,75 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
+  describe "build_stage/3 — email (task 01a0cf21 stage 6)" do
+    test "one test_pass validation, named Deploy: Email, describing account/sender/recipients" do
+      strategy = %{
+        "type" => "email",
+        "config" => %{
+          "account_id" => "019f0000-0000-7000-8000-0000000000aa",
+          "sender_key" => "reports",
+          "recipients" => ["a@example.test", "b@example.test"],
+          "recipient_user_ids" => ["019f0000-0000-7000-8000-0000000000bb"]
+        }
+      }
+
+      result = DeployStageBuilder.build_stage(strategy, 4, @recorded_branch)
+
+      assert result.name == "Deploy: Email"
+      assert result.position == 4
+      assert result.validations == [%{kind: "test_pass"}]
+      assert result.description =~ "019f0000-0000-7000-8000-0000000000aa"
+      assert result.description =~ "Sender key: reports."
+      assert result.description =~ "Recipients: 3."
+      assert result.description =~ "do NOT push evidence"
+      refute result.description =~ "manual_approval"
+    end
+
+    test "with no strategy-level config it points at the task's deploy_target_config" do
+      result = DeployStageBuilder.build_stage(%{"type" => "email"}, 2, @recorded_branch)
+
+      assert result.name == "Deploy: Email"
+      assert result.validations == [%{kind: "test_pass"}]
+      assert result.description =~ "deploy_target_config"
+    end
+  end
+
+  describe "validate_strategy/1 — email (task 01a0cf21 stage 6)" do
+    test "email is a registered strategy type" do
+      assert "email" in DeployStageBuilder.valid_strategy_types()
+      assert :ok = DeployStageBuilder.validate_strategy(%{"type" => "email"})
+    end
+
+    test "accepts a string-valued config and refuses a malformed one, without the database" do
+      assert :ok =
+               DeployStageBuilder.validate_strategy(%{
+                 "type" => "email",
+                 "config" => %{"account_id" => "any-string", "sender_key" => "ops"}
+               })
+
+      assert {:error, msg} =
+               DeployStageBuilder.validate_strategy(%{"type" => "email", "config" => "nope"})
+
+      assert msg =~ "map"
+
+      assert {:error, msg} =
+               DeployStageBuilder.validate_strategy(%{
+                 "type" => "email",
+                 "config" => %{"account_id" => 7}
+               })
+
+      assert msg =~ "account_id"
+
+      assert {:error, msg} =
+               DeployStageBuilder.validate_strategy(%{
+                 "type" => "email",
+                 "config" => %{"sender_key" => ["x"]}
+               })
+
+      assert msg =~ "sender_key"
+    end
+  end
+
   describe "build_stage/3 — position" do
     test "uses the provided position for all strategy types" do
       for {type, pos} <- [
@@ -286,7 +355,8 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
             {"docker_deploy", 7},
             {"fly", 10},
             {"manual", 42},
-            {"project_files", 6}
+            {"project_files", 6},
+            {"email", 9}
           ] do
         result = DeployStageBuilder.build_stage(%{"type" => type}, pos, @recorded_branch)
         assert result.position == pos, "Expected position #{pos} for type #{type}"

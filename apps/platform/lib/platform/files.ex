@@ -69,6 +69,81 @@ defmodule Platform.Files do
   end
 
   @doc """
+  Store in-memory `bytes` as a file of `project` — the one ingest path for
+  bytes a caller already holds.
+
+  Extracted from the `file_add` MCP tool's inline branch (task
+  01a0cf21-29ba-7001-8690-3c59d6cb17c6 stage 4) so the Email module's "Add
+  to files" writes through the same code instead of a second store. In order:
+
+    1. `Platform.Files.Storage.put/3` persists the bytes under a fresh key;
+    2. `find_ingested_sibling/2` dedupes on the content hash within the
+       project — on a hit the just-written bytes are deleted (best effort)
+       and the existing row is returned;
+    3. otherwise `create_file/1` inserts the `platform_files` row and
+       `Platform.Files.Ingester.ingest_async/1` is fired.
+
+  Options:
+
+    * `:uploaded_by_user_id` — recorded on a new row (default `nil`);
+    * `:ingest` — `false` skips step 3's `ingest_async/1`, for a caller that
+      runs this inside its own transaction and must enqueue after commit
+      (the ingester reads the row from another process). Default `true`.
+
+  Returns `{:ok, file, deduplicated?}`, `{:error, {:persist_failed,
+  reason}}`, or `create_file/1`'s error (the bytes are deleted first).
+  """
+  @spec add_bytes(map(), binary(), String.t(), String.t(), keyword()) ::
+          {:ok, File.t(), boolean()}
+          | {:error, {:persist_failed, term()} | Ecto.Changeset.t() | :project_archived}
+  def add_bytes(%{id: project_id} = project, bytes, filename, content_type, opts \\ [])
+      when is_binary(project_id) and is_binary(bytes) and is_binary(filename) do
+    case Platform.Files.Storage.put({:binary, bytes}, project_id, filename: filename) do
+      {:ok, %{storage_key: storage_key, content_hash: hash, byte_size: size}} ->
+        case find_ingested_sibling(project_id, hash) do
+          %File{} = sibling ->
+            # Storage.put landed under a fresh key; the canonical row points
+            # at its own, so the new key is orphaned.
+            _ = Platform.Files.Storage.delete(storage_key)
+            {:ok, sibling, true}
+
+          nil ->
+            insert_added_bytes(project, filename, content_type, size, storage_key, hash, opts)
+        end
+
+      {:error, reason} ->
+        {:error, {:persist_failed, reason}}
+    end
+  end
+
+  defp insert_added_bytes(project, filename, content_type, size, storage_key, hash, opts) do
+    attrs = %{
+      project_id: project.id,
+      org_id: Map.get(project, :org_id),
+      uploaded_by_user_id: Keyword.get(opts, :uploaded_by_user_id),
+      name: filename,
+      original_filename: filename,
+      content_type: content_type,
+      byte_size: size,
+      storage_key: storage_key,
+      content_hash: hash,
+      ingest_status: "pending"
+    }
+
+    case create_file(attrs) do
+      {:ok, file} ->
+        if Keyword.get(opts, :ingest, true),
+          do: :ok = Platform.Files.Ingester.ingest_async(file)
+
+        {:ok, file, false}
+
+      {:error, reason} ->
+        _ = Platform.Files.Storage.delete(storage_key)
+        {:error, reason}
+    end
+  end
+
+  @doc """
   The ingestion intent a file of this content type gets when the caller
   does not specify one.
 

@@ -858,7 +858,22 @@ defmodule Platform.Federation.ToolSurface do
     ]
   end
 
-  defp messaging_tools do
+  defp messaging_tools, do: base_messaging_tools() ++ mail_draft_tools()
+
+  # The Email module's agent tools (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6
+  # stage 5), defined in `Platform.Federation.MailDraftTools` and listed only
+  # while `Platform.Mail.Config.enabled?/0` is true; `execute/3` re-checks the
+  # flag. There is deliberately NO send tool: an agent-written draft leaves
+  # only when a person sends it from the Email module (or through the email
+  # deploy strategy). `tool_surface_mail_test.exs` pins that no bundle
+  # exposes one.
+  defp mail_draft_tools do
+    if Platform.Mail.Config.enabled?(),
+      do: Platform.Federation.MailDraftTools.definitions(),
+      else: []
+  end
+
+  defp base_messaging_tools do
     [
       %{
         name: "send_media",
@@ -6930,6 +6945,39 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Email drafts (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6 stage 5) ──
+
+  def execute("mail_draft_create", args, context) do
+    with :ok <- mail_enabled("mail_draft_create"),
+         {:ok, agent} <- mail_agent(context, "mail_draft_create"),
+         {:ok, org_id} <- require_string(args, "org_id", "mail_draft_create"),
+         {:ok, _subject} <- require_string(args, "subject", "mail_draft_create"),
+         :ok <- require_binary(args, "body", "mail_draft_create"),
+         :ok <- authorize_mail_org(agent, org_id) do
+      attrs = Map.take(args, mail_draft_keys())
+
+      case Platform.Mail.Drafts.create({:agent, agent.id}, org_id, attrs) do
+        {:ok, draft} -> {:ok, mail_draft_result(draft)}
+        {:error, reason} -> mail_draft_error("mail_draft_create", reason)
+      end
+    end
+  end
+
+  def execute("mail_draft_update", args, context) do
+    with :ok <- mail_enabled("mail_draft_update"),
+         {:ok, agent} <- mail_agent(context, "mail_draft_update"),
+         {:ok, draft_id} <- require_string(args, "draft_id", "mail_draft_update"),
+         {:ok, draft} <- mail_fetch_draft(draft_id),
+         :ok <- authorize_mail_org(agent, draft.org_id) do
+      attrs = Map.take(args, mail_draft_keys())
+
+      case Platform.Mail.Drafts.update({:agent, agent.id}, draft.id, attrs) do
+        {:ok, draft} -> {:ok, mail_draft_result(draft)}
+        {:error, reason} -> mail_draft_error("mail_draft_update", reason)
+      end
+    end
+  end
+
   def execute("file_get_metadata", args, context) do
     with {:ok, file_id} <- require_string(args, "file_id", "file_get_metadata"),
          %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
@@ -11567,6 +11615,150 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Email draft tool helpers (task 01a0cf21 stage 5) ────────────────────
+
+  defp mail_draft_keys, do: Platform.Federation.MailDraftTools.arg_keys()
+
+  defp mail_enabled(tool) do
+    if Platform.Mail.Config.enabled?() do
+      :ok
+    else
+      {:error,
+       %{
+         error: "#{tool}: the email module is not enabled",
+         code: :mail_disabled,
+         recoverable: true,
+         suggestion:
+           "This Suite install has not turned on the Email module (MAIL_ENABLED). Tell the person you are working with; do not retry until it is on."
+       }}
+    end
+  end
+
+  # Drafts record WHICH agent wrote them, so an anonymous call is refused
+  # rather than written as nobody's.
+  defp mail_agent(context, tool) do
+    case load_agent(context) do
+      %Agent{} = agent ->
+        {:ok, agent}
+
+      nil ->
+        {:error,
+         %{
+           error: "#{tool}: requires an identified agent caller",
+           code: :unauthorized,
+           recoverable: false,
+           suggestion: "Call this tool through an agent runtime's MCP session."
+         }}
+    end
+  end
+
+  defp require_binary(args, key, tool) do
+    if is_binary(Map.get(args, key)) do
+      :ok
+    else
+      {:error,
+       %{
+         error: "#{tool}: `#{key}` is required",
+         recoverable: true,
+         suggestion: "Provide `#{key}` as a string."
+       }}
+    end
+  end
+
+  # Same rule and envelope shape as the files tools (`authorize_file_access/2`):
+  # a tenant-pinned agent may only write into its own org.
+  defp authorize_mail_org(agent, org_id) do
+    case authorize_org_filter(agent, org_id) do
+      :ok ->
+        :ok
+
+      {:error, envelope} ->
+        {:error,
+         Map.put(envelope, :error, "unauthorized: draft is in an org you are not a member of")}
+    end
+  end
+
+  defp mail_fetch_draft(draft_id) do
+    case Platform.Mail.Drafts.fetch(draft_id) do
+      {:ok, draft} -> {:ok, draft}
+      {:error, reason} -> mail_draft_error("mail_draft_update", reason)
+    end
+  end
+
+  defp mail_draft_result(%Platform.Mail.Draft{} = draft) do
+    %{
+      draft_id: draft.id,
+      org_id: draft.org_id,
+      account_id: draft.account_id,
+      sender_key: draft.sender_key,
+      to_addresses: draft.to_addresses,
+      to_user_ids: draft.to_user_ids,
+      subject: draft.subject,
+      body_length: String.length(draft.body || ""),
+      status: draft.status,
+      review_path: "/email/drafts/#{draft.id}?org=#{draft.org_id}"
+    }
+  end
+
+  defp mail_draft_error(tool, reason) do
+    {code, recoverable, text} =
+      case reason do
+        :unauthorized ->
+          {:unauthorized, false, "you may not write this draft"}
+
+        :org_not_found ->
+          {:not_found, false, "org not found"}
+
+        :draft_not_found ->
+          {:not_found, false, "draft not found"}
+
+        :draft_not_editable ->
+          {:draft_not_editable, false, "the draft is no longer a draft"}
+
+        :account_not_found ->
+          {:account_not_found, true, "no such account in this org"}
+
+        :sender_key_not_found ->
+          {:sender_key_not_found, true, "no such sender key on the account"}
+
+        :sender_key_without_account ->
+          {:invalid, true, "sender_key needs account_id"}
+
+        :on_behalf_of_not_member ->
+          {:invalid, true, "on_behalf_of_user_id is not an org member"}
+
+        :task_not_found ->
+          {:task_not_found, true, "no such task in this org"}
+
+        {:invalid_addresses, bad} ->
+          {:invalid, true, "not email addresses: #{Enum.join(bad, ", ")}"}
+
+        {:unknown_recipient_user_ids, ids} ->
+          {:invalid, true, "unknown user ids: #{Enum.join(ids, ", ")}"}
+
+        {:invalid, message} ->
+          {:invalid, true, message}
+
+        %Ecto.Changeset{errors: errors} ->
+          {:invalid, true, inspect(errors)}
+
+        other ->
+          {:error, false, inspect(other)}
+      end
+
+    {:error,
+     %{
+       error: "#{tool}: #{text}",
+       code: code,
+       recoverable: recoverable,
+       suggestion:
+         if(recoverable,
+           do: "Correct the argument and retry.",
+           else: "Do not retry with the same arguments."
+         )
+     }}
+  end
+
   defp file_unauthorized_envelope(envelope) do
     # Re-key the message so callers can tell file_list / file_get_text
     # produced the rejection (vs memory_search). The shape is identical.
@@ -11962,55 +12154,38 @@ defmodule Platform.Federation.ToolSurface do
   defp file_add_inline(args, project, filename, content_type) do
     with {:ok, bytes} <- decode_file_base64(Map.get(args, "data_base64")),
          :ok <- check_inline_file_size(byte_size(bytes)) do
-      case Platform.Files.Storage.put({:binary, bytes}, project.id, filename: filename) do
-        {:ok, %{storage_key: storage_key, content_hash: hash, byte_size: size}} ->
-          case Platform.Files.find_ingested_sibling(project.id, hash) do
-            %Platform.Files.File{} = sibling ->
-              # Dedup: drop the just-written bytes (Storage.put landed under
-              # a fresh storage_key — the canonical row points at its own
-              # key, so the new key is orphaned). Best-effort delete.
-              _ = Platform.Files.Storage.delete(storage_key)
+      # The persist → dedup-or-insert → ingest_async sequence lives in
+      # `Platform.Files.add_bytes/5` (task 01a0cf21 stage 4), shared with the
+      # Email module's "Add to files".
+      case Platform.Files.add_bytes(project, bytes, filename, content_type,
+             uploaded_by_user_id: nil
+           ) do
+        {:ok, file, dedup?} ->
+          {:ok, file_add_result_ready(file, dedup?)}
 
-              {:ok, file_add_result_ready(sibling, true)}
+        {:error, %Ecto.Changeset{} = cs} ->
+          {:error,
+           %{
+             error: "file_add: insert failed (#{inspect(cs.errors)})",
+             recoverable: true,
+             suggestion:
+               "Validation error inserting the platform_files row — inspect the errors map and retry with corrected input."
+           }}
 
-            nil ->
-              create_attrs = %{
-                project_id: project.id,
-                org_id: project.org_id,
-                uploaded_by_user_id: nil,
-                name: filename,
-                original_filename: filename,
-                content_type: content_type,
-                byte_size: size,
-                storage_key: storage_key,
-                content_hash: hash,
-                ingest_status: "pending"
-              }
-
-              case Platform.Files.create_file(create_attrs) do
-                {:ok, file} ->
-                  :ok = Platform.Files.Ingester.ingest_async(file)
-                  {:ok, file_add_result_ready(file, false)}
-
-                {:error, %Ecto.Changeset{} = cs} ->
-                  _ = Platform.Files.Storage.delete(storage_key)
-
-                  {:error,
-                   %{
-                     error: "file_add: insert failed (#{inspect(cs.errors)})",
-                     recoverable: true,
-                     suggestion:
-                       "Validation error inserting the platform_files row — inspect the errors map and retry with corrected input."
-                   }}
-              end
-          end
-
-        {:error, reason} ->
+        {:error, {:persist_failed, reason}} ->
           {:error,
            %{
              error: "file_add: persist failed (#{inspect(reason)})",
              recoverable: true,
              suggestion: "The storage adapter rejected the bytes. Retry shortly."
+           }}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "file_add: insert failed (#{inspect(reason)})",
+             recoverable: false,
+             suggestion: "The project does not accept new files."
            }}
       end
     end

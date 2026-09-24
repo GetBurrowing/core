@@ -88,7 +88,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
 
   alias Platform.Tasks.RepoRef
 
-  @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual project_files no_op_wait_for_rollup)
+  @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual project_files email no_op_wait_for_rollup)
   @valid_merge_methods ~w(squash merge rebase)
 
   # A `pr_merge` repo entry's `"ci"` is a THREE-STATE fact once you read it
@@ -295,6 +295,22 @@ defmodule Platform.Tasks.DeployStageBuilder do
     }
   end
 
+  # The `email` strategy (task 01a0cf21 stage 6). The platform queues the send
+  # inside the plan engine's transaction and `Platform.Mail.Outbox` resolves
+  # the `test_pass` after SMTP answers. The config (account, sender key,
+  # recipients) lives on `task.deploy_target_config`; a strategy-level
+  # `"config"` map is read only for the stage description.
+  def build_stage(%{"type" => "email"} = strategy, position, _branch, _tips) do
+    config = Map.get(strategy, "config", %{})
+
+    %{
+      name: "Deploy: Email",
+      description: email_description(config),
+      position: position,
+      validations: [%{kind: "test_pass"}]
+    }
+  end
+
   # ── Strategy Validation ────────────────────────────────────────────────
 
   @doc """
@@ -336,6 +352,31 @@ defmodule Platform.Tasks.DeployStageBuilder do
   @spec validate_strategy(map()) :: :ok | {:error, String.t()}
   def validate_strategy(%{"type" => "pr_merge"} = strategy) do
     validate_repos(strategy)
+  end
+
+  # Pure shape check, no Repo: the account and sender are resolved (and
+  # refused) at deploy time by `Platform.Deploy.Email`, against the task's
+  # org, never here.
+  def validate_strategy(%{"type" => "email"} = strategy) do
+    case Map.get(strategy, "config") do
+      nil ->
+        :ok
+
+      config when is_map(config) ->
+        cond do
+          not optional_string?(config["account_id"]) ->
+            {:error, "email config account_id must be a string"}
+
+          not optional_string?(config["sender_key"]) ->
+            {:error, "email config sender_key must be a string"}
+
+          true ->
+            :ok
+        end
+
+      _ ->
+        {:error, "email config must be a map"}
+    end
   end
 
   def validate_strategy(%{"type" => type}) when type in @valid_strategy_types do
@@ -749,6 +790,29 @@ defmodule Platform.Tasks.DeployStageBuilder do
 
     parts |> Enum.reject(&is_nil/1) |> Enum.join(" ")
   end
+
+  defp email_description(config) do
+    account_id = Map.get(config, "account_id")
+    sender_key = Map.get(config, "sender_key")
+    count = Platform.Deploy.Email.recipient_count(config)
+
+    parts = [
+      "Mail the task's deliverable from an org mail account.",
+      "The platform auto-executes the deploy — do NOT push evidence manually.",
+      "The deliverable canvas is exported to Markdown and queued as one email; test_pass is passed when the relay accepts it (or failed with a reason).",
+      if(account_id,
+        do: "Account ID: #{account_id}.",
+        else: "Account: as configured in the task's deploy_target_config."
+      ),
+      if(sender_key, do: "Sender key: #{sender_key}.", else: nil),
+      if(count > 0, do: "Recipients: #{count}.", else: nil)
+    ]
+
+    parts |> Enum.reject(&is_nil/1) |> Enum.join(" ")
+  end
+
+  defp optional_string?(nil), do: true
+  defp optional_string?(value), do: is_binary(value)
 
   defp skill_driven_description(config, skill_id) do
     parts = [

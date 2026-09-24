@@ -4152,4 +4152,73 @@ defmodule Platform.Responsibilities.RouterTest do
       refute log =~ "stamp_last_successful_fire raised"
     end
   end
+
+  # Task 01a0cf21 stage 3: inbound email is untrusted outside text, so a
+  # chat_pattern must not fire on it. Positive control first: the same
+  # content from an ordinary message DOES fire.
+  describe "chat_pattern and inbound email" do
+    test "a matching email_inbound message fires nothing; the same text from a person does" do
+      key = "routertest.email_guard_#{System.unique_integer([:positive])}"
+
+      insert!(%{
+        key: key,
+        trigger_kind: "chat_pattern",
+        trigger_config: %{"regex" => "zz-email-guard-canary"}
+      })
+
+      handler_id = "router-test-email-guard-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :unfilled],
+        fn _event, _measurements, %{key: fired_key} = meta, pid ->
+          send(pid, {:fired, fired_key, meta})
+        end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {pid, _name} = start_router()
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Email guard",
+          slug: "email-guard-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, person} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Pat",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, email_author} = Platform.Mail.Inbound.ensure_email_participant(space.id)
+
+      insert_message = fn participant, metadata ->
+        %Chat.Message{}
+        |> Chat.Message.changeset(%{
+          space_id: space.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: "please zz-email-guard-canary now",
+          metadata: metadata
+        })
+        |> Repo.insert!()
+      end
+
+      email = insert_message.(email_author, %{"source" => "email_inbound"})
+      send(pid, {:telemetry_chat_message_posted, %{message_id: email.id}})
+      _ = :sys.get_state(pid)
+      refute_received {:fired, ^key, _}
+
+      ordinary = insert_message.(person, %{})
+      send(pid, {:telemetry_chat_message_posted, %{message_id: ordinary.id}})
+      _ = :sys.get_state(pid)
+      assert_received {:fired, ^key, _}
+    end
+  end
 end

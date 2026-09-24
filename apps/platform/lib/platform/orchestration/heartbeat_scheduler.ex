@@ -1708,6 +1708,25 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp deploy_strategy_instructions(
+         "email",
+         _config,
+         _repos,
+         _default_branch,
+         _task_slug
+       ) do
+    """
+    ## Email Deploy Flow
+    The platform automatically executes this deploy — you do NOT push evidence.
+    The `Platform.Deploy.Email` handler will:
+      1. Resolve the mail account and sender key named in the task's deploy_target_config (never a default account or sender).
+      2. Export the deliverable canvas to Markdown (config.deliverable_canvas_id, or the newest canvas in the execution space).
+      3. Queue one email to the configured recipients through the audited send path (send toggle, internal-only, rate limit apply).
+      4. When the relay accepts it, `test_pass` passes; a refusal or SMTP failure fails `test_pass` with a reason.
+    Do NOT push `test_pass` evidence manually and do NOT create a `suite_review_request_create`. Report a blocker only if the handler itself fails to run.
+    """
+  end
+
+  defp deploy_strategy_instructions(
          "skill_driven",
          _config,
          _repos,

@@ -23,13 +23,20 @@ defmodule Platform.Tasks.DeployResolver do
   @doc """
   Resolves a named deploy target from the project's deploy config.
 
-  Returns `{:ok, validated_target}` or `{:error, reason}`.
+  Returns `{:ok, validated_target}` or `{:error, reason}`. Only map entries
+  can match; a bare-string entry is skipped, so a name that matches only a
+  string answers `{:error, {:target_not_found, name}}` rather than raising.
   """
   @spec resolve(Project.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def resolve(%Project{deploy_config: deploy_config}, target_name) do
     targets = get_targets(deploy_config)
 
-    case Enum.find(targets, &(&1["name"] == target_name)) do
+    # Map entries only. A project may carry bare-string targets
+    # (`["staging", "production"]`); `&1["name"]` on a string raises
+    # FunctionClauseError, and the router's deploy diagnostic reaches this
+    # call for any such task with `deploy_target` set — on 2026-08-26 that
+    # raise took the TaskRouter down. A non-map entry is simply not a match.
+    case Enum.find(targets, &(is_map(&1) and Map.get(&1, "name") == target_name)) do
       nil ->
         {:error, {:target_not_found, target_name}}
 

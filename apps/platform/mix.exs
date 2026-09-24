@@ -171,7 +171,20 @@ defmodule Platform.MixProject do
       # so the runtime image needs no libvips package — verified by running
       # the derivation inside a container built from the Dockerfile's `app`
       # stage, not merely under `mix test`.
-      {:image, "~> 0.54"}
+      {:image, "~> 0.54"},
+      # swoosh + gen_smtp: the Email module's outbound path (task 01a0cf21
+      # stage 2). Exactly one module calls them — Platform.Mail.Mailer, under
+      # lib/platform/mail/ — and a guard test fails if any other file under
+      # lib/ does. gen_smtp is optional in swoosh but required by its SMTP
+      # adapter. Both are pure Erlang/Elixir: no NIFs, no system libraries.
+      {:swoosh, "~> 1.28"},
+      {:gen_smtp, "~> 1.3"},
+      # mail: parses the MIME the Email module's IMAP poller fetches (task
+      # 01a0cf21 stage 3). IMAP itself is spoken by
+      # Platform.Mail.Imap.WireClient over :gen_tcp/:ssl (stage 7 dropped
+      # mailroom, which failed against a real server). Pure Elixir: no NIFs,
+      # no system libraries.
+      {:mail, "~> 0.5"}
     ]
   end
 

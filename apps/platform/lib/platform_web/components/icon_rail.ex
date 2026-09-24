@@ -419,6 +419,25 @@ defmodule PlatformWeb.Components.IconRail do
 
     canonical_destinations()
     |> Enum.reject(fn dest -> dest.fabrikam_only? and not is_fabrikam_user end)
+    |> Enum.filter(&enabled?/1)
+  end
+
+  @doc """
+  Is this destination switched on right now?
+
+  An entry may carry `:enabled?`, a zero-arity predicate for an env-gated
+  module (Email reads `Platform.Mail.Config.enabled?/0`, task 01a0cf21
+  stage 4). An entry without one is always on. Applied in `destinations/1`
+  and at the `icon_rail/1` cluster boundary, so the desktop rail, the mobile
+  bottom rail and the More sheet (which reads `destinations/1`) all drop a
+  disabled module from one place — DOM-absent, not hidden.
+  """
+  @spec enabled?(map()) :: boolean()
+  def enabled?(dest) do
+    case Map.get(dest, :enabled?) do
+      nil -> true
+      fun when is_function(fun, 0) -> fun.() == true
+    end
   end
 
   # ------------------------------------------------------------------
@@ -429,6 +448,7 @@ defmodule PlatformWeb.Components.IconRail do
     all
     |> Enum.filter(&(&1.cluster == cluster))
     |> filter_fabrikam_only(is_fabrikam_user)
+    |> Enum.filter(&enabled?/1)
   end
 
   # Apply the fabrikam_only? filter against a per-render is_fabrikam_user flag.
@@ -446,6 +466,7 @@ defmodule PlatformWeb.Components.IconRail do
     # rendered separately because it's a button (phx-click), not a link.
     canonical_destinations()
     |> Enum.filter(&(&1.key in [:chat, :tasks, :inbox, :activity]))
+    |> Enum.filter(&enabled?/1)
   end
 
   # Resolve the single active destination for a path. A destination matches
@@ -744,6 +765,20 @@ defmodule PlatformWeb.Components.IconRail do
         hero_icon: "hero-video-camera",
         cluster: :working,
         fabrikam_only?: false
+      },
+      %{
+        # Task 01a0cf21 stage 4: the Email module. Its own module in the
+        # Working cluster (not an admin screen), gated by MAIL_ENABLED
+        # through `Platform.Mail.Config.enabled?/0` — the only env-gated
+        # destination, hence the `:enabled?` predicate. Account management
+        # inside it is org-admin-only, enforced in `Platform.Mail`.
+        key: :email,
+        label: "Email",
+        path: "/email",
+        hero_icon: "hero-envelope",
+        cluster: :working,
+        fabrikam_only?: false,
+        enabled?: &Platform.Mail.Config.enabled?/0
       },
 
       # Admin cluster — Fabrikam-only, gated by `is_fabrikam_user`

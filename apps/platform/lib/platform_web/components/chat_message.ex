@@ -360,6 +360,32 @@ defmodule PlatformWeb.Components.ChatMessage do
             <span>Correction to earlier message</span>
           </button>
 
+          <%!-- Inbound email provenance (task 01a0cf21 stage 3). An email is
+             outside text posted by the "Email (external)" system participant,
+             so it is labelled as such above the body rather than looking like
+             a Suite participant's own message. Values come from the message
+             metadata `Platform.Mail.Inbound` stamped; HEEx escapes them. --%>
+          <% email_meta = email_inbound_metadata(@msg) %>
+          <div
+            :if={email_meta}
+            data-role="mail-inbound-provenance"
+            class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-base-content/60 mb-1"
+          >
+            <span class="hero-envelope size-3.5 shrink-0" aria-hidden="true"></span>
+            <span>
+              Email to {email_meta["account_address"] || "this account"}, from {email_meta[
+                "from"
+              ] || "an unknown sender"}
+            </span>
+            <span
+              :if={email_meta["message_id"]}
+              data-role="mail-inbound-message-id"
+              class="font-mono break-all"
+            >
+              {email_meta["message_id"]}
+            </span>
+          </div>
+
           <%!-- Inline editor (task 019e0f29 Stage 5). When this message is
              the one being edited, render the editor in place of the
              bubble. Otherwise render the bubble as before. --%>
@@ -780,4 +806,12 @@ defmodule PlatformWeb.Components.ChatMessage do
   end
 
   defp format_day_label(_), do: ""
+
+  # Metadata of an inbound-email message (task 01a0cf21 stage 3), or nil.
+  defp email_inbound_metadata(msg) do
+    case Map.get(msg, :metadata) do
+      %{"source" => "email_inbound"} = metadata -> metadata
+      _ -> nil
+    end
+  end
 end

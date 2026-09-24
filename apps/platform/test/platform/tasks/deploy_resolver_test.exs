@@ -66,6 +66,32 @@ defmodule Platform.Tasks.DeployResolverTest do
                DeployResolver.resolve(project, "production")
     end
 
+    # Task 01a0cf21 stage 6. A project configured with bare-string targets
+    # (`["staging", "production"]`) used to raise FunctionClauseError out of
+    # `&1["name"]`; the router's deploy diagnostic reaches this call, and on
+    # 2026-08-26 that raise took the TaskRouter down. Built as a struct:
+    # the point is the shape the resolver is handed, whatever wrote it.
+    test "bare-string targets answer target_not_found instead of raising" do
+      project = %Platform.Tasks.Project{
+        deploy_config: %{"deploy_targets" => ["staging", "production"]}
+      }
+
+      assert {:error, {:target_not_found, "production"}} =
+               DeployResolver.resolve(project, "production")
+
+      assert {:error, {:target_not_found, "nope"}} = DeployResolver.resolve(project, "nope")
+    end
+
+    test "a map target still resolves when bare strings sit beside it" do
+      project = %Platform.Tasks.Project{
+        deploy_config: %{"deploy_targets" => ["staging", @docker_target, 42, nil]}
+      }
+
+      assert {:ok, target} = DeployResolver.resolve(project, "production")
+      assert target["type"] == "docker_compose"
+      assert {:error, {:target_not_found, "staging"}} = DeployResolver.resolve(project, "staging")
+    end
+
     test "returns error when deploy_config is nil" do
       {:ok, project} = Tasks.create_project(%{name: "Empty", deploy_config: nil})
       assert {:error, {:target_not_found, "x"}} = DeployResolver.resolve(project, "x")

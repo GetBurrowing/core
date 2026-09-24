@@ -108,3 +108,56 @@ defmodule PlatformWeb.Components.MoreSheetTest do
     end
   end
 end
+
+defmodule PlatformWeb.Components.MoreSheetMailFlagTest do
+  @moduledoc """
+  The More sheet reads `IconRail.destinations/1`, so the Email module's flag
+  (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6 stage 4) reaches it from the one
+  place: flag off, no Email row; flag on, an Email row under Working.
+
+  async: false — flips `:mail_enabled`.
+  """
+  use ExUnit.Case, async: false
+
+  import Phoenix.Component
+  import Phoenix.LiveViewTest
+  import PlatformWeb.Components.MoreSheet
+
+  defp with_mail(enabled) do
+    previous = Application.fetch_env(:platform, :mail_enabled)
+    Application.put_env(:platform, :mail_enabled, enabled)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:platform, :mail_enabled, value)
+        :error -> Application.delete_env(:platform, :mail_enabled)
+      end
+    end)
+  end
+
+  defp render_sheet do
+    assigns = %{}
+
+    rendered_to_string(~H"""
+    <.more_sheet open={true} is_fabrikam_user={false} current_user={nil} />
+    """)
+  end
+
+  test "flag off: no Email row" do
+    with_mail(false)
+    html = render_sheet()
+    assert html =~ ~s(data-destination="meetings")
+    refute html =~ ~s(data-destination="email")
+  end
+
+  test "flag on: one Email row, in the Working section" do
+    with_mail(true)
+    html = render_sheet()
+    doc = LazyHTML.from_fragment(html)
+    assert doc |> LazyHTML.query(~s([data-destination="email"])) |> Enum.count() == 1
+
+    {working_at, _} = :binary.match(html, ">Working<")
+    {email_at, _} = :binary.match(html, ~s(data-destination="email"))
+    assert email_at > working_at
+  end
+end

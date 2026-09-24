@@ -699,6 +699,18 @@ defmodule PlatformWeb.Router do
       live("/files/:project_id", FilesLive, :show)
       live("/meetings", MeetingLive, :index)
       live("/meetings/:slug", MeetingLive, :show)
+      # Task 01a0cf21 stage 4: the Email module. Routes are compile-time, so
+      # `EmailLive.mount/3` 404s when `Platform.Mail.Config.enabled?/0` is
+      # false or the viewer has no non-external membership. `/email/accounts/new`
+      # must stay above `/email/accounts/:id`.
+      live("/email", EmailLive, :index)
+      live("/email/messages/:id", EmailLive, :message)
+      # `/email/drafts/new` must stay above `/email/drafts/:id`.
+      live("/email/drafts/new", EmailLive, :new_draft)
+      live("/email/drafts/:id", EmailLive, :draft)
+      live("/email/accounts", EmailLive, :accounts)
+      live("/email/accounts/new", EmailLive, :new_account)
+      live("/email/accounts/:id", EmailLive, :account)
       live("/skills", SkillsLive, :index)
       live("/skills/:slug", SkillsLive, :show)
       live("/changelog", ChangelogLive, :index)
