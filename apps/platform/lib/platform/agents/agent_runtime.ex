@@ -88,12 +88,12 @@ defmodule Platform.Agents.AgentRuntime do
     hash_token(raw_token) == stored_hash
   end
 
-  @valid_client_products ~w(openclaw claude_channel)
+  @valid_client_products ~w(openclaw claude_channel hermes_channel)
 
   @doc """
   Reads `metadata["client_info"]["product"]` from a runtime (or any map
   with a `:metadata` key) and returns one of `"openclaw"`,
-  `"claude_channel"`, or `"unknown"`.
+  `"claude_channel"`, `"hermes_channel"`, or `"unknown"`.
 
   The `"unknown"` case covers:
 

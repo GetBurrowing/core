@@ -19,7 +19,7 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Meetings
   alias Platform.Meetings.IntentQueue
 
-  @valid_client_products ~w(openclaw claude_channel)
+  @valid_client_products ~w(openclaw claude_channel hermes_channel)
 
   # Bounds on the declared capability set in `client_info.features`.
   #

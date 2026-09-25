@@ -567,6 +567,44 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert is_binary(reloaded.metadata["client_info"]["last_seen_at"])
     end
 
+    # Task 01a0d6c5 stage 2: the Hermes Agent channel plugin.
+    test "join with product hermes_channel persists hermes_channel", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{
+          "client_info" => %{"product" => "hermes_channel", "version" => "0.1.0"}
+        })
+
+      assert joined_socket.assigns.client_info.product == "hermes_channel"
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      assert reloaded.metadata["client_info"]["product"] == "hermes_channel"
+      assert Platform.Agents.AgentRuntime.client_product(reloaded) == "hermes_channel"
+    end
+
+    test "join with an unlisted near-miss product (hermes) still persists unknown", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{
+          "client_info" => %{"product" => "hermes"}
+        })
+
+      assert joined_socket.assigns.client_info.product == "unknown"
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      assert reloaded.metadata["client_info"]["product"] == "unknown"
+    end
+
     test "AgentRuntime.client_product/1 round-trips the persisted value end-to-end", ctx do
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{

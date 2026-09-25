@@ -104,6 +104,21 @@ defmodule Platform.Orchestration.ProviderGuidanceTest do
 
       assert ProviderGuidance.for_agent(agent, runtime) == ""
     end
+
+    # Task 01a0d6c5 stage 2: a Hermes Agent cannot follow the Claude Code
+    # "spawn via the Agent tool" instruction, even when its model is Claude.
+    # Without the hermes_channel clause this raises CaseClauseError (the case
+    # has no catch-all), and without the allowlist entry it falls through to
+    # the model-name path and returns the Claude block.
+    test "hermes_channel runtime with a claude-named model gets empty guidance" do
+      runtime = %AgentRuntime{
+        metadata: %{"client_info" => %{"product" => "hermes_channel", "version" => "0.1.0"}}
+      }
+
+      agent = %Agent{slug: "hermes-claude", model_config: %{"primary" => "claude-opus-4-7"}}
+
+      assert ProviderGuidance.for_agent(agent, runtime) == ""
+    end
   end
 
   describe "claude_subagent_guidance/0" do

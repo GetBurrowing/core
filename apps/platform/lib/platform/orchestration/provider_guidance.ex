@@ -11,7 +11,10 @@ defmodule Platform.Orchestration.ProviderGuidance do
 
     1. Federation handshake — `runtime.metadata["client_info"]["product"]`
        via `AgentRuntime.client_product/1`. `"claude_channel"` returns the
-       Claude block; `"openclaw"` returns `""`.
+       Claude block; `"openclaw"` and `"hermes_channel"` return `""` (the
+       Hermes Agent channel plugin cannot follow the Agent-tool instruction,
+       even when its model is Claude, so it must not reach the model-name
+       fallback).
     2. Model-name fallback — when `client_product/1` is `"unknown"` (older
        runtimes that haven't declared yet), check `agent.model_config["primary"]`
        against `~r/^claude/i`.
@@ -42,6 +45,7 @@ defmodule Platform.Orchestration.ProviderGuidance do
     case product_for(runtime) do
       "claude_channel" -> @claude_subagent_guidance
       "openclaw" -> ""
+      "hermes_channel" -> ""
       "unknown" -> guidance_from_model(agent)
     end
   end

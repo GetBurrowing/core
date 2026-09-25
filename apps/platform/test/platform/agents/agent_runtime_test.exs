@@ -148,6 +148,22 @@ defmodule Platform.Agents.AgentRuntimeTest do
       assert AgentRuntime.client_product(runtime) == "claude_channel"
     end
 
+    # Task 01a0d6c5 stage 2: the Hermes Agent channel plugin declares
+    # `hermes_channel`. Without it in the allowlist the runtime reads as
+    # "unknown" and falls through to the model-name guidance path.
+    test "returns \"hermes_channel\" when metadata.client_info.product is \"hermes_channel\"" do
+      runtime = %AgentRuntime{
+        metadata: %{"client_info" => %{"product" => "hermes_channel", "version" => "0.1.0"}}
+      }
+
+      assert AgentRuntime.client_product(runtime) == "hermes_channel"
+    end
+
+    test "returns \"unknown\" for a near-miss of hermes_channel (allowlist is exact)" do
+      runtime = %AgentRuntime{metadata: %{"client_info" => %{"product" => "hermes"}}}
+      assert AgentRuntime.client_product(runtime) == "unknown"
+    end
+
     test "returns \"unknown\" when metadata is empty (no client_info ever set)" do
       runtime = %AgentRuntime{metadata: %{}}
       assert AgentRuntime.client_product(runtime) == "unknown"
