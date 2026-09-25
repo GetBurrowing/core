@@ -1,0 +1,25 @@
+# Render fixture (task 01a0d69d stage 2): a GPU host running voice on CUDA.
+schema_version = 1
+
+[install]
+name = "suite-gpu-test"
+
+[domain]
+primary = "suite-gpu.test"
+tls = "acme"
+acme_email = "ops@suite-gpu.test"
+
+[host]
+gpu = true
+
+[services]
+files = true
+memory = false
+voice = true
+embeddings = false
+
+[voice]
+accelerator = "cuda"
+
+[images]
+source = "preloaded"

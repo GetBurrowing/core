@@ -126,7 +126,7 @@ defmodule Platform.OIDC do
       user_url: issuer <> "/userinfo",
       token_url: issuer <> "/token",
       authorize_url: issuer <> "/authorize",
-      http_adapter: config(:http_adapter)
+      http_adapter: http_adapter()
     ] ++ pkce_config()
   end
 
@@ -156,6 +156,25 @@ defmodule Platform.OIDC do
     config!(:issuer)
     |> String.trim_trailing("/")
   end
+
+  @doc """
+  The HTTP adapter Assent uses for discovery, token and userinfo calls.
+
+  Assent's `Assent.HTTPAdapter.Httpc`, when given no trust store, verifies
+  against `:certifi.cacerts()`, a list compiled into certifi.beam that no file
+  can extend. So the bare module (the config.exs value) is resolved to the same
+  CAStore bundle `config/runtime.exs` installs as core's global trust store,
+  and one file decides what core trusts (ADR 0053). Only `:cacertfile` is
+  supplied: Assent still adds `verify: :verify_peer` and hostname checking.
+  Any other configured adapter (e.g. `{Assent.HTTPAdapter.Mint, []}` in test)
+  is passed through unchanged.
+  """
+  def http_adapter(configured \\ config(:http_adapter))
+
+  def http_adapter(Assent.HTTPAdapter.Httpc),
+    do: {Assent.HTTPAdapter.Httpc, ssl: [cacertfile: CAStore.file_path()]}
+
+  def http_adapter(configured), do: configured
 
   defp config(key) do
     Application.get_env(:platform, :oidc, [])

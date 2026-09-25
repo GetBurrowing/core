@@ -534,3 +534,30 @@ jobs:
             docker.io/example/suite-core:${{ steps.vars.outputs.branch_tag }}
             docker.io/example/suite-core:${{ github.sha }}
             docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}
+
+  # Install-manifest tooling (ADR 0053, task 01a0d69d): the validator and the
+  # single-host renderer under deployment/installer. Python STANDARD LIBRARY
+  # only, so the stock image needs no apt or pip step.
+  #
+  # `--user 1000:1000` is safe here, unlike in `test`, precisely because
+  # nothing is installed; and it is required on this self-hosted runner, where
+  # a root container leaves root-owned files in the shared `_work` checkout
+  # (see the WORKSPACE OWNERSHIP note on `test` above).
+  #
+  # The image has no git, so actions/checkout falls back to a REST download
+  # with no .git directory; the renderer's git-worktree refusal test builds its
+  # own .git fixtures and does not depend on the checkout being a repository.
+  installer:
+    name: Installer (validate + render)
+    runs-on: [self-hosted, linux, x64]
+    container:
+      image: python:3.12-slim
+      options: --user 1000:1000
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run installer unit tests
+        env:
+          PYTHONPATH: deployment/installer
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s deployment/installer/tests -v

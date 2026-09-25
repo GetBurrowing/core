@@ -1,0 +1,25 @@
+# Render fixture (task 01a0d69d stage 2): one bring-your-own model endpoint.
+# The positive control for the no-baked-endpoints test: its base_url must render.
+schema_version = 1
+
+[install]
+name = "suite-byo-test"
+
+[domain]
+primary = "suite-byo.test"
+tls = "internal"
+
+[services]
+files = false
+memory = false
+voice = false
+embeddings = false
+
+[[models.endpoints]]
+name = "own-llm"
+kind = "byo"
+base_url = "https://llm.byo-endpoint.example/v1"
+api_key_ref = "OWN_LLM_API_KEY"
+
+[images]
+source = "preloaded"

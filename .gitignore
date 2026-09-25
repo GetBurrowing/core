@@ -53,3 +53,7 @@ apps/platform/priv/meetings.yml
 # it ships inside the release image. It exists ONLY inside the image — never
 # commit a second copy of docs/decisions/ here, two copies drift.
 apps/platform/priv/adr_decisions/
+
+# Python (deployment/installer)
+__pycache__/
+*.pyc

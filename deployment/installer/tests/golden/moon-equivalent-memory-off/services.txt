@@ -1,0 +1,6 @@
+caddy
+core-platform
+core-postgres
+embeddings
+files-service
+pocket-id

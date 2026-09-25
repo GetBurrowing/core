@@ -1,0 +1,57 @@
+# Example install manifest, schema v1 (ADR 0053, deployment/schema/install-manifest.md).
+#
+# A safe, non-personal example (ADR 0003) with the same service set as a
+# production single-host install: core + postgres + files + memory + local
+# embeddings, bundled pocket-id for sign-in. It is the positive-control fixture
+# for the validator tests and the manifest booted by the throwaway-VM proof.
+#
+# Voice is off because the proof VM has no GPU. The [voice] table still says
+# cuda so that the gpu_required rule is one field away: turn services.voice on
+# only on a host that also sets host.gpu = true, or set accelerator = "cpu".
+#
+# There is deliberately no [[models.endpoints]] entry: an install has no model
+# endpoint unless its owner declares one (local, hosted or byo).
+
+schema_version = 1
+
+[install]
+name = "suite-01a0d69d"
+size_tier = "medium"
+
+[domain]
+primary = "suite-01a0d69d.test"
+tls = "internal"
+
+[host]
+gpu = false
+
+[services]
+files = true
+memory = true
+voice = false
+embeddings = true
+
+[voice]
+accelerator = "cuda"
+
+[embeddings]
+mode = "local"
+
+[models]
+endpoints = [
+  { name = "llm", kind = "byo", base_url = "https://llm-a.example.com/v1" },
+  { name = "llm", kind = "hosted", base_url = "https://llm-b.example.com/v1" },
+]
+
+[auth]
+mode = "bundled-pocket-id"
+
+[backup]
+target = "none"
+
+[images]
+source = "preloaded"
+
+[day2]
+upgrade_channel = "stable"
+phone_home = false

@@ -1,0 +1,3 @@
+# The proof scripts source lib.sh from their own directory.
+external-sources=true
+source-path=SCRIPTDIR

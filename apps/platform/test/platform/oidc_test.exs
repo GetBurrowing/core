@@ -156,4 +156,37 @@ defmodule Platform.OIDCTest do
       end
     end
   end
+
+  # ADR 0053 (task 01a0d69d stage 3): Assent's Httpc adapter with no trust
+  # store verifies against :certifi.cacerts(), compiled into certifi.beam, so an
+  # install's own root (tls = internal) could never be trusted and /auth/login
+  # answered 500. Measured on a throwaway VM: the install root was in CAStore's
+  # file and in :public_key.cacerts_get(), and absent from :certifi.cacerts().
+  describe "http_adapter/1 trust store" do
+    test "prod configures the bare Httpc adapter (the value http_adapter/1 resolves)" do
+      config = Config.Reader.read!(Path.expand("../../config/config.exs", __DIR__), env: :prod)
+
+      assert get_in(config, [:platform, :oidc, :http_adapter]) == Assent.HTTPAdapter.Httpc
+    end
+
+    test "the bare Httpc adapter verifies against CAStore's file, the global trust store" do
+      assert OIDC.http_adapter(Assent.HTTPAdapter.Httpc) ==
+               {Assent.HTTPAdapter.Httpc, ssl: [cacertfile: CAStore.file_path()]}
+
+      assert File.read!(CAStore.file_path()) =~ "-----BEGIN CERTIFICATE-----"
+    end
+
+    test "only the trust store is supplied, so Assent keeps peer and hostname verification" do
+      {Assent.HTTPAdapter.Httpc, opts} = OIDC.http_adapter(Assent.HTTPAdapter.Httpc)
+
+      # Assent.HTTPAdapter.Httpc adds verify: :verify_peer, a hostname
+      # verify_fun and customize_hostname_check only when :verify_fun is absent.
+      assert Keyword.keys(opts[:ssl]) == [:cacertfile]
+    end
+
+    test "any other configured adapter passes through unchanged" do
+      assert OIDC.http_adapter({Assent.HTTPAdapter.Mint, []}) == {Assent.HTTPAdapter.Mint, []}
+      assert OIDC.http_adapter(nil) == nil
+    end
+  end
 end

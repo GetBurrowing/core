@@ -1,0 +1,659 @@
+"""Tests for the single-host renderer (ADR 0053, task 01a0d69d stage 2).
+
+Run: PYTHONPATH=deployment/installer python3 -m unittest discover -s deployment/installer/tests -v
+
+Design:
+- Every class renders the shipped moon-equivalent example FIRST (positive
+  control), so a renderer that emits nothing, or refuses everything, fails
+  loudly instead of passing the absence checks.
+- (a) Golden files are compared byte-for-byte, whole-file, after secret values
+  are replaced with ``<secret:NAME>``: a raw full-content assertion catches a
+  widened render as well as a narrowed one.
+- (b) Knob semantics are checked for EVERY optional service against the
+  identifiers the registry says that service owns: all present when on (the
+  positive control for the absence check), none present when off.
+- Secret values are only ever compared in memory; no test prints one.
+
+Regenerate golden files after an intended change with
+``SUITE_INSTALL_UPDATE_GOLDEN=1`` and review the diff.
+"""
+
+import contextlib
+import copy
+import difflib
+import io
+import os
+import re
+import shutil
+import stat
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+INSTALLER = os.path.dirname(HERE)
+REPO = os.path.dirname(os.path.dirname(INSTALLER))
+EXAMPLE = os.path.join(REPO, "deployment", "examples", "moon-equivalent.install.toml")
+RENDER_FIXTURES = os.path.join(HERE, "render_fixtures")
+GOLDEN = os.path.join(HERE, "golden")
+
+sys.path.insert(0, INSTALLER)
+
+from suite_install import registry
+from suite_install.__main__ import main
+from suite_install.manifest import load
+from suite_install.render import TARGETS, RenderError, build, plan, render
+from suite_install.secrets import parse_env_file
+from suite_install.validate import validate
+
+MEMORY_OFF = os.path.join(RENDER_FIXTURES, "moon-equivalent-memory-off.toml")
+VOICE_CUDA = os.path.join(RENDER_FIXTURES, "voice-cuda-gpu.toml")
+BYO = os.path.join(RENDER_FIXTURES, "byo-endpoint.toml")
+
+GOLDEN_CASES = {
+    "moon-equivalent": EXAMPLE,
+    "moon-equivalent-memory-off": MEMORY_OFF,
+}
+
+# Host literals and agent-harness settings of ours that must never be rendered
+# unless a manifest declares them (Rowan, 2026-09-25).
+FORBIDDEN = ("ellis", "192.168.", "lightning", "OPENCLAW_")
+
+MEMORY_EXPECTED_IDENTIFIERS = {
+    "memory-service",
+    "MEMORY_SERVICE_URL",
+    "MEMORY_SERVICE_API_KEY",
+    "MEMORY_API_KEY",
+    "MEMORY_DATABASE_URL",
+    "MEMORY_DB_PASSWORD",
+    "MEMORY_EMBEDDING_URL",
+    "MEMORY_EMBEDDING_BACKEND",
+    "MEMORY_EMBEDDING_MODEL",
+    "MEMORY_HOST",
+    "MEMORY_PORT",
+    "10-memory.sql",
+}
+
+
+def manifest_from(path):
+    errors, normalized = validate(load(path))
+    if errors:
+        raise AssertionError(f"fixture {path} is invalid: {errors}")
+    return normalized
+
+
+def valid(raw):
+    errors, normalized = validate(raw)
+    if errors:
+        raise AssertionError(f"mutated manifest is invalid: {errors}")
+    return normalized
+
+
+def all_text(rendered):
+    return "\n".join(text for text, _mode in rendered.files.values())
+
+
+def run_cli(*argv):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = main(list(argv))
+    return code, out.getvalue()
+
+
+class TempDirMixin:
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="suite-install-01a0d69d-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        if _inside_git(self.tmp):
+            self.skipTest(f"the temp dir {self.tmp} is inside a git work tree")
+
+
+def _inside_git(path):
+    from suite_install.render import inside_git_worktree
+
+    return inside_git_worktree(path)
+
+
+class PositiveControlMixin:
+    """Render the shipped example before anything else in the class."""
+
+    @classmethod
+    def setUpClass(cls):
+        rendered = build(manifest_from(EXAMPLE))
+        for required in ("compose.yaml", "Caddyfile", "user-data", "secrets.env"):
+            if not rendered.files.get(required, ("", 0))[0].strip():
+                raise AssertionError(f"positive control failed: {required} is empty")
+
+
+# ---------------------------------------------------------------------------
+# (a) golden files
+# ---------------------------------------------------------------------------
+
+
+class GoldenTest(PositiveControlMixin, unittest.TestCase):
+    def check_golden(self, case):
+        redacted = build(manifest_from(GOLDEN_CASES[case])).redacted()
+        golden_dir = os.path.join(GOLDEN, case)
+        if os.environ.get("SUITE_INSTALL_UPDATE_GOLDEN") == "1":
+            shutil.rmtree(golden_dir, ignore_errors=True)
+            for rel, text in redacted.items():
+                path = os.path.join(golden_dir, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+        on_disk = {}
+        for root, _dirs, names in os.walk(golden_dir):
+            for name in names:
+                path = os.path.join(root, name)
+                with open(path, encoding="utf-8") as handle:
+                    on_disk[os.path.relpath(path, golden_dir)] = handle.read()
+        self.assertEqual(sorted(redacted), sorted(on_disk), "rendered file set changed")
+        for rel in sorted(redacted):
+            if redacted[rel] != on_disk[rel]:
+                diff = "".join(
+                    difflib.unified_diff(
+                        on_disk[rel].splitlines(True),
+                        redacted[rel].splitlines(True),
+                        f"golden/{case}/{rel}",
+                        "rendered",
+                    )
+                )
+                self.fail(f"{case}/{rel} differs from golden:\n{diff}")
+
+    def test_golden_moon_equivalent(self):
+        self.check_golden("moon-equivalent")
+
+    def test_golden_moon_equivalent_memory_off(self):
+        self.check_golden("moon-equivalent-memory-off")
+
+    def test_golden_files_hold_no_secret_value(self):
+        # Positive control for the search: a raw render's secrets.env DOES
+        # hold its values; the redacted form of the same render holds none.
+        rendered = build(manifest_from(EXAMPLE))
+        values = list(rendered.generated.values())
+        self.assertTrue(all(v in rendered.files["secrets.env"][0] for v in values))
+        for text in rendered.redacted().values():
+            self.assertFalse([v for v in values if v in text])
+
+    def test_memory_off_fixture_differs_from_example_in_one_field(self):
+        on, off = load(EXAMPLE), load(MEMORY_OFF)
+        self.assertTrue(on["services"]["memory"])
+        off["services"]["memory"] = True
+        self.assertEqual(on, off)
+
+
+# ---------------------------------------------------------------------------
+# (b) knob semantics
+# ---------------------------------------------------------------------------
+
+
+def all_on_raw():
+    """The example with every optional service on (GPU host so voice can run)."""
+    raw = load(EXAMPLE)
+    raw["host"]["gpu"] = True
+    for knob in registry.OPTIONAL_SERVICES:
+        raw["services"][knob] = True
+    return raw
+
+
+class KnobTest(PositiveControlMixin, unittest.TestCase):
+    def pair(self, knob):
+        base = all_on_raw()
+        if knob == "embeddings":
+            # memory needs embeddings (memory_requires_embeddings), so the
+            # embeddings knob is flipped with memory off in BOTH renders.
+            base["services"]["memory"] = False
+        off = copy.deepcopy(base)
+        off["services"][knob] = False
+        return valid(base), valid(off)
+
+    def test_every_optional_service_owns_all_of_its_identifiers(self):
+        for knob, container in registry.OPTIONAL_SERVICES.items():
+            with self.subTest(service=container):
+                on, off = self.pair(knob)
+                ids = registry.identifiers(container, registry.Ctx(on))
+                self.assertIn(container, ids)
+                self.assertGreater(len(ids), 1, f"{container} declares only its name")
+                on_text = all_text(build(on))
+                off_text = all_text(build(off))
+                missing = sorted(i for i in ids if i not in on_text)
+                self.assertEqual(missing, [], f"{container} on: identifiers not rendered")
+                leaked = sorted(i for i in ids if i in off_text)
+                self.assertEqual(leaked, [], f"{container} off: identifiers still rendered")
+
+    def test_memory_identifiers_are_the_expected_literal_set(self):
+        # Raw literal, so widening the registry's memory entry is caught too.
+        on, _off = self.pair("memory")
+        self.assertEqual(
+            registry.identifiers("memory-service", registry.Ctx(on)), MEMORY_EXPECTED_IDENTIFIERS
+        )
+
+    def test_memory_diff_removes_only_memory_lines_and_adds_none(self):
+        on = build(manifest_from(EXAMPLE)).redacted()
+        off = build(manifest_from(MEMORY_OFF)).redacted()
+        self.assertEqual(sorted(set(on) - set(off)), ["postgres-init/10-memory.sql"])
+        self.assertEqual(sorted(set(off) - set(on)), [])
+        ids = MEMORY_EXPECTED_IDENTIFIERS
+        for rel in sorted(off):
+            matcher = difflib.SequenceMatcher(
+                a=on[rel].splitlines(), b=off[rel].splitlines(), autojunk=False
+            )
+            for tag, i1, i2, _j1, _j2 in matcher.get_opcodes():
+                if tag == "equal":
+                    continue
+                with self.subTest(file=rel, lines=f"{i1 + 1}-{i2}"):
+                    self.assertEqual(tag, "delete", f"{rel}: memory-off changed or added lines")
+                    hunk = on[rel].splitlines()[i1:i2]
+                    self.assertTrue(
+                        any(i in line for line in hunk for i in ids),
+                        f"{rel}: a removed hunk holds no memory identifier: {hunk}",
+                    )
+
+    def test_no_dangling_reference_for_any_single_service_off(self):
+        for knob in registry.OPTIONAL_SERVICES:
+            with self.subTest(off=knob):
+                _on, off = self.pair(knob)
+                p = plan(off)
+                running = set(p.services)
+                for svc in p.services.values():
+                    self.assertLessEqual(set(svc.depends_on), running)
+                rendered = build(off)
+                text = all_text(rendered)
+                self.assertNotIn("{secret:", text)
+                self.assertNotIn("{customer:", text)
+                compose_services = re.findall(
+                    r"^  ([a-z][a-z0-9-]*):$", rendered.files["compose.yaml"][0], re.MULTILINE
+                )
+                self.assertEqual(compose_services, p.containers)
+                self.assertEqual(
+                    rendered.files["services.txt"][0].split(), registry.enabled_containers(off)
+                )
+
+    def test_endpoint_embeddings_runs_no_container_and_leaves_no_edge_to_it(self):
+        # memory-service declares depends_on embeddings; in endpoint mode the
+        # capability is on but no embeddings container runs, so the edge,
+        # the model mount and the model-file check must all go.
+        raw = load(EXAMPLE)
+        raw["embeddings"] = {"mode": "endpoint", "base_url": "https://emb.customer.example/v1"}
+        m = valid(raw)
+        p = plan(m)
+        self.assertNotIn("embeddings", p.services)
+        self.assertEqual(sorted(p.services["memory-service"].depends_on), ["core-postgres"])
+        compose = build(m).files["compose.yaml"][0]
+        self.assertIn('MEMORY_EMBEDDING_URL: "https://emb.customer.example/v1"', compose)
+        self.assertNotIn("embeddings:", compose)
+        self.assertNotIn("/models", all_text(build(m)))
+
+    def test_compose_and_user_data_parse_as_yaml(self):
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML not installed (stdlib-only CI container)")
+        rendered = build(valid(all_on_raw()))
+        compose = yaml.safe_load(rendered.files["compose.yaml"][0])
+        self.assertEqual(
+            sorted(compose["services"]), registry.enabled_containers(valid(all_on_raw()))
+        )
+        user_data = rendered.files["user-data"][0]
+        self.assertTrue(user_data.startswith("#cloud-config\n"))
+        doc = yaml.safe_load(user_data)
+        by_path = {w["path"]: w for w in doc["write_files"]}
+        for rel, (text, mode) in rendered.files.items():
+            if rel in ("user-data", "meta-data", "registry-auth.json"):
+                continue
+            entry = by_path[f"/opt/suite/{rel}"]
+            self.assertEqual(entry["content"], text, rel)
+            self.assertEqual(entry["permissions"], f"0{mode:o}", rel)
+
+
+# ---------------------------------------------------------------------------
+# (c) (d) secrets
+# ---------------------------------------------------------------------------
+
+
+class SecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
+    def test_every_generated_secret_differs_between_fresh_renders(self):
+        m = manifest_from(EXAMPLE)
+        first, second = build(m).generated, build(m).generated
+        self.assertEqual(sorted(first), sorted(second))
+        self.assertGreaterEqual(len(first), 11)
+        same = sorted(n for n in first if first[n] == second[n])
+        self.assertEqual(same, [])
+
+    def test_reuse_secrets_keeps_every_value(self):
+        m = manifest_from(EXAMPLE)
+        out = os.path.join(self.tmp, "one")
+        first = render(m, out).generated
+        again = build(m, reuse_secrets=os.path.join(out, "secrets.env")).generated
+        self.assertEqual(sorted(first), sorted(again))
+        self.assertEqual([n for n in first if first[n] != again[n]], [])
+
+    def test_reuse_after_memory_off_drops_memory_secrets_only(self):
+        out = os.path.join(self.tmp, "on")
+        on = render(manifest_from(EXAMPLE), out).generated
+        off = build(manifest_from(MEMORY_OFF), reuse_secrets=os.path.join(out, "secrets.env"))
+        self.assertEqual(
+            sorted(set(on) - set(off.generated)), ["MEMORY_DB_PASSWORD", "MEMORY_SERVICE_API_KEY"]
+        )
+        self.assertEqual([n for n in off.generated if off.generated[n] != on[n]], [])
+        names = [line.split("=", 1)[0] for line in off.files["secrets.env"][0].splitlines()]
+        self.assertFalse([n for n in names if n.startswith("MEMORY_")])
+
+    def test_generated_values_never_in_compose_or_caddyfile(self):
+        rendered = build(manifest_from(EXAMPLE))
+        values = rendered.generated
+        secrets_env = rendered.files["secrets.env"][0]
+        # Positive control: the same search hits every value in secrets.env.
+        self.assertEqual([n for n, v in values.items() if v not in secrets_env], [])
+        for rel in ("compose.yaml", "Caddyfile", "services.txt", "meta-data"):
+            text = rendered.files[rel][0]
+            self.assertEqual([n for n, v in values.items() if v in text], [], rel)
+
+    def test_secret_files_are_written_0600_and_out_dir_0700(self):
+        out = os.path.join(self.tmp, "modes")
+        render(manifest_from(EXAMPLE), out)
+        self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o700)
+        for rel in ("secrets.env", "user-data"):
+            self.assertEqual(stat.S_IMODE(os.stat(os.path.join(out, rel)).st_mode), 0o600, rel)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(out, "compose.yaml")).st_mode), 0o644)
+
+    def test_generated_formats_match_their_consumers(self):
+        import base64
+
+        values = build(manifest_from(EXAMPLE)).generated
+        self.assertEqual(len(base64.b64decode(values["VAULT_MASTER_KEY"], validate=True)), 32)
+        self.assertGreaterEqual(len(values["SECRET_KEY_BASE"]), 64)
+        for name in (
+            "ATTACHMENT_SIGNING_KEY",
+            "MEETING_GUEST_SIGNING_KEY",
+            "MEETING_CALENDAR_SIGNING_KEY",
+        ):
+            self.assertGreaterEqual(len(values[name]), 32, name)
+        for name in ("POSTGRES_PASSWORD", "MEMORY_DB_PASSWORD"):
+            self.assertRegex(values[name], r"^[0-9a-f]{48}$", name)
+        for name, value in values.items():
+            self.assertNotRegex(value, r"[\s\"'$`\\#]", name)
+
+    def test_cli_render_prints_names_never_values(self):
+        out = os.path.join(self.tmp, "cli")
+        code, stdout = run_cli("render", EXAMPLE, "--out", out)
+        self.assertEqual(code, 0, stdout)
+        values = parse_env_file(os.path.join(out, "secrets.env"))
+        self.assertIn("secret generated-or-reused POSTGRES_PASSWORD", stdout)
+        self.assertIn("file secrets.env 0600", stdout)
+        self.assertEqual([n for n, v in values.items() if v in stdout], [])
+
+    def test_customer_secret_is_required_and_kept_out_of_secrets_env(self):
+        m = manifest_from(BYO)
+        with self.assertRaises(RenderError) as ctx:
+            build(m)
+        self.assertEqual(ctx.exception.code, "customer_secret_missing")
+        self.assertEqual(ctx.exception.path, "models.endpoints[0].api_key_ref")
+        supplied = os.path.join(self.tmp, "customer.env")
+        with open(supplied, "w") as handle:
+            handle.write("OWN_LLM_API_KEY=customer-value-01a0d69d\nUNUSED=x\n")
+        rendered = build(m, customer_secrets=supplied)
+        self.assertEqual(sorted(rendered.customer), ["OWN_LLM_API_KEY"])
+        self.assertIn("customer-value-01a0d69d", rendered.files["customer-secrets.env"][0])
+        for rel in ("secrets.env", "compose.yaml", "Caddyfile", "models.json"):
+            self.assertNotIn("customer-value-01a0d69d", rendered.files[rel][0], rel)
+        self.assertNotIn("UNUSED", all_text(rendered))
+
+    def test_customer_ref_cannot_shadow_a_generated_name(self):
+        raw = load(BYO)
+        raw["models"]["endpoints"][0]["api_key_ref"] = "SECRET_KEY_BASE"
+        supplied = os.path.join(self.tmp, "customer.env")
+        with open(supplied, "w") as handle:
+            handle.write("SECRET_KEY_BASE=x\n")
+        with self.assertRaises(RenderError) as ctx:
+            build(valid(raw), customer_secrets=supplied)
+        self.assertEqual(ctx.exception.code, "customer_secret_conflict")
+
+    def test_registry_source_needs_registry_auth(self):
+        raw = load(EXAMPLE)
+        raw["images"]["source"] = "registry"
+        with self.assertRaises(RenderError) as ctx:
+            build(valid(raw))
+        self.assertEqual(ctx.exception.code, "registry_auth_required")
+        auth = os.path.join(self.tmp, "config.json")
+        with open(auth, "w") as handle:
+            handle.write('{"auths": {"docker.io": {"auth": "c2VjcmV0LTAxYTBkNjlk"}}}\n')
+        rendered = build(valid(raw), registry_auth=auth)
+        self.assertEqual(rendered.files["registry-auth.json"][1], 0o600)
+        self.assertIn("/root/.docker/config.json", rendered.files["user-data"][0])
+        self.assertNotIn("pull_policy", rendered.files["compose.yaml"][0])
+        self.assertNotIn("ConditionPathExists", rendered.files["user-data"][0])
+        for rel in ("compose.yaml", "Caddyfile", "secrets.env"):
+            self.assertNotIn("c2VjcmV0LTAxYTBkNjlk", rendered.files[rel][0], rel)
+        self.assertNotIn("c2VjcmV0LTAxYTBkNjlk", "".join(rendered.redacted().values()))
+
+    def test_preloaded_gates_the_unit_and_never_pulls(self):
+        rendered = build(manifest_from(EXAMPLE))
+        self.assertIn(
+            "ConditionPathExists=/opt/suite/.images-loaded", rendered.files["user-data"][0]
+        )
+        compose = rendered.files["compose.yaml"][0]
+        self.assertEqual(
+            compose.count('pull_policy: "never"'),
+            len(registry.enabled_containers(manifest_from(EXAMPLE))),
+        )
+        self.assertIn("--pull never", rendered.files["user-data"][0])
+
+
+# ---------------------------------------------------------------------------
+# (e) no baked endpoints
+# ---------------------------------------------------------------------------
+
+
+class NoBakedEndpointsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
+    def test_byo_endpoint_base_url_renders(self):
+        # Positive control: a declared endpoint DOES reach the render, so the
+        # absence check below can fail.
+        supplied = os.path.join(self.tmp, "customer.env")
+        with open(supplied, "w") as handle:
+            handle.write("OWN_LLM_API_KEY=k\n")
+        rendered = build(manifest_from(BYO), customer_secrets=supplied)
+        self.assertIn("https://llm.byo-endpoint.example/v1", rendered.files["models.json"][0])
+        self.assertIn("https://llm.byo-endpoint.example/v1", rendered.files["user-data"][0])
+
+    def test_manifest_without_models_renders_no_literal_of_ours(self):
+        for path in (EXAMPLE, MEMORY_OFF, VOICE_CUDA):
+            with self.subTest(manifest=os.path.basename(path)):
+                m = manifest_from(path)
+                self.assertEqual(m["models"]["endpoints"], [])
+                rendered = build(m)
+                self.assertNotIn("models.json", rendered.files)
+                text = all_text(rendered)
+                # The default image refs live under the docker.io/example
+                # namespace (the stage's own defaults), which contains
+                # "ellis". An image namespace is not a host or endpoint,
+                # so image refs are removed before the search, and the only
+                # "ellis" left anywhere must be inside one of them.
+                images = {svc.image for svc in plan(m).services.values()}
+                self.assertEqual(text.count("ellis"), text.count("example/"))
+                for image in sorted(images, key=len, reverse=True):
+                    text = text.replace(image, "<image>")
+                self.assertEqual([f for f in FORBIDDEN if f in text], [])
+
+    def test_forbidden_search_can_hit(self):
+        raw = load(BYO)
+        raw["models"]["endpoints"][0]["base_url"] = "http://192.168.0.9:8000/v1"
+        raw["models"]["endpoints"][0].pop("api_key_ref")
+        self.assertIn("192.168.", all_text(build(valid(raw))))
+
+
+# ---------------------------------------------------------------------------
+# (f) refuse an output dir inside a git work tree
+# ---------------------------------------------------------------------------
+
+
+class GitTreeTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
+    def test_render_outside_git_succeeds(self):
+        # Positive control: the same layout without .git renders.
+        out = os.path.join(self.tmp, "repo", "out")
+        render(manifest_from(EXAMPLE), out)
+        self.assertTrue(os.path.exists(os.path.join(out, "secrets.env")))
+
+    def test_refuses_inside_a_git_dir_and_writes_nothing(self):
+        for kind in ("dir", "file"):
+            with self.subTest(dot_git=kind):
+                repo = os.path.join(self.tmp, f"repo-{kind}")
+                os.makedirs(repo)
+                if kind == "dir":
+                    os.makedirs(os.path.join(repo, ".git"))
+                else:  # a linked worktree has a .git FILE
+                    with open(os.path.join(repo, ".git"), "w") as handle:
+                        handle.write("gitdir: /elsewhere\n")
+                out = os.path.join(repo, "deep", "out")
+                code, stdout = run_cli("render", EXAMPLE, "--out", out)
+                self.assertEqual(code, 2)
+                self.assertEqual(
+                    [line.split(" at ")[0] for line in stdout.splitlines()],
+                    ["error output_inside_git_worktree"],
+                )
+                self.assertFalse(os.path.exists(os.path.join(repo, "deep")))
+
+    def test_refuses_a_non_empty_out_dir(self):
+        out = os.path.join(self.tmp, "full")
+        os.makedirs(out)
+        with open(os.path.join(out, "stale.sql"), "w") as handle:
+            handle.write("-- from an earlier render\n")
+        with self.assertRaises(RenderError) as ctx:
+            render(manifest_from(EXAMPLE), out)
+        self.assertEqual(ctx.exception.code, "output_not_empty")
+
+    def test_redact_cli_round_trip(self):
+        out = os.path.join(self.tmp, "raw")
+        red = os.path.join(self.tmp, "red")
+        rendered = render(manifest_from(EXAMPLE), out)
+        code, _ = run_cli("redact", out, "--out", red)
+        self.assertEqual(code, 0)
+        for rel, text in rendered.redacted().items():
+            with open(os.path.join(red, rel), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), text, rel)
+
+
+# ---------------------------------------------------------------------------
+# (g) GPU
+# ---------------------------------------------------------------------------
+
+
+class GpuTest(PositiveControlMixin, unittest.TestCase):
+    def test_cuda_voice_on_gpu_host_reserves_the_gpu(self):
+        rendered = build(manifest_from(VOICE_CUDA))
+        compose = rendered.files["compose.yaml"][0]
+        block = compose.split("\n  speaches:\n", 1)[1].split("\nvolumes:", 1)[0]
+        self.assertIn('image: "ghcr.io/speaches-ai/speaches:latest-cuda"', block)
+        self.assertIn('driver: "nvidia"', block)
+        self.assertIn('- "gpu"', block)
+        self.assertEqual(compose.count('driver: "nvidia"'), 1)
+        self.assertIn(
+            'STT_BASE_URL: "http://speaches:8000/v1"',
+            compose.split("\n  files-service:\n", 1)[1],
+        )
+
+    def test_cpu_voice_has_no_reservation(self):
+        raw = load(VOICE_CUDA)
+        raw["voice"]["accelerator"] = "cpu"
+        compose = build(valid(raw)).files["compose.yaml"][0]
+        self.assertIn("speaches:latest-cpu", compose)
+        self.assertNotIn("nvidia", compose)
+
+    def test_voice_off_renders_no_speaches(self):
+        raw = load(VOICE_CUDA)
+        raw["services"]["voice"] = False
+        text = all_text(build(valid(raw)))
+        self.assertNotIn("speaches", text)
+        self.assertNotIn("STT_BASE_URL", text)
+        self.assertNotIn("nvidia", text)
+
+
+# ---------------------------------------------------------------------------
+# Targets and TLS
+# ---------------------------------------------------------------------------
+
+
+class TargetAndTlsTest(PositiveControlMixin, unittest.TestCase):
+    def test_single_host_is_the_default_and_only_target(self):
+        self.assertEqual(sorted(TARGETS), ["single-host"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+            main(["render", EXAMPLE, "--out", "/nonexistent-01a0d69d", "--target", "mac"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("invalid choice: 'mac'", err.getvalue())
+        self.assertFalse(os.path.exists("/nonexistent-01a0d69d"))
+
+    def test_internal_tls_mounts_the_bundle_over_the_measured_castore_path(self):
+        rendered = build(manifest_from(EXAMPLE))
+        compose = rendered.files["compose.yaml"][0]
+        self.assertEqual(registry.CASTORE_PATH, "/app/lib/castore-1.0.17/priv/cacerts.pem")
+        self.assertIn(f'"./tls/ca-bundle.pem:{registry.CASTORE_PATH}:ro"', compose)
+        user_data = rendered.files["user-data"][0]
+        self.assertIn("/opt/suite/bin/suite-root-ca", user_data)
+        self.assertIn(f"castore='{registry.CASTORE_PATH}'", user_data)
+        self.assertIn("\ttls internal\n", rendered.files["Caddyfile"][0])
+        # The root key is generated on the host; no key material is rendered.
+        self.assertNotIn("PRIVATE KEY", all_text(rendered))
+
+    def test_acme_renders_email_and_no_internal_ca(self):
+        rendered = build(manifest_from(VOICE_CUDA))
+        caddy = rendered.files["Caddyfile"][0]
+        self.assertIn("\temail ops@suite-gpu.test\n", caddy)
+        self.assertNotIn("tls internal", caddy)
+        text = all_text(rendered)
+        self.assertNotIn("ca-bundle", text)
+        self.assertNotIn(registry.CASTORE_PATH, text)
+        self.assertNotIn("suite-root-ca", text)
+
+    def test_bundled_auth_wires_core_to_pocket_id(self):
+        compose = build(manifest_from(EXAMPLE)).files["compose.yaml"][0]
+        core = compose.split("\n  core-platform:\n", 1)[1].split("\n  core-postgres:\n", 1)[0]
+        for line in (
+            'OIDC_ISSUER: "https://auth.suite-01a0d69d.test"',
+            'OIDC_PKCE_ENABLED: "true"',
+            'APP_URL: "https://suite-01a0d69d.test"',
+            'PHX_HOST: "suite-01a0d69d.test"',
+        ):
+            self.assertIn(line, core)
+        self.assertIn('- "auth.suite-01a0d69d.test"', compose)
+
+    def test_external_oidc_drops_pocket_id_and_uses_the_customer_secret(self):
+        raw = load(EXAMPLE)
+        raw["auth"] = {
+            "mode": "external-oidc",
+            "issuer": "https://id.customer.example",
+            "client_id": "suite",
+            "client_secret_ref": "CUSTOMER_OIDC_SECRET",
+        }
+        with tempfile.TemporaryDirectory(prefix="suite-install-01a0d69d-") as tmp:
+            supplied = os.path.join(tmp, "c.env")
+            with open(supplied, "w") as handle:
+                handle.write("CUSTOMER_OIDC_SECRET=oidc-value-01a0d69d\n")
+            rendered = build(valid(raw), customer_secrets=supplied)
+        text = all_text(rendered)
+        self.assertNotIn("pocket-id", text)
+        self.assertNotIn("auth.suite-01a0d69d.test", text)
+        self.assertIn("OIDC_CLIENT_SECRET=oidc-value-01a0d69d", rendered.files["secrets.env"][0])
+        self.assertNotIn("customer-secrets.env", rendered.files)
+        self.assertIn(
+            'OIDC_ISSUER: "https://id.customer.example"', rendered.files["compose.yaml"][0]
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class HealthcheckPortTest(unittest.TestCase):
+    """A compose healthcheck must probe the port the service listens on.
+
+    Measured on the throwaway VM (stage 3): llama.cpp's stock HEALTHCHECK
+    probes 8080 while the rendered server listens on 8188, so a healthy
+    embeddings server showed as unhealthy.
+    """
+
+    def test_embeddings_healthcheck_probes_its_listen_port(self):
+        svc = registry.SERVICES["embeddings"]
+        port = svc.command[svc.command.index("--port") + 1]
+        self.assertEqual(svc.healthcheck, ["CMD", "curl", "-f", f"http://localhost:{port}/health"])
