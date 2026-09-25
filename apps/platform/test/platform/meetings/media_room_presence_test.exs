@@ -30,12 +30,16 @@ defmodule Platform.Meetings.MediaRoomPresenceTest do
     do: put_livekit_env(api_key: "k", api_secret: "s-0123456789abcdef", url: "wss://livekit.test")
 
   # The Req.Test pattern `Platform.ExternalAgentsTest` uses: a named stub,
-  # the injected client pointed at it, env cleared on exit.
+  # the injected client pointed at it. On exit the run-wide default client
+  # is RESTORED rather than the key deleted — a delete can race the next
+  # test's stub-arming through the persistent_term mirror and flip the
+  # invite-flash copy (see
+  # `Platform.LivekitStubPlug.restore_default_req_client/0`).
   defp stub_livekit(response_fn) do
     {:ok, _} = Application.ensure_all_started(:req)
     Application.put_env(:platform, :livekit_req_client, Req.new(plug: {Req.Test, :livekit_test}))
     Req.Test.stub(:livekit_test, response_fn)
-    on_exit(fn -> Application.delete_env(:platform, :livekit_req_client) end)
+    on_exit(&Platform.LivekitStubPlug.restore_default_req_client/0)
   end
 
   defp participants(identities) do

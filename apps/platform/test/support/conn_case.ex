@@ -132,10 +132,27 @@ defmodule PlatformWeb.ConnCase do
       # NOT covered, by construction: bare-`spawn` children (task 01a06638 /
       # PR #965). They carry no `$callers`, never resolve an owner, and no
       # ownership-scoped drain can see them. Do not "fix" that here.
+      #
+      # Task 01a0d265 stage 2: the async branch now calls the QUIESCE, not the
+      # bare drain, and the shared branch runs the quiesce after the
+      # unconditional drain. Same ownership scope, one added step: children of
+      # THIS test still alive when the drain deadline passes are terminated
+      # while the owner is still alive, because a wait-only drain provably
+      # cannot quiesce a fire-and-forget lifecycle edge —
+      # `run_architect_edge`'s runner parks in a `receive` on a 30-minute
+      # budget, so the scoped drain below already ran, gave up, and the owner
+      # still exited under a live client: 14 "owner exited, client still
+      # using a connection" events in the baseline full-suite log. A client
+      # that dies BEFORE its owner returns the connection instead of leaking
+      # it. The termination is gated on the owner being alive, which is what
+      # keeps the beyond-drain construction (owner stopped in the body,
+      # orphans parked on the proxy) byte-for-byte what it was. See
+      # `Platform.SandboxHelpers.quiesce_own_or_warn/3`.
       if shared_mode? do
         Platform.SandboxHelpers.drain_or_warn()
+        Platform.SandboxHelpers.quiesce_own_or_warn(test_pid, owner, drain_opts)
       else
-        Platform.SandboxHelpers.drain_own_or_warn(test_pid, drain_opts)
+        Platform.SandboxHelpers.quiesce_own_or_warn(test_pid, owner, drain_opts)
       end
 
       # LAST. Everything above needs a live connection.

@@ -253,6 +253,122 @@ defmodule Platform.SandboxHelpersScopedDrainTest do
     end
   end
 
+  # Task 01a0d265 stage 2. The quiesce is `drain_own_or_warn` plus the
+  # terminal step that makes a fire-and-forget lifecycle edge quiescable at
+  # all: its runner parks in a `receive` on a 30-minute budget, so no
+  # wait-shaped drain can ever see it exit, and the owner-exit disconnect
+  # happens unless the leftover children are terminated BEFORE the owner
+  # stops. These tests pin the three load-bearing properties of that step:
+  # it terminates THIS test's leftovers while the owner is alive, it leaves a
+  # foreign child alone, and it leaves the children of an ALREADY-DEAD owner
+  # untouched — the last one is what
+  # `PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest`'s construction
+  # depends on, where the readings die with the children if the gate is
+  # missing. There is no sandbox in this module, so the "owner" here is a
+  # stand-in pid: the only thing the gate reads is `Process.alive?/1`.
+  describe "quiesce_own_or_warn/3 terminal step" do
+    test "terminates this test's leftover child while the owner stand-in is alive" do
+      test_pid = self()
+
+      {:ok, mine} =
+        Task.Supervisor.start_child(@supervisor, fn ->
+          send(test_pid, {:own_started, self()})
+
+          receive do
+            :release -> :ok
+          after
+            @hold_ms -> :ok
+          end
+        end)
+
+      assert_receive {:own_started, ^mine}, 5_000
+      # Monitor BEFORE the quiesce: the DOWN is the proof the child was
+      # terminated by the terminal step (an exit signal is immediate, so the
+      # message is in the mailbox well before the quiesce returns).
+      ref = Process.monitor(mine)
+
+      owner =
+        spawn(fn ->
+          receive do
+            _msg -> :ok
+          end
+        end)
+
+      {elapsed, :ok} =
+        timed(fn -> SandboxHelpers.quiesce_own_or_warn(test_pid, owner, timeout: 200) end)
+
+      assert elapsed < 3_000,
+             "the terminal step took #{elapsed}ms — the drain and the terminations " <>
+               "should both be sub-second at these deadlines"
+
+      refute Process.alive?(mine),
+             "the leftover child survived a quiesce with the owner alive — the edge " <>
+               "leak this function exists to close is still open"
+
+      assert_receive {:DOWN, ^ref, :process, ^mine, _}, 5_000
+      assert Process.alive?(owner), "the owner stand-in was killed by its own quiesce"
+      send(owner, :stop)
+    end
+
+    test "does not terminate a foreign child" do
+      {foreign_parent, foreign} = start_foreign_child()
+
+      owner =
+        spawn(fn ->
+          receive do
+            _msg -> :ok
+          end
+        end)
+
+      assert :ok = SandboxHelpers.quiesce_own_or_warn(self(), owner, timeout: 200)
+
+      assert Process.alive?(foreign),
+             "the quiesce terminated a child this test does not own — the scoping " <>
+               "that makes the drain admissible in async mode does not hold for the " <>
+               "terminal step"
+
+      send(owner, :stop)
+      stop_foreign_child(foreign_parent, foreign)
+    end
+
+    test "leaves the children of an already-dead owner untouched" do
+      test_pid = self()
+
+      {:ok, mine} =
+        Task.Supervisor.start_child(@supervisor, fn ->
+          send(test_pid, {:own_started, self()})
+
+          receive do
+            :release -> :ok
+          after
+            @hold_ms -> :ok
+          end
+        end)
+
+      assert_receive {:own_started, ^mine}, 5_000
+
+      owner =
+        spawn(fn ->
+          receive do
+            _msg -> :ok
+          end
+        end)
+
+      send(owner, :stop)
+      await_death(owner)
+
+      assert :ok = SandboxHelpers.quiesce_own_or_warn(test_pid, owner, timeout: 200)
+
+      assert Process.alive?(mine),
+             "the quiesce terminated children of a DEAD owner — the beyond-drain " <>
+               "construction's orphans are parked exactly there, and their readings " <>
+               "die with them"
+
+      send(mine, :release)
+      await_death(mine)
+    end
+  end
+
   describe "own_children/2" do
     test "returns [] when the supervisor is not running" do
       assert SandboxHelpers.own_children(self(), :no_such_supervisor_01a08b49) == []

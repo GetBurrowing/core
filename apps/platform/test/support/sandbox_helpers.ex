@@ -115,13 +115,30 @@ defmodule Platform.SandboxHelpers do
   objection above does not apply to it.
 
   `PlatformWeb.ConnCase`'s `async: true` branch calls it (via
-  `drain_own_or_warn/2`) before `Sandbox.stop_owner/1`, which is what
+  `quiesce_own_or_warn/3`, the scoped drain plus the terminal step recorded
+  below) before `Sandbox.stop_owner/1`, which is what
   removes the orphan this module's opening section describes. Both
   directions of the filter are pinned by
   `Platform.SandboxHelpersScopedDrainTest`, in particular that a child
   started by a foreign process is NOT waited for — because "excludes
   everything" would satisfy a one-sided test and would silently reinstate
   the defect.
+
+  ## Why a WAIT is not always enough: the terminal step
+
+  A drain waits for children to EXIT, and a child with no exit inside any
+  teardown-shaped deadline defeats it. Task 01a0d265 stage 2 measured exactly
+  that: the architect gate's lifecycle edge parks its runner in a `receive`
+  on a 30-minute budget, so ConnCase's scoped drain ran, gave up, and the
+  runner was still inside a query when its owner exited — 14
+  "owner exited, client still using a connection" events in one full-suite
+  log, with the drain wired in the whole time. `quiesce_own_or_warn/3` is the
+  scoped drain plus the missing step: after the deadline, terminate the
+  owner's leftovers while the owner is STILL alive (a client that dies first
+  returns its connection; an owner that dies first leaks it), and only in
+  that order. Its doc carries the full argument, including why the
+  termination is gated on the owner being alive — the beyond-drain
+  construction depends on the gate.
 
   ## What NO drain here can see: bare `spawn`
 
@@ -287,14 +304,177 @@ defmodule Platform.SandboxHelpers do
         :ok
 
       {:timeout, active} ->
-        Logger.warning(
-          "[SandboxHelpers] #{active} supervised child(ren) started by " <>
-            "#{inspect(owner_pid)} still running when the sandbox owner released " <>
-            "its connection — their Repo writes will be killed mid-flight. " <>
-            "See Platform.SandboxHelpers's moduledoc."
-        )
+        warn_drain_gave_up(owner_pid, active)
 
         :ok
+    end
+  end
+
+  # One shared warning body for both drains' deadline branch: the wording IS
+  # the finding ("the owner released its connection under a live client"), and
+  # two copies of it would drift.
+  defp warn_drain_gave_up(owner_pid, active) do
+    Logger.warning(
+      "[SandboxHelpers] #{active} supervised child(ren) started by " <>
+        "#{inspect(owner_pid)} still running when the sandbox owner released " <>
+        "its connection — their Repo writes will be killed mid-flight. " <>
+        "See Platform.SandboxHelpers's moduledoc."
+    )
+  end
+
+  # The confirmation wait between termination rounds. Longer than a killed
+  # child needs to die (an exit signal is immediate and the poll interval is
+  # 5 ms), short enough that a stuck terminate cannot hang a teardown.
+  @terminate_confirm_ms 250
+
+  # The quiesce's OWN default for its drain phase. It is NOT the wait-only
+  # drain's 5 s, on purpose, and the difference is measured: the drain phase
+  # of a QUIESCE exists to let in-flight Repo writes land (millisecond-scale —
+  # the baseline leak log shows the edge's writes arriving as single queries),
+  # while the children that actually need quiescing are parked on a 30-minute
+  # gate budget and will NEVER exit inside any drain. Every second of waiting
+  # for them is paid again on every teardown of every plan-submission test,
+  # and the terminal step below is what actually ends them. An explicit
+  # `:timeout` opt (the `sandbox_drain_timeout` tag) still wins untouched.
+  @quiesce_drain_default_ms 1_000
+
+  # Rounds of {snapshot, terminate} after the drain deadline. One is enough for
+  # a child that spawns nothing; the architect gate's edge runner spawns its
+  # own watcher child, and a child that dies between the snapshot and its own
+  # termination can leave that grandchild behind — so the loop re-looks rather
+  # than trusting one snapshot. Three is not a tuned number: a shape needing a
+  # fourth round is a new finding, not a round count.
+  @terminate_rounds 3
+
+  @doc """
+  `drain_own_or_warn/2` plus a terminal step: children of `test_pid` that are
+  STILL alive when the drain deadline passes are terminated — but only while
+  the sandbox `owner_pid` is still alive.
+
+  `test_pid` is the ownership key (the `:"$callers"` filter, exactly as in
+  `await_own_supervised_writes/2`); `owner_pid` is the sandbox owner agent the
+  caller is about to stop. `opts` are the drain's own options; an explicit
+  `:timeout` there is respected as-is, while the default is this function's
+  own `#{@quiesce_drain_default_ms}` ms rather than the wait-only drain's
+  5 s — see `@quiesce_drain_default_ms` above for why.
+
+  ## Why the terminal step exists at all
+
+  `await_own_supervised_writes/2` waits for children to EXIT. A legitimate
+  child can have no exit inside any teardown-shaped deadline. The measured one
+  is the architect gate's lifecycle edge (task 01a0d265 stage 2):
+  `Platform.Tasks.run_architect_edge/1` spawns the edge runner on
+  `Platform.TaskSupervisor` fire-and-forget; the runner parks in a `receive`
+  waiting for the gate to resolve — a human timescale, `Lifecycle.step_timeout_ms/0`
+  ships 30 minutes — while its watcher child polls the gate row once per
+  second through the test's sandbox owner. When the test finishes first the
+  owner exits, and every client still inside a query dies as
+  `owner #PID<…> exited — Client #PID<…> is still using a connection from
+  owner`: one pool connection withheld per event. The scoped drain alone does
+  not prevent this — the baseline full-suite log for task 01a0d265 shows 14
+  such events attributable to the edge in a run where ConnCase's caller-scoped
+  drain was already wired in, because no wait outlasts a 30-minute budget.
+
+  Terminating the client BEFORE the owner exits is what that error is defined
+  against: `DBConnection` returns a connection whose client died to the
+  still-alive owner silently, while an owner that dies under a live client is
+  the disconnect event this module exists to prevent. So the order is: drain
+  (in-flight writes land inside the still-open sandbox transaction), then
+  terminate the leftovers, then — in the caller — `Sandbox.stop_owner/1`.
+
+  ## Why the termination is gated on the owner being alive
+
+  If the owner is already gone when the drain gives up, the disconnect has
+  already happened and a termination would save no connection — it would only
+  destroy whatever those children had left to record.
+  `PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest` DEPENDS on that: its
+  owner is stopped by the test body on purpose, its orphans are parked on the
+  ownership proxy's wait queue at that moment, and their readings are the
+  case's measurements. So: owner alive → drain, terminate, report; owner gone
+  → the same timeout warning `drain_own_or_warn/2` gives, and nothing more.
+
+  ## Scope — unchanged from `drain_own_or_warn/2`
+
+  Only children whose `:"$callers"` chain names `test_pid` are ever waited on
+  or terminated. A concurrent module's children are never visible to this
+  call, which is what makes it admissible from `async: true` cases AND from
+  the shared-mode branch — where async children legitimately keep running and
+  the unconditional drain's own moduledoc records why that branch must not
+  widen to them.
+  """
+  @spec quiesce_own_or_warn(pid(), pid(), keyword()) :: :ok
+  def quiesce_own_or_warn(test_pid, owner_pid, opts \\ [])
+      when is_pid(test_pid) and is_pid(owner_pid) do
+    opts = Keyword.put_new(opts, :timeout, @quiesce_drain_default_ms)
+
+    case await_own_supervised_writes(test_pid, opts) do
+      :ok ->
+        :ok
+
+      {:timeout, active} ->
+        if Process.alive?(owner_pid) do
+          killed = terminate_remaining(test_pid, @terminate_rounds, 0)
+
+          case await_own_supervised_writes(test_pid, timeout: @terminate_confirm_ms) do
+            :ok ->
+              Logger.warning(
+                "[SandboxHelpers] terminated #{killed} supervised child(ren) started " <>
+                  "by #{inspect(test_pid)} — still running when the drain deadline " <>
+                  "passed with the sandbox owner alive. A client that dies before " <>
+                  "its owner returns the connection instead of leaking it past " <>
+                  "teardown. See Platform.SandboxHelpers's moduledoc " <>
+                  "(quiesce_own_or_warn/3)."
+              )
+
+            {:timeout, left} ->
+              Logger.warning(
+                "[SandboxHelpers] terminated #{killed} supervised child(ren) started " <>
+                  "by #{inspect(test_pid)} but #{left} still running — a child this " <>
+                  "drain can neither see nor stop is holding a connection the owner " <>
+                  "is about to release. See Platform.SandboxHelpers's moduledoc " <>
+                  "(quiesce_own_or_warn/3)."
+              )
+          end
+        else
+          # The owner was stopped by the test body (the beyond-drain
+          # construction) before this teardown ran. The disconnect has already
+          # happened; terminating the parked children now would only destroy
+          # the readings that construction exists to record. Report exactly as
+          # the wait-only drain does and leave them be.
+          warn_drain_gave_up(test_pid, active)
+        end
+
+        :ok
+    end
+  end
+
+  # Snapshot this owner's children, terminate every one, confirm, and look
+  # again — each round covers a grandchild spawned between an earlier snapshot
+  # and its parent's death. The count is children TERMINATED, not children
+  # that existed: a pid that died on its own between snapshot and terminate
+  # costs nothing and reports nothing.
+  defp terminate_remaining(test_pid, rounds_left, killed) when rounds_left > 0 do
+    own = own_children(test_pid)
+
+    if own == [] do
+      killed
+    else
+      Enum.each(own, &terminate_one/1)
+      await_own_supervised_writes(test_pid, timeout: @terminate_confirm_ms)
+      terminate_remaining(test_pid, rounds_left - 1, killed + length(own))
+    end
+  end
+
+  defp terminate_remaining(_test_pid, 0, killed), do: killed
+
+  defp terminate_one(pid) do
+    try do
+      Task.Supervisor.terminate_child(Platform.TaskSupervisor, pid)
+    catch
+      # A supervisor that is not running (trimmed test supervision trees) exits
+      # the call; a pid that already exited is handled by the loop above, not
+      # here. Neither is a finding worth crashing a teardown over.
+      :exit, _reason -> :ok
     end
   end
 

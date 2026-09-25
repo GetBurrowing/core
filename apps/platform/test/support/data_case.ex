@@ -94,6 +94,12 @@ defmodule Platform.DataCase do
     # NOT drain.
     shared_mode? = not tags[:async]
 
+    # The scoped drain/termination keys on the TEST process's `:"$callers"`
+    # chain, and `on_exit` runs in a different process after the test is dead —
+    # so the key must be captured here, exactly as `PlatformWeb.ConnCase` does
+    # for its own scoped drain.
+    test_pid = self()
+
     on_exit(fn ->
       for name <- [Platform.Chat.AttentionRouter, Platform.Chat.ContextPlane] do
         if pid = Process.whereis(name) do
@@ -105,7 +111,31 @@ defmodule Platform.DataCase do
         end
       end
 
+      # Task 01a0d265 stage 2. TWO things before the owner is stopped, in BOTH
+      # modes, because both modes leak the same way.
+      #
+      # The UNCONDITIONAL drain stays shared-mode ONLY — that rule and its
+      # reason are untouched (`Platform.SandboxHelpers`' moduledoc): async
+      # modules run concurrently and `Platform.TaskSupervisor`'s child set
+      # belongs to other modules as much as to this one.
+      #
+      # The SCOPED quiesce covers what the unconditional drain cannot see and
+      # what async mode had NOTHING for: the children THIS test started,
+      # transitively, through the same `:"$callers"` chain that gives them the
+      # sandbox connection in the first place. The measured leak it closes is
+      # `run_architect_edge`'s fire-and-forget edge (task 01a0d265 Class 3):
+      # its runner parks in a `receive` on a 30-minute budget, so a wait-only
+      # drain gives up and the owner exits under a live client — 14
+      # "owner exited, client still using a connection" events in the baseline
+      # full-suite log, every one withholding a pool connection. The quiesce
+      # terminates those leftovers BEFORE the owner stops, which is the order
+      # the connection error is defined against; it is a no-op (one poll) for
+      # a test whose children have already exited, and it leaves a dead owner
+      # exactly as it found it (see `quiesce_own_or_warn/3` — the beyond-drain
+      # construction gates on that).
       if shared_mode?, do: Platform.SandboxHelpers.drain_or_warn()
+
+      Platform.SandboxHelpers.quiesce_own_or_warn(test_pid, owner)
 
       # LAST. Everything above needs a live connection.
       Sandbox.stop_owner(owner)

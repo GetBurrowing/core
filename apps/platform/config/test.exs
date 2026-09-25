@@ -14,7 +14,33 @@ config :platform, Platform.Repo,
   port: String.to_integer(System.get_env("PGPORT", "5432")),
   database: System.get_env("PLATFORM_TEST_DATABASE", "platform_test"),
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: 10
+  # Sized to ExUnit's concurrency, not a fixed 10 (task 01a0d265,
+  # 2026-09-24 seed-A run: 19 failures — 14 setup `start_owner!` MatchErrors
+  # and 5 in-test linked-preload crashes, every one a `:queue_timeout`
+  # / "dropped from queue").
+  #
+  # ExUnit's default `max_cases` is `System.schedulers_online() * 2`
+  # (elixir `lib/ex_unit/lib/ex_unit.ex:348` docs — "defaults to
+  # `System.schedulers_online * 2`" — and the `defp put_max_cases/1`
+  # fallback) and this repo does not override it (test/test_helper.exs), so
+  # the moon rig (16 schedulers) runs 32 tests in parallel. EVERY test holds
+  # ONE pool connection for its whole lifetime (`Sandbox.start_owner!` in
+  # test/support/data_case.ex:42 and test/support/conn_case.ex:61), so a
+  # pool below max_cases starves the surplus owners and DBConnection's
+  # adaptive queue drops their checkouts. `schedulers_online() * 2 + 8`
+  # covers max_cases PLUS 8 spare connections that absorb the Class-3
+  # leak-pinned connections (background tasks — Ecto parallel preloads,
+  # fire-and-forget lifecycle edges — still using a connection when their
+  # owner exits) during teardown; max(..., 24) keeps that floor on any rig.
+  # ExUnit max_cases itself is NOT overridden here — suite concurrency and
+  # wall time stay as they are.
+  # queue_target/queue_interval deliberately UNTOUCHED — capacity, not
+  # checkout patience, is the fix of record here (a documented queue bump
+  # is the fallback only if evidence later demands it).
+  # test/platform/test_env_pool_config_test.exs fails the suite if this is
+  # reverted (asserts pool_size >= max_cases + 8, read from the live
+  # runtime).
+  pool_size: max(System.schedulers_online() * 2 + 8, 24)
 
 config :platform, :oidc,
   client_id: "test-client-id",

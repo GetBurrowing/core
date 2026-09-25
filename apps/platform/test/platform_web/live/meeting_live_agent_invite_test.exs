@@ -1051,7 +1051,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       # 2. The meeting. A row AND a frame the worker could receive — the row
       #    alone is exactly the 01a04e0f lying-success shape.
       assert [%MeetingParticipant{}] = agent_participant_rows(space.id, outsider.id)
-      assert_push "meeting_join", _payload, 500
+      assert_push("meeting_join", _payload, 500)
 
       assert html =~ "waiting for it to join"
       refute html =~ "could not be invited"
@@ -1108,7 +1108,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       assert unchanged.joined_at == before.joined_at
 
       assert [%MeetingParticipant{}] = agent_participant_rows(space.id, member.id)
-      assert_push "meeting_join", _payload, 500
+      assert_push("meeting_join", _payload, 500)
       assert html =~ "waiting for it to join"
     end
   end
@@ -1167,7 +1167,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       # And nothing reached the meeting either.
       assert agent_participant_rows(space.id, outsider.id) == []
-      refute_push "meeting_join", _payload, 200
+      refute_push("meeting_join", _payload, 200)
     end
   end
 
@@ -1558,7 +1558,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       html = render_click(view, "meeting_invite_agent", %{"agent-id" => incapable.id})
 
-      refute_push "meeting_join", _payload, 200
+      refute_push("meeting_join", _payload, 200)
       assert agent_participant_rows(space.id, incapable.id) == []
       assert html =~ "That agent could not be invited."
       refute html =~ "waiting for it to join"
@@ -1613,7 +1613,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       # `assert_push`, not `assert_receive` on a bare subscription: this only
       # passes if the frame travelled broadcast -> joined channel process ->
       # client, which is the leg the merged version of this test skipped.
-      assert_push "meeting_join", payload, 1_000
+      assert_push("meeting_join", payload, 1_000)
 
       # And the topic the code used to publish on is confirmed dead.
       refute_receive %Phoenix.Socket.Broadcast{topic: ^dead_topic}, 200
@@ -1676,10 +1676,14 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
         })
       end)
 
-      on_exit(fn ->
-        Req.Test.set_req_test_to_private(%{})
-        Application.delete_env(:platform, :livekit_req_client)
-      end)
+      # Restore the run-wide default client rather than deleting the key:
+      # this test's on_exit runs concurrently with the next test, and a
+      # delete landing after the next test armed its own stub made
+      # `Meetings.livekit_req_client/0` fall through to the persistent_term
+      # mirror — whose 200-empty answer reads as "no participants" and put
+      # the "does not see you" copy in the flash (the 16:02Z seed-77
+      # failure). See `Platform.LivekitStubPlug.restore_default_req_client/0`.
+      on_exit(&Platform.LivekitStubPlug.restore_default_req_client/0)
     end
 
     defp invite_and_read_flash(conn, inviter, meeting, runtime_agent) do
@@ -1694,7 +1698,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
         |> render_click()
 
       # Delivered, whatever the diagnostic said.
-      assert_push "meeting_join", _payload, 1_000
+      assert_push("meeting_join", _payload, 1_000)
       html
     end
 
@@ -1730,9 +1734,33 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
     test "LiveKit cannot be asked: the flash is the existing copy, unchanged",
          %{conn: conn, meeting: meeting, runtime_agent: runtime_agent} do
-      # No stub: the configured `wss://livekit.test` does not resolve, so
-      # `ListParticipants` fails in transport and presence is :unavailable.
-      # The diagnostic must degrade to the old flash, not to an error.
+      # A ListParticipants TRANSPORT failure — as a real unresolvable
+      # host produces — so presence is :unavailable. Was a real DNS
+      # round-trip to the fixture host before task 01a0d265 stage 4
+      # stubbed the LiveKit Twirp endpoint run-wide; the stub default
+      # answers 200, so the transport failure is now scripted explicitly.
+      # Assertions are byte-identical to the pre-stub contract.
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :livekit_req_client,
+        Req.new(plug: {Req.Test, :livekit_invite_unreachable})
+      )
+
+      Req.Test.set_req_test_to_shared(%{})
+
+      Req.Test.stub(:livekit_invite_unreachable, fn conn ->
+        Req.Test.transport_error(conn, :nxdomain)
+      end)
+
+      # Same on_exit rationale as `stub_livekit_participants/1` above:
+      # restore the run-wide default instead of deleting the key, so this
+      # test's teardown cannot race the next test's stub-arming through the
+      # persistent_term mirror (see
+      # `Platform.LivekitStubPlug.restore_default_req_client/0`).
+      on_exit(&Platform.LivekitStubPlug.restore_default_req_client/0)
+
       inviter = user!("inviter")
 
       html = invite_and_read_flash(conn, inviter, meeting, runtime_agent)

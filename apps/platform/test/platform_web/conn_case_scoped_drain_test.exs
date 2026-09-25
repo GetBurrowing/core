@@ -115,7 +115,8 @@ defmodule PlatformWeb.ConnCaseScopedDrainObservationTest do
            `:orphaned` (a returned `DBConnection.OwnershipError`) means the sandbox
            owner was gone before the child reached the Repo — i.e.
            `PlatformWeb.ConnCase`'s `on_exit` is no longer calling
-           `Platform.SandboxHelpers.drain_own_or_warn/2` on its `async: true` branch,
+           `Platform.SandboxHelpers.quiesce_own_or_warn/3` (the scoped drain, since
+           task 01a0d265 stage 2) on its `async: true` branch,
            or is calling it AFTER `Sandbox.stop_owner/1`. That is the orphan of task
            01a089ee / 01a08b49: the child's write is destroyed and, on the audit path,
            the resulting process exit detaches "platform-audit-telemetry" for the

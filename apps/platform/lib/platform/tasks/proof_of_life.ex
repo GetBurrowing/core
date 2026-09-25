@@ -129,6 +129,18 @@ defmodule Platform.Tasks.ProofOfLife do
              },
              kind: :task_metadata
            ),
+         # The run must read :running BEFORE the provider exists. RunServer
+         # applies a runner exit directly (no transition check), so spawning
+         # first leaves a window where a fast run reaches :completed before
+         # the launcher's `:running` transition, which the engine then
+         # refuses as {:invalid_transition, :completed, :running}
+         # (seed-flake Class 4, task 01a0d265). The state machine only
+         # allows created → starting → running, so the two-step choreography
+         # mirrors `ProofRun.transition_to_running/1`. A failed transition
+         # short-circuits this `with` and returns {:error, reason} before
+         # any runner is spawned.
+         {:ok, run} <- Execution.transition(run.id, :starting),
+         {:ok, run} <- Execution.transition(run.id, :running),
          {:ok, run} <-
            spawn_run_provider(
              run,
@@ -138,8 +150,7 @@ defmodule Platform.Tasks.ProofOfLife do
              lease,
              branch,
              context_version
-           ),
-         {:ok, run} <- Execution.transition(run.id, :running) do
+           ) do
       # Supervised, not a bare `spawn/1` — see the note on
       # `Platform.Tasks.run_architect_edge/1` (ticket 01a06638).
       # `finalize_run/7` persists the run's outcome, so it is precisely the

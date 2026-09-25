@@ -6892,7 +6892,20 @@ defmodule Platform.Meetings do
   end
 
   defp livekit_req_client do
-    Application.get_env(:platform, :livekit_req_client, Req.new())
+    case Application.get_env(:platform, :livekit_req_client) do
+      nil ->
+        # The Application env key is momentarily absent when an async test's
+        # `on_exit` hook restores it globally. Falling back to a bare
+        # `Req.new()` here would resolve a fixture URL like `wss://livekit.test`
+        # against the REAL network (task 01a0d265 stage 4: the residual
+        # :nxdomain flood). `test/test_helper.exs` arms a stub mirror;
+        # if it is armed we use it, otherwise (non-test runtime) a bare
+        # client as before.
+        :persistent_term.get({:platform, :livekit_req_client_fallback}, Req.new())
+
+      client ->
+        client
+    end
   end
 
   defp livekit_config do
@@ -7094,12 +7107,14 @@ defmodule Platform.Meetings do
         |> String.replace_prefix("wss://", "https://")
         |> String.replace_prefix("ws://", "http://")
 
-      case Req.post("#{twirp_url}/twirp/livekit.RoomService/CreateRoom",
+      case Req.post(livekit_req_client(),
+             url: "#{twirp_url}/twirp/livekit.RoomService/CreateRoom",
              body: body,
              headers: [
                {"content-type", "application/json"},
                {"authorization", "Bearer #{token}"}
              ],
+             retry: false,
              receive_timeout: 10_000
            ) do
         {:ok, %{status: status}} when status in [200, 201] ->
