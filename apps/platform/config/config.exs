@@ -381,6 +381,14 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Log-output filter for Phoenix's own request/socket logging (task 01a0d8ba).
+# `Phoenix.Logger` prints socket connect params at :info (`REFUSED CONNECTION
+# TO ... Parameters:`), which leaked RuntimeSocket `token` values in cleartext.
+# Keys are matched as substrings, so this also covers `_csrf_token`,
+# `id_token`, `auth_token`, and string values containing `token=`.
+# Setting this key REPLACES Phoenix's default `["password"]`, so keep it here.
+config :phoenix, :filter_parameters, ["password", "token", "secret", "api_key"]
+
 # Timezone database — Tzdata (IANA rules) backs `DateTime.shift_zone!/2`
 # for timezone-aware cron triggers (task 019f70e9 stage 6). Without this
 # only `Etc/UTC` shifts work; named zones like `America/Chicago` fail.
