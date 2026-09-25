@@ -93,6 +93,10 @@ defmodule Platform.Application do
            {Task.Supervisor, name: Platform.TaskSupervisor},
            # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)
            Platform.Chat.ContextPlane,
+           # On-demand agent-message context summaries (task 01a0d8de) —
+           # owns the :chat_context_summary_cache ETS table. No Repo, no
+           # PubSub: a lifecycle owner only, lost on restart by design.
+           Platform.Chat.ContextSummaryCache,
            # Active agent mutex — ETS-backed per-space agent tracking (ADR 0027)
            Platform.Chat.ActiveAgentStore,
            # External-agent ephemeral credentials — ETS-backed, lost on

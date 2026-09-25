@@ -244,7 +244,12 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
       assert stop.stopped_by_human == false
 
       assert Enum.map(context.surfaces, & &1.key) |> Enum.sort() ==
-               ["dispatch.prompt", "mail.draft.generator", "planner.stage_budget"]
+               [
+                 "chat.context_summary",
+                 "dispatch.prompt",
+                 "mail.draft.generator",
+                 "planner.stage_budget"
+               ]
     end
 
     test "a mail body, subject or sender string is ABSENT from the whole context", ctx do

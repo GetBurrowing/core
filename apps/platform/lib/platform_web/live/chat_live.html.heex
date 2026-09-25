@@ -601,6 +601,14 @@
   open_message_actions_msg={@open_message_actions_msg}
   current_participant={@current_participant}
   quick_emojis={@quick_emojis}
+  agent_participant_ids={@agent_participant_ids}
+/>
+
+<%!-- "What this message is answering" (task 01a0d8de stage 3): popover on
+     desktop, bottom sheet on mobile; state in MessageContextHooks. --%>
+<.message_context_overlay
+  message_context={@message_context}
+  mobile?={@message_context_mobile?}
 />
 
 <%!-- Schedule-deletion confirm dialog (task 019f4eaa stage 6). Archive is

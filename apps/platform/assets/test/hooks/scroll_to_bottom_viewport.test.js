@@ -114,6 +114,8 @@ function fakeRow(participantId = "p-1") {
       },
       contains: (name) => classes.has(name),
     },
+    // No Context trigger inside: grouping's opensRun probe (01a0d8de) finds nothing.
+    querySelector: () => null,
   };
 }
 

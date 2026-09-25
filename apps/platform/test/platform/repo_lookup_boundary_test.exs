@@ -228,6 +228,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "unindexed_count/1 filters the space_ids list through Platform.UUID.valid?/1 before `where: c.space_id in ^ids`, which raises the same Ecto.Query.CastError as Repo.get/2 on a non-uuid. The ids arrive from whatever spaces the caller is rendering (task 01a07402 stage 5's partial-index line), so a malformed one folds into a 0 count instead of taking the render down"},
     {"platform/chat/canvas_access.ex", :get, "Canvas", 1, :safe_internal,
      "fetch_for_viewer/3 checks Platform.UUID.valid?/1 on the /canvases/:id URL path segment before the lookup, folding a malformed id into the existing {:error, :not_found}"},
+    {"platform/chat/reply_context.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "normalize/3 guards the runtime-supplied in_reply_to_message_id (a raw channel-frame field) with Platform.UUID.valid?/1 and folds a malformed value into a dropped `invalid_uuid` entry, and participant/1 guards the agent participant id before Chat.get_participant/1; neither can raise, and the reply still posts (task 01a0d8de stage 2)"},
     {"platform/chat/dispatch_membership.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "resolve_space/1 and resolve_agent/1 each guard with Platform.UUID.valid?/1 before their lookups. Both ids arrive verbatim off dispatch payloads (meeting transcript rows, TaskRouter context maps, the intent queue) and agent_id is routinely a slug, so a bare Ecto.UUID.cast/1 would hex-encode a 16-character slug, clear the guard, and raise against the strict UUIDv7 PK — on a best-effort path whose contract is always-:ok"},
     {"platform/chat/dispatch_membership.ex", :get, "Agent", 1, :safe_internal,

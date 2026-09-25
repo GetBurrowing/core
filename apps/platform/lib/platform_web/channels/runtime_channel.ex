@@ -11,6 +11,7 @@ defmodule PlatformWeb.RuntimeChannel do
 
   alias Platform.Analytics.UsageEvent
   alias Platform.Chat
+  alias Platform.Chat.ReplyContext
   alias Platform.Federation
   alias Platform.Federation.RuntimePresence
   alias Platform.Federation.ToolArguments
@@ -377,7 +378,7 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   @impl true
-  def handle_in("reply", %{"space_id" => space_id, "content" => content}, socket) do
+  def handle_in("reply", %{"space_id" => space_id, "content" => content} = params, socket) do
     # Proven at the top of the clause, before the participant check below:
     # the capability under test is "this build can emit a chat reply", and a
     # well-formed inbound `reply` frame settles that whether or not the agent
@@ -401,21 +402,29 @@ defmodule PlatformWeb.RuntimeChannel do
         # Stop typing indicator when reply arrives
         Platform.Chat.PubSub.broadcast_agent_typing(space_id, participant_id, false)
 
+        # Optional reply annotations (task 01a0d8de). Invalid ones are dropped
+        # and reported in the ack; the message itself always posts.
+        {reply_additions, dropped} = ReplyContext.normalize(params, space_id, participant_id)
+
         case Chat.post_message(%{
                space_id: space_id,
                participant_id: participant_id,
                content_type: "text",
                content: content,
-               metadata: %{
-                 "source" => "external_runtime",
-                 "runtime_id" => socket.assigns.runtime_id
-               }
+               metadata:
+                 Map.merge(
+                   %{
+                     "source" => "external_runtime",
+                     "runtime_id" => socket.assigns.runtime_id
+                   },
+                   reply_additions
+                 )
              }) do
           {:ok, message} ->
             # Refresh active agent mutex timeout on successful reply
             Platform.Chat.ActiveAgentStore.set_active(space_id, participant_id)
 
-            {:reply, {:ok, %{message_id: message.id, space_id: space_id}}, socket}
+            {:reply, {:ok, reply_ack(message.id, space_id, dropped)}, socket}
 
           {:error, changeset} ->
             error_map = %{
@@ -530,7 +539,7 @@ defmodule PlatformWeb.RuntimeChannel do
   @impl true
   def handle_in(
         "reply_with_media",
-        %{"space_id" => space_id, "content" => content, "attachments" => attachments},
+        %{"space_id" => space_id, "content" => content, "attachments" => attachments} = params,
         socket
       )
       when is_list(attachments) do
@@ -584,17 +593,24 @@ defmodule PlatformWeb.RuntimeChannel do
 
           message_content = content || ""
 
+          {reply_additions, dropped} =
+            ReplyContext.normalize(params, space_id, agent_participant_id)
+
           case Chat.post_message_with_attachments(
                  %{
                    space_id: space_id,
                    participant_id: agent_participant_id,
                    content_type: "text",
                    content: message_content,
-                   metadata: %{
-                     "source" => "external_runtime",
-                     "runtime_id" => socket.assigns.runtime_id,
-                     "has_media" => true
-                   }
+                   metadata:
+                     Map.merge(
+                       %{
+                         "source" => "external_runtime",
+                         "runtime_id" => socket.assigns.runtime_id,
+                         "has_media" => true
+                       },
+                       reply_additions
+                     )
                  },
                  attachment_attrs
                ) do
@@ -602,7 +618,7 @@ defmodule PlatformWeb.RuntimeChannel do
               # Refresh active agent mutex timeout on successful reply
               Platform.Chat.ActiveAgentStore.set_active(space_id, agent_participant_id)
 
-              {:reply, {:ok, %{message_id: message.id, space_id: space_id}}, socket}
+              {:reply, {:ok, reply_ack(message.id, space_id, dropped)}, socket}
 
             {:error, reason} ->
               error_map = %{
@@ -879,6 +895,14 @@ defmodule PlatformWeb.RuntimeChannel do
   # map is built by `ToolSurface.space_write_denied/1`, the single definition
   # shared with the ToolSurface read gate, send_media and react, so a caller sees
   # one wording (and the offending id) whichever transport it used.
+  # The ok-ack of `reply` / `reply_with_media`. `dropped` is added ONLY when a
+  # reply annotation was refused, so a frame without the new keys gets exactly
+  # the ack shape it got before task 01a0d8de.
+  defp reply_ack(message_id, space_id, []), do: %{message_id: message_id, space_id: space_id}
+
+  defp reply_ack(message_id, space_id, dropped),
+    do: %{message_id: message_id, space_id: space_id, dropped: dropped}
+
   defp authorize_space_write(socket, space_id) do
     case get_agent_participant_id(socket, space_id) do
       nil ->

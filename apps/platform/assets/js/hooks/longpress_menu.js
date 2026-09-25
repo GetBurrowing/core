@@ -15,7 +15,9 @@
 //
 // NOTE (task 01a000c0): the dashed (+) that used to sit below every message
 // is gone — the add-reaction control moved into the desktop hover action row
-// in stage 3, and that row is never revealed on a coarse pointer. This
+// in stage 3, and that row is never revealed on a `hover: none` device
+// except by keyboard focus inside it (app.css, task 01a0d8de stage 5; until
+// then a tap that focused anything in the row revealed it). This
 // gesture, and the sheet it opens, are now the ONLY add-reaction path on
 // touch. Covered by e2e/tests/chat_message_density.spec.ts and cases 4-5 of
 // e2e/tests/chat_reactions.spec.ts; if you change the gesture, those are the

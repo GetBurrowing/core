@@ -20,6 +20,7 @@ defmodule PlatformWeb.Components.ChatMessage do
 
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.CanvasHooks
+  alias PlatformWeb.ChatLive.MessageContextHooks
 
   attr(:dom_id, :string, required: true)
   attr(:msg, :map, required: true)
@@ -158,6 +159,39 @@ defmodule PlatformWeb.Components.ChatMessage do
               timestamp={Platform.Chat.message_ordered_at(@msg)}
               class="text-[10px] text-base-content/40"
             />
+            <%!-- "Context" (task 01a0d8de stage 3; design canvas "Design
+                 direction: agent message context"). Rendered only on AGENT
+                 messages that carry something to show without generating it
+                 (`reply_context` or `reply_to_message_id` in metadata, which
+                 built-in agents write too). Always visible, not hover-gated:
+                 the reader who needs it is scanning, and touch has no hover.
+                 Also rendered when read-only, since it only reads. `shrink-0`
+                 and placed after the time, so the name and time keep
+                 truncation priority and the hover row keeps the right edge.
+                 It carries no `data-message-id`: that attribute is how the
+                 scroll hooks find the ROW, and a first match on this button
+                 would scroll to the header instead.
+
+                 `message-context-trigger` is the app.css handle for its
+                 touch hit area (45px tall below lg, via a transparent
+                 `::after`) and the stage 5 fix beside it: on `hover: none`
+                 the hover strip no longer reveals on the focus a tap gives
+                 this button, which is what used to swallow the tap. --%>
+            <button
+              :if={
+                MapSet.member?(@agent_participant_ids, @msg.participant_id) &&
+                  MessageContextHooks.has_context?(@msg)
+              }
+              type="button"
+              phx-click="open_message_context"
+              phx-value-message-id={@msg.id}
+              data-role="message-context-trigger"
+              data-context-message-id={@msg.id}
+              aria-haspopup="dialog"
+              class="message-context-trigger shrink-0 text-[10px] text-base-content/40 hover:text-base-content/70 hover:underline focus-visible:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
+            >
+              Context
+            </button>
             <%!-- (edited) affix per contract Section D.1 — visible only on
                messages with >1 version row (i.e. at least one edit on top
                of the original v1). Clicking opens the version history
@@ -297,6 +331,27 @@ defmodule PlatformWeb.Components.ChatMessage do
                   )
                 ]}>
                 </span>
+              </button>
+
+              <%!-- "Summarise what led here" (task 01a0d8de stage 3). Only on
+                   agent messages with NO context of their own; those get no
+                   header marker, because marking every agent message would put
+                   a control on most of the chat. Opens the same panel as the
+                   header's "Context" button, with a generated summary. --%>
+              <button
+                :if={
+                  MapSet.member?(@agent_participant_ids, @msg.participant_id) &&
+                    !MessageContextHooks.has_context?(@msg)
+                }
+                type="button"
+                phx-click="summarise_message_context"
+                phx-value-message-id={@msg.id}
+                data-role="message-context-summarise"
+                aria-label="Summarise what led here"
+                title="Summarise what led here"
+                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+              >
+                <span class="hero-document-text size-4" aria-hidden="true"></span>
               </button>
 
               <%!-- 3-dot overflow menu (task 019e0f29 Stage 3). Replaces the

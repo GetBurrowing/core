@@ -57,7 +57,8 @@ defmodule Platform.Experiments.Surfaces do
   @surfaces [
     Platform.Experiments.Surfaces.DispatchPrompt,
     Platform.Experiments.Surfaces.MailDraftGenerator,
-    Platform.Experiments.Surfaces.PlannerStageBudget
+    Platform.Experiments.Surfaces.PlannerStageBudget,
+    Platform.Experiments.Surfaces.ChatContextSummary
   ]
 
   @prompt_surface "dispatch.prompt"

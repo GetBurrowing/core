@@ -2800,4 +2800,288 @@ defmodule PlatformWeb.RuntimeChannelTest do
     {:ok, project} = Tasks.create_project(Map.merge(default, attrs))
     project
   end
+
+  # Task 01a0d8de stage 2: the optional reply annotations. Unit coverage of
+  # every drop reason is in Platform.Chat.ReplyContextTest; these pin the
+  # wire half: what is stored, what the ack says, and that legacy frames are
+  # untouched.
+  defp post_as!(space_id, participant_id, content) do
+    {:ok, msg} =
+      Chat.post_message(%{
+        space_id: space_id,
+        participant_id: participant_id,
+        content_type: "text",
+        content: content
+      })
+
+    msg
+  end
+
+  describe "reply annotations (in_reply_to_message_id, context)" do
+    test "(a) same-space target and context are stored under reply_to_message_id / reply_context",
+         ctx do
+      socket = joined_socket(ctx)
+      target = post_as!(ctx.space.id, ctx.agent_participant.id, "the question")
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "the answer",
+          "in_reply_to_message_id" => target.id,
+          "context" => "Answers the question\nabout stage 4"
+        })
+
+      assert_reply ref, :ok, ack
+      # Nothing dropped, so no `dropped` key at all.
+      assert ack == %{message_id: ack.message_id, space_id: ctx.space.id}
+
+      message = Repo.get!(Chat.Message, ack.message_id)
+      assert message.metadata["reply_to_message_id"] == target.id
+      assert message.metadata["reply_context"] == "Answers the question about stage 4"
+      assert message.metadata["source"] == "external_runtime"
+    end
+
+    test "(b) a target in another space the runtime can write to is dropped, the message posts",
+         ctx do
+      socket = joined_socket(ctx)
+      other = create_space()
+      {:ok, other_p} = Chat.add_agent_participant(other.id, ctx.agent, display_name: "x")
+      foreign = post_as!(other.id, other_p.id, "in the other space")
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "cross-space probe",
+          "in_reply_to_message_id" => foreign.id
+        })
+
+      assert_reply ref, :ok, ack
+
+      assert ack == %{
+               message_id: ack.message_id,
+               space_id: ctx.space.id,
+               dropped: [%{field: "in_reply_to_message_id", reason: "other_space"}]
+             }
+
+      message = Repo.get!(Chat.Message, ack.message_id)
+      assert message.space_id == ctx.space.id
+      assert message.content == "cross-space probe"
+      refute Map.has_key?(message.metadata, "reply_to_message_id")
+    end
+
+    test "(c) each invalid target is dropped with its reason and the message still posts", ctx do
+      socket = joined_socket(ctx)
+      deleted = post_as!(ctx.space.id, ctx.agent_participant.id, "gone")
+      {:ok, _} = Chat.delete_message(deleted)
+
+      for {id, reason} <- [
+            {"nope", "invalid_uuid"},
+            {Ecto.UUID.generate(), "not_found"},
+            {deleted.id, "deleted"}
+          ] do
+        ref =
+          push(socket, "reply", %{
+            "space_id" => ctx.space.id,
+            "content" => "reply for " <> reason,
+            "in_reply_to_message_id" => id
+          })
+
+        assert_reply ref, :ok, %{message_id: message_id, dropped: dropped}
+        assert dropped == [%{field: "in_reply_to_message_id", reason: reason}]
+        message = Repo.get!(Chat.Message, message_id)
+        assert message.content == "reply for " <> reason
+        refute Map.has_key?(message.metadata, "reply_to_message_id")
+      end
+    end
+
+    test "(c) a target older than the agent's history grant is dropped as outside_grant", ctx do
+      old = post_as!(ctx.space.id, ctx.agent_participant.id, "before the grant")
+
+      {:ok, _} =
+        Chat.update_participant(ctx.agent_participant, %{
+          history_visible_from: DateTime.add(old.inserted_at, 1, :second)
+        })
+
+      socket = joined_socket(ctx)
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "bounded",
+          "in_reply_to_message_id" => old.id
+        })
+
+      assert_reply ref, :ok, %{
+        dropped: [%{field: "in_reply_to_message_id", reason: "outside_grant"}]
+      }
+    end
+
+    test "(d) a 500-char context is capped at 200 and a non-string context is dropped", ctx do
+      socket = joined_socket(ctx)
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "long",
+          "context" => String.duplicate("x", 500)
+        })
+
+      assert_reply ref, :ok, ack
+      refute Map.has_key?(ack, :dropped)
+      stored = Repo.get!(Chat.Message, ack.message_id).metadata["reply_context"]
+      assert String.length(stored) == 200
+
+      ref =
+        push(socket, "reply", %{"space_id" => ctx.space.id, "content" => "n", "context" => 7})
+
+      assert_reply ref, :ok, %{
+        message_id: id,
+        dropped: [%{field: "context", reason: "not_string"}]
+      }
+
+      refute Map.has_key?(Repo.get!(Chat.Message, id).metadata, "reply_context")
+    end
+
+    test "(e) a mention token in context is stored with no at-bracket sequence", ctx do
+      socket = joined_socket(ctx)
+      opener = "@" <> "["
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "answer",
+          "context" => "ask " <> opener <> ctx.agent.slug <> "] next"
+        })
+
+      assert_reply ref, :ok, %{message_id: id}
+      stored = Repo.get!(Chat.Message, id).metadata["reply_context"]
+      refute String.contains?(stored, opener)
+      assert stored =~ ctx.agent.slug
+    end
+
+    test "(g) a legacy frame keeps its exact ack and metadata", ctx do
+      socket = joined_socket(ctx)
+
+      ref = push(socket, "reply", %{"space_id" => ctx.space.id, "content" => "legacy"})
+
+      assert_reply ref, :ok, ack
+      assert Map.keys(ack) |> Enum.sort() == [:message_id, :space_id]
+      assert ack == %{message_id: ack.message_id, space_id: ctx.space.id}
+
+      message = Repo.get!(Chat.Message, ack.message_id)
+
+      assert message.metadata == %{
+               "source" => "external_runtime",
+               "runtime_id" => ctx.runtime.runtime_id
+             }
+    end
+
+    test "(g) an unknown extra key is accepted and not stored", ctx do
+      socket = joined_socket(ctx)
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "extra",
+          "some_future_field" => "whatever"
+        })
+
+      assert_reply ref, :ok, ack
+      assert ack == %{message_id: ack.message_id, space_id: ctx.space.id}
+
+      assert Repo.get!(Chat.Message, ack.message_id).metadata == %{
+               "source" => "external_runtime",
+               "runtime_id" => ctx.runtime.runtime_id
+             }
+    end
+
+    test "(h) reply_with_media stores the same fields and reports drops", ctx do
+      socket = joined_socket(ctx)
+      target = post_as!(ctx.space.id, ctx.agent_participant.id, "show me")
+
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => ctx.space.id,
+          "content" => "here",
+          "in_reply_to_message_id" => target.id,
+          "context" => "the diagram you asked for",
+          "attachments" => [
+            %{
+              "filename" => "d.txt",
+              "content_type" => "text/plain",
+              "data" => Base.encode64("hi")
+            }
+          ]
+        })
+
+      assert_reply ref, :ok, ack
+      assert ack == %{message_id: ack.message_id, space_id: ctx.space.id}
+      message = Repo.get!(Chat.Message, ack.message_id)
+      assert message.metadata["reply_to_message_id"] == target.id
+      assert message.metadata["reply_context"] == "the diagram you asked for"
+      assert message.metadata["has_media"] == true
+
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => ctx.space.id,
+          "content" => "bad",
+          "in_reply_to_message_id" => "nope",
+          "attachments" => []
+        })
+
+      assert_reply ref, :ok, %{
+        message_id: id,
+        dropped: [%{field: "in_reply_to_message_id", reason: "invalid_uuid"}]
+      }
+
+      refute Map.has_key?(Repo.get!(Chat.Message, id).metadata, "reply_to_message_id")
+    end
+
+    test "(h) a legacy reply_with_media keeps its exact ack", ctx do
+      socket = joined_socket(ctx)
+
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => ctx.space.id,
+          "content" => "legacy media",
+          "attachments" => []
+        })
+
+      assert_reply ref, :ok, ack
+      assert ack == %{message_id: ack.message_id, space_id: ctx.space.id}
+
+      assert Repo.get!(Chat.Message, ack.message_id).metadata == %{
+               "source" => "external_runtime",
+               "runtime_id" => ctx.runtime.runtime_id,
+               "has_media" => true
+             }
+    end
+
+    # Pins the stage-2 finding that a chunked reply's persisted row is the
+    # plain `reply` a plugin sends at finalisation. If chunks ever start
+    # persisting, this trips and the change has to decide where the reply
+    # annotations go.
+    test "(i) reply_chunk with done: true creates no message row", ctx do
+      socket = joined_socket(ctx)
+
+      count = fn ->
+        Repo.aggregate(from(m in Chat.Message, where: m.space_id == ^ctx.space.id), :count)
+      end
+
+      before = count.()
+
+      ref =
+        push(socket, "reply_chunk", %{
+          "space_id" => ctx.space.id,
+          "chunk_id" => "final",
+          "text" => "the whole answer",
+          "done" => true,
+          "in_reply_to_message_id" => Ecto.UUID.generate(),
+          "context" => "ignored on chunks"
+        })
+
+      assert_reply ref, :ok
+      assert count.() == before
+    end
+  end
 end

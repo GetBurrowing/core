@@ -27,6 +27,7 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.ChatLive.Partials.ExternalRail
   import PlatformWeb.ChatLive.Partials.MobileBrowser
   import PlatformWeb.ChatLive.Partials.Overlays
+  import PlatformWeb.ChatLive.Partials.MessageContext, only: [message_context_overlay: 1]
   import PlatformWeb.ChatLive.Partials.Rail
   import PlatformWeb.ChatLive.RenderHelpers
 
@@ -42,6 +43,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.ChatLive.MentionsHooks
+  alias PlatformWeb.ChatLive.MessageContextHooks
   alias PlatformWeb.ChatLive.MessagesHooks
   alias PlatformWeb.ChatLive.NewChannelComponent
   alias PlatformWeb.ChatLive.NewConversationComponent
@@ -786,6 +788,7 @@ defmodule PlatformWeb.ChatLive do
       |> UploadHooks.attach()
       |> CanvasHooks.attach()
       |> ActiveAgentHooks.attach()
+      |> MessageContextHooks.attach()
 
     # Meeting hooks own join/leave for the LiveKit room. When embedded
     # inside `MeetingLive`, the parent already owns the meeting lifecycle

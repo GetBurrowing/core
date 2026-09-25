@@ -132,14 +132,18 @@ class FakeElement {
 
 function parseSelector(selector) {
   const matchers = [];
-  // Match attribute selectors like [data-participant-id]
-  for (const m of selector.matchAll(/\[([a-z0-9-]+)\]/gi)) {
+  // Match attribute selectors like [data-participant-id] or
+  // [data-role="message-context-trigger"]. An unparsed selector would leave
+  // zero matchers and match EVERY node, so the value form must be handled.
+  for (const m of selector.matchAll(/\[([a-z0-9-]+)(?:="([^"]*)")?\]/gi)) {
     const attr = m[1];
+    const value = m[2];
     matchers.push((el) => {
       if (attr.startsWith("data-")) {
         const key = attr
           .slice(5)
           .replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        if (value !== undefined) return el.dataset[key] === value;
         return el.dataset[key] !== undefined;
       }
       return false;

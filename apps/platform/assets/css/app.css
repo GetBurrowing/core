@@ -1824,6 +1824,85 @@ body, .font-fabrikam {
   .chat-message-pulse { animation: none; }
 }
 
+/* Jump highlight (task 01a0d8de stage 3): the Context panel's "Jump to
+   message" marks the answered message with a primary left rail and a light
+   primary tint that fade over about two seconds. Fill and border only,
+   never text; no transform. Both are pseudo-elements, so the row's content
+   does not shift, and both fade by OPACITY over a solid primary fill: a
+   color-mix() tint inside @keyframes is compiled with an @supports fallback
+   nested in the keyframe, which browsers drop, leaving the fallback's solid
+   primary (measured on the dev rig). Applied and removed by the
+   ChatScrollToMessage hook. It replaces the generic arrival pulse on the
+   same row, so the reader sees one signal, not two. */
+@keyframes chat-message-jump-tint {
+  0%, 35% { opacity: 0.1; }
+  100% { opacity: 0; }
+}
+@keyframes chat-message-jump-rail {
+  0%, 35% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.chat-message-jump.chat-message-pulse { animation: none; }
+/* `isolation` makes the row a stacking context so the tint's z-index -1
+   paints above the row's own background and BELOW its text. */
+.chat-message-jump { isolation: isolate; }
+.chat-message-jump::before,
+.chat-message-jump::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  background-color: var(--color-primary);
+  opacity: 0;
+}
+.chat-message-jump::before {
+  left: 0;
+  top: 0.25rem;
+  bottom: 0.25rem;
+  width: 3px;
+  border-radius: 999px;
+  animation: chat-message-jump-rail 2s ease-out forwards;
+}
+.chat-message-jump::after {
+  inset: 0;
+  z-index: -1;
+  border-radius: 1rem;
+  animation: chat-message-jump-tint 2s ease-out forwards;
+}
+.chat-message-jump:focus { outline: none; }
+/* Focus lands on the ROW after a jump, and the hover action row reveals on
+   `group-focus-within`, which matches the focused row itself. Left alone the
+   strip floats over the author's name on arrival (measured at 375px). Keep
+   it hidden while the row itself holds focus; Tab into the row still
+   reveals it, because focus is then on a descendant, not the row. */
+[data-message-id]:focus:not(:hover) > .message-row-inner .message-action-row {
+  opacity: 0;
+  pointer-events: none;
+}
+.chat-message-jump:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No fade: the tint and rail hold, and the hook removes the class. */
+  .chat-message-jump::before { animation: none; opacity: 1; }
+  .chat-message-jump::after { animation: none; opacity: 0.1; }
+}
+
+/* Secondary labels in the Context panel ("From the agent", "Replying to",
+   the source line): the design direction names `neutral` at text-xs. Light
+   uses the token raw. Dark gets the same correction the reaction picker
+   measured for this token on base-100 (1.86:1 raw), by mixing the foreground
+   into neutral rather than moving the token. */
+.message-context-label { color: var(--color-neutral); }
+[data-theme="dark"] .message-context-label {
+  color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .message-context-label {
+    color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
+  }
+}
+
 /* ── Jump-to-latest chip (task 01a03c76 stage 3) ──────────────────
    The way back to the tip of a conversation for a reader who scrolled up
    into history.
@@ -3602,6 +3681,55 @@ body, .font-fabrikam {
   background-color: var(--color-base-100);
   border-radius: 0.5rem;
   padding-inline: 0.25rem;
+}
+
+/* ── No hover strip on a touch screen (task 01a0d8de stage 5) ──────────
+   The strip reveals on hover and on focus-within. Tailwind already gates
+   the hover variant on `(hover: hover)`; the focus-within variant has no
+   such gate, so on a phone any TAP that focuses something in the row
+   revealed the strip. A tap on the header "Context" button focuses it on
+   mousedown, the 354px-wide strip appears over the header, the mouseup
+   lands on the strip's overflow button, and the click resolves to their
+   common ancestor: the sheet never opened (measured at 375px, 2 of 2
+   taps). The double-tap actions sheet is the touch path to everything in
+   the strip, so on `hover: none` the strip stays hidden and inert.
+
+   Keyboard focus is the one exception, because a phone or tablet with a
+   hardware keyboard has no other way to reach these buttons. A pointer
+   focus does not match `:focus-visible`, a Tab does, so focus INSIDE the
+   strip still reveals it. Focus on the Context trigger (or anywhere else
+   in the row outside the strip) does not. */
+@media (hover: none) {
+  .message-action-row {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .message-action-row:has(:focus-visible) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* The Context trigger is 10px text, a 15px-tall box. Below lg it gets a
+   transparent `::after` that grows the HIT area to 45px tall and 8px wider
+   without moving anything in layout: a pseudo-element hit-tests as its
+   originating element, so a tap on it is a tap on the button. More of the
+   growth goes down, into this message's own first line, than up, into the
+   message above. */
+.message-context-trigger {
+  position: relative;
+}
+
+@media (width < 64rem) {
+  .message-context-trigger::after {
+    content: "";
+    position: absolute;
+    top: -12px;
+    bottom: -18px;
+    left: -4px;
+    right: -4px;
+  }
 }
 
 /* ── Hover feedback on the individual action buttons ──────────────────

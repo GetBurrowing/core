@@ -433,7 +433,16 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   #
   # RE-DERIVED from the guard's own counting rule on this tree (2,300), not by
   # adding a remembered delta to a remembered pin.
-  @chat_live_code_line_count 2300
+  # ── 2026-09-25, task 01a0d8de stage 3: +3 (2,300 -> 2,303) ──────────────
+  #
+  # The "Context" affordance on agent messages: one `import` of
+  # `ChatLive.Partials.MessageContext.message_context_overlay/1`, one `alias`
+  # of `ChatLive.MessageContextHooks`, and its `attach()` in the mount
+  # pipeline. Every event, info message and assign lives in the hook module,
+  # not here.
+  #
+  # RE-DERIVED from the guard's own measurement on this tree (measured: 2303).
+  @chat_live_code_line_count 2303
 
   @doc """
   Count the CODE lines of a source file.

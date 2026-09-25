@@ -96,16 +96,21 @@ defmodule Platform.Design.FocusRingCensusTest do
   # It happens to agree with the brief's breakdown exactly: 37 across 9 files.
   # New files carrying the class are fine (the total is a floor); these nine are
   # pinned so a conversion cannot silently regress.
+  #
+  # Task 01a0d8de stage 3 added three controls that carry the ring:
+  # chat_message.ex's header "Context" button and hover-row "Summarise what
+  # led here" button (9 -> 11), and overlays.ex's actions-sheet row "What
+  # this message is answering" (7 -> 8).
   @expected_required_sites %{
     "assets/css/app.css" => 5,
-    "lib/platform_web/components/chat_message.ex" => 9,
+    "lib/platform_web/components/chat_message.ex" => 11,
     "lib/platform_web/components/chat_message_editor.ex" => 3,
     "lib/platform_web/components/chat_version_history.ex" => 1,
     "lib/platform_web/components/empty_state.ex" => 1,
     "lib/platform_web/components/inbox_item.ex" => 1,
     "lib/platform_web/components/sheet.ex" => 1,
     "lib/platform_web/live/chat/partials.ex" => 9,
-    "lib/platform_web/live/chat/partials/overlays.ex" => 7
+    "lib/platform_web/live/chat/partials/overlays.ex" => 8
   }
 
   @expected_required_total 37

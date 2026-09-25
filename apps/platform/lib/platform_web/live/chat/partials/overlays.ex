@@ -345,6 +345,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   attr(:open_message_actions_msg, :any, required: true)
   attr(:current_participant, :any, required: true)
   attr(:quick_emojis, :list, required: true)
+  attr(:agent_participant_ids, :any, default: MapSet.new())
 
   @doc """
   The per-message actions bottom sheet.
@@ -376,6 +377,38 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
     >
       <:title>Message actions</:title>
       <div class="flex flex-col gap-1">
+        <%!-- "What this message is answering" (task 01a0d8de stage 3). The
+             first row, on agent messages only, with or without context of
+             their own: the panel shows the agent's context when there is
+             some and generates a summary when there is not. It closes this
+             sheet first, so exactly one sheet is ever open. --%>
+        <button
+          :if={
+            @open_message_actions_msg &&
+              MapSet.member?(@agent_participant_ids, @open_message_actions_msg.participant_id)
+          }
+          type="button"
+          data-role="message-actions-context"
+          phx-click={
+            Phoenix.LiveView.JS.push("close_message_actions")
+            |> Phoenix.LiveView.JS.push("open_message_context",
+              value: %{"message-id" => @open_message_actions_id}
+            )
+          }
+          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          <span class="hero-arrow-up-right size-5 text-base-content/70" aria-hidden="true"></span>
+          <span class="font-medium">What this message is answering</span>
+        </button>
+        <div
+          :if={
+            @open_message_actions_msg &&
+              MapSet.member?(@agent_participant_ids, @open_message_actions_msg.participant_id)
+          }
+          class="border-t border-edge"
+          aria-hidden="true"
+        >
+        </div>
         <%!-- Quick-reaction strip (task 01a000c0 stage 1).
 
              WHY A STRIP AND NOT AN "Add reaction…" MENU ROW: design canvas

@@ -85,6 +85,51 @@ defmodule Platform.Experiments.SurfacesTest do
       assert {:error, [_]} = DispatchPrompt.validate_payload(%{})
     end
 
+    test "chat.context_summary is registered on the :draft path with its one target" do
+      alias Platform.Experiments.Surfaces.ChatContextSummary
+
+      assert Surfaces.get("chat.context_summary") == ChatContextSummary
+      assert ChatContextSummary.path() == :draft
+      assert ChatContextSummary.subject_type() == "message"
+      assert ChatContextSummary.targets() == ["chat.context_summary"]
+    end
+
+    test "chat.context_summary validates its payload" do
+      alias Platform.Experiments.Surfaces.ChatContextSummary, as: S
+
+      assert {:ok, %{"provider" => "ollama", "model" => "m", "max_messages" => 30}} =
+               S.validate_payload(%{
+                 "provider" => "ollama",
+                 "model" => " m ",
+                 "max_messages" => 30
+               })
+
+      assert {:ok, %{"provider" => "anthropic"}} =
+               S.validate_payload(%{provider: "anthropic", system_prompt: "  "})
+
+      assert {:error, ["unknown keys: tools"]} =
+               S.validate_payload(%{"provider" => "openai", "tools" => []})
+
+      for n <- [0, 31, "5", 1.5] do
+        assert {:error, ["max_messages must be an integer in 1..30"]} =
+                 S.validate_payload(%{"provider" => "ollama", "max_messages" => n})
+      end
+
+      assert {:error, [_]} = S.validate_payload(%{"provider" => "none"})
+      assert {:error, [_]} = S.validate_payload(%{})
+
+      assert {:error, ["system_prompt must be at most 4000 chars"]} =
+               S.validate_payload(%{
+                 "provider" => "ollama",
+                 "system_prompt" => String.duplicate("x", 4001)
+               })
+
+      assert {:error, ["max_tokens must be an integer in 1..4096"]} =
+               S.validate_payload(%{"provider" => "ollama", "max_tokens" => 0})
+
+      assert {:error, ["payload must be an object"]} = S.validate_payload("x")
+    end
+
     test "dispatch.prompt's control payload is the template's current content", %{template: t} do
       assert DispatchPrompt.control_payload(t.slug, []) == {:ok, %{"content" => "LIVE-BODY"}}
       assert DispatchPrompt.control_payload("no.such.slug", []) == {:error, :template_not_found}

@@ -82,6 +82,7 @@ defmodule Platform.Experiments.GuardrailsTest do
 
       assert Enum.sort(rails.allowed_surfaces) ==
                [
+                 "chat.context_summary",
                  "dispatch.prompt",
                  "mail.draft.generator",
                  "mail.test.generator",
