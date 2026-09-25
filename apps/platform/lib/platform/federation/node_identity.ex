@@ -1,7 +1,14 @@
 defmodule Platform.Federation.NodeIdentity do
   @moduledoc """
   Manages Ed25519 device identity for the OpenClaw node connection.
+
+  The Ed25519 primitives live in `Platform.Federation.Ed25519` (hoisted there
+  by task 01a0d90f stage 2). This module owns only the on-disk identity file,
+  whose format is unchanged: a JSON object with standard-base64
+  `public_key` and `private_key`.
   """
+
+  alias Platform.Federation.Ed25519
 
   @default_identity_path "/data/platform/execution-runs/node_identity.json"
 
@@ -33,18 +40,16 @@ defmodule Platform.Federation.NodeIdentity do
   end
 
   @doc """
-  Derives a device ID from the public key: SHA256 hex, first 32 chars.
+  Derives a device ID from the public key: the full lowercase SHA256 hex
+  (64 characters), i.e. `Ed25519.fingerprint/1`.
   """
-  def device_id(identity) do
-    :crypto.hash(:sha256, identity.public_key)
-    |> Base.encode16(case: :lower)
-  end
+  def device_id(identity), do: Ed25519.fingerprint(identity.public_key)
 
   @doc """
   Signs a binary payload with the identity's private key using Ed25519.
   """
   def sign(payload, identity) when is_binary(payload) do
-    :crypto.sign(:eddsa, :none, payload, [identity.private_key, :ed25519])
+    Ed25519.sign(payload, identity.private_key)
   end
 
   @doc """
@@ -74,7 +79,7 @@ defmodule Platform.Federation.NodeIdentity do
   def base64url(bytes), do: Base.url_encode64(bytes, padding: false)
 
   defp generate_and_persist(path) do
-    {pub, priv} = :crypto.generate_key(:eddsa, :ed25519)
+    {pub, priv} = Ed25519.generate()
     identity = %{public_key: pub, private_key: priv}
 
     json =

@@ -820,11 +820,6 @@ defmodule Platform.Mail.Inbound do
 
   @doc false
   def email_participant_id(space_id) do
-    <<a::binary-size(8), b::binary-size(4), c::binary-size(4), d::binary-size(4),
-      e::binary-size(12), _::binary>> =
-      :crypto.hash(:sha256, "mail_inbound_email_external:#{space_id}")
-      |> Base.encode16(case: :lower)
-
-    "#{a}-#{b}-#{c}-#{d}-#{e}"
+    Platform.UUID.deterministic("mail_inbound_email_external:#{space_id}")
   end
 end

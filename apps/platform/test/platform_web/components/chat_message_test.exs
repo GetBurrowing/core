@@ -91,7 +91,41 @@ defmodule PlatformWeb.Components.ChatMessageTest do
       html = row_html(metadata)
       refute html =~ "mail-inbound-provenance"
       refute html =~ "mail-inbound-message-id"
+      refute html =~ "federation-inbound-provenance"
     end
+  end
+
+  # Task 01a0d90f stage 5: a peer install's shared-space message.
+  @federation_meta %{
+    "source" => "federation_inbound",
+    "skip_mention_scan" => true,
+    "peer_id" => "019f0000-0000-7000-8000-000000000001",
+    "remote_message_id" => "019f0000-0000-7000-8000-000000000002",
+    "peer_display_name" => "Acme Suite",
+    "remote_author" => "Pat"
+  }
+
+  test "a peer-install message renders the federation provenance line above the body" do
+    html = row_html(@federation_meta)
+    doc = LazyHTML.from_fragment(html)
+
+    [line] =
+      doc |> LazyHTML.query(~s([data-role="federation-inbound-provenance"])) |> Enum.to_list()
+
+    assert LazyHTML.text(line) =~ "Shared from Acme Suite, by Pat"
+    assert LazyHTML.attribute(line, "class") |> hd() =~ "text-xs"
+    assert line |> LazyHTML.query(".hero-globe-alt") |> Enum.count() == 1
+    refute html =~ "mail-inbound-provenance"
+
+    {prov_at, _} = :binary.match(html, "federation-inbound-provenance")
+    {body_at, _} = :binary.match(html, "chat-markdown")
+    assert prov_at < body_at
+  end
+
+  test "federation provenance values are escaped, not rendered as markup" do
+    html = row_html(Map.put(@federation_meta, "remote_author", "<img src=x onerror=alert(1)>"))
+    refute html =~ "<img src=x"
+    assert html =~ "&lt;img src=x"
   end
 
   # ── The "Context" trigger (task 01a0d8de stage 3) ───────────────────

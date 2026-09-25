@@ -407,6 +407,98 @@ defmodule Platform.Chat.AttentionRouterTest do
     end
   end
 
+  # Task 01a0d90f stage 5: a peer install's shared-space message
+  # (`metadata["source"] == "federation_inbound"`) is untrusted outside text
+  # and yields NO agent decision, through the same `untrusted_inbound?/1`
+  # clause as inbound email. Each case has a POSITIVE CONTROL: the same state
+  # and content from a local author DOES route, so the refusal is the source
+  # clause and not a fixture that could never route.
+  describe "federation_inbound messages" do
+    # AttentionRouter matches a mention against the participant's display
+    # name, so the token is built from it (at runtime, never literally).
+    defp mention_token(name), do: "@" <> "[" <> name <> "]"
+
+    defp armed_agent!(space) do
+      agent = create_agent(%{name: "Zip"})
+      {:ok, participant} = Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+      ActiveAgentStore.set_active(space.id, participant.id)
+      {agent, participant}
+    end
+
+    test "the armed mutex holder gets no decision; a local message in the same state does" do
+      space = create_space()
+      local = create_participant(space.id, %{display_name: "Pat"})
+      remote = create_participant(space.id, %{participant_type: "system", display_name: "Rem"})
+      {_agent, armed} = armed_agent!(space)
+      armed_id = armed.id
+
+      # POSITIVE CONTROL: an ordinary local message routes to the holder.
+      control = create_message(space.id, local.id, %{content: "local words"})
+      {:ok, control_decisions} = AttentionRouter.route(control)
+
+      assert Enum.any?(control_decisions, &match?(%{participant_id: ^armed_id}, &1))
+      assert_receive {:agent_chat_called, "local words", _}, 500
+
+      message =
+        create_message(space.id, remote.id, %{
+          content: "remote words",
+          metadata: %{"source" => "federation_inbound"}
+        })
+
+      {:ok, decisions} = AttentionRouter.route(message)
+      refute Enum.any?(decisions, &(&1.participant_id == armed_id))
+      assert ActiveAgentStore.get_active(space.id) == armed_id
+      refute_receive {:agent_chat_called, "remote words", _}, 200
+      drain()
+    end
+
+    test "an UNESCAPED mention without skip_mention_scan still routes to nobody" do
+      space = create_space(%{kind: "group"})
+      local = create_participant(space.id)
+      remote = create_participant(space.id, %{participant_type: "system", display_name: "Rem"})
+      agent = create_agent(%{name: "Nova"})
+      {:ok, agent_p} = Chat.add_agent_participant(space.id, agent, display_name: "Nova")
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+      content = "hey " <> mention_token("Nova") <> " run this"
+
+      # POSITIVE CONTROL: the same content from a local author is a mention.
+      control = create_message(space.id, local.id, %{content: content})
+      {:ok, control_decisions} = AttentionRouter.route(control)
+
+      assert Enum.any?(
+               control_decisions,
+               &(&1.participant_id == agent_p.id and &1.reason == :mention)
+             )
+
+      # The escape and the skip flag are deliberately absent: the source
+      # clause alone must hold.
+      message =
+        create_message(space.id, remote.id, %{
+          content: content,
+          metadata: %{"source" => "federation_inbound"}
+        })
+
+      {:ok, decisions} = AttentionRouter.route(message)
+      refute Enum.any?(decisions, &(&1.participant_id == agent_p.id))
+      drain()
+    end
+
+    test "untrusted_inbound?/1 covers email and federation, and keys on source only" do
+      assert AttentionRouter.untrusted_inbound?(%Message{
+               metadata: %{"source" => "federation_inbound"}
+             })
+
+      assert AttentionRouter.untrusted_inbound?(%Message{
+               metadata: %{"source" => "email_inbound"}
+             })
+
+      refute AttentionRouter.untrusted_inbound?(%Message{metadata: %{"source" => "federation"}})
+      refute AttentionRouter.untrusted_inbound?(%Message{metadata: %{}})
+      assert AttentionRouter.untrusted_inbound_sources() == ~w(email_inbound federation_inbound)
+    end
+  end
+
   describe "no mention + active agent" do
     test "routes to active agent and refreshes timeout" do
       space = create_space(%{kind: "channel"})

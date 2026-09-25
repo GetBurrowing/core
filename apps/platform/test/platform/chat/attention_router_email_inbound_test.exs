@@ -193,10 +193,13 @@ defmodule Platform.Chat.AttentionRouterEmailInboundTest do
       drain()
     end
 
-    test "email_inbound?/1 keys on metadata source only" do
-      assert AttentionRouter.email_inbound?(%Message{metadata: %{"source" => "email_inbound"}})
-      refute AttentionRouter.email_inbound?(%Message{metadata: %{"source" => "task_router"}})
-      refute AttentionRouter.email_inbound?(%Message{metadata: nil})
+    test "untrusted_inbound?/1 keys on metadata source only" do
+      assert AttentionRouter.untrusted_inbound?(%Message{
+               metadata: %{"source" => "email_inbound"}
+             })
+
+      refute AttentionRouter.untrusted_inbound?(%Message{metadata: %{"source" => "task_router"}})
+      refute AttentionRouter.untrusted_inbound?(%Message{metadata: nil})
     end
   end
 

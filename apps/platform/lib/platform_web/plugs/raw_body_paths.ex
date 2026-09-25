@@ -29,8 +29,14 @@ defmodule PlatformWeb.Plugs.RawBodyPaths do
   @behaviour Plug
 
   # Route prefixes whose controllers read the raw body themselves.
+  #
+  # The peer inbox (task 01a0d90f stage 3) is here so its 256 KB cap holds
+  # WHILE the body is read: `PlatformWeb.Plugs.VerifyPeerEnvelope` reads at
+  # most cap + 1 bytes itself, where `Plug.Parsers` would first buffer up to
+  # its 8 MB default.
   @raw_body_prefixes [
-    ["chat", "attachments", "upload"]
+    ["chat", "attachments", "upload"],
+    ["federation", "v1", "inbox"]
   ]
 
   @impl true

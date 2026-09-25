@@ -263,6 +263,22 @@ config :platform, :meetings_enabled, false
 # with `Application.put_env` + `on_exit` restore in async: false modules.
 config :platform, :mail_enabled, false
 
+# Install-to-install federation master switch (task 01a0d90f stage 2, ADR
+# 0054). Same reasoning as :mail_enabled above: without the injected key
+# `Federation.Peers.Config.enabled?/0` reads `PEER_FEDERATION_ENABLED` from
+# the host. Tests that need it on flip it per-test and restore it on exit.
+config :platform, :peer_federation_enabled, false
+
+# Peer federation HTTP never reaches the network in tests (task 01a0d90f
+# stage 3): every `Federation.Peers.Client` request goes to the `Req.Test`
+# stub of that name, and the SSRF guard's DNS lookups go to a static map that
+# is empty here, so a test that forgets to stub one fails as
+# `:unresolvable` instead of querying real DNS. Tests that need an address
+# put their own resolver and restore this one on exit.
+config :platform, :peer_federation_req_options, plug: {Req.Test, Platform.Federation.Peers.Client}
+
+config :platform, :peer_federation_resolver, %{}
+
 # Email send path (task 01a0cf21 stage 2): tests never reach SMTP. The
 # recording adapter sends `{:mail_test_adapter, email, config}` to the calling
 # process so a test can assert WHICH relay and username a send used;

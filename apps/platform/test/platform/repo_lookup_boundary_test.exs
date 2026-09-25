@@ -323,6 +323,20 @@ defmodule Platform.RepoLookupBoundaryTest do
      "one reads `stage.plan_id` off a %Stage{} Postgres just returned (NOT NULL uuid FK column); the other is review_plan_freshness/1's subject lookup, behind the Platform.UUID.valid?/1 guard recorded above"},
     {"platform/federation/dead_letter_policy.ex", :get, "Tasks.Task", 1, :safe_internal,
      "reads `plan.task_id` off a %Plan{} loaded two lines earlier — a NOT NULL uuid FK column, so no id reaches it that Postgres did not just hand back"},
+    # ── Install-to-install federation (task 01a0d90f stage 2, ADR 0054) ──
+    {"platform/federation/peers.ex", :get, "Peer", 1, :safe_internal,
+     "`get_peer/1` guards the id with Platform.UUID.valid?/1 in the same `if` — later stages reach it from an admin action or an envelope — and a malformed id returns nil, the function's existing miss"},
+    {"platform/federation/peers.ex", :get_by, "Peer", 1, :safe_internal,
+     "`get_peer_by_install_id/1` keys `peer_install_id:` (an `Ecto.UUID` column) and guards it with Platform.UUID.valid?/1 in the same `if`; the install id will arrive in a remote envelope's `from` field, so a malformed one must be a nil miss, not a cast error"},
+    {"platform/federation/peers.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "the two guards recorded above, in `get_peer/1` and `get_peer_by_install_id/1`. Count 2 -> 3 with task 01a0d90f stage 5: `replica_space_id/1` checks the `data.space_id` a PEER's inbox answered to `space.share` before it is stored as `remote_space_id` (an `Ecto.UUID` column); a malformed id is `{:error, :invalid_answer}` and no row is written, so the guard, not the peer, bounds the insert"},
+    # ── Install-to-install federation, shared spaces (task 01a0d90f stage 5) ──
+    {"platform/federation/peers/ingest.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "`parse/1` checks the relay payload's `space_id` and `message_id` — both from a REMOTE install's signed envelope, so attacker-shaped — before either reaches a query (`SharedSpaces.get_active/2`'s `local_space_id ==` comparison and the `federation_message_links` claim insert). A malformed id is `{:error, :invalid_payload}`, the handler's existing refusal"},
+    {"platform/federation/peers/peer_connection.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "`acknowledged/3` checks the `data.message_id` a peer's inbox answered with before `SharedSpaces.record_outbound/3` inserts it into `federation_message_links.remote_message_id` (an `Ecto.UUID` column); a malformed id records no link and the cursor still advances"},
+    {"platform/federation/peers/shared_spaces.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "`accept_share/2` checks a remote `space.share` payload's `space_id` before `existing_replica/2` compares it against `remote_space_id` (an `Ecto.UUID` column); a malformed id is `{:error, :invalid_payload}`"},
     {"platform/federation/task_attrs.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
      "`default_agent_resolver/1` is the injection seam for tests; callers pass an `assignee_id` that `TaskAttrs` has already shape-validated"},
     {"platform/federation/tool_surface.ex", :platform_uuid_guard, "-", 8, :safe_internal,
@@ -774,6 +788,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # unindexed there" instead of raising `Ecto.Query.CastError` inside a
     # page render.
     "platform/chat/canvas_search_index.ex" => 1,
+    # Task 01a0d90f stage 2: 0 -> 2. `get_record/0` and `current_key/0` in
+    # InstallIdentity. Triaged by hand: neither `where:` pins an id — one
+    # reads the singleton identity row with `limit: 1`, the other filters on
+    # `status == "current"`, a string literal — so nothing boundary-reachable
+    # can raise Ecto.Query.CastError there.
+    "platform/federation/peers/install_identity.ex" => 2,
     # Task 01a0cf21 (Email module). dispatch.ex: 0 → 2 — `recent_count/1`
     # (`account_id` off a locked `%Account{}`) and `lock_draft!/1` (the draft
     # id `fetch_draft/1` already guarded). mailbox.ex: 0 → 6 — three

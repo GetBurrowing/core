@@ -74,6 +74,7 @@ defmodule Platform.Security.ExternalContent do
     browser: "Browser",
     web_search: "Web Search",
     web_fetch: "Web Fetch",
+    federation: "Suite peer",
     unknown: "External"
   }
 
@@ -168,7 +169,8 @@ defmodule Platform.Security.ExternalContent do
 
   @ignorable [0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0x00AD]
 
-  @type source :: :email | :webhook | :api | :browser | :web_search | :web_fetch | :unknown
+  @type source ::
+          :email | :webhook | :api | :browser | :web_search | :web_fetch | :federation | :unknown
 
   @doc "The fixed SECURITY NOTICE placed ahead of every wrapped block."
   @spec warning() :: String.t()

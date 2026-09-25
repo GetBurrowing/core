@@ -75,4 +75,31 @@ defmodule Platform.UUID do
   def cast(value) do
     if valid?(value), do: Ecto.UUID.cast(value), else: :error
   end
+
+  @doc """
+  A deterministic uuid-SHAPED id for `seed`: the first 32 hex characters of
+  `sha256(seed)`, formatted 8-4-4-4-12.
+
+  Used for system participants that must be the same row every time they are
+  looked up and must never collide with a user or agent id, e.g. the
+  `"Email (external)"` participant of `Platform.Mail.Inbound` and the remote
+  authors of `Platform.Federation.Peers.Ingest` (task 01a0d90f stage 5
+  hoisted it out of the former). The version and variant nibbles are NOT
+  set, so this is not an RFC 9562 UUID; it satisfies `valid?/1` and casts and
+  dumps as a `:binary_id`. Callers pick a namespace prefix for `seed` so two
+  features can never derive the same id.
+
+      iex> Platform.UUID.deterministic("mail_inbound_email_external:x")
+      ...> |> Platform.UUID.valid?()
+      true
+  """
+  @spec deterministic(String.t()) :: String.t()
+  def deterministic(seed) when is_binary(seed) do
+    <<a::binary-size(8), b::binary-size(4), c::binary-size(4), d::binary-size(4),
+      e::binary-size(12), _::binary>> =
+      :crypto.hash(:sha256, seed)
+      |> Base.encode16(case: :lower)
+
+    "#{a}-#{b}-#{c}-#{d}-#{e}"
+  end
 end

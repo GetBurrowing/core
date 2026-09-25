@@ -441,6 +441,26 @@ defmodule PlatformWeb.Components.ChatMessage do
             </span>
           </div>
 
+          <%!-- Peer-install provenance (task 01a0d90f stage 5). A message
+             from a shared space on another Suite install is outside text
+             posted by a "<name> (via <peer>)" system participant, so it is
+             labelled as such above the body, as the mail block above is.
+             Values come from the metadata `Platform.Federation.Peers.Ingest`
+             stamped; HEEx escapes them. --%>
+          <% federation_meta = federation_inbound_metadata(@msg) %>
+          <div
+            :if={federation_meta}
+            data-role="federation-inbound-provenance"
+            class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-base-content/60 mb-1"
+          >
+            <span class="hero-globe-alt size-3.5 shrink-0" aria-hidden="true"></span>
+            <span>
+              Shared from {federation_meta["peer_display_name"] || "a Suite peer"}, by {federation_meta[
+                "remote_author"
+              ] || "an unknown author"}
+            </span>
+          </div>
+
           <%!-- Inline editor (task 019e0f29 Stage 5). When this message is
              the one being edited, render the editor in place of the
              bubble. Otherwise render the bubble as before. --%>
@@ -861,6 +881,14 @@ defmodule PlatformWeb.Components.ChatMessage do
   end
 
   defp format_day_label(_), do: ""
+
+  # Metadata of a peer-install message (task 01a0d90f stage 5), or nil.
+  defp federation_inbound_metadata(msg) do
+    case Map.get(msg, :metadata) do
+      %{"source" => "federation_inbound"} = metadata -> metadata
+      _ -> nil
+    end
+  end
 
   # Metadata of an inbound-email message (task 01a0cf21 stage 3), or nil.
   defp email_inbound_metadata(msg) do

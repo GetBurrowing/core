@@ -89,6 +89,23 @@ defmodule Platform.Application do
            # AFTER RuntimePresence and for a structural reason: every delivery
            # re-checks presence, so this must not outlive the process it reads.
            Platform.Federation.DeadLetterReplay,
+           # Peer-envelope replay cache (task 01a0d90f stage 3, ADR 0054) —
+           # owns the :federation_peer_nonces table. Pure ETS lifecycle
+           # owner (PressWindow shape), no DB and no PubSub; it must exist
+           # before the Endpoint accepts the first inbox POST.
+           Platform.Federation.Peers.NonceCache,
+           # Per-peer outbound connections (task 01a0d90f stage 4, ADR 0054
+           # section 4). The Registry names each peer's connection
+           # `{:peer, id}` and its wrapper `{:peer_sup, id}`; it must start
+           # before the Supervisor whose children register in it.
+           {Registry, keys: :unique, name: Platform.Federation.Peers.Registry},
+           # One wrapper Supervisor per peer under this DynamicSupervisor, so
+           # a crash-looping peer exhausts only its own restart budget.
+           Platform.Federation.Peers.Supervisor,
+           # Starts a connection per active peer at boot and re-scans every
+           # 60 s. Returns :ignore (starts nothing) when federation is off.
+           # After Repo (it lists peers) and after the Supervisor it fills.
+           Platform.Federation.Peers.Boot,
            # Task supervisor for parallel agent dispatch (ADR 0027)
            {Task.Supervisor, name: Platform.TaskSupervisor},
            # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)

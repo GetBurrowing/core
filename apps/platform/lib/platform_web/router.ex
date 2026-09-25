@@ -19,7 +19,8 @@ defmodule PlatformWeb.Router do
        sign-in begins on the chat host and the IdP's registered redirect URI
        is a fixed absolute URL), the `/org-context[/*file_key]` 301s, the
        HMAC-token attachment routes, the subscribed `invite.ics` calendar
-       feed, and the `/api/*` + `/mcp` machine callers.
+       feed, the `/api/*` + `/mcp` machine callers, and the
+       `/.well-known/suite-federation` peer descriptor.
 
   Enforcement of bucket 1 is the `:host_surface_enforcement` config flag, `:on`
   as of stage 4. The whole point of it being a flag is that the rollback is one
@@ -118,6 +119,17 @@ defmodule PlatformWeb.Router do
   pipeline :github_webhook do
     plug(:accepts, ["json"])
     plug(PlatformWeb.Plugs.VerifyGithubSignature)
+  end
+
+  # Peer-install inbox pipeline — task 01a0d90f stage 3, ADR 0054. Unlike
+  # `:github_webhook`, the body is NOT pre-read: the inbox path is on
+  # `PlatformWeb.Plugs.RawBodyPaths`' skip-list, and `VerifyPeerEnvelope`
+  # reads it itself with the 256 KB cap applied WHILE reading (see its
+  # moduledoc), then verifies the Ed25519 envelope and halts on any refusal
+  # before controller code runs.
+  pipeline :peer_envelope do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.VerifyPeerEnvelope)
   end
 
   pipeline :mcp do
@@ -845,6 +857,28 @@ defmodule PlatformWeb.Router do
   # in THEIR console, verified by `VerifyLivekitSignature` /
   # `VerifyGithubSignature`. Fencing those would drop webhooks with no
   # client-side error anyone here would see. None get `:require_app_surface`.
+  # Install-to-install federation descriptor (task 01a0d90f stage 2, ADR
+  # 0054). HOST-AGNOSTIC and UNAUTHENTICATED, both deliberate: it is fetched
+  # by PEER INSTALLS, from arbitrary hosts, against whatever base URL an admin
+  # typed, and a peer carries no session. `:require_app_surface` would 404 it
+  # on a chat- or meet-prefixed base URL. The body is public keys only, and
+  # the controller answers 404 while `PEER_FEDERATION_ENABLED` is off.
+  scope "/.well-known", PlatformWeb do
+    pipe_through(:api)
+    get("/suite-federation", FederationWellKnownController, :show)
+  end
+
+  # Install-to-install federation inbox (task 01a0d90f stage 3, ADR 0054).
+  # HOST-AGNOSTIC and SESSIONLESS for the same reason as the descriptor
+  # above: peer installs POST here from arbitrary hosts, against the base URL
+  # an admin typed, and carry no session. Every request authenticates on its
+  # own Ed25519 envelope signature (`:peer_envelope`), and answers 404 while
+  # `PEER_FEDERATION_ENABLED` is off.
+  scope "/federation/v1", PlatformWeb do
+    pipe_through(:peer_envelope)
+    post("/inbox", FederationInboxController, :create)
+  end
+
   scope "/api/internal", PlatformWeb do
     pipe_through(:api)
     post("/usage-events", UsageEventController, :create)

@@ -124,7 +124,10 @@ defmodule PlatformWeb.RouterAppSurfaceWiringTest do
         {"POST", "/api/webhooks/github"},
         {"POST", "/api/webhooks/livekit"},
         {"POST", "/mcp"},
-        {"GET", "/mcp"}
+        {"GET", "/mcp"},
+        # peer-install descriptor and inbox, called by other installs (task 01a0d90f)
+        {"GET", "/.well-known/suite-federation"},
+        {"POST", "/federation/v1/inbox"}
       ]
 
       for {verb, path} <- agnostic do
@@ -144,7 +147,9 @@ defmodule PlatformWeb.RouterAppSurfaceWiringTest do
       for {verb, path} <- [
             {"GET", "/health"},
             {"GET", "/auth/oidc/callback"},
-            {"POST", "/api/webhooks/livekit"}
+            {"POST", "/api/webhooks/livekit"},
+            {"GET", "/.well-known/suite-federation"},
+            {"POST", "/federation/v1/inbox"}
           ] do
         info = Phoenix.Router.route_info(Router, verb, path, @chat_host)
 

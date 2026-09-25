@@ -5,9 +5,9 @@ defmodule Platform.Chat.AttentionRouter do
 
   ## Routing logic (agents)
 
-  0. **Inbound email** (`metadata["source"] == "email_inbound"`) — no agent
-     decision in any space kind, ahead of every rule below. See
-     `email_inbound?/1`.
+  0. **Untrusted inbound** (`metadata["source"]` is `"email_inbound"` or
+     `"federation_inbound"`) — no agent decision in any space kind, ahead of
+     every rule below. See `untrusted_inbound?/1`.
   1. **Execution spaces** — `log_only` messages are silently skipped.
   2. **DM spaces** — always route to the single agent participant (`:directed`).
   3. **Single @mention** — set mentioned agent as active (mutex) and route.
@@ -361,8 +361,9 @@ defmodule Platform.Chat.AttentionRouter do
   # hold for every key in `Platform.Roles.Role` (ADR 0043's security guard and
   # ADR 0044's architect included) the moment they stamp the metadata.
   #
-  # Inbound email (task 01a0cf21 stage 3) is checked FIRST, ahead of the
-  # role-scoped branch and of every activity branch: an `email_inbound`
+  # Untrusted inbound (email, task 01a0cf21 stage 3; peer federation, task
+  # 01a0d90f stage 5) is checked FIRST, ahead of the role-scoped branch and
+  # of every activity branch: an `email_inbound` or `federation_inbound`
   # message is untrusted outside text and yields NO agent decision — no
   # :directed (DM), no :mention / :multi_mention, no :active_agent to the
   # mutex holder (ADR 0027 rule 5), no execution-assignee fallback, and it
@@ -374,7 +375,7 @@ defmodule Platform.Chat.AttentionRouter do
   # fall-through into activity routing. Human routing is unchanged.
   defp route_agents(%Space{} = space, %Message{} = message, agent_recipients) do
     cond do
-      email_inbound?(message) ->
+      untrusted_inbound?(message) ->
         []
 
       role_key = role_scoped_dispatch_role(message) ->
@@ -385,14 +386,27 @@ defmodule Platform.Chat.AttentionRouter do
     end
   end
 
+  @untrusted_inbound_sources ~w(email_inbound federation_inbound)
+
   @doc """
-  True for a message posted by the Email module's inbound poller
-  (`metadata["source"] == "email_inbound"`, task 01a0cf21 stage 3). Such a
-  message never produces an agent routing decision.
+  True for a message whose text came from OUTSIDE this install and was posted
+  by a system participant on its behalf: `metadata["source"]` is
+  `"email_inbound"` (the Email module's inbound poller, task 01a0cf21
+  stage 3) or `"federation_inbound"` (a peer install's shared-space message,
+  `Platform.Federation.Peers.Ingest`, task 01a0d90f stage 5). Such a message
+  never produces an agent routing decision, and never fires a chat-pattern
+  responsibility (`Platform.Responsibilities.Router`).
   """
-  @spec email_inbound?(Message.t()) :: boolean()
-  def email_inbound?(%Message{metadata: %{"source" => "email_inbound"}}), do: true
-  def email_inbound?(_), do: false
+  @spec untrusted_inbound?(Message.t()) :: boolean()
+  def untrusted_inbound?(%Message{metadata: %{"source" => source}})
+      when source in @untrusted_inbound_sources,
+      do: true
+
+  def untrusted_inbound?(_), do: false
+
+  @doc "The `metadata[\"source\"]` values `untrusted_inbound?/1` recognises."
+  @spec untrusted_inbound_sources() :: [String.t()]
+  def untrusted_inbound_sources, do: @untrusted_inbound_sources
 
   defp route_role_scoped(%Space{} = space, %Message{} = message, agent_recipients, role_key) do
     case Roles.agent_id_for_role(role_key) do
