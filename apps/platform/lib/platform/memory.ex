@@ -10,7 +10,13 @@ defmodule Platform.Memory do
         base_url: "http://memory-service:8100",
         api_key: "optional-shared-secret",
         model: "embeddings",
-        timeout: 5_000
+        timeout: 5_000,
+        ingest_timeout: 120_000
+
+  `:timeout` bounds search, delete and health; `:ingest_timeout` bounds
+  ingest only (an ingest embeds before it answers and is slow by nature).
+  Ingest never falls back to `:timeout`. See
+  `Platform.Memory.Providers.StartupSuite` for why.
 
   When `MEMORY_SERVICE_URL` isn't set at boot the provider falls back to
   `Platform.Memory.Providers.Noop` so the app still starts and the existing

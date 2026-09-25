@@ -37,6 +37,51 @@ defmodule Platform.Org.Wiki.Indexer do
       * `retry_max_ms`      — cap on retry delay (default 30_000ms)
       * `retry_warn_after`  — log a warning after N consecutive failures
                               for the same corpus (default 5)
+      * `retry_timeout_floor_ms` — minimum retry delay after a receive
+                              timeout (default 30_000ms; see below)
+      * `max_attempts`      — consecutive failures of one corpus after which
+                              its pending ids are dropped (default 8)
+
+  Every tunable can also be passed in `start_link/1` opts, which win over
+  application config.
+
+  ## Retries (task 01a0d8c9)
+
+  A failed corpus is re-enqueued and retried with exponential backoff
+  (`retry_initial_ms * 2^(attempt-1)`, capped at `retry_max_ms`). Each corpus
+  keeps its own attempt counter and its own due time:
+
+    * **Receive timeouts are `:possibly_in_progress`.** A
+      `%Req.TransportError{reason: :timeout}` (or bare `:timeout`) means the
+      client stopped waiting, not that memory-service stopped working: the
+      ingest is probably still embedding. Resending at once makes the
+      service embed the same content again, so after a timeout the retry
+      delay is at least `retry_timeout_floor_ms`. Other errors keep the
+      plain backoff.
+    * **A corpus in backoff is held.** A flush triggered by a new wiki
+      event only dispatches corpora with no failures outstanding. A corpus
+      in backoff is flushed only by its retry timer (or `flush_now/1`);
+      events for it still accumulate in its pending set and go out with
+      that retry. Before this, every unrelated journal append resent every
+      failed page immediately, whatever the backoff said.
+    * **Retries are bounded.** When a corpus has failed `max_attempts`
+      times in a row, the indexer logs one `Logger.error` line naming the
+      corpus, the ids, the attempt count and the last reason, emits
+      `:gave_up` telemetry, drops those ids from pending and resets the
+      counter. The rows stay in Postgres; they are re-indexed the next
+      time they are written.
+
+  ## Trade-off: the flush is synchronous
+
+  The flush runs inside this GenServer, not in a Task, so corpora are
+  dispatched one after another and a slow call delays the rest. With the
+  long ingest timeout (`Platform.Memory.Providers.StartupSuite`, 120s by
+  default) a slow page ingest makes the journal and delete corpora wait up
+  to that long behind it. Before, they waited 5s per attempt, and the
+  2026-09-25 incident repeated that 146 times; one long wait that succeeds
+  is cheaper than many short ones that each cost a full re-embed. Moving the
+  flush off-process would need in-flight tracking per corpus to keep the
+  "never two copies in flight" property, and is not done here.
 
   ## Telemetry
 
@@ -45,8 +90,12 @@ defmodule Platform.Org.Wiki.Indexer do
         metadata:     %{}
 
       [:platform, :org, :wiki_indexer, :retry]
-        measurements: %{attempt}
-        metadata:     %{kind, reason}
+        measurements: %{attempt, delay_ms}
+        metadata:     %{kind, reason, class}   # class: :possibly_in_progress | :failed
+
+      [:platform, :org, :wiki_indexer, :gave_up]
+        measurements: %{attempts, count}
+        metadata:     %{kind, ids, reason}
 
   ## Provider gate
 
@@ -73,6 +122,10 @@ defmodule Platform.Org.Wiki.Indexer do
   @default_retry_initial_ms 1_000
   @default_retry_max_ms 30_000
   @default_retry_warn_after 5
+  @default_retry_timeout_floor_ms 30_000
+  @default_max_attempts 8
+
+  @corpora [:pages, :journal, :deletes]
 
   @flush_message :flush
 
@@ -123,6 +176,9 @@ defmodule Platform.Org.Wiki.Indexer do
       pending_deletes: %{},
       flush_timer: nil,
       retry_attempts: %{pages: 0, journal: 0, deletes: 0},
+      # Monotonic ms at which a corpus in backoff may be retried; nil when
+      # the corpus has no failure outstanding.
+      retry_due_at: %{pages: nil, journal: nil, deletes: nil},
       retry_timer: nil,
       tick_ms: Keyword.get(opts, :tick_ms, config(:tick_ms, @default_tick_ms)),
       max_batch_size:
@@ -132,7 +188,14 @@ defmodule Platform.Org.Wiki.Indexer do
       retry_max_ms:
         Keyword.get(opts, :retry_max_ms, config(:retry_max_ms, @default_retry_max_ms)),
       retry_warn_after:
-        Keyword.get(opts, :retry_warn_after, config(:retry_warn_after, @default_retry_warn_after))
+        Keyword.get(opts, :retry_warn_after, config(:retry_warn_after, @default_retry_warn_after)),
+      retry_timeout_floor_ms:
+        Keyword.get(
+          opts,
+          :retry_timeout_floor_ms,
+          config(:retry_timeout_floor_ms, @default_retry_timeout_floor_ms)
+        ),
+      max_attempts: Keyword.get(opts, :max_attempts, config(:max_attempts, @default_max_attempts))
     }
 
     {:ok, state}
@@ -167,12 +230,12 @@ defmodule Platform.Org.Wiki.Indexer do
 
   def handle_info(@flush_message, state) do
     state = %{state | flush_timer: nil}
-    {:noreply, do_flush(state)}
+    {:noreply, do_flush(state, :event)}
   end
 
   def handle_info(:retry_flush, state) do
     state = %{state | retry_timer: nil}
-    {:noreply, do_flush(state)}
+    {:noreply, do_flush(state, :retry)}
   end
 
   # Ignore any other PubSub message tag — defensive, since the topic
@@ -184,7 +247,7 @@ defmodule Platform.Org.Wiki.Indexer do
     state =
       state
       |> cancel_flush_timer()
-      |> do_flush()
+      |> do_flush(:force)
 
     {:reply, :ok, state}
   end
@@ -221,11 +284,16 @@ defmodule Platform.Org.Wiki.Indexer do
 
   # ── Flush ─────────────────────────────────────────────────────────────
 
-  defp do_flush(state) do
+  # `mode` decides which corpora in backoff may be dispatched:
+  #   :event  — a debounced wiki event; corpora in backoff are held
+  #   :retry  — the retry timer; corpora whose due time has passed go out
+  #   :force  — flush_now/1; everything goes out
+  # A corpus with no failure outstanding is dispatched in every mode.
+  defp do_flush(state, mode) do
     start = System.monotonic_time(:microsecond)
 
     if Memory.enabled?() do
-      state = flush_pending(state)
+      state = flush_pending(state, mode)
       latency = System.monotonic_time(:microsecond) - start
 
       :telemetry.execute(
@@ -248,26 +316,56 @@ defmodule Platform.Org.Wiki.Indexer do
     end
   end
 
-  defp flush_pending(state) do
-    %{pending_pages: pages, pending_journal: journal, pending_deletes: deletes} = state
+  defp flush_pending(state, mode) do
+    now = System.monotonic_time(:millisecond)
 
-    page_ids = Map.keys(pages)
-    journal_ids = Map.keys(journal)
-    delete_ids = Map.keys(deletes)
+    {state, counts} =
+      Enum.reduce(@corpora, {state, %{}}, fn kind, {acc, counts} ->
+        if dispatchable?(acc, kind, mode, now) do
+          ids = acc |> Map.fetch!(pending_key(kind)) |> Map.keys()
+          outcome = dispatch_corpus(kind, ids, acc)
 
-    pages_outcome = ingest_corpus(:pages, page_ids, state, &load_page/1)
-    journal_outcome = ingest_corpus(:journal, journal_ids, state, &load_journal/1)
-    deletes_outcome = delete_corpus(delete_ids, state)
+          {reconcile_pending(acc, kind, outcome.result, ids),
+           Map.put(counts, kind, outcome.count)}
+        else
+          # Held: the corpus is in backoff. Its pending set (including ids
+          # that arrived since the failure) waits for its own retry.
+          {acc, Map.put(counts, kind, 0)}
+        end
+      end)
 
     state
-    |> reconcile_pending(:pages, pages_outcome.result, page_ids)
-    |> reconcile_pending(:journal, journal_outcome.result, journal_ids)
-    |> reconcile_pending(:deletes, deletes_outcome.result, delete_ids)
-    |> Map.put(:__last_flushed_pages, pages_outcome.count)
-    |> Map.put(:__last_flushed_journal, journal_outcome.count)
-    |> Map.put(:__last_flushed_deletes, deletes_outcome.count)
+    |> Map.put(:__last_flushed_pages, counts.pages)
+    |> Map.put(:__last_flushed_journal, counts.journal)
+    |> Map.put(:__last_flushed_deletes, counts.deletes)
     |> maybe_schedule_retry()
   end
+
+  defp dispatchable?(state, kind, mode, now) do
+    cond do
+      state.retry_attempts[kind] == 0 -> true
+      mode == :force -> true
+      mode == :retry -> due?(state.retry_due_at[kind], now)
+      true -> false
+    end
+  end
+
+  defp due?(nil, _now), do: true
+  defp due?(due_at, now), do: due_at <= now
+
+  defp dispatch_corpus(:pages, ids, state), do: ingest_corpus(:pages, ids, state, &load_page/1)
+
+  defp dispatch_corpus(:journal, ids, state),
+    do: ingest_corpus(:journal, ids, state, &load_journal/1)
+
+  defp dispatch_corpus(:deletes, ids, state), do: delete_corpus(ids, state)
+
+  defp pending_key(:pages), do: :pending_pages
+  defp pending_key(:journal), do: :pending_journal
+  defp pending_key(:deletes), do: :pending_deletes
+
+  defp pending_value(:deletes), do: :delete
+  defp pending_value(_kind), do: :upsert
 
   # Each corpus ingest is split into chunks bounded by `max_batch_size`
   # so a giant burst doesn't push an unbounded payload through the
@@ -325,116 +423,122 @@ defmodule Platform.Org.Wiki.Indexer do
     end
   end
 
-  # On success, clear the corresponding pending set and reset its
-  # retry counter. On error, re-merge the ids that didn't make it back
-  # into pending state and bump the retry counter for that corpus.
-  defp reconcile_pending(state, :pages, :ok, _ids) do
+  # On success, clear the corresponding pending set and reset its retry
+  # state. On error, either re-merge the ids into pending and schedule the
+  # corpus's own retry, or — once it has failed `max_attempts` times in a
+  # row — give up on those ids.
+  defp reconcile_pending(state, kind, :ok, _ids) do
     state
-    |> Map.put(:pending_pages, %{})
-    |> put_in([:retry_attempts, :pages], 0)
+    |> Map.put(pending_key(kind), %{})
+    |> put_in([:retry_attempts, kind], 0)
+    |> put_in([:retry_due_at, kind], nil)
   end
 
-  defp reconcile_pending(state, :pages, {:error, {kind, reason}}, ids) do
-    log_retry(state, kind, reason)
-    re_enqueue_pages(state, ids)
+  defp reconcile_pending(state, kind, {:error, {_kind, reason}}, ids) do
+    attempt = state.retry_attempts[kind] + 1
+
+    if attempt >= state.max_attempts do
+      give_up(state, kind, ids, attempt, reason)
+    else
+      class = classify(reason)
+      delay = retry_delay(attempt, class, state)
+      log_retry(state, kind, reason, attempt, class, delay)
+
+      state
+      |> Map.update!(pending_key(kind), fn current ->
+        Enum.reduce(ids, current, fn id, acc -> Map.put(acc, id, pending_value(kind)) end)
+      end)
+      |> put_in([:retry_attempts, kind], attempt)
+      |> put_in([:retry_due_at, kind], System.monotonic_time(:millisecond) + delay)
+    end
   end
 
-  defp reconcile_pending(state, :journal, :ok, _ids) do
-    state
-    |> Map.put(:pending_journal, %{})
-    |> put_in([:retry_attempts, :journal], 0)
-  end
+  # A receive timeout means the client stopped waiting, not that the
+  # service stopped working: the ingest is probably still embedding.
+  defp classify(%Req.TransportError{reason: :timeout}), do: :possibly_in_progress
+  defp classify(:timeout), do: :possibly_in_progress
+  defp classify(_reason), do: :failed
 
-  defp reconcile_pending(state, :journal, {:error, {kind, reason}}, ids) do
-    log_retry(state, kind, reason)
-    re_enqueue_journal(state, ids)
-  end
-
-  defp reconcile_pending(state, :deletes, :ok, _ids) do
-    state
-    |> Map.put(:pending_deletes, %{})
-    |> put_in([:retry_attempts, :deletes], 0)
-  end
-
-  defp reconcile_pending(state, :deletes, {:error, {kind, reason}}, ids) do
-    log_retry(state, kind, reason)
-    re_enqueue_deletes(state, ids)
-  end
-
-  defp re_enqueue_pages(state, ids) do
-    state
-    |> Map.update!(:pending_pages, fn current ->
-      Enum.reduce(ids, current, fn id, acc -> Map.put(acc, id, :upsert) end)
-    end)
-    |> update_in([:retry_attempts, :pages], &(&1 + 1))
-  end
-
-  defp re_enqueue_journal(state, ids) do
-    state
-    |> Map.update!(:pending_journal, fn current ->
-      Enum.reduce(ids, current, fn id, acc -> Map.put(acc, id, :upsert) end)
-    end)
-    |> update_in([:retry_attempts, :journal], &(&1 + 1))
-  end
-
-  defp re_enqueue_deletes(state, ids) do
-    state
-    |> Map.update!(:pending_deletes, fn current ->
-      Enum.reduce(ids, current, fn id, acc -> Map.put(acc, id, :delete) end)
-    end)
-    |> update_in([:retry_attempts, :deletes], &(&1 + 1))
-  end
-
-  defp log_retry(state, kind, reason) do
-    attempt = (state.retry_attempts[kind] || 0) + 1
+  defp give_up(state, kind, ids, attempts, reason) do
+    Logger.error(
+      "Platform.Org.Wiki.Indexer: giving up on #{kind} after #{attempts} consecutive " <>
+        "failed attempts; dropping ids=#{inspect(ids)} (last reason=#{inspect(reason)}). " <>
+        "They stay unindexed until next written."
+    )
 
     :telemetry.execute(
+      [:platform, :org, :wiki_indexer, :gave_up],
+      %{attempts: attempts, count: length(ids)},
+      %{kind: kind, ids: ids, reason: inspect(reason)}
+    )
+
+    state
+    |> Map.update!(pending_key(kind), &Map.drop(&1, ids))
+    |> put_in([:retry_attempts, kind], 0)
+    |> put_in([:retry_due_at, kind], nil)
+  end
+
+  defp log_retry(state, kind, reason, attempt, class, delay) do
+    :telemetry.execute(
       [:platform, :org, :wiki_indexer, :retry],
-      %{attempt: attempt},
-      %{kind: kind, reason: inspect(reason)}
+      %{attempt: attempt, delay_ms: delay},
+      %{kind: kind, reason: inspect(reason), class: class}
     )
 
     if attempt >= state.retry_warn_after do
       Logger.warning(
         "Platform.Org.Wiki.Indexer: #{kind} ingest failed #{attempt} times " <>
-          "in a row (reason=#{inspect(reason)}); continuing with capped backoff."
+          "in a row (reason=#{inspect(reason)}, #{class}); retrying in #{delay}ms."
       )
     end
 
     :ok
   end
 
-  # If any corpus has pending work after reconcile, schedule a retry
-  # tick with exponential backoff based on the largest attempt counter.
+  # Arm one retry timer for the earliest due corpus in backoff. Deadlines
+  # are absolute, so re-arming on every flush never pushes a retry later.
+  # A corpus with pending ids and no failure outstanding (ids that arrived
+  # after a give-up) gets an ordinary debounced flush.
   defp maybe_schedule_retry(state) do
-    has_pending =
-      map_size(state.pending_pages) > 0 or
-        map_size(state.pending_journal) > 0 or
-        map_size(state.pending_deletes) > 0
+    state = cancel_retry_timer(state)
+    now = System.monotonic_time(:millisecond)
 
-    if has_pending do
-      max_attempt =
-        state.retry_attempts |> Map.values() |> Enum.max(fn -> 0 end)
+    due =
+      @corpora
+      |> Enum.filter(&(state.retry_attempts[&1] > 0))
+      |> Enum.map(&state.retry_due_at[&1])
+      |> Enum.reject(&is_nil/1)
 
-      delay = retry_delay(max_attempt, state)
+    state =
+      case due do
+        [] ->
+          state
 
-      state = cancel_retry_timer(state)
-      ref = Process.send_after(self(), :retry_flush, delay)
-      %{state | retry_timer: ref}
-    else
-      state
+        dues ->
+          ref = Process.send_after(self(), :retry_flush, max(Enum.min(dues) - now, 0))
+          %{state | retry_timer: ref}
+      end
+
+    unheld_pending? =
+      Enum.any?(@corpora, fn kind ->
+        state.retry_attempts[kind] == 0 and map_size(Map.fetch!(state, pending_key(kind))) > 0
+      end)
+
+    if unheld_pending?, do: schedule_flush(state), else: state
+  end
+
+  # Exponential backoff with cap: initial * 2^(attempt-1), capped at
+  # retry_max_ms. After a receive timeout the delay is at least
+  # retry_timeout_floor_ms, even above the cap.
+  defp retry_delay(attempt, class, state) do
+    candidate = state.retry_initial_ms * Integer.pow(2, max(attempt - 1, 0))
+    delay = min(candidate, state.retry_max_ms)
+
+    case class do
+      :possibly_in_progress -> max(delay, state.retry_timeout_floor_ms)
+      :failed -> delay
     end
   end
-
-  # Exponential backoff with cap: initial * 2^(attempt-1), capped at retry_max_ms.
-  defp retry_delay(attempt, state) when attempt > 0 do
-    base = state.retry_initial_ms
-    cap = state.retry_max_ms
-    candidate = base * Integer.pow(2, max(attempt - 1, 0))
-    min(candidate, cap)
-  end
-
-  defp retry_delay(_attempt, state), do: state.retry_initial_ms
 
   # ── Repo loaders ──────────────────────────────────────────────────────
 

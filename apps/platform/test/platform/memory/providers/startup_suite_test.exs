@@ -1,3 +1,34 @@
+defmodule Platform.Memory.Providers.StartupSuiteTest.SlowPlug do
+  @moduledoc """
+  A real HTTP endpoint that stalls before answering like memory-service.
+
+  A `Req.Test` stub runs in-process and never touches Finch, so it does not
+  enforce `receive_timeout`; a timeout assertion against a stub passes
+  whether or not the option is applied (task 01a0d8c9).
+  """
+
+  @behaviour Plug
+
+  @impl true
+  def init(opts), do: opts
+
+  @impl true
+  def call(conn, opts) do
+    Process.sleep(Keyword.fetch!(opts, :sleep_ms))
+
+    body =
+      case conn.request_path do
+        "/ingest" -> %{"ingested" => 1}
+        "/search" -> %{"results" => []}
+        _ -> %{"status" => "ok"}
+      end
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, Jason.encode!(body))
+  end
+end
+
 defmodule Platform.Memory.Providers.StartupSuiteTest do
   use ExUnit.Case, async: true
 
@@ -224,5 +255,102 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
 
       assert {:error, {:service_status, "loading"}} = StartupSuite.health(config())
     end
+  end
+
+  describe "timeouts (task 01a0d8c9)" do
+    # Captures the receive_timeout each request actually carries, through
+    # the real request path, without a socket.
+    defp install_capture do
+      test_pid = self()
+
+      adapter = fn req ->
+        send(test_pid, {:receive_timeout, req.url.path, req.options[:receive_timeout]})
+
+        body =
+          case req.url.path do
+            "/ingest" -> %{"ingested" => 1}
+            "/search" -> %{"results" => []}
+            "/entries" -> %{"deleted" => 1}
+            _ -> %{"status" => "ok"}
+          end
+
+        {req, Req.Response.json(body)}
+      end
+
+      Application.put_env(:platform, :memory_service_req_client, Req.new(adapter: adapter))
+    end
+
+    defp timeouts_for(config) do
+      install_capture()
+      assert {:ok, 1} = StartupSuite.ingest([%{id: "a", content: "x"}], config)
+      assert {:ok, []} = StartupSuite.search("q", [], config)
+      assert {:ok, 1} = StartupSuite.delete(["a"], config)
+      assert :ok = StartupSuite.health(config)
+
+      assert_receive {:receive_timeout, "/ingest", ingest}
+      assert_receive {:receive_timeout, "/search", search}
+      assert_receive {:receive_timeout, "/entries", delete}
+      assert_receive {:receive_timeout, "/health", health}
+      %{ingest: ingest, search: search, delete: delete, health: health}
+    end
+
+    test "default config: ingest waits at least 120s, search/delete/health keep 5s" do
+      t = timeouts_for(base_url: "http://memory-service:8100")
+
+      assert t.ingest >= 120_000
+      assert t.search == 5_000
+      assert t.delete == 5_000
+      assert t.health == 5_000
+    end
+
+    test "an explicit :timeout does not change ingest's timeout" do
+      t = timeouts_for(base_url: "http://memory-service:8100", timeout: 1_000)
+
+      assert t.ingest >= 120_000
+      assert t.search == 1_000
+      assert t.delete == 1_000
+      assert t.health == 1_000
+    end
+
+    test "an explicit :ingest_timeout governs ingest only" do
+      t = timeouts_for(base_url: "http://memory-service:8100", ingest_timeout: 777)
+
+      assert t.ingest == 777
+      assert t.search == 5_000
+    end
+
+    test "over a real socket: ingest outlives :timeout, search does not" do
+      # The adapter's default client, so the timeout reaches Finch.
+      Application.delete_env(:platform, :memory_service_req_client)
+      base_url = start_slow_server(600)
+      config = [base_url: base_url, timeout: 200, ingest_timeout: 2_000]
+
+      assert {:ok, 1} = StartupSuite.ingest([%{id: "a", content: "x"}], config)
+
+      assert {:error, %Req.TransportError{reason: :timeout}} =
+               StartupSuite.search("q", [], config)
+    end
+  end
+
+  defp start_slow_server(sleep_ms) do
+    port = free_port()
+
+    start_supervised!(
+      {Bandit,
+       plug: {Platform.Memory.Providers.StartupSuiteTest.SlowPlug, sleep_ms: sleep_ms},
+       scheme: :http,
+       ip: {127, 0, 0, 1},
+       port: port,
+       startup_log: false}
+    )
+
+    "http://127.0.0.1:#{port}"
+  end
+
+  defp free_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    port
   end
 end

@@ -7,6 +7,13 @@ defmodule Platform.Memory.TelemetryHandler do
   for indexing. Volume is low (~5–50 writes/day), so synchronous ingest is
   appropriate.
 
+  The ingest runs in the process that emitted the event, so its bound is the
+  short `:timeout` (default 5s), not the long `:ingest_timeout` that
+  fire-and-forget callers take: a journal write must not wait up to two
+  minutes on the embed round-trip. It passes `ingest_timeout:` equal to the
+  configured `:timeout` explicitly, because ingest no longer reads `:timeout`
+  (task 01a0d8c9).
+
   Attach in Application.start/2 alongside other telemetry handlers.
   """
 
@@ -14,6 +21,7 @@ defmodule Platform.Memory.TelemetryHandler do
 
   @handler_id "platform-memory-telemetry"
   @events [[:platform, :org, :memory_entry_written]]
+  @default_blocking_timeout 5_000
 
   @doc """
   Attach the memory telemetry handler. Idempotent — a duplicate attach
@@ -38,7 +46,7 @@ defmodule Platform.Memory.TelemetryHandler do
       entry = Platform.Repo.get(Platform.Org.WikiJournalEntry, metadata.memory_entry_id)
 
       if entry do
-        case Platform.Memory.ingest([entry]) do
+        case Platform.Memory.ingest([entry], ingest_timeout: blocking_timeout()) do
           {:ok, _count} ->
             :ok
 
@@ -58,5 +66,12 @@ defmodule Platform.Memory.TelemetryHandler do
       Logger.error(
         "Memory telemetry handler crashed: #{Exception.format(:error, error, __STACKTRACE__)}"
       )
+  end
+
+  # The short, search-class bound: this ingest blocks the emitting process.
+  defp blocking_timeout do
+    :platform
+    |> Application.get_env(:memory_service, [])
+    |> Keyword.get(:timeout, @default_blocking_timeout)
   end
 end

@@ -150,7 +150,15 @@ defmodule Platform.Org.Wiki.IndexerT3E2ETest do
 
     on_exit(fn -> :telemetry.detach("t3-e2e-retry-#{inspect(ref)}") end)
 
-    _pid = start_indexer!(tick_ms: 50, retry_initial_ms: 50, retry_max_ms: 300)
+    # `:timeout` is a receive timeout, which now carries a backoff floor
+    # (task 01a0d8c9); keep the floor small so the retry lands in-window.
+    _pid =
+      start_indexer!(
+        tick_ms: 50,
+        retry_initial_ms: 50,
+        retry_max_ms: 300,
+        retry_timeout_floor_ms: 50
+      )
 
     {:ok, _} = Wiki.upsert_page("org/retry-test.md", %{content: "retry me"})
 

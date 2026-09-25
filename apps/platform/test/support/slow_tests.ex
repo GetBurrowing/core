@@ -79,6 +79,23 @@ defmodule Platform.SlowTests do
     %{
       tag: @tag,
       test:
+        "test/platform/org/wiki/indexer_test.exs: " <>
+          "a page ingest slower than 5s is sent exactly once, even with a journal event behind it",
+      ticket: "01a0d8c9",
+      seconds: 9,
+      reason: """
+      Reproduces the 2026-09-25 embed flood over a real socket: a Bandit
+      endpoint takes 6s per /ingest, one second past the old 5_000ms ingest
+      bound, and the test watches 8.5s for a resend. The 6s is the claim (it
+      must exceed 5s by a margin scheduling cannot explain away); the window
+      must outlast a 5s timeout plus a retry. The fast twins in the same file
+      cover the hold and the floor in about a second.
+      """,
+      added_on: ~D[2026-09-25]
+    },
+    %{
+      tag: @tag,
+      test:
         "test/platform/meetings/summarizer_test.exs: " <>
           "a completion returned after 16s still lands the transcript complete with a summary",
       ticket: "01a0826f",

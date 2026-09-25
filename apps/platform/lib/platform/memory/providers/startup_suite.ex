@@ -14,7 +14,26 @@ defmodule Platform.Memory.Providers.StartupSuite do
 
   Configuration is read from `config :platform, :memory_service, ...` keyword
   list (see `Platform.Memory`). Required: `:base_url`. Optional: `:api_key`,
-  `:timeout` (default 5s).
+  `:timeout`, `:ingest_timeout`.
+
+  ## Timeouts
+
+  Two receive timeouts, one per kind of call:
+
+    * `:ingest_timeout` (default 120_000ms) bounds `POST /ingest` and
+      nothing else. An ingest embeds every chunk of every entry before it
+      answers, so a batch of large wiki pages legitimately takes tens of
+      seconds. Ingest does NOT fall back to `:timeout`: a client that gives
+      up on an ingest the service is still working on, and then resends
+      it, makes the service embed the same content again (task 01a0d8c9 —
+      one 5-page write cost 1,880 embed calls at a 5s bound).
+    * `:timeout` (default 5_000ms) bounds `/search`, `DELETE /entries` and
+      `/health`. These are interactive or cheap; a slow answer there is a
+      fault, and a long bound would make a caller wait on it.
+
+  A caller that must not block long on an ingest (e.g. an ingest made
+  synchronously in someone else's process) passes its own
+  `ingest_timeout:` through `Platform.Memory.ingest/2`.
   """
 
   @behaviour Platform.Memory.Provider
@@ -22,10 +41,13 @@ defmodule Platform.Memory.Providers.StartupSuite do
   require Logger
 
   @default_timeout 5_000
+  @default_ingest_timeout 120_000
 
   @impl true
   def ingest(entries, config) do
-    case post(config, "/ingest", %{entries: entries}) do
+    timeout = Keyword.get(config, :ingest_timeout, @default_ingest_timeout)
+
+    case request(config, :post, "/ingest", %{entries: entries}, timeout) do
       {:ok, %{status: 200, body: %{"ingested" => count}}} ->
         emit(:ingested, %{count: count}, %{})
         {:ok, count}
@@ -103,6 +125,10 @@ defmodule Platform.Memory.Providers.StartupSuite do
   defp get(config, path), do: request(config, :get, path, nil)
 
   defp request(config, method, path, body) do
+    request(config, method, path, body, Keyword.get(config, :timeout, @default_timeout))
+  end
+
+  defp request(config, method, path, body, receive_timeout) do
     base_url = Keyword.fetch!(config, :base_url)
     url = String.trim_trailing(base_url, "/") <> path
 
@@ -111,7 +137,7 @@ defmodule Platform.Memory.Providers.StartupSuite do
         method: method,
         url: url,
         headers: headers(config),
-        receive_timeout: Keyword.get(config, :timeout, @default_timeout)
+        receive_timeout: receive_timeout
       ]
       |> maybe_put(:json, body)
 

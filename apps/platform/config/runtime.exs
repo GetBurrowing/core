@@ -519,9 +519,29 @@ end
 # search_memory_entries falls back to substring match. See ADR 0033.
 memory_service_url = System.get_env("MEMORY_SERVICE_URL")
 
+#
+# Two timeouts (task 01a0d8c9):
+#   MEMORY_SERVICE_TIMEOUT_MS         -> :timeout, bounds /search, DELETE
+#                                        /entries and /health ONLY (default 5000).
+#   MEMORY_SERVICE_INGEST_TIMEOUT_MS  -> :ingest_timeout, bounds POST /ingest
+#                                        ONLY (default 120000). Ingest never
+#                                        falls back to MEMORY_SERVICE_TIMEOUT_MS.
+#
+# Stopgap to revert: before this split, MEMORY_SERVICE_TIMEOUT_MS=120000 was
+# set in production to stop the wiki indexer resending page ingests every 5s.
+# Once this ships that setting is no longer needed and must be reverted to
+# unset (or 5000): left at 120000 it lengthens every /search bound to 120s,
+# and the journal telemetry handler's blocking ingest bound with it (it
+# reuses :timeout on purpose; see Platform.Memory.TelemetryHandler).
 memory_service_timeout =
   case System.get_env("MEMORY_SERVICE_TIMEOUT_MS") do
     nil -> 5_000
+    value -> String.to_integer(value)
+  end
+
+memory_service_ingest_timeout =
+  case System.get_env("MEMORY_SERVICE_INGEST_TIMEOUT_MS") do
+    nil -> 120_000
     value -> String.to_integer(value)
   end
 
@@ -530,7 +550,8 @@ if memory_service_url do
     provider: Platform.Memory.Providers.StartupSuite,
     base_url: memory_service_url,
     api_key: System.get_env("MEMORY_SERVICE_API_KEY"),
-    timeout: memory_service_timeout
+    timeout: memory_service_timeout,
+    ingest_timeout: memory_service_ingest_timeout
 end
 
 # ── Files service ─────────────────────────────────────────────────────────────

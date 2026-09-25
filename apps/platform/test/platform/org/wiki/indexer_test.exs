@@ -1,3 +1,30 @@
+defmodule Platform.Org.Wiki.IndexerTest.CountingIngestPlug do
+  @moduledoc """
+  A real memory-service stand-in for the 01a0d8c9 incident repro: reports
+  every `POST /ingest` (with its entry ids) to the test process on ARRIVAL,
+  then sleeps before answering. A `Req.Test` stub would not enforce the
+  provider's receive_timeout, so the repro needs a real socket.
+  """
+
+  @behaviour Plug
+
+  @impl true
+  def init(opts), do: opts
+
+  @impl true
+  def call(conn, opts) do
+    {:ok, raw, conn} = Plug.Conn.read_body(conn)
+    ids = raw |> Jason.decode!() |> Map.get("entries", []) |> Enum.map(& &1["id"])
+    send(Keyword.fetch!(opts, :test_pid), {:ingest_request, ids})
+
+    Process.sleep(Keyword.fetch!(opts, :sleep_ms))
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, Jason.encode!(%{"ingested" => length(ids)}))
+  end
+end
+
 defmodule Platform.Org.Wiki.IndexerTest do
   @moduledoc """
   Stage-3 unit tests for `Platform.Org.Wiki.Indexer`.
@@ -196,7 +223,15 @@ defmodule Platform.Org.Wiki.IndexerTest do
         ingest_response: response
       )
 
-      _pid = start_indexer!(tick_ms: 50, retry_initial_ms: 50, retry_max_ms: 200)
+      # `:timeout` is a receive timeout, which now carries a backoff floor
+      # (task 01a0d8c9); keep the floor small so the retry lands in-window.
+      _pid =
+        start_indexer!(
+          tick_ms: 50,
+          retry_initial_ms: 50,
+          retry_max_ms: 200,
+          retry_timeout_floor_ms: 50
+        )
 
       {:ok, _page} = Wiki.upsert_page("org/retry.md", %{content: "retry me"})
 
@@ -396,5 +431,181 @@ defmodule Platform.Org.Wiki.IndexerTest do
 
       assert is_integer(latency) and latency >= 0
     end
+  end
+
+  describe "resend on receive timeout (task 01a0d8c9)" do
+    defp use_stub_response(response) do
+      Application.put_env(:platform, :memory_service,
+        provider: StubProvider,
+        test_pid: self(),
+        ingest_response: response
+      )
+    end
+
+    @timeout_error {:error, %Req.TransportError{reason: :timeout}}
+
+    test "a receive timeout holds the page for retry_timeout_floor_ms; a journal event does not resend it" do
+      use_stub_response(@timeout_error)
+      _pid = start_indexer!(retry_timeout_floor_ms: 1_000)
+
+      {:ok, page} = Wiki.upsert_page("org/floor.md", %{content: "big page"})
+      page_id = to_string(page.id)
+      assert_receive {:ingest, [%{id: ^page_id, memory_type: "page"}]}, 1_000
+
+      {:ok, _} = Journal.append(%{content: "unrelated", date: ~D[2026-09-25]})
+      assert_receive {:ingest, [%{memory_type: "journal"}]}, 1_000
+
+      # Plain backoff would retry after 50ms; the floor holds it to 1s.
+      refute_receive {:ingest, [%{memory_type: "page"} | _]}, 600
+
+      # The hold is released by the page corpus's own retry timer.
+      assert_receive {:ingest, [%{id: ^page_id, memory_type: "page"}]}, 1_500
+    end
+
+    test "an event-triggered flush does not dispatch a corpus in backoff" do
+      # A non-timeout error, so only the plain backoff (1s here) applies:
+      # this isolates the per-corpus hold from the timeout floor.
+      use_stub_response({:error, :econnrefused})
+      _pid = start_indexer!(retry_initial_ms: 1_000, retry_max_ms: 1_000)
+
+      {:ok, page} = Wiki.upsert_page("org/hold.md", %{content: "held page"})
+      page_id = to_string(page.id)
+      assert_receive {:ingest, [%{id: ^page_id}]}, 1_000
+
+      {:ok, _} = Journal.append(%{content: "unrelated", date: ~D[2026-09-25]})
+      assert_receive {:ingest, [%{memory_type: "journal"}]}, 1_000
+
+      refute_receive {:ingest, [%{memory_type: "page"} | _]}, 500
+      assert Indexer.state().pending_pages |> Map.has_key?(page.id)
+
+      # A page written during the hold waits for the retry, and goes with it.
+      {:ok, page2} = Wiki.upsert_page("org/hold-2.md", %{content: "second page"})
+      page2_id = to_string(page2.id)
+      refute_receive {:ingest, [%{memory_type: "page"} | _]}, 200
+
+      assert_receive {:ingest, [%{memory_type: "page"} | _] = entries}, 1_500
+      assert entries |> Enum.map(& &1.id) |> Enum.sort() == Enum.sort([page_id, page2_id])
+    end
+
+    test "retries are bounded by max_attempts: terminal log, :gave_up telemetry, ids dropped" do
+      use_stub_response(@timeout_error)
+      ref = make_ref()
+      handler = "wiki-indexer-gave-up-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler,
+        [:platform, :org, :wiki_indexer, :gave_up],
+        fn _e, m, md, pid -> send(pid, {:gave_up, ref, m, md}) end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
+          _pid =
+            start_indexer!(
+              max_attempts: 3,
+              retry_timeout_floor_ms: 50,
+              retry_initial_ms: 50,
+              retry_max_ms: 100
+            )
+
+          {:ok, page} = Wiki.upsert_page("org/bounded.md", %{content: "never lands"})
+          page_id = to_string(page.id)
+          send(self(), {:page_id, page_id})
+
+          for _ <- 1..3, do: assert_receive({:ingest, [%{id: ^page_id}]}, 1_000)
+          refute_receive {:ingest, _}, 600
+
+          assert_receive {:gave_up, ^ref, %{attempts: 3, count: 1},
+                          %{kind: :pages, ids: [gave_up_id]}},
+                         100
+
+          assert to_string(gave_up_id) == page_id
+
+          state = Indexer.state()
+          assert state.pending_pages == %{}
+          assert state.retry_attempts.pages == 0
+        end)
+
+      assert_receive {:page_id, page_id}
+      assert log =~ "giving up on pages after 3 consecutive failed attempts"
+      assert log =~ page_id
+      assert log =~ "timeout"
+    end
+  end
+
+  describe "incident repro over a real socket (task 01a0d8c9)" do
+    @tag :slow
+    @tag timeout: 60_000
+    test "a page ingest slower than 5s is sent exactly once, even with a journal event behind it" do
+      port = free_port()
+
+      start_supervised!(
+        {Bandit,
+         plug:
+           {Platform.Org.Wiki.IndexerTest.CountingIngestPlug, test_pid: self(), sleep_ms: 6_000},
+         scheme: :http,
+         ip: {127, 0, 0, 1},
+         port: port,
+         startup_log: false}
+      )
+
+      # The real provider with its DEFAULT ingest timeout: no :timeout and no
+      # :ingest_timeout in config. The retry knobs are all minimal, including
+      # the timeout floor, so the only thing standing between a 5s timeout
+      # and a resend within the window is the ingest timeout itself.
+      Application.put_env(:platform, :memory_service,
+        provider: Platform.Memory.Providers.StartupSuite,
+        base_url: "http://127.0.0.1:#{port}"
+      )
+
+      _pid =
+        start_indexer!(
+          retry_initial_ms: 50,
+          retry_max_ms: 200,
+          retry_timeout_floor_ms: 50
+        )
+
+      started = System.monotonic_time(:millisecond)
+      {:ok, page} = Wiki.upsert_page("org/slow-page.md", %{content: "slow to embed"})
+      page_id = to_string(page.id)
+      assert_receive {:ingest_request, [^page_id]}, 2_000
+
+      # An unrelated journal entry while the page request is still sleeping.
+      {:ok, entry} = Journal.append(%{content: "unrelated", date: ~D[2026-09-25]})
+      entry_id = to_string(entry.id)
+
+      # The first request was consumed above; collect the rest of the window.
+      requests = [[page_id] | collect_ingest_requests(started + 8_500)]
+
+      assert Enum.count(requests, &(page_id in &1)) == 1,
+             "expected exactly one /ingest carrying the page, got: #{inspect(requests)}"
+
+      # The journal entry was not lost behind the slow page.
+      assert Enum.any?(requests, &(entry_id in &1))
+    end
+  end
+
+  defp collect_ingest_requests(deadline, acc \\ []) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      Enum.reverse(acc)
+    else
+      receive do
+        {:ingest_request, ids} -> collect_ingest_requests(deadline, [ids | acc])
+      after
+        remaining -> Enum.reverse(acc)
+      end
+    end
+  end
+
+  defp free_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    port
   end
 end
