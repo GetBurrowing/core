@@ -6,6 +6,13 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
   path, a tenant-pinned agent refused on a sibling org, and — the property
   the whole design rests on — no bundle exposes a way for an agent to send.
 
+  As of task 01a0d4a0 stage 4 round 2, these tools live in their OWN `mail`
+  bundle, not folded into `messaging` — a runtime granted `messaging` alone
+  (e.g. the single-purpose Meeting Assistant voice persona) no longer gets
+  mail-drafting for free. See `ToolSurface.messaging_tools/0`'s moduledoc
+  comment and the `20260924180000_agent_runtime_mail_bundle.exs` migration
+  that backfilled existing runtimes.
+
   async: false — flips `:mail_enabled` in application env.
   """
   use Platform.DataCase, async: false
@@ -123,13 +130,13 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
   defp draft_count, do: Repo.aggregate(Draft, :count)
 
   describe "the module flag" do
-    test "off: the tools are not listed in messaging or anywhere, and execute refuses recoverably",
+    test "off: the tools are not listed in mail or anywhere, and execute refuses recoverably",
          ctx do
       set_flag(false)
 
       names = ToolSurface.tool_definitions() |> Enum.map(& &1.name)
       for tool <- @draft_tools, do: refute(tool in names)
-      refute Enum.any?(ToolSurface.list_tools(["messaging"]), &(&1.name in @draft_tools))
+      refute Enum.any?(ToolSurface.list_tools(["mail"]), &(&1.name in @draft_tools))
 
       before = draft_count()
 
@@ -148,15 +155,20 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
       assert draft_count() == before
     end
 
-    test "positive control: on, both tools are listed in the messaging bundle and only there" do
-      messaging = ToolSurface.list_tools(["messaging"])
+    test "positive control: on, both tools are listed in the mail bundle and only there" do
+      mail = ToolSurface.list_tools(["mail"])
 
       for tool <- @draft_tools do
-        assert %{bundle: "messaging"} = Enum.find(messaging, &(&1.name == tool))
+        assert %{bundle: "mail"} = Enum.find(mail, &(&1.name == tool))
       end
 
-      others = ToolSurface.list_tools(ToolSurface.all_bundles() -- ["messaging"])
+      others = ToolSurface.list_tools(ToolSurface.all_bundles() -- ["mail"])
       refute Enum.any?(others, &(&1.name in @draft_tools))
+    end
+
+    test "messaging alone does not grant mail drafting" do
+      messaging = ToolSurface.list_tools(["messaging"])
+      refute Enum.any?(messaging, &(&1.name in @draft_tools))
     end
   end
 

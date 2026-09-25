@@ -5388,6 +5388,69 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "Failed to send media"
     end
 
+    # ── send_media: file_base64 (task 01a0d4a0 stage 5) ────────────────────
+    #
+    # A remote MCP caller (`services/meeting-voice-agent`'s worker) has no
+    # filesystem in common with Core — a local `file_path` it writes is
+    # unreadable here (`:enoent`). `file_base64` is the cross-host-safe
+    # shape: bytes travel over the wire, never a path. These tests never
+    # create a local temp file at all, unlike the file_path/file_paths
+    # tests above — that absence IS the point being proven.
+
+    test "send_media posts a message with a file_base64 attachment, no local path involved" do
+      space = create_space()
+      participant = create_participant(space.id)
+
+      test_uploads = Path.join(System.tmp_dir!(), "platform_test_uploads_#{Ecto.UUID.generate()}")
+      prev = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, test_uploads)
+
+      context = %{
+        space_id: space.id,
+        agent_participant_id: participant.id
+      }
+
+      try do
+        {:ok, result} =
+          ToolSurface.execute(
+            "send_media",
+            %{
+              "space_id" => space.id,
+              "file_base64" => Base.encode64("here is the long hand-off answer"),
+              "content" => "here is the long hand-off answer",
+              "filename" => "response.md"
+            },
+            context
+          )
+
+        assert is_binary(result.message_id)
+        assert result.space_id == space.id
+        assert result.attachment_count == 1
+      after
+        Application.put_env(:platform, :chat_attachments_root, prev)
+        File.rm_rf(test_uploads)
+      end
+    end
+
+    test "send_media rejects invalid file_base64 without touching storage" do
+      space = create_space()
+      participant = create_participant(space.id)
+
+      context = %{
+        space_id: space.id,
+        agent_participant_id: participant.id
+      }
+
+      {:error, error} =
+        ToolSurface.execute(
+          "send_media",
+          %{"space_id" => space.id, "file_base64" => "not-valid-base64!!"},
+          context
+        )
+
+      assert error.error =~ "Failed to send media"
+    end
+
     # ── send_media space authorization (task 01a0ac54) ───────────────────
     #
     # Driven through `ToolArguments.dispatch/3` with the context shape both

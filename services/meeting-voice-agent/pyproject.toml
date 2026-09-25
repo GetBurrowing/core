@@ -1,0 +1,56 @@
+[project]
+name = "meeting-voice-agent"
+version = "0.1.0"
+description = "Dedicated meeting voice agent worker: livekit-agents AgentSession with barge-in, VAD, and preemptive generation, backed by swappable STT/LLM/TTS config."
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "livekit-agents[mcp]>=1.8.3,<2",
+    "livekit-plugins-silero>=1.8.3,<2",
+    "livekit-plugins-turn-detector>=1.8.3,<2",
+    "livekit-plugins-openai>=1.8.3,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+# Task 01a0d4a0 stage 4's re-runnable latency harness -- joins a real LiveKit
+# room, plays one short spoken question, and reports first-audio latency.
+# See README.md's "Latency harness" section for usage.
+meeting-voice-latency-harness = "meeting_voice_agent.latency_harness_live:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "live_infra: requires real network access to a live endpoint (Dalton's wave LLM, moon's speaches STT/TTS, or a running Core instance) — not run by default, see tests/live/README.md",
+]
+# Stage-1's unit tests (mocked backends, no network) run by default. Stage-3's
+# live_infra integration tests are opt-in only (`pytest -m live_infra`) so a
+# plain `pytest` stays fast and green regardless of whether wave/moon/Core
+# are reachable from wherever this suite runs.
+addopts = "-m 'not live_infra'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["meeting_voice_agent"]

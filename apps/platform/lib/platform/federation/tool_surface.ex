@@ -78,7 +78,7 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings experiments)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -172,6 +172,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
   defp tools_for_bundle("files"), do: tag(files_tools(), "files")
   defp tools_for_bundle("meetings"), do: tag(meetings_tools(), "meetings")
+  defp tools_for_bundle("mail"), do: tag(mail_draft_tools(), "mail")
   # Task 01a0d415 stage 2: definitions in ExperimentTools, behaviour in Experiments.Tools.
   defp tools_for_bundle("experiments"),
     do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
@@ -862,15 +863,33 @@ defmodule Platform.Federation.ToolSurface do
     ]
   end
 
-  defp messaging_tools, do: base_messaging_tools() ++ mail_draft_tools()
+  # `messaging` is chat-only: `send_media`/`react`. Mail drafting lives in
+  # its own `mail` bundle (task 01a0d4a0 stage 4 round 2) so a runtime can be
+  # granted chat messaging WITHOUT also getting a prod mail-write tool —
+  # before this split, ANY runtime holding `messaging` (which includes
+  # `AgentRuntime.default_allowed_bundles/0`) implicitly got
+  # `mail_draft_create`/`mail_draft_update` too, which is how the
+  # single-purpose "Meeting Assistant" persona (whose `allowed_bundles` was
+  # at the time scoped to `space messaging context_read memory`, and is now
+  # `messaging context_read` per stage 5's further narrowing, explicitly
+  # EXCLUDING task/plan/review either way) could still call
+  # `mail_draft_create` — see
+  # `mix platform.seed_meeting_voice_agent`'s `allowed_bundles` moduledoc and
+  # Dalton's live moon run (rollup space 01a0b5bf). Existing runtimes that
+  # already relied on getting mail via `messaging` are preserved by the
+  # `mail` bundle backfill migration
+  # (`priv/repo/migrations/20260924180000_agent_runtime_mail_bundle.exs`),
+  # the same pattern already used for the `meetings`/`attachment`/`skill`
+  # bundle additions.
+  defp messaging_tools, do: base_messaging_tools()
 
   # The Email module's agent tools (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6
   # stage 5), defined in `Platform.Federation.MailDraftTools` and listed only
   # while `Platform.Mail.Config.enabled?/0` is true; `execute/3` re-checks the
   # flag. There is deliberately NO send tool: an agent-written draft leaves
   # only when a person sends it from the Email module (or through the email
-  # deploy strategy). `tool_surface_mail_test.exs` pins that no bundle
-  # exposes one.
+  # deploy strategy). `tool_surface_mail_test.exs` pins that no bundle other
+  # than `mail` exposes one.
   defp mail_draft_tools do
     if Platform.Mail.Config.enabled?(),
       do: Platform.Federation.MailDraftTools.definitions(),
@@ -887,12 +906,20 @@ defmodule Platform.Federation.ToolSurface do
           file_paths: %{
             type: "array",
             required: false,
-            description: "Absolute local file paths to attach"
+            description:
+              "Absolute local file paths to attach. Only usable when the caller shares a filesystem with Core (e.g. an in-process runtime) — a remote MCP client on another host should use file_base64 instead."
           },
           file_path: %{
             type: "string",
             required: false,
-            description: "Back-compat single absolute local path to the file"
+            description:
+              "Back-compat single absolute local path to the file. Same same-filesystem caveat as file_paths."
+          },
+          file_base64: %{
+            type: "string",
+            required: false,
+            description:
+              "Base64-encoded bytes of a single attachment, for a caller with no local filesystem in common with Core (e.g. a remote MCP worker on a different host). Cross-host safe, unlike file_path/file_paths. Pair with filename to name it."
           },
           content: %{
             type: "string",
@@ -902,13 +929,15 @@ defmodule Platform.Federation.ToolSurface do
           filename: %{
             type: "string",
             required: false,
-            description: "Optional display filename for single-file uploads"
+            description:
+              "Optional display filename for single-file uploads (file_path or file_base64)"
           }
         },
         returns: "The message ID, space ID, and attachment count",
         limitations:
-          "Files must exist on the local filesystem. Agent must be a participant in the space.",
-        when_to_use: "When you need to share files (images, documents, etc.) in a space"
+          "Exactly one of file_paths, file_path, or file_base64 is required. file_path/file_paths must exist on the SAME filesystem Core itself reads (:enoent otherwise) — a remote caller should pass file_base64. Agent must be a participant in the space.",
+        when_to_use:
+          "When you need to share files (images, documents, etc.) in a space. Prefer file_base64 unless you know the caller and Core share a filesystem."
       },
       %{
         name: "react",
@@ -7743,6 +7772,14 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # Task 01a0d4a0 stage 5: `file_base64` is a third, cross-host-safe shape
+  # alongside the two local-path shapes below — see the `send_media` tool's
+  # own `parameters` doc for why a remote MCP caller (a worker with no
+  # filesystem in common with Core) must use it instead of file_path/
+  # file_paths. Each cond branch below returns its own `{:ok, specs} |
+  # {:error, message}` directly rather than building a bare list and
+  # checking for `[]` afterward, so a malformed `file_base64` can surface
+  # its OWN error message instead of the generic "no file path provided".
   defp normalize_send_media_attachments(args) do
     file_paths =
       case Map.get(args, "file_paths") do
@@ -7750,32 +7787,37 @@ defmodule Platform.Federation.ToolSurface do
         _ -> []
       end
 
-    attachment_specs =
-      cond do
-        file_paths != [] ->
-          Enum.map(file_paths, fn path ->
-            %{path: path, filename: Path.basename(path)}
-          end)
+    cond do
+      file_paths != [] ->
+        {:ok,
+         Enum.map(file_paths, fn path ->
+           %{path: path, filename: Path.basename(path)}
+         end)}
 
-        is_binary(Map.get(args, "file_path")) and Map.get(args, "file_path") != "" ->
-          file_path = Map.get(args, "file_path")
-          filename = Map.get(args, "filename") || Path.basename(file_path)
-          [%{path: file_path, filename: filename}]
+      is_binary(Map.get(args, "file_path")) and Map.get(args, "file_path") != "" ->
+        file_path = Map.get(args, "file_path")
+        filename = Map.get(args, "filename") || Path.basename(file_path)
+        {:ok, [%{path: file_path, filename: filename}]}
 
-        true ->
-          []
-      end
+      is_binary(Map.get(args, "file_base64")) and Map.get(args, "file_base64") != "" ->
+        decode_send_media_base64(Map.get(args, "file_base64"), Map.get(args, "filename"))
 
-    case attachment_specs do
-      [] -> {:error, "Failed to send media: no file path provided"}
-      specs -> {:ok, specs}
+      true ->
+        {:error, "Failed to send media: no file path provided"}
+    end
+  end
+
+  defp decode_send_media_base64(encoded, filename) do
+    case Base.decode64(encoded) do
+      {:ok, bytes} -> {:ok, [%{bytes: bytes, filename: filename || "attachment"}]}
+      :error -> {:error, "Failed to send media: file_base64 is not valid base64"}
     end
   end
 
   defp persist_send_media_attachments(attachment_specs) do
     attachment_specs
-    |> Enum.reduce_while({:ok, []}, fn %{path: path, filename: filename}, {:ok, acc} ->
-      case Chat.AttachmentStorage.persist_upload(path, filename) do
+    |> Enum.reduce_while({:ok, []}, fn spec, {:ok, acc} ->
+      case persist_one_send_media_attachment(spec) do
         {:ok, file_meta} -> {:cont, {:ok, [Map.put(file_meta, :message_id, nil) | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -7785,6 +7827,18 @@ defmodule Platform.Federation.ToolSurface do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # `path`-shaped specs (file_path/file_paths) go through the ORIGINAL
+  # same-filesystem copy; `bytes`-shaped specs (file_base64, decoded above)
+  # go straight to the adapter's binary-write clause — no temp file on
+  # Core's side either, for symmetry with the caller-side fix this pairs
+  # with (`services/meeting-voice-agent`'s `post_to_meeting_chat` no longer
+  # writes one on its side either).
+  defp persist_one_send_media_attachment(%{path: path, filename: filename}),
+    do: Chat.AttachmentStorage.persist_upload(path, filename)
+
+  defp persist_one_send_media_attachment(%{bytes: bytes, filename: filename}),
+    do: Chat.AttachmentStorage.persist_binary_upload(bytes, filename)
 
   defp react_after_validation(space_id, message_id, emoji, context) do
     case Chat.get_message(message_id) do

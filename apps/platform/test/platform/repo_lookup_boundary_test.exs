@@ -127,6 +127,10 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `slug:`, a plain string column — no UUID type on either side, so `Ecto.Query.CastError` is not reachable; the value is `--agent` out of the task's own OptionParser opts and a miss falls through to `get_agent_by_id/1` and then an explicit `Mix.raise`"},
     {"mix/tasks/platform/voice_runtime.ex", :get_by, "User", 1, :safe_internal,
      "keyed `email:`, a plain string column — no UUID type on either side; the value is `--owner` out of the task's own OptionParser opts and a miss is an explicit `Mix.raise` in the operator's terminal"},
+    {"mix/tasks/platform/seed_meeting_voice_agent.ex", :get_by, "Agent", 1, :safe_internal,
+     "keyed `slug:`, a plain string column — no UUID type on either side, so `Ecto.Query.CastError` is not reachable; the value is the module's own compile-time `@agent_slug` constant (\"meeting-assistant\"), never external input"},
+    {"mix/tasks/platform/seed_meeting_voice_agent.ex", :get_by, "User", 1, :safe_internal,
+     "keyed `email:`, a plain string column — no UUID type on either side; the value is `--owner` out of the task's own OptionParser opts and a miss is an explicit `Mix.raise` in the operator's terminal"},
     # ── Accounts ───────────────────────────────────────────────────────
     {"platform/accounts.ex", :get, "User", 1, :safe_internal,
      "guarded by `Platform.UUID.valid?/1` in stage 2 of task 019fa129; `Accounts.get_user/1` is total and returns nil for `\"system\"`, `\"system:auto\"` and agent slugs"},

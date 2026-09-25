@@ -140,6 +140,34 @@ defmodule Platform.Chat.AttachmentStorageTest do
     end
   end
 
+  describe "persist_binary_upload/3 (task 01a0d4a0 stage 5)" do
+    test "writes bytes straight to storage with no local source path involved", %{root: root} do
+      assert {:ok, meta} =
+               AttachmentStorage.persist_binary_upload("hello", "hello.txt", "text/plain")
+
+      assert meta.filename == "hello.txt"
+      assert meta.content_type == "text/plain"
+      assert meta.byte_size == 5
+      assert is_binary(meta.storage_key)
+      assert File.read!(Path.join(root, meta.storage_key)) == "hello"
+    end
+
+    test "infers content_type from extension exactly like persist_upload/3" do
+      assert {:ok, meta} =
+               AttachmentStorage.persist_binary_upload(<<137, 80, 78, 71>>, "shot.png", nil)
+
+      assert meta.content_type == "image/png"
+    end
+
+    test "content_hash matches the sha256 of the given bytes" do
+      bytes = "the-exact-bytes"
+      expected = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+      assert {:ok, meta} = AttachmentStorage.persist_binary_upload(bytes, "f.bin", nil)
+      assert meta.content_hash == expected
+    end
+  end
+
   describe "ensure_writable!/0" do
     test "returns :ok when the storage root is writable" do
       assert AttachmentStorage.ensure_writable!() == :ok

@@ -17,6 +17,31 @@ defmodule Platform.Chat.AttachmentStorage do
   @spec persist_upload(binary(), String.t() | nil, String.t() | nil) ::
           {:ok, map()} | {:error, term()}
   def persist_upload(temp_path, client_name, client_type \\ nil) do
+    persist_source({:path, temp_path}, client_name, client_type)
+  end
+
+  @doc """
+  Same as `persist_upload/3`, but for content that only ever exists as an
+  in-memory binary — never written to a local path by the caller.
+
+  Task 01a0d4a0 stage 5: `send_media`'s hand-off callers can be a remote MCP
+  client (a `services/meeting-voice-agent` worker running in its own
+  container) that has no filesystem in common with Core. Passing a local
+  path in that shape is a guaranteed `:enoent` on Core's side — a path is
+  only ever meaningful on the filesystem that wrote it. This entry point
+  lets `Platform.Federation.ToolSurface`'s `send_media` accept the content
+  itself (already decoded from the wire, e.g. base64) and hand it straight
+  to the storage adapter's own `{:binary, bytes}` clause
+  (`Platform.Chat.AttachmentStorage.Adapter.LocalDisk.persist/2`), with no
+  temp file anywhere in the path.
+  """
+  @spec persist_binary_upload(binary(), String.t() | nil, String.t() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def persist_binary_upload(bytes, client_name, client_type \\ nil) when is_binary(bytes) do
+    persist_source({:binary, bytes}, client_name, client_type)
+  end
+
+  defp persist_source(source, client_name, client_type) do
     filename = sanitize_filename(client_name || "attachment")
     bucket = Date.utc_today() |> Date.to_iso8601() |> String.replace("-", "/")
     stored_name = "#{Ecto.UUID.generate()}-#{filename}"
@@ -28,7 +53,7 @@ defmodule Platform.Chat.AttachmentStorage do
     # controlled raw input here is still safe.
     inference_hint = client_name || filename
 
-    case adapter().persist(storage_key, {:path, temp_path}) do
+    case adapter().persist(storage_key, source) do
       {:ok, %{byte_size: size, content_hash: hash}} ->
         {:ok,
          %{

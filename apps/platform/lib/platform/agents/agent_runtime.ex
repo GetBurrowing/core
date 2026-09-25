@@ -21,7 +21,7 @@ defmodule Platform.Agents.AgentRuntime do
   #
   # Being GRANTABLE is not being GRANTED: adding a bundle here does not add it
   # to `@default_allowed_bundles` below, and must not.
-  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings experiments)
+  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments)
 
   # `meetings` is a DEFAULT, not merely grantable (task 01a066af stage 4).
   # `meeting_say` is the only way an invited agent can speak in a room, and it
@@ -29,7 +29,16 @@ defmodule Platform.Agents.AgentRuntime do
   # human invited still gets `:not_in_room`, so the bundle grant on its own
   # buys nothing. Withholding it by default, though, meant every voice-capable
   # runtime on the defaults was refused before that guard ever ran.
-  @default_allowed_bundles ~w(federation space context_read messaging attachment skill meetings)
+  #
+  # `mail` is a DEFAULT for the same reason it exists at all (task 01a0d4a0
+  # stage 4 round 2): before `mail` was split out of `messaging`, every
+  # default runtime already got `mail_draft_create`/`mail_draft_update`
+  # implicitly by holding `messaging`. Keeping `mail` off the defaults would
+  # have silently narrowed every existing default runtime's capability —
+  # this bundle split is about letting a runtime be granted `messaging`
+  # WITHOUT `mail` (as `mix platform.seed_meeting_voice_agent` now does by
+  # simply not listing `mail`), not about narrowing what the defaults get.
+  @default_allowed_bundles ~w(federation space context_read messaging attachment skill meetings mail)
 
   schema "agent_runtimes" do
     field(:runtime_id, :string)

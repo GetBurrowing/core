@@ -5305,14 +5305,56 @@ defmodule Platform.Meetings do
   `error`. The previous behaviour — return `:ok` after a broadcast into
   the void — is precisely the failure mode this change exists to remove,
   so it is not preserved for compatibility.
+
+  ## LiveKit Agent Dispatch fallback (task 01a0d4a0)
+
+  When `resolve_meeting_join_target/1` answers `:voice_runtime_offline`,
+  this checks for a runtime that opted in to a different routing path —
+  see `livekit_dispatch_target/1` — before giving up. A livekit-agents
+  worker (`services/meeting-voice-agent`, for example) never opens the
+  `RuntimeChannel` socket `resolve_voice_target/1`'s presence check
+  requires, so without this fallback such a runtime is permanently
+  `:voice_runtime_offline` even while its process is up and reachable by
+  LiveKit itself. Every runtime that has not declared the opt-in key is
+  unaffected: `livekit_dispatch_target/1` finds nothing for it and the
+  original `:voice_runtime_offline` is returned unchanged.
   """
   @spec dispatch_meeting_join(Agent.t() | binary(), String.t(), map()) ::
           :ok | {:error, term()}
   def dispatch_meeting_join(agent_or_id, room_name, context \\ %{})
 
   def dispatch_meeting_join(%Agent{} = agent, room_name, context) do
-    with {:ok, target} <- resolve_meeting_join_target(agent),
-         {:ok, token} <- generate_agent_token(agent, room_name) do
+    case resolve_meeting_join_target(agent) do
+      {:ok, target} ->
+        dispatch_meeting_join_over_channel(agent, target, room_name, context)
+
+      {:error, :voice_runtime_offline} = offline_error ->
+        case livekit_dispatch_target(agent) do
+          {:ok, target} ->
+            dispatch_meeting_join_via_livekit(agent, target, room_name, context)
+
+          {:error, :no_livekit_dispatch_target} ->
+            offline_error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  def dispatch_meeting_join(agent_id, room_name, context) when is_binary(agent_id) do
+    case resolve_agent(agent_id) do
+      %Agent{} = agent -> dispatch_meeting_join(agent, room_name, context)
+      nil -> {:error, :agent_not_found}
+    end
+  end
+
+  # The path every runtime used before task 01a0d4a0, byte-for-byte:
+  # resolve a `RuntimeChannel` topic and broadcast onto it. Any runtime that
+  # does not declare `livekit_dispatch_target/1`'s opt-in key reaches ONLY
+  # this function, exactly as it did before this task existed.
+  defp dispatch_meeting_join_over_channel(agent, target, room_name, context) do
+    with {:ok, token} <- generate_agent_token(agent, room_name) do
       payload = %{
         room_name: room_name,
         token: token,
@@ -5344,10 +5386,47 @@ defmodule Platform.Meetings do
     end
   end
 
-  def dispatch_meeting_join(agent_id, room_name, context) when is_binary(agent_id) do
-    case resolve_agent(agent_id) do
-      %Agent{} = agent -> dispatch_meeting_join(agent, room_name, context)
-      nil -> {:error, :agent_not_found}
+  # The task 01a0d4a0 path: a livekit-agents worker never opens a
+  # `RuntimeChannel`, so instead of a Phoenix broadcast this calls LiveKit's
+  # own `AgentDispatchService/CreateDispatch` Twirp RPC, naming the worker's
+  # registered `agent_name` directly — LiveKit itself already knows how to
+  # route a job to that worker. No token is minted for the worker: unlike
+  # the channel path, nothing here sends the worker a Core-issued JWT over a
+  # socket it never opens.
+  defp dispatch_meeting_join_via_livekit(agent, target, room_name, context) do
+    metadata =
+      Jason.encode!(%{
+        "space_id" => Map.get(context, :space_id),
+        "meeting_id" => Map.get(context, :meeting_id),
+        # Task 01a0d4a0 stage 5: the worker's own participant-linking (which
+        # LiveKit participant is "the human" this session should listen to)
+        # has no reliable local signal to pick from when two agents are
+        # invited within milliseconds of each other — see
+        # `human_identity_from_actor/1`. This is `nil` (encodes as JSON
+        # `null`) whenever `inviting_user` isn't a resolvable human actor
+        # (e.g. one agent inviting another), in which case the worker falls
+        # back to its old default-participant behavior rather than crashing
+        # on a missing key.
+        "human_identity" => Map.get(context, :human_identity)
+      })
+
+    case create_livekit_agent_dispatch(room_name, target.livekit_agent_name, metadata) do
+      :ok ->
+        Logger.info(
+          "[Meetings] dispatched meeting_join to agent=#{agent.slug} " <>
+            "runtime=#{target.runtime_id} room=#{room_name} via LiveKit Agent Dispatch " <>
+            "(agent_name=#{target.livekit_agent_name})"
+        )
+
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[Meetings] LiveKit Agent Dispatch failed for agent=#{agent.slug} room=#{room_name} " <>
+            "agent_name=#{target.livekit_agent_name}: #{inspect(reason)}"
+        )
+
+        {:error, :livekit_dispatch_failed}
     end
   end
 
@@ -6500,13 +6579,65 @@ defmodule Platform.Meetings do
           {:ok, Participant.t()} | {:error, term()}
   def invite_agent(%Room{} = room, %Agent{} = agent, inviting_user) do
     with {:ok, _writer} <- SpaceAccess.authorize_writer(room.space_id, inviting_user),
-         {:ok, _topic} <- meeting_join_topic(agent),
+         :ok <- meeting_join_reachable?(agent),
          {:ok, _token} <-
            generate_agent_token(agent, room.livekit_room_name),
          {:ok, participant} <- invite_participant_row(room, agent) do
       # Dispatch to agent runtime
-      dispatch_meeting_join(agent, room.livekit_room_name, %{space_id: room.space_id})
+      dispatch_meeting_join(agent, room.livekit_room_name, %{
+        space_id: room.space_id,
+        human_identity: human_identity_from_actor(inviting_user)
+      })
+
       {:ok, participant}
+    end
+  end
+
+  # The LiveKit participant identity `invite_agent/3`'s human inviter would
+  # hold in this room, in the same `"user:<uuid>"` shape `parse_identity/1`
+  # reads back (`press_identity/1` in `PlatformWeb.MeetingLive` mints the
+  # exact same string for the socket's own owner). Threaded through
+  # `dispatch_meeting_join/3`'s metadata so the livekit-agents worker can
+  # pin its `AgentSession` to THIS participant instead of accepting
+  # whichever remote participant it happens to observe first — the failure
+  # mode Dalton's dual-agent moon run hit when two agents were invited
+  # within milliseconds of each other and the second worker linked to the
+  # first agent's own room participant instead of the human.
+  #
+  # `nil` (never raises) for an actor this can't resolve to a human — e.g.
+  # `{:agent, id}` when one agent invites another on a human's behalf. The
+  # worker's default behavior (link to the first accepted participant) is
+  # the correct fallback there: there may be no single human to pin to.
+  @spec human_identity_from_actor(SpaceAccess.actor()) :: String.t() | nil
+  defp human_identity_from_actor({:user, id}) when is_binary(id), do: "user:#{id}"
+  defp human_identity_from_actor(%{id: id}) when is_binary(id), do: "user:#{id}"
+  defp human_identity_from_actor(_), do: nil
+
+  # `meeting_join_topic/1`'s pre-flight, widened to also accept the task
+  # 01a0d4a0 LiveKit Agent Dispatch fallback `dispatch_meeting_join/3` uses
+  # — otherwise `invite_agent/3` would refuse with `:voice_runtime_offline`
+  # before ever reaching the dispatch that would have worked. Deliberately
+  # NOT folded into `meeting_join_topic/1` itself: that function is also
+  # `say/4`'s pre-flight, and `say/4` broadcasts on a `RuntimeChannel` topic
+  # with no LiveKit-Agent-Dispatch equivalent — a livekit-agents job process
+  # cannot receive it either way, so widening `meeting_join_topic/1` would
+  # let `say/4` report success into a void. Every runtime that has not
+  # declared the opt-in key is unaffected: `livekit_dispatch_target/1` finds
+  # nothing for it and the original `:voice_runtime_offline` is returned.
+  @spec meeting_join_reachable?(Agent.t()) :: :ok | {:error, :no_runtime | :voice_runtime_offline}
+  defp meeting_join_reachable?(agent) do
+    case meeting_join_topic(agent) do
+      {:ok, _topic} ->
+        :ok
+
+      {:error, :voice_runtime_offline} = offline_error ->
+        case livekit_dispatch_target(agent) do
+          {:ok, _target} -> :ok
+          {:error, :no_livekit_dispatch_target} -> offline_error
+        end
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -6630,6 +6761,70 @@ defmodule Platform.Meetings do
       true -> :unknown
     end
   end
+
+  # ── LiveKit Agent Dispatch capability (task 01a0d4a0) ────────────────────
+  #
+  # A livekit-agents worker (`services/meeting-voice-agent`, for example)
+  # never opens a `RuntimeChannel` socket: LiveKit's own Agent Dispatch API
+  # pushes a job TO a registered worker by `agent_name` rather than waiting
+  # for the worker to dial Core, so `RuntimePresence.online?/1` can never
+  # observe one and `resolve_voice_target/1` (left entirely unchanged by
+  # this section) answers `:voice_runtime_offline` for it forever.
+  #
+  # A runtime opts in to a DIFFERENT routing path by declaring a non-empty
+  # `metadata["client_info"]["livekit_agent_name"]` string — explicit data
+  # on the row, sibling to the `"meeting_voice"` feature flag
+  # `capability_from_metadata/1` already reads. This is consulted ONLY as a
+  # fallback, from `dispatch_meeting_join/3` and `meeting_join_reachable?/1`,
+  # after `resolve_voice_target/1` has already answered
+  # `:voice_runtime_offline` — a runtime that never declares this key never
+  # reaches this code, so its behaviour is unchanged by this task.
+
+  # The first voice-capable row (per `capability_from_metadata/1`) that also
+  # declares a LiveKit `agent_name`. Rows come brain-first from
+  # `runtimes_for_agent/1`, matching `resolve_voice_target/1`'s own order of
+  # preference.
+  @spec livekit_dispatch_target(Agent.t()) ::
+          {:ok,
+           %{
+             agent: Agent.t(),
+             runtime: AgentRuntime.t(),
+             runtime_id: String.t(),
+             livekit_agent_name: String.t()
+           }}
+          | {:error, :no_livekit_dispatch_target}
+  defp livekit_dispatch_target(%Agent{} = agent) do
+    agent
+    |> Federation.runtimes_for_agent()
+    |> Enum.find_value(fn %AgentRuntime{runtime_id: runtime_id, metadata: metadata} = runtime ->
+      with true <- is_binary(runtime_id),
+           :capable <- capability_from_metadata(metadata),
+           agent_name when is_binary(agent_name) <- livekit_dispatch_agent_name(metadata) do
+        %{agent: agent, runtime: runtime, runtime_id: runtime_id, livekit_agent_name: agent_name}
+      else
+        _ -> nil
+      end
+    end)
+    |> case do
+      nil -> {:error, :no_livekit_dispatch_target}
+      %{} = target -> {:ok, target}
+    end
+  end
+
+  # Read through the same `metadata["client_info"]` shape
+  # `capability_from_metadata/1` reads `features` from. `nil` unless the
+  # value is a genuinely non-empty string — an empty string could never be a
+  # real LiveKit `agent_name` and is treated as "not declared".
+  defp livekit_dispatch_agent_name(metadata) when is_map(metadata) do
+    with %{} = client_info <- Map.get(metadata, "client_info"),
+         name when is_binary(name) and name != "" <- Map.get(client_info, "livekit_agent_name") do
+      name
+    else
+      _ -> nil
+    end
+  end
+
+  defp livekit_dispatch_agent_name(_), do: nil
 
   @doc """
   Record a runtime's answer to a `meeting_join` dispatch.
@@ -6820,6 +7015,63 @@ defmodule Platform.Meetings do
            ) do
         {:ok, %{status: 200, body: body}} -> {:ok, participant_identities(body)}
         {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  rescue
+    e -> {:error, {:exception, Exception.message(e)}}
+  end
+
+  @doc """
+  Create an explicit LiveKit Agent Dispatch: ask LiveKit's own
+  `AgentDispatchService/CreateDispatch` Twirp RPC to route a job for
+  `room_name` to the worker registered under `livekit_agent_name` (task
+  01a0d4a0).
+
+  This is the routing path `dispatch_meeting_join/3` (via
+  `livekit_dispatch_target/1`) falls to for a runtime that declares a
+  LiveKit `agent_name` instead of opening a `RuntimeChannel` socket.
+  LiveKit already knows how to reach a worker registered under this name
+  — via `WorkerOptions(agent_name: ...)` on the worker side, e.g.
+  `services/meeting-voice-agent`'s — so this replaces the
+  `Phoenix.Endpoint.broadcast/3` a `RuntimeChannel`-shaped runtime gets.
+
+  Uses the same `roomAdmin`-scoped grant `list_livekit_participants/1`
+  does — LiveKit's dispatch API refuses a `roomCreate`-only token the way
+  `ListParticipants` does. `{:error, :livekit_not_configured}` without
+  credentials; any HTTP or transport failure is `{:error, reason}` — this
+  must never raise into its caller.
+  """
+  @spec create_livekit_agent_dispatch(String.t(), String.t(), String.t()) ::
+          :ok | {:error, :livekit_not_configured | term()}
+  def create_livekit_agent_dispatch(room_name, livekit_agent_name, metadata \\ "{}")
+      when is_binary(room_name) and is_binary(livekit_agent_name) and is_binary(metadata) do
+    config = livekit_config()
+    url = config[:url]
+    api_key = config[:api_key]
+    api_secret = config[:api_secret]
+
+    if is_nil(url) or is_nil(api_key) or is_nil(api_secret) do
+      {:error, :livekit_not_configured}
+    else
+      token = room_admin_token(api_key, api_secret, room_name)
+
+      twirp_url =
+        url
+        |> String.replace_prefix("wss://", "https://")
+        |> String.replace_prefix("ws://", "http://")
+
+      body = %{"room" => room_name, "agent_name" => livekit_agent_name, "metadata" => metadata}
+
+      case Req.post(livekit_req_client(),
+             url: "#{twirp_url}/twirp/livekit.AgentDispatchService/CreateDispatch",
+             json: body,
+             headers: [{"authorization", "Bearer #{token}"}],
+             receive_timeout: 5_000,
+             retry: false
+           ) do
+        {:ok, %{status: status}} when status in [200, 201] -> :ok
+        {:ok, %{status: status, body: resp_body}} -> {:error, {:http_error, status, resp_body}}
         {:error, reason} -> {:error, reason}
       end
     end
