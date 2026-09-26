@@ -41,17 +41,18 @@ defmodule Platform.Security.TransportCapabilityParityTest do
   ## Explicit non-dependency
 
   `Platform.Agents.AgentRuntime.valid_bundles/0`
-  (`lib/platform/agents/agent_runtime.ex`, 11 names) and
+  (`lib/platform/agents/agent_runtime.ex`) and
   `Platform.Federation.ToolSurface.all_bundles/0`
-  (`lib/platform/federation/tool_surface.ex`, 12 names) DISAGREE: `files` is
-  absent from the former, so `validate_subset/3` rejects it and it can never be
-  granted through the changeset. That is a SEPARATE tracked issue and is
-  deliberately NOT fixed here. Every grant below is a LITERAL list — nothing in
-  this file reads `valid_bundles/0` or `all_bundles/0` — so the suite cannot
-  silently start depending on the two lists agreeing. The `files` case inserts
-  its row DIRECTLY, bypassing the changeset, because that is the shape prod
-  actually carries: 16 of 20 active runtimes hold `files` despite the
-  changeset refusing it.
+  (`lib/platform/federation/tool_surface.ex`) once DISAGREED: `files` was
+  absent from the former, so the changeset could not grant it. Since task
+  019ff110 (#706) `valid_bundles/0` includes `files`, and
+  `test/platform/agents/agent_runtime_test.exs` holds the two lists equal.
+  Every grant below is still a LITERAL list — nothing in this file reads
+  `valid_bundles/0` or `all_bundles/0` — so the suite cannot silently start
+  depending on the two lists agreeing. The `files` case still inserts its row
+  DIRECTLY, bypassing the changeset, to pin the production row shape
+  (`transport`, `trust_level` and `metadata` set on the struct, not derived by
+  the changeset).
   """
   use PlatformWeb.ChannelCase, async: false
 
@@ -121,10 +122,10 @@ defmodule Platform.Security.TransportCapabilityParityTest do
     end
   end
 
-  # The `files` row cannot be produced by `AgentRuntime.changeset/2` — see the
-  # moduledoc. Inserted directly so the parity property is proved against the
-  # row shape prod actually carries, WITHOUT this file taking a position on the
-  # two-list mismatch.
+  # The `files` row is inserted directly, bypassing `AgentRuntime.changeset/2`,
+  # so the parity property is proved against the row shape prod actually
+  # carries — see the moduledoc. (The describe name predates `files` becoming
+  # grantable; it is kept because reviews locate the case by it.)
   describe "a directly-inserted runtime carrying the ungrantable `files` bundle" do
     test "still resolves identically on both transports", ctx do
       bundles = ~w(federation files)
@@ -136,6 +137,35 @@ defmodule Platform.Security.TransportCapabilityParityTest do
       for probe <- @probes do
         assert http_verdict(token, probe) == ws_verdict(socket, probe),
                "transports disagreed on #{probe} for a files-carrying runtime"
+      end
+
+      # Parity alone cannot see a SYMMETRIC weakening: a clause that allows an
+      # undeclared tool on both transports keeps http == ws. So each verdict is
+      # also crossed against the advertisement, on each transport separately —
+      # the same check `assert_verdict_parity/3` makes, inlined because that
+      # helper builds its row through the changeset and this case exists to use
+      # the directly-inserted row.
+      advertised = ws_tool_names(capabilities)
+
+      # Preconditions, so the cross-check cannot pass vacuously: the `:denied`
+      # branch must be exercised by an undeclared name, and the `:allowed`
+      # branch by a tool the `files` bundle actually resolved to on this row.
+      refute "canvas_create" in advertised
+      assert "file_list" in advertised
+
+      for probe <- @probes ++ ~w(file_list) do
+        http = http_verdict(token, probe)
+        ws = ws_verdict(socket, probe)
+        expected = if probe in advertised, do: :allowed, else: :denied
+        listed = if probe in advertised, do: "advertised", else: "not advertised"
+
+        assert http == expected,
+               "HTTP: #{probe} is #{listed} for a files-carrying runtime " <>
+                 "but the verdict was #{http}"
+
+        assert ws == expected,
+               "WS: #{probe} is #{listed} for a files-carrying runtime " <>
+                 "but the verdict was #{ws}"
       end
     end
   end
