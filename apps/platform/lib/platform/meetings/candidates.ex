@@ -709,6 +709,9 @@ defmodule Platform.Meetings.Candidates do
 
   # ── activity log (task 01a03fba) ──────────────────────────────────────────
 
+  # Process-dictionary key for `deferring_candidate_events/1` (task 01a0913b).
+  @deferred_candidate_events_key :platform_meetings_candidates_deferred_events
+
   # Emit one line for one write, and ONLY for a write that succeeded.
   #
   # This wrapper is the mechanism behind the ticket's central assertion —
@@ -724,12 +727,78 @@ defmodule Platform.Meetings.Candidates do
   # Returns the result untouched. Logging must never change what a
   # caller sees, or the log would be able to break the thing it
   # describes.
+  #
+  # Inside a `deferring_candidate_events/1` scope the line is QUEUED
+  # instead of written (task 01a0913b); outside one — every caller except
+  # `correct/3` — it is written exactly as before. See
+  # `deferring_candidate_events/1`.
   defp emit({:ok, %MeetingCandidate{} = candidate} = result, kind, detail_fun) do
-    CandidateEvents.record(candidate, kind, jsonable(detail_fun.(candidate)))
+    detail = jsonable(detail_fun.(candidate))
+
+    case Process.get(@deferred_candidate_events_key) do
+      nil ->
+        CandidateEvents.record(candidate, kind, detail)
+
+      queued ->
+        Process.put(@deferred_candidate_events_key, [{candidate, kind, detail} | queued])
+    end
+
     result
   end
 
   defp emit(result, _kind, _detail_fun), do: result
+
+  # `CandidateEvents.record/3` INSERTS and then immediately broadcasts, and
+  # every other MeetingLive answers the broadcast by re-reading the whole
+  # board on its own connection. Called inside a transaction, that
+  # broadcast would go out before commit, and a READ COMMITTED re-read
+  # would paint the card still open with no later event to correct it.
+  #
+  # So `correct/3` runs its transaction inside this scope: `emit/3` queues
+  # instead of writing, and the queue is flushed IN ORDER only when `fun`
+  # returns `{:ok, _}` — i.e. after the commit — and DISCARDED otherwise,
+  # because a write that rolled back must not be narrated. Mirrors
+  # `Platform.Tasks.PlanEngine.deferring_broadcasts/1`, including the
+  # nesting rule: an inner scope runs `fun` bare and lets the outermost
+  # one flush.
+  #
+  # A post-commit event write that fails is logged and not raised —
+  # `CandidateEvents`' existing "Failure is recorded, not raised"
+  # contract. The only thing that can be lost after commit is an activity
+  # line, never the corpus row or the card's state.
+  defp deferring_candidate_events(fun) do
+    case Process.get(@deferred_candidate_events_key) do
+      nil ->
+        Process.put(@deferred_candidate_events_key, [])
+
+        try do
+          result = fun.()
+
+          case result do
+            {:ok, _} -> flush_deferred_candidate_events()
+            _ -> :ok
+          end
+
+          result
+        after
+          Process.delete(@deferred_candidate_events_key)
+        end
+
+      _queued ->
+        fun.()
+    end
+  end
+
+  defp flush_deferred_candidate_events do
+    queued = Process.get(@deferred_candidate_events_key, [])
+    Process.put(@deferred_candidate_events_key, [])
+
+    queued
+    |> Enum.reverse()
+    |> Enum.each(fn {candidate, kind, detail} ->
+      CandidateEvents.record(candidate, kind, detail)
+    end)
+  end
 
   defp jsonable(nil), do: nil
   defp jsonable(true), do: true
@@ -1327,43 +1396,69 @@ defmodule Platform.Meetings.Candidates do
 
   ## The order is a requirement, not a style
 
-  The `meeting_intent_corrections` row is written FIRST, and on
-  `{:error, changeset}` this function returns that error having changed
-  NOTHING about the candidate — no reassign, no flip, no close, no
-  re-arm. That is what makes "the panel wrote nothing" structurally
-  impossible rather than merely tested for: there is no ordering in
-  which the card can move while the corpus stays silent.
+  The `meeting_intent_corrections` row is written FIRST, inside the
+  same transaction as the change to the card, and the two commit
+  together or not at all. That is what makes "the panel rendered but
+  wrote nothing" — the card moved and the corpus stayed silent —
+  structurally impossible rather than merely tested for: there is no
+  ordering in which the card's change can commit while the corpus row
+  does not. A successful correction writes exactly one row.
 
-  Every refusal this function can raise ITSELF is therefore checked
-  before the write: `:same_agent`, `:no_agent`, `:unknown_agent` and a
+  Every refusal this function can raise ITSELF is checked before the
+  transaction opens: `:same_agent`, `:no_agent`, `:unknown_agent` and a
   candidate change that would not survive `MeetingCandidate.changeset/2`
-  all answer before the insert, so none of them can leave an orphan
-  exemplar claiming a correction that never happened.
+  all answer from `plan_correction/3`, which only reads.
 
-  ## The exception, measured rather than assumed
+  ## Write and apply commit together (task 01a0913b)
 
-  `:already_fired` is NOT one of those. It comes back from `stop/3`,
-  which `:not_an_action` runs AFTER the corpus row is written, so a
-  `:not_an_action` on a card that has graduated (`disposition ==
-  :accepted`) or that the sweeper has already claimed (`:acting` AND
-  disarmed) answers `{:error, :already_fired}` with the exemplar
-  already in the corpus. The card is untouched — that invariant holds —
-  but the corpus is not empty.
+  Refusals raised by the APPLY are not checked beforehand, and until
+  task 01a0913b they left an orphan. `:not_an_action` closes through
+  `stop/3`, which answers `{:error, :already_fired}` for a card that has
+  graduated (`disposition == :accepted`) or that the sweeper has already
+  claimed (`:acting` AND disarmed). The corpus row used to commit on its
+  own first, so both left an exemplar behind whose nil
+  `dispatch_outcome` — "it never left the queue" per `IntentCorrection`
+  — is false for a graduated card, and `IntentCorrections.recent_exemplars/2`
+  fed it to the classifier as a few-shot example. A wrong exemplar is
+  worse than a missing one.
 
-  This is the cost of the write-first order rather than a bug in it, and
-  it is the direction that was chosen deliberately: a card that moves
-  while the classifier learns nothing is the failure this ticket exists
-  to prevent, and an exemplar for a correction the card could not accept
-  is the cheaper of the two. It is not free, though. The surviving row
-  carries a nil `dispatch_outcome`, which `IntentCorrection`'s moduledoc
-  defines as "it never left the queue", and for a graduated card that is
-  false — `IntentCorrections.recent_exemplars/2` feeds these rows to the
-  classifier as few-shot examples, so it is a wrong example and not just
-  a spare one. Closing it needs a transaction around the write and the
-  apply; a precheck cannot, because the sweeper can claim the row
-  between the check and the insert. Both reachable cases are pinned in
-  `candidate_correction_test.exs`, under "a refusal raised AFTER the
-  corpus write".
+  Now the write and the apply run in one `Repo.transaction/1`, and any
+  `{:error, reason}` from either is `Repo.rollback/1`ed, so the return
+  shape is unchanged — a refused `:not_an_action` still answers exactly
+  `{:error, :already_fired}` — and it now writes nothing. The same holds
+  for an `{:error, _}` out of the `:reassign` / `:flip_outcome` update or
+  out of `rearm/2`, which also used to leave an orphan.
+
+  A precheck could not close this: the sweeper can claim the card
+  between any check and the insert. The transaction closes it without a
+  lock of its own, and must not add one. `claim_due/2` claims with a
+  single conditional UPDATE (`acts_at IS NOT NULL AND state <> 'closed'`)
+  and `do_stop/3` disarms with the rival conditional UPDATE, so Postgres
+  row locking picks the winner:
+
+    * if the stop's UPDATE wins, it now holds the candidate's row lock
+      until this transaction COMMITS; the sweeper's UPDATE blocks,
+      re-evaluates its WHERE after commit, finds `acts_at` nil, and
+      claims nothing;
+    * if the sweeper wins, the stop's UPDATE re-evaluates to zero rows,
+      `stop/3` answers `:already_fired`, and the corpus row rolls back;
+    * a graduated card is refused by `stop/3` from the re-read
+      `disposition` before any write, and rolls back.
+
+  So the corpus row commits if and only if the stop's own conditional
+  UPDATE matched. The cost is that the row lock is held a little longer
+  than before — across the `close/2` update and the commit, not just the
+  one statement. A second locking read would only lengthen that hold.
+
+  The candidate events the apply narrates (`:closed`, then
+  `:countdown_stopped`) are queued rather than written inside the
+  transaction and flushed, in order, after it commits — and dropped if
+  it rolls back. `CandidateEvents.record/3` broadcasts as soon as it
+  inserts, and every other MeetingLive answers by re-reading the board
+  on its own connection; a broadcast sent before commit could be
+  answered with the card still open, and no later event would correct
+  it. See `deferring_candidate_events/1`. Every other `emit/3` caller
+  runs outside that scope and writes its line immediately, as before.
 
   ## Why the re-arm is the point
 
@@ -1384,7 +1479,8 @@ defmodule Platform.Meetings.Candidates do
 
   Returns `{:ok, candidate}`, or `{:error, reason}` where reason is
   `:same_agent`, `:no_agent`, `:unknown_agent`, `:unknown_correction`,
-  `:not_found`, `:already_fired` (from `stop/3`), or a changeset.
+  `:not_found`, `:already_fired` (from `stop/3`), or a changeset. Every
+  `{:error, _}` leaves the corpus and the card exactly as they were.
   """
   @spec correct(MeetingCandidate.t() | binary(), atom(), keyword()) ::
           {:ok, MeetingCandidate.t()}
@@ -1408,9 +1504,20 @@ defmodule Platform.Meetings.Candidates do
     # and `outcome_kind` are exactly the fields a stale copy gets wrong.
     with {:ok, %MeetingCandidate{id: id}} <- fetch(candidate_or_id),
          {:ok, %MeetingCandidate{} = candidate} <- fetch(id),
-         {:ok, plan} <- plan_correction(candidate, kind, opts),
-         {:ok, _correction} <- IntentCorrections.create_correction(plan.correction) do
-      apply_correction(candidate, plan, opts, now)
+         {:ok, plan} <- plan_correction(candidate, kind, opts) do
+      # Write, then apply, in ONE transaction (task 01a0913b): a refusal
+      # from the apply — `stop/3`'s `:already_fired` above all — rolls the
+      # corpus row back with it. See "Write and apply commit together".
+      deferring_candidate_events(fn ->
+        Repo.transaction(fn ->
+          with {:ok, _correction} <- IntentCorrections.create_correction(plan.correction),
+               {:ok, applied} <- apply_correction(candidate, plan, opts, now) do
+            applied
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+      end)
     end
   end
 
