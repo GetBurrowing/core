@@ -204,7 +204,10 @@ defmodule Platform.Orchestration.TaskRouterStaleNoAckTimerTest do
       # same-stage preservation added by this stage deliberately does not
       # apply here.
       transition_at = DateTime.utc_now()
-      :ok = LeaseManager.record_dispatch(task.id, stage_b.id, "coding", transition_at)
+
+      :ok =
+        LeaseManager.record_dispatch(task.id, stage_b.id, "coding", transition_at, assignee.id)
+
       assert %{stage_id: stage_b_id, ack_at: nil} = LeaseManager.get(task.id)
       assert stage_b_id == stage_b.id
 
@@ -246,7 +249,14 @@ defmodule Platform.Orchestration.TaskRouterStaleNoAckTimerTest do
       :ok = ack_via_runtime_event!(task, stage_a, assignee)
 
       # The duplicate `task_assigned` — same stage, ~4.5 minutes in.
-      :ok = LeaseManager.record_dispatch(task.id, stage_a.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage_a.id,
+          "coding",
+          DateTime.utc_now(),
+          assignee.id
+        )
 
       assert %{ack_at: %DateTime{}, no_ack_at: nil} = LeaseManager.get(task.id),
              "a re-dispatch of the acked stage must not wipe the ack"
@@ -280,10 +290,17 @@ defmodule Platform.Orchestration.TaskRouterStaleNoAckTimerTest do
       original_at = DateTime.add(DateTime.utc_now(), -elapsed, :millisecond)
 
       LeaseManager.clear(task.id)
-      :ok = LeaseManager.record_dispatch(task.id, stage_a.id, "coding", original_at)
+      :ok = LeaseManager.record_dispatch(task.id, stage_a.id, "coding", original_at, assignee.id)
       %{no_ack_at: original_deadline} = LeaseManager.get(task.id)
 
-      :ok = LeaseManager.record_dispatch(task.id, stage_a.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage_a.id,
+          "coding",
+          DateTime.utc_now(),
+          assignee.id
+        )
 
       assert %{ack_at: nil, no_ack_at: ^original_deadline} = LeaseManager.get(task.id)
 
@@ -312,7 +329,13 @@ defmodule Platform.Orchestration.TaskRouterStaleNoAckTimerTest do
       # still reach it, and the handler used to fire on a lease whose alarm
       # was explicitly disabled.
       :ok =
-        LeaseManager.record_dispatch(task.id, stage_b.id, "manual_approval", DateTime.utc_now())
+        LeaseManager.record_dispatch(
+          task.id,
+          stage_b.id,
+          "manual_approval",
+          DateTime.utc_now(),
+          assignee.id
+        )
 
       assert %{no_ack_at: nil, ack_at: nil} = LeaseManager.get(task.id)
 

@@ -89,7 +89,15 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
       stage: stage
     } do
       dispatched_at = DateTime.utc_now() |> DateTime.add(-30, :second)
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at)
+
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          dispatched_at,
+          "runtime-alarm-silence-owner"
+        )
 
       test_pid = self()
       handler_id = "alarm-silence-happy-#{System.unique_integer([:positive])}"
@@ -173,7 +181,15 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
     test "resolves stage_id from current_running_stage when arg is omitted",
          %{task: task, stage: stage} do
       dispatched_at = DateTime.utc_now() |> DateTime.add(-5, :second)
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at)
+
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          dispatched_at,
+          "runtime-alarm-silence-owner"
+        )
 
       {:ok, result} =
         ToolSurface.execute(
@@ -220,7 +236,14 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
     end
 
     test "until_seconds below the 60s floor", %{task: task, stage: stage} do
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          DateTime.utc_now(),
+          "runtime-alarm-silence-owner"
+        )
 
       {:error, err} =
         ToolSurface.execute(
@@ -239,7 +262,14 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
     end
 
     test "until_seconds above the 24h cap", %{task: task, stage: stage} do
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          DateTime.utc_now(),
+          "runtime-alarm-silence-owner"
+        )
 
       {:error, err} =
         ToolSurface.execute(
@@ -258,7 +288,14 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
     end
 
     test "reason shorter than 8 characters", %{task: task, stage: stage} do
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          DateTime.utc_now(),
+          "runtime-alarm-silence-owner"
+        )
 
       {:error, err} =
         ToolSurface.execute(
@@ -351,7 +388,14 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
       plan: plan,
       stage: stage
     } do
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          DateTime.utc_now(),
+          "runtime-alarm-silence-owner"
+        )
 
       {:ok, done_stage} =
         Tasks.create_stage(%{
@@ -390,7 +434,14 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
       task: task,
       stage: stage
     } do
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          DateTime.utc_now(),
+          "runtime-alarm-silence-owner"
+        )
 
       {:ok, other_task} =
         Tasks.create_task(%{project_id: project.id, title: "Sibling task"})
@@ -433,7 +484,14 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
       task: task,
       stage: stage
     } do
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          DateTime.utc_now(),
+          "runtime-alarm-silence-owner"
+        )
 
       ghost_id = Ecto.UUID.generate()
 
@@ -465,7 +523,14 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
       task: task,
       stage: stage
     } do
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          DateTime.utc_now(),
+          "runtime-alarm-silence-owner"
+        )
 
       assert {:ok, result} =
                ToolSurface.execute(
@@ -512,7 +577,14 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
       # inert. Restored on exit, because it is VM-global (task 019f9d80).
       Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.TelemetryHandler)
 
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "coding",
+          DateTime.utc_now(),
+          "runtime-alarm-silence-owner"
+        )
 
       {:ok, _result} =
         ToolSurface.execute(

@@ -72,9 +72,17 @@ defmodule Platform.Orchestration.TaskRouterDispatchSuppressionTest do
 
     test "records the task status and clears liveness when it suppresses", %{project: project} do
       %{task: task, stage: stage} = fixture = completed_plan_task(project)
-      %{pid: pid} = start_router!(fixture)
+      %{pid: pid, runtime_id: runtime_id} = start_router!(fixture)
 
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "test_pass", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "test_pass",
+          DateTime.utc_now(),
+          runtime_id
+        )
+
       assert LeaseManager.get(task.id)
 
       send(pid, :dispatch)

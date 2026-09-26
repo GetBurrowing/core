@@ -4,8 +4,8 @@ defmodule Platform.Orchestration.LeaseManagerTest do
   ephemeral router liveness store (task 019f640d stage 2).
 
   Covers:
-    * `record_dispatch/4` writes a lease with computed timestamps
-    * `record_ack/1` clears no-ack fields, extends safety-net,
+    * `record_dispatch/5` writes a lease with computed timestamps
+    * `record_ack/3` clears no-ack fields, extends safety-net,
       resets `no_ack_fired?`
     * `record_progress/1` extends safety-net only, does NOT touch
       no-ack state
@@ -22,6 +22,11 @@ defmodule Platform.Orchestration.LeaseManagerTest do
   use ExUnit.Case, async: false
 
   alias Platform.Orchestration.LeaseManager
+
+  # Task 01a0c762: every lease is dispatched to a runtime, and only that
+  # runtime's ack is accepted. Ownership itself is covered by
+  # `lease_manager_ack_ownership_test.exs`.
+  @owner "runtime-lease-manager-test"
 
   setup do
     # LeaseManager is booted by the application supervisor. Purge any
@@ -65,14 +70,14 @@ defmodule Platform.Orchestration.LeaseManagerTest do
     end
   end
 
-  describe "record_dispatch/4 + get/1" do
+  describe "record_dispatch/5 + get/1" do
     test "writes a lease row with computed no_ack_at and safety_net_at" do
       task_id = new_task_id()
       stage_id = new_stage_id()
       dispatched_at = ~U[2026-07-15 12:00:00.000000Z]
 
       assert :ok =
-               LeaseManager.record_dispatch(task_id, stage_id, "coding", dispatched_at)
+               LeaseManager.record_dispatch(task_id, stage_id, "coding", dispatched_at, @owner)
 
       assert %{
                stage_id: ^stage_id,
@@ -99,7 +104,8 @@ defmodule Platform.Orchestration.LeaseManagerTest do
                  task_id,
                  new_stage_id(),
                  "manual_approval",
-                 dispatched_at
+                 dispatched_at,
+                 @owner
                )
 
       assert %{no_ack_at: nil, safety_net_at: nil, stage_kind: "manual_approval"} =
@@ -114,7 +120,8 @@ defmodule Platform.Orchestration.LeaseManagerTest do
                  task_id,
                  new_stage_id(),
                  "brand_new_kind",
-                 DateTime.utc_now()
+                 DateTime.utc_now(),
+                 @owner
                )
 
       assert %{no_ack_at: nil, safety_net_at: nil, stage_kind: "brand_new_kind"} =
@@ -130,25 +137,26 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       first_stage = new_stage_id()
       second_stage = new_stage_id()
 
-      LeaseManager.record_dispatch(task_id, first_stage, "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, first_stage, "coding", DateTime.utc_now(), @owner)
 
       LeaseManager.record_dispatch(
         task_id,
         second_stage,
         "review",
-        DateTime.utc_now()
+        DateTime.utc_now(),
+        @owner
       )
 
       assert %{stage_id: ^second_stage, stage_kind: "review"} = LeaseManager.get(task_id)
     end
   end
 
-  describe "record_ack/1" do
+  describe "record_ack/3" do
     test "sets ack_at, clears no_ack_at, resets no_ack_fired?, extends safety_net_at" do
       task_id = new_task_id()
       dispatched_at = DateTime.add(DateTime.utc_now(), -60, :second)
 
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", dispatched_at)
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", dispatched_at, @owner)
       # Simulate the no-ack timer having fired before the ack landed
       # so we can prove the reset semantics.
       LeaseManager.mark_no_ack_fired(task_id)
@@ -156,7 +164,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       before_ack = LeaseManager.get(task_id)
       assert before_ack.no_ack_fired? == true
 
-      assert :ok = LeaseManager.record_ack(task_id)
+      assert :ok = LeaseManager.record_ack(task_id, @owner)
 
       after_ack = LeaseManager.get(task_id)
       assert after_ack.ack_at != nil
@@ -170,14 +178,21 @@ defmodule Platform.Orchestration.LeaseManagerTest do
     end
 
     test "returns {:error, :not_found} when no lease exists" do
-      assert LeaseManager.record_ack(new_task_id()) == {:error, :not_found}
+      assert LeaseManager.record_ack(new_task_id(), @owner) == {:error, :not_found}
     end
 
     test "on a manual_approval lease, ack_at is stamped but safety_net_at stays nil" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "manual_approval", DateTime.utc_now())
 
-      assert :ok = LeaseManager.record_ack(task_id)
+      LeaseManager.record_dispatch(
+        task_id,
+        new_stage_id(),
+        "manual_approval",
+        DateTime.utc_now(),
+        @owner
+      )
+
+      assert :ok = LeaseManager.record_ack(task_id, @owner)
 
       after_ack = LeaseManager.get(task_id)
       assert after_ack.ack_at != nil
@@ -190,7 +205,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       task_id = new_task_id()
       dispatched_at = DateTime.add(DateTime.utc_now(), -30, :second)
 
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "review", dispatched_at)
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "review", dispatched_at, @owner)
       before = LeaseManager.get(task_id)
 
       assert :ok = LeaseManager.record_progress(task_id)
@@ -212,7 +227,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
   describe "mark_no_ack_fired/1" do
     test "first call returns {:ok, :fired}, subsequent calls {:ok, :already_fired}" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       assert LeaseManager.mark_no_ack_fired(task_id) == {:ok, :fired}
       assert LeaseManager.mark_no_ack_fired(task_id) == {:ok, :already_fired}
@@ -229,7 +244,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
   describe "mark_safety_net_fired/1" do
     test "first call returns {:ok, :fired}, subsequent calls {:ok, :already_fired}" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       assert LeaseManager.mark_safety_net_fired(task_id) == {:ok, :fired}
       assert LeaseManager.mark_safety_net_fired(task_id) == {:ok, :already_fired}
@@ -243,7 +258,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
 
     test "marking safety_net does not touch no_ack state (and vice versa)" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       LeaseManager.mark_safety_net_fired(task_id)
 
@@ -254,7 +269,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
   describe "clear/1" do
     test "removes the lease row so subsequent get/1 returns nil" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       assert LeaseManager.get(task_id) != nil
       assert :ok = LeaseManager.clear(task_id)
@@ -267,16 +282,16 @@ defmodule Platform.Orchestration.LeaseManagerTest do
   end
 
   describe "silence/3" do
-    test "record_dispatch/4 initializes silenced_until to nil so freshly-armed leases are not silenced" do
+    test "record_dispatch/5 initializes silenced_until to nil so freshly-armed leases are not silenced" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       assert %{silenced_until: nil} = LeaseManager.get(task_id)
     end
 
     test "sets silenced_until on an armed lease, preserves every other field" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
       before = LeaseManager.get(task_id)
 
       until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
@@ -304,7 +319,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
 
     test "rejects past `until` with {:error, :invalid_until}" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       # Comfortably in the past.
       past = DateTime.add(DateTime.utc_now(), -60, :second)
@@ -320,7 +335,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       # Edge of the strict-greater-than check — an `until` that equals `now`
       # would immediately lapse and provides no useful suppression window.
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       # Race note: this test can flake if `DateTime.utc_now/0` inside the
       # handler advances past this `now` before the compare runs, in which
@@ -334,7 +349,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
 
     test "rejects `until` past the 24h cap with {:error, :cap_exceeded}" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       # 25h > cap
       too_far = DateTime.add(DateTime.utc_now(), 25 * 60 * 60, :second)
@@ -350,7 +365,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       # microseconds elapse between the caller's clock and the handler's
       # clock, target 24h - 5s to avoid a boundary flake.
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       just_inside = DateTime.add(DateTime.utc_now(), 24 * 60 * 60 - 5, :second)
 
@@ -360,7 +375,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
 
     test "re-silencing overwrites the prior silenced_until timestamp" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       first = DateTime.add(DateTime.utc_now(), 60, :second)
       second = DateTime.add(DateTime.utc_now(), 900, :second)
@@ -372,14 +387,14 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       assert %{silenced_until: ^second} = LeaseManager.get(task_id)
     end
 
-    test "record_ack/1 does NOT clear silenced_until — silence is orthogonal to ack" do
+    test "record_ack/3 does NOT clear silenced_until — silence is orthogonal to ack" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
       assert :ok = LeaseManager.silence(task_id, until, "operator escape hatch")
 
-      assert :ok = LeaseManager.record_ack(task_id)
+      assert :ok = LeaseManager.record_ack(task_id, @owner)
 
       after_ack = LeaseManager.get(task_id)
       # Ack landed.
@@ -395,7 +410,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       # Documented invariant — progress evidence extends the safety-net but
       # is not the same signal class as an operator-scoped silence override.
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
       assert :ok = LeaseManager.silence(task_id, until, "operator escape hatch")
@@ -407,7 +422,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
 
     test "clear/1 deletes the row so silence dies by side effect" do
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
       assert :ok = LeaseManager.silence(task_id, until, "operator escape hatch")
@@ -422,12 +437,12 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       # A stage transition upgrades the lease in place via record_dispatch —
       # the fresh row MUST NOT carry the prior stage's silence.
       task_id = new_task_id()
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now(), @owner)
 
       until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
       assert :ok = LeaseManager.silence(task_id, until, "silence on stage 1")
 
-      LeaseManager.record_dispatch(task_id, new_stage_id(), "review", DateTime.utc_now())
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "review", DateTime.utc_now(), @owner)
 
       assert %{silenced_until: nil, stage_kind: "review"} = LeaseManager.get(task_id)
     end
@@ -441,7 +456,8 @@ defmodule Platform.Orchestration.LeaseManagerTest do
         task_id,
         new_stage_id(),
         "coding",
-        DateTime.utc_now()
+        DateTime.utc_now(),
+        @owner
       )
 
       parent = self()

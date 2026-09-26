@@ -2056,7 +2056,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_ack",
         description:
-          "Ack that you (the executor/reviewer/deployer) received the dispatch and are actively working on the stage. Call this as your FIRST tool call after spawning for a task (task 019f640d stage 5). Emits an `execution.acked` runtime_event which the TaskRouter consumes to extend the safety-net timer and suppress the 5-minute no-ack alert. Returns `{ack_at, next_safety_net_at}` for reference — `next_safety_net_at` may be nil when no lease is armed (e.g. manual_approval stages, where no safety-net timer runs). Requires a RUNNING stage, on both paths. A SUPPLIED `stage_id` is honoured exactly when all three hold: the stage EXISTS, it BELONGS TO this `task_id`, and its `status` is `\"running\"`; if any one fails the call is refused with a recoverable error naming which of the three it was (not-found / wrong-task / not-running), so a caller with a stale id, a caller holding a sibling task's id, and a caller racing a stage transition each get a different next action. The refusal is not bookkeeping: an honoured ack suppresses that stage's dispatch for the whole safety-net window (~90m; 120m in planning), so a misdirected ack would park a stage nobody is working. With NO `stage_id` the tool derives the current plan's running stage, and when there is none it returns `no running stage — cannot ack without a stage_id`. That is expected during the planning phase, which arms no liveness timers and needs no ack — the planning dispatch says so and does not ask you to call this. Requires a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack.",
+          "Ack that you (the executor/reviewer/deployer) received the dispatch and are actively working on the stage. Call this as your FIRST tool call after spawning for a task (task 019f640d stage 5). Emits an `execution.acked` runtime_event which the TaskRouter consumes to extend the safety-net timer and suppress the 5-minute no-ack alert. Returns `{ack_at, next_safety_net_at}` for reference — `next_safety_net_at` may be nil when no lease is armed (e.g. manual_approval stages, where no safety-net timer runs). Requires a RUNNING stage, on both paths. A SUPPLIED `stage_id` is honoured exactly when all three hold: the stage EXISTS, it BELONGS TO this `task_id`, and its `status` is `\"running\"`; if any one fails the call is refused with a recoverable error naming which of the three it was (not-found / wrong-task / not-running), so a caller with a stale id, a caller holding a sibling task's id, and a caller racing a stage transition each get a different next action. The refusal is not bookkeeping: an honoured ack suppresses that stage's dispatch for the whole safety-net window (~90m; 120m in planning), so a misdirected ack would park a stage nobody is working. With NO `stage_id` the tool derives the current plan's running stage, and when there is none it returns `no running stage — cannot ack without a stage_id`. That is expected during the planning phase, which arms no liveness timers and needs no ack — the planning dispatch says so and does not ask you to call this. Requires a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack. The ack must come from the runtime the stage was dispatched to — that is the AUTHENTICATED caller (your MCP token or runtime socket), never an argument — and any other runtime's ack is refused with a recoverable not-owner error and writes no `execution.acked` row; `subagent_id` is recorded for audit only and is not verified.",
         parameters: %{
           task_id: %{
             type: "string",
@@ -2079,7 +2079,7 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{task_id, stage_id, event_id, acked_at, next_safety_net_at}. `next_safety_net_at` is nil when the LeaseManager has no active lease for the task (planning-phase dispatch, manual_approval stages, or a boot-race before the router recorded the dispatch).",
         limitations:
-          "Idempotent — re-calling on the same stage is a soft ack refresh; each call emits a fresh execution.acked event and extends the safety-net deadline. Unknown `task_id` returns `{:error, :not_found}`. A supplied `stage_id` is accepted only when the stage exists, belongs to this `task_id`, and is `running`; otherwise a recoverable envelope names the failing condition — the stage does not exist, it belongs to another task (the owning task_id is cited), or it is in some other status (the status is cited). When no stage_id is supplied and the task has no running stage, returns `{:error, :no_running_stage}` so the caller can decide whether to task_start first or ignore. Invalid subagent_id returns `{:error, :invalid_subagent_id}` — one of `missing` (key absent or nil), `empty_or_whitespace` (empty string or whitespace-only), or `oversized` (> 128 bytes). No format policing beyond that; any well-formed string identifying the spawn handle is accepted.",
+          "Idempotent — re-calling on the same stage is a soft ack refresh; each accepted call emits a fresh execution.acked event and extends the safety-net deadline (a non-owner call is refused and emits nothing). Unknown `task_id` returns `{:error, :not_found}`. A supplied `stage_id` is accepted only when the stage exists, belongs to this `task_id`, and is `running`; otherwise a recoverable envelope names the failing condition — the stage does not exist, it belongs to another task (the owning task_id is cited), or it is in some other status (the status is cited). When no stage_id is supplied and the task has no running stage, returns `{:error, :no_running_stage}` so the caller can decide whether to task_start first or ignore. Invalid subagent_id returns `{:error, :invalid_subagent_id}` — one of `missing` (key absent or nil), `empty_or_whitespace` (empty string or whitespace-only), or `oversized` (> 128 bytes). No format policing beyond that; any well-formed string identifying the spawn handle is accepted.",
         when_to_use:
           "As your FIRST tool call after being dispatched for a task, before you start reading code or planning steps. Without an ack the router fires an escalation alert in 5 minutes on `coding`/`review`/`deploying` stages (planning: same 5m ack window, longer safety-net)."
       },
@@ -9056,10 +9056,13 @@ defmodule Platform.Federation.ToolSurface do
   # it never asked whether the stage existed, whether it belonged to
   # `task_id`, or whether it was running. That matters because
   # `TaskRouter.live_acked_executor?/2` suppresses dispatch whenever
-  # `Orchestration.last_stage_ack_at(task_id, stage.id)` falls inside the
-  # safety-net window, consulting neither the acker's identity nor its
-  # liveness — so an ack naming a stage that is not the one being worked
-  # parks that stage for the whole window (~90m; 120m in planning).
+  # `Orchestration.last_stage_ack_at(task_id, stage.id, runtime_id)` falls
+  # inside the safety-net window. Since task 01a0c762 that read is scoped
+  # to the DISPATCHED runtime's acks (and `emit_task_ack/4` refuses a
+  # non-owner's ack without writing a row), but it still does not consult
+  # the acker's liveness — so an owner ack naming a stage that is not the
+  # one being worked would park that stage for the whole window (~90m;
+  # 120m in planning).
   #
   # SCOPE, stated as scope and not as an exception: this guard covers
   # acks naming a stage of the SAME task the caller passed. It is not a
@@ -9178,20 +9181,54 @@ defmodule Platform.Federation.ToolSurface do
     # when the router hasn't recorded the dispatch yet (boot race, or the
     # ack raced ahead of the arm-liveness path). The runtime_event still
     # persists and the router's own `apply_runtime_event/2` clause will
-    # call `record_ack/1` again when the PubSub broadcast arrives.
+    # call `record_ack/3` again when the PubSub broadcast arrives.
     # Task 01a007bf stage 4: match on the return so the `:not_found` is
     # visible in the log instead of vanishing into `_`. Worded as
     # "expected" — this site runs BEFORE `record_runtime_event/1`.
-    case Platform.Orchestration.LeaseManager.record_ack(task_id) do
+    #
+    # Task 01a0c762 stage 1: the ownership check takes the AUTHENTICATED
+    # caller runtime as-is — `nil` stays `nil` (fail closed), never the
+    # `"tool-surface"` display fallback used for the event row above.
+    #
+    # Task 01a0c762 stage 3: a `:not_owner` refusal returns a recoverable
+    # envelope and writes NO `execution.acked` row. The refusal is audited
+    # by LeaseManager's `[:platform, :orchestration, :ack_refused]`
+    # telemetry and warning. `:not_found` (no lease yet) still writes the
+    # row; the router's runtime-scoped readers (stage 2) ignore a row
+    # whose runtime is not the dispatched one.
+    caller_runtime_id = Map.get(context, :runtime_id)
+
+    case Platform.Orchestration.LeaseManager.record_ack(
+           task_id,
+           caller_runtime_id,
+           subagent_id
+         ) do
       :ok ->
-        :ok
+        persist_task_ack(task_id, stage_id, acked_at, attrs)
+
+      {:error, {:not_owner, owner}} ->
+        {:error, not_owner_ack_envelope(task_id, stage_id, owner, caller_runtime_id)}
 
       {:error, :not_found} ->
         Logger.warning(
-          "[ToolSurface.task_ack] task #{task_id} stage #{stage_id} — LeaseManager.record_ack/1 returned :not_found: no ETS lease armed yet (expected during the dispatch race); the durable execution.acked row is still being written. No operator action needed."
+          "[ToolSurface.task_ack] task #{task_id} stage #{stage_id} — LeaseManager.record_ack/3 returned :not_found: no ETS lease armed yet (expected during the dispatch race); the durable execution.acked row is still being written. No operator action needed."
         )
-    end
 
+        persist_task_ack(task_id, stage_id, acked_at, attrs)
+    end
+  end
+
+  defp not_owner_ack_envelope(task_id, stage_id, owner, caller_runtime_id) do
+    %{
+      error:
+        "task_id=#{task_id} stage_id=#{stage_id} is dispatched to runtime #{owner}, not #{caller_runtime_id || "an unauthenticated caller"}.",
+      recoverable: true,
+      suggestion:
+        "Ack from the runtime that received the dispatch (the caller is identified by its authenticated token, not by any argument), or have the task's phase assignee changed so the stage is re-dispatched to your runtime."
+    }
+  end
+
+  defp persist_task_ack(task_id, stage_id, acked_at, attrs) do
     case Platform.Orchestration.record_runtime_event(attrs) do
       {:ok, event} ->
         next_safety_net_at =

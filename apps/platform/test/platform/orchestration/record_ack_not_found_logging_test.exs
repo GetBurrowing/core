@@ -1,6 +1,6 @@
 defmodule Platform.Orchestration.RecordAckNotFoundLoggingTest do
   @moduledoc """
-  Task 01a007bf stage 4 — `LeaseManager.record_ack/1` returning
+  Task 01a007bf stage 4 — `LeaseManager.record_ack/1` (now `/3`) returning
   `{:error, :not_found}` used to vanish into `_ =` at both call sites. Every
   occurrence of the acked-stage no-ack bug emitted one and nobody saw it.
 
@@ -92,7 +92,10 @@ defmodule Platform.Orchestration.RecordAckNotFoundLoggingTest do
     pid
   end
 
-  defp ack!(task, stage) do
+  # Acks as the dispatched runtime (task 01a0c762): the lease only accepts
+  # the owner's ack, and the router re-applies the ack under the event's
+  # runtime_id.
+  defp ack!(task, stage, assignee) do
     {:ok, _} =
       ToolSurface.execute(
         "task_ack",
@@ -101,7 +104,7 @@ defmodule Platform.Orchestration.RecordAckNotFoundLoggingTest do
           "stage_id" => stage.id,
           "subagent_id" => "subagent-#{System.unique_integer([:positive])}"
         },
-        %{}
+        %{runtime_id: assignee.id}
       )
 
     :ok = sync_router(task.id)
@@ -115,7 +118,7 @@ defmodule Platform.Orchestration.RecordAckNotFoundLoggingTest do
       :ok = LeaseManager.clear(task.id)
       refute LeaseManager.get(task.id), "precondition: no lease row may be armed"
 
-      log = capture_log(fn -> :ok = ack!(task, stage) end)
+      log = capture_log(fn -> :ok = ack!(task, stage, assignee) end)
 
       assert log =~ @tool_surface_marker,
              "the tool_surface site must name the dispatch race: #{log}"
@@ -129,7 +132,7 @@ defmodule Platform.Orchestration.RecordAckNotFoundLoggingTest do
       _pid = boot_router!(task, assignee)
       :ok = LeaseManager.clear(task.id)
 
-      log = capture_log(fn -> :ok = ack!(task, stage) end)
+      log = capture_log(fn -> :ok = ack!(task, stage, assignee) end)
 
       assert log =~ @router_marker,
              "the router site must say the lease was erased under an acked stage: #{log}"
@@ -156,12 +159,13 @@ defmodule Platform.Orchestration.RecordAckNotFoundLoggingTest do
           task.id,
           stage.id,
           "coding",
-          DateTime.add(DateTime.utc_now(), -30, :second)
+          DateTime.add(DateTime.utc_now(), -30, :second),
+          assignee.id
         )
 
       assert LeaseManager.get(task.id), "precondition: a lease row must be armed"
 
-      log = capture_log(fn -> :ok = ack!(task, stage) end)
+      log = capture_log(fn -> :ok = ack!(task, stage, assignee) end)
 
       refute log =~ @tool_surface_marker,
              "the tool_surface site must stay silent when the lease exists: #{log}"

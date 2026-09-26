@@ -155,7 +155,7 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchCopyTest do
       # would be free and the copy half would never be reached.
       assert_dispatched!("the fixture must dispatch once before anything can be withheld")
 
-      ack!(ctx.task, ctx.stage)
+      ack!(ctx.task, ctx.stage, ctx.assignee)
 
       # ── COPY HALF: drive the real suppression so the real `post_log/2` row
       # is written. Nothing here hand-writes the expected sentence.
@@ -365,7 +365,7 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchCopyTest do
   end
 
   # The REAL ack path — the same tool call an executor makes first.
-  defp ack!(task, stage) do
+  defp ack!(task, stage, assignee) do
     {:ok, _envelope} =
       ToolSurface.execute(
         "task_ack",
@@ -374,7 +374,10 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchCopyTest do
           "stage_id" => stage.id,
           "subagent_id" => "subagent-withheld-copy-#{System.unique_integer([:positive])}"
         },
-        %{}
+        # Task 01a0c762 stage 2: ack as the DISPATCHED runtime. The router's
+        # durable-ack readers now count only the lease owner's rows; an empty
+        # context wrote `runtime_id: "tool-surface"`, which no owner matches.
+        %{runtime_id: assignee.id}
       )
 
     :ok = sync_router(task.id)

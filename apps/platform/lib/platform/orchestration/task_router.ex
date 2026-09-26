@@ -2624,7 +2624,7 @@ defmodule Platform.Orchestration.TaskRouter do
             # for this stage-instance. `arm_liveness_timers/2` no-ops on
             # manual_approval stage kinds (no timers armed at all).
             stage_kind = current_stage_type(%{state | current_stage_id: stage && stage.id})
-            arm_liveness_timers(state.task_id, stage, stage_kind)
+            arm_liveness_timers(state.task_id, stage, stage_kind, state.assignee.id)
 
             state =
               state
@@ -2751,8 +2751,12 @@ defmodule Platform.Orchestration.TaskRouter do
       LeaseManager.stage_kind_timeouts()
       |> Map.get(stage_kind, %{ack_ms: nil, safety_net_ms: nil})
 
+    # Task 01a0c762 stage 2: only the DISPATCHED runtime's ack counts.
+    # `state.assignee` is post-`refresh_assignee/2` here (see the note in
+    # `do_dispatch_resolved`), so after a reassignment this reads the NEW
+    # runtime's acks and the old owner's fresh ack withholds nothing.
     case {timeouts.safety_net_ms,
-          Platform.Orchestration.last_stage_ack_at(state.task_id, stage.id)} do
+          Platform.Orchestration.last_stage_ack_at(state.task_id, stage.id, state.assignee.id)} do
       {safety_net_ms, %DateTime{} = acked_at} when is_integer(safety_net_ms) ->
         DateTime.diff(DateTime.utc_now(), acked_at, :millisecond) < safety_net_ms and
           not finished_since?(state.task_id, stage.id, acked_at) and
@@ -2877,9 +2881,9 @@ defmodule Platform.Orchestration.TaskRouter do
   # reads Postgres via `stage_acked?/2` regardless, per ADR 0051.
   defp suppress_live_acked_executor(state, task, stage) do
     stage_kind = current_stage_type(%{state | current_stage_id: stage.id})
-    arm_liveness_timers(state.task_id, stage, stage_kind)
+    arm_liveness_timers(state.task_id, stage, stage_kind, state.assignee.id)
 
-    ack_identity = live_ack_identity(state.task_id, stage.id)
+    ack_identity = live_ack_identity(state.task_id, stage.id, state.assignee.id)
 
     Logger.info(
       "[TaskRouter] suppressed dispatch for task=#{state.task_id} stage=#{stage.id}: " <>
@@ -2924,13 +2928,18 @@ defmodule Platform.Orchestration.TaskRouter do
   # deleted between the two queries would, and a notice is never worth crashing
   # the router over, so that races to `ack: unknown` rather than to a
   # FunctionClauseError.
-  defp live_ack_identity(task_id, stage_id) do
-    case Platform.Orchestration.last_stage_ack(task_id, stage_id) do
+  #
+  # Task 01a0c762 stage 2: read through the same runtime scope the guard used,
+  # so the notice cites the ack that actually withheld the dispatch, and names
+  # the runtime next to the subagent — the runtime is the authenticated half,
+  # the subagent id is caller-asserted.
+  defp live_ack_identity(task_id, stage_id, runtime_id) do
+    case Platform.Orchestration.last_stage_ack(task_id, stage_id, runtime_id) do
       {%DateTime{} = acked_at, subagent_id} ->
         age_min = DateTime.diff(DateTime.utc_now(), acked_at, :second) |> div(60)
 
-        "acked #{DateTime.to_iso8601(acked_at)}, #{age_min}m ago, by subagent " <>
-          (subagent_id || "unknown")
+        "acked #{DateTime.to_iso8601(acked_at)}, #{age_min}m ago, by runtime " <>
+          "#{runtime_id} / subagent " <> (subagent_id || "unknown")
 
       _ ->
         "ack instant unknown, by subagent unknown"
@@ -3112,10 +3121,21 @@ defmodule Platform.Orchestration.TaskRouter do
   # whose `stage_kind_timeouts()` entry has nil ack_ms / safety_net_ms
   # (manual_approval today; disabled/unknown kinds fall through the same
   # nil path).
-  defp arm_liveness_timers(_task_id, nil, _stage_kind), do: :ok
+  #
+  # `owner_runtime_id` is the runtime this dispatch was addressed to
+  # (`state.assignee.id`); the lease only accepts acks from it (task
+  # 01a0c762).
+  defp arm_liveness_timers(_task_id, nil, _stage_kind, _owner_runtime_id), do: :ok
 
-  defp arm_liveness_timers(task_id, %Stage{} = stage, stage_kind) do
-    :ok = LeaseManager.record_dispatch(task_id, stage.id, stage_kind, DateTime.utc_now())
+  defp arm_liveness_timers(task_id, %Stage{} = stage, stage_kind, owner_runtime_id) do
+    :ok =
+      LeaseManager.record_dispatch(
+        task_id,
+        stage.id,
+        stage_kind,
+        DateTime.utc_now(),
+        owner_runtime_id
+      )
 
     timeouts =
       LeaseManager.stage_kind_timeouts()
@@ -3132,7 +3152,7 @@ defmodule Platform.Orchestration.TaskRouter do
     :ok
   end
 
-  defp arm_liveness_timers(_task_id, _other, _stage_kind), do: :ok
+  defp arm_liveness_timers(_task_id, _other, _stage_kind, _owner_runtime_id), do: :ok
 
   # Clear the LeaseManager row for the task. Pending `:check_no_ack` /
   # `:check_safety_net` timers may still fire later — their handlers
@@ -3317,8 +3337,15 @@ defmodule Platform.Orchestration.TaskRouter do
   end
 
   defp maybe_fire_no_ack(%State{} = state, task_id, lease) do
-    if durable_ack_suppresses_alarm?(task_id, lease.stage_id) do
-      LeaseManager.record_ack(task_id)
+    owner = Map.get(lease, :owner_runtime_id)
+
+    if durable_ack_suppresses_alarm?(task_id, lease.stage_id, owner) do
+      # Task 01a0c762 stage 2: the durable read above is scoped to the
+      # lease's owner, so the row that suppressed the alarm was written by
+      # that owner and re-stamping the lease in the owner's name is truthful.
+      # A lease with no owner (nil) never reaches here: the scoped read
+      # returns nil for it and the alarm fires.
+      LeaseManager.record_ack(task_id, owner)
 
       Logger.info(
         "[TaskRouter] task #{task_id} stage #{lease.stage_id} — no-ack alarm suppressed by a durable execution.acked event; re-stamping lease ack_at"
@@ -3334,8 +3361,14 @@ defmodule Platform.Orchestration.TaskRouter do
   # `last_stage_ack_at/2` is the recency twin of `stage_acked?/2` (same query
   # shape, same nil/blank-stage_id guard), so the only behavioural difference
   # from the unbounded version is the `human_released_since?/3` clause.
-  defp durable_ack_suppresses_alarm?(task_id, stage_id) do
-    case Platform.Orchestration.last_stage_ack_at(task_id, stage_id) do
+  #
+  # Task 01a0c762 stage 2: scoped to the lease owner's acks. Any
+  # authenticated runtime can write an `execution.acked` row naming any
+  # stage (`RuntimeChannel` `execution_event`), so an unscoped read let a
+  # non-owner's row both silence this alarm and, via the re-stamp in
+  # `maybe_fire_no_ack/3`, extend the owner's safety net.
+  defp durable_ack_suppresses_alarm?(task_id, stage_id, owner_runtime_id) do
+    case Platform.Orchestration.last_stage_ack_at(task_id, stage_id, owner_runtime_id) do
       %DateTime{} = acked_at -> not human_released_since?(task_id, stage_id, acked_at)
       _ -> false
     end
@@ -3714,22 +3747,44 @@ defmodule Platform.Orchestration.TaskRouter do
         # tool_surface site, a `:not_found` HERE is not the dispatch race —
         # the durable ack already landed, so a missing ETS row means the
         # lease was cleared out from under an acked stage.
-        case LeaseManager.record_ack(state.task_id) do
-          :ok ->
-            :ok
+        # Task 01a0c762 stage 1: the event's `runtime_id` is the acking
+        # runtime (forced from authenticated state by both transports).
+        subagent_id =
+          case event do
+            %{payload: %{"subagent_id" => sid}} -> sid
+            _ -> nil
+          end
 
-          {:error, :not_found} ->
+        case LeaseManager.record_ack(state.task_id, event.runtime_id, subagent_id) do
+          {:error, {:not_owner, owner}} ->
+            # Task 01a0c762 stage 2. A refused ack is not evidence that
+            # anyone is working the stage, so it must not flip `status` to
+            # `:running` either — return `base_state` untouched by this
+            # event. KNOWN LEFTOVER, out of scope: `maybe_reset_stalled/1`
+            # above runs on EVERY event from any runtime and can still move
+            # a `:stalled` router to `:running` on this same event.
             Logger.warning(
-              "[TaskRouter] task #{state.task_id} stage #{acked_stage_id(event, state)} — LeaseManager.record_ack/1 returned :not_found on execution.acked: ETS lease row missing for an acked stage — the lease was cleared between dispatch and ack. The no-ack countdown is no longer tracked for this stage; check for a stage transition or a LeaseManager restart in between."
+              "[TaskRouter] task #{state.task_id} stage #{acked_stage_id(event, state)} — " <>
+                "execution.acked from runtime #{inspect(event.runtime_id)} refused: the " <>
+                "lease is owned by runtime #{inspect(owner)}. Not treating it as liveness."
             )
-        end
 
-        if still_awaiting_human?(base_state) do
-          base_state
-          |> clear_liveness()
-          |> Map.put(:status, :waiting_human)
-        else
-          %{base_state | status: :running}
+            base_state
+
+          result ->
+            if result == {:error, :not_found} do
+              Logger.warning(
+                "[TaskRouter] task #{state.task_id} stage #{acked_stage_id(event, state)} — LeaseManager.record_ack/3 returned :not_found on execution.acked: ETS lease row missing for an acked stage — the lease was cleared between dispatch and ack. The no-ack countdown is no longer tracked for this stage; check for a stage transition or a LeaseManager restart in between."
+              )
+            end
+
+            if still_awaiting_human?(base_state) do
+              base_state
+              |> clear_liveness()
+              |> Map.put(:status, :waiting_human)
+            else
+              %{base_state | status: :running}
+            end
         end
 
       type

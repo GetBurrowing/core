@@ -172,7 +172,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
   # lease, and broadcasts — the same call an executor makes as its first tool
   # call. Asserting on both stores here means a later refutation cannot pass
   # because the ack quietly failed to record.
-  defp ack!(task, stage) do
+  defp ack!(task, stage, assignee) do
     {:ok, _envelope} =
       ToolSurface.execute(
         "task_ack",
@@ -181,7 +181,10 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
           "stage_id" => stage.id,
           "subagent_id" => "subagent-live-ack-#{System.unique_integer([:positive])}"
         },
-        %{}
+        # Task 01a0c762 stage 2: ack as the DISPATCHED runtime. The router's
+        # durable-ack readers now count only the lease owner's rows; an empty
+        # context wrote `runtime_id: "tool-surface"`, which no owner matches.
+        %{runtime_id: assignee.id}
       )
 
     :ok = sync_router(task.id)
@@ -232,7 +235,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
       start_router(task.id, assignee)
       assert_dispatched!("the fixture must dispatch once before anything can be withheld")
 
-      ack!(task, stage)
+      ack!(task, stage, assignee)
 
       # 2. The reported incident: the router stops and a NEW process boots.
       #    `terminate/2` clears the ETS lease on the way out, so the restarted
@@ -278,7 +281,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
       pid = start_router(task.id, assignee)
       assert_dispatched!("the fixture must dispatch once before anything can be withheld")
 
-      ack!(task, stage)
+      ack!(task, stage, assignee)
 
       send(pid, :dispatch)
       :ok = sync_router(task.id)
@@ -360,7 +363,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
       pid = start_router(task.id, assignee)
       assert_dispatched!()
 
-      ack!(task, stage)
+      ack!(task, stage, assignee)
 
       # The subagent exits. Its ack is still well inside the safety-net window,
       # so ONLY the finished event distinguishes this from the withheld case
@@ -410,7 +413,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
       pid = start_router(task.id, assignee)
       assert_dispatched!()
 
-      ack!(task, stage)
+      ack!(task, stage, assignee)
 
       # POSITIVE CONTROL ON THIS FIXTURE. Before varying anything, show the
       # guard is actively suppressing here — otherwise the assertion at the
@@ -480,7 +483,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
       pid = start_router(task.id, assignee)
       assert_dispatched!()
 
-      ack!(task, stage)
+      ack!(task, stage, assignee)
 
       send(pid, :dispatch)
       :ok = sync_router(task.id)

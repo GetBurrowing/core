@@ -35,17 +35,43 @@ defmodule Platform.Orchestration.LeaseManager do
         no_ack_at: DateTime.t() | nil,       # nil = no-ack disabled OR ack received
         no_ack_fired?: boolean(),
         safety_net_fired?: boolean(),
-        silenced_until: DateTime.t() | nil   # nil = no silence; DateTime = suppress :check_no_ack until this instant
+        silenced_until: DateTime.t() | nil,  # nil = no silence; DateTime = suppress :check_no_ack until this instant
+        owner_runtime_id: binary(),          # AgentRuntime runtime_id this stage-instance was dispatched to
+        ack_runtime_id: binary() | nil,      # runtime_id of the caller whose ack was ACCEPTED (always the owner)
+        ack_subagent_id: binary() | nil      # caller-asserted subagent handle of that ack; audit only, never verified
       }
+
+  ## Ack ownership (task 01a0c762 stage 1)
+
+  A lease belongs to the runtime it was dispatched to
+  (`owner_runtime_id`). `record_ack/3` accepts an ack only from that
+  runtime: a non-owner or `nil` caller gets
+  `{:error, {:not_owner, owner_runtime_id}}` and the row is left
+  exactly as it was. Before this, any caller holding a `task_id`
+  could extend the safety net of a stage nobody was working, which
+  bought a false liveness window of 90 to 120 minutes that ended
+  parked on a human.
+
+  The ownership key is the AgentRuntime `runtime_id`, which both
+  federation transports stamp from authenticated state. `subagent_id`
+  is caller-asserted and is recorded (`ack_subagent_id`) for audit
+  only; it takes no part in the ownership decision.
+
+  A same-stage dispatch to a DIFFERENT owner (reassignment) is not a
+  re-dispatch: it builds a fresh row for the new owner. The old
+  owner's ack says nothing about the new owner's pickup.
 
   ## Dispatch vs. re-dispatch (task 019fa469 stage 6)
 
-  `record_dispatch/4` is keyed on `stage_id`, not on "a dispatch
-  happened":
+  `record_dispatch/5` is keyed on `stage_id` and owner, not on "a
+  dispatch happened":
 
     * **New stage** (no row, or the row's `stage_id` differs) — build a
       fresh zero-ack row. A stage transition really has not been acked.
-    * **Same stage** (the row's `stage_id` matches) — this is a
+    * **Same stage, different owner** (reassignment, task 01a0c762) —
+      build a fresh zero-ack row for the new owner.
+    * **Same stage, same owner** (the row's `stage_id` and
+      `owner_runtime_id` both match) — this is a
       RE-dispatch: the same prompt delivered twice. Preserve `ack_at`,
       `last_progress_at`, `dispatched_at`, `no_ack_fired?`,
       `safety_net_fired?` and `silenced_until`; extend `safety_net_at`;
@@ -55,7 +81,7 @@ defmodule Platform.Orchestration.LeaseManager do
   `ack_at: nil` and a fresh countdown, so a duplicate `task_assigned`
   erased an ack that had already landed and re-armed the no-ack alarm
   against a live agent. The module's own docs already described the
-  stage-transition semantics (see `record_ack/1` and the "Silence dies
+  stage-transition semantics (see `record_ack/3` and the "Silence dies
   with the row" note below, both of which say *subsequent stage*); only
   the implementation applied them to every dispatch.
 
@@ -70,7 +96,7 @@ defmodule Platform.Orchestration.LeaseManager do
   alarm — used by the `alarm_silence` MCP tool (task 019f6791-c01b stage 3)
   when a subagent's MCP client cache lacks `task_ack`. Sets `silenced_until`
   to an absolute future timestamp (capped at `now + 24h`). Orthogonal to
-  `ack_at` — `record_ack/1` does NOT clear the silence, and `silence/3`
+  `ack_at` — `record_ack/3` does NOT clear the silence, and `silence/3`
   does NOT clear ack state. `clear/1` deletes the row so a stage
   transition ends any silence by side effect. Consumers (the router in
   task 019f6791-c01b stage 2) check `silenced_until` when a
@@ -96,6 +122,8 @@ defmodule Platform.Orchestration.LeaseManager do
   """
 
   use GenServer
+
+  require Logger
 
   @table :orchestration_lease_manager
 
@@ -130,7 +158,7 @@ defmodule Platform.Orchestration.LeaseManager do
   init so reads from any process are lock-free. Booted from
   `Platform.Application`'s child list BEFORE
   `Platform.Orchestration.TaskRouterSupervisor` — routers must be
-  able to call `record_dispatch/4` at boot without racing the table.
+  able to call `record_dispatch/5` at boot without racing the table.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -168,15 +196,21 @@ defmodule Platform.Orchestration.LeaseManager do
   def stage_kind_timeouts, do: @stage_kind_timeouts
 
   @doc """
-  Record a dispatch for `task_id` on `stage_id`.
+  Record a dispatch for `task_id` on `stage_id` to the runtime
+  `owner_runtime_id` (the AgentRuntime `runtime_id` the router
+  addressed the dispatch to).
 
   When no lease exists, or the existing lease is for a DIFFERENT
   stage (a real stage transition), writes a zero-ack, zero-progress
   row with `safety_net_at` / `no_ack_at` computed from
   `dispatched_at` + the stage-kind timeouts.
 
-  When the existing lease is for the SAME stage, this is a
-  re-dispatch: ack / progress / fired / silence state is preserved,
+  When the existing lease is for the same stage but a DIFFERENT
+  owner (reassignment), a fresh row is written for the new owner:
+  `ack_at` nil, no-ack re-armed from `dispatched_at`, no silence.
+
+  When the existing lease is for the SAME stage and the SAME owner,
+  this is a re-dispatch: ack / progress / fired / silence state is preserved,
   `safety_net_at` is extended, and `no_ack_at` is left on its
   original deadline (or nil'd when an ack already landed). See
   "Dispatch vs. re-dispatch" in the moduledoc for why.
@@ -185,17 +219,34 @@ defmodule Platform.Orchestration.LeaseManager do
   timeouts are stored as `nil` — the router uses that as its signal
   to skip arming the corresponding timer.
   """
-  @spec record_dispatch(binary(), binary(), binary(), DateTime.t()) :: :ok
-  def record_dispatch(task_id, stage_id, stage_kind, %DateTime{} = dispatched_at)
-      when is_binary(task_id) and is_binary(stage_id) and is_binary(stage_kind) do
+  @spec record_dispatch(binary(), binary(), binary(), DateTime.t(), binary()) :: :ok
+  def record_dispatch(
+        task_id,
+        stage_id,
+        stage_kind,
+        %DateTime{} = dispatched_at,
+        owner_runtime_id
+      )
+      when is_binary(task_id) and is_binary(stage_id) and is_binary(stage_kind) and
+             is_binary(owner_runtime_id) do
     GenServer.call(
       __MODULE__,
-      {:record_dispatch, task_id, stage_id, stage_kind, dispatched_at}
+      {:record_dispatch, task_id, stage_id, stage_kind, dispatched_at, owner_runtime_id}
     )
   end
 
   @doc """
-  Record that the executor/reviewer acked the dispatch. Sets
+  Record that the executor/reviewer acked the dispatch.
+
+  `caller_runtime_id` is the AUTHENTICATED runtime making the ack. It
+  must equal the lease's `owner_runtime_id`; otherwise (including
+  `nil` or a non-binary caller — fail closed) the call returns
+  `{:error, {:not_owner, owner_runtime_id}}`, leaves the ETS row
+  unchanged, emits `[:platform, :orchestration, :ack_refused]`
+  telemetry and logs one warning. `subagent_id` is recorded as
+  `ack_subagent_id` for audit only.
+
+  On an owner ack: stamps `ack_runtime_id` / `ack_subagent_id`, sets
   `ack_at: now`, clears `no_ack_at` (nil) and resets
   `no_ack_fired?` (false) so a re-dispatch on the same task later can
   arm fresh timers, and extends `safety_net_at` to `now +
@@ -206,9 +257,10 @@ defmodule Platform.Orchestration.LeaseManager do
   (the `task_ack` MCP tool in stage 5) treat this as a soft failure —
   belt-and-braces write that races the router boot.
   """
-  @spec record_ack(binary()) :: :ok | {:error, :not_found}
-  def record_ack(task_id) when is_binary(task_id) do
-    GenServer.call(__MODULE__, {:record_ack, task_id})
+  @spec record_ack(binary(), binary() | nil, binary() | nil) ::
+          :ok | {:error, :not_found} | {:error, {:not_owner, binary() | nil}}
+  def record_ack(task_id, caller_runtime_id, subagent_id \\ nil) when is_binary(task_id) do
+    GenServer.call(__MODULE__, {:record_ack, task_id, caller_runtime_id, subagent_id})
   end
 
   @doc """
@@ -228,13 +280,13 @@ defmodule Platform.Orchestration.LeaseManager do
     * `reason` (>= 8 char binary at the MCP boundary — this module
       accepts any binary) is not persisted in the lease itself; the
       caller emits an audit runtime_event alongside for durability.
-    * Silence is orthogonal to `ack_at`. `record_ack/1` does NOT
+    * Silence is orthogonal to `ack_at`. `record_ack/3` does NOT
       clear `silenced_until` (an ack is progress, silence is an
       operator override — different lifecycles). Re-silencing on a
       row that already has a `silenced_until` overwrites the
       timestamp.
     * Silence dies with the row: `clear/1` deletes the lease and
-      `record_dispatch/4` on a subsequent stage builds a fresh
+      `record_dispatch/5` on a subsequent stage builds a fresh
       `silenced_until: nil` row. Silence never leaks across stage
       transitions.
 
@@ -306,7 +358,7 @@ defmodule Platform.Orchestration.LeaseManager do
 
   @doc """
   Delete the lease row for `task_id`. Called on stage transition
-  (router upgrades to a new lease via `record_dispatch/4` on the
+  (router upgrades to a new lease via `record_dispatch/5` on the
   next dispatch, but explicit `clear/1` between stages is cleaner)
   or router termination. Idempotent — `:ok` whether or not a row
   existed.
@@ -324,7 +376,7 @@ defmodule Platform.Orchestration.LeaseManager do
 
   @impl true
   def handle_call(
-        {:record_dispatch, task_id, stage_id, stage_kind, dispatched_at},
+        {:record_dispatch, task_id, stage_id, stage_kind, dispatched_at, owner_runtime_id},
         _from,
         state
       ) do
@@ -333,11 +385,16 @@ defmodule Platform.Orchestration.LeaseManager do
 
     lease =
       case direct_get(task_id) do
-        %{stage_id: ^stage_id} = existing ->
+        # Same stage, same owner: a duplicate delivery (019fa469 stage 6).
+        %{stage_id: ^stage_id, owner_runtime_id: ^owner_runtime_id} = existing ->
           redispatch_lease(existing, stage_kind, dispatched_at, timeouts)
 
+        # New stage, OR same stage reassigned to a different owner
+        # (task 01a0c762). Reusing the old row on a reassignment would
+        # let the new owner inherit the old owner's ack, i.e. a dead
+        # runtime's liveness.
         _ ->
-          fresh_lease(stage_id, stage_kind, dispatched_at, timeouts)
+          fresh_lease(stage_id, stage_kind, dispatched_at, timeouts, owner_runtime_id)
       end
 
     :ets.insert(@table, {task_id, lease})
@@ -365,18 +422,34 @@ defmodule Platform.Orchestration.LeaseManager do
     {:reply, reply, state}
   end
 
-  def handle_call({:record_ack, task_id}, _from, state) do
+  def handle_call({:record_ack, task_id, caller_runtime_id, subagent_id}, _from, state) do
     reply =
-      update_lease(task_id, fn lease ->
-        now = DateTime.utc_now()
-        timeouts = timeouts_for(lease.stage_kind)
+      case direct_get(task_id) do
+        nil ->
+          {:error, :not_found}
 
-        lease
-        |> Map.put(:ack_at, now)
-        |> Map.put(:no_ack_at, nil)
-        |> Map.put(:no_ack_fired?, false)
-        |> Map.put(:safety_net_at, maybe_add(now, timeouts.safety_net_ms))
-      end)
+        lease ->
+          owner = Map.get(lease, :owner_runtime_id)
+
+          if owner_ack?(caller_runtime_id, owner) do
+            now = DateTime.utc_now()
+            timeouts = timeouts_for(lease.stage_kind)
+
+            updated =
+              lease
+              |> Map.put(:ack_at, now)
+              |> Map.put(:no_ack_at, nil)
+              |> Map.put(:no_ack_fired?, false)
+              |> Map.put(:safety_net_at, maybe_add(now, timeouts.safety_net_ms))
+              |> Map.put(:ack_runtime_id, caller_runtime_id)
+              |> Map.put(:ack_subagent_id, subagent_id)
+
+            :ets.update_element(@table, task_id, {@item_pos, updated})
+            :ok
+          else
+            refuse_ack(task_id, lease, caller_runtime_id, owner)
+          end
+      end
 
     {:reply, reply, state}
   end
@@ -447,7 +520,7 @@ defmodule Platform.Orchestration.LeaseManager do
   # `record_dispatch/4` has always written, and stage transitions must
   # keep getting exactly it: a new stage really has not been acked, and
   # its no-ack countdown really does start now.
-  defp fresh_lease(stage_id, stage_kind, dispatched_at, timeouts) do
+  defp fresh_lease(stage_id, stage_kind, dispatched_at, timeouts, owner_runtime_id) do
     %{
       stage_id: stage_id,
       stage_kind: stage_kind,
@@ -458,8 +531,41 @@ defmodule Platform.Orchestration.LeaseManager do
       no_ack_at: maybe_add(dispatched_at, timeouts.ack_ms),
       no_ack_fired?: false,
       safety_net_fired?: false,
-      silenced_until: nil
+      silenced_until: nil,
+      owner_runtime_id: owner_runtime_id,
+      ack_runtime_id: nil,
+      ack_subagent_id: nil
     }
+  end
+
+  # Fail closed: only a binary caller equal to a binary owner is the
+  # owner. `nil == nil` (an ownerless row and a caller with no
+  # authenticated runtime) must NOT count as a match.
+  defp owner_ack?(caller, owner) when is_binary(caller) and is_binary(owner),
+    do: caller == owner
+
+  defp owner_ack?(_caller, _owner), do: false
+
+  # A refused ack writes NOTHING to the row: no ack_at, no
+  # safety_net_at, no no_ack change. The audit trail is the telemetry
+  # event and the warning, never the lease.
+  defp refuse_ack(task_id, lease, caller_runtime_id, owner) do
+    :telemetry.execute(
+      [:platform, :orchestration, :ack_refused],
+      %{count: 1},
+      %{
+        task_id: task_id,
+        stage_id: lease.stage_id,
+        caller_runtime_id: caller_runtime_id,
+        owner_runtime_id: owner
+      }
+    )
+
+    Logger.warning(
+      "[LeaseManager] task #{task_id} stage #{lease.stage_id} — ack refused: caller runtime #{inspect(caller_runtime_id)} is not the lease owner #{inspect(owner)}. Lease left unchanged."
+    )
+
+    {:error, {:not_owner, owner}}
   end
 
   # A re-dispatch of the stage this task is ALREADY leasing (task
@@ -512,7 +618,7 @@ defmodule Platform.Orchestration.LeaseManager do
   # branch.
 
   # Already acked → no-ack is settled for this stage-instance; nil the
-  # deadline exactly as `record_ack/1` does and leave the clock where it is.
+  # deadline exactly as `record_ack/3` does and leave the clock where it is.
   defp redispatch_no_ack(%{ack_at: %DateTime{}} = existing, _redispatched_at, _timeouts) do
     {existing.dispatched_at, nil}
   end

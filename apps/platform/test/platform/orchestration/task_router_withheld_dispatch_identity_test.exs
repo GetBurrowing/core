@@ -130,7 +130,7 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
       # withheld and every assertion below reads an absent row.
       assert_dispatched!("the fixture must dispatch once before anything can be withheld")
 
-      subagent_id = ack!(ctx.task, ctx.stage)
+      subagent_id = ack!(ctx.task, ctx.stage, ctx.assignee)
 
       # 25 minutes: inside `coding`'s 90-minute net (so the guard still
       # suppresses), and far enough from zero that a renderer emitting a
@@ -172,6 +172,17 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
              #{posted}
              """
 
+      # Task 01a0c762 stage 2: the runtime is the AUTHENTICATED half of the
+      # identity (the subagent id is caller-asserted), and the guard now
+      # counts only this runtime's acks, so the notice names it.
+      assert posted =~ "by runtime #{ctx.assignee.id} / subagent #{subagent_id}",
+             """
+             The notice does not name the acking runtime next to the subagent.
+
+             Posted message was:
+             #{posted}
+             """
+
       assert posted =~ ~r/\b25m ago\b/,
              """
              The notice does not name the ack's elapsed age. The ack was aged to \
@@ -195,7 +206,7 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
       pid = start_router(ctx.task.id, ctx.assignee)
       assert_dispatched!("the fixture must dispatch once before anything can be withheld")
 
-      ack!(ctx.task, ctx.stage)
+      ack!(ctx.task, ctx.stage, ctx.assignee)
       strip_subagent_id!(ctx.task.id, ctx.stage.id)
 
       {acked_at, read_back_subagent} = Orchestration.last_stage_ack(ctx.task.id, ctx.stage.id)
@@ -317,14 +328,17 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
 
   # The REAL ack path — the same tool call an executor makes first. Returns the
   # handle it recorded so the notice can be checked against it.
-  defp ack!(task, stage) do
+  defp ack!(task, stage, assignee) do
     subagent_id = "subagent-withheld-identity-#{System.unique_integer([:positive])}"
 
     {:ok, _envelope} =
       ToolSurface.execute(
         "task_ack",
         %{"task_id" => task.id, "stage_id" => stage.id, "subagent_id" => subagent_id},
-        %{}
+        # Task 01a0c762 stage 2: ack as the DISPATCHED runtime. The router's
+        # durable-ack readers now count only the lease owner's rows; an empty
+        # context wrote `runtime_id: "tool-surface"`, which no owner matches.
+        %{runtime_id: assignee.id}
       )
 
     :ok = sync_router(task.id)

@@ -115,6 +115,11 @@ defmodule Platform.Orchestration do
   resolves to the newer row (ids are UUIDv7, monotonic in time). Shares
   `stage_acked?/2`'s deliberately un-indexed query shape — see that function's
   cost note before adding an index for this.
+
+  UNSCOPED: counts an ack from ANY runtime. Since task `01a0c762` stage 2 no
+  `TaskRouter` decision reads this form — the dispatch guard and the no-ack
+  alarm use `last_stage_ack_at/3`, scoped to the dispatched runtime. Reach for
+  `/3` for anything that decides; this form is for "did anyone ack at all".
   """
   @spec last_stage_ack_at(String.t(), String.t() | nil) :: DateTime.t() | nil
   def last_stage_ack_at(task_id, stage_id),
@@ -149,7 +154,57 @@ defmodule Platform.Orchestration do
   @spec last_stage_ack(String.t(), String.t() | nil) :: {DateTime.t(), String.t() | nil} | nil
   def last_stage_ack(_task_id, stage_id) when stage_id in [nil, ""], do: nil
 
-  def last_stage_ack(task_id, stage_id) when is_binary(task_id) and is_binary(stage_id) do
+  def last_stage_ack(task_id, stage_id) when is_binary(task_id) and is_binary(stage_id),
+    do: do_last_stage_ack(task_id, stage_id, :any_runtime)
+
+  def last_stage_ack(_task_id, _stage_id), do: nil
+
+  @doc """
+  `last_stage_ack/2` scoped to the acks ONE runtime wrote, or `nil`.
+
+  Task `01a0c762` stage 2. The `/2` form answers "did anybody ack this stage",
+  and every router decision that reads it is really asking "did the runtime the
+  stage was DISPATCHED to ack it". Those differ whenever a row was written by
+  someone else: `RuntimeChannel`'s `execution_event` handler lets any
+  authenticated runtime write an `execution.acked` row naming any `stage_id`
+  (it forces only `runtime_id` to the sender's own), and after a reassignment
+  the previous owner's fresh ack is a real row about the wrong runtime.
+
+  Filters on the `runtime_events.runtime_id` COLUMN — the value both federation
+  transports stamp from authenticated state and `ToolSurface.emit_task_ack/4`
+  writes — never on the caller-asserted payload. Same nil/blank `stage_id`
+  guard as the `/2` form. A nil, blank or non-binary `runtime_id` returns `nil`:
+  "no owner is known" must never widen back to "anyone's ack counts".
+  """
+  @spec last_stage_ack(String.t(), String.t() | nil, String.t() | nil) ::
+          {DateTime.t(), String.t() | nil} | nil
+  def last_stage_ack(_task_id, stage_id, _runtime_id) when stage_id in [nil, ""], do: nil
+  def last_stage_ack(_task_id, _stage_id, runtime_id) when runtime_id in [nil, ""], do: nil
+
+  def last_stage_ack(task_id, stage_id, runtime_id)
+      when is_binary(task_id) and is_binary(stage_id) and is_binary(runtime_id),
+      do: do_last_stage_ack(task_id, stage_id, runtime_id)
+
+  def last_stage_ack(_task_id, _stage_id, _runtime_id), do: nil
+
+  @doc """
+  `last_stage_ack_at/2` scoped to one runtime's acks: the `occurred_at` of the
+  newest `execution.acked` row for the stage whose `runtime_id` column equals
+  `runtime_id`, or `nil`. See `last_stage_ack/3` for why the scope exists and
+  for the nil/blank guards, which are identical.
+  """
+  @spec last_stage_ack_at(String.t(), String.t() | nil, String.t() | nil) :: DateTime.t() | nil
+  def last_stage_ack_at(task_id, stage_id, runtime_id) do
+    case last_stage_ack(task_id, stage_id, runtime_id) do
+      {%DateTime{} = acked_at, _subagent_id} -> acked_at
+      _ -> nil
+    end
+  end
+
+  # One query for both the scoped and unscoped forms, so the two cannot drift
+  # apart in ordering or stage matching. `:any_runtime` is an atom precisely so
+  # it can never collide with a runtime_id string.
+  defp do_last_stage_ack(task_id, stage_id, runtime_scope) do
     from(e in RuntimeEvent,
       where:
         e.task_id == ^task_id and e.event_type == "execution.acked" and
@@ -158,10 +213,14 @@ defmodule Platform.Orchestration do
       limit: 1,
       select: {e.occurred_at, fragment("?->>'subagent_id'", e.payload)}
     )
+    |> scope_ack_runtime(runtime_scope)
     |> Repo.one()
   end
 
-  def last_stage_ack(_task_id, _stage_id), do: nil
+  defp scope_ack_runtime(query, :any_runtime), do: query
+
+  defp scope_ack_runtime(query, runtime_id) when is_binary(runtime_id),
+    do: from(e in query, where: e.runtime_id == ^runtime_id)
 
   @doc """
   When a stage last emitted `event_type`, from the durable `runtime_events` log.

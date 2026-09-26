@@ -149,7 +149,7 @@ defmodule Platform.Federation.StagelessDispatchMcpSurfaceTest do
 
       # The stage was acked moments ago by an executor still inside its safety
       # net, so the router withholds the frame.
-      insert_ack(task.id, stage.id)
+      insert_ack(task.id, stage.id, runtime_id)
 
       watch_suppressions!(runtime_id)
 
@@ -249,11 +249,14 @@ defmodule Platform.Federation.StagelessDispatchMcpSurfaceTest do
     %{task: task, stage: stage}
   end
 
-  defp insert_ack(task_id, stage_id) do
+  # Task 01a0c762 stage 2: the ack is written in the DISPATCHED runtime's
+  # name. The router's live-acked guard now counts only the lease owner's
+  # rows, so a fixed `"runtime-acked-executor"` would suppress nothing.
+  defp insert_ack(task_id, stage_id, runtime_id) do
     Repo.insert!(%RuntimeEvent{
       task_id: task_id,
       event_type: "execution.acked",
-      runtime_id: "runtime-acked-executor",
+      runtime_id: runtime_id,
       phase: "execution",
       occurred_at: DateTime.utc_now(),
       # NOT NULL on `runtime_events`; the production writer derives it, and a

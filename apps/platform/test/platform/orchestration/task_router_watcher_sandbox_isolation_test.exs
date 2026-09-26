@@ -713,7 +713,13 @@ defmodule Platform.Orchestration.TaskRouterWatcherSandboxIsolationTest do
 
   defp seed_lease!(task_id) do
     :ok =
-      LeaseManager.record_dispatch(task_id, UUIDv7.generate(), "coding", DateTime.utc_now())
+      LeaseManager.record_dispatch(
+        task_id,
+        UUIDv7.generate(),
+        "coding",
+        DateTime.utc_now(),
+        "runtime-isolation-owner"
+      )
 
     on_exit(fn -> LeaseManager.clear(task_id) end)
 

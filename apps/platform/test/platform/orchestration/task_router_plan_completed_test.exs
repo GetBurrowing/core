@@ -152,7 +152,14 @@ defmodule Platform.Orchestration.TaskRouterPlanCompletedTest do
       %{task: task, plan: plan, stage: stage} = settled_plan_task(project)
       start_router!(task)
 
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "test_pass", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(
+          task.id,
+          stage.id,
+          "test_pass",
+          DateTime.utc_now(),
+          "runtime-plan-completed-owner"
+        )
 
       assert LeaseManager.get(task.id)
 

@@ -1,6 +1,6 @@
 defmodule Platform.Orchestration.LeaseManagerRedispatchTest do
   @moduledoc """
-  `record_dispatch/4` must distinguish a stage TRANSITION from a
+  `record_dispatch/5` must distinguish a stage TRANSITION from a
   RE-dispatch of the stage already being leased (task 019fa469 stage 6).
 
   Before this distinction existed, every dispatch rebuilt the ETS row
@@ -17,7 +17,7 @@ defmodule Platform.Orchestration.LeaseManagerRedispatchTest do
     * acked vs. never acked
 
   The never-acked halves are the load-bearing ones. A change that made
-  `record_dispatch/4` preserve everything unconditionally would satisfy
+  `record_dispatch/5` preserve everything unconditionally would satisfy
   the "ack survives" assertions perfectly while disabling the detector,
   so every preservation assertion is paired with one proving the alarm
   still has a deadline to fire on.
@@ -32,6 +32,11 @@ defmodule Platform.Orchestration.LeaseManagerRedispatchTest do
 
   @ack_ms LeaseManager.stage_kind_timeouts()["coding"].ack_ms
   @safety_net_ms LeaseManager.stage_kind_timeouts()["coding"].safety_net_ms
+
+  # Task 01a0c762: every dispatch here goes to ONE owner, so these cases
+  # keep exercising the same-owner re-dispatch path they always pinned.
+  # The different-owner path lives in `lease_manager_ack_ownership_test.exs`.
+  @owner "runtime-redispatch-test"
 
   setup do
     on_exit(fn ->
@@ -53,7 +58,7 @@ defmodule Platform.Orchestration.LeaseManagerRedispatchTest do
   defp dispatch(task_id, stage_id, opts \\ []) do
     at = Keyword.get(opts, :at, DateTime.utc_now())
     kind = Keyword.get(opts, :kind, "coding")
-    :ok = LeaseManager.record_dispatch(task_id, stage_id, kind, at)
+    :ok = LeaseManager.record_dispatch(task_id, stage_id, kind, at, @owner)
     at
   end
 
@@ -63,7 +68,7 @@ defmodule Platform.Orchestration.LeaseManagerRedispatchTest do
       stage_a: stage_a
     } do
       dispatch(task_id, stage_a)
-      :ok = LeaseManager.record_ack(task_id)
+      :ok = LeaseManager.record_ack(task_id, @owner)
 
       %{ack_at: %DateTime{} = original_ack} = LeaseManager.get(task_id)
 
@@ -213,7 +218,7 @@ defmodule Platform.Orchestration.LeaseManagerRedispatchTest do
       stage_b: stage_b
     } do
       dispatch(task_id, stage_a)
-      :ok = LeaseManager.record_ack(task_id)
+      :ok = LeaseManager.record_ack(task_id, @owner)
       assert %{ack_at: %DateTime{}} = LeaseManager.get(task_id)
 
       t1 = DateTime.utc_now()
@@ -309,7 +314,7 @@ defmodule Platform.Orchestration.LeaseManagerRedispatchTest do
       # restart dropping the table's owner, leaves no row to carry ack
       # state forward from. The stage_id match cannot resurrect it.
       dispatch(task_id, stage_a)
-      :ok = LeaseManager.record_ack(task_id)
+      :ok = LeaseManager.record_ack(task_id, @owner)
       :ok = LeaseManager.clear(task_id)
 
       dispatch(task_id, stage_a)

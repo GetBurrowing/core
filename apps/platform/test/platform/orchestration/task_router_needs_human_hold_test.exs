@@ -605,7 +605,10 @@ defmodule Platform.Orchestration.TaskRouterNeedsHumanHoldTest do
           "stage_id" => ctx.stage.id,
           "subagent_id" => "subagent-needs-human-#{System.unique_integer([:positive])}"
         },
-        %{}
+        # Task 01a0c762 stage 2: ack as the DISPATCHED runtime. The router's
+        # durable-ack readers now count only the lease owner's rows; an empty
+        # context wrote `runtime_id: "tool-surface"`, which no owner matches.
+        %{runtime_id: ctx.assignee.id}
       )
 
     :ok = sync_router(ctx.task.id)

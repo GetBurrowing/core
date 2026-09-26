@@ -167,9 +167,11 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
   end
 
   # The REAL ack: the `task_ack` MCP tool. Writes the durable
-  # `execution.acked` runtime_event AND calls `LeaseManager.record_ack/1`,
+  # `execution.acked` runtime_event AND calls `LeaseManager.record_ack/3`,
   # then broadcasts so the router's own `apply_runtime_event/2` clause runs.
-  defp ack_via_tool!(task, stage) do
+  # Acks as the dispatched runtime (`assignee.id`), the only caller the lease
+  # accepts since task 01a0c762.
+  defp ack_via_tool!(task, stage, assignee) do
     {:ok, _envelope} =
       ToolSurface.execute(
         "task_ack",
@@ -178,7 +180,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
           "stage_id" => stage.id,
           "subagent_id" => "subagent-acked-#{System.unique_integer([:positive])}"
         },
-        %{}
+        %{runtime_id: assignee.id}
       )
 
     :ok = sync_router(task.id)
@@ -298,7 +300,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       pid = boot_router!(task, assignee)
       assert %{ack_at: nil, no_ack_at: %DateTime{}} = LeaseManager.get(task.id)
 
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
 
       space = ExecutionSpace.find_by_task_id(task.id)
 
@@ -390,7 +392,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       {:ok, _} = Tasks.create_validation(%{stage_id: next_stage.id, kind: "test_pass"})
 
       pid = boot_router!(task, assignee)
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
 
       space = ExecutionSpace.find_by_task_id(task.id)
 
@@ -435,7 +437,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assignee: assignee
     } do
       pid = boot_router!(task, assignee)
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
 
       # Real terminal-ish runtime event. `apply_runtime_event/2`'s
       # `"execution.finished"` clause calls `clear_liveness/1`.
@@ -481,7 +483,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assignee: assignee
     } do
       pid = boot_router!(task, assignee)
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
 
       # Wholesale ETS wipe — not a `clear_liveness/1` code path but the state
       # a LeaseManager restart (or any of its ~15 callers) leaves behind. The
@@ -491,7 +493,8 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assert Orchestration.stage_acked?(task.id, stage.id)
 
       # A fresh dispatch arms a lease that has never seen an ack.
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now(), assignee.id)
 
       expire_no_ack_deadline!(task.id)
       :ok = refute_alarm_and_assert_restamped!(pid, task.id)
@@ -531,11 +534,12 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assignee: assignee
     } do
       pid = boot_router!(task, assignee)
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
 
       # `redispatch_lease/4` (lease_manager.ex ~:498, the 2026-07-27 fix)
       # preserves the ack across a same-stage re-dispatch.
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now())
+      :ok =
+        LeaseManager.record_dispatch(task.id, stage.id, "coding", DateTime.utc_now(), assignee.id)
 
       assert %{ack_at: %DateTime{}, no_ack_at: nil} = LeaseManager.get(task.id)
       :ok = refute_alarm!(pid, task.id)
@@ -547,7 +551,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assignee: assignee
     } do
       pid = boot_router!(task, assignee)
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
 
       Tasks.broadcast_board({:stage_transitioned, reload_stage!(task.id, stage.id)})
       :ok = sync_router(task.id)
@@ -623,7 +627,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       pid = boot_router!(task, assignee)
 
       # 1. The runtime acks, exactly as every dispatch prompt tells it to.
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
       pre_blocker_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
       assert %DateTime{} = pre_blocker_ack_at
 
@@ -694,7 +698,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
     } do
       pid = boot_router!(task, assignee)
 
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
       pre_blocker_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
 
       hold = file_needs_human_blocker!(task, stage, assignee.id)
@@ -712,7 +716,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       end)
 
       # THE ONE DIFFERENCE FROM 6a. The runtime took the re-dispatch.
-      :ok = ack_via_tool!(task, stage)
+      :ok = ack_via_tool!(task, stage, assignee)
       post_release_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
 
       assert DateTime.compare(post_release_ack_at, released_at) == :gt,

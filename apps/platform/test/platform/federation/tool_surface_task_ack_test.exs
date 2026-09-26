@@ -12,6 +12,9 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
     * stage_id resolution from `current_running_stage` when the caller
       omits the arg,
     * error envelopes for unknown task_id and no-running-stage,
+    * the non-owner refusal (task 01a0c762): a runtime other than the one
+      the lease was dispatched to gets a recoverable envelope and no
+      `execution.acked` row,
     * bundle exposure via `list_tools(["task"])`.
 
   async: false — the LeaseManager is a global singleton owned by
@@ -28,6 +31,11 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
   alias Platform.Tasks
 
   import Ecto.Query
+
+  # Task 01a0c762: the lease accepts an ack only from the runtime it was
+  # dispatched to, so the lease-asserting cases dispatch to and ack as
+  # this one runtime.
+  @owner "runtime-task-ack-owner"
 
   setup do
     {:ok, project} =
@@ -93,6 +101,21 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
              "task_ack description must instruct spawn-first ordering"
     end
 
+    # 01a0c762 stage 3: the ownership grain is a fact about the tool.
+    test "task_ack description states the runtime ownership grain" do
+      task_ack = ToolSurface.list_tools(["task"]) |> Enum.find(&(&1.name == "task_ack"))
+
+      assert task_ack.description =~ ~r/runtime the stage was dispatched to/,
+             "task_ack must state that the ack must come from the dispatched runtime"
+
+      assert task_ack.description =~ ~r/AUTHENTICATED caller/,
+             "task_ack must state that the caller is authenticated, not an argument"
+
+      assert task_ack.description =~
+               ~r/`subagent_id` is recorded for audit only and is not verified/,
+             "task_ack must state that subagent_id is audit-only"
+    end
+
     # 01a0a633 stage 3: the supplied-stage_id contract is a fact about the
     # tool, not an implementation detail. Asserted here so the prose cannot
     # silently drift back to describing only the derived path.
@@ -132,7 +155,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
   describe "execute/3 happy path" do
     test "returns {:ok, envelope} and persists execution.acked event", %{task: task, stage: stage} do
       dispatched_at = DateTime.utc_now() |> DateTime.add(-30, :second)
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at)
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at, @owner)
 
       {:ok, result} =
         ToolSurface.execute(
@@ -142,7 +165,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
             "stage_id" => stage.id,
             "subagent_id" => "higgins.moon"
           },
-          %{runtime_id: "runtime-test-#{System.unique_integer([:positive])}"}
+          %{runtime_id: @owner}
         )
 
       assert result.task_id == task.id
@@ -163,7 +186,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
          %{task: task, stage: stage} do
       # Dispatch 60 seconds ago; safety-net was originally dispatched_at + 90m.
       dispatched_at = DateTime.utc_now() |> DateTime.add(-60, :second)
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at)
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at, @owner)
 
       pre_ack_lease = LeaseManager.get(task.id)
       assert pre_ack_lease.ack_at == nil
@@ -177,7 +200,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
             "stage_id" => stage.id,
             "subagent_id" => "higgins.moon"
           },
-          %{}
+          %{runtime_id: @owner}
         )
 
       post_ack_lease = LeaseManager.get(task.id)
@@ -306,7 +329,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
 
     setup %{task: task, stage: stage} do
       dispatched_at = DateTime.utc_now() |> DateTime.add(-30, :second)
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at)
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at, @owner)
       :ok
     end
 
@@ -353,7 +376,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
 
     setup %{task: task, stage: stage} do
       dispatched_at = DateTime.utc_now() |> DateTime.add(-30, :second)
-      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at)
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at, @owner)
       :ok
     end
 
@@ -367,7 +390,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
             "stage_id" => stage.id,
             "subagent_id" => "higgins.moon"
           },
-          %{}
+          %{runtime_id: @owner}
         )
 
       event = Repo.get!(RuntimeEvent, result.event_id)
@@ -384,7 +407,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
             "stage_id" => stage.id,
             "subagent_id" => "afd767f1e0cc81633"
           },
-          %{}
+          %{runtime_id: @owner}
         )
 
       event = Repo.get!(RuntimeEvent, result.event_id)
@@ -404,11 +427,97 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
             "stage_id" => stage.id,
             "subagent_id" => id_at_limit
           },
-          %{}
+          %{runtime_id: @owner}
         )
 
       event = Repo.get!(RuntimeEvent, result.event_id)
       assert event.payload["subagent_id"] == id_at_limit
+    end
+  end
+
+  # ── non-owner refusal at the tool surface (task 01a0c762 stage 3) ──
+  #
+  # A tool-contract test, NOT the ticket's acceptance: the acceptance is the
+  # direct LeaseManager test in `lease_manager_ack_ownership_test.exs`, which
+  # a tool-level refusal would otherwise absorb. What this pins is the
+  # tool's half: the envelope, and that a refused ack writes NO durable
+  # `execution.acked` row for any Postgres reader to consume.
+  describe "execute/3 non-owner refusal (task 01a0c762)" do
+    setup %{task: task, stage: stage} do
+      dispatched_at = DateTime.utc_now() |> DateTime.add(-60, :second)
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at, @owner)
+      :ok
+    end
+
+    defp acked_rows(task_id, stage_id) do
+      RuntimeEvent
+      |> where(
+        [e],
+        e.task_id == ^task_id and e.event_type == "execution.acked" and
+          fragment("?->>'stage_id' = ?", e.payload, ^stage_id)
+      )
+      |> Repo.all()
+    end
+
+    defp ack_as(task_id, stage_id, context) do
+      ToolSurface.execute(
+        "task_ack",
+        %{"task_id" => task_id, "stage_id" => stage_id, "subagent_id" => "sub-probe"},
+        context
+      )
+    end
+
+    test "a non-owner ack returns the recoverable envelope and writes no execution.acked row",
+         %{task: task, stage: stage} do
+      before = LeaseManager.get(task.id)
+
+      {:error, err} = ack_as(task.id, stage.id, %{runtime_id: "runtime-intruder"})
+
+      assert err.recoverable == true
+      assert err.error =~ "task_id=#{task.id}"
+      assert err.error =~ "stage_id=#{stage.id}"
+      assert err.error =~ "dispatched to runtime #{@owner}"
+      assert err.error =~ "not runtime-intruder"
+      assert err.suggestion =~ ~r/runtime that received the dispatch/
+      assert err.suggestion =~ ~r/phase assignee/
+
+      assert acked_rows(task.id, stage.id) == []
+      assert LeaseManager.get(task.id) == before
+    end
+
+    test "a caller with no authenticated runtime is refused, never treated as tool-surface",
+         %{task: task, stage: stage} do
+      before = LeaseManager.get(task.id)
+
+      {:error, err} = ack_as(task.id, stage.id, %{})
+
+      assert err.recoverable == true
+      assert err.error =~ "dispatched to runtime #{@owner}"
+      assert acked_rows(task.id, stage.id) == []
+      assert LeaseManager.get(task.id) == before
+    end
+
+    # Positive control for the two refusals above: the same fixture, acked by
+    # the owner, DOES write the row and move the deadline. A tool that refused
+    # everything would pass the refusal tests and fail this one.
+    test "the owner's ack returns {:ok, _}, writes the row and moves next_safety_net_at",
+         %{task: task, stage: stage} do
+      before = LeaseManager.get(task.id)
+
+      {:ok, result} = ack_as(task.id, stage.id, %{runtime_id: @owner})
+
+      assert %DateTime{} = result.next_safety_net_at
+      assert DateTime.compare(result.next_safety_net_at, before.safety_net_at) == :gt
+
+      assert [row] = acked_rows(task.id, stage.id)
+      assert row.id == result.event_id
+      assert row.runtime_id == @owner
+      assert row.payload["runtime_id"] == @owner
+      assert row.payload["subagent_id"] == "sub-probe"
+
+      lease = LeaseManager.get(task.id)
+      assert lease.ack_runtime_id == @owner
+      assert lease.ack_subagent_id == "sub-probe"
     end
   end
 

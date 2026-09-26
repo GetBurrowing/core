@@ -1499,7 +1499,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # Ack lands first; then a silence is installed. `:check_no_ack` must
       # match the earlier `ack_at: %DateTime{}` clause before ever
       # reaching the silence branch — so silence is moot but not harmful.
-      :ok = LeaseManager.record_ack(task.id)
+      :ok = LeaseManager.record_ack(task.id, assignee.id)
       until = DateTime.add(DateTime.utc_now(), 5_000, :millisecond)
       :ok = LeaseManager.silence(task.id, until, "moot but present")
 
@@ -5265,7 +5265,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
           held.id,
           Ecto.UUID.generate(),
           "coding",
-          DateTime.utc_now()
+          DateTime.utc_now(),
+          "runtime-design-lease-seed"
         )
 
       assert %{} = LeaseManager.get(held.id)
@@ -5308,7 +5309,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
           control.id,
           Ecto.UUID.generate(),
           "coding",
-          DateTime.utc_now()
+          DateTime.utc_now(),
+          "runtime-design-lease-seed"
         )
 
       send(control_pid, :dispatch)
