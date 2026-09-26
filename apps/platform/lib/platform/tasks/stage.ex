@@ -230,6 +230,18 @@ defmodule Platform.Tasks.Stage do
       :completed_at
     ])
     |> validate_required([:plan_id, :position, :name])
+    # stages.name is varchar(255) NOT NULL
+    # (20260320120000_create_tasks_tables.exs:100). Without this bound an
+    # over-length name raised Postgrex 22001 from inside the plan_create /
+    # plan_update transaction and MCP callers got an opaque 500 (task
+    # 01a08a87). `:codepoints` matches Postgres, which counts UTF8
+    # characters: the default `:graphemes` passes e+U+0301 x128 (256
+    # codepoints) that the DB then rejects, and `:bytes` refuses 255
+    # multi-byte chars the DB accepts. Stricter than Postgres in one case,
+    # deliberately: the DB silently truncates over-length trailing spaces;
+    # here they are a named refusal. Written inline, not shared with
+    # Task.changeset/2's title bound, so each field's tests fail on its own.
+    |> validate_length(:name, max: 255, count: :codepoints)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:origin, @origins)
     |> foreign_key_constraint(:plan_id)

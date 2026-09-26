@@ -7611,7 +7611,7 @@ defmodule Platform.Federation.ToolSurface do
       {:error, reason} ->
         {:error,
          %{
-           error: "Failed to update plan: #{inspect(reason)}",
+           error: "Failed to update plan: #{inspect_errors_safe(reason)}",
            recoverable: true,
            suggestion: "Check that stages have valid fields and retry"
          }}

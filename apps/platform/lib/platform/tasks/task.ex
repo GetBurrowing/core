@@ -305,6 +305,15 @@ defmodule Platform.Tasks.Task do
       :needs_promotion
     ])
     |> validate_required([:project_id, :title])
+    # tasks.title is varchar(255) (20260320120000_create_tasks_tables.exs:52).
+    # Without this bound an over-length title raised Postgrex 22001 out of
+    # Repo.insert/update and MCP callers got an opaque 500 (task 01a08a87).
+    # `:codepoints` matches Postgres, which counts UTF8 characters: the
+    # default `:graphemes` passes e+U+0301 x128 (256 codepoints) that the DB
+    # then rejects, and `:bytes` refuses 255 multi-byte chars the DB accepts.
+    # Stricter than Postgres in one case, deliberately: the DB silently
+    # truncates over-length trailing spaces; here they are a named refusal.
+    |> validate_length(:title, max: 255, count: :codepoints)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)
     |> validate_phase_assignees()
