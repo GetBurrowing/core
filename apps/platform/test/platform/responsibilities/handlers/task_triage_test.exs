@@ -60,6 +60,8 @@ defmodule Platform.Responsibilities.Handlers.TaskTriageTest do
       assert spec.metadata["owner"] == "platform.tasks"
       assert spec.metadata["status"] == "placeholder"
       assert spec.metadata["role"] == "triage_officer"
+      # Task 01a0b4d1: retired from dispatch via the Router's inert gate.
+      assert spec.metadata["dispatch"] == "inert"
     end
   end
 

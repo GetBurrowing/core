@@ -22,12 +22,54 @@ defmodule Platform.Responsibilities.Handlers.TaskTriage do
   The `output_contract` map here only carries top-level keys because the
   M1 schema rejects non-string values in the JSONB column.
 
+  ## DECLARED INERT — `metadata["dispatch"] == "inert"`
+
+  This key is registered but deliberately **not dispatchable** (task
+  `01a0b4d1`, the RETIRE path). Until then the weekday cron fired it at
+  09:00 UTC, the assignee answered, and `handle_output/3` threw the
+  answer away with a placeholder log line — a paid model round-trip per
+  weekday with nothing consuming it.
+
+  `Platform.Responsibilities.Router.fire_trigger/3` refuses any row
+  whose `metadata["dispatch"]` is `"inert"`, before assignee
+  resolution, returning `{:ok, :placeholder}` and logging
+  `[ResponsibilityRouter] placeholder responsibility=tasks.triage`.
+  The row keeps its cron `trigger_kind` and expression, so it still
+  sits in the Router's cron bucket and still computes next-fire times;
+  the veto is at fire time, not in the due-list. It is NOT unscheduled.
+
+  The `responsibilities` row, its role mapping and the `tasks.triage.v1`
+  prompt template all stay, so re-enabling is a one-line code change and
+  not a re-seed.
+
+  ### Why `dispatch` and not `status`
+
+  `"status" => "placeholder"` stays, but it is NOT a dispatch veto:
+  eleven rows carry it and several of them fire legitimately. See
+  `Handlers.MeetingAttendanceFollowup`'s moduledoc and the comment above
+  `Router.dispatch_inert?/1` for that argument; this row follows the same
+  two-field convention.
+
+  ### Why `metadata` and not `enabled: false`
+
+  `Platform.Responsibilities.@upsert_replace_fields` deliberately
+  EXCLUDES `enabled` — operator territory, preserved across upserts so
+  admin-UI toggles survive redeploys. A code-side `enabled: false` here
+  would be a no-op against the row already in production. `metadata` IS
+  in the replace list, so this declaration reaches every install on its
+  next boot's `Registry` register pass, with no migration.
+
+  ### How to re-enable
+
+  Delete `"dispatch" => "inert"` from `register/0` below, in the same
+  edit that implements `handle_output/3` for real. Not a config toggle:
+  the marker exists because the handler below discards its input.
+
   ## Callback stubs
 
   `gather_context/2` returns an `:org_identity` slot marked `missing?:
   true` — the runtime that materialises project task lists for triage
-  has not been wired yet, and this handler exists to fill the bundle
-  roster (task 019f2455) not to fire live.
+  has not been wired yet.
 
   `handle_output/2` and `handle_output/3` log a placeholder warning and
   return `:ok`. Rowan/Marlowe iterate the prompt template content live via
@@ -68,10 +110,16 @@ defmodule Platform.Responsibilities.Handlers.TaskTriage do
         },
         default_prompt_template: @template_slug,
         cost_profile: "high_freq_low_cost",
+        # `dispatch: "inert"` has exactly one reader,
+        # `Router.dispatch_inert?/1`, and is the only thing that stops
+        # this row firing (task 01a0b4d1). `status: "placeholder"` is the
+        # operator/reporting marker and is NOT a dispatch veto. See the
+        # moduledoc for why this is metadata and not `enabled: false`.
         metadata: %{
           "owner" => "platform.tasks",
           "status" => "placeholder",
-          "role" => "triage_officer"
+          "role" => "triage_officer",
+          "dispatch" => "inert"
         }
       }
     ]

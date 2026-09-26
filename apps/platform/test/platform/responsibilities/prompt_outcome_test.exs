@@ -73,6 +73,7 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.Handlers.TaskTriage
+  alias Platform.Responsibilities.Handlers.TaskWeeklyReview
   alias Platform.Responsibilities.Responsibility
   alias Platform.Responsibilities.Router
   alias Platform.Roles
@@ -324,11 +325,18 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
 
     # THE REAL ROW, THE REAL HANDLER, THE REAL MIGRATION. Nothing about the
     # slug or the body is restated here: the descriptor comes from
-    # `TaskTriage.register/0` and the content from the migrated
+    # `TaskWeeklyReview.register/0` and the content from the migrated
     # `prompt_templates` table, so a change to either side is caught rather
     # than shadowed by a hand-copied constant.
-    test "tasks.triage renders the seeded template body instead of shipping empty" do
-      slug = TaskTriage.template_slug()
+    #
+    # REPOINTED by task 01a0b4d1: this test used `tasks.triage`, which is
+    # now declared inert (`metadata["dispatch"] == "inert"`), so its fire
+    # returns `{:ok, :placeholder}` and never reaches the template lookup.
+    # `tasks.weekly_review` is the same `Providers.Tasks` feature with no
+    # `build_prompt/1` and a seeded `tasks.weekly_review.v1`, so it takes
+    # exactly the code path this test was written to pin.
+    test "tasks.weekly_review renders the seeded template body instead of shipping empty" do
+      slug = TaskWeeklyReview.template_slug()
 
       # FIXTURE POSITIVE CONTROL, before anything is asserted about the
       # wire. If the migration has not run in this environment the phrase
@@ -341,12 +349,12 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
              "no prompt_templates row for #{slug} — the seed migration has not run in " <>
                "this test database, so this test cannot say anything about the Router"
 
-      assert template.content =~ "propose a priority pass",
+      assert template.content =~ "write a short weekly digest",
              "the seeded body no longer contains the phrase this test pins; update both " <>
                "the migration and this assertion deliberately, do not loosen the assertion"
 
       row =
-        TaskTriage.register()
+        TaskWeeklyReview.register()
         |> hd()
         |> create_responsibility!()
 
@@ -364,14 +372,14 @@ defmodule Platform.Responsibilities.PromptOutcomeTest do
       assert_dispatched(row)
       assert_receive {:captured_signal, signal}
 
-      assert signal.metadata.responsibility_key == "tasks.triage"
-      assert signal.metadata.prompt =~ "propose a priority pass"
+      assert signal.metadata.responsibility_key == "tasks.weekly_review"
+      assert signal.metadata.prompt =~ "write a short weekly digest"
 
       # WHAT FAILURE LOOKS LIKE. If the lookup is skipped and the slug is
-      # passed through the way `ExternalAgents.Dispatcher` does, ExUnit
-      # prints `"tasks.triage.v1"` as the received value.
+      # passed through the way `ExternalDispatcher` does, ExUnit
+      # prints `"tasks.weekly_review.v1"` as the received value.
       refute signal.metadata.prompt == slug
-      refute signal.metadata.prompt =~ "tasks.triage.v1"
+      refute signal.metadata.prompt =~ "tasks.weekly_review.v1"
     end
 
     # THE NEGATIVE CONTROL, and it is what makes the test above mean

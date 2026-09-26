@@ -1346,8 +1346,8 @@ defmodule Platform.Responsibilities.RouterTest do
     end
 
     test "every registered provider row that fires today still has no dispatch veto" do
-      # Guards the blast radius from the other end: exactly ONE
-      # registered responsibility may declare `dispatch: "inert"`. If a
+      # Guards the blast radius from the other end: only the keys pinned below
+      # may declare `dispatch: "inert"`. If a
       # future edit sprays the marker across the `status: "placeholder"`
       # rows — the mistake this stage's brief invited — this fails.
       inert_keys =
@@ -1363,7 +1363,15 @@ defmodule Platform.Responsibilities.RouterTest do
       # the same topic, so a Router fire was a duplicate model call whose
       # answer the handler discarded. Adding a THIRD key here should be
       # just as hard a decision as adding this one was.
-      assert inert_keys == ["meetings.attendance_followup", "meetings.intent_classify"]
+      #
+      # `tasks.triage` is that third key, added deliberately by task
+      # 01a0b4d1 (RETIRE path): its weekday cron dispatched a model whose
+      # answer `handle_output/3` discarded. A FOURTH should be as hard.
+      assert inert_keys == [
+               "meetings.attendance_followup",
+               "meetings.intent_classify",
+               "tasks.triage"
+             ]
 
       # …and the `status: "placeholder"` population is genuinely large,
       # which is what makes the assertion above load-bearing rather than
