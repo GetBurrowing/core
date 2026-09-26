@@ -7,7 +7,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
     * `record_dispatch/5` writes a lease with computed timestamps
     * `record_ack/3` clears no-ack fields, extends safety-net,
       resets `no_ack_fired?`
-    * `record_progress/1` extends safety-net only, does NOT touch
+    * `record_progress/2` extends safety-net only, does NOT touch
       no-ack state
     * `mark_*_fired/1` idempotency (returns `{:ok, :already_fired}`
       on repeat)
@@ -200,7 +200,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
     end
   end
 
-  describe "record_progress/1" do
+  describe "record_progress/2" do
     test "extends safety_net_at, sets last_progress_at, leaves no_ack fields untouched" do
       task_id = new_task_id()
       dispatched_at = DateTime.add(DateTime.utc_now(), -30, :second)
@@ -208,7 +208,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       LeaseManager.record_dispatch(task_id, new_stage_id(), "review", dispatched_at, @owner)
       before = LeaseManager.get(task_id)
 
-      assert :ok = LeaseManager.record_progress(task_id)
+      assert :ok = LeaseManager.record_progress(task_id, @owner)
 
       after_progress = LeaseManager.get(task_id)
       assert after_progress.last_progress_at != nil
@@ -220,7 +220,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
     end
 
     test "returns {:error, :not_found} when no lease exists" do
-      assert LeaseManager.record_progress(new_task_id()) == {:error, :not_found}
+      assert LeaseManager.record_progress(new_task_id(), @owner) == {:error, :not_found}
     end
   end
 
@@ -406,7 +406,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       assert after_ack.silenced_until == until
     end
 
-    test "record_progress/1 does NOT clear silenced_until" do
+    test "record_progress/2 does NOT clear silenced_until" do
       # Documented invariant — progress evidence extends the safety-net but
       # is not the same signal class as an operator-scoped silence override.
       task_id = new_task_id()
@@ -415,7 +415,7 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
       assert :ok = LeaseManager.silence(task_id, until, "operator escape hatch")
 
-      assert :ok = LeaseManager.record_progress(task_id)
+      assert :ok = LeaseManager.record_progress(task_id, @owner)
 
       assert %{silenced_until: ^until} = LeaseManager.get(task_id)
     end
@@ -463,11 +463,11 @@ defmodule Platform.Orchestration.LeaseManagerTest do
       parent = self()
 
       # Spawn one writer that flips the safety-net timestamp forward
-      # on every tick via `record_progress/1`.
+      # on every tick via `record_progress/2`.
       writer =
         spawn_link(fn ->
           Enum.each(1..500, fn _ ->
-            LeaseManager.record_progress(task_id)
+            LeaseManager.record_progress(task_id, @owner)
             # Yield to give readers a chance to interleave.
             :erlang.yield()
           end)

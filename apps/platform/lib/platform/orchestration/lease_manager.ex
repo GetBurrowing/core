@@ -61,6 +61,17 @@ defmodule Platform.Orchestration.LeaseManager do
   re-dispatch: it builds a fresh row for the new owner. The old
   owner's ack says nothing about the new owner's pickup.
 
+  ## Progress ownership (task 01a0db63 stage 1)
+
+  `record_progress/2` is gated the same way: only the lease owner's
+  progress extends `safety_net_at` and stamps `last_progress_at`. A
+  non-owner or `nil` caller gets `{:error, {:not_owner, owner}}`, the
+  row is left exactly as it was, and `[:platform, :orchestration,
+  :progress_refused]` telemetry plus one warning record the refusal.
+  Before this, a heartbeat from ANY runtime pushed the net of a stage
+  whose dispatched owner was dead another 90 to 120 minutes out. Both
+  gates share one compare (`owner?/2`) and one refusal path.
+
   ## Dispatch vs. re-dispatch (task 019fa469 stage 6)
 
   `record_dispatch/5` is keyed on `stage_id` and owner, not on "a
@@ -302,16 +313,32 @@ defmodule Platform.Orchestration.LeaseManager do
   end
 
   @doc """
-  Record progress (a validation_pass, execution.progress runtime
-  event, etc). Extends `safety_net_at` to `now + safety_net_ms` for
-  the lease's stage_kind and stamps `last_progress_at: now`. Does
-  NOT clear the no-ack fields — progress evidence is not an ack.
+  Record progress from the runtime the stage was dispatched to.
+  Extends `safety_net_at` to `now + safety_net_ms` for the lease's
+  stage_kind and stamps `last_progress_at: now`. Does NOT clear the
+  no-ack fields or `silenced_until` — progress evidence is not an ack.
 
-  Returns `{:error, :not_found}` when no lease exists.
+  `caller_runtime_id` must equal the lease's `owner_runtime_id` (task
+  01a0db63 stage 1), under the same fail-closed compare `record_ack/3`
+  uses. A non-owner, `nil` or non-binary caller — and any caller
+  against a row with no owner — gets `{:error, {:not_owner, owner}}`;
+  the row is left exactly as it was, and the refusal is recorded as
+  `[:platform, :orchestration, :progress_refused]` telemetry and one
+  warning.
+
+  There is no `record_progress/1`: it was deleted so an unthreaded
+  caller fails to compile instead of silently failing closed. A future
+  router-internal progress source (one with no event runtime to pass)
+  must pass `lease.owner_runtime_id` explicitly, as
+  `TaskRouter.maybe_fire_no_ack/3` does for `record_ack/3`.
+
+  Returns `{:error, :not_found}` when no lease exists, checked before
+  the owner compare.
   """
-  @spec record_progress(binary()) :: :ok | {:error, :not_found}
-  def record_progress(task_id) when is_binary(task_id) do
-    GenServer.call(__MODULE__, {:record_progress, task_id})
+  @spec record_progress(binary(), term()) ::
+          :ok | {:error, :not_found} | {:error, {:not_owner, binary() | nil}}
+  def record_progress(task_id, caller_runtime_id) when is_binary(task_id) do
+    GenServer.call(__MODULE__, {:record_progress, task_id, caller_runtime_id})
   end
 
   @doc """
@@ -431,7 +458,7 @@ defmodule Platform.Orchestration.LeaseManager do
         lease ->
           owner = Map.get(lease, :owner_runtime_id)
 
-          if owner_ack?(caller_runtime_id, owner) do
+          if owner?(caller_runtime_id, owner) do
             now = DateTime.utc_now()
             timeouts = timeouts_for(lease.stage_kind)
 
@@ -447,23 +474,37 @@ defmodule Platform.Orchestration.LeaseManager do
             :ets.update_element(@table, task_id, {@item_pos, updated})
             :ok
           else
-            refuse_ack(task_id, lease, caller_runtime_id, owner)
+            refuse(:ack, task_id, lease, caller_runtime_id, owner)
           end
       end
 
     {:reply, reply, state}
   end
 
-  def handle_call({:record_progress, task_id}, _from, state) do
+  def handle_call({:record_progress, task_id, caller_runtime_id}, _from, state) do
     reply =
-      update_lease(task_id, fn lease ->
-        now = DateTime.utc_now()
-        timeouts = timeouts_for(lease.stage_kind)
+      case direct_get(task_id) do
+        nil ->
+          {:error, :not_found}
 
-        lease
-        |> Map.put(:last_progress_at, now)
-        |> Map.put(:safety_net_at, maybe_add(now, timeouts.safety_net_ms))
-      end)
+        lease ->
+          owner = Map.get(lease, :owner_runtime_id)
+
+          if owner?(caller_runtime_id, owner) do
+            now = DateTime.utc_now()
+            timeouts = timeouts_for(lease.stage_kind)
+
+            updated =
+              lease
+              |> Map.put(:last_progress_at, now)
+              |> Map.put(:safety_net_at, maybe_add(now, timeouts.safety_net_ms))
+
+            :ets.update_element(@table, task_id, {@item_pos, updated})
+            :ok
+          else
+            refuse(:progress, task_id, lease, caller_runtime_id, owner)
+          end
+      end
 
     {:reply, reply, state}
   end
@@ -540,18 +581,23 @@ defmodule Platform.Orchestration.LeaseManager do
 
   # Fail closed: only a binary caller equal to a binary owner is the
   # owner. `nil == nil` (an ownerless row and a caller with no
-  # authenticated runtime) must NOT count as a match.
-  defp owner_ack?(caller, owner) when is_binary(caller) and is_binary(owner),
+  # authenticated runtime) must NOT count as a match. The ONE compare
+  # behind both gated writes, `record_ack/3` and `record_progress/2`, so
+  # the two gates cannot drift apart.
+  defp owner?(caller, owner) when is_binary(caller) and is_binary(owner),
     do: caller == owner
 
-  defp owner_ack?(_caller, _owner), do: false
+  defp owner?(_caller, _owner), do: false
 
-  # A refused ack writes NOTHING to the row: no ack_at, no
-  # safety_net_at, no no_ack change. The audit trail is the telemetry
-  # event and the warning, never the lease.
-  defp refuse_ack(task_id, lease, caller_runtime_id, owner) do
+  # A refused ack or progress call writes NOTHING to the row: no ack_at,
+  # no last_progress_at, no safety_net_at, no no_ack change. The audit
+  # trail is the telemetry event and the warning, never the lease. One
+  # helper for both gated writes; only the event name and the verb in
+  # the log line differ.
+  defp refuse(action, task_id, lease, caller_runtime_id, owner)
+       when action in [:ack, :progress] do
     :telemetry.execute(
-      [:platform, :orchestration, :ack_refused],
+      [:platform, :orchestration, refused_event(action)],
       %{count: 1},
       %{
         task_id: task_id,
@@ -562,11 +608,14 @@ defmodule Platform.Orchestration.LeaseManager do
     )
 
     Logger.warning(
-      "[LeaseManager] task #{task_id} stage #{lease.stage_id} — ack refused: caller runtime #{inspect(caller_runtime_id)} is not the lease owner #{inspect(owner)}. Lease left unchanged."
+      "[LeaseManager] task #{task_id} stage #{lease.stage_id} — #{action} refused: caller runtime #{inspect(caller_runtime_id)} is not the lease owner #{inspect(owner)}. Lease left unchanged."
     )
 
     {:error, {:not_owner, owner}}
   end
+
+  defp refused_event(:ack), do: :ack_refused
+  defp refused_event(:progress), do: :progress_refused
 
   # A re-dispatch of the stage this task is ALREADY leasing (task
   # 019fa469 stage 6). Rebuilding the row from scratch here erased an

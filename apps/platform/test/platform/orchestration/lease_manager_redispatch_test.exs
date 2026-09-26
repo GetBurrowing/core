@@ -135,7 +135,7 @@ defmodule Platform.Orchestration.LeaseManagerRedispatchTest do
       stage_a: stage_a
     } do
       dispatch(task_id, stage_a)
-      :ok = LeaseManager.record_progress(task_id)
+      :ok = LeaseManager.record_progress(task_id, @owner)
       {:ok, :fired} = LeaseManager.mark_no_ack_fired(task_id)
       {:ok, :fired} = LeaseManager.mark_safety_net_fired(task_id)
 

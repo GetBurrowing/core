@@ -18,17 +18,20 @@ defmodule Platform.Orchestration.TaskRouter do
      `HeartbeatScheduler.dispatch_prompt/4` + `ContextAssembler.build/2` and
      broadcasts an `attention` event to the assignee runtime.
   3. **Arm timers**: on successful broadcast, the router calls
-     `LeaseManager.record_dispatch/4` and arms one `:check_no_ack` timer
+     `LeaseManager.record_dispatch/5` and arms one `:check_no_ack` timer
      (short — 5 min) and one `:check_safety_net` timer (stage-kind specific)
      via `Process.send_after/3`.
   4. **Ack extends**: an `execution.acked` runtime_event (emitted by the
      `task_ack` MCP tool in stage 5) is consumed by `apply_runtime_event/2`,
-     which calls `LeaseManager.record_ack/1` to clear the no-ack countdown
+     which calls `LeaseManager.record_ack/3` to clear the no-ack countdown
      and extend the safety-net deadline.
-  5. **Progress extends**: any `execution.heartbeat` / `execution.progress` /
-     validation activity event calls `LeaseManager.record_progress/1`,
-     pushing the safety-net deadline forward without touching the no-ack
-     idempotency.
+  5. **Progress extends**: an `assignment.accepted` / `execution.started` /
+     `execution.heartbeat` / `execution.progress` / `execution.unblocked`
+     runtime_event calls `LeaseManager.record_progress/2` with the event's
+     `runtime_id`, pushing the safety-net deadline forward without touching
+     the no-ack idempotency. Only the lease owner's events extend the net
+     (task 01a0db63); another runtime's are refused and are not treated as
+     liveness. Validation activity does not call it.
   6. **Silent drops**: on `:check_no_ack` firing with no ack, the router
      broadcasts a single `execution.no_ack_timeout` runtime_event, posts an
      `execution.blocked needs_human=true` message to the execution space,
@@ -1058,8 +1061,8 @@ defmodule Platform.Orchestration.TaskRouter do
   end
 
   # `:check_safety_net` — armed on each successful dispatch at the stage-kind's
-  # safety-net interval. If progress extended the deadline (`record_progress/1`
-  # or `record_ack/1` moved `safety_net_at` past `now`), reschedule to the new
+  # safety-net interval. If progress extended the deadline (`record_progress/2`
+  # or `record_ack/3` moved `safety_net_at` past `now`), reschedule to the new
   # deadline. Otherwise fire one loud `execution.safety_net_fired` runtime_event
   # + post `execution.blocked needs_human=true`. Also idempotency-gated.
   def handle_info(:check_safety_net, %State{task_id: task_id} = state) do
@@ -3795,18 +3798,37 @@ defmodule Platform.Orchestration.TaskRouter do
              "execution.progress",
              "execution.unblocked"
            ] ->
-        # Any runtime-liveness signal is progress — extends the safety-net
-        # window so long-running stages don't false-alarm.
-        _ = LeaseManager.record_progress(state.task_id)
+        # A runtime-liveness signal from the lease OWNER is progress —
+        # extends the safety-net window so long-running stages don't
+        # false-alarm. Task 01a0db63: the event's `runtime_id` is the
+        # sender (forced from authenticated state by RuntimeChannel), and
+        # only the runtime the stage was dispatched to may extend the net.
+        case LeaseManager.record_progress(state.task_id, event.runtime_id) do
+          {:error, {:not_owner, owner}} ->
+            # A refused event is not evidence anyone is working the stage,
+            # so it must not flip `status` to `:running` or clear liveness
+            # either — return `base_state` untouched by this arm, as the
+            # `execution.acked` arm does (task 01a0c762 stage 2). KNOWN
+            # LEFTOVER, out of scope (01a0db63-a8e2): `maybe_reset_stalled/1`
+            # above still runs on every event from any runtime.
+            Logger.warning(
+              "[TaskRouter] task #{state.task_id} stage #{inspect(state.current_stage_id)} — " <>
+                "#{event.event_type} from runtime #{inspect(event.runtime_id)} refused: the " <>
+                "lease is owned by runtime #{inspect(owner)}. Not treating it as liveness."
+            )
 
-        if still_awaiting_human?(base_state) do
-          # A manual-review gate is still pending; runtime activity must not
-          # flip us out of the suppressed state.
-          base_state
-          |> clear_liveness()
-          |> Map.put(:status, :waiting_human)
-        else
-          %{base_state | status: :running}
+            base_state
+
+          _ok_or_not_found ->
+            if still_awaiting_human?(base_state) do
+              # A manual-review gate is still pending; runtime activity must not
+              # flip us out of the suppressed state.
+              base_state
+              |> clear_liveness()
+              |> Map.put(:status, :waiting_human)
+            else
+              %{base_state | status: :running}
+            end
         end
 
       "execution.blocked" ->
