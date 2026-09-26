@@ -450,7 +450,21 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # Every event, info message and assign lives in the hook module, not here.
   #
   # RE-DERIVED from the guard's own measurement on this tree (measured: 2305).
-  @chat_live_code_line_count 2305
+  #
+  # ── 2026-09-26, task 01a0938b: +15 (2,305 -> 2,320) ─────────────────────
+  #
+  # Scope pills for runtime-created orgs. `org_indexes/0` builds the
+  # id->name bucket map and a name->org-row map in one `list_orgs/0` pass
+  # (replacing `org_bucket_index/0`'s body), with the `bucket_org` type and
+  # helper. `org_scope/1` maps a slug to its shipped atom or the stored slug
+  # binary (never `String.to_atom`). `space_scope_atom/1` is split into
+  # `space_org/1` + `org_scope_of/1` so `assign_active_space/2` can assign
+  # `:active_space_org` (name/slug for the header pill) from the same lookup.
+  # Offset: the 7-clause `bucket_for_scope/1` closed map is deleted.
+  #
+  # RE-DERIVED from the guard's own measurement on this tree (CI run
+  # 36276668869 at 7aff3118: measured 2320).
+  @chat_live_code_line_count 2320
 
   @doc """
   Count the CODE lines of a source file.

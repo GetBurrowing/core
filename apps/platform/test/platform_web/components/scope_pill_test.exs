@@ -30,8 +30,9 @@ defmodule PlatformWeb.Components.ScopePillTest do
           # every test but the masking one.
           value: nil,
           # Overrides the visible text AND the aria-label together. nil =
-          # "caller didn't say"; the chat surfaces pass `@mask_names? && …`,
-          # so `false` is a real value here and is not the same as nil.
+          # "caller didn't say"; a caller writing `@mask_names? && …` (the
+          # chat surfaces did until task 01a0938b) passes `false`, which is a
+          # real value here and is not the same as nil.
           label: nil
         },
         assigns
@@ -279,9 +280,9 @@ defmodule PlatformWeb.Components.ScopePillTest do
       # component contract rather than as two chat-surface failures.
       #
       # The chat header and the hidden-channels drawer mask by overriding the
-      # visible label and handing over the REAL scope atom from
-      # `sub_org_scope_atom/1` — no `value`. Falling back to `@scope` there
-      # wrote `data-scope="wayne_tech"` into a masked session: the underscore
+      # visible label and handing over the REAL scope (the atom or runtime
+      # slug `ChatLive.org_scope/1` resolves from the org row, task 01a0938b)
+      # and no `value`. Falling back to `@scope` there wrote `data-scope="wayne_tech"` into a masked session: the underscore
       # spelling, which `refute html =~ "Wayne-Tech"` does not catch, in an
       # attribute, which renders as no text at all and is perfectly legible
       # in a DOM inspector.
@@ -306,10 +307,11 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
     test "a label override does NOT suppress data-scope when masking is off" do
       # The other half, and the reason the guard is `is_binary/1` rather than
-      # a nil check. Chat call sites write `label={@mask_names? && …}`, which
-      # is the atom `false` when masking is off — if `false` suppressed the
-      # attribute, every unmasked chat pill would lose its colour and the
-      # test above would still pass.
+      # a nil check. A call site writing `label={@mask_names? && …}` (the
+      # chat surfaces did until task 01a0938b) passes the atom `false` when
+      # masking is off — if `false` suppressed the attribute, every such
+      # unmasked pill would lose its colour and the test above would still
+      # pass.
       html = render_pill(%{scope: :wayne_tech, label: false, clickable: false})
 
       assert html =~ ~s(data-scope="wayne_tech")

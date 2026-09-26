@@ -317,6 +317,89 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     end
   end
 
+  describe "a runtime-created org on a masked surface" do
+    # Task 01a0938b stage 2. The fixture org's name has no separator, so
+    # `MaskAssertions.forms/1` (which derives spellings only by swapping
+    # `-`/`_` WITHIN the name) never produces its stored slug `new_client`.
+    # The slug is therefore refuted as a name of its own below; one
+    # `refute_name_anywhere(pill, "Newclient")` would pass on a pill that
+    # still says `data-scope="new_client"`.
+    @runtime_names ["Newclient", "new_client"]
+    @runtime_pills [
+      ".channel-hidden-drawer-group-label",
+      ".chat-header-scope-pill",
+      ".chat-header-scope-pill-mobile"
+    ]
+
+    # A Fabrikam member, so the viewer can see the runtime org (the shell's colour
+    # rules are built from the orgs the viewer can see).
+    defp runtime_org_conn(conn) do
+      user = insert_chat_user()
+
+      %Platform.Tenancy.OrgMembership{}
+      |> Platform.Tenancy.OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id,
+        role: "member"
+      })
+      |> Repo.insert!()
+
+      org =
+        Repo.insert!(
+          Platform.Tenancy.Org.changeset(%Platform.Tenancy.Org{}, %{
+            name: "Newclient",
+            slug: "new_client",
+            parent_org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id,
+            color_hue: 200
+          })
+        )
+
+      [visible, hidden] =
+        for slug <- ["client-general", "client-archive"] do
+          {:ok, ch} =
+            Chat.create_space(%{name: slug, slug: slug, kind: "channel", org_id: org.id})
+
+          {:ok, _} =
+            Chat.add_participant(ch.id, %{
+              participant_type: "user",
+              participant_id: user.id,
+              joined_at: DateTime.utc_now()
+            })
+
+          ch
+        end
+
+      {:ok, _} = Platform.Accounts.hide_channel(user.id, hidden.id)
+      {init_test_session(conn, current_user_id: user.id), visible}
+    end
+
+    test "the drawer group label and both header pills mask every spelling", %{conn: conn} do
+      {conn, visible} = runtime_org_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/chat/#{visible.id}")
+
+      # Anti-vacuity: unmasked, each pill really does spell the org both ways.
+      # Without this, the refutations below pass on a pill that never rendered.
+      for selector <- @runtime_pills, name <- @runtime_names do
+        assert_name_anywhere(extract(html, selector), name)
+      end
+
+      masked =
+        view
+        |> element(~s(button[phx-click="toggle_mask_names"]))
+        |> render_click()
+
+      for selector <- @runtime_pills do
+        pill = extract(masked, selector)
+        assert pill =~ "Workspace", "expected #{selector} to render a placeholder"
+        refute pill =~ "data-scope=", "#{selector} spells a data-scope while masked"
+
+        for name <- @runtime_names do
+          refute_name_anywhere(pill, name)
+        end
+      end
+    end
+  end
+
   describe "word discipline" do
     test "no padlock, no shield, and no privacy vocabulary on the mobile surfaces",
          %{conn: conn} do

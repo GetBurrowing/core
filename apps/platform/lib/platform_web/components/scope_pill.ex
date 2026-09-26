@@ -148,9 +148,12 @@ defmodule PlatformWeb.Components.ScopePill do
       `:base_100` (they sit in `page_header/1`'s `bg-base-100` `<header>`).
 
   Since stage 5 the six shipped orgs take the declared surface like any
-  other org. The chat rail and the chat header reach ONLY those six
-  (`sub_org_scope_atom/1` and `section_scope_atom/1` are closed six-name
-  maps), so stage 5 is when those two declarations took effect.
+  other org. Until task 01a0938b the chat rail and the chat header reached
+  only those six, through closed six-name maps, so stage 5 is when those two
+  declarations first took effect. Since 01a0938b both surfaces resolve the
+  pill from the org ROW (`ChatLive.org_scope/1`: a compiled atom for the six,
+  the slug binary for any other org), so every org on them, runtime-created
+  ones included, wears its declared surface.
 
   ## Edge and hover (task 01a09333-d374 stage 4)
 
@@ -554,9 +557,14 @@ defmodule PlatformWeb.Components.ScopePill do
   #     so it is what goes in the attribute, and the chip keeps whatever
   #     colour a rule keyed on that placeholder would give it (none, today).
   #
-  #   * The CHAT rail and chat header mask by passing a placeholder `label`
-  #     and NOTHING else — they hand over the real scope atom from
-  #     `sub_org_scope_atom/1`. A first cut of this function fell back to
+  #   * The CHAT rail's hidden-drawer group label and both chat header
+  #     pills (task 01a0938b) pass `scope` = the org's scope value (a
+  #     compiled atom for the six shipped orgs, the slug binary as stored for
+  #     an org created at runtime), `label` = the org's NAME unmasked or the
+  #     placeholder masked, and `value` = the org's SLUG unmasked or nil
+  #     masked. Unmasked, `@value` is the slug, so the chip keeps its colour.
+  #     Masked, only the placeholder `label` arrives, and the clause below
+  #     suppresses the attribute. A first cut of this function fell back to
   #     `@scope` there and wrote `data-scope="wayne_tech"` into a masked
   #     session. `ChatLiveMaskMobileTest` caught it on both surfaces; it was
   #     a real leak, not a test being fussy, and it is the reason
@@ -568,19 +576,44 @@ defmodule PlatformWeb.Components.ScopePill do
   # slug one attribute over contradicts the rename — emit nothing. Only an
   # un-renamed chip gets its own scope.
   #
-  # Suppression costs a masked chip its colour, because every colour rule is
-  # keyed on `data-scope`. Since task 01a09333-d374 stage 5 that includes
-  # the six shipped orgs, on the chat rail and header (no `data-scope`) and
-  # on the tasks rail (a placeholder `data-scope` no rule names). Before
-  # stage 5 those six kept their colour under masking through per-slug class
-  # names (`bg-wayne-tech`), which the mask sweep tolerated because it strips
-  # `class`. Those names are retired, so a masked chip is uncoloured on
-  # every surface and no spelling of the real org is anywhere in it.
+  # The masking reasoning, re-derived for runtime orgs (task 01a0938b):
+  #
+  #   (a) The rule is unchanged: a masked chip emits no `data-scope`, because
+  #       the stored slug IS a spelling of the org's name (`new_client` for
+  #       Newclient). Suppression costs a masked chip its colour, because
+  #       every colour rule `ScopeColorStyles` emits is keyed on
+  #       `data-scope`. That cost now covers EVERY org on the chat rail and
+  #       header, runtime-created ones included, and on the tasks rail (a
+  #       placeholder `data-scope` no rule names). Before 01a09333-d374 stage
+  #       5 the six shipped orgs kept their colour under masking through
+  #       per-slug class names (`bg-wayne-tech`), which the mask sweep
+  #       tolerated because it strips `class`. Those names are retired, so a
+  #       masked chip is uncoloured on every surface and no spelling of the
+  #       real org is anywhere in it.
+  #
+  #   (b) The leak a nil label would open. `SidebarMask.label_for_bucket/3`
+  #       returns nil for a nil bucket. A caller that looked the masked label
+  #       up through a closed scope->name map would get nil for a runtime
+  #       org, and a nil label falls through BOTH `display_label/2` (text and
+  #       aria-label read the title-cased slug, "New Client") and this
+  #       function (`data-scope="new_client"`): the name in all three
+  #       spellings. That is why the chat call sites pass the org's NAME as
+  #       the bucket, never a closed-map lookup.
+  #
+  #   (c) `phx-value-scope` still carries the real scope on a masked,
+  #       clickable chat header pill, because the masked contract passes
+  #       `value=nil` and the payload falls back to `@scope`. That is the
+  #       named limitation `Platform.MaskAssertions` documents in
+  #       `@dom_only_attrs`: invisible on a screen share, and it IS the
+  #       filter argument. It now spells a runtime slug too, under the same
+  #       limitation.
   #
   # `label` is `false` (not nil) when a caller writes `@mask_names? && …`
   # with masking off, which is why the guard is `is_binary/1` and not a nil
-  # check: `false` must fall through to the scope, or an unmasked chat pill
-  # would lose its colour too.
+  # check: `false` must fall through to the scope, or an unmasked pill from
+  # such a caller would lose its colour. The chat call sites wrote exactly
+  # that until task 01a0938b; they now pass an explicit label and `value`,
+  # but the guard stays for any caller that still does.
   defp data_scope(%{value: value}) when is_binary(value), do: value
   defp data_scope(%{label: label}) when is_binary(label), do: nil
   defp data_scope(%{scope: scope}), do: stringify_scope(scope)

@@ -25,6 +25,7 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.ScopeColor
+  alias PlatformWeb.ChatLive
 
   import Ecto.Query, only: [from: 2]
 
@@ -188,35 +189,47 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   end
 
   describe "the chat surfaces' data-scope names a stored row" do
-    test "every atom the chat rail and header maps produce emits the slug an org row carries" do
-      # The chat rail drawer and both chat header pills reach the chip
-      # through `sub_org_scope_atom/1` and `section_scope_atom/1`, closed
-      # six-name maps. Since stage 5 their colour depends on the
-      # `data-scope` they emit naming a row the stylesheet has a rule for;
-      # a mismatch (`wayne-tech` against a `wayne_tech` row) is an uncoloured
-      # chip and no error. Held against the rows in the database, not the
-      # migration's table, which lists both wayne-tech spellings.
-      stored = MapSet.new(Repo.all(from(o in Org, select: o.slug)))
+    test "every scope the chat rail and header resolve from an org row emits a stored slug" do
+      # The chat rail drawer and both chat header pills resolve their chip's
+      # scope from the org ROW through `ChatLive.org_scope/1` (task 01a0938b
+      # stage 1): the six shipped slugs keep their atoms, every other org
+      # passes its stored slug as a binary. It used to be two closed six-name
+      # maps, which gave a runtime org no pill at all. Since 01a09333 stage 5
+      # the chip's colour depends on the `data-scope` it emits naming a row
+      # the stylesheet has a rule for; a mismatch (`wayne-tech` against a
+      # `wayne_tech` row) is an uncoloured chip and no error. Held against the
+      # rows in the database, not the migration's table, which lists both
+      # wayne-tech spellings.
+      stored_rows = Repo.all(from(o in Org, select: o.slug))
+      stored = MapSet.new(stored_rows)
 
-      buckets = ~w(Paragon Soylent Fabrikam Wayne-Tech SXI Cyberdyne)
-      tokens = ~w(paragon soylent fabrikam wayne-tech sxi cyberdyne)
-
-      atoms =
-        Enum.map(buckets, &PlatformWeb.ChatLive.RenderHelpers.sub_org_scope_atom/1) ++
-          Enum.map(tokens, &PlatformWeb.ChatLive.section_scope_atom/1)
+      # The six shipped slugs still land on exactly the component's atoms, so
+      # the header's `@scope_filter == header_scope` active state keeps working.
+      atoms = Enum.map(~w(paragon soylent fabrikam wayne_tech sxi cyberdyne), &ChatLive.org_scope/1)
 
       assert atoms |> Enum.uniq() |> Enum.sort() ==
                Enum.sort(PlatformWeb.Components.ScopePill.scopes())
 
+      # Every shipped atom but Cyberdyne (below) has a row to be coloured by.
       for atom <- atoms, atom != :cyberdyne do
+        assert Atom.to_string(atom) in stored, "no stored row for #{inspect(atom)}"
+      end
+
+      for slug <- stored_rows do
+        scope = ChatLive.org_scope(slug)
+
         html =
           Phoenix.LiveViewTest.render_component(&PlatformWeb.Components.ScopePill.scope_pill/1,
-            scope: atom
+            scope: scope
           )
 
         [_, data_scope] = Regex.run(~r/data-scope="([^"]+)"/, html)
-        assert data_scope in stored, "#{inspect(atom)} emits data-scope=#{data_scope}"
-        assert Tenancy.get_org_by_slug(data_scope).color_lightness
+        assert data_scope in stored, "#{slug} (#{inspect(scope)}) emits data-scope=#{data_scope}"
+
+        # A runtime org's binary scope must name its own row, not a sibling's.
+        if is_binary(scope), do: assert(data_scope == slug)
+
+        if is_atom(scope), do: assert(Tenancy.get_org_by_slug(data_scope).color_lightness)
       end
 
       # Cyberdyne has no row in a fresh database (installs create it in the

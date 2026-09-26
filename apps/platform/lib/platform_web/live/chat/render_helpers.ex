@@ -471,25 +471,4 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
     do: Platform.Tasks.ChatPins.display_name_for_space(space)
 
   def pinned_row_label(_kind, space, user_id), do: sidebar_row_label(space, user_id)
-
-  # Mapping from `channel_sections/3` string bucket keys to the atom values
-  # the `scope_pill` component takes. Called from the colocated heex
-  # template, hence defp + same-module visibility.
-  #
-  # Task 01a0312e stage 1: it is now `def` in this module, imported by
-  # `ChatLive`. The colocated template still reaches it unqualified; the
-  # `defp` half of that sentence is what changed, not the call site.
-  def sub_org_scope_atom("Paragon"), do: :paragon
-  def sub_org_scope_atom("Soylent"), do: :soylent
-  def sub_org_scope_atom("Fabrikam"), do: :fabrikam
-  def sub_org_scope_atom("Wayne-Tech"), do: :wayne_tech
-  def sub_org_scope_atom("SXI"), do: :sxi
-  def sub_org_scope_atom("Cyberdyne"), do: :cyberdyne
-
-  # Buckets now derive from the orgs table, so a bucket can name an org the
-  # scope-colour vocabulary has never heard of. `nil` means "no pill" — the
-  # drawer renders the bucket's plain name instead. Do NOT `String.to_atom/1`
-  # here: `scope_pill`'s label/colour clauses are a closed enum and an unknown
-  # atom would crash the render rather than degrade it.
-  def sub_org_scope_atom(_bucket), do: nil
 end

@@ -4465,7 +4465,8 @@ defmodule PlatformWeb.ChatLive do
           pinned: [Platform.Chat.Space.t()],
           dms: [Platform.Chat.Space.t()],
           sub_orgs: %{String.t() => [Platform.Chat.Space.t()]},
-          hidden_sub_orgs: %{String.t() => [Platform.Chat.Space.t()]}
+          hidden_sub_orgs: %{String.t() => [Platform.Chat.Space.t()]},
+          bucket_orgs: %{String.t() => bucket_org()}
         }
   def channel_sections(
         channels,
@@ -4489,7 +4490,12 @@ defmodule PlatformWeb.ChatLive do
     # recompute; a `Tenancy.get_org/1` inside the loop would be one query per
     # channel per render. Same shape as `Sidebar.place_channels/4`, which
     # builds its `org_to_section` index once (sidebar.ex:484).
-    org_buckets = org_bucket_index()
+    #
+    # The same read also yields `bucket_orgs` (task 01a0938b stage 1): the org
+    # ROW behind each bucket, so the rail can render a bucket's scope pill from
+    # the org's slug and name instead of a closed map keyed on six display
+    # names. Do NOT add a second `list_orgs/0` call for it.
+    {org_buckets, bucket_orgs} = org_indexes()
     empty_buckets = Map.new(bucket_names(org_buckets), fn name -> {name, []} end)
 
     sub_orgs =
@@ -4534,7 +4540,8 @@ defmodule PlatformWeb.ChatLive do
       pinned: pinned,
       dms: open_dms,
       sub_orgs: visible_sub_orgs,
-      hidden_sub_orgs: hidden_sub_orgs
+      hidden_sub_orgs: hidden_sub_orgs,
+      bucket_orgs: bucket_orgs
     }
   end
 
@@ -4824,9 +4831,58 @@ defmodule PlatformWeb.ChatLive do
   # "works for five, mysteriously broken for the sixth".
   @spec org_bucket_index() :: %{binary() => String.t()}
   defp org_bucket_index do
-    Platform.Tenancy.list_orgs()
-    |> Map.new(fn org -> {org.id, org.name} end)
+    {org_buckets, _bucket_orgs} = org_indexes()
+    org_buckets
   end
+
+  # What `channel_sections/5` knows about the org behind a bucket. `scope` is
+  # the value `scope_pill`'s `scope` attr takes — see `org_scope/1`.
+  @type bucket_org :: %{slug: String.t(), name: String.t(), scope: atom() | String.t()}
+
+  # BOTH org indexes from ONE `Tenancy.list_orgs/0` read:
+  #
+  #   * `org_buckets` — `org_id => display name`, what a channel buckets by.
+  #   * `bucket_orgs` — `display name => bucket_org()`, the row behind each
+  #     bucket, so a bucket's pill reads the org's slug and name rather than
+  #     a closed name-keyed map (task 01a0938b stage 1).
+  #
+  # Keyed by name because the bucket key IS the name. Two orgs sharing a name
+  # already share a bucket in `org_buckets`; `bucket_orgs` inherits that
+  # collision rather than introducing a new one.
+  @spec org_indexes() :: {%{binary() => String.t()}, %{String.t() => bucket_org()}}
+  defp org_indexes do
+    orgs = Platform.Tenancy.list_orgs()
+
+    {
+      Map.new(orgs, fn org -> {org.id, org.name} end),
+      Map.new(orgs, fn org -> {org.name, bucket_org(org)} end)
+    }
+  end
+
+  defp bucket_org(org), do: %{slug: org.slug, name: org.name, scope: org_scope(org.slug)}
+
+  @doc false
+  # An org slug -> the value `scope_pill`'s `scope` attr takes (task 01a0938b
+  # stage 1). The six shipped slugs keep their existing atoms; every other org
+  # gets its slug BINARY AS STORED (`"new_client"`).
+  #
+  # Why not a binary for all of them: `@scope_filter` holds atoms (the
+  # `parse_scope/1` whitelist) and the header computes
+  # `active={@scope_filter == header_scope}`, so turning the six into binaries
+  # would silently break their active-filter state.
+  #
+  # NEVER `String.to_atom/1` / `String.to_existing_atom/1` a slug here: slugs
+  # are runtime data, and the atom table is not garbage-collected.
+  #
+  # KNOWN LIMITATION: filtering BY a runtime org is out of scope. Its pill is
+  # clickable, `parse_scope/1` returns nil for its slug, and the scope_filter
+  # handler therefore clears any filter rather than applying one.
+  @spec org_scope(String.t() | nil) :: atom() | String.t() | nil
+  def org_scope(slug) when is_binary(slug) do
+    section_scope_atom(css_slug(slug)) || slug
+  end
+
+  def org_scope(_), do: nil
 
   # The org destinations the "+ New channel" dialog offers (task 01a00910
   # stage 5). Two reads, and the split is deliberate:
@@ -4965,21 +5021,34 @@ defmodule PlatformWeb.ChatLive do
   # Resolved at assign time only (see `assign_active_space/2`) — never inline
   # in the template — because `Platform.Tenancy.get_org/1` is a DB read and the
   # chat header re-renders on every message.
+  #
+  # Task 01a0938b stage 1: the slug goes through `org_scope/1`, not straight
+  # into `section_scope_atom/1`, so a runtime-created org yields its slug
+  # binary instead of nil (the six shipped orgs keep their atoms).
   @doc false
-  @spec space_scope_atom(map() | nil) :: atom() | nil
-  def space_scope_atom(%{kind: kind}) when kind in ["dm", "group"], do: nil
+  @spec space_scope_atom(map() | nil) :: atom() | String.t() | nil
+  def space_scope_atom(space), do: space |> space_org() |> org_scope_of()
 
-  def space_scope_atom(%{org_id: org_id}) when is_binary(org_id) do
+  # The org row a space belongs to, or nil for DMs/groups and any space whose
+  # org can't be resolved. The ONE `Tenancy.get_org/1` read behind both
+  # `@active_space_scope` and `@active_space_org`.
+  @spec space_org(map() | nil) :: Platform.Tenancy.Org.t() | nil
+  defp space_org(%{kind: kind}) when kind in ["dm", "group"], do: nil
+
+  defp space_org(%{org_id: org_id}) when is_binary(org_id) do
     case Platform.Tenancy.get_org(org_id) do
-      %{slug: slug} when is_binary(slug) ->
-        slug |> String.downcase() |> String.replace("_", "-") |> section_scope_atom()
-
-      _ ->
-        nil
+      %{slug: slug} = org when is_binary(slug) -> org
+      _ -> nil
     end
   end
 
-  def space_scope_atom(_), do: nil
+  defp space_org(_), do: nil
+
+  defp org_scope_of(%{slug: slug}), do: org_scope(slug)
+  defp org_scope_of(_), do: nil
+
+  defp active_org_summary(%{slug: slug, name: name}), do: %{slug: slug, name: name}
+  defp active_org_summary(_), do: nil
 
   # Assign the active space AND its resolved org scope atom together. Every
   # write to `:active_space` MUST go through here so `@active_space_scope`
@@ -4989,9 +5058,16 @@ defmodule PlatformWeb.ChatLive do
   @spec assign_active_space(Phoenix.LiveView.Socket.t(), map() | nil) ::
           Phoenix.LiveView.Socket.t()
   defp assign_active_space(socket, space) do
+    # One org read feeds both the pill's scope and the org it names (task
+    # 01a0938b stage 1). `@active_space_org` (`%{slug, name}` or nil) is what
+    # the header labels the pill with, so it rides this funnel for the same
+    # reason the scope does: it must never describe a space no longer open.
+    org = space_org(space)
+
     socket
     |> assign(:active_space, space)
-    |> assign(:active_space_scope, space_scope_atom(space))
+    |> assign(:active_space_scope, org_scope_of(org))
+    |> assign(:active_space_org, active_org_summary(org))
     # The agents goal panel (task 01a0b491 stage 4) rides the SAME funnel as
     # the scope atom and for the same reason: it is derived from the space,
     # and a second write path is how it would come to describe a space that
@@ -5055,19 +5131,6 @@ defmodule PlatformWeb.ChatLive do
   def parse_scope("sxi"), do: :sxi
   def parse_scope("cyberdyne"), do: :cyberdyne
   def parse_scope(_), do: nil
-
-  # Inverse of `sub_org_scope_atom/1` — bucket-display-name from scope
-  # atom. Used by the template to gate sub-org section rendering when
-  # `@scope_filter` is set (Stage 4).
-  @doc false
-  @spec bucket_for_scope(atom()) :: String.t() | nil
-  def bucket_for_scope(:paragon), do: "Paragon"
-  def bucket_for_scope(:soylent), do: "Soylent"
-  def bucket_for_scope(:fabrikam), do: "Fabrikam"
-  def bucket_for_scope(:wayne_tech), do: "Wayne-Tech"
-  def bucket_for_scope(:sxi), do: "SXI"
-  def bucket_for_scope(:cyberdyne), do: "Cyberdyne"
-  def bucket_for_scope(_), do: nil
 
   # `section_slug/1` (bucket-name → slug) was retired in Stage 4: the
   # resolver-driven rail sets `data-section-slug` directly from a section's

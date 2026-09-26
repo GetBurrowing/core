@@ -75,7 +75,6 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
       pinned_row_label: 3,
       section_channel_rows: 3,
       sidebar_row_label: 2,
-      sub_org_scope_atom: 1,
       unread_label: 1
     ]
 
@@ -1684,13 +1683,31 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                   hidden_channels != [] do %>
             <div class="channel-hidden-drawer-group">
               <div class="channel-hidden-drawer-group-label">
-                <%!-- Buckets derive from the orgs table (task 01a00910 stage
-                     3), so a bucket can name an org that has no scope colour
-                     token. `sub_org_scope_atom/1` returns nil for those and
-                     we label the group with its plain name — `scope_pill`'s
-                     colour/label clauses are a closed enum and would crash on
-                     an unknown scope. --%>
-                <% scope = sub_org_scope_atom(bucket)
+                <%!-- Each bucket is an org NAME, and `bucket_orgs` (task 01a0938b)
+                     maps it to that org's row: its slug, its name and the
+                     value `scope_pill`'s `scope` attr takes (one of the six
+                     compiled atoms, or the slug binary as stored for any org
+                     created at runtime). Every org row therefore renders a
+                     pill, whatever its slug. `scope_pill` is total since
+                     01a09287 stage 2: `scope_label/1` title-cases any slug,
+                     the var-path colour classes are slug-agnostic, and a
+                     colour arrives only through `ScopeColorStyles`' rule for
+                     the chip's `data-scope`, so an org with no `color_hue`
+                     gets an uncoloured pill rather than a crash.
+
+                     The plain-name `<span>` is reached only by a bucket with
+                     no org row behind it: the default bucket, on an install
+                     that has no org of that name.
+
+                     Call-site contract, shared with both chat header pills:
+                     `label` is the placeholder when masked and the org's NAME
+                     otherwise (the slug title-cased is not always the name:
+                     `new_client` would read "New Client" for Newclient), and
+                     `value` is the org's SLUG unmasked and nil masked.
+                     `value` is load-bearing: `scope_pill` emits no
+                     `data-scope` for a binary `label` without one, and every
+                     colour rule is keyed on `data-scope`. --%>
+                <% bucket_org = @channel_sections.bucket_orgs[bucket]
 
                 hidden_mask_ctx =
                   Platform.Chat.SidebarMask.context(
@@ -1716,14 +1733,15 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                      this drawer sets no fill, so the chip sits on the rail
                      `<aside>`'s `bg-base-200`. --%>
                 <.scope_pill
-                  :if={scope}
-                  scope={scope}
+                  :if={bucket_org}
+                  scope={bucket_org.scope}
                   surface={:base_200}
                   clickable={false}
-                  label={@mask_names? && bucket_label}
+                  label={if @mask_names?, do: bucket_label, else: bucket_org.name}
+                  value={if @mask_names?, do: nil, else: bucket_org.slug}
                 />
                 <span
-                  :if={is_nil(scope)}
+                  :if={is_nil(bucket_org)}
                   class="text-xs font-semibold uppercase tracking-wide text-base-content/50"
                 >
                   {bucket_label}

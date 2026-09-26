@@ -301,8 +301,10 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
 
     test "an org created after this code shipped resolves with no code change" do
       # The point of the whole stage: a brand-new org must bucket without
-      # anyone editing a literal list. `Newclient` deliberately has no scope
-      # colour token, so it also exercises `sub_org_scope_atom/1`'s nil path.
+      # anyone editing a literal list. `Newclient` is not one of the six
+      # shipped orgs, so it also exercises the binary-slug path: its bucket
+      # resolves to the org row's slug and name, not to a closed map
+      # (task 01a0938b stage 1).
       fabrikam = Platform.Tenancy.get_org_by_slug!("fabrikam")
 
       org =
@@ -319,6 +321,9 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
 
       ch = org_channel("anything-at-all", org.id)
       assert hidden_bucket_of(ch) == "Newclient"
+
+      assert ChatLive.channel_sections([ch], []).bucket_orgs["Newclient"] ==
+               %{slug: "new_client", name: "Newclient", scope: "new_client"}
     end
 
     test "an unknown slug resolves to nil" do

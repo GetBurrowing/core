@@ -111,6 +111,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:revealed_section_ids, :any, required: true)
   attr(:sidebar_sections, :list, required: true)
   attr(:active_space_scope, :any, required: true)
+  # The org row behind `@active_space_scope`, `%{slug, name}` or nil (task
+  # 01a0938b). Both header pills label from its NAME and pass its SLUG as
+  # `value`; see the call-site contract on the desktop pill below.
+  attr(:active_space_org, :any, default: nil)
   attr(:scope_filter, :any, required: true)
   attr(:meetings_enabled, :boolean, required: true)
   attr(:in_meeting, :boolean, required: true)
@@ -211,17 +215,20 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
               clickable={true}
               active={@scope_filter == mobile_header_scope}
               label={
-                @mask_names? &&
-                  Platform.Chat.SidebarMask.label_for_bucket(
-                    Platform.Chat.SidebarMask.context(
+                if @mask_names?,
+                  do:
+                    Platform.Chat.SidebarMask.label_for_bucket(
+                      Platform.Chat.SidebarMask.context(
+                        @sidebar_sections,
+                        @mask_names?,
+                        @revealed_section_ids
+                      ),
                       @sidebar_sections,
-                      @mask_names?,
-                      @revealed_section_ids
+                      @active_space_org && @active_space_org.name
                     ),
-                    @sidebar_sections,
-                    PlatformWeb.ChatLive.bucket_for_scope(mobile_header_scope)
-                  )
+                  else: @active_space_org && @active_space_org.name
               }
+              value={if !@mask_names? && @active_space_org, do: @active_space_org.slug}
             />
           </span>
         </div>
@@ -250,24 +257,41 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                currently-selected filter. --%>
           <% header_scope = !@external? && @active_space_scope %>
           <span :if={header_scope} class="chat-header-scope-pill">
-            <%!-- Declared surface, as on the mobile pill above. --%>
+            <%!-- Declared surface, as on the mobile pill above.
+
+                 Call-site contract (task 01a0938b), identical on the mobile
+                 pill and the rail's hidden-drawer group label:
+                   scope = `@active_space_scope` (a compiled atom, or the slug
+                           binary for an org created at runtime)
+                   label = masked ? placeholder : `@active_space_org.name`
+                   value = masked ? nil : `@active_space_org.slug`
+                 The masked label is looked up by the org's NAME, never
+                 through a closed scope->name map: `label_for_bucket/3` returns
+                 nil for a nil bucket, and a nil label falls back to the
+                 title-cased slug in text and aria-label and to the real slug
+                 in `data-scope`, which is a leak in all three spellings. The
+                 unmasked `value` is what keeps `data-scope` (and so the
+                 colour rule) on a chip whose label is a binary. --%>
             <.scope_pill
               scope={header_scope}
               surface={:base_100}
               clickable={true}
               active={@scope_filter == header_scope}
               label={
-                @mask_names? &&
-                  Platform.Chat.SidebarMask.label_for_bucket(
-                    Platform.Chat.SidebarMask.context(
+                if @mask_names?,
+                  do:
+                    Platform.Chat.SidebarMask.label_for_bucket(
+                      Platform.Chat.SidebarMask.context(
+                        @sidebar_sections,
+                        @mask_names?,
+                        @revealed_section_ids
+                      ),
                       @sidebar_sections,
-                      @mask_names?,
-                      @revealed_section_ids
+                      @active_space_org && @active_space_org.name
                     ),
-                    @sidebar_sections,
-                    PlatformWeb.ChatLive.bucket_for_scope(header_scope)
-                  )
+                  else: @active_space_org && @active_space_org.name
               }
+              value={if !@mask_names? && @active_space_org, do: @active_space_org.slug}
             />
           </span>
           <%!-- DECISION (task 01a0b491, stage 4): `topic` is SUPPRESSED while a
