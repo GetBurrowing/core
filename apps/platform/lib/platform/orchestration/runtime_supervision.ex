@@ -11,7 +11,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
   require Logger
 
   alias Ecto.Multi
-  alias Platform.Orchestration.{ExecutionLease, ExecutionSpace, RuntimeEvent}
+  alias Platform.Orchestration.{ExecutionLease, ExecutionSpace, LeaseManager, RuntimeEvent}
   alias Platform.Repo
   alias Platform.Tasks
 
@@ -779,6 +779,50 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     end
   end
 
+  # Task 01a0db63-e4b1 stage 1. Word the `execution.acked` space line by the
+  # LeaseManager ETS owner, not by the fact that a row was written. A non-owner
+  # row still reaches this path (RuntimeChannel `execution_event` forces only
+  # `runtime_id`), and the router refuses it as liveness; the space post must
+  # say so rather than read as a real ack.
+  #
+  # RACE, documented and not fixed: this reads ETS before the router's own
+  # `LeaseManager.record_ack/3` runs for the same event. A dispatch that
+  # re-owns the lease between the two reads can make this line disagree with
+  # the router's verdict. Out of scope.
+  #
+  # No lease (nil) keeps the old wording: there is no owner to compare
+  # against, and the router accepts the ack in that case. That also means a
+  # stranger's ack reads as an ack in the window after a LeaseManager
+  # restart or clear.
+  defp format_ack_log_message(event) do
+    runtime = event.runtime_id
+
+    lease = if is_binary(event.task_id), do: LeaseManager.get(event.task_id)
+
+    case lease do
+      nil ->
+        "Runtime #{runtime} acked dispatch for #{event.phase}"
+
+      %{} ->
+        owner = Map.get(lease, :owner_runtime_id)
+
+        if ack_from_owner?(runtime, owner) do
+          "Runtime #{runtime} acked dispatch for #{event.phase}"
+        else
+          "Runtime #{runtime} reported an ack for #{event.phase}, but this stage is " <>
+            "dispatched to runtime #{owner}; the ack was refused and is not counted as liveness"
+        end
+    end
+  end
+
+  # Mirrors the binary-and-equal semantics of the private
+  # `LeaseManager.owner?/2`, failing closed: a non-binary caller or owner is
+  # never the owner.
+  defp ack_from_owner?(caller, owner) when is_binary(caller) and is_binary(owner),
+    do: caller == owner
+
+  defp ack_from_owner?(_caller, _owner), do: false
+
   defp format_log_message(event, lease) do
     runtime = event.runtime_id
 
@@ -790,7 +834,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
         "Runtime #{runtime} rejected assignment for #{event.phase}"
 
       "execution.acked" ->
-        "Runtime #{runtime} acked dispatch for #{event.phase}"
+        format_ack_log_message(event)
 
       "execution.alarm_silenced" ->
         silenced_until =

@@ -3462,10 +3462,7 @@ defmodule Platform.Orchestration.TaskRouter do
       last_validation_pass_at: lease.last_progress_at
     })
 
-    sentence =
-      "Stage safety-net exceeded (#{div(elapsed_ms, 60_000)}m elapsed for #{lease.stage_kind}). " <>
-        "The executor acked but has not produced validation progress within the stage's safety-net window. " <>
-        "Check whether the agent is stuck; manual intervention may be required."
+    sentence = safety_net_sentence(lease, elapsed_ms)
 
     stamp_blocked_reason(state.task_id, sentence)
 
@@ -3480,6 +3477,22 @@ defmodule Platform.Orchestration.TaskRouter do
         "elapsed_ms" => elapsed_ms
       }
     )
+  end
+
+  # Task 01a0db63-e4b1 stage 1. The acked sentence is kept byte-for-byte; a
+  # lease with no `ack_at` (e.g. an alarm_silence'd stage that never acked)
+  # must not claim "The executor acked".
+  defp safety_net_sentence(%{ack_at: %DateTime{}} = lease, elapsed_ms) do
+    "Stage safety-net exceeded (#{div(elapsed_ms, 60_000)}m elapsed for #{lease.stage_kind}). " <>
+      "The executor acked but has not produced validation progress within the stage's safety-net window. " <>
+      "Check whether the agent is stuck; manual intervention may be required."
+  end
+
+  defp safety_net_sentence(lease, elapsed_ms) do
+    "Stage safety-net exceeded (#{div(elapsed_ms, 60_000)}m elapsed for #{lease.stage_kind}). " <>
+      "No ack from the dispatched runtime is recorded on the lease, and no validation progress " <>
+      "arrived within the stage's safety-net window. " <>
+      "Check whether the agent is running at all; manual intervention may be required."
   end
 
   # Give the escalation sentence a durable per-task home
