@@ -42,6 +42,33 @@ config :platform, Platform.Repo,
   # runtime).
   pool_size: max(System.schedulers_online() * 2 + 8, 24)
 
+# Auto-admin email domain (task 01a068f6 stage 1): `config/config.exs`
+# deliberately carries no default for `:root_org_admin_email_domain` (a
+# fresh production install must not implicitly inherit Fabrikam's domain). This
+# is a test-only convenience pin so the existing `@example.com` fixtures
+# throughout the suite (`tenancy_test.exs` et al.) keep deriving `:admin`
+# exactly like they did before that change.
+config :platform, :root_org_admin_email_domain, "example.com"
+
+# Root org identity (task 01a068f6 stage 2): `20260519143620_seed_root_orgs`
+# now reads `ROOT_ORG_SLUG`/`ROOT_ORG_NAME` from the OS environment directly
+# (a migration can't assume `config/runtime.exs` ran — see that file's
+# moduledoc) and defaults to "root"/"Root Org" when neither is set, so a
+# genuinely fresh PRODUCTION install stops coming up owned by "Fabrikam". This
+# repo's test suite still asserts against the literal "fabrikam" slug in well
+# over a hundred places (`Tenancy.get_org_by_slug!("fabrikam")` and friends,
+# plus migrations like `20260921190000_add_color_lightness_to_orgs` that
+# pin colours by that exact slug) — CI's Postgres service container is
+# empty on every job, so without this pin `mix test`'s own
+# `ecto.create`/`ecto.migrate` would seed "root" instead and every one of
+# those assertions would start raising `Ecto.NoResultsError`. `System.put_env/2`
+# here runs in the SAME OS process that later executes the migration's
+# `System.get_env/2` read (Mix loads config before running `ecto.migrate`),
+# so this keeps a fresh test database seeding "Fabrikam"/"fabrikam" exactly as it
+# did before this task.
+System.put_env("ROOT_ORG_SLUG", "fabrikam")
+System.put_env("ROOT_ORG_NAME", "Fabrikam")
+
 config :platform, :oidc,
   client_id: "test-client-id",
   client_secret: "test-client-secret",

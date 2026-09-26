@@ -115,6 +115,100 @@ if Process.whereis(Platform.Repo) do
   end)
 end
 
+# Restore the four legacy Fabrikam-brand tenant orgs (+ resync `channel_sections`
+# positions to match) for THIS TEST RUN ONLY (task 01a068f6 stage 2).
+# `20260519143620_seed_root_orgs.exs` no longer seeds them — a fresh
+# PRODUCTION install must not come up owned by one customer's org structure,
+# which is the whole point of that migration's rewrite. But this suite's own
+# history runs the other direction: well over a hundred existing test files
+# assert directly against the literal "soylent"/"wayne_tech"/"sxi"/"paragon"
+# slugs (`Tenancy.get_org_by_slug!/1` and friends), independent of
+# `Platform.TenancyFixtures.tenant_org_id/1`'s per-test get-or-create
+# fallback, and a downstream migration (`20260618181114_adr_0042_org_project_topology`)
+# only tolerates their absence, it doesn't restore them. Seeding here — once,
+# for real (the pool is still in `:auto` mode; the `:manual` switch is right
+# below) — keeps that coverage green without putting Fabrikam's brand back into
+# a migration a fresh install actually runs. Raw SQL, `ON CONFLICT DO
+# NOTHING`: the exact shape `SeedRootOrgs` used, just relocated out of
+# `priv/repo/migrations` into test-only setup.
+if Process.whereis(Platform.Repo) do
+  root_row =
+    Platform.Repo.query!("SELECT id, name FROM orgs WHERE parent_org_id IS NULL LIMIT 1")
+
+  case root_row.rows do
+    [[root_id, _root_name]] ->
+      for {slug, name} <- %{
+            "soylent" => "Soylent",
+            "wayne_tech" => "Wayne-Tech",
+            "sxi" => "SXI",
+            "paragon" => "Paragon"
+          } do
+        org_id = Ecto.UUID.dump!(Platform.Types.UUIDv7.generate())
+
+        Platform.Repo.query!(
+          """
+          INSERT INTO orgs (id, parent_org_id, name, slug, inserted_at, updated_at)
+          VALUES ($1::uuid, $2, $3, $4, NOW(), NOW())
+          ON CONFLICT (slug) DO NOTHING
+          """,
+          [org_id, root_id, name, slug]
+        )
+      end
+
+      # `20260604000100_create_channel_sections.exs` already gave "fabrikam" a
+      # section at position 0 — the only org that existed when IT ran,
+      # since the four orgs above didn't exist yet at migrate time. Redoing
+      # its exact seed pass here (same `ORDER BY name ASC` + `with_index`),
+      # but `ON CONFLICT (org_id) DO UPDATE` instead of `DO NOTHING`,
+      # renumbers every org's section — fabrikam's included — to the position
+      # it would have gotten had all five existed together at migrate time,
+      # instead of leaving fabrikam pinned at a now-wrong 0 while the newcomers
+      # collide on whatever position they'd otherwise all share.
+      %{rows: org_rows} =
+        Platform.Repo.query!("SELECT id, name, slug FROM orgs ORDER BY name ASC")
+
+      org_rows
+      |> Enum.with_index()
+      |> Enum.each(fn {[org_id, name, slug], idx} ->
+        section_id = Ecto.UUID.dump!(Platform.Types.UUIDv7.generate())
+        color = String.replace(slug, "_", "-")
+
+        Platform.Repo.query!(
+          """
+          INSERT INTO channel_sections (id, org_id, name, color, position, inserted_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+          ON CONFLICT (org_id) DO UPDATE SET position = EXCLUDED.position
+          """,
+          [section_id, org_id, name, color, idx]
+        )
+      end)
+
+    [] ->
+      :ok
+  end
+
+  # `20260921190000_add_color_lightness_to_orgs.exs` (and
+  # `20260911220000_add_color_to_orgs.exs` before it) pin the shipped
+  # hue/chroma/lightness for fabrikam/soylent/wayne_tech/sxi/paragon/cyberdyne —
+  # but they ran during `mix ecto.migrate`, BEFORE the tenant orgs seeded
+  # just above existed, so their no-op-on-missing-slug tolerance (by
+  # design — see that migration's own test) means soylent/wayne_tech/sxi/
+  # paragon came out of the loop above with no colour. Re-running the
+  # migration's own idempotent `pin_shipped_colours/1` here (its test
+  # asserts a second run changes nothing) paints them exactly as it would
+  # have if it had run after the seed, instead of duplicating its pinned
+  # values into a second place that could drift from them.
+  color_migration_path =
+    Path.join([
+      Path.dirname(__ENV__.file),
+      "..",
+      "priv/repo/migrations/20260921190000_add_color_lightness_to_orgs.exs"
+    ])
+
+  Code.require_file(color_migration_path)
+  Platform.Repo.Migrations.AddColorLightnessToOrgs.pin_shipped_colours(Platform.Repo)
+end
+
 if Process.whereis(Platform.Repo) do
   Ecto.Adapters.SQL.Sandbox.mode(Platform.Repo, :manual)
 end

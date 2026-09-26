@@ -354,7 +354,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
   defp default_project_form_attrs(_), do: fabrikam_default_attrs()
 
   defp fabrikam_default_attrs do
-    case Tenancy.get_org_by_slug(Tenancy.root_org_slug()) do
+    case Tenancy.get_root_org() do
       %Tenancy.Org{id: id} -> %{"org_id" => id}
       _ -> %{}
     end

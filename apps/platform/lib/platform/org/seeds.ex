@@ -55,12 +55,13 @@ defmodule Platform.Org.Seeds do
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     # ADR 0042: org_id is required on org_wiki_pages. Default seeds attach
-    # to the install's root org (`Platform.Tenancy.root_org_slug/0`). If the
+    # to the install's root org, resolved structurally via
+    # `Platform.Tenancy.get_root_org/0` (`parent_org_id IS NULL`). If the
     # seed migration hasn't run yet (e.g. a very early boot), skip silently
     # rather than crash — `seed_defaults` is idempotent and will run again
     # later.
     org_id =
-      case Platform.Tenancy.get_org_by_slug(Platform.Tenancy.root_org_slug()) do
+      case Platform.Tenancy.get_root_org() do
         %Platform.Tenancy.Org{id: id} -> id
         nil -> nil
       end

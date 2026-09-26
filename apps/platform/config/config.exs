@@ -428,18 +428,29 @@ config :platform, :host_surface_enforcement, :on
 # at all. runtime.exs threads the per-install value via ROOT_ORG_SLUG.
 config :platform, :root_org_slug, "fabrikam"
 
-# Auto-admin email domain (task 01a081c2 stage 2). `derive_role_from_email/1`
-# reads this through `Platform.Tenancy.admin_email_domain/0` on every user
-# INSERT and every email-change UPDATE. An address whose host equals this
-# domain is auto-promoted to admin on the root org. Fabrikam's own install keeps
-# "example.com", so this default preserves current behaviour.
+# Auto-admin email domain (task 01a081c2 stage 2, renamed + de-defaulted in
+# task 01a068f6 stage 1). `derive_role_from_email/1` reads this through
+# `Platform.Tenancy.root_org_admin_email_domain/0` on every user INSERT and
+# every email-change UPDATE. An address whose host equals this domain is
+# auto-promoted to admin on the root org.
 #
-# Until now the domain was the literal regex `~r/@example\.com$/` compiled into
-# tenancy.ex, which made a Fabrikam email address an automatic admin on somebody
-# else's Suite. runtime.exs threads the per-install value via ADMIN_EMAIL_DOMAIN,
-# and a BLANK value there disables auto-admin entirely. See the accessor's
-# @doc for why blank must not fall back to this default.
-config :platform, :admin_email_domain, "example.com"
+# Deliberately UNSET here: this file is the shared base every environment
+# (including a stranger's fresh production install) imports from, and
+# task 01a068f6 exists precisely because Fabrikam-specific defaults living here
+# make every fresh Suite install come up implicitly owned by Fabrikam — an
+# install that never sets ROOT_ORG_ADMIN_EMAIL_DOMAIN must get `nil`
+# (nobody auto-admined), not a silent inherited "example.com". Fabrikam's own
+# dev and test behaviour is preserved by pinning this key in
+# `config/dev.exs` and `config/test.exs` instead — a per-environment
+# convenience override, not a shared default.
+#
+# Until task 01a081c2 the domain was the literal regex `~r/@example\.com$/`
+# compiled into tenancy.ex, which made a Fabrikam email address an automatic
+# admin on somebody else's Suite. runtime.exs threads the per-install value
+# via ROOT_ORG_ADMIN_EMAIL_DOMAIN, and a BLANK value there disables
+# auto-admin entirely even when dev/test pins a default above. See the
+# accessor's @doc for why blank must not fall back to an environment
+# default.
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

@@ -49,13 +49,15 @@ defmodule Platform.Org.WikiPage do
 
   # ADR 0042: org_id is required at the DB level. Legacy callers that don't
   # yet pass org_id are silently attached to the install's root org so
-  # existing write paths keep working while we migrate them. The slug comes
-  # from `Platform.Tenancy.root_org_slug/0` — an install whose root org is not
-  # "fabrikam" resolved nil here and wrote the row unowned.
+  # existing write paths keep working while we migrate them. Resolved
+  # structurally via `Platform.Tenancy.get_root_org/0` (`parent_org_id IS
+  # NULL`) — resolving by slug instead (task 01a068f6) meant an install
+  # whose root org was not literally "fabrikam" resolved nil here and wrote
+  # the row unowned.
   defp maybe_default_org_id(changeset) do
     case Ecto.Changeset.get_field(changeset, :org_id) do
       nil ->
-        case Platform.Tenancy.get_org_by_slug(Platform.Tenancy.root_org_slug()) do
+        case Platform.Tenancy.get_root_org() do
           %Platform.Tenancy.Org{id: id} -> Ecto.Changeset.put_change(changeset, :org_id, id)
           nil -> changeset
         end

@@ -129,6 +129,57 @@ defmodule Platform.TenancyTest do
     end
   end
 
+  # ── get_root_org/0 (task 01a068f6 stage 1) ───────────────────────────
+  #
+  # Structural, not slug-based: identifies the root org by
+  # `parent_org_id IS NULL` rather than a configured/hardcoded slug.
+
+  describe "get_root_org/0" do
+    test "returns the org with parent_org_id IS NULL (Fabrikam, in the seeded fixture)" do
+      assert %Org{slug: "fabrikam", parent_org_id: nil} = Tenancy.get_root_org()
+    end
+
+    test "returns nil when zero orgs have parent_org_id IS NULL" do
+      # Point Fabrikam's own row at itself so no row in the table has a NULL
+      # parent_org_id anymore. Self-reference keeps the FK constraint
+      # happy; the whole mutation lives inside this test's sandboxed
+      # transaction and is rolled back on exit.
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "UPDATE orgs SET parent_org_id = $1::uuid WHERE id = $1::uuid",
+        [Ecto.UUID.dump!(fabrikam.id)]
+      )
+
+      assert is_nil(Tenancy.get_root_org())
+    end
+
+    test "raises when more than one org has parent_org_id IS NULL (corruption, not a normal state)" do
+      # The `orgs_single_root` partial unique index (task
+      # `20260519143600_create_orgs.exs`) makes this structurally
+      # impossible through a normal insert/update — dropping it here,
+      # inside this test's own sandboxed transaction (DDL is transactional
+      # in Postgres), is the only way to reach the corrupted state at all.
+      # The drop and the corrupting insert below are both rolled back at
+      # test exit; no other test observes either.
+      Ecto.Adapters.SQL.query!(Repo, "DROP INDEX orgs_single_root", [])
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        INSERT INTO orgs (id, parent_org_id, name, slug, inserted_at, updated_at)
+        VALUES (gen_random_uuid(), NULL, 'Rogue Root', 'rogue-root', NOW(), NOW())
+        """,
+        []
+      )
+
+      assert_raise RuntimeError, ~r/found 2 orgs with parent_org_id IS NULL/, fn ->
+        Tenancy.get_root_org()
+      end
+    end
+  end
+
   # ── list_orgs / list_tenants ──────────────────────────────────────────
 
   describe "list_orgs/0" do
@@ -905,6 +956,15 @@ defmodule Platform.TenancyTest do
 
   describe "denylist overlay + ops API" do
     test "apply_derived_role/1 SKIPS evaluation when roles_locked_at is set (lock prevents auto-promote)" do
+      # Seed an unrelated membership first so Fabrikam is not an EMPTY root org
+      # in this test's transaction — otherwise the bootstrap-admin fallback
+      # (task 01a068f6 stage 1: the first-ever membership on an empty root
+      # org is force-admined) would fire on the very next insert below and
+      # this test would be exercising that fallback instead of the lock
+      # behavior it's actually about. See the "denylist overlay" describe
+      # block further down for fallback-specific coverage.
+      create_membership!(create_user!(), Tenancy.get_org_by_slug!("fabrikam"), "member")
+
       # Non-Fabrikam email → starts at :member, then we manually lock the row,
       # then we change the email to @example.com and re-apply the rule.
       # The lock should hold → role stays :member.
@@ -933,6 +993,9 @@ defmodule Platform.TenancyTest do
 
     test "apply_derived_role/1 with no existing row inserts at the derived role (no lock to honor)" do
       # Fresh user, no membership row yet → rule applies normally.
+      # (This particular email also matches the domain rule, so it is
+      # covered separately from — and does not by itself prove — the
+      # bootstrap-admin fallback tested below.)
       user = create_user!(%{email: "alice@example.com"})
       assert fabrikam_membership_count(user) == 0
 
@@ -940,6 +1003,73 @@ defmodule Platform.TenancyTest do
 
       assert membership.role == "admin"
       assert is_nil(membership.roles_locked_at)
+    end
+
+    # ── Bootstrap-admin fallback (task 01a068f6 stage 1) ────────────────
+    #
+    # A brand-new install's root org has no admin and no way to call
+    # `promote_to_admin/2` without one. The first-ever membership on an
+    # otherwise-empty root org is force-admined regardless of the
+    # email-domain rule; this must be permanently inert once ANY
+    # membership exists on that org.
+
+    test "apply_derived_role/1 force-admins the FIRST membership on an empty root org, regardless of the domain rule" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      # Sanity: this test's sandboxed transaction starts with zero
+      # memberships anywhere on Fabrikam (the seed migration seeds orgs only,
+      # never memberships).
+      assert Repo.aggregate(from(m in OrgMembership, where: m.org_id == ^fabrikam.id), :count) == 0
+
+      # Deliberately non-matching email — proves the forced role comes
+      # from the empty-org fallback, not the domain rule.
+      user = create_user!(%{email: "first-ever@example.com"})
+
+      {:ok, membership} = Tenancy.apply_derived_role(user)
+
+      assert membership.role == "admin"
+      assert is_nil(membership.roles_locked_at)
+    end
+
+    test "apply_derived_role/1 does NOT force-admin a second user once the first membership exists" do
+      first_user = create_user!(%{email: "first-ever@example.com"})
+      {:ok, first_membership} = Tenancy.apply_derived_role(first_user)
+      assert first_membership.role == "admin"
+
+      # Same non-matching-domain shape as the first user, landing right
+      # after — the fallback must already be permanently inert.
+      second_user = create_user!(%{email: "second-ever@example.com"})
+      {:ok, second_membership} = Tenancy.apply_derived_role(second_user)
+
+      assert second_membership.role == "member"
+    end
+
+    test "apply_derived_role/1: roles_locked_at wins over BOTH the domain rule and the bootstrap-admin fallback" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      user = create_user!(%{email: "vendor@example.com"})
+
+      # Insert the LOCKED row directly (bypassing apply_derived_role) so
+      # this is still the first-ever membership on Fabrikam in this test's
+      # transaction — i.e. the exact precondition the fallback above
+      # fires on — but pre-locked at :member.
+      {:ok, locked} =
+        %OrgMembership{}
+        |> OrgMembership.changeset(%{
+          user_id: user.id,
+          org_id: fabrikam.id,
+          role: "member",
+          roles_locked_at: DateTime.utc_now()
+        })
+        |> Repo.insert()
+
+      {:ok, after_apply} = Tenancy.apply_derived_role(user)
+
+      # Had there been no lock, this being the first-ever membership on
+      # an empty root org would have force-admined it (see the fallback
+      # test above). The lock holds instead — neither the fallback nor
+      # the domain rule touches it.
+      assert after_apply.role == "member"
+      assert after_apply.roles_locked_at == locked.roles_locked_at
     end
 
     test "apply_derived_role/1 with no lock applies the rule normally" do

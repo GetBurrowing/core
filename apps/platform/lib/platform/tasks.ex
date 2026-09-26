@@ -200,7 +200,7 @@ defmodule Platform.Tasks do
         attrs
 
       is_map(attrs) and not is_struct(attrs) ->
-        case Platform.Tenancy.get_org_by_slug(Platform.Tenancy.root_org_slug()) do
+        case Platform.Tenancy.get_root_org() do
           %Platform.Tenancy.Org{id: id} -> Map.put(attrs, :org_id, id)
           nil -> attrs
         end

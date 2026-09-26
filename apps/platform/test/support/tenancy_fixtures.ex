@@ -8,31 +8,117 @@ defmodule Platform.TenancyFixtures do
   `invocation_visibility_grants.grantee_org_id` can no longer hold an
   arbitrary `Ecto.UUID.generate()`. They must reference a real `orgs.id`.
 
-  These helpers return the seeded org ids so tests can populate the
-  FK columns with values that exist.
+  These helpers return org ids so tests can populate the FK columns with
+  values that exist.
 
       import Platform.TenancyFixtures
 
       attrs = %{actor_org_id: fabrikam_org_id(), …}
 
-  Both `fabrikam_org_id/0` and `tenant_org_id/1` rely on the seed migration
-  (`20260519143620_seed_root_orgs.exs`) having run as part of
-  `mix ecto.migrate` — they do not seed on demand.
+  ## Get-or-create, not "rely on the seed migration" (task 01a068f6 stage 2)
+
+  `fabrikam_org_id/0` and `tenant_org_id/1` used to hard-rely on
+  `20260519143620_seed_root_orgs.exs` having seeded exactly those five
+  named orgs as part of `mix ecto.migrate`, via `get_org_by_slug!/1` —
+  which RAISES if the row is absent. That migration no longer seeds
+  tenant orgs at all, and only seeds a root org named/slugged from
+  `ROOT_ORG_NAME`/`ROOT_ORG_SLUG` (see its moduledoc) — "fabrikam" only
+  because `config/test.exs` pins those env vars for this environment.
+
+  Both functions now get-or-create: look up by slug first (the common
+  case — most tests share the same seeded/previously-created rows within
+  a test's sandboxed transaction), and synthesize the row on demand when
+  it's missing, so a caller never has to know or care whether the seed
+  migration produced it.
   """
 
+  alias Platform.Accounts.User
+  alias Platform.Repo
   alias Platform.Tenancy
+  alias Platform.Tenancy.Org
+  alias Platform.Tenancy.OrgMembership
 
-  @doc "Return the id of the seeded Fabrikam (root) org."
-  @spec fabrikam_org_id() :: binary()
-  def fabrikam_org_id, do: Tenancy.get_org_by_slug!("fabrikam").id
+  @tenant_names %{
+    "soylent" => "Soylent",
+    "wayne_tech" => "Wayne-Tech",
+    "sxi" => "SXI",
+    "paragon" => "Paragon"
+  }
 
   @doc """
-  Return the id of a seeded tenant org by slug.
+  Return the id of this install's root (Fabrikam) org, creating one on demand.
 
-  Valid slugs: `"soylent"`, `"wayne_tech"`, `"sxi"`, `"paragon"`.
+  Structural fallback, not slug-blind: if a root org already exists under
+  ANY slug (e.g. a caller that migrated without the "fabrikam" env pin), that
+  row is reused — inserting a second `parent_org_id: nil` row would trip
+  the `orgs_single_root` partial unique index.
+  """
+  @spec fabrikam_org_id() :: binary()
+  def fabrikam_org_id do
+    case Tenancy.get_org_by_slug("fabrikam") do
+      %Org{id: id} -> id
+      nil -> (Tenancy.get_root_org() || create_root_org!()).id
+    end
+  end
+
+  @doc """
+  Return the id of a seeded tenant org by slug, creating it on demand
+  parented to this install's root org.
+
+  Well-known slugs (`"soylent"`, `"wayne_tech"`, `"sxi"`, `"paragon"`) get
+  their historical display name; any other slug is created with a
+  humanized version of the slug as its name.
   """
   @spec tenant_org_id(String.t()) :: binary()
-  def tenant_org_id(slug) when is_binary(slug), do: Tenancy.get_org_by_slug!(slug).id
+  def tenant_org_id(slug) when is_binary(slug) do
+    case Tenancy.get_org_by_slug(slug) do
+      %Org{id: id} -> id
+      nil -> create_tenant_org!(slug).id
+    end
+  end
+
+  defp create_root_org! do
+    %Org{}
+    |> Org.changeset(%{name: "Fabrikam", slug: "fabrikam", parent_org_id: nil})
+    |> Repo.insert!()
+  end
+
+  defp create_tenant_org!(slug) do
+    name = Map.get(@tenant_names, slug, Phoenix.Naming.humanize(slug))
+
+    case Tenancy.create_org(root_admin!(), %{name: name, slug: slug}) do
+      {:ok, org} ->
+        org
+
+      {:error, reason} ->
+        raise "Platform.TenancyFixtures.tenant_org_id/1 could not create " <>
+                "#{inspect(slug)}: #{inspect(reason)}"
+    end
+  end
+
+  # `Tenancy.create_org/2` is Fabrikam-admin-only (see
+  # `Platform.Tenancy.Lifecycle`) — there is no system/unauthenticated path.
+  # A throwaway admin, scoped to whichever org `fabrikam_org_id/0` resolves as
+  # root, is cheaper than threading a real admin actor through every
+  # `tenant_org_id/1` call site.
+  defp root_admin! do
+    n = System.unique_integer([:positive])
+
+    user =
+      %User{}
+      |> User.changeset(%{
+        email: "tenancy-fixtures-admin-#{n}@example.com",
+        name: "TenancyFixtures Admin #{n}",
+        oidc_sub: "tenancy-fixtures-admin-#{n}"
+      })
+      |> Repo.insert!()
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: "admin"})
+    |> Repo.insert!()
+
+    user
+  end
 
   @doc """
   Give `user` a plain `"member"` `org_memberships` row in every seeded org.

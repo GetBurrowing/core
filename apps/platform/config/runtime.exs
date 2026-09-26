@@ -55,23 +55,29 @@ case System.get_env("ROOT_ORG_SLUG") do
 end
 
 # ── Auto-admin email domain (per-install) ────────────────────────────────────
-# `Platform.Tenancy.admin_email_domain/0` reads this key at runtime and
-# `derive_role_from_email/1` uses it on every user INSERT and every
-# email-change UPDATE. config.exs defaults it to "example.com".
+# `Platform.Tenancy.root_org_admin_email_domain/0` reads this key at runtime
+# and `derive_role_from_email/1` uses it on every user INSERT and every
+# email-change UPDATE. Renamed from ADMIN_EMAIL_DOMAIN / :admin_email_domain
+# (task 01a068f6 stage 1): config.exs no longer defaults this key to
+# "example.com" at all — only `config/dev.exs` and `config/test.exs` pin
+# that value now, as an environment convenience rather than a shared
+# production default.
 #
 # The branch shape here deliberately differs from SESSION_COOKIE_DOMAIN and
 # ROOT_ORG_SLUG above, which both skip a blank value. Here a blank value is
-# MEANINGFUL: ADMIN_EMAIL_DOMAIN="" disables auto-admin entirely, and must NOT
-# fall back to the config.exs default. An install that does not want Fabrikam
-# addresses auto-promoted on its database has to be able to say so by setting
-# the var empty, without inventing a sentinel string.
+# MEANINGFUL: ROOT_ORG_ADMIN_EMAIL_DOMAIN="" disables auto-admin entirely,
+# and must NOT fall back to whatever the environment config pinned (e.g.
+# dev/test's "example.com"). An install that does not want Fabrikam addresses
+# auto-promoted on its database has to be able to say so by setting the var
+# empty, without inventing a sentinel string.
 #
-# Unset (nil) still means "keep the config.exs default", so dev, test and CI
-# are unchanged and per-test `Application.put_env/3` overrides remain the only
-# thing that moves the key there.
-case System.get_env("ADMIN_EMAIL_DOMAIN") do
+# Unset (nil) means "keep whatever config.exs + the env-specific config file
+# already set" — nothing on a production release (no default anywhere), and
+# "example.com" in dev/test — so per-test `Application.put_env/3` overrides
+# remain the only thing that moves the key there.
+case System.get_env("ROOT_ORG_ADMIN_EMAIL_DOMAIN") do
   nil -> :ok
-  domain -> config :platform, :admin_email_domain, String.trim(domain)
+  domain -> config :platform, :root_org_admin_email_domain, String.trim(domain)
 end
 
 # ── ADR corpus location (release images have no `docs/decisions/`) ────────────

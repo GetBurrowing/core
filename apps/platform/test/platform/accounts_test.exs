@@ -59,9 +59,40 @@ defmodule Platform.AccountsTest do
     )
   end
 
+  # `apply_derived_role/1`'s bootstrap-admin fallback (task 01a068f6 stage
+  # 1) force-admins the FIRST-EVER membership on an empty root org,
+  # regardless of the domain rule. This file is specifically about the
+  # DOMAIN rule wiring (see moduledoc), not that fallback — it has its own
+  # dedicated, isolated coverage in `tenancy_test.exs`. Seed an unrelated
+  # membership first so Fabrikam is never empty in a test's sandboxed
+  # transaction and the fallback never fires here.
+  defp seed_bystander_fabrikam_membership! do
+    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    n = System.unique_integer([:positive])
+
+    bystander =
+      %Accounts.User{}
+      |> Accounts.User.changeset(%{
+        email: "bystander-#{n}@example.com",
+        name: "Bystander #{n}",
+        oidc_sub: "oidc-bystander-#{n}"
+      })
+      |> Repo.insert!()
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: bystander.id, org_id: fabrikam.id, role: "member"})
+    |> Repo.insert!()
+
+    :ok
+  end
+
   # ── INSERT hook ──────────────────────────────────────────────────────
 
   describe "find_or_create_from_oidc/1 — INSERT hook" do
+    setup do
+      seed_bystander_fabrikam_membership!()
+    end
+
     test "a brand-new @example.com signup gets a Fabrikam admin membership" do
       attrs = oidc_attrs(%{email: "newhire@example.com"})
       assert {:ok, user} = Accounts.find_or_create_from_oidc(attrs)
@@ -97,6 +128,10 @@ defmodule Platform.AccountsTest do
   # ── UPDATE / email-change hook ───────────────────────────────────────
 
   describe "find_or_create_from_oidc/1 — email-change hook" do
+    setup do
+      seed_bystander_fabrikam_membership!()
+    end
+
     test "an existing member changing email to @example.com is promoted to admin" do
       sub = "promo-sub-#{System.unique_integer([:positive])}"
 

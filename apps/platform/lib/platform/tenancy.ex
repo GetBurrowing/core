@@ -43,11 +43,14 @@ defmodule Platform.Tenancy do
   UPDATE so new Fabrikam hires auto-inherit `:admin` without re-running the
   migration.
 
-  The domain is configuration, not a literal (task 01a081c2 stage 2).
-  `config :platform, :admin_email_domain` plus `derive_role_from_email/1`
-  are together the SINGLE SOURCE OF TRUTH for the rule; read the key via
-  `admin_email_domain/0` and never re-hardcode a domain here. Setting
-  `ADMIN_EMAIL_DOMAIN=""` on an install disables auto-admin outright.
+  The domain is configuration, not a literal (task 01a081c2 stage 2,
+  renamed from `:admin_email_domain` to `:root_org_admin_email_domain` in
+  task 01a068f6 stage 1 to drop the config.exs-level Fabrikam default that
+  survived that first fix). `config :platform, :root_org_admin_email_domain`
+  plus `derive_role_from_email/1` are together the SINGLE SOURCE OF TRUTH
+  for the rule; read the key via `root_org_admin_email_domain/0` and never
+  re-hardcode a domain here. Setting `ROOT_ORG_ADMIN_EMAIL_DOMAIN=""` on an
+  install disables auto-admin outright.
 
   > NOTHING IS LEFT IN LOCKSTEP WITH THE MIGRATION. The SQL in
   > `priv/repo/migrations/20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`
@@ -176,6 +179,45 @@ defmodule Platform.Tenancy do
   @doc "Fetch an org by slug, raising on not found."
   @spec get_org_by_slug!(String.t()) :: Org.t() | no_return()
   def get_org_by_slug!(slug) when is_binary(slug), do: Repo.get_by!(Org, slug: slug)
+
+  @doc """
+  Fetch this install's root org — the one org with `parent_org_id IS NULL`.
+
+  Structural, not slug-based: `root_org_slug/0` (and every call site that
+  resolves the root org through `get_org_by_slug(root_org_slug())`) still
+  requires an operator to know and configure that slug for their install.
+  This function needs nothing configured — the root org is definitionally
+  the one with no parent, enforced by the `orgs_single_root` DB-level
+  partial unique index (see `20260519143600_create_orgs.exs`), so at most
+  one row can ever match.
+
+  Returns `nil` when zero orgs match (a boot-time race before the seed
+  migration has run, or a from-scratch DB nobody has seeded yet) — every
+  existing `get_org_by_slug(root_org_slug())` call site this replaces
+  already treats "not found" as `nil`, so callers keep the same shape.
+
+  Raises if MORE than one org matches. That should be structurally
+  impossible given the unique index, so more than one row is real data
+  corruption, not a normal boot state — silently picking one of them would
+  hide that rather than surface it.
+  """
+  @spec get_root_org() :: Org.t() | nil
+  def get_root_org do
+    case Repo.all(from(o in Org, where: is_nil(o.parent_org_id))) do
+      [] ->
+        nil
+
+      [org] ->
+        org
+
+      orgs ->
+        ids = Enum.map_join(orgs, ", ", & &1.id)
+
+        raise "Platform.Tenancy.get_root_org/0: found #{length(orgs)} orgs with " <>
+                "parent_org_id IS NULL (#{ids}) — expected at most one. The DB-level " <>
+                "partial unique index should prevent this; this is data corruption."
+    end
+  end
 
   @doc "List every org (root + tenants)."
   @spec list_orgs() :: [Org.t()]
@@ -1439,23 +1481,34 @@ defmodule Platform.Tenancy do
   The email domain whose addresses are auto-promoted to admin on the root
   org, or `nil` when auto-admin is switched off.
 
-  Defaults to `"example.com"` from `config/config.exs`. `config/runtime.exs`
-  overrides it from `ADMIN_EMAIL_DOMAIN` per install, and a BLANK value there
-  is honoured rather than skipped: `ADMIN_EMAIL_DOMAIN=""` means nobody is
-  auto-admined. This function collapses unset and blank to the same `nil` so
-  callers have one case to handle.
+  No hardcoded fallback anywhere in `config.exs` — an install that never
+  sets `ROOT_ORG_ADMIN_EMAIL_DOMAIN` gets `nil` and nobody is
+  auto-admined by domain. (`config/dev.exs` and `config/test.exs` each pin
+  this to `"example.com"` so Fabrikam's own dev workflow and existing test
+  suite keep behaving exactly as before — that is a per-environment
+  convenience override, not a shared/production default.)
+
+  `config/runtime.exs` overrides this key from `ROOT_ORG_ADMIN_EMAIL_DOMAIN`
+  per install, and a BLANK value there is honoured rather than skipped:
+  `ROOT_ORG_ADMIN_EMAIL_DOMAIN=""` means nobody is auto-admined even if the
+  environment (e.g. dev/test) otherwise pins a default. This function
+  collapses unset and blank to the same `nil` so callers have one case to
+  handle.
 
   Until task 01a081c2 the domain was a literal compiled into this module, so
   a Fabrikam email address was automatically an admin on any other install of
-  Suite. Renaming an install's org did not touch that.
+  Suite. Renamed from `:admin_email_domain` (task 01a068f6 stage 1) to make
+  the "root org" scope explicit and to shed the config.exs-level Fabrikam
+  default that survived that first fix — a fresh install that never touched
+  `ADMIN_EMAIL_DOMAIN` still auto-admined `@example.com` addresses.
 
   Read at RUNTIME via `Application.get_env/3`, never `compile_env/3`: the
   released image auto-updates from `:latest` and would otherwise ship whatever
   config.exs held at build time, and tests could not override the key per case.
   """
-  @spec admin_email_domain() :: String.t() | nil
-  def admin_email_domain do
-    case Application.get_env(:platform, :admin_email_domain) do
+  @spec root_org_admin_email_domain() :: String.t() | nil
+  def root_org_admin_email_domain do
+    case Application.get_env(:platform, :root_org_admin_email_domain) do
       domain when is_binary(domain) ->
         case String.trim(domain) do
           "" -> nil
@@ -1470,7 +1523,7 @@ defmodule Platform.Tenancy do
   @doc """
   Single source of truth for the email-domain admin rule.
 
-  Returns `:admin` when `email`'s host equals `admin_email_domain/0`,
+  Returns `:admin` when `email`'s host equals `root_org_admin_email_domain/0`,
   compared case-insensitively on the whole `"@" <> domain` suffix.
   `:member` otherwise. Nil, empty, and non-binary input return `:member`.
 
@@ -1487,7 +1540,7 @@ defmodule Platform.Tenancy do
 
   ## Examples
 
-      # With :admin_email_domain set to "example.com"
+      # With :root_org_admin_email_domain set to "example.com"
       iex> Platform.Tenancy.derive_role_from_email("alice@example.com")
       :admin
 
@@ -1508,7 +1561,7 @@ defmodule Platform.Tenancy do
   """
   @spec derive_role_from_email(any()) :: :admin | :member
   def derive_role_from_email(email) when is_binary(email) and email != "" do
-    case admin_email_domain() do
+    case root_org_admin_email_domain() do
       nil ->
         :member
 
@@ -1590,10 +1643,29 @@ defmodule Platform.Tenancy do
   @doc """
   Lock-aware caller used by `Platform.Accounts.find_or_create_from_oidc/1`.
 
-  If a membership row exists for `{user, root_org_slug()}` AND its `roles_locked_at`
+  If a membership row exists for `{user, root org}` AND its `roles_locked_at`
   is non-nil, this is a no-op and returns `{:ok, existing}` — the manual
-  grant wins. Otherwise the email-domain rule is evaluated and the row is
-  upserted via `set_membership_role/3`.
+  grant wins over BOTH the email-domain rule and the bootstrap-admin
+  fallback below. Otherwise the email-domain rule is evaluated and the row
+  is upserted via `set_membership_role/3`.
+
+  Root org resolution is structural (`get_root_org/0`, `parent_org_id IS
+  NULL`), not slug-based — no operator has to configure `ROOT_ORG_SLUG` just
+  to make login work.
+
+  ## Bootstrap-admin fallback
+
+  When no membership row exists yet for `{user, root_org}` AND the root org
+  currently has zero memberships at all (checked with a `count()` against
+  `org_memberships`, not a cache), the derived role is forced to `:admin`
+  regardless of what `derive_role_from_email/1` says. A brand-new install
+  has no admin and no way to call `promote_to_admin/2` without one — this is
+  how the FIRST person to log in on a fresh root org gets in.
+
+  This is permanently inert once any membership exists on the org: the next
+  user to land (any email) is evaluated by the ordinary domain rule (or
+  `:member`), never by this fallback again. Fabrikam's own root org already has
+  memberships, so this branch never fires there.
 
   This is the function the accounts hook should call. `set_membership_role/3`
   remains the unconditional setter for `promote_to_admin/2` /
@@ -1604,26 +1676,41 @@ defmodule Platform.Tenancy do
           | {:error, :org_not_found}
           | {:error, Ecto.Changeset.t()}
   def apply_derived_role(%{id: user_id, email: email} = user) when is_binary(user_id) do
-    slug_str = normalize_slug(root_org_slug())
-
-    case get_org_by_slug(slug_str) do
+    case get_root_org() do
       nil ->
         {:error, :org_not_found}
 
-      %Org{id: org_id} ->
+      %Org{id: org_id, slug: org_slug} ->
         case Repo.get_by(OrgMembership, user_id: user_id, org_id: org_id) do
           %OrgMembership{roles_locked_at: %DateTime{}} = locked ->
             # Manual grant wins — skip evaluation entirely.
             {:ok, locked}
 
-          _ ->
+          nil ->
+            role = derive_role_for_first_membership(org_id, email)
+            set_membership_role(user, org_slug, role)
+
+          _existing ->
             role = derive_role_from_email(email)
-            set_membership_role(user, slug_str, role)
+            set_membership_role(user, org_slug, role)
         end
     end
   end
 
   def apply_derived_role(_), do: {:error, :invalid_input}
+
+  # Bootstrap-admin fallback: the FIRST membership ever written on an
+  # otherwise-empty root org is force-admined, independent of the
+  # email-domain rule. Guarded by a live COUNT (not a flag or a cache) so
+  # it is provably a no-op the moment any membership exists — including a
+  # second brand-new user landing microseconds after the first.
+  defp derive_role_for_first_membership(org_id, email) do
+    if Repo.aggregate(from(m in OrgMembership, where: m.org_id == ^org_id), :count) == 0 do
+      :admin
+    else
+      derive_role_from_email(email)
+    end
+  end
 
   @doc """
   Promote `user` to `:admin` on the Fabrikam root org and set `roles_locked_at`
@@ -1640,7 +1727,10 @@ defmodule Platform.Tenancy do
 
   ## Options
 
-    * `:org_slug` — defaults to `Platform.Tenancy.root_org_slug/0`.
+    * `:org_slug` — an explicit override, resolved by slug. Defaults to
+      the install's root org resolved structurally via
+      `Platform.Tenancy.get_root_org/0` (`parent_org_id IS NULL`), not by
+      slug.
     * `:actor_id` — UUID of the user/agent making the change. Defaults to
       `nil` and `actor_type` defaults to `"system"`.
     * `:actor_type` — one of `Platform.Audit.Event.actor_types/0`. Defaults
@@ -1699,11 +1789,10 @@ defmodule Platform.Tenancy do
   # another field of the struct. Dropped rather than underscore-prefixed.
   defp set_managed_role(%{id: user_id}, target_role, opts)
        when is_binary(user_id) and target_role in [:admin, :member] do
-    slug_str = opts |> Keyword.get(:org_slug, root_org_slug()) |> normalize_slug()
     role_str = Atom.to_string(target_role)
     now = DateTime.utc_now()
 
-    case get_org_by_slug(slug_str) do
+    case resolve_managed_org(opts) do
       nil ->
         {:error, :org_not_found}
 
@@ -1730,6 +1819,19 @@ defmodule Platform.Tenancy do
   end
 
   defp set_managed_role(_, _, _), do: {:error, :invalid_input}
+
+  # An explicit `:org_slug` opt is a real override (e.g. granting admin on
+  # a specific non-root tenant) and is resolved by slug, same as before.
+  # With no opt, resolve the install's root org structurally
+  # (`get_root_org/0`, `parent_org_id IS NULL`) instead of through
+  # `root_org_slug/0` — a renamed or freshly-seeded root org has no fixed
+  # slug value an operator must know to configure.
+  defp resolve_managed_org(opts) do
+    case Keyword.fetch(opts, :org_slug) do
+      {:ok, slug} -> get_org_by_slug(normalize_slug(slug))
+      :error -> get_root_org()
+    end
+  end
 
   defp managed_action_name(:admin), do: "promote_to_admin"
   defp managed_action_name(:member), do: "revoke_admin"

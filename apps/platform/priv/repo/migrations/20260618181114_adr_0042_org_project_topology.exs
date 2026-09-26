@@ -34,6 +34,20 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
   in `20260519143620_seed_root_orgs.exs`. UUIDs are environment-specific —
   hardcoding prod ids here would break dev/test.
 
+  ## Soylent/SXI are now OPTIONAL (task 01a068f6 stage 2)
+
+  `20260519143620_seed_root_orgs.exs` no longer seeds the four Fabrikam-brand
+  tenant orgs, only a root. This migration is already applied (recorded in
+  `schema_migrations`) on every install that ever had Soylent/SXI rows, so
+  rewriting `up/0` is inert there for the same reason `SeedRootOrgs`'
+  rewrite is — it only changes behavior for a genuinely fresh database's
+  first migrate, which by definition has an empty `projects` table (the
+  only table this file's name-match backfill can touch). `soylent_id`/
+  `sxi_id` fall back to the root org when those slugs don't exist, instead
+  of raising — the fallback is never exercised by a real backfill on such a
+  database, and it keeps `mix ecto.migrate` from hard-failing on any fresh
+  install (exactly the bug task 01a068f6 exists to fix).
+
   ## chat_space safety
 
   The existing `chat_spaces_unique_slug` index is `(workspace_id, slug)` —
@@ -64,8 +78,8 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
     flush()
 
     fabrikam_id = fetch_org_id!(@fabrikam_slug)
-    soylent_id = fetch_org_id!(@soylent_slug)
-    sxi_id = fetch_org_id!(@sxi_slug)
+    soylent_id = fetch_org_id(@soylent_slug) || fabrikam_id
+    sxi_id = fetch_org_id(@sxi_slug) || fabrikam_id
 
     # Name-match backfill. CASE returns fabrikam for any other name; the
     # leftover-NULL guard below catches projects whose name *we missed*,
@@ -195,8 +209,14 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
     # ("Soylent", "Wayne-Tech", "Stark Industries"). Rollback restores
     # the schema, not the prior labels; an operator can rename via UI.
 
-    execute("ALTER TABLE org_wiki_journal_entries DROP CONSTRAINT IF EXISTS org_wiki_journal_entries_project_id_fkey")
-    execute("ALTER TABLE org_wiki_journal_entries DROP CONSTRAINT IF EXISTS org_wiki_journal_entries_org_id_fkey")
+    execute(
+      "ALTER TABLE org_wiki_journal_entries DROP CONSTRAINT IF EXISTS org_wiki_journal_entries_project_id_fkey"
+    )
+
+    execute(
+      "ALTER TABLE org_wiki_journal_entries DROP CONSTRAINT IF EXISTS org_wiki_journal_entries_org_id_fkey"
+    )
+
     drop_if_exists(index(:org_wiki_journal_entries, [:project_id]))
     drop_if_exists(index(:org_wiki_journal_entries, [:org_id]))
     execute("ALTER TABLE org_wiki_journal_entries DROP COLUMN IF EXISTS project_id")
@@ -216,15 +236,21 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
 
   # ── helpers ────────────────────────────────────────────────────────────
 
-  defp fetch_org_id!(slug) do
+  # `nil` on a missing slug — used for the two OPTIONAL tenant orgs
+  # (Soylent/SXI), which the seed migration no longer guarantees.
+  defp fetch_org_id(slug) do
     case repo_query!("SELECT id FROM orgs WHERE slug = $1", [slug]) do
-      %{rows: [[id]]} ->
-        id
-
-      %{rows: []} ->
-        raise "ADR 0042 backfill: orgs.slug=#{inspect(slug)} not found. " <>
-                "Run migration 20260519143620_seed_root_orgs first."
+      %{rows: [[id]]} -> id
+      %{rows: []} -> nil
     end
+  end
+
+  # Raises on a missing slug — used only for the root org (fabrikam), which
+  # `20260519143620_seed_root_orgs.exs` always seeds exactly one of.
+  defp fetch_org_id!(slug) do
+    fetch_org_id(slug) ||
+      raise "ADR 0042 backfill: orgs.slug=#{inspect(slug)} not found. " <>
+              "Run migration 20260519143620_seed_root_orgs first."
   end
 
   defp repo_query!(sql, params \\ []) do

@@ -190,12 +190,14 @@ defmodule Platform.Accounts do
   Wrapped in `Ecto.Multi` so the user write and the Fabrikam-membership
   upsert are atomic:
 
-    * **INSERT**: every new user gets an `org_memberships` row in Fabrikam
-      with role derived from `Platform.Tenancy.derive_role_from_email/1`
-      (`:admin` for the configured `:admin_email_domain`, `:member`
-      otherwise, and `:member` for everyone when no domain is set).
-      No lock exists yet for a fresh user, so the rule always applies
-      on first INSERT.
+    * **INSERT**: every new user gets an `org_memberships` row in the
+      root org with role derived from
+      `Platform.Tenancy.derive_role_from_email/1` (`:admin` for the
+      configured `:root_org_admin_email_domain`, `:member` otherwise, and
+      `:member` for everyone when no domain is set — except the very
+      first membership on an empty root org, which is force-admined; see
+      `apply_derived_role/1`'s bootstrap-admin fallback). No lock exists
+      yet for a fresh user, so the rule always applies on first INSERT.
     * **UPDATE with email change**: if the email changes AND the new
       email derives `:admin`, promote the user in Fabrikam — UNLESS the
       Fabrikam membership row has `roles_locked_at` set, in which case the
