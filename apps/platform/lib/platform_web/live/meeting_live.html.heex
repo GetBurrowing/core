@@ -4449,6 +4449,67 @@
             </div>
           </div>
 
+          <%!-- ── Meet now (task 01a0d4d5) ──────────────────────────────
+               The common case is "start a call right now", so it sits
+               above the scheduling form and needs nothing filled in.
+
+               OUTSIDE the form element and outside
+               `data-role="meeting-create-body"`, which is the panel's one
+               scrolling region. A control placed in the body scrolls away
+               behind a long staged-invite list — the same defect the
+               footer bar was rejected for at stage 4 of the original
+               sheet. `flex-none` keeps it out of the shrink calculation.
+
+               NOT breakpoint-gated. The desktop `new-meeting-button` and
+               the mobile `start-meeting-fab` both push
+               `open_start_meeting_sheet` and render this one panel, so one
+               ungated control is what "works from both entry points"
+               means here. A `lg:`-gated duplicate would be two controls to
+               keep in step and two chances to drift.
+
+               `min-h-11` is the 44px tap floor: `btn` alone renders 35px
+               in this theme (see the FAB comment above). --%>
+          <div :if={@projects != []} class="flex-none border-b border-edge px-4 py-4">
+            <%!-- A TILE, not a second filled primary. `start-meeting-submit`
+                 in the footer is already `btn-primary`; a second one here
+                 makes the sheet read as two equal commits and neither wins.
+                 The tile reads as a shortcut OUT of the form, which is what
+                 it is. Ratified design canvas rev 2.
+
+                 Icon, label and subline are all INSIDE the one button, so
+                 the whole surface is the hit target — `text-left` because a
+                 two-line control that centres its subline reads as a banner
+                 rather than something you press. --%>
+            <button
+              type="button"
+              phx-click="meet_now"
+              disabled={@meet_now_pending?}
+              data-role="meeting-meet-now"
+              class="flex w-full min-h-11 items-center gap-3 rounded-box border border-edge bg-base-200 px-3 py-3 text-left transition-colors hover:bg-base-300 disabled:opacity-60"
+            >
+              <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
+              <span class="min-w-0">
+                <span class="block text-sm font-semibold">Meet now</span>
+                <%!-- NAMES THE PROJECT the click will land in. Load-bearing,
+                     not decoration: the tile takes no input, so in a
+                     multi-project org it is silently choosing a project and
+                     a viewer who cannot see which one is surprised by a real
+                     side effect once they are already in the room. --%>
+                <span class="block truncate text-xs text-muted" data-role="meeting-meet-now-hint">
+                  Starts now in {@meet_now_project_name}
+                </span>
+              </span>
+            </button>
+          </div>
+
+          <%!-- Divider into the scheduling path the sheet used to be
+               entirely about. --%>
+          <div class="flex-none flex items-center gap-3 px-4 pt-4">
+            <div class="h-px flex-1 bg-edge"></div>
+            <span class="text-xs uppercase tracking-wide text-muted">Or schedule for later</span>
+            <div class="h-px flex-1 bg-edge"></div>
+          </div>
+
           <%!-- Form --%>
           <form
             id="start-meeting-form"

@@ -6824,6 +6824,245 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  # ── Meet now (task 01a0d4d5) ─────────────────────────────────────────────
+  #
+  # A separate describe rather than additions to ":index action —
+  # new-meeting create sheet" above: the ticket's acceptance is that the
+  # existing "New meeting" tests pass UNMODIFIED, so the file reads more
+  # honestly if the new coverage cannot be confused for an edit to them.
+
+  describe ":index action — Meet now" do
+    @meet_now_zone "America/Chicago"
+
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+
+      {:ok,
+       conn: put_connect_params(conn, %{"timezone" => @meet_now_zone}),
+       user: user,
+       project: project}
+    end
+
+    defp open_sheet(conn) do
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+      view
+    end
+
+    test "the tile renders in the sheet and is not inside the scrolling body",
+         %{conn: conn} do
+      html = conn |> open_sheet() |> render()
+
+      assert html =~ ~s(data-role="meeting-meet-now")
+
+      # The defect this guards is specific: a control placed inside
+      # `meeting-create-body` scrolls out of reach behind a long staged
+      # invite list. Asserting it merely EXISTS would stay green through
+      # exactly that regression.
+      body_html =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-create-body"]))
+        |> LazyHTML.to_html()
+
+      refute body_html =~ ~s(data-role="meeting-meet-now")
+    end
+
+    test "one click, no field touched, creates one meeting starting now and enters its room",
+         %{conn: conn, project: project} do
+      view = open_sheet(conn)
+      before = DateTime.utc_now()
+
+      assert {:error, {:live_redirect, %{to: to}}} =
+               view |> element(~s([data-role="meeting-meet-now"])) |> render_click()
+
+      assert [%Meeting{} = created] = Repo.all(Meeting)
+      assert created.project_id == project.id
+      assert to == "/meetings/#{created.slug}"
+
+      # Both endpoints, never one: `Meeting.changeset/2` validates the
+      # intended-time pair as both-or-neither, and the calendar places the
+      # row off `scheduled_start_at`.
+      assert DateTime.compare(created.scheduled_start_at, before) != :lt
+      assert DateTime.diff(created.scheduled_start_at, before, :second) <= 10
+
+      assert DateTime.diff(created.scheduled_end_at, created.scheduled_start_at, :second) ==
+               PlatformWeb.MeetingLive.default_duration_minutes() * 60
+
+      assert String.starts_with?(created.name, "Meeting · ")
+    end
+
+    test "the default name is rendered in the viewer's zone, not the server's",
+         %{conn: conn} do
+      view = open_sheet(conn)
+
+      assert {:error, {:live_redirect, _}} =
+               view |> element(~s([data-role="meeting-meet-now"])) |> render_click()
+
+      assert [%Meeting{} = created] = Repo.all(Meeting)
+
+      expected =
+        DateTime.utc_now()
+        |> DateTime.shift_zone!(@meet_now_zone)
+        |> Calendar.strftime("%-d %b %Y")
+
+      assert created.name =~ expected
+    end
+
+    test "a meet_now arriving while one is already in flight creates nothing",
+         %{conn: conn} do
+      view = open_sheet(conn)
+
+      # A successful meet_now navigates away and ends this LiveView, so a
+      # replay after the fact hits a dead process and proves nothing. Put the
+      # view in the in-flight state directly, then send the event: this is
+      # the only way to constrain the handler clause itself. Clicking the
+      # rendered button would be stopped by `disabled` and stay green with
+      # the clause deleted.
+      :sys.replace_state(view.pid, fn state ->
+        put_in(state.socket.assigns.meet_now_pending?, true)
+      end)
+
+      _ = render_click(view, "meet_now", %{})
+
+      assert Repo.all(Meeting) == []
+    end
+
+    test "with no project the tile is absent and a replayed click still writes nothing",
+         %{conn: conn} do
+      Repo.delete_all(Project)
+
+      view = open_sheet(conn)
+
+      # `meetings.project_id` is NOT NULL, so with no project there is
+      # nothing this tile could honestly create. Ratified design canvas
+      # rev 2: hide it rather than offer a control whose only outcome is an
+      # error.
+      refute render(view) =~ ~s(data-role="meeting-meet-now")
+
+      # The template gate keeps it out of the DOM; this keeps it out of
+      # reach. A `phx-click` is a message from a client, and a client can
+      # send one for a control it can no longer see, so the handler refuses
+      # in place rather than trusting the markup.
+      html = render_click(view, "meet_now", %{})
+
+      assert html =~ "Create a project before starting a meeting."
+      assert Repo.all(Meeting) == []
+    end
+
+    test "the tile names the project the click will land in", %{conn: conn, project: project} do
+      html = conn |> open_sheet() |> render()
+
+      assert html =~ project.name
+    end
+
+    test "with three projects and nothing preselected, it lands in the project it named",
+         %{conn: conn} do
+      # THREE projects, so `blank_start_meeting_form/1` preselects nothing
+      # and the sheet's select sits on its disabled blank option. The single
+      # -project cases above all pass with an implementation that simply
+      # forwards the form's `project_id`; this one does not. A blank
+      # `project_id` hits the `project_id == ""` refusal in
+      # `start_meeting`, so forwarding it would fail here — which is the
+      # whole reason Meet now resolves its own project rather than reading
+      # the form's.
+      _second = create_project()
+      _third = create_project()
+
+      view = open_sheet(conn)
+      html = render(view)
+
+      # Nothing is preselected: no `option` in the project select carries a
+      # `selected` attribute. Without this the test would still pass on an
+      # implementation that quietly preselected one, and the case it is
+      # named for would stop being exercised.
+      selected =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(#start-meeting-form select[name*="project_id"] option[selected]))
+        |> LazyHTML.attribute("value")
+
+      assert selected == [""]
+
+      named =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-meet-now-hint"]))
+        |> LazyHTML.text()
+        |> String.trim()
+
+      assert {:error, {:live_redirect, _}} =
+               view |> element(~s([data-role="meeting-meet-now"])) |> render_click()
+
+      assert [%Meeting{project_id: landed}] = Repo.all(Meeting)
+
+      # The tile's claim and the row agree. Comparing the NAME, not the id,
+      # is the point: the subline is the only thing the viewer saw before
+      # they committed.
+      assert named == "Starts now in " <> Repo.get!(Project, landed).name
+    end
+
+    test "picking a different project in the form re-points the tile", %{conn: conn} do
+      other = create_project()
+      view = open_sheet(conn)
+
+      html =
+        view
+        |> form("#start-meeting-form",
+          start_meeting: %{
+            "name" => "",
+            "project_id" => other.id,
+            "date" => "",
+            "start_time" => "",
+            "duration_minutes" => "30"
+          }
+        )
+        |> render_change()
+
+      hint =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-meet-now-hint"]))
+        |> LazyHTML.to_html()
+
+      assert hint =~ other.name
+
+      # And the click actually commits there — the label and the write are
+      # one resolution, not two that can disagree.
+      assert {:error, {:live_redirect, _}} =
+               view |> element(~s([data-role="meeting-meet-now"])) |> render_click()
+
+      assert [%Meeting{project_id: landed}] = Repo.all(Meeting)
+      assert landed == other.id
+    end
+
+    test "the scheduling form still stays put and does not enter the room",
+         %{conn: conn, project: project} do
+      view = open_sheet(conn)
+
+      html =
+        view
+        |> form("#start-meeting-form",
+          start_meeting: %{
+            "name" => "Design review",
+            "project_id" => project.id,
+            "date" => "2026-09-16",
+            "start_time" => "09:30",
+            "duration_minutes" => "45"
+          }
+        )
+        |> render_submit()
+
+      # The stage-4 decision this protects: a meeting scheduled for next
+      # Wednesday must not open its room now. Threading a mode through the
+      # shared commit path is exactly the change that could break it.
+      assert html =~ "Meeting created."
+      assert [%Meeting{}] = Repo.all(Meeting)
+    end
+  end
+
   # ── LiveKit wiring via MeetingHooks (task 019e2d1a stage 2) ──────────────
   #
   # Stage 2 wires the LiveKit lifecycle into MeetingLive by reusing
