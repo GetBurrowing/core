@@ -4122,14 +4122,15 @@ defmodule Platform.Meetings do
   here** — it is what makes "currently failed" the actual predicate instead
   of "has ever failed since this column existed."
 
-  Concretely, this is not only hypothetical. Both code paths that take a
-  row out of `failed` now clear the column: `complete_transcript/2` (stage
-  2, backed by the CHECK constraint) and `reopen_transcript/1` (the rejoin
-  path, task 01a08a25). But rows reopened BEFORE task 01a08a25 are still
-  sitting in `recording` / `processing` with their old reason. No backfill
-  cleared them, and the CHECK constraint is deliberately scoped to
-  `complete`, so it does not forbid them. Any raw write can produce the same
-  shape. `not is_nil(failure_reason)` alone misreports those rows as
+  Concretely, this is not only hypothetical. The three code paths that take
+  a row out of `failed` now clear the column: `complete_transcript/2` (stage
+  2, backed by the CHECK constraint), `reopen_transcript/1` (the rejoin
+  path, task 01a08a25) and `finalize_transcript/1` (the `room_finished`
+  recovery path, task 01a0de8f). But rows reopened before task 01a08a25, or
+  finalized before task 01a0de8f, can still be sitting in `recording` /
+  `processing` with their old reason. No backfill cleared them, and the
+  CHECK constraint is deliberately scoped to `complete`, so it does not
+  forbid them. Any raw write can produce the same shape. `not is_nil(failure_reason)` alone misreports those rows as
   unrecovered failures, which is exactly why this function filters on
   status rather than relying on the column alone.
 
@@ -4633,9 +4634,21 @@ defmodule Platform.Meetings do
   # ── Transcript Status Transitions ─────────────────────────────────────────
 
   @doc """
-  Transition a transcript to 'processing' status and return it.
+  Transition a transcript to 'processing' status and return it, clearing
+  `failure_reason` (task 01a0de8f).
 
   Called when a meeting ends to prepare the transcript for summary generation.
+
+  The clear is unconditional, from any source status, mirroring
+  `reopen_transcript/1`. `room_finished` re-runs a `failed` row through here
+  on purpose, as recovery: the webhook controller does not absorb `failed`.
+  A row in `processing` is not currently failed, so a reason left on it is
+  false (see the field comment in `Platform.Meetings.Transcript`). It is also
+  misleading on a later failure: `fail_transcript/1` and `/2` pass
+  `reason = nil`, which does not overwrite the column, so a kept reason would
+  be read as the explanation of a DIFFERENT run. Failure history is not lost
+  by the clear. Every failure is recorded durably in `audit_events`
+  (`event_type = "platform.meetings.transcription_failed"`).
   """
   @spec finalize_transcript(String.t()) :: {:ok, Transcript.t()} | {:error, term()}
   def finalize_transcript(transcript_id) do
@@ -4646,6 +4659,12 @@ defmodule Platform.Meetings do
       transcript ->
         transcript
         |> Transcript.changeset(%{status: "processing"})
+        # `put_change/3` rather than a `failure_reason: nil` key in the attrs
+        # map above, mirroring `reopen_transcript/1` and
+        # `complete_transcript/2`: the clearing is the point, and a nil value
+        # threaded through `cast/3` is exactly the sort of thing that silently
+        # no-ops. Stated here, it also survives a later refactor of the attrs.
+        |> Ecto.Changeset.put_change(:failure_reason, nil)
         |> Repo.update()
     end
   end

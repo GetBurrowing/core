@@ -29,17 +29,22 @@ defmodule Platform.Meetings.Transcript do
     # Why this row is CURRENTLY failed — task 019ff6f3 stage 3. Single-valued
     # and overwritten by every `fail_transcript/3` call that carries a reason,
     # so it is a latch, not a history. A non-nil value on a row that is not
-    # `failed` is a bug. It is cleared at BOTH points where a row leaves
+    # `failed` is a bug. It is cleared at all THREE points where a row leaves
     # `failed`:
     #   * `Meetings.complete_transcript/2`, on success (task 01a089b3 stage 2);
-    #   * `Meetings.reopen_transcript/1`, on rejoin (task 01a08a25).
+    #   * `Meetings.reopen_transcript/1`, on rejoin (task 01a08a25);
+    #   * `Meetings.finalize_transcript/1`, on `room_finished` recovery of a
+    #     failed row (task 01a0de8f).
     # Decision (task 01a08a25): CLEAR on reopen rather than keep. A reopened
     # row is not currently failed, and a kept reason would be misattributed to
     # a later reason-less `fail_transcript/1`/`/2`.
+    # Decision (task 01a0de8f): CLEAR on finalize, for the same reason.
+    # `room_finished` re-runs a `failed` row on purpose, and the row it leaves
+    # in `processing` is not currently failed.
     # The DB enforces the invariant ONLY for `complete`, via the
     # `meeting_transcripts_no_reason_when_complete` CHECK constraint. That scope
-    # is deliberate: rows reopened before task 01a08a25 still sit in
-    # `recording`/`processing` holding a reason. Extending the constraint would
+    # is deliberate: rows reopened before task 01a08a25, or finalized before
+    # task 01a0de8f, can still sit in `recording`/`processing` holding a reason. Extending the constraint would
     # need a backfill that nulls the ONLY record of failures that predate the
     # audit bridge, and that is a separate decision.
     # Failure HISTORY lives in `audit_events`

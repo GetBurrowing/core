@@ -1345,6 +1345,32 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert length(Meetings.list_transcripts_for_room(room_name)) == 1
       assert length(Meetings.get_transcript(existing.id).segments) == 5
     end
+
+    # Task 01a0de8f. Pins ROUTING only: a `failed` populated row is NOT
+    # absorbed by room_finished, so the real entry point reaches
+    # `Meetings.finalize_transcript/1` (where the failure_reason clear lives).
+    # It deliberately asserts nothing about `failure_reason`: the async
+    # summarizer started by `maybe_trigger_summary/1` can rewrite that column
+    # and race any assertion. The clear itself is pinned in
+    # `Platform.MeetingsTest` against `finalize_transcript/1` directly.
+    test "room_finished re-runs a FAILED populated row through finalize (task 01a0de8f)",
+         %{conn: conn} do
+      room_name = app_room_name()
+      existing = transcript_at(room_name, 4, ~U[2026-02-02 09:00:00.000000Z])
+
+      {:ok, failed} =
+        Meetings.fail_transcript(existing.id, nil, {:llm_failed, :planted_01a0de8f})
+
+      assert failed.status == "failed"
+      existing_id = existing.id
+
+      assert %{"status" => "finalized", "transcript_id" => ^existing_id, "segment_count" => 4} =
+               conn
+               |> post(@livekit_webhook_path, room_finished_payload(room_name))
+               |> json_response(200)
+
+      assert length(Meetings.list_transcripts_for_room(room_name)) == 1
+    end
   end
 
   # Two rows for one room: populated first, EMPTY row inserted strictly

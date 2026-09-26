@@ -3007,4 +3007,89 @@ defmodule Platform.MeetingsTest do
       assert failure_audit_count(transcript.id) == 2
     end
   end
+
+  describe "finalize_transcript/1 clears failure_reason (task 01a0de8f)" do
+    # Decision: CLEAR on finalize, the same reasoning as reopen (01a08a25).
+    # `room_finished` re-runs a `failed` row on purpose (the controller does
+    # not absorb `failed`), so a finalized row is in recovery, not failed.
+    # Every test FAILS a row with a reason and asserts the reason is present
+    # before finalizing: a test that finalizes a never-failed row would pass
+    # against the unfixed code and prove nothing. Reuses the module-level
+    # `processing_transcript/1` and `failure_audit_count/1` helpers defined in
+    # the 01a08a25 describe above.
+
+    test "fail -> finalize leaves the row processing with a NULL failure_reason" do
+      transcript = processing_transcript()
+
+      {:ok, failed} =
+        Meetings.fail_transcript(
+          transcript.id,
+          nil,
+          {:llm_failed, %Req.TransportError{reason: :timeout}}
+        )
+
+      # Precondition: without this the test is vacuous.
+      refute is_nil(failed.failure_reason)
+      assert failed.status == "failed"
+
+      assert {:ok, finalized} = Meetings.finalize_transcript(transcript.id)
+      assert finalized.status == "processing"
+      assert is_nil(finalized.failure_reason)
+
+      reloaded = Repo.reload!(finalized)
+      assert reloaded.status == "processing"
+      assert is_nil(reloaded.failure_reason)
+    end
+
+    # The misattribution case: `fail_transcript/1` passes `reason = nil`, which
+    # does NOT overwrite the column. Were the first run's reason kept across the
+    # finalize, it would be read as the explanation of the SECOND failure.
+    test "a reason-less re-fail after finalize lands with a NULL reason, not the first run's" do
+      transcript = processing_transcript()
+
+      {:ok, failed} =
+        Meetings.fail_transcript(
+          transcript.id,
+          nil,
+          {:llm_failed, %Req.TransportError{reason: :timeout}}
+        )
+
+      refute is_nil(failed.failure_reason)
+
+      {:ok, _finalized} = Meetings.finalize_transcript(transcript.id)
+
+      assert {:ok, refailed} = Meetings.fail_transcript(transcript.id)
+      assert refailed.status == "failed"
+      assert is_nil(refailed.failure_reason)
+      assert is_nil(Repo.reload!(refailed).failure_reason)
+    end
+
+    # Positive control: the fix must not degenerate into "never write this
+    # column". A re-fail WITH a reason still records it, and the audit log
+    # keeps both failures even though the column held only one at a time.
+    # Passes with and without the fix by design.
+    test "a re-fail with a reason after finalize records it, and both failures stay audited" do
+      Platform.Audit.TelemetryHandler.attach()
+      transcript = processing_transcript()
+
+      {:ok, failed} =
+        Meetings.fail_transcript(
+          transcript.id,
+          nil,
+          {:llm_failed, %Req.TransportError{reason: :timeout}}
+        )
+
+      refute is_nil(failed.failure_reason)
+
+      {:ok, _finalized} = Meetings.finalize_transcript(transcript.id)
+
+      assert {:ok, refailed} =
+               Meetings.fail_transcript(transcript.id, nil, {:llm_failed, :bad_audio_format})
+
+      assert refailed.status == "failed"
+      assert refailed.failure_reason =~ "bad_audio_format"
+      refute refailed.failure_reason =~ "timeout"
+      assert failure_audit_count(transcript.id) == 2
+    end
+  end
 end
