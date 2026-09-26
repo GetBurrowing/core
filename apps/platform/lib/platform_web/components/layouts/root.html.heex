@@ -22,7 +22,9 @@
          `apple-mobile-web-app-title` from THIS head at add-time — the
          manifest is Android's half, these tags are iOS's. Every identity
          value here routes through Platform.Branding; no literal name, hex
-         or icon path may be reintroduced. --%>
+         or icon path may be reintroduced. The same rule covers the in-app
+         theme colours below: they come from the row through
+         Platform.Branding.ThemeCss, never a literal here. --%>
     <.live_title default={branding.app_name}>
       {assigns[:page_title]}
     </.live_title>
@@ -59,6 +61,20 @@
       content={to_string(Application.get_env(:platform, :webmcp_enabled, false))}
     />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <%!-- Install theme colours (task 01a0dbee-f598-7001-b450-7890103f44c4
+         stage 2). MUST come after the app.css link: it overrides the daisyUI
+         theme tokens at equal specificity, so source order is what makes it
+         win. Renders nothing at all when the row stores no colours, so a
+         fresh install's CSS is exactly app.css. The css is safe to raw/1
+         because ThemeCss re-validates every value as #rrggbb and drops the
+         rest. Read from the same uncached row as everything above: a save
+         shows on the next FULL page load in every tab. LiveView live
+         navigation does not re-render this root layout, so an already-open
+         tab keeps its old colours until its next full load. --%>
+    <% install_theme_css = Platform.Branding.ThemeCss.render(branding) %>
+    <style :if={install_theme_css} id="install-theme" data-role="install-theme">
+      <%= Phoenix.HTML.raw(install_theme_css) %>
+    </style>
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
     <script>

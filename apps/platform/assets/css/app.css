@@ -1230,16 +1230,17 @@ body, .font-fabrikam {
 }
 
 /* Active glow: pulsing cyan box-shadow matching the --cyan-glow design token.
-   rgba(6, 213, 237, 0.15) ≈ oklch(82% 0.12 207 / 0.15) — the primary cyan. */
+   Primary at 15% alpha: rgba(6, 213, 237, 0.15) on a fresh install, and the
+   install's own action colour once one is saved (task 01a0dbee stage 4). */
 @keyframes checklist-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(6, 213, 237, 0.15); }
-  50%       { box-shadow: 0 0 0 6px rgba(6, 213, 237, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 15%, transparent); }
+  50%       { box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-primary) 0%, transparent); }
 }
 
 .card-checklist [data-state="active"] {
   animation: checklist-glow 2s ease-in-out infinite;
   border-radius: 0.375rem;
-  background: rgba(6, 213, 237, 0.05);
+  background: color-mix(in srgb, var(--color-primary) 5%, transparent);
 }
 
 /* ── Needs-attention pulse ───────────────────────────────────────── */
@@ -1297,7 +1298,7 @@ body, .font-fabrikam {
 .msg-reply-gutter {
   position: absolute; left: -6px; top: 50%; transform: translateY(-50%);
   width: 28px; height: 28px; border-radius: 50%; border: none;
-  background: #252c3d; color: #06d5ed; cursor: pointer;
+  background: #252c3d; color: var(--color-primary); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: all 0.15s ease; z-index: 10;
   box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.08);
@@ -1305,7 +1306,7 @@ body, .font-fabrikam {
 }
 .message:hover .msg-reply-gutter,
 .group:hover > .msg-reply-gutter { opacity: 1; left: -14px; }
-.msg-reply-gutter:hover { background: #06d5ed; color: #000; transform: translateY(-50%) scale(1.1); }
+.msg-reply-gutter:hover { background: var(--color-primary); color: var(--color-primary-content); transform: translateY(-50%) scale(1.1); }
 [data-theme="light"] .msg-reply-gutter { box-shadow: 0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px #E0E0E0; background: #F5F5F5; }
 
 /* Thread indicator (collapsed state) */
@@ -1318,12 +1319,12 @@ body, .font-fabrikam {
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
-  color: #06d5ed;
+  color: var(--color-primary);
   transition: background 150ms ease;
   opacity: 0.85;
 }
 .thread-indicator:hover {
-  background: rgba(6,213,237,0.08);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
   opacity: 1;
 }
 .thread-indicator .ti-count { font-weight: 600; }
@@ -1347,7 +1348,7 @@ body, .font-fabrikam {
   margin-left: -6px;
 }
 .thread-avatars .t-av:first-child { margin-left: 0; }
-.thread-avatars .t-av.ai { background: #06d5ed; color: #000; }
+.thread-avatars .t-av.ai { background: var(--color-primary); color: var(--color-primary-content); }
 .thread-avatars .t-av.human { background: rgba(255,255,255,0.12); color: #B0B0B0; }
 [data-theme="light"] .thread-avatars .t-av { border-color: #FFFFFF; }
 [data-theme="light"] .thread-avatars .t-av.human { background: #D0D0D0; color: #4A4A4A; }
@@ -1376,11 +1377,11 @@ body, .font-fabrikam {
 
 /* Agent replies */
 .thread-reply.agent-reply {
-  background: rgba(6,213,237,0.03);
-  box-shadow: inset 2px 0 0 0 rgba(6,213,237,0.15);
+  background: color-mix(in srgb, var(--color-primary) 3%, transparent);
+  box-shadow: inset 2px 0 0 0 color-mix(in srgb, var(--color-primary) 15%, transparent);
   border-radius: 0 6px 6px 0;
 }
-.thread-reply.agent-reply:hover { background: rgba(6,213,237,0.07); }
+.thread-reply.agent-reply:hover { background: color-mix(in srgb, var(--color-primary) 7%, transparent); }
 
 /* Thread reply sizing overrides */
 /* `.thread-reply .msg-avatar` lived here. Its only markup was the inline
@@ -1400,8 +1401,8 @@ body, .font-fabrikam {
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 4px;
-  background: rgba(6,213,237,0.08);
-  color: #06d5ed;
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  color: var(--color-primary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1433,8 +1434,8 @@ body, .font-fabrikam {
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 .thread-input:focus {
-  border-color: rgba(6,213,237,0.55);
-  box-shadow: 0 0 0 3px rgba(6,213,237,0.08);
+  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 8%, transparent);
 }
 .thread-input::placeholder { color: #666; }
 .thread-send {
@@ -1442,8 +1443,8 @@ body, .font-fabrikam {
   height: 30px;
   border-radius: 50%;
   border: none;
-  background: #06d5ed;
-  color: #000;
+  background: var(--color-primary);
+  color: var(--color-primary-content);
   cursor: pointer;
   display: flex;
   align-items: center;

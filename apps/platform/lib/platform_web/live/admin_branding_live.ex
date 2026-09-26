@@ -56,13 +56,38 @@ defmodule PlatformWeb.AdminBrandingLive do
   and says so, and then accepts whatever the admin types. Blocking a
   longer name would be wrong: the manifest `name` is also used untruncated
   in the install prompt and the app switcher.
+
+  ## App colours (task 01a0dbee-f598-7001-b450-7890103f44c4 stage 4)
+
+  Three colours per mode (action, surface, optional accent), edited as a
+  DRAFT held in `:colors_draft` and saved only on "Save colours". Until then
+  the page chrome stays in the saved theme: the draft reaches the paired
+  preview only, through `ThemeCss.mode_declarations/2`, the same function the
+  root layout's `#install-theme` block is built from, so what the admin
+  approves is what the app renders.
+
+    * Each slot has a native colour swatch AND a typeable hex field in one
+      form. `validate_colors` reads `_target` to take whichever changed. A
+      value that does not parse leaves the last good colour in the draft and
+      shows an inline error; a blank value is "Suite default" (nil).
+    * `Palette.checks/2` re-runs on every change. Save is disabled while any
+      check blocks, with the reason written beside it. That is convenience:
+      `Branding.update_colors/2` re-runs the same checks and refuses, and the
+      refusal is rendered if a form bypasses the disabled button.
+    * A successful save or reset does a full `redirect/2`, not a
+      `push_navigate/2`: the root layout, which carries the install theme,
+      only re-renders on a full page load.
   """
   use PlatformWeb, :live_view
 
   alias Platform.Branding
   alias Platform.Branding.IconSet
   alias Platform.Branding.IconStorage
+  alias Platform.Branding.Contrast
   alias Platform.Branding.InstallBranding
+  alias Platform.Branding.Palette
+  alias Platform.Branding.Presets
+  alias Platform.Branding.ThemeCss
 
   @upload_name :source
   # The source is derived down to 512px at most, so nothing here needs a
@@ -72,6 +97,10 @@ defmodule PlatformWeb.AdminBrandingLive do
   # The label budget the helper text and the live counter both read. iOS is
   # the tighter of the two platforms; see the moduledoc.
   @label_budget 11
+
+  @modes [:light, :dark]
+  @slots [:action, :surface, :accent]
+  @save_scope "This changes colours for everyone on this install."
 
   @doc "The `allow_upload/3` name this surface consumes."
   @spec upload_name() :: atom()
@@ -129,6 +158,114 @@ defmodule PlatformWeb.AdminBrandingLive do
 
   def allowed_entry?(_entry), do: false
 
+  @doc "The Save colours confirmation, one sentence stating the scope."
+  @spec save_scope() :: String.t()
+  def save_scope, do: @save_scope
+
+  @doc "The colour modes the App colours section edits, in display order."
+  @spec modes() :: [:light | :dark]
+  def modes, do: @modes
+
+  @doc "The colour slots per mode, in display order."
+  @spec slots() :: [:action | :surface | :accent]
+  def slots, do: @slots
+
+  @doc "The form field name for one mode's slot, e.g. `\"light_action\"`."
+  @spec field(atom(), atom()) :: String.t()
+  def field(mode, slot), do: "#{mode}_#{slot}"
+
+  @doc "Human label for a colour slot."
+  @spec slot_label(atom()) :: String.t()
+  def slot_label(:action), do: "Action"
+  def slot_label(:surface), do: "Surface"
+  def slot_label(:accent), do: "Accent"
+
+  @doc "Human label for a mode."
+  @spec mode_label(atom()) :: String.t()
+  def mode_label(:light), do: "Light"
+  def mode_label(:dark), do: "Dark"
+
+  @doc """
+  The pairing a `Palette.checks/2` entry is about, in words, for the checks
+  list under the preview.
+  """
+  @spec check_label(atom()) :: String.t()
+  def check_label(:body_text), do: "Body text on surface"
+  def check_label(:button_text), do: "Button text"
+  def check_label(:accent_text), do: "Text on accent"
+  def check_label(:link_text), do: "Link text on surface"
+  def check_label(:action_visibility), do: "Action vs surface"
+  def check_label(:focus_ring), do: "Focus ring"
+
+  def check_label(id) do
+    case Atom.to_string(id) do
+      "collides_with_" <> status -> "Action vs #{status} colour"
+      other -> other
+    end
+  end
+
+  @doc "A contrast ratio as the page prints it (`15.3:1`), floored like Palette's copy."
+  @spec format_ratio(float() | nil) :: String.t()
+  def format_ratio(nil), do: "hue"
+
+  def format_ratio(ratio),
+    do: :erlang.float_to_binary(Float.floor(ratio * 10) / 10, decimals: 1) <> ":1"
+
+  @doc "The chip tone for a check level: pass success, warn warning, block error."
+  @spec level_tone(atom()) :: String.t()
+  def level_tone(:pass), do: "success"
+  def level_tone(:warn), do: "warning"
+  def level_tone(:block), do: "error"
+
+  @doc "The word a check level prints as."
+  @spec level_word(atom()) :: String.t()
+  def level_word(:pass), do: "pass"
+  def level_word(:warn), do: "warn"
+  def level_word(:block), do: "block"
+
+  @doc """
+  The colour a slot actually resolves to for display: the draft value, else
+  (accent) the action colour, else the Suite default. Always `#rrggbb`, so
+  it is what a native `<input type="color">` can hold.
+  """
+  @spec resolved(map(), atom(), atom()) :: String.t()
+  def resolved(draft, mode, slot) do
+    defaults = Map.fetch!(Palette.suite_defaults(), mode)
+    values = Map.fetch!(draft, mode)
+
+    case slot do
+      :accent -> values.accent || values.action || defaults.action
+      other -> Map.fetch!(values, other) || Map.fetch!(defaults, other)
+    end
+  end
+
+  @doc "The placeholder a blank hex field shows: the Suite default, or 'same as action'."
+  @spec placeholder(atom(), atom()) :: String.t()
+  def placeholder(_mode, :accent), do: "same as action"
+
+  def placeholder(mode, slot),
+    do: Palette.suite_defaults() |> Map.fetch!(mode) |> Map.fetch!(slot)
+
+  @doc """
+  The inline `style` for a preset card: split diagonally between the preset's
+  light and dark surfaces, with each half's action colour available as
+  `--swatch-light` / `--swatch-dark`. nil slots (Suite default) resolve
+  through `resolved/3`, so no hex is spelled here.
+  """
+  @spec preset_style(Presets.t()) :: String.t()
+  def preset_style(preset) do
+    draft = %{light: preset.light, dark: preset.dark}
+
+    "background:linear-gradient(135deg,#{resolved(draft, :light, :surface)} 50%," <>
+      "#{resolved(draft, :dark, :surface)} 50%);" <>
+      "--swatch-light:#{resolved(draft, :light, :action)};" <>
+      "--swatch-dark:#{resolved(draft, :dark, :action)};"
+  end
+
+  @doc "The preview wrapper's inline style for a draft mode: see `ThemeCss.mode_declarations/2`."
+  @spec preview_style(map(), atom()) :: String.t() | nil
+  def preview_style(draft, mode), do: ThemeCss.mode_declarations(mode, Map.fetch!(draft, mode))
+
   @doc "Maps an `upload_errors/1,2` reason to copy an admin can act on."
   @spec error_message(term()) :: String.t()
   def error_message(:too_large),
@@ -141,6 +278,8 @@ defmodule PlatformWeb.AdminBrandingLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    branding = Branding.get()
+
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Platform.PubSub, Branding.pubsub_topic())
     end
@@ -150,7 +289,9 @@ defmodule PlatformWeb.AdminBrandingLive do
      |> assign(:page_title, "Branding")
      |> assign(:upload_error, nil)
      |> assign(:saved?, false)
-     |> assign_branding(Branding.get())
+     |> assign(:colors_preview_mode, :light)
+     |> assign_branding(branding)
+     |> assign_colors(branding)
      |> allow_upload(@upload_name,
        accept: accept(),
        auto_upload: true,
@@ -174,6 +315,101 @@ defmodule PlatformWeb.AdminBrandingLive do
      socket
      |> assign(:form, to_form(changeset, as: :branding))
      |> assign(:app_name_length, name_length(params["app_name"]))}
+  end
+
+  def handle_event("match_app_colours", _params, socket) do
+    surface = resolved(socket.assigns.colors_draft, :dark, :surface)
+
+    params =
+      Map.merge(socket.assigns.form.params || %{}, %{
+        "background_color" => surface,
+        "theme_color" => surface
+      })
+
+    changeset =
+      socket.assigns.branding
+      |> InstallBranding.identity_changeset(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, :form, to_form(changeset, as: :branding))}
+  end
+
+  def handle_event("validate_colors", %{"_target" => ["colors", target]} = params, socket) do
+    value = get_in(params, ["colors", target])
+
+    case field_for(target) do
+      {mode, slot} when is_binary(value) -> {:noreply, put_slot(socket, mode, slot, value)}
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("validate_colors", _params, socket), do: {:noreply, socket}
+
+  def handle_event("apply_preset", %{"preset" => key}, socket) do
+    case Presets.get(key) do
+      nil ->
+        {:noreply, socket}
+
+      preset ->
+        draft = %{light: preset.light, dark: preset.dark}
+
+        {:noreply,
+         socket
+         |> assign(:colors_preset, preset.key)
+         |> assign(:colors_inputs, raw_inputs(draft))
+         |> assign(:colors_errors, %{})
+         |> assign(:colors_save_errors, [])
+         |> assign_draft(draft)}
+    end
+  end
+
+  def handle_event("preview_mode", %{"mode" => mode}, socket) when mode in ["light", "dark"] do
+    {:noreply, assign(socket, :colors_preview_mode, String.to_existing_atom(mode))}
+  end
+
+  def handle_event("cancel_colors", _params, socket) do
+    {:noreply, assign_colors(socket, socket.assigns.branding)}
+  end
+
+  def handle_event("save_colors", _params, socket) do
+    draft = socket.assigns.colors_draft
+
+    attrs =
+      for mode <- @modes,
+          slot <- @slots,
+          into: %{"color_preset" => socket.assigns.colors_preset} do
+        {field(mode, slot), draft[mode][slot]}
+      end
+
+    case Branding.update_colors(actor(socket), attrs) do
+      {:ok, %InstallBranding{}} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "App colours saved.")
+         |> redirect(to: ~p"/admin/branding")}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :colors_save_errors, changeset_messages(changeset))}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You don't have access to that page.")}
+    end
+  end
+
+  def handle_event("reset_colors", _params, socket) do
+    case Branding.reset_colors(actor(socket)) do
+      {:ok, %InstallBranding{}} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "App colours reset to the Suite default.")
+         |> redirect(to: ~p"/admin/branding")}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :colors_save_errors, changeset_messages(changeset))}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You don't have access to that page.")}
+    end
   end
 
   def handle_event("save_identity", %{"branding" => params}, socket) do
@@ -216,7 +452,18 @@ defmodule PlatformWeb.AdminBrandingLive do
     # read and is the module's documented single read path. The payload is
     # matched only to prove the message is ours.
     _ = branding
-    {:noreply, assign_branding(socket, Branding.get())}
+    previous = socket.assigns.branding
+    fresh = Branding.get()
+    socket = assign_branding(socket, fresh)
+
+    # Only a change to the SAVED colours replaces the draft. A name save in
+    # this or another window must not discard colours being edited here.
+    socket =
+      if colours_key(previous) == colours_key(fresh),
+        do: socket,
+        else: assign_colors(socket, fresh)
+
+    {:noreply, socket}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
@@ -282,6 +529,93 @@ defmodule PlatformWeb.AdminBrandingLive do
     |> assign(:form, to_form(InstallBranding.identity_changeset(branding, %{}), as: :branding))
     |> assign(:app_name_length, name_length(branding.app_name))
     |> assign(:icons, icon_urls())
+  end
+
+  # ── App colours ───────────────────────────────────────────────
+
+  defp assign_colors(socket, %InstallBranding{} = branding) do
+    draft = Branding.app_colors(branding)
+
+    socket
+    |> assign(:colors_preset, branding.color_preset)
+    |> assign(:colors_inputs, raw_inputs(draft))
+    |> assign(:colors_errors, %{})
+    |> assign(:colors_save_errors, [])
+    |> assign_draft(draft)
+  end
+
+  defp assign_draft(socket, draft) do
+    checks = Map.new(@modes, &{&1, Palette.checks(&1, Map.fetch!(draft, &1))})
+
+    blocks =
+      for mode <- @modes, check <- checks[mode], check.level == :block do
+        "#{mode_label(mode)}: #{check.message}"
+      end
+
+    socket
+    |> assign(:colors_draft, draft)
+    |> assign(:colors_checks, checks)
+    |> assign(:colors_blocks, blocks)
+  end
+
+  # A valid entry is echoed back NORMALISED ('#F55' -> '#ff5555'), so the
+  # field says what will be saved; an invalid one is kept RAW beside its error
+  # so the admin can see what they typed. LiveView never overwrites a focused
+  # input's value, so the HexField hook applies the normalised text on blur
+  # (task 01a0dbee-f598-7001-b450-7890103f44c4 stage 5).
+  defp put_slot(socket, mode, slot, raw) do
+    field = field(mode, slot)
+
+    parsed =
+      if String.trim(raw) == "", do: {:ok, nil}, else: Contrast.normalize_hex(raw)
+
+    case parsed do
+      {:ok, value} ->
+        draft = put_in(socket.assigns.colors_draft, [mode, slot], value)
+
+        socket
+        |> assign(:colors_inputs, Map.put(socket.assigns.colors_inputs, field, value || ""))
+        |> assign(:colors_errors, Map.delete(socket.assigns.colors_errors, field))
+        |> assign(:colors_save_errors, [])
+        |> assign_draft(draft)
+
+      :error ->
+        socket
+        |> assign(:colors_inputs, Map.put(socket.assigns.colors_inputs, field, raw))
+        |> assign(
+          :colors_errors,
+          Map.put(
+            socket.assigns.colors_errors,
+            field,
+            "Not a colour. Use 3 or 6 hex digits, with or without the #."
+          )
+        )
+    end
+  end
+
+  # `light_action` or `light_action_swatch` -> {:light, :action}; anything
+  # else (a stray field name from a tampered form) -> nil.
+  defp field_for(target) do
+    name = String.replace_suffix(target, "_swatch", "")
+
+    Enum.find_value(for(m <- @modes, s <- @slots, do: {m, s}), fn {m, s} ->
+      field(m, s) == name && {m, s}
+    end)
+  end
+
+  defp raw_inputs(draft) do
+    for mode <- @modes, slot <- @slots, into: %{} do
+      {field(mode, slot), draft[mode][slot] || ""}
+    end
+  end
+
+  defp colours_key(%InstallBranding{} = b), do: {Branding.app_colors(b), b.color_preset}
+
+  defp changeset_messages(%Ecto.Changeset{} = changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, _opts} -> msg end)
+    |> Enum.flat_map(fn {_field, msgs} -> msgs end)
+    |> Enum.uniq()
   end
 
   # Read through `Branding.icon_url/1` rather than building a path here:

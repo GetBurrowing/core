@@ -14,6 +14,7 @@ import DrawerSearchFocus from "./drawer_search_focus"
 import EmbedCanvasScale from "./embed_canvas_scale"
 import ExecutionLogScroll from "./execution_log_scroll"
 import FilePreviewScale from "./file_preview_scale"
+import HexField from "./hex_field"
 import InfiniteScroll from "./infinite_scroll"
 import InlineEdit from "./inline_edit"
 import InlineFocus from "./inline_focus"
@@ -74,6 +75,7 @@ export default {
   EmbedCanvasScale,
   ExecutionLogScroll,
   FilePreviewScale,
+  HexField,
   InfiniteScroll,
   InlineEdit,
   InlineFocus,

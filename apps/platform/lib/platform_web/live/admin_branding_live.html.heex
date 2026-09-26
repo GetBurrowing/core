@@ -12,7 +12,7 @@
      takes the bounded height, the inner div is the scroller. --%>
 <div class="flex h-full min-h-0 flex-col" data-role="admin-branding">
   <div class="flex-1 min-h-0 overflow-y-auto px-4 py-6">
-    <div class="mx-auto w-full max-w-3xl">
+    <div class="mx-auto w-full max-w-5xl">
       <div class="mb-6">
         <.link navigate="/admin" class="text-sm text-base-content/60 hover:text-base-content">
           ← Admin
@@ -145,11 +145,313 @@
             Six-digit hex. The background is the splash surface AND the padding behind the
             maskable icon, so the two match by construction.
           </p>
+          <%!-- The browser bar is a different surface from the app, so these stay
+               separate fields; this only COPIES the app's dark surface in (the app
+               is dark-first and root.html.heex paints background_color as the
+               first-paint colour). Nothing is saved until Save. --%>
+          <button
+            type="button"
+            phx-click="match_app_colours"
+            class="btn btn-ghost btn-xs mt-2"
+            data-role="branding-match-app-colours"
+          >
+            <span class="hero-swatch size-4" aria-hidden="true"></span> Match app colours
+          </button>
 
           <div class="mt-4">
             <.button phx-disable-with="Saving…" data-role="branding-save">Save</.button>
           </div>
         </.form>
+      </section>
+
+      <%!-- ── App colours (task 01a0dbee stage 4) ───────────────────
+           Design direction canvas 01a0dbf8. Three colours per mode, the rest
+           derived. The DRAFT reaches the preview only (inline style from
+           ThemeCss.mode_declarations/2); the page chrome stays in the saved
+           theme until Save. Phone: controls, then a Light/Dark toggle above
+           ONE preview, then that mode's checks. lg: controls left, both
+           previews and both check lists right. --%>
+      <section
+        class="mb-8 rounded-lg border border-edge bg-base-200 p-4"
+        data-role="app-colours"
+      >
+        <h2 class="text-base font-semibold text-base-content">App colours</h2>
+        <p class="mt-1 text-sm text-base-content/60">
+          Colours used inside Suite for everyone on this install. Pick an action colour and a
+          surface for each mode; Suite derives text, links, borders and the focus ring from
+          them. Status colours (info, success, warning, error) are not editable.
+        </p>
+
+        <div class="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <%!-- ── Controls ── --%>
+          <form
+            id="app-colours-form"
+            phx-change="validate_colors"
+            phx-submit="save_colors"
+            class="min-w-0"
+          >
+            <h3 class="text-sm font-medium text-base-content">Start from a theme</h3>
+            <div
+              class="mt-2 flex gap-3 overflow-x-auto pb-2"
+              role="list"
+              data-role="color-presets"
+            >
+              <button
+                :for={preset <- Presets.all()}
+                type="button"
+                role="listitem"
+                phx-click="apply_preset"
+                phx-value-preset={preset.key}
+                class={[
+                  "focus-visible-ring flex shrink-0 flex-col items-center gap-1 rounded-lg p-1",
+                  @colors_preset == preset.key && "bg-base-300"
+                ]}
+                aria-pressed={to_string(@colors_preset == preset.key)}
+                data-role="color-preset"
+                data-preset={preset.key}
+              >
+                <span
+                  class="relative block h-12 w-16 overflow-hidden rounded-md border border-edge"
+                  style={preset_style(preset)}
+                  aria-hidden="true"
+                >
+                  <span
+                    class="absolute left-1.5 top-1.5 size-3 rounded-full"
+                    style="background:var(--swatch-light)"
+                  >
+                  </span>
+                  <span
+                    class="absolute bottom-1.5 right-1.5 size-3 rounded-full"
+                    style="background:var(--swatch-dark)"
+                  >
+                  </span>
+                </span>
+                <span class="text-xs text-base-content/80">{preset.name}</span>
+              </button>
+            </div>
+            <p class="text-xs text-base-content/60" data-role="color-preset-label">
+              current: {Presets.label(@colors_preset, @colors_draft)}
+            </p>
+
+            <div class="mt-4 grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-start gap-x-3 gap-y-3">
+              <span></span>
+              <span :for={mode <- modes()} class="text-xs font-medium text-base-content/60">
+                {mode_label(mode)}
+              </span>
+
+              <%= for slot <- slots() do %>
+                <span class="pt-1.5 text-sm text-base-content">{slot_label(slot)}</span>
+                <div
+                  :for={mode <- modes()}
+                  class="min-w-0"
+                  data-role={"color-#{mode}-#{slot}"}
+                >
+                  <div class="flex items-center gap-1.5">
+                    <input
+                      type="color"
+                      id={"colors-#{field(mode, slot)}-swatch"}
+                      name={"colors[#{field(mode, slot)}_swatch]"}
+                      value={resolved(@colors_draft, mode, slot)}
+                      phx-debounce="150"
+                      class="focus-visible-ring h-8 w-8 shrink-0 cursor-pointer rounded border border-edge bg-transparent p-0.5"
+                      aria-label={"#{mode_label(mode)} #{String.downcase(slot_label(slot))} colour picker"}
+                    />
+                    <input
+                      type="text"
+                      id={"colors-#{field(mode, slot)}"}
+                      name={"colors[#{field(mode, slot)}]"}
+                      value={@colors_inputs[field(mode, slot)]}
+                      data-normalized={@colors_inputs[field(mode, slot)]}
+                      phx-hook="HexField"
+                      placeholder={placeholder(mode, slot)}
+                      phx-debounce="150"
+                      autocomplete="off"
+                      spellcheck="false"
+                      maxlength="7"
+                      class={[
+                        "input input-sm w-full min-w-0 font-mono text-xs",
+                        @colors_errors[field(mode, slot)] && "input-error"
+                      ]}
+                      aria-label={"#{mode_label(mode)} #{String.downcase(slot_label(slot))} hex"}
+                      aria-invalid={to_string(Map.has_key?(@colors_errors, field(mode, slot)))}
+                    />
+                  </div>
+                  <p
+                    :if={@colors_errors[field(mode, slot)]}
+                    role="alert"
+                    class="mt-1 text-xs text-error"
+                    data-role="color-input-error"
+                  >
+                    {@colors_errors[field(mode, slot)]}
+                  </p>
+                </div>
+              <% end %>
+            </div>
+
+            <div class="mt-6 flex flex-col gap-3">
+              <p
+                :for={reason <- @colors_blocks}
+                class="text-sm text-error"
+                data-role="color-block-reason"
+              >
+                {reason}
+              </p>
+              <p
+                :for={msg <- @colors_save_errors}
+                role="alert"
+                class="text-sm text-error"
+                data-role="color-save-error"
+              >
+                {msg}
+              </p>
+              <div class="flex flex-wrap items-center gap-2">
+                <.button
+                  variant="primary"
+                  disabled={@colors_blocks != []}
+                  data-confirm={save_scope()}
+                  data-role="color-save"
+                >
+                  Save colours
+                </.button>
+                <%!-- type="button" so neither submits the form; `.button` has no
+                     `type` attr, hence the plain element with its classes. --%>
+                <button
+                  type="button"
+                  phx-click="cancel_colors"
+                  class="btn btn-ghost focus-visible-ring"
+                  data-role="color-cancel"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  phx-click="reset_colors"
+                  data-confirm={save_scope()}
+                  class="btn btn-ghost focus-visible-ring"
+                  data-role="color-reset"
+                >
+                  Reset to Suite default
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <%!-- ── Preview + checks ── --%>
+          <div class="min-w-0">
+            <div
+              class="mb-3 inline-flex rounded-lg border border-edge p-0.5 lg:hidden"
+              role="group"
+              aria-label="Preview mode"
+              data-role="color-preview-toggle"
+            >
+              <button
+                :for={mode <- modes()}
+                type="button"
+                phx-click="preview_mode"
+                phx-value-mode={mode}
+                aria-pressed={to_string(@colors_preview_mode == mode)}
+                class={[
+                  "focus-visible-ring rounded-md px-3 py-1 text-sm",
+                  @colors_preview_mode == mode && "bg-base-300 font-medium"
+                ]}
+              >
+                {mode_label(mode)}
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <div
+                :for={mode <- modes()}
+                class={[@colors_preview_mode != mode && "hidden lg:block", "min-w-0"]}
+              >
+                <p class="mb-1 hidden text-xs font-medium text-base-content/60 lg:block">
+                  {mode_label(mode)}
+                </p>
+                <%!-- data-theme gives daisy's theme for this mode;
+                     data-theme-preview keeps the SAVED #install-theme block out
+                     (see ThemeCss moduledoc); the inline style is the draft. --%>
+                <div
+                  data-theme={mode}
+                  data-theme-preview
+                  style={preview_style(@colors_draft, mode)}
+                  class="flex overflow-hidden rounded-lg border border-edge bg-base-100 text-base-content"
+                  data-role={"color-preview-#{mode}"}
+                  aria-label={"#{mode_label(mode)} mode preview"}
+                >
+                  <div class="flex w-16 shrink-0 flex-col gap-1 border-r border-edge bg-base-200 p-1.5 text-[10px] sm:w-20">
+                    <span class="truncate font-semibold">{@branding.app_name}</span>
+                    <span class="truncate rounded bg-primary px-1 py-0.5 text-primary-content">
+                      # general
+                    </span>
+                    <span class="truncate px-1 text-base-content/70"># design</span>
+                    <span class="flex items-center gap-1 px-1 text-base-content/70">
+                      <span class="size-1.5 shrink-0 rounded-full bg-success"></span>
+                      <span class="truncate">Ana</span>
+                    </span>
+                  </div>
+                  <div class="flex min-w-0 flex-1 flex-col gap-2 p-2">
+                    <div class="flex items-start gap-1.5">
+                      <span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-accent text-[9px] font-bold text-accent-content">
+                        A
+                      </span>
+                      <div class="min-w-0 text-[11px] leading-snug">
+                        <span class="font-semibold">Ana</span>
+                        <p>
+                          Draft is up, <span class="text-interactive underline">see the doc</span>.
+                        </p>
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      readonly
+                      tabindex="-1"
+                      value="Reply in #general"
+                      aria-label={"#{mode_label(mode)} preview message field"}
+                      class="input input-xs w-full min-w-0 ring-2 ring-focus-ring"
+                    />
+                    <div>
+                      <.button variant="primary" class="btn btn-primary btn-xs" tabindex="-1">
+                        Send
+                      </.button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2" data-role="color-checks">
+              <div
+                :for={mode <- modes()}
+                class={[@colors_preview_mode != mode && "hidden lg:block", "min-w-0"]}
+                data-role={"color-checks-#{mode}"}
+              >
+                <h3 class="text-xs font-medium text-base-content/60">
+                  {mode_label(mode)} checks
+                </h3>
+                <ul class="mt-1 flex flex-col gap-1.5">
+                  <li
+                    :for={check <- @colors_checks[mode]}
+                    class="text-sm"
+                    data-role="color-check"
+                    data-level={check.level}
+                    data-check={check.id}
+                  >
+                    <div class="flex items-center gap-2">
+                      <span class="min-w-0 flex-1">{check_label(check.id)}</span>
+                      <span class="font-mono text-xs text-base-content/70">
+                        {format_ratio(check.ratio)}
+                      </span>
+                      <.chip tone={level_tone(check.level)}>{level_word(check.level)}</.chip>
+                    </div>
+                    <p :if={check.level != :pass} class="text-xs text-base-content/60">
+                      {check.message}
+                    </p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <%!-- ── Derived preview ─────────────────────────────────────── --%>

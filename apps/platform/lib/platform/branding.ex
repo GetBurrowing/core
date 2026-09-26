@@ -170,6 +170,79 @@ defmodule Platform.Branding do
   end
 
   @doc """
+  Save the in-app theme colours. Fabrikam-admin only, re-checked here for the
+  reason `update_identity/2` documents.
+
+  `attrs` may carry any of `light_action`, `light_surface`, `light_accent`,
+  `dark_action`, `dark_surface`, `dark_accent` and `color_preset`; see
+  `InstallBranding.colors_changeset/2` for normalisation and for the contrast
+  checks that refuse an unreadable palette. Nothing else on the row can move
+  through this function.
+
+  ## No version bump, on purpose
+
+  `version` is the content hash of the uploaded icon source and is the
+  immutable URL segment `BrandingIconController` serves icons under. None of
+  these colours feed the manifest or the icons, and the manifest and the
+  `/branding/current/:variant` redirect are already `no-cache`. Colours are
+  emitted per render (stage 2), so there is nothing to bust. Overloading
+  `version` would re-point the immutable icon URLs without re-deriving the
+  icons. If colours ever move to a cached, served CSS file, that file needs its
+  OWN content-hash segment.
+
+  Broadcasts `{:install_branding_updated, branding}` like `update_identity/2`.
+  """
+  @spec update_colors(any(), map()) ::
+          {:ok, InstallBranding.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def update_colors(actor, attrs) do
+    with_fabrikam_admin_authz(actor, fn ->
+      get()
+      |> InstallBranding.colors_changeset(attrs)
+      |> update_and_broadcast()
+    end)
+  end
+
+  @doc """
+  Put every in-app colour back to the Suite default: the six colours and
+  `color_preset` all become nil. Fabrikam-admin only. Broadcasts.
+  """
+  @spec reset_colors(any()) ::
+          {:ok, InstallBranding.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def reset_colors(actor) do
+    attrs = Map.new([:color_preset | InstallBranding.app_colour_fields()], &{&1, nil})
+    update_colors(actor, attrs)
+  end
+
+  @doc """
+  The in-app colours as `%{light: %{action, surface, accent}, dark: ...}`.
+
+  nil slots stay nil. What nil means (today's `app.css`) is the renderer's
+  decision, not this function's; filling in defaults here would make "the admin
+  picked today's cyan" and "the admin picked nothing" indistinguishable.
+  """
+  @spec app_colors(InstallBranding.t()) :: %{
+          light: %{action: String.t() | nil, surface: String.t() | nil, accent: String.t() | nil},
+          dark: %{action: String.t() | nil, surface: String.t() | nil, accent: String.t() | nil}
+        }
+  def app_colors(%InstallBranding{} = b) do
+    %{
+      light: %{action: b.light_action, surface: b.light_surface, accent: b.light_accent},
+      dark: %{action: b.dark_action, surface: b.dark_surface, accent: b.dark_accent}
+    }
+  end
+
+  defp update_and_broadcast(%Ecto.Changeset{} = changeset) do
+    case Repo.update(changeset) do
+      {:ok, %InstallBranding{} = branding} ->
+        broadcast(branding)
+        {:ok, branding}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  @doc """
   Accept an uploaded square, derive the seven variants, and make them the
   install's icons (task 01a0879a stage 2). Fabrikam-admin only, re-checked here
   for the reason `update_identity/2` documents.

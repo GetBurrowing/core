@@ -359,4 +359,201 @@ defmodule Platform.BrandingTest do
                )
     end
   end
+
+  # ── In-app theme colours (task 01a0dbee-f598-7001-b450-7890103f44c4) ────
+
+  @colour_fields [
+    :light_action,
+    :light_surface,
+    :light_accent,
+    :dark_action,
+    :dark_surface,
+    :dark_accent,
+    :color_preset
+  ]
+
+  defp colour_values(%InstallBranding{} = b), do: Map.take(b, @colour_fields)
+
+  describe "in-app colours on a migrated database" do
+    test "all seven are nil, meaning Suite default, and app_colors/1 keeps the nils" do
+      b = Branding.get()
+      assert colour_values(b) == Map.new(@colour_fields, &{&1, nil})
+
+      assert Branding.app_colors(b) == %{
+               light: %{action: nil, surface: nil, accent: nil},
+               dark: %{action: nil, surface: nil, accent: nil}
+             }
+    end
+  end
+
+  describe "update_colors/2" do
+    test "normalises #abc to #aabbcc, bare and upper-case hex to lowercase #rrggbb" do
+      assert {:ok, b} =
+               Branding.update_colors(admin!(), %{
+                 light_action: "#abc",
+                 light_surface: "FFFFFF",
+                 dark_action: "  #5E81AC ",
+                 color_preset: "nord"
+               })
+
+      assert b.light_action == "#aabbcc"
+      assert b.light_surface == "#ffffff"
+      assert b.dark_action == "#5e81ac"
+      assert b.color_preset == "nord"
+
+      reread = Branding.get()
+      assert reread.light_action == "#aabbcc"
+
+      assert Branding.app_colors(reread) == %{
+               light: %{action: "#aabbcc", surface: "#ffffff", accent: nil},
+               dark: %{action: "#5e81ac", surface: nil, accent: nil}
+             }
+    end
+
+    test "an empty string casts to nil, i.e. back to the default for that slot" do
+      admin = admin!()
+      assert {:ok, _} = Branding.update_colors(admin, %{light_action: "#112233"})
+      assert {:ok, b} = Branding.update_colors(admin, %{light_action: ""})
+      assert b.light_action == nil
+    end
+
+    test "a malformed hex is refused and the row is unchanged" do
+      before = Branding.get()
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Branding.update_colors(admin!(), %{dark_surface: "#12345", light_action: "#abc"})
+
+      assert {"must be a hex colour like #1a2b3c", _} = cs.errors[:dark_surface]
+      assert colour_values(Branding.get()) == colour_values(before)
+    end
+
+    test "a BLOCKED palette is refused with a changeset error and the row is unchanged" do
+      admin = admin!()
+      assert {:ok, _} = Branding.update_colors(admin, %{dark_action: "#5e81ac"})
+      before = Branding.get()
+
+      # Mid-grey: neither black nor the near-white body text reads on it.
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Branding.update_colors(admin, %{light_surface: "#707070"})
+
+      assert {message, opts} = cs.errors[:light_surface]
+      assert message =~ "Body text on this surface is 4.2:1. It needs 4.5:1"
+      assert opts[:check] == :body_text
+      assert opts[:mode] == :light
+
+      assert colour_values(Branding.get()) == colour_values(before)
+    end
+
+    test "a palette that only WARNS saves" do
+      assert {:ok, b} = Branding.update_colors(admin!(), %{light_action: "#10b981"})
+      assert b.light_action == "#10b981"
+    end
+
+    test "casts ONLY the colour fields: name, manifest colours and icon columns cannot move" do
+      before = Branding.get()
+
+      assert {:ok, b} =
+               Branding.update_colors(admin!(), %{
+                 light_action: "#5e81ac",
+                 app_name: "HIJACK-XYZ",
+                 theme_color: "#000000",
+                 background_color: "#000000",
+                 source_storage_key: "attacker/key.png",
+                 version: "deadbeef"
+               })
+
+      assert b.app_name == before.app_name
+      assert b.theme_color == before.theme_color
+      assert b.background_color == before.background_color
+      assert b.source_storage_key == before.source_storage_key
+      assert b.version == before.version
+    end
+
+    test "update_identity/2 with a name only leaves the colours intact" do
+      admin = admin!()
+
+      assert {:ok, coloured} =
+               Branding.update_colors(admin, %{light_action: "#5e81ac", dark_surface: "#2e3440"})
+
+      assert {:ok, _} =
+               Branding.update_identity(admin, %{
+                 app_name: "NAME-ONLY-XYZ",
+                 light_action: "#ff0000",
+                 dark_surface: nil
+               })
+
+      reread = Branding.get()
+      assert reread.app_name == "NAME-ONLY-XYZ"
+      assert colour_values(reread) == colour_values(coloured)
+    end
+
+    test "update_colors/2 leaves the identity fields intact (the other direction)" do
+      admin = admin!()
+      assert {:ok, named} = Branding.update_identity(admin, %{app_name: "KEEP-ME-XYZ"})
+      assert {:ok, _} = Branding.update_colors(admin, %{dark_action: "#88c0d0"})
+
+      reread = Branding.get()
+      assert reread.app_name == named.app_name
+      assert reread.theme_color == named.theme_color
+      assert reread.background_color == named.background_color
+    end
+
+    test "does NOT bump version: colours feed neither the manifest nor the icons" do
+      before = Branding.get()
+      assert {:ok, b} = Branding.update_colors(admin!(), %{light_action: "#5e81ac"})
+      assert b.version == before.version
+    end
+
+    test "broadcasts on the install_branding topic" do
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, Branding.pubsub_topic())
+      assert {:ok, _} = Branding.update_colors(admin!(), %{dark_accent: "#b48ead"})
+      assert_receive {:install_branding_updated, %InstallBranding{dark_accent: "#b48ead"}}
+    end
+  end
+
+  describe "reset_colors/1" do
+    test "nils all seven and broadcasts" do
+      admin = admin!()
+
+      assert {:ok, _} =
+               Branding.update_colors(admin, %{
+                 light_action: "#5e81ac",
+                 light_surface: "#eceff4",
+                 light_accent: "#b48ead",
+                 dark_action: "#88c0d0",
+                 dark_surface: "#2e3440",
+                 dark_accent: "#b48ead",
+                 color_preset: "nord"
+               })
+
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, Branding.pubsub_topic())
+      assert {:ok, b} = Branding.reset_colors(admin)
+
+      assert colour_values(b) == Map.new(@colour_fields, &{&1, nil})
+      assert colour_values(Branding.get()) == Map.new(@colour_fields, &{&1, nil})
+      assert_receive {:install_branding_updated, %InstallBranding{light_action: nil}}
+    end
+  end
+
+  describe "colour writes: authorization is re-checked in the context" do
+    test "a non-admin gets :unauthorized from update_colors/2 and the row is unchanged" do
+      before = Branding.get()
+
+      assert {:error, :unauthorized} =
+               Branding.update_colors(non_admin!(), %{light_action: "#5e81ac"})
+
+      assert colour_values(Branding.get()) == colour_values(before)
+    end
+
+    test "a non-admin gets :unauthorized from reset_colors/1 and the row is unchanged" do
+      assert {:ok, coloured} = Branding.update_colors(admin!(), %{light_action: "#5e81ac"})
+      assert {:error, :unauthorized} = Branding.reset_colors(non_admin!())
+      assert colour_values(Branding.get()) == colour_values(coloured)
+    end
+
+    test "nil actor is refused" do
+      assert {:error, :unauthorized} = Branding.update_colors(nil, %{light_action: "#5e81ac"})
+      assert {:error, :unauthorized} = Branding.reset_colors(nil)
+    end
+  end
 end
